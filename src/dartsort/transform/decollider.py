@@ -1,26 +1,27 @@
 from logging import getLogger
-from threading import Thread
-from queue import Queue
+import dataclasses
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import (
-    BatchSampler,
     DataLoader,
     Dataset,
     Sampler,
-    RandomSampler,
     StackDataset,
     TensorDataset,
-    WeightedRandomSampler,
 )
 from tqdm.auto import trange
 
-from ..util import spikeio
 from ..util.spiketorch import reindex, spawn_torch_rg
-from ._base_nn_denoiser import BaseMultichannelDenoiser
+from ._multichan_denoiser_kit import (
+    BaseMultichannelDenoiser,
+    get_noise,
+    AsyncSameChannelNoiseDataset,
+    AOTIndicesWeightedRandomBatchSampler,
+    NoneDataset,
+)
 
 
 logger = getLogger(__name__)
@@ -164,8 +165,11 @@ class Decollider(BaseMultichannelDenoiser):
         self.to(self.device)
 
     def fit(self, waveforms, max_channels, recording, weights=None):
+        train_data, val_data = self._construct_datasets_from_waveforms(
+            waveforms, max_channels, recording, weights
+        )
         with torch.enable_grad():
-            res = self._fit(waveforms, max_channels, recording, weights=weights)
+            res = self._fit(train_data, val_data)
         self._needs_fit = False
         return res
 
@@ -398,95 +402,12 @@ class Decollider(BaseMultichannelDenoiser):
                 bs = be
         return losses
 
-    def _fit(self, waveforms, channels, recording, weights=None):
-        self.initialize_nets(waveforms.shape[1])
-        waveforms = waveforms.cpu()
-        channels = channels.cpu()
-
-        val_size = 0
-        train_indices = slice(None)
-        val_indices = None
-        if self.val_split_p:
-            num_samples = len(waveforms)
-            val_size = int(self.val_split_p * num_samples)
-            train_size = num_samples - val_size
-            train_indices = self.rg.choice(num_samples, size=train_size, replace=False)
-            val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
-
-        # training dataset
-        train_waveforms = waveforms[train_indices]
-        train_channels = channels[train_indices]
-        train_dataset = TensorDataset(train_waveforms, train_channels)
-        noise_train_dataset = AsyncSameChannelNoiseDataset(
-            recording,
-            train_channels.numpy(force=True),
-            self.model_channel_index_np,
-            spike_length_samples=self.spike_length_samples,
-            generator=spawn_torch_rg(self.rg),
-        )
-        if self.cycle_loss_alpha:
-            cycle_noise_dataset = AsyncSameChannelNoiseDataset(
-                recording,
-                train_channels.numpy(force=True),
-                self.model_channel_index_np,
-                spike_length_samples=self.spike_length_samples,
-                generator=spawn_torch_rg(self.rg),
-            )
-        else:
-            cycle_noise_dataset = NoneDataset(len(train_channels))
-
-        train_stack_dataset = StackDataset(
-            train_dataset, noise_train_dataset, cycle_noise_dataset
-        )
-        train_weights = None if weights is None else weights[train_indices]
-        train_sampler = AOTIndicesWeightedRandomBatchSampler(
-            n_examples=len(train_channels),
-            weights=train_weights,
-            replacement=train_weights is not None,
-            batch_size=self.batch_size,
-            generator=spawn_torch_rg(self.rg),
-            epoch_size=self.epoch_size,
-        )
-        train_loader = DataLoader(
-            train_stack_dataset,
-            sampler=train_sampler,
-            num_workers=0,
-            batch_size=None,
-        )
-
-        # initialize validation datasets only if val_split_p > 0
-        if val_size > 0:
-            val_waveforms = waveforms[val_indices]
-            val_channels = channels[val_indices]
-            val_noise = get_noise(
-                recording,
-                val_channels.numpy(force=True),
-                self.model_channel_index_np,
-                spike_length_samples=self.spike_length_samples,
-                rg=self.rg,
-            )
-            if self.cycle_loss_alpha:
-                cycle_val_noise = get_noise(
-                    recording,
-                    val_channels.numpy(force=True),
-                    self.model_channel_index_np,
-                    spike_length_samples=self.spike_length_samples,
-                    rg=self.rg,
-                )
-            else:
-                cycle_val_noise = NoneDataset(len(train_channels))
-            val_dataset = TensorDataset(val_waveforms, val_channels, val_noise)
-            val_dataset = StackDataset(val_dataset, cycle_val_noise)
-
-            # val set does not need shuffling
-            val_loader = DataLoader(
-                val_dataset,
-                num_workers=self.n_data_workers,
-                persistent_workers=bool(self.n_data_workers),
-                batch_size=self.batch_size,
-            )
-        else:
-            val_loader = None
+    def _fit(
+        self,
+        train_data: "DecolliderDataLoader",
+        val_data: "DecolliderDataLoader | None",
+    ):
+        self.initialize_nets(train_data.spike_length_samples)
 
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
@@ -497,20 +418,17 @@ class Decollider(BaseMultichannelDenoiser):
         with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 # deal with random indices...
-                train_sampler.refresh()
-                noise_train_dataset.refresh(train_sampler.indices)
-                if self.cycle_loss_alpha:
-                    cycle_noise_dataset.refresh(train_sampler.indices)
+                train_data.refresh()
 
                 # Training phase
                 self.train()
                 train_losses = {}
-                examples_this_epoch = 0
                 for (
-                    (waveform_batch, channels_batch),
+                    waveform_batch,
+                    channels_batch,
                     noise_batch,
                     cnoise_batch,
-                ) in train_loader:
+                ) in train_data:
                     waveform_batch = waveform_batch.to(self.device)
                     channels_batch = channels_batch.to(self.device)
                     waveform_batch = reindex(
@@ -543,19 +461,14 @@ class Decollider(BaseMultichannelDenoiser):
                     for k, v in loss_dict.items():
                         train_losses[k] = v.item() + train_losses.get(k, 0.0)
                 # // epoch loop
-                noise_train_dataset.cleanup()
-                if self.cycle_loss_alpha:
-                    cycle_noise_dataset.cleanup()
-
-                train_losses = {
-                    k: v / len(train_loader) for k, v in train_losses.items()
-                }
+                train_data.cleanup()
+                train_losses = {k: v / len(train_data) for k, v in train_losses.items()}
                 train_records.append({**train_losses})
 
                 # Validation phase (only if val_loader is not None)
                 val_losses = {}
                 val_loss = None
-                if val_loader:
+                if val_data is not None:
                     self.eval()
                     val_losses = {}
                     with torch.no_grad():
@@ -563,7 +476,8 @@ class Decollider(BaseMultichannelDenoiser):
                             waveform_batch,
                             channels_batch,
                             noise_batch,
-                        ), ell_batch in val_loader:
+                            ell_batch,
+                        ) in val_data:
                             waveform_batch = waveform_batch.to(self.device)
                             channels_batch = channels_batch.to(self.device)
                             noise_batch = noise_batch.to(self.device)
@@ -589,7 +503,7 @@ class Decollider(BaseMultichannelDenoiser):
                             for k, v in loss_dict.items():
                                 val_losses[k] = v.item() + val_losses.get(k, 0.0)
 
-                    val_losses = {k: v / len(val_loader) for k, v in val_losses.items()}
+                    val_losses = {k: v / len(val_data) for k, v in val_losses.items()}
                     val_loss = sum(val_losses.values())
                     train_records[-1]["val_loss"] = val_loss
 
@@ -610,7 +524,7 @@ class Decollider(BaseMultichannelDenoiser):
                 loss_str = f"Train {loss:.4f} " + "|".join(
                     f"{k}: {v:.3f}" for k, v in train_losses.items()
                 )
-                if val_loader:
+                if val_data is not None:
                     loss_str += f" Val {val_loss:.4f}" + "|".join(
                         f"{k}: {v:.3f}" for k, v in val_losses.items()
                     )
@@ -627,246 +541,150 @@ class Decollider(BaseMultichannelDenoiser):
         train_df = pd.DataFrame.from_records(train_records)
         return train_df
 
-
-def get_noise(
-    recording,
-    channels,
-    channel_index,
-    spike_length_samples=121,
-    rg: int | None | np.random.Generator = 0,
-    generator: torch.Generator | None = None,
-):
-    if rg is not None:
-        rg = np.random.default_rng(rg)
-        # pick random times
-        times_samples = rg.integers(
-            recording.get_num_samples() - spike_length_samples,
-            size=len(channels),
-        )
-    else:
-        times_samples = torch.randint(
-            low=0,
-            high=recording.get_num_samples() - spike_length_samples,
-            size=(len(channels),),
-            device="cpu",
-            generator=generator,
-        ).numpy()
-
-    order = np.argsort(times_samples)
-    inv_order = np.argsort(order)
-
-    # load waveforms on the same channels and channel neighborhoods
-    noise_waveforms = spikeio.read_waveforms_channel_index(
-        recording,
-        times_samples[order],
-        channel_index,
-        channels,
-        trough_offset_samples=0,
-        spike_length_samples=spike_length_samples,
-        fill_value=0.0,
-    )
-
-    # back to random order
-    noise_waveforms = noise_waveforms[inv_order]
-
-    return torch.from_numpy(noise_waveforms)
-
-
-class NoneDataset(Dataset):
-    def __init__(self, n):
-        super().__init__()
-        self.n = n
-
-    def __len__(self):
-        return self.n
-
-    def __getitem__(self, index):
-        return None
-
-
-class SameChannelNoiseDataset(Dataset):
-    def __init__(
-        self,
-        recording,
-        channels,
-        channel_index,
-        spike_length_samples=121,
-        generator=None,
+    def _construct_datasets_from_waveforms(
+        self, waveforms, channels, recording, weights=None
     ):
-        super().__init__()
-        self.recording = recording
-        self.channels = channels
-        self.spike_length_samples = spike_length_samples
-        self.channel_index = channel_index
-        self.generator = generator
+        val_size = 0
+        train_indices = slice(None)
+        val_indices = None
+        if self.val_split_p:
+            num_samples = len(waveforms)
+            val_size = int(self.val_split_p * num_samples)
+            train_size = num_samples - val_size
+            train_indices = self.rg.choice(num_samples, size=train_size, replace=False)
+            val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
 
-    def __len__(self):
-        return len(self.channels)
-
-    def __getitem__(self, index):
-        noise = get_noise(
-            self.recording,
-            self.channels[index],
-            self.channel_index,
+        # training dataset
+        train_waveforms = waveforms[train_indices]
+        train_channels = channels[train_indices]
+        train_dataset = TensorDataset(train_waveforms, train_channels)
+        train_noise_dataset = AsyncSameChannelNoiseDataset(
+            recording,
+            train_channels.numpy(force=True),
+            self.model_channel_index_np,
             spike_length_samples=self.spike_length_samples,
-            rg=None,
-            generator=self.generator,
+            generator=spawn_torch_rg(self.rg),
         )
-        return noise
+        if self.cycle_loss_alpha:
+            train_cycle_noise_dataset = AsyncSameChannelNoiseDataset(
+                recording,
+                train_channels.numpy(force=True),
+                self.model_channel_index_np,
+                spike_length_samples=self.spike_length_samples,
+                generator=spawn_torch_rg(self.rg),
+            )
+        else:
+            train_cycle_noise_dataset = NoneDataset(len(train_channels))
+
+        train_stack_dataset = StackDataset(
+            train_dataset, train_noise_dataset, train_cycle_noise_dataset
+        )
+        train_weights = None if weights is None else weights[train_indices]
+        train_sampler = AOTIndicesWeightedRandomBatchSampler(
+            n_examples=len(train_channels),
+            weights=train_weights,
+            replacement=train_weights is not None,
+            batch_size=self.batch_size,
+            generator=spawn_torch_rg(self.rg),
+            epoch_size=self.epoch_size,
+        )
+        train_loader = DataLoader(
+            train_stack_dataset,
+            sampler=train_sampler,
+            num_workers=0,
+            batch_size=None,
+        )
+        train_data = DecolliderDataLoader(
+            loader=train_loader,
+            sampler=train_sampler,
+            noise_dataset=train_noise_dataset,
+            cycle_noise_dataset=train_cycle_noise_dataset,
+            spike_length_samples=waveforms.shape[1],
+        )
+
+        # initialize validation datasets only if val_split_p > 0
+        if val_size > 0:
+            val_waveforms = waveforms[val_indices]
+            val_channels = channels[val_indices]
+            val_noise = get_noise(
+                recording,
+                val_channels.numpy(force=True),
+                self.model_channel_index_np,
+                spike_length_samples=self.spike_length_samples,
+                rg=self.rg,
+            )
+            if self.cycle_loss_alpha:
+                cycle_val_noise = get_noise(
+                    recording,
+                    val_channels.numpy(force=True),
+                    self.model_channel_index_np,
+                    spike_length_samples=self.spike_length_samples,
+                    rg=self.rg,
+                )
+                cycle_val_noise = TensorDataset(cycle_val_noise)
+            else:
+                cycle_val_noise = NoneDataset(len(train_channels))
+            val_dataset = TensorDataset(val_waveforms, val_channels)
+            val_noise_dataset = TensorDataset(val_noise)
+
+            # val set does not need shuffling
+            val_loader = DataLoader(
+                val_dataset,
+                num_workers=self.n_data_workers,
+                persistent_workers=bool(self.n_data_workers),
+                batch_size=self.batch_size,
+            )
+            val_data = DecolliderDataLoader(
+                loader=val_loader,
+                sampler=None,
+                noise_dataset=val_noise_dataset,
+                cycle_noise_dataset=cycle_val_noise,
+                spike_length_samples=waveforms.shape[1],
+            )
+        else:
+            val_data = None
+
+        return train_data, val_data
 
 
-class AOTIndicesWeightedRandomBatchSampler(Sampler):
-    def __init__(
-        self,
-        n_examples=None,
-        weights=None,
-        replacement=True,
-        batch_size=None,
-        generator=None,
-        epoch_size=None,
-    ):
-        super().__init__()
-
-        if weights is not None:
-            weights = torch.as_tensor(weights, dtype=torch.double)
-        if n_examples is None:
-            n_examples = len(weights)
-
-        self.n_examples = n_examples
-        self.weights = weights
-        self.replacement = replacement
-        self.generator = generator
-        self.epoch_size = epoch_size
-
-        self.indices = None
-        self.batch_size = batch_size
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class DecolliderDataLoader:
+    loader: DataLoader
+    sampler: Sampler | None
+    noise_dataset: Dataset
+    cycle_noise_dataset: Dataset | NoneDataset
+    spike_length_samples: int
 
     def __len__(self):
-        n = self.epoch_size or self.n_examples
-        if self.batch_size is None:
-            return n
-        return (n + self.batch_size - 1) // self.batch_size
+        return len(self.loader)
 
     def __iter__(self):
-        if self.batch_size is None:
-            yield from self.indices
-        else:
-            n = self.epoch_size or self.n_examples
-            for bs in range(0, n, self.batch_size):
-                be = min(n, bs + self.batch_size)
-                yield self.indices[bs:be]
+        """Flatten..."""
+        for batch in self.loader:
+            batch_flat = []
+            for item in batch:
+                if isinstance(item, tuple):
+                    batch_flat.extend(item)
+                else:
+                    batch_flat.append(item)
+            yield batch_flat
 
     def refresh(self):
-        if self.generator is None:
-            seed = int(torch.empty((), dtype=torch.int64).random_().item())
-            generator = torch.Generator()
-            generator.manual_seed(seed)
+        if hasattr(self.sampler, "refresh"):
+            self.sampler.refresh()
+            if hasattr(self.noise_dataset, "refresh"):
+                self.noise_dataset.refresh(self.sampler.indices)
+            if self.cycle_noise_dataset is not None and hasattr(
+                self.cycle_noise_dataset, "refresh"
+            ):
+                self.cycle_noise_dataset.refresh(self.sampler.indices)
         else:
-            generator = self.generator
-
-        n_draws = self.epoch_size or self.n_examples
-
-        if self.weights is None:
-            if self.replacement:
-                self.indices = torch.randint(
-                    high=self.n_examples,
-                    size=(n_draws,),
-                    dtype=torch.int64,
-                    generator=generator,
-                )
-            else:
-                self.indices = torch.randperm(self.n_examples, generator=generator)[
-                    :n_draws
-                ]
-        else:
-            self.indices = torch.multinomial(
-                self.weights, n_draws, self.replacement, generator=generator
-            )
-
-
-class AsyncSameChannelNoiseDataset(Dataset):
-    def __init__(
-        self,
-        recording,
-        channels,
-        channel_index,
-        spike_length_samples=121,
-        generator=None,
-        chunk_size=2048,
-        queue_chunks=8,
-    ):
-        super().__init__()
-        self.recording = recording
-        self.channels = channels
-        self.spike_length_samples = spike_length_samples
-        self.channel_index = channel_index
-        # note: although there's threading here, this is only used in one
-        # thread, so that's okay.
-        self.generator = generator
-
-        self.chunk_size = chunk_size
-        self._queue = Queue(maxsize=queue_chunks)
-        self._thread = None
-
-        self._indices = None
-        self._cur_data_ix = None
-
-        self._cur_chunk = None
-        self._cur_chunk_ix = None
-
-    def __len__(self):
-        return len(self.channels)
+            assert not hasattr(self.noise_dataset, "refresh")
 
     def cleanup(self):
-        if self._thread is not None:
-            self._thread.join()
-            assert not self._thread.is_alive()
-        self._thread = None
-
-    def refresh(self, indices):
-        assert self._thread is None, "Run cleanup()!"
-        self._cur_data_ix = 0
-        self._indices = indices
-        self._run_thread()
-
-    def __getitem__(self, index):
-        bs = len(index)
-        my_indices = self._indices[self._cur_data_ix : self._cur_data_ix + bs]
-        assert torch.equal(torch.asarray(index), my_indices)
-
-        # need to batch up the chunks...
-        if self._cur_chunk is None:
-            self._cur_chunk = self._queue.get()
-            self._cur_chunk_ix = 0
-
-        chunk_end_ix = min(self._cur_chunk_ix + bs, len(self._cur_chunk))
-        noise_batch = self._cur_chunk[self._cur_chunk_ix : chunk_end_ix]
-
-        # check if we are done with this chunk
-        if chunk_end_ix == len(self._cur_chunk):
-            self._cur_chunk = None
-            self._cur_chunk_ix = None
-        else:
-            self._cur_chunk_ix = chunk_end_ix
-
-        self._cur_data_ix += bs
-        return noise_batch
-
-    def _run_thread(self):
-        self._thread = Thread(target=self._thread_main, daemon=True)
-        self._thread.start()
-
-    def _thread_main(self):
-        for chunk_start in range(0, len(self._indices), self.chunk_size):
-            chunk_end = min(len(self._indices), chunk_start + self.chunk_size)
-
-            index = self._indices[chunk_start:chunk_end]
-            noise = get_noise(
-                self.recording,
-                self.channels[index],
-                self.channel_index,
-                spike_length_samples=self.spike_length_samples,
-                rg=None,
-                generator=self.generator,
-            )
-            self._queue.put(noise)
+        if hasattr(self.noise_dataset, "cleanup"):
+            self.noise_dataset.cleanup()
+        if self.cycle_noise_dataset is not None and hasattr(
+            self.cycle_noise_dataset, "cleanup"
+        ):
+            self.cycle_noise_dataset.cleanup()

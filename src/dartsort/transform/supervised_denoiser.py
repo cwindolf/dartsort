@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import trange
 
 
-from ._base_nn_denoiser import BaseMultichannelDenoiser
+from ._multichan_denoiser_kit import BaseMultichannelDenoiser
 from torch.utils.data import random_split
 
 
@@ -84,7 +84,9 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                     gt_waveform_batch, mask = self.to_nn_channels(
                         gt_waveform_batch, channels_batch
                     )
-                    pred = self.forward_unbatched(waveform_batch, channels_batch, to_orig_channels=False)
+                    pred = self.forward_unbatched(
+                        waveform_batch, channels_batch, to_orig_channels=False
+                    )
 
                     loss_dict = self.loss(mask, gt_waveform_batch, pred)
                     loss = sum(loss_dict.values())
@@ -114,7 +116,9 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
                             gt_waveform_batch, mask = self.to_nn_channels(
                                 gt_waveform_batch, channels_batch
                             )
-                            pred = self.forward_unbatched(waveform_batch, channels_batch, to_orig_channels=False)
+                            pred = self.forward_unbatched(
+                                waveform_batch, channels_batch, to_orig_channels=False
+                            )
 
                             loss_dict = self.loss(mask, gt_waveform_batch, pred)
                             loss = sum(loss_dict.values())
