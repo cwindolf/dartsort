@@ -1,6 +1,5 @@
 import torch
-from dartsort.util.waveform_util import (get_channels_in_probe,
-                                         set_channels_in_probe)
+from dartsort.util.waveform_util import get_channels_in_probe, set_channels_in_probe
 from torch import nn
 
 from .transform_base import BaseWaveformDenoiser
@@ -32,6 +31,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         name_prefix="",
         clsname="SingleChannelDenoiser",
         n_epochs=None,
+        epoch_size=None,
     ):
         super().__init__(
             channel_index=channel_index, name=name, name_prefix=name_prefix
@@ -107,7 +107,13 @@ class SingleChannelDenoiser(nn.Module):
 
 
 class FlexibleSingleChanDenoiser(nn.Module):
-    def __init__(self, pretrained_path=None, n_filters=[32, 32, 32], filter_sizes=[11, 11, 11], spike_size=121):
+    def __init__(
+        self,
+        pretrained_path=None,
+        n_filters=[32, 32, 32],
+        filter_sizes=[11, 11, 11],
+        spike_size=121,
+    ):
         super().__init__()
         nets = []
         for inf, outf, s in zip([1, *n_filters], n_filters, filter_sizes):
@@ -115,7 +121,9 @@ class FlexibleSingleChanDenoiser(nn.Module):
         # self.conv1 = nn.Sequential(nn.Conv1d(1, feat1, size1), nn.ReLU())
         # self.conv2 = nn.Sequential(nn.Conv1d(feat1, feat2, size2), nn.ReLU())
         self.conv = nn.Sequential(*nets)
-        n_input_feat = n_filters[-1] * (spike_size - sum(filter_sizes) + len(filter_sizes))
+        n_input_feat = n_filters[-1] * (
+            spike_size - sum(filter_sizes) + len(filter_sizes)
+        )
         self.out = nn.Linear(n_input_feat, spike_size)
 
     def forward(self, x):
@@ -130,4 +138,8 @@ class FlexibleSingleChanDenoiser(nn.Module):
         self.load_state_dict(checkpoint)
         return self
 
-dnclss = {'FlexibleSingleChanDenoiser': FlexibleSingleChanDenoiser, 'SingleChannelDenoiser': SingleChannelDenoiser}
+
+dnclss = {
+    "FlexibleSingleChanDenoiser": FlexibleSingleChanDenoiser,
+    "SingleChannelDenoiser": SingleChannelDenoiser,
+}

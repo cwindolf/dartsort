@@ -24,7 +24,7 @@ class BaseWaveformModule(torch.nn.Module):
                 "geom", torch.asarray(geom, dtype=torch.float, copy=True)
             )
 
-    def fit(self, waveforms, max_channels, recording=None):
+    def fit(self, waveforms, max_channels, recording=None, weights=None):
         pass
 
     def needs_fit(self) -> bool:
@@ -115,10 +115,10 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             return False
         return self.pipeline.needs_fit()
 
-    def fit(self, waveforms, max_channels, recording=None):
+    def fit(self, waveforms, max_channels, recording=None, weights=None):
         if self.pipeline is None:
             return
-        self.pipeline.fit(waveforms, max_channels)
+        self.pipeline.fit(waveforms, max_channels, recording=recording, weights=weights)
 
     def forward(self, waveforms, max_channels=None):
         if self.pipeline is None:

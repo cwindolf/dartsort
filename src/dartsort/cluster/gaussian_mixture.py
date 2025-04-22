@@ -144,7 +144,8 @@ class SpikeMixtureModel(torch.nn.Module):
         hard_noise=False,
         min_log_prop=-16.0,
         random_seed: int = 0,
-        lls_keep_k: int | None = 8,
+        # TODO debug this topk thing.
+        lls_keep_k: int | None = None,
     ):
         super().__init__()
 
@@ -893,7 +894,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 if split_indices == slice(None)
                 else len(split_indices)
             )
-            topk_arr = allocate_topk(ncols, self.lls_keep_k)
+            topk_arr = allocate_topk(ncols, min(max(unit_ids) + 1, self.lls_keep_k))
 
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(_ll_job(ninfo) for ninfo in unit_neighb_info)

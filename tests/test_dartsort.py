@@ -24,8 +24,16 @@ def test_fakedata():
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
                 subtraction_denoising_config=dartsort.FeaturizationConfig(
-                    denoise_only=True, do_nn_denoise=False
-                )
+                    denoise_only=True,
+                    do_nn_denoise=True,
+                    nn_denoiser_class_name="Decollider",
+                    # not good parameters -- don't want to explode CI
+                    nn_denoiser_train_epochs=25,
+                    nn_denoiser_epoch_size=256,
+                    nn_denoiser_pretrained_path=None,
+                    nn_denoiser_extra_kwargs=dict(hidden_dims=[512] * 2, batch_size=32),
+                ),
+                first_denoiser_thinning=0.0,
             ),
             # pc based clust
             clustering_config=dartsort.ClusteringConfig(

@@ -78,7 +78,7 @@ class WaveformPipeline(torch.nn.Module):
 
         return waveforms, features
 
-    def fit(self, waveforms, max_channels, recording):
+    def fit(self, waveforms, max_channels, recording, weights=None):
         assert waveforms.ndim == 3
         assert max_channels.shape[0] == waveforms.shape[0]
 
@@ -89,7 +89,10 @@ class WaveformPipeline(torch.nn.Module):
             if transformer.needs_fit():
                 transformer.train()
                 transformer.fit(
-                    waveforms, max_channels=max_channels, recording=recording
+                    waveforms,
+                    max_channels=max_channels,
+                    recording=recording,
+                    weights=weights,
                 )
             transformer.eval()
 
@@ -139,7 +142,9 @@ def featurization_config_to_class_names_and_kwargs(
 
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
-    sls_kw = dict(spike_length_samples=waveform_config.spike_length_samples(sampling_frequency))
+    sls_kw = dict(
+        spike_length_samples=waveform_config.spike_length_samples(sampling_frequency)
+    )
 
     if do_feats and fc.save_input_voltages:
         class_names_and_kwargs.append(
@@ -163,6 +168,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "name_prefix": fc.input_waveforms_name,
                     "centered": fc.tpca_centered,
                     "temporal_slice": tslice,
+                    "max_waveforms": fc.tpca_max_waveforms,
                 },
             )
         )
@@ -173,6 +179,7 @@ def featurization_config_to_class_names_and_kwargs(
                 {
                     "pretrained_path": fc.nn_denoiser_pretrained_path,
                     "n_epochs": fc.nn_denoiser_train_epochs,
+                    "epoch_size": fc.nn_denoiser_epoch_size,
                     **(fc.nn_denoiser_extra_kwargs or {}),
                 },
             )

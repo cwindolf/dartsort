@@ -34,7 +34,7 @@ class ThresholdAndFeaturize(BasePeeler):
         n_waveforms_fit=20_000,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
-        thinning=0,
+        thinning=0.0,
         time_jitter=0,
         spatial_jitter_channel_index=None,
         dtype=torch.float,

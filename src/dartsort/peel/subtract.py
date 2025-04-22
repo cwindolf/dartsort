@@ -24,7 +24,7 @@ from ..util.waveform_util import (
 )
 
 from .peel_base import BasePeeler
-from .threshold import threshold_chunk
+from .threshold import threshold_chunk, ThresholdAndFeaturize
 
 
 class SubtractionPeeler(BasePeeler):
@@ -54,6 +54,10 @@ class SubtractionPeeler(BasePeeler):
         n_singlechan_templates=10,
         singlechan_threshold=40.0,
         singlechan_alignment_padding=20,
+        first_denoiser_max_waveforms_fit=250_000,
+        first_denoiser_thinning=0.5,
+        first_denoiser_temporal_jitter=3,
+        first_denoiser_spatial_jitter=35.0,
         dtype=torch.float,
     ):
         super().__init__(
@@ -87,18 +91,15 @@ class SubtractionPeeler(BasePeeler):
             self.subtract_channel_index, self.channel_index
         )
         if not self.extract_subtract_same:
-            self.register_buffer(
-                "extract_subtract_mask",
-                relative_channel_subset_index(
-                    self.subtract_channel_index, self.channel_index
-                ),
+            esmask = relative_channel_subset_index(
+                self.subtract_channel_index, self.channel_index
             )
+            self.register_buffer("extract_subtract_mask", esmask)
         else:
             self.extract_subtract_mask = None
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
-                "spatial_dedup_channel_index",
-                spatial_dedup_channel_index,
+                "spatial_dedup_channel_index", spatial_dedup_channel_index
             )
         else:
             self.spatial_dedup_channel_index = None
@@ -108,6 +109,13 @@ class SubtractionPeeler(BasePeeler):
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
 
+        # first denoiser fitting parameters
+        self.first_denoiser_max_waveforms_fit = first_denoiser_max_waveforms_fit
+        self.first_denoiser_thinning = first_denoiser_thinning
+        self.first_denoiser_temporal_jitter = first_denoiser_temporal_jitter
+        self.first_denoiser_spatial_jitter = first_denoiser_spatial_jitter
+
+        # singlechan template based detection
         self.use_singlechan_templates = use_singlechan_templates
         self.have_singlechan_templates = False
         self.singlechan_threshold = singlechan_threshold
@@ -118,15 +126,12 @@ class SubtractionPeeler(BasePeeler):
                 alignment_padding=singlechan_alignment_padding,
                 trough_offset_samples=self.trough_offset_samples,
                 spike_length_samples=self.spike_length_samples,
+                max_waveforms=n_waveforms_fit,
             )
             if self.featurization_pipeline is None:
                 self.featurization_pipeline = WaveformPipeline([sc_feat])
             else:
                 self.featurization_pipeline.transformers.insert(0, sc_feat)
-
-        # internal api for switching to thresholding during denoiser fitting
-        # when there are no pre-fit denoisers
-        self._turn_off_subtraction = False
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -286,7 +291,6 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=self.peak_sign,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
-            no_subtraction=self._turn_off_subtraction,
             **singlechan_kw,
         )
 
@@ -401,11 +405,17 @@ class SubtractionPeeler(BasePeeler):
 
             # this is the sequence of transforms to actually use in fitting
             fit_feats = already_fitted + fit_feats
-
-            # if we have no denoisers yet, then definitely don't do subtraction!
-            self._turn_off_subtraction = not already_fitted
         else:
             already_fitted = [t for t in orig_denoise if t.is_denoiser]
+
+        # if fitting the very first denoiser...
+        if which == "denoisers" and not already_fitted:
+            fit_pipeline = WaveformPipeline(fit_feats)
+            self._threshold_to_fit(
+                tmp_dir, fit_pipeline, computation_config=computation_config
+            )
+            return True
+
         self.subtraction_denoising_pipeline = WaveformPipeline(ifeats + already_fitted)
 
         # and we don't need any features for this
@@ -425,7 +435,7 @@ class SubtractionPeeler(BasePeeler):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms = peel_util.subsample_waveforms(
+                channels, waveforms, weights = peel_util.subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -440,10 +450,12 @@ class SubtractionPeeler(BasePeeler):
                 fit_denoise = WaveformPipeline(fit_feats)
                 fit_denoise = fit_denoise.to(device)
                 fit_denoise.fit(
-                    waveforms, max_channels=channels, recording=self.recording
+                    waveforms,
+                    max_channels=channels,
+                    recording=self.recording,
+                    weights=weights,
                 )
                 fit_denoise = fit_denoise.to("cpu")
-                self._turn_off_subtraction = False
                 self.subtraction_denoising_pipeline = orig_denoise
                 self.featurization_pipeline = orig_featurization_pipeline
             finally:
@@ -451,6 +463,59 @@ class SubtractionPeeler(BasePeeler):
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()
         return True
+
+    def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_config):
+        geom = self.recording.get_channel_locations()
+        spatial_jitter_index = None
+        if self.first_denoiser_spatial_jitter:
+            spatial_jitter_index = make_channel_index(
+                geom, self.first_denoiser_spatial_jitter, to_torch=True
+            )
+        waveform_pipeline = WaveformPipeline([Waveform(self.subtract_channel_index)])
+        full_dedup_channel_index = make_channel_index(geom, 1e10, to_torch=True)
+        trainer = ThresholdAndFeaturize(
+            self.recording,
+            detection_threshold=self.detection_threshold,
+            channel_index=self.subtract_channel_index,
+            spatial_dedup_channel_index=full_dedup_channel_index,
+            featurization_pipeline=waveform_pipeline,
+            dedup_temporal_radius_samples=self.spike_length_samples,
+            thinning=self.first_denoiser_thinning,
+            time_jitter=self.first_denoiser_temporal_jitter,
+            spatial_jitter_channel_index=spatial_jitter_index,
+            peak_sign=self.peak_sign,
+        )
+
+        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
+            temp_hdf5_filename = Path(temp_dir) / f"subtraction_denoiser0_fit.h5"
+            try:
+                trainer.peel(
+                    temp_hdf5_filename,
+                    shuffle=True,
+                    stop_after_n_waveforms=self.first_denoiser_max_waveforms_fit,
+                    task_name=f"Load examples for initial denoiser fitting",
+                    computation_config=computation_config,
+                )
+
+                # get fit weights
+                channels, waveforms, weights = peel_util.subsample_waveforms(
+                    temp_hdf5_filename,
+                    fit_sampling=self.fit_sampling,
+                    random_state=self.fit_subsampling_random_state,
+                    n_waveforms_fit=self.first_denoiser_max_waveforms_fit,
+                    fit_max_reweighting=self.fit_max_reweighting,
+                    voltages_dataset_name="voltages",
+                    waveforms_dataset_name="waveforms",
+                    subsample_by_weighting=True,
+                )
+
+                # fit the thing
+                fit_pipeline.fit(
+                    waveforms, channels, recording=self.recording, weights=weights
+                )
+            finally:
+                if temp_hdf5_filename.exists():
+                    temp_hdf5_filename.unlink()
 
 
 ChunkSubtractionResult = namedtuple(

@@ -181,6 +181,12 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_feats: int = 0
     initial_pc_scale: float = 2.5
 
+    n_waveforms_fit: int = 20_000
+    max_waveforms_fit: int = 50_000
+    nn_denoiser_waveforms_fit: int = 50_000
+    nn_denoiser_max_waveforms_fit: int = 250_000
+    first_denoiser_thinning: float = 0.5
+
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"

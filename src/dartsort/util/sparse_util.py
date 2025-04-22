@@ -197,7 +197,7 @@ def topk_sparse_tocsc(
     data = np.take_along_axis(topk_data, order, axis=1)
     row_inds = np.take_along_axis(topk_row_indices, order, axis=1)
 
-    start = searchsorted_along_columns_decreasing(row_inds, 0)
+    start = searchsorted_along_columns(row_inds, 0)
     nnz = row_inds.size - start.sum()
     if extra_row is not None:
         assert extra_row.shape == (n,)
@@ -603,9 +603,9 @@ def hard_noise_argmax_loop(
             # best = noise_ix
 
 
-def searchsorted_along_columns_decreasing(arr, value):
+def searchsorted_along_columns(arr, value):
     out = np.empty((arr.shape[0],), dtype=int)
-    _searchsorted_along_columns_decreasing(out, arr, value)
+    _searchsorted_along_columns(out, arr, value)
     return out
 
 
@@ -615,7 +615,7 @@ def searchsorted_along_columns_decreasing(arr, value):
     nogil=True,
     parallel=True,
 )
-def _searchsorted_along_columns_decreasing(out, arr, value):
+def _searchsorted_along_columns(out, arr, value):
     k = arr.shape[1]
     for j in numba.prange(out.shape[0]):
         i = 0
