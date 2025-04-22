@@ -185,7 +185,9 @@ class DeveloperConfig(DARTsortUserConfig):
     max_waveforms_fit: int = 50_000
     nn_denoiser_max_waveforms_fit: int = 250_000
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = default_pretrained_path
+    nn_denoiser_pretrained_path: str | None = argfield(
+        default=default_pretrained_path, arg_type=str_or_none
+    )
     first_denoiser_thinning: float = 0.5
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000

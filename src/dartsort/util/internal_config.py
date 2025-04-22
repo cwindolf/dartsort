@@ -7,7 +7,7 @@ import numpy as np
 from pydantic.dataclasses import dataclass
 import torch
 
-from .py_util import int_or_inf, int_or_float, float_or_str
+from .py_util import int_or_inf, int_or_float, float_or_str, str_or_none
 from .cli_util import argfield
 
 try:

@@ -78,6 +78,12 @@ def float_or_str(s):
         return s
 
 
+def str_or_none(s):
+    if s.lower() == "none":
+        return None
+    return s
+
+
 def resolve_path(p: str | Path, strict=False) -> Path:
     p = Path(p)
     p = p.expanduser()
