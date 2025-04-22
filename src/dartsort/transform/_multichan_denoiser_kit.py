@@ -519,10 +519,13 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
         data = F.pad(data, (0, 1), value=torch.nan)
         data = data.take_along_dim(chan_inds[:, None, :], dim=2)
 
-        tixs = torch.randint(
-            low=0, high=self._tix_max, generator=self.generator, size=nix
-        )
-        time_inds = tixs[:, None] + self._tix_rel
-        data = data.take_along_dim(time_inds[, :, None], dim=1)
+        if self._tix_max:
+            tixs = torch.randint(
+                low=0, high=self._tix_max, generator=self.generator, size=nix
+            )
+            time_inds = tixs[:, None] + self._tix_rel
+            data = data.take_along_dim(time_inds[:, :, None], dim=1)
+        else:
+            assert data.shape[1] == self.spike_length_samples
 
         return data
