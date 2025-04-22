@@ -472,12 +472,11 @@ class SubtractionPeeler(BasePeeler):
                 geom, self.first_denoiser_spatial_jitter, to_torch=True
             )
         waveform_pipeline = WaveformPipeline([Waveform(self.subtract_channel_index)])
-        full_dedup_channel_index = make_channel_index(geom, 1e10, to_torch=True)
         trainer = ThresholdAndFeaturize(
             self.recording,
             detection_threshold=self.detection_threshold,
             channel_index=self.subtract_channel_index,
-            spatial_dedup_channel_index=full_dedup_channel_index,
+            spatial_dedup_channel_index=self.subtract_channel_index,
             featurization_pipeline=waveform_pipeline,
             dedup_temporal_radius_samples=self.spike_length_samples,
             thinning=self.first_denoiser_thinning,
