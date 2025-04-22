@@ -512,7 +512,7 @@ class SubtractionPeeler(BasePeeler):
                 )
 
                 # fit the thing
-                fit_pipeline.to(device)
+                fit_pipeline = fit_pipeline.to(device)
                 fit_pipeline.fit(
                     waveforms, channels, recording=self.recording, weights=weights
                 )
