@@ -226,7 +226,7 @@ def topk_sparse_tocsc(
         indptr = np.zeros((ncols + 1,), dtype=int)
         indptr[1 + column_support] = k + (extra_row is not None)
         indptr[1 + column_support] -= start
-        np.cumsum(indptr, out=indptr)
+        np.cumsum(indptr[1:], out=indptr[1:])
 
     if extra_row is None:
         _topk_pack(index_storage, data_storage, start, data, row_inds)

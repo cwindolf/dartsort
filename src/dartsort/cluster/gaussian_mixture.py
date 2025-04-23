@@ -117,14 +117,6 @@ class SpikeMixtureModel(torch.nn.Module):
             "heldout_elbo",
             "loglik",
             "elbo",
-            "old_heldout_loglik",
-            "old_heldout_ccl",
-            "old_loglik",
-            "old_ccl",
-            "old_aic",
-            "old_bic",
-            "old_icl",
-            "old_bimodality",
         ] = "heldout_elbo",
         merge_decision_algorithm="brute",
         split_decision_algorithm="tree",
@@ -870,12 +862,13 @@ class SpikeMixtureModel(torch.nn.Module):
                     return_sorted=False,
                 )
                 if ix is not None:
+                    ll.add_(self.log_proportions[j])
                     ix = ix.numpy(force=True)
                     ll = ll.numpy(force=True)
             split_ix = None
             if topk_sparse and split != "full" and ix is not None:
                 # find split indices
-                split_ix = double_searchsorted(split_indices.numpy(force=True), ix)
+                split_ix = np.searchsorted(split_indices.numpy(force=True), ix)
             return j, ix, ll, split_ix
 
         if not topk_sparse:
@@ -921,8 +914,10 @@ class SpikeMixtureModel(torch.nn.Module):
             nlls = None
             if with_noise_unit:
                 nlls = self.noise_log_likelihoods(indices=split_indices)
+                nlls = nlls + self.log_proportions[-1].numpy(force=True)
                 # j += 1
                 # topk_sparse_insert(j, np.arange(len(split_indi)), nlls, topk_arr)
+            print(f"{np.unique(topk_arr[0], return_counts=True)=}")
             log_liks = topk_sparse_tocsc(
                 topk_arr,
                 j + 1,
@@ -931,6 +926,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 n_columns_full=self.data.n_spikes,
             )
             assert log_liks.shape[0] == j + 1 + with_noise_unit
+            print(f"{log_liks.shape=}")
+            print(f"{np.unique(log_liks.indices, return_counts=True)=}")
             rows, counts = np.unique(log_liks.indices, return_counts=True)
             row_nnz = np.zeros(log_liks.shape[0], dtype=int)
             row_nnz[rows] = counts
@@ -941,11 +938,13 @@ class SpikeMixtureModel(torch.nn.Module):
                 data_ixs = write_offsets[split_indices]
                 # assert np.array_equal(data_ixs, ccol_indices[1:] - 1)  # just fyi
                 csc_indices[data_ixs] = j + 1
-                csc_data[data_ixs] = liks
+                csc_data[data_ixs] = liks + self.log_proportions[-1].numpy(force=True)
 
             nrows = j + 1 + with_noise_unit
             shape = (nrows, self.data.n_spikes)
             log_liks = csc_array((csc_data, csc_indices, indptr), shape=shape)
+            print(f"{log_liks.shape=}")
+            print(f"{np.unique(log_liks.indices, return_counts=True)=}")
             log_liks.has_canonical_format = True
             log_liks.row_nnz = row_nnz
 
@@ -963,11 +962,6 @@ class SpikeMixtureModel(torch.nn.Module):
         log_liks = log_liks.tocoo()
         log_liks = coo_to_torch(log_liks, torch.float, copy_data=True)
 
-        # log proportions are added to the likelihoods
-        if self.log_proportions is not None:
-            log_props_vec = self.log_proportions.cpu()[log_liks.indices()[0]]
-            log_liks.values().add_(log_props_vec)
-
         # softmax over units, logged
         log_resps = torch.sparse.log_softmax(log_liks, dim=0)
         log_resps = coo_to_scipy(log_resps).tocsr()
@@ -981,10 +975,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def reassign(self, log_liks):
         spike_ix, assignments, spike_logliks, log_liks_csc = loglik_reassign(
-            log_liks,
-            has_noise_unit=self.with_noise_unit,
-            log_proportions=self.log_proportions,
-            hard_noise=self.hard_noise,
+            log_liks, has_noise_unit=self.with_noise_unit, hard_noise=self.hard_noise
         )
         assignments = torch.from_numpy(assignments).to(self.labels)
 
@@ -1723,30 +1714,18 @@ class SpikeMixtureModel(torch.nn.Module):
         responsibilities = responsibilities[:, split_ids]
 
         # avoid oversplitting by doing a mini merge here
-        if criterion.startswith("old_"):
-            split_labels = self.mini_merge(
-                sp,
-                split_labels,
-                unit_id,
-                weights=responsibilities.T,
-                debug=debug,
-                debug_info=result,
-                merge_kind=merge_kind,
-                merge_criterion=merge_criterion,
-            )
-        else:
-            split_labels = self.split_decision(
-                unit_id,
-                hyp_fit_spikes=sp,
-                hyp_fit_resps=responsibilities.T,
-                criterion=criterion,
-                debug_info=result if debug else None,
-                decision_algorithm=decision_algorithm,
-                ignore_channels=ignore_channels,
-                min_overlap=min_overlap,
-                distance_metric=distance_metric,
-                distance_normalization_kind=distance_normalization_kind,
-            )
+        split_labels = self.split_decision(
+            unit_id,
+            hyp_fit_spikes=sp,
+            hyp_fit_resps=responsibilities.T,
+            criterion=criterion,
+            debug_info=result if debug else None,
+            decision_algorithm=decision_algorithm,
+            ignore_channels=ignore_channels,
+            min_overlap=min_overlap,
+            distance_metric=distance_metric,
+            distance_normalization_kind=distance_normalization_kind,
+        )
         if split_labels is None:
             logger.dartsortdebug(f"Split {unit_id} bailed.")
             return result
@@ -1824,143 +1803,6 @@ class SpikeMixtureModel(torch.nn.Module):
         new_ids = new_ids[new_ids >= 0]
         result["new_ids"] = result["clear_ids"] = new_ids
         return result
-
-    def mini_merge(
-        self,
-        spike_data,
-        labels,
-        unit_id,
-        weights,
-        debug=False,
-        debug_info=None,
-        n_em_iter=None,
-        merge_kind=None,
-        merge_criterion=None,
-    ):
-        """Given labels for a small bag of data, fit and merge."""
-        if n_em_iter is None:
-            n_em_iter = self.split_em_iter
-
-        # E/M sub-units
-        units = lls = log_props = None
-        for _ in range(max(1, n_em_iter)):
-            unique_labels, label_counts = labels.unique(return_counts=True)
-            valid = unique_labels >= 0
-            unique_labels = unique_labels[valid]
-            label_counts = label_counts[valid]
-            big_enough = label_counts >= self.channels_count_min
-            if not big_enough.any():
-                labels.fill_(-1)
-                return labels
-
-            kept = torch.isin(labels, unique_labels[big_enough])
-            kept_labels = labels[kept]
-            labels.fill_(-1)
-            labels[kept] = torch.searchsorted(unique_labels[big_enough], kept_labels)
-            weights = weights[big_enough]
-            log_props = weights.mean(dim=1).log()
-            if debug:
-                debug_info["reas_labels"] = labels
-                debug_info["units"] = units
-
-            units = []
-            _, train_extract_neighborhoods = self.data.neighborhoods(
-                neighborhood="extract"
-            )
-            lps = []
-            for j, label in enumerate(unique_labels[big_enough]):
-                features = spike_data
-                # (in_label,) = torch.nonzero(labels == label, as_tuple=True)
-                # features = spike_data[in_label.to(spike_data.indices.device)]
-                # core_neighborhoods = core_neighborhood_ids = None
-                # if self.channels_strategy.endswith("core"):
-                #     _, core_neighborhoods = self.data.neighborhoods()
-                #     core_neighborhood_ids = core_neighborhoods.neighborhood_ids[
-                #         spike_data.split_indices
-                #     ]
-                try:
-                    unit = GaussianUnit.from_features(
-                        features,
-                        weights=weights[j],  # [in_label],
-                        neighborhoods=train_extract_neighborhoods,
-                        # core_neighborhoods=core_neighborhoods,
-                        # core_neighborhood_ids=core_neighborhood_ids,
-                        channels=self[unit_id].channels.clone(),
-                        **self.split_unit_args,
-                    )
-                    if unit.channels.numel():
-                        units.append(unit)
-                        lps.append(log_props[j])
-                except Exception as e:
-                    warnings.warn("Error in mini_merge unit fit. Traceback on the way")
-                    traceback.print_exception(e)
-
-            if len(units) <= 1:
-                if debug:
-                    debug_info["bail"] = "em"
-                    debug_info["units"] = units
-                return labels
-
-            # determine their bimodalities while at once mini-reassigning
-            lls = spike_data.features.new_full(
-                (len(units), len(spike_data)), -torch.inf
-            )
-            log_props = torch.tensor(lps, device=lls.device)
-            for j, unit in enumerate(units):
-                try:
-                    lls_ = self.unit_log_likelihoods(
-                        unit=unit,
-                        spike_indices=spike_data.indices,
-                        spike_split_indices=spike_data.split_indices,
-                        ignore_channels=True,
-                    )
-                    if lls_ is not None:
-                        lls[j] = lls_
-                except Exception as e:
-                    warnings.warn("Error in mini_merge unit lls. Traceback on the way")
-                    traceback.print_exception(e)
-            nlls = lls + log_props.unsqueeze(1)
-            best_liks, labels = nlls.max(dim=0)
-            labels[torch.isinf(best_liks)] = -1
-            labels = labels.cpu()
-            weights = F.softmax(nlls, dim=0)
-            log_props = weights.mean(1).log()
-
-        labels = labels.numpy(force=True)
-        kept = labels >= 0
-        ids, counts = np.unique(labels, return_counts=True)
-        # valid = np.logical_and(ids >= 0, counts >= self.min_count)
-        valid = ids >= 0
-        ids = ids[valid]
-        units = [units[ii] for ii in ids]
-        keepers = np.flatnonzero(np.isin(labels, ids))
-        kept_labels = labels[keepers]
-        labels[:] = -1
-        labels[keepers] = np.searchsorted(ids, kept_labels)
-        if ids.size <= 1:
-            if debug:
-                debug_info["bail"] = "clean"
-                debug_info["reas_labels"] = labels
-            return labels
-        if debug:
-            debug_info["reas_labels"] = labels
-            debug_info["bail"] = "finished"
-            debug_info["units"] = units
-            debug_info["lls"] = lls
-
-        new_labels, new_ids = self.merge_units(
-            units=units,
-            labels=labels,
-            override_unit_id=unit_id,
-            likelihoods=lls[ids],
-            log_proportions=log_props[ids],
-            spike_data=spike_data,
-            debug_info=debug_info,
-            merge_kind=merge_kind,
-            merge_criterion=merge_criterion,
-        )
-
-        return new_labels
 
     def unit_pair_bimodality(
         self,
@@ -2533,131 +2375,6 @@ class SpikeMixtureModel(torch.nn.Module):
         _, labels = labels.unique(return_inverse=True)
         return labels
 
-    def old_tree_merge(
-        self,
-        distances,
-        unit_ids=None,
-        units=None,
-        labels=None,
-        override_unit_id=None,
-        spikes_extract=None,
-        max_distance=1.0,
-        threshold=None,
-        criterion="heldout_loglik",
-        likelihoods=None,
-        log_proportions=None,
-        spikes_per_subunit=4096,
-        sym_function=np.maximum,
-        show_progress=False,
-        max_group_size=8,
-    ):
-        if distances.shape[0] == 1:
-            return None, None, None, None
-
-        # heuristic unit groupings to investigate
-        distances = sym_function(distances, distances.T)
-        distances = distances[np.triu_indices(len(distances), k=1)]
-        finite = np.isfinite(distances)
-        if not finite.any():
-            return None, None, None, None
-        if not finite.all():
-            inf = max(0, distances[finite].max()) + max_distance + 1
-            distances[np.logical_not(finite)] = inf
-        Z = linkage(distances)
-        n_units = len(Z) + 1
-
-        # figure out the leaf nodes in each cluster in the hierarchy
-        # up to max_distance
-        clusters = leafsets(Z)
-
-        if threshold is None:
-            threshold = self.merge_criterion_threshold
-
-        # walk backwards through the tree
-        already_merged_leaves = set()
-        improvements = np.full(n_units - 1, -np.inf)
-        overlaps = np.full(n_units - 1, -np.inf)
-        group_ids = np.arange(n_units)
-        its = reversed(list(enumerate(Z)))
-
-        # TODO: remove after testing change
-        old = criterion.startswith("old_")
-        assert old
-        criterion = criterion.removeprefix("old_")
-        in_bag = not criterion.startswith("heldout_")
-        criterion = criterion.removeprefix("heldout_")
-
-        if show_progress:
-            its = tqdm(its, desc="Tree", total=n_units - 1, **tqdm_kw)
-        if torch.is_tensor(likelihoods):
-            wunit = self.get_fit_weights(
-                override_unit_id, spikes_extract.indices, self.log_liks
-            )
-            fit_weights = F.softmax(likelihoods + log_proportions[:, None], dim=0)
-        for i, (pa, pb, dist, nab) in its:
-            if not np.isfinite(dist) or dist > max_distance:
-                continue
-
-            pleaves = clusters.get(pa, [int(pa)]) + clusters.get(pb, [int(pb)])
-            if len(pleaves) > max_group_size:
-                continue
-
-            # did we already merge a cluster containing this one?
-            contained = [l in already_merged_leaves for l in pleaves]
-            if any(contained):
-                assert all(contained)
-                improvements[i] = np.inf
-                continue
-
-            # check if should merge
-            leaves = list(sorted(clusters[n_units + i]))
-            cluster_ids = leaves if unit_ids is None else unit_ids[leaves]
-            level_spe = None
-            if spikes_extract is not None:
-                in_level = np.flatnonzero(np.isin(labels, cluster_ids))
-                level_spe = spikes_extract[in_level]
-
-            level_likelihoods = likelihoods
-            level_units = units
-            level_fit_weights = None
-            level_logprops = None
-            level_overall_prop = None
-            if units is not None:
-                level_units = [units[l] for l in leaves]
-                level_likelihoods = likelihoods[leaves][:, in_level]
-                level_fit_weights = wunit[in_level] * fit_weights[leaves][
-                    :, in_level
-                ].sum(dim=0)
-                level_logprops = torch.log_softmax(log_proportions[leaves], dim=0)
-                level_overall_prop = torch.logsumexp(
-                    self.log_proportions[override_unit_id] + log_proportions[leaves],
-                    dim=0,
-                )
-
-            crit, olap = self.old_merge_criteria(
-                unit_ids=cluster_ids,
-                units=level_units,
-                spikes_extract=level_spe,
-                likelihoods=level_likelihoods,
-                fit_weights=level_fit_weights,
-                log_proportions=level_logprops,
-                overall_log_proportion=level_overall_prop,
-                in_bag=in_bag,
-                spikes_per_subunit=spikes_per_subunit,
-                override_unit_id=override_unit_id,
-            )
-
-            if crit is not None:
-                improvements[i] = crit[criterion]
-                overlaps[i] = olap
-
-            # how to actually merge?
-            if improvements[i] > -threshold:
-                group_ids[leaves] = n_units + i
-                already_merged_leaves.update(leaves)
-
-        return Z, group_ids, improvements, overlaps
-
     def validation_criterion(
         self,
         current_log_liks,
@@ -2987,344 +2704,11 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         return res
 
-    def old_merge_criteria(
-        self,
-        unit_ids,
-        units=None,
-        likelihoods=None,
-        fit_weights=None,
-        log_proportions=None,
-        override_unit_id=None,
-        spikes_extract=None,
-        in_bag=False,
-        spikes_per_subunit=2048,
-        min_overlap=0.8,
-        class_balancing="worst",
-        debug=False,
-        allow_empty=None,
-        include_noise_unit=False,
-        overall_log_proportion=None,
-        ignore_channels=True,
-    ):
-        """See if a single unit explains a group
-
-        This code handles two cases. In the split step, we're computing things for a
-        group of hypothetical units which don't correspond to labels in self.labels.
-        In that case, likelihoods is dense and has len(likelihoods)==len(unit_ids).
-        Otherwise, likelihoods is the usual csc array and unit_ids indexes its rows.
-
-        And, it computes several criteria.
-        """
-        # check our two cases...
-        if isinstance(likelihoods, csc_array):
-            # "merge step" case. using units in self._units
-            assert units is None
-            assert override_unit_id is None
-            if allow_empty is None:
-                allow_empty = False
-        else:
-            # "split step" case. using pre-fit hypothetical units.
-            assert torch.is_tensor(likelihoods)
-            assert units is not None
-            assert unit_ids is not None
-            assert override_unit_id is not None
-            assert spikes_extract is not None
-            assert len(units) == len(unit_ids) == len(likelihoods)
-            assert likelihoods.shape[1] == len(spikes_extract)
-            if allow_empty is None:
-                allow_empty = True
-
-        unit_ids = torch.asarray(unit_ids)
-        dim_units = 0  # naming this for clarity in sums below
-
-        # pick spikes for merged unit fit
-        if spikes_extract is None:
-            ix_in_subunits = []
-            splitix_in_subunits = []
-            for u in unit_ids:
-                _, ix, splitix = self.random_indices(u, max_size=spikes_per_subunit)
-                ix_in_subunits.append(ix)
-                splitix_in_subunits.append(splitix)
-            in_any = torch.cat(ix_in_subunits)
-            in_any, in_order = torch.sort(in_any)
-            splitix_in_subunits = torch.cat(splitix_in_subunits)[in_order]
-            spikes_extract = self.data.spike_data(
-                in_any, split_indices=splitix_in_subunits, with_neighborhood_ids=True
-            )
-
-        # fit merged unit
-        if isinstance(likelihoods, csc_array):
-            assert fit_weights is None
-            fit_weights = self.get_log_likelihoods(spikes_extract.indices, likelihoods)
-            fit_weights = torch.sparse.softmax(fit_weights, dim=dim_units)
-            fit_weights = fit_weights.to_dense()[unit_ids].sum(dim=dim_units)
-            assert fit_weights.shape == (len(spikes_extract),)
-        elif torch.is_tensor(likelihoods):
-            assert fit_weights is not None
-
-        merged_unit = self.fit_unit(features=spikes_extract, weights=fit_weights)
-
-        # pick spikes for likelihood computation
-        if in_bag:
-            spikes_core = self.data.spike_data(
-                spikes_extract.indices,
-                split_indices=spikes_extract.split_indices,
-                neighborhood="core",
-                with_neighborhood_ids=True,
-            )
-        else:
-            spikes_core = self.random_spike_data(
-                unit_id=override_unit_id,
-                unit_ids=unit_ids,
-                split_name="val",
-                neighborhood="core",
-                with_neighborhood_ids=True,
-            )
-
-        if include_noise_unit:
-            assert self._noise_log_likelihoods is not None
-            noise_ll = torch.asarray(
-                self.noise_log_likelihoods(spikes_core.indices),
-                device=spikes_core.features.device,
-            )
-
-        # get original units' log likelihoods
-        # two cases: pre-computed dense ones, or we need to grab from sparse
-        # we also grab the sum of responsibilities in the first case. this
-        # helps us compute the local change in log lik due to this merge
-        lik_weights = None
-        if isinstance(likelihoods, csc_array):
-            # below we compute likelihoods, but the proportion vector should be re-normalized.
-            # need to multiply by 1/sum(suprops), aka subtract logsumexp(logsuprops)
-            prop_correction = torch.logsumexp(self.log_proportions[unit_ids], dim=0)
-
-            if in_bag:
-                full_logliks = self.get_log_likelihoods(
-                    spikes_core.indices, likelihoods, unit_ids=unit_ids, dense=True
-                )
-                full_logliks -= prop_correction
-                lik_weights = fit_weights
-            else:
-                full_logliks_sp = self.get_log_likelihoods(
-                    spikes_core.indices, likelihoods
-                )
-
-                data = full_logliks_sp.values()
-                full_logliks = data.new_full(full_logliks_sp.shape, -torch.inf)
-                full_logliks[tuple(full_logliks_sp.indices())] = data
-                full_logliks = full_logliks[unit_ids].sub_(prop_correction)
-
-                lik_weights = torch.sparse.softmax(full_logliks_sp, dim=dim_units)
-                lik_weights = lik_weights.to_dense()[unit_ids].sum(dim=dim_units)
-        else:
-            # split case
-            full_logliks = spikes_core.features.new_full(
-                (len(units) + include_noise_unit, len(spikes_core)), -torch.inf
-            )
-            for j, unit in enumerate(units):
-                ull = self.unit_log_likelihoods(
-                    unit=unit, spikes=spikes_core, ignore_channels=ignore_channels
-                )
-                ullf = ull[ull.isfinite()]
-                if ull is not None:
-                    full_logliks[j] = ull
-            if include_noise_unit:
-                full_logliks[-1] = noise_ll
-                log_proportions = torch.concatenate(
-                    (
-                        overall_log_proportion + log_proportions,
-                        self.log_proportions[-1:],
-                    )
-                )
-                log_proportions = torch.log_softmax(log_proportions, dim=0)
-            full_logliks.nan_to_num_(nan=-torch.inf)
-            full_logliks += log_proportions[:, None]
-        assert full_logliks.shape == (
-            len(unit_ids) + include_noise_unit,
-            len(spikes_core),
-        )
-
-        labels = full_logliks.argmax(0)
-        if include_noise_unit:
-            not_noise = labels < len(units)
-            # labels = torch.where(not_noise, labels, -1)
-            (keep,) = not_noise.nonzero(as_tuple=True)
-            labids, labixs_, labcts = labels[keep].unique(
-                return_inverse=True, return_counts=True
-            )
-            labixs = torch.full_like(labels, len(labids) + 1)
-            labixs[keep] = labixs_
-        else:
-            labids, labixs, labcts = labels.unique(
-                return_inverse=True, return_counts=True
-            )
-        if (not allow_empty) and len(labids) < len(full_logliks):
-            return None, -np.inf
-
-        # compute entropy correction for class likelihood
-        log_resps = F.log_softmax(full_logliks, dim=dim_units)
-        log_resps.nan_to_num_(neginf=0.0, nan=torch.nan)
-        fec = -(log_resps * log_resps.exp()).sum(dim=dim_units)
-
-        # full model's log likelihood for each spike is logsumexp over units
-        if debug:
-            subunit_logliks = full_logliks
-        keep0 = full_logliks.isfinite().all(dim=dim_units)
-        full_logliks = torch.logsumexp(full_logliks, dim=dim_units)
-
-        # merged model's likelihood
-        merged_logliks = self.unit_log_likelihoods(
-            unit=merged_unit, spikes=spikes_core, ignore_channels=ignore_channels
-        )
-        if include_noise_unit:
-            merged_lp = torch.tensor([overall_log_proportion, self.log_proportions[-1]])
-            merged_lp = torch.log_softmax(merged_lp, dim=0)
-            merged_logliks = torch.stack((merged_logliks, noise_ll), dim=dim_units)
-            merged_logliks += merged_lp.unsqueeze(1)
-
-            merged_log_resps = F.log_softmax(merged_logliks, dim=dim_units)
-            merged_log_resps.nan_to_num_(neginf=0.0, nan=torch.nan)
-            mec = -(merged_log_resps * merged_log_resps.exp()).sum(dim=dim_units)
-
-            merged_logliks = torch.logsumexp(merged_logliks, dim=dim_units)
-
-        # it's possible for spikes to be ignored. that's fine, but within reason.
-        if merged_logliks is None:
-            return None, -np.inf
-        keep = torch.logical_and(keep0, merged_logliks.isfinite())
-        if include_noise_unit:
-            keep = torch.logical_and(keep, not_noise)
-        keep_mask = keep.cpu()
-        labprops = torch.zeros_like(labcts)
-        spiketorch.add_at_(labprops, labixs[keep], 1)
-        labprops = labprops / labcts
-        olap = labprops.min()
-        if (not allow_empty) and olap < min_overlap:
-            if debug:
-                return dict(
-                    info=dict(
-                        unit_logliks=merged_logliks[keep],
-                        subunit_logliks=subunit_logliks[:, keep],
-                        keep_mask=keep_mask,
-                        merged_unit=merged_unit,
-                    )
-                )
-            return None, olap
-
-        (keep,) = keep_mask.nonzero(as_tuple=True)
-        n = keep.numel()
-
-        labixs = labixs[keep]
-        merged_logliks = merged_logliks[keep]
-        full_logliks = full_logliks[keep]
-        fec = fec[keep]
-        if include_noise_unit:
-            mec = mec[keep]
-        if lik_weights is not None:
-            lik_weights = lik_weights[keep]
-
-        # get averages in each class
-        if lik_weights is not None:
-            class_w = class_sum(labids, labixs, lik_weights)
-        else:
-            class_w = labcts.to(torch.float)
-        class_fec = class_sum(labids, labixs, fec, lik_weights) / class_w
-        if include_noise_unit:
-            class_mec = class_sum(labids, labixs, mec, lik_weights) / class_w
-        else:
-            class_mec = torch.zeros_like(class_fec)
-        class_fll = class_sum(labids, labixs, full_logliks, lik_weights) / class_w
-        class_mll = class_sum(labids, labixs, merged_logliks, lik_weights) / class_w
-
-        if class_balancing == "worst":
-            worst_ix = torch.argmin(class_mll - class_fll)
-            fec = class_fec[worst_ix]
-            mec = class_mec[worst_ix]
-            fll = class_fll[worst_ix]
-            mll = class_mll[worst_ix]
-        elif class_balancing == "balanced":
-            fec = class_fec.mean()
-            mec = class_mec.mean()
-            fll = class_fll.mean()
-            mll = class_mll.mean()
-        else:
-            assert False
-
-        full_ll = fll.cpu().item()
-        merged_ll = mll.cpu().item()
-        full_ec = fec.cpu().item()
-        merged_ec = mec.cpu().item()
-
-        full_criteria = dict(loglik=full_ll, ccl=full_ll - full_ec)
-        merged_criteria = dict(loglik=merged_ll, ccl=merged_ll - merged_ec)
-        if in_bag:
-            # in-bag metrics include information criteria
-            if units is None:
-                units = [self[u] for u in unit_ids]
-            k_full, k_merged = get_average_parameter_counts(
-                units,
-                merged_unit,
-                spikes_core[keep],
-                self.data.neighborhoods()[1],
-                use_proportions=self.use_proportions,
-                reduce=False,
-            )
-            class_w = class_w.cpu()
-            if lik_weights is not None:
-                lik_weights = lik_weights.cpu()
-            labixs = labixs.cpu()
-            labids = labids.cpu()
-            k_full = class_sum(labids, labixs, k_full.cpu(), lik_weights) / class_w
-            k_merged = class_sum(labids, labixs, k_merged.cpu(), lik_weights) / class_w
-            if class_balancing == "worst":
-                k_full = k_full[worst_ix]
-                k_merged = k_merged[worst_ix]
-                n = class_w[worst_ix].cpu().item()
-            elif class_balancing == "balanced":
-                k_full = k_full.mean()
-                k_merged = k_merged.mean()
-                n = class_w.mean().cpu().item()
-
-            # skip factors of 2
-            full_criteria["aic"] = k_full / n - full_ll
-            merged_criteria["aic"] = k_merged / n - merged_ll
-            full_criteria["bic"] = 0.5 * (k_full * np.log(n) / n) - full_ll
-            merged_criteria["bic"] = 0.5 * (k_merged * np.log(n) / n) - merged_ll
-            full_criteria["icl"] = full_criteria["bic"] + full_ec
-            merged_criteria["icl"] = merged_criteria["bic"]
-
-        improvements = {}
-        for k in full_criteria.keys():
-            # *ic*: smaller=better, so diff=merged-full<0 means merge is good
-            sign = -1 if k in ("aic", "bic", "icl") else 1
-            improvements[k] = sign * (merged_criteria[k] - full_criteria[k])
-
-        if debug:
-            results = dict(
-                improvements=improvements,
-                full_criteria=full_criteria,
-                merged_criteria=merged_criteria,
-                class_w=class_w,
-                class_fec=class_fec,
-                class_mec=class_mec,
-                class_fll=class_fll,
-                class_mll=class_mll,
-                class_dmf=class_mll - class_fll,
-                info=dict(
-                    unit_logliks=merged_logliks,
-                    subunit_logliks=subunit_logliks[:, keep],
-                    keep_mask=keep_mask,
-                    merged_unit=merged_unit,
-                ),
-            )
-            return results
-        return improvements, olap
-
     def get_log_likelihoods(
         self,
         indices,
         likelihoods,
-        with_proportions=True,
+        proportions_already=True,
         unit_ids=None,
         dense=False,
     ):
@@ -3339,7 +2723,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         liks = coo_to_torch(liks.tocoo(), torch.float, copy_data=True)
         liks = liks.to(self.data.device)
-        if with_proportions and self.log_proportions is not None:
+        if not proportions_already and self.log_proportions is not None:
             log_props = self.log_proportions
             if unit_ids is not None:
                 log_props = log_props[unit_ids]
@@ -3594,8 +2978,6 @@ class SpikeMixtureModel(torch.nn.Module):
         if merge_kind is None:
             if merge_criterion == "bimodality":
                 merge_kind = "hierarchical"
-            elif merge_criterion.startswith("old_"):
-                merge_kind = "old_tree"
             else:
                 merge_kind = "tree"
 
@@ -3634,30 +3016,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 debug_info["Z"] = Z
                 debug_info["improvements"] = improvements
                 debug_info["overlaps"] = overlaps
-            group_ids = torch.asarray(group_ids)
-            _, new_ids = group_ids.unique(return_inverse=True)
-            new_labels = torch.asarray(labels).clone()
-            (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
-            new_labels[kept] = new_ids[new_labels[kept]]
-        elif merge_kind == "old_tree":
-            Z, group_ids, improvements, overlaps = self.old_tree_merge(
-                distances,
-                labels=labels,
-                units=units,
-                override_unit_id=override_unit_id,
-                spikes_extract=spike_data,
-                max_distance=self.merge_distance_threshold,
-                criterion=merge_criterion,
-                likelihoods=likelihoods,
-                log_proportions=log_proportions,
-                sym_function=self.merge_sym_function,
-                show_progress=show_progress,
-            )
-            if debug_info is not None:
-                debug_info["Z"] = Z
-                debug_info["improvements"] = improvements
-                debug_info["overlaps"] = overlaps
-
             group_ids = torch.asarray(group_ids)
             _, new_ids = group_ids.unique(return_inverse=True)
             new_labels = torch.asarray(labels).clone()
@@ -4409,34 +3767,6 @@ def get_nans(target, storage, name, shape):
         setattr(storage, name, buffer)
 
     return buffer
-
-
-def marginal_loglik(
-    indices, log_proportions, log_likelihoods, unit_ids=None, reduce="mean"
-):
-    if unit_ids is not None:
-        # renormalize log props
-        log_proportions = log_proportions[unit_ids]
-        log_proportions = log_proportions - logsumexp(log_proportions)
-
-    log_likelihoods = log_likelihoods[:, indices]
-    if unit_ids is not None:
-        log_likelihoods = log_likelihoods[unit_ids]
-
-    # .indices == row inds for a csc_array
-    # since log_proportions and log_likelihoods both were sliced by the same
-    # unit_ids, the row indices match.
-    props = log_proportions[log_likelihoods.indices]
-    log_liks = props + log_likelihoods.data
-
-    if reduce == "mean":
-        ll = log_liks.mean()
-    elif reduce == "sum":
-        ll = log_liks.sum()
-    else:
-        assert False
-
-    return ll
 
 
 def loglik_reassign(
