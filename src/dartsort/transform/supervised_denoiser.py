@@ -395,7 +395,7 @@ class NoisedTemplatesDataset(AsyncBatchDataset):
                 1.0, self.amplitude_jitter_std, size=n, generator=self.generator
             )
             scaling.clamp_(self.amplitude_jitter_min, self.amplitude_jitter_max)
-            gt_waveforms.mul_(scaling[..., None, None])
+            gt_waveforms = gt_waveforms * scaling[..., None, None]
 
         # get noise waveforms
         noise = self.noise.simulate(size=n, generator=self.generator)

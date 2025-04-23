@@ -8,8 +8,6 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, Sampler, DataLoader
 import numpy as np
 
-from dartsort.vis import waveforms
-
 from .transform_base import BaseWaveformDenoiser
 from ..util.waveform_util import regularize_channel_index
 from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg

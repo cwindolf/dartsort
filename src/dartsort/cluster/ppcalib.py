@@ -7,14 +7,11 @@ import torch.nn.functional as F
 from tqdm.auto import trange
 from dataclasses import dataclass
 
-from ..util.noise_util import EmbeddedNoise
-from .stable_features import SpikeFeatures, SpikeNeighborhoods
-
 
 def ppca_em(
-    sp: SpikeFeatures,
-    noise: EmbeddedNoise,
-    neighborhoods: SpikeNeighborhoods,
+    sp,
+    noise,
+    neighborhoods,
     active_channels,
     active_mean=None,
     active_W=None,
@@ -169,8 +166,8 @@ def ppca_em(
 
 
 def ppca_e_step(
-    sp: SpikeFeatures,
-    noise: EmbeddedNoise,
+    sp,
+    noise,
     neighb_data,
     active_channels,
     active_mean,
