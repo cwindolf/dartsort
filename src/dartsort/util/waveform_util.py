@@ -1,15 +1,12 @@
 """
 A collection of helper functions for dealing with which channels
-waveforms are extracted on.
-
-Right now, this file is a mix of numpy and torch, and it could be
-a bit confusing which functions are torch/numpy-compatible.
-Ideally they should all be both.
+waveforms are extracted on, things like that.
 """
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.interpolate import CubicSpline
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
 from tqdm.auto import trange
@@ -679,3 +676,27 @@ def grab_main_channels_torch(waveforms, channels, channel_index):
     assert rpos.shape == (nc,)
     inds = rpos[channels]
     return torch.take_along_dim(waveforms, inds[:, None, None], dim=2)
+
+
+# -- temporal processing
+
+
+def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=1):
+    """nt -> nut"""
+    if temporal_jitter == 1:
+        return singlechan_waveforms[:, None]
+
+    n, t = singlechan_waveforms.shape
+    if time_domain is None:
+        time_domain = np.linspace(0.0, t, num=t)
+    erp = CubicSpline(time_domain, singlechan_waveforms, axis=-1)
+    dt_ms = np.diff(time_domain).mean()
+    t_up = np.stack(
+        [time_domain + dt_ms * (j / temporal_jitter) for j in range(temporal_jitter)],
+        axis=1,
+    )
+    t_up = t_up.ravel()
+    erp_y_up = erp(t_up)
+    erp_y_up = erp_y_up.reshape(n, t, temporal_jitter)
+    singlechan_waveforms_up = erp_y_up.transpose(0, 2, 1)
+    return singlechan_waveforms_up

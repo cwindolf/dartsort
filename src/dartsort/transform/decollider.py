@@ -52,10 +52,13 @@ class Decollider(BaseMultichannelDenoiser):
         res_type="none",
         lr_schedule="CosineAnnealingLR",
         lr_schedule_kwargs=None,
+        inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
         nonlinearity="ELU",
         scaling="max",
+        signal_gates=True,
+        step_callback=None,
         # my args. todo: port over common ones.
         epoch_size=200 * 256,
         inference_z_samples=10,
@@ -74,9 +77,6 @@ class Decollider(BaseMultichannelDenoiser):
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
-        log_signal=False,
-        signal_gates=True,
-        step_callback=None,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -102,13 +102,17 @@ class Decollider(BaseMultichannelDenoiser):
             res_type=res_type,
             lr_schedule=lr_schedule,
             lr_schedule_kwargs=lr_schedule_kwargs,
+            inference_batch_size=inference_batch_size,
             optimizer=optimizer,
             optimizer_kwargs=optimizer_kwargs,
             nonlinearity=nonlinearity,
             scaling=scaling,
+            signal_gates=signal_gates,
+            step_callback=step_callback,
         )
 
         self.epoch_size = epoch_size
+
         self.inference_z_samples = inference_z_samples
         self.detach_amortizer = detach_amortizer
         self.exz_estimator = exz_estimator
@@ -117,7 +121,6 @@ class Decollider(BaseMultichannelDenoiser):
         self.e_exz_y_res_type = e_exz_y_res_type
         self.emz_res_type = emz_res_type
         self.val_noise_random_seed = val_noise_random_seed
-        self.step_callback = step_callback
         self.inf_net_hidden_dims = inf_net_hidden_dims
         self.eyz_net_hidden_dims = eyz_net_hidden_dims
         self.l1_alpha = l1_alpha
@@ -126,8 +129,7 @@ class Decollider(BaseMultichannelDenoiser):
         self.cycle_loss_alpha = cycle_loss_alpha
         self.separate_cycle_net = separate_cycle_net
         self.detach_cycle_loss = detach_cycle_loss
-        self.signal_gates = signal_gates
-        self.log_signal = log_signal
+
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
 
@@ -136,29 +138,19 @@ class Decollider(BaseMultichannelDenoiser):
             logger.dartsortdebug("Already initialized.")
             return
         self.initialize_shapes(spike_length_samples)
-        signal_output_type = "gated_linear" if self.signal_gates else "linear"
         if self.exz_estimator in ("n2n", "n3n"):
             self.eyz = self.get_mlp(
-                res_type=self.eyz_res_type,
-                hidden_dims=self.eyz_net_hidden_dims,
-                output_layer=signal_output_type,
-                log_transform=self.log_signal,
+                res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims
             )
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz = self.get_mlp(res_type=self.emz_res_type)
+            self.emz = self.get_mlp(res_type=self.emz_res_type, output_layer="linear")
         if self.inference_kind == "amortized":
             self.inf_net = self.get_mlp(
-                res_type=self.e_exz_y_res_type,
-                hidden_dims=self.inf_net_hidden_dims,
-                output_layer=signal_output_type,
-                log_transform=self.log_signal,
+                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
             )
         if self.separate_cycle_net:
             self.den_net = self.get_mlp(
-                res_type=self.e_exz_y_res_type,
-                hidden_dims=self.inf_net_hidden_dims,
-                output_layer=signal_output_type,
-                log_transform=self.log_signal,
+                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
             )
         else:
             self.den_net = self.inf_net
@@ -530,13 +522,7 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                 pbar.set_description(f"Epochs [{loss_str}]")
 
-                if scheduler is not None:
-                    sc_args = ()
-                    if isinstance(
-                        scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
-                    ):
-                        sc_args = (val_loss,) if val_loss is not None else loss
-                    scheduler.step(*sc_args)
+                self.step_scheduler(scheduler, loss, val_loss)
 
         train_df = pd.DataFrame.from_records(train_records)
         return train_df

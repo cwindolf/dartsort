@@ -5,6 +5,7 @@ from queue import Queue
 import h5py
 import torch
 import torch.nn.functional as F
+from torch.utils.data import Dataset, Sampler, DataLoader
 import numpy as np
 
 from dartsort.vis import waveforms
@@ -30,9 +31,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         name=None,
         name_prefix="",
         batch_size=256,
-        learning_rate=2.5e-4,
-        weight_decay=1e-5,
-        n_epochs=10,
+        learning_rate=4e-4,
+        weight_decay=0.0,
+        n_epochs=75,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         pretrained_path=None,
@@ -41,13 +42,15 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         earlystop_eps=None,
         random_seed=0,
         res_type="none",
-        lr_schedule=None,
+        lr_schedule="CosineAnnealingLR",
         lr_schedule_kwargs=None,
         inference_batch_size=1024,
-        optimizer=None,
+        optimizer="Adam",
         optimizer_kwargs=None,
-        nonlinearity="ReLU",
-        scaling=None,
+        nonlinearity="ELU",
+        scaling="max",
+        signal_gates=True,
+        step_callback=None,
     ):
         assert pretrained_path is None, "Need to implement loading."
         super().__init__(
@@ -69,6 +72,13 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.optimizer_kwargs = optimizer_kwargs
         self.nonlinearity = nonlinearity
         self.scaling = scaling
+        self.signal_gates = signal_gates
+        self.step_callback = step_callback
+        self.val_split_p = val_split_p
+        self.min_epochs = min_epochs
+        self.earlystop_eps = earlystop_eps
+        self.res_type = res_type
+        self.inference_batch_size = inference_batch_size
 
         self.model_channel_index_np = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
@@ -86,13 +96,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             get_relative_index(self.model_channel_index, self.channel_index),
         )
         self._needs_fit = True
-        self.val_split_p = val_split_p
-        self.min_epochs = min_epochs
-        self.earlystop_eps = earlystop_eps
         self.rg = np.random.default_rng(random_seed)
         self.generator = spawn_torch_rg(self.rg)
-        self.res_type = res_type
-        self.inference_batch_size = inference_batch_size
 
     def forward(self, waveforms, max_channels):
         out = torch.empty_like(waveforms)
@@ -146,6 +151,14 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         assert issubclass(lr_schedule, torch.optim.lr_scheduler.LRScheduler)
         return lr_schedule(optimizer, **sched_kw)
 
+    def step_scheduler(self, scheduler, loss, val_loss):
+        if scheduler is None:
+            return
+        sc_args = ()
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            sc_args = (val_loss,) if val_loss is not None else loss
+        scheduler.step(*sc_args)
+
     @property
     def device(self):
         return self.channel_index.device
@@ -157,11 +170,13 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self,
         res_type="none",
         hidden_dims=None,
-        output_layer="linear",
+        output_layer=None,
         log_transform=False,
     ):
         if hidden_dims is None:
             hidden_dims = self.hidden_dims
+        if output_layer is None:
+            output_layer = "gated_linear" if self.signal_gates else "linear"
         return nn_util.get_waveform_mlp(
             self.spike_length_samples,
             self.model_channel_index.shape[1],
@@ -282,7 +297,37 @@ class SameChannelNoiseDataset(Dataset):
         return noise
 
 
-class AOTIndicesWeightedRandomBatchSampler(Sampler):
+class RefreshableSampler(Sampler):
+    def refresh(self):
+        pass
+
+
+class RefreshableDataLoader(DataLoader):
+    def refresh(self):
+        pass
+
+
+class RefreshableDataset(Dataset):
+    def refresh(self, indices):
+        pass
+
+
+class AOTIndicesInOrderBatchSampler(RefreshableSampler):
+    def __init__(self, n_examples, batch_size=None):
+        super().__init__()
+        self.n_examples = n_examples
+        self.indices = torch.arange(n_examples)
+        self.batch_size = batch_size
+
+    def __iter__(self):
+        if self.batch_size is None:
+            yield from self.indices
+        for bs in range(0, self.n_examples, self.batch_size):
+            be = min(self.n_examples, self.batch_size)
+            yield self.indices[bs:be]
+
+
+class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
     def __init__(
         self,
         n_examples=None,
@@ -351,23 +396,53 @@ class AOTIndicesWeightedRandomBatchSampler(Sampler):
             )
 
 
-class AsyncSameChannelNoiseDataset(Dataset):
+class AOTIndicesRefreshableDataLoader(RefreshableDataLoader):
     def __init__(
         self,
-        channels,
-        channel_index,
+        dataset,
+        in_order=False,
+        weights=None,
+        replacement=True,
+        batch_size=None,
+        generator=None,
+        epoch_size=None,
+    ):
+        if in_order:
+            self.sampler = AOTIndicesWeightedRandomBatchSampler(
+                len(dataset),
+                weights=weights,
+                replacement=replacement,
+                batch_size=batch_size,
+                generator=generator,
+                epoch_size=epoch_size,
+            )
+        else:
+            self.sampler = AOTIndicesInOrderBatchSampler(
+                len(dataset), batch_size=batch_size
+            )
+        super().__init__(dataset, sampler=self.sampler)
+
+    def refresh(self):
+        self.sampler.refresh()
+        if hasattr(self.dataset, "refresh"):
+            self.dataset.refresh(indices)
+
+
+class AsyncBatchDataset(RefreshableDataset):
+    def __init__(
+        self,
+        n_examples,
         spike_length_samples=121,
         generator=None,
         chunk_size=2048,
         queue_chunks=8,
     ):
         super().__init__()
-        self.channels = channels
         self.spike_length_samples = spike_length_samples
-        self.channel_index = channel_index
         # note: although there's threading here, this is only used in one
         # thread, so that's okay.
         self.generator = generator
+        self.n_examples = n_examples
 
         self.chunk_size = chunk_size
         self._queue = Queue(maxsize=queue_chunks)
@@ -378,7 +453,7 @@ class AsyncSameChannelNoiseDataset(Dataset):
         self._cur_chunk_ix = None
 
     def __len__(self):
-        return len(self.channels)
+        return self.n_examples
 
     def cleanup(self):
         if self._thread is not None:
@@ -433,9 +508,35 @@ class AsyncSameChannelNoiseDataset(Dataset):
 
             self._queue.put(noise)
 
-    def load_noise(self, index):
+    def load_batch(self, index):
         # subclasses must implement
         raise NotImplementedError
+
+
+class AsyncSameChannelNoiseDataset(AsyncBatchDataset):
+    def __init__(
+        self,
+        channel_index,
+        channels=None,
+        spike_length_samples=121,
+        generator=None,
+        chunk_size=2048,
+        queue_chunks=8,
+    ):
+        super().__init__(
+            n_examples=len(channels) if channels is not None else torch.inf,
+            spike_length_samples=spike_length_samples,
+            generator=generator,
+            chunk_size=chunk_size,
+            queue_chunks=queue_chunks,
+        )
+        self.channels = channels
+        self.channel_index = channel_index
+
+    def __len__(self):
+        if self.channels is None:
+            return torch.inf
+        return len(self.channels)
 
 
 class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
@@ -459,7 +560,7 @@ class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
         )
         self.recording = recording
 
-    def load_noise(self, index):
+    def load_batch(self, index):
         return get_noise(
             self.recording,
             self.channels[index],
@@ -505,7 +606,7 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
         del self._dataset
         self._h5.close()
 
-    def load_noise(self, index):
+    def load_batch(self, index):
         nix = index.numel()
         dixs = torch.randint(
             low=0, high=self.nsnips, generator=self.generator, size=nix

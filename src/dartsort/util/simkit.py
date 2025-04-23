@@ -1,10 +1,7 @@
-import warnings
-
 import numpy as np
 import probeinterface
 from spikeinterface.core import NumpySorting, NumpyRecording
 from scipy.spatial.distance import cdist
-from scipy.interpolate import CubicSpline
 from tqdm.auto import tqdm
 
 from dartsort.templates.templates import TemplateData
@@ -15,6 +12,7 @@ from .noise_util import StationaryFactorizedNoise, WhiteNoise
 from .data_util import DARTsortSorting
 from .spiketorch import spawn_torch_rg, ptp
 from .drift_util import registered_geometry
+from .waveform_util import upsample_singlechan
 
 
 # -- spike train sims
@@ -143,27 +141,6 @@ def simulate_sorting(
     )
 
     return sorting
-
-
-# -- temporal utils
-
-
-def upsample_singlechan(singlechan_templates, time_domain, temporal_jitter=1):
-    if temporal_jitter == 1:
-        return singlechan_templates[:, None]
-
-    n, t = singlechan_templates.shape
-    erp = CubicSpline(time_domain, singlechan_templates, axis=-1)
-    dt_ms = np.diff(time_domain).mean()
-    t_up = np.stack(
-        [time_domain + dt_ms * (j / temporal_jitter) for j in range(temporal_jitter)],
-        axis=1,
-    )
-    t_up = t_up.ravel()
-    erp_y_up = erp(t_up)
-    erp_y_up = erp_y_up.reshape(n, t, temporal_jitter)
-    singlechan_templates_up = erp_y_up.transpose(0, 2, 1)
-    return singlechan_templates_up
 
 
 # -- spatial utils
