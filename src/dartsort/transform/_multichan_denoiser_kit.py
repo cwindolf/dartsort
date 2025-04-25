@@ -502,7 +502,7 @@ class AsyncBatchDataset(RefreshableDataset):
             chunk_end = min(len(self._indices), chunk_start + self.chunk_size)
 
             index = self._indices[chunk_start:chunk_end]
-            noise = self.load_noise(index)
+            noise = self.load_batch(index)
 
             self._queue.put(noise)
 
