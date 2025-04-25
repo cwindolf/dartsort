@@ -3,6 +3,7 @@ import warnings
 from collections import namedtuple
 from pathlib import Path
 
+from pandas.core import computation
 import torch
 import torch.nn.functional as F
 
@@ -472,12 +473,11 @@ class SubtractionPeeler(BasePeeler):
                 geom, self.first_denoiser_spatial_jitter, to_torch=True
             )
         waveform_pipeline = WaveformPipeline([Waveform(self.subtract_channel_index)])
-        full_dedup_channel_index = make_channel_index(geom, 1e10, to_torch=True)
         trainer = ThresholdAndFeaturize(
             self.recording,
             detection_threshold=self.detection_threshold,
             channel_index=self.subtract_channel_index,
-            spatial_dedup_channel_index=full_dedup_channel_index,
+            spatial_dedup_channel_index=self.subtract_channel_index,
             featurization_pipeline=waveform_pipeline,
             dedup_temporal_radius_samples=self.spike_length_samples,
             thinning=self.first_denoiser_thinning,
@@ -485,6 +485,8 @@ class SubtractionPeeler(BasePeeler):
             spatial_jitter_channel_index=spatial_jitter_index,
             peak_sign=self.peak_sign,
         )
+        device = computation_config.actual_device()
+        trainer.to(device)
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
             temp_hdf5_filename = Path(temp_dir) / f"subtraction_denoiser0_fit.h5"
@@ -510,9 +512,11 @@ class SubtractionPeeler(BasePeeler):
                 )
 
                 # fit the thing
+                fit_pipeline = fit_pipeline.to(device)
                 fit_pipeline.fit(
                     waveforms, channels, recording=self.recording, weights=weights
                 )
+                fit_pipeline.to("cpu")
             finally:
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()

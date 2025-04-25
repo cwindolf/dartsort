@@ -2429,8 +2429,8 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- organize labels...
         best_improvement = best_improvement
         assert np.isfinite(best_improvement)
-        if best_improvement < 0:
-            return None
+        # if best_improvement < 0:
+        #     return None
         best_group_ids = torch.asarray(best_group_ids)
         labels = best_group_ids[full_labels.cpu()]
         _, labels = labels.unique(return_inverse=True)

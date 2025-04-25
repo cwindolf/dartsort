@@ -68,6 +68,9 @@ class BaseTemporalPCA(BaseWaveformModule):
         waveforms = self._temporal_slice(waveforms)
         self.dtype = waveforms.dtype
         train_channel_index = self.channel_index
+        if waveforms.device != train_channel_index.device:
+            waveforms = waveforms.to(train_channel_index.device)
+            max_channels = max_channels.to(train_channel_index.device)
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
