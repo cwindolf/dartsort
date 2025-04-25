@@ -157,7 +157,7 @@ class SubtractionConfig:
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius: float | None = 150.0
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = math.sqrt(0.1 * 15**2)  # sqrt(10)
+    residnorm_decrease_threshold: float = math.sqrt(0.1 * 10**2)  # sqrt(10)
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
@@ -193,7 +193,7 @@ class MatchingConfig:
     fit_max_reweighting: float = 4.0
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
+    threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 4
     template_min_channel_amplitude: float = 1.0
@@ -546,6 +546,7 @@ def to_internal_config(cfg):
     subtraction_denoising_config = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=cfg.use_nn_in_subtraction,
+        do_tpca_denoise=cfg.do_tpca_denoise,
         tpca_rank=cfg.temporal_pca_rank,
         tpca_fit_radius=cfg.fit_radius_um,
         input_waveforms_name="raw",

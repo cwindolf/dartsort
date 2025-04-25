@@ -62,7 +62,7 @@ class DARTsortUserConfig:
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=15.0,
+        default=10.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
@@ -188,6 +188,7 @@ class DeveloperConfig(DARTsortUserConfig):
     nn_denoiser_pretrained_path: str | None = argfield(
         default=default_pretrained_path, arg_type=str_or_none
     )
+    do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.5
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
