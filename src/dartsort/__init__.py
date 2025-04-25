@@ -29,6 +29,7 @@ from .main import (
     subtract,
     grab,
     threshold,
+    logger,
 )
 from .util.internal_config import *
 from .peel.grab import GrabAndFeaturize

@@ -19,7 +19,7 @@ def ppca_em(
     cache_prefix=None,
     M=1,
     n_iter=100,
-    mean_prior_pseudocount=0.0,
+    prior_pseudocount=0.0,
     show_progress=False,
     W_initialization="svd",
     normalize=False,
@@ -27,6 +27,9 @@ def ppca_em(
     prior_var=1.0,
     cache_global_direct=True,
     cache_local_direct=False,
+    laplace_ard=False,
+    alpha_min=1e-6,
+    alpha_max=1e6,
 ):
     new_zeros = sp.features.new_zeros
     if active_W is not None:
@@ -80,7 +83,7 @@ def ppca_em(
             neighb_data,
             active_channels,
             weights=weights,
-            mean_prior_pseudocount=mean_prior_pseudocount,
+            prior_pseudocount=prior_pseudocount,
         )
     else:
         nobs = initialize_mean(
@@ -88,7 +91,7 @@ def ppca_em(
             neighb_data,
             active_channels,
             weights=weights,
-            mean_prior_pseudocount=mean_prior_pseudocount,
+            prior_pseudocount=prior_pseudocount,
             nobs_only=True,
         )
 
@@ -102,6 +105,10 @@ def ppca_em(
             W_needs_initialization = False
         else:
             assert False
+
+    alpha = prior_pseudocount
+    if prior_pseudocount and laplace_ard and M > 0:
+        alpha = sp.features.new_full((M,), float(prior_pseudocount))
 
     iters = trange(n_iter, desc="PPCA") if show_progress else range(n_iter)
     state = dict(mu=active_mean, W=active_W)
@@ -127,11 +134,16 @@ def ppca_em(
             M=M,
             ess=ess,
             active_cov_chol_factor=active_cov_chol_factor,
-            mean_prior_pseudocount=mean_prior_pseudocount,
             noise=noise,
             active_channels=active_channels,
             rescale=True,
+            alpha=alpha,
+            laplace_ard=laplace_ard,
+            alpha_min=alpha_min,
+            alpha_max=alpha_max,
         )
+        if state.get("alpha") is not None:
+            alpha = alpha
         dmu = torch.abs(state["mu"] - old_state["mu"]).abs().max()
         dW = 0
         if state["W"] is not None:
@@ -601,7 +613,11 @@ def ppca_m_step(
     noise=None,
     active_cov_chol_factor=None,
     active_channels=None,
-    mean_prior_pseudocount=0.0,
+    prior_pseudocount=0.0,
+    alpha=0.0,
+    laplace_ard=False,
+    alpha_min=1e-6,
+    alpha_max=1e6,
     rescale=False,
 ):
     """Lightweight PPCA M step"""
@@ -611,8 +627,8 @@ def ppca_m_step(
     mu = e_y
     if e_u is not None:
         mu -= W_old @ e_u
-    if mean_prior_pseudocount:
-        mu *= ess / (ess + mean_prior_pseudocount)
+    if prior_pseudocount:
+        mu *= ess / (ess + alpha)
 
     # initialize W via SVD of whitened residual
     if yc is not None and M:
@@ -624,8 +640,8 @@ def ppca_m_step(
             L = active_cov_chol_factor
         yc = yc.view(n, rank * nc)
         ycw = torch.linalg.solve_triangular(L, yc.T, upper=False).T
-        if mean_prior_pseudocount:
-            ycw *= ess / (ess + mean_prior_pseudocount)
+        if prior_pseudocount:
+            ycw *= ess / (ess + alpha)
         assert ycw.shape == (n, rank * nc)
 
         try:
@@ -653,8 +669,8 @@ def ppca_m_step(
     if e_u is None:
         return dict(mu=mu, W=None)
 
-    if mean_prior_pseudocount:
-        e_uu.diagonal(dim1=-2, dim2=-1).add_(mean_prior_pseudocount / ess)
+    if laplace_ard:
+        e_uu.diagonal(dim1=-2, dim2=-1).add_(alpha / ess)
 
     if rescale:
         scales = e_uu.diagonal().sqrt()
@@ -664,9 +680,15 @@ def ppca_m_step(
     W = torch.linalg.solve(e_uu, e_ycu.view(rank * nc, M), left=False)
     if rescale:
         W.mul_(scales)
+
+    alpha = None
+    if laplace_ard:
+        amin = alpha_min * max(ess, 1)
+        amax = alpha_max * max(ess, 1)
+        alpha = (1.0 / W.square().mean(0)).clamp_(amin, amax)
     W = W.view(rank, nc, M)
 
-    return dict(mu=mu, W=W)
+    return dict(mu=mu, W=W, alpha=alpha)
 
 
 def initialize_mean(
@@ -674,7 +696,7 @@ def initialize_mean(
     neighborhood_data,
     active_channels,
     weights=None,
-    mean_prior_pseudocount=10.0,
+    prior_pseudocount=10.0,
     nobs_only=False,
 ):
     nc = active_channels.numel()
@@ -692,7 +714,7 @@ def initialize_mean(
         nobs[nd.active_subset] += nd.w.sum()
 
     if not nobs_only:
-        mean = weighted_sum / (nobs + mean_prior_pseudocount)
+        mean = weighted_sum / (nobs + prior_pseudocount)
         return mean, nobs
     return nobs
 

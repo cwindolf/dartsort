@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import alpha
 import torch
 from logging import getLogger
 from torch import nn
@@ -57,6 +58,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         sgd_batch_size=None,
         Cinv_in_grad=True,
         prior_pseudocount=5,
+        laplace_ard=False,
+        alpha_max=1e6,
+        alpha_min=1e-6,
     ):
         super().__init__()
         if n_search is None:
@@ -81,6 +85,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.exact_kl = exact_kl
         self.sgd_batch_size = sgd_batch_size
         self.prior_pseudocount = prior_pseudocount
+        self.laplace_ard = laplace_ard
+        self.alpha_max = alpha_max
+        self.alpha_min = alpha_min
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
         logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
@@ -159,6 +166,17 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.bases = nn.Parameter(F.pad(bases, (0, 1)), requires_grad=False)
         else:
             self.bases = None
+
+        if self.M and self.laplace_ard:
+            assert self.prior_pseudocount
+            assert bases is not None
+            alpha = bases.new_full(
+                (nu, self.M), self.prior_pseudocount, dtype=torch.float64
+            )
+            self.laplace_alpha = nn.Parameter(alpha, requires_grad=False)
+        else:
+            self.laplace_alpha = self.prior_pseudocount
+
         self.to(means.device)
 
     def initialize_parameters(self, train_labels):
@@ -168,10 +186,13 @@ class SpikeTruncatedMixtureModel(nn.Module):
         # then storing?
         raise NotImplementedError
 
-    def step(self, show_progress=False, hard_label=False, tic=None):
+    def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
         search_neighbors = self.search_sets()
         candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
             search_neighbors
+        )
+        assert (
+            candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
         )
         self.processor.update(
             log_proportions=self.log_proportions,
@@ -185,6 +206,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             show_progress=show_progress,
             with_kl=not self.exact_kl,
             with_hard_labels=hard_label,
+            with_probs=with_probs,
         )
         assert result.obs_elbo is not None
         assert result.N is not None
@@ -205,13 +227,23 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 # just to avoid numerical issues when a unit dies
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
             if self.prior_pseudocount:
-                tikh = self.prior_pseudocount / result.N.clamp(min=1.0)
+                denom = result.N.clamp(min=1.0).unsqueeze(1).to(torch.float64)
+                tikh = self.laplace_alpha / denom
                 if logger.isEnabledFor(DARTSORTVERBOSE):
                     logger.dartsortverbose(f"TVI basis {tikh=}")
-                result.U.diagonal(dim1=-2, dim2=-1).add_(tikh[:, None])
+                result.U.diagonal(dim1=-2, dim2=-1).add_(tikh.to(result.U))
             Uc = psd_safe_cholesky(result.U)
             W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
+
+        if self.laplace_ard and self.M:
+            assert W is not None
+            assert isinstance(self.laplace_alpha, nn.Parameter)
+            denom = W.to(torch.float64, copy=True).square_().mean(dim=2)
+            assert denom.shape == self.laplace_alpha.shape
+            amin = self.alpha_min * result.N.clamp(min=1.0).unsqueeze(1)
+            amax = self.alpha_max * result.N.clamp(min=1.0).unsqueeze(1)
+            self.laplace_alpha[:] = (1.0 / denom).clamp_(amin, amax)
 
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
@@ -247,12 +279,14 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 self.means[..., :-1].reshape(self.n_units, -1),
                 W,
                 self.noise.full_inverse(),
+                alpha=self.laplace_alpha if self.laplace_ard and self.M else None,
             )
 
         result = dict(
             obs_elbo=obs_elbo.numpy(force=True).item(),
             noise_lp=self.noise_log_prop.numpy(force=True).copy(),
             labels=result.hard_labels,
+            probs=result.probs,
         )
         if tic is not None:
             result["wall"] = time.perf_counter() - tic
@@ -397,7 +431,13 @@ class SpikeTruncatedMixtureModel(nn.Module):
         return topkinds
 
     def channel_occupancy(
-        self, labels, min_count=0, min_prop=0, count_per_unit=None, neighborhoods=None, rg=0
+        self,
+        labels,
+        min_count=0,
+        min_prop=0,
+        count_per_unit=None,
+        neighborhoods=None,
+        rg=0,
     ):
         if neighborhoods is None:
             neighborhoods = self.train_neighborhoods
@@ -486,7 +526,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         return self.Coo_logdet.device
 
     def truncated_e_step(
-        self, candidates, with_kl=False, show_progress=False, with_hard_labels=False
+        self,
+        candidates,
+        with_kl=False,
+        show_progress=False,
+        with_hard_labels=False,
+        with_probs=False,
     ) -> TEStepResult:
         """E step of truncated VEM
 
@@ -516,6 +561,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         hard_labels = None
         if with_hard_labels:
             hard_labels = torch.empty_like(top_candidates[:, 0])
+        probs = None
+        if with_probs:
+            probs = torch.empty(candidates[:, : self.n_candidates].shape)
 
         # do we need to initialize the noise log likelihoods?
         first_run = not hasattr(self, "noise_logliks")
@@ -525,7 +573,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            self._te_step_job(candidates, batchix, with_kl, with_hard_labels)
+            self._te_step_job(
+                candidates, batchix, with_kl, with_hard_labels, with_probs
+            )
             for batchix in self.batches(show_progress=show_progress)
         )
         count = 0
@@ -573,6 +623,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 assert result.hard_labels is not None
                 hard_labels[result.indices] = result.hard_labels
 
+            if with_probs:
+                probs[result.indices] = result.probs
+
         if first_run:
             self.register_buffer("noise_logliks", noise_logliks)
 
@@ -591,10 +644,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             kl=dkl,
             hard_labels=hard_labels,
             count=count,
+            probs=probs,
         )
 
     @joblib.delayed
-    def _te_step_job(self, candidates, batch_indices, with_kl, with_hard_labels):
+    def _te_step_job(
+        self, candidates, batch_indices, with_kl, with_hard_labels, with_probs
+    ):
         return self.process_batch(
             candidates=candidates,
             batch_indices=batch_indices,
@@ -602,6 +658,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             with_obs_elbo=True,
             with_kl=with_kl,
             with_hard_labels=with_hard_labels,
+            with_probs=with_probs,
         )
 
     def batches(self, shuffle=False, show_progress=False, batch_size=None):
@@ -636,6 +693,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_elbo=False,
         with_obs_elbo=False,
         with_hard_labels=False,
+        with_probs=False,
     ) -> TEBatchResult:
         assert not with_elbo  # not implemented yet
         if torch.is_tensor(batch_indices):
@@ -660,6 +718,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_log_prop=self.noise_log_prop,
             candidates=candidates,
             with_kl=with_kl,
+            with_probs=with_probs,
             **edata,
         )
         candidates = eres["candidates"]
@@ -738,6 +797,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             dkl=eres["dkl"],
             noise_lls=eres["noise_lls"],
             hard_labels=hard_labels,
+            probs=eres["probs"],
         )
 
     def initialize_fixed(

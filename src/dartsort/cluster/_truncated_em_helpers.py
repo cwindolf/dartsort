@@ -43,6 +43,7 @@ class TEStepResult:
     kl: torch.Tensor | None = None
 
     hard_labels: torch.Tensor | None = None
+    probs: torch.Tensor | None = None
     count: int | None = None
 
     if ds_verbose:
@@ -72,6 +73,7 @@ class TEBatchResult:
     dkl: torch.Tensor | None = None
 
     noise_lls: torch.Tensor | None = None
+    probs: torch.Tensor | None = None
     hard_labels: torch.Tensor | None = None
 
     if ds_verbose:
@@ -105,6 +107,7 @@ def _te_batch_e(
     noise_trunc_factors=None,
     wburyroot=None,
     with_kl=False,
+    with_probs=False,
 ):
     """This is the "E step" within the E step."""
     pinobs = log2pi * nobs
@@ -183,6 +186,7 @@ def _te_batch_e(
         ncc=ncc,
         dkl=dkl,
         noise_lls=nlls,
+        probs=toplls if with_probs else None,
     )
 
 
@@ -414,12 +418,18 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
     return d.view(R.shape)
 
 
-def _elbo_prior_correction(prior_pseudocount, total_count, mu, W, Cinv):
+def _elbo_prior_correction(prior_pseudocount, total_count, mu, W, Cinv, alpha=None):
     mu_term = torch.einsum("ki,ij,kj->", mu, Cinv, mu).double()
-    W_term = 0
-    if W is not None:
-        W_term = torch.einsum("kli,ij,klj->", W, Cinv, W).double()
-    return (-0.5 * (prior_pseudocount / total_count)) * (mu_term + W_term)
+    mu_term = -0.5 * (prior_pseudocount / total_count) * mu_term
+    if alpha is None:
+        W_term = 0
+        if W is not None:
+            W_term = torch.einsum("kli,ij,klj->", W, Cinv, W).double()
+        return mu_term - 0.5 * (prior_pseudocount / total_count) * W_term
+
+    W_term = torch.einsum("kli,ij,klj,kl->", W, Cinv, W, alpha.to(W)).double()
+    alpha_term = (W.shape[2] / 2) * alpha.log().sum() / total_count
+    return mu_term - 0.5 * W_term / total_count + alpha_term
 
 
 def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False):

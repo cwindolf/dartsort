@@ -106,20 +106,13 @@ class TextInfo(GMMPlot):
                         k = k.item()
                 if torch.is_tensor(v):
                     v = v.numpy(force=True)
-                if isinstance(v, np.ndarray):
-                    if not v.size:
-                        v = "[]"
-                    elif v.size == 1:
-                        v = v.item()
-                    elif v.ndim == 1:
-                        vv = [str(v[0])]
-                        for vvv in map(str, v[1:]):
-                            if len(vv[-1]) > 10:
-                                vv[-1] += "\n"
-                                vv.append(vvv)
-                                continue
-                            vv[-1] += "," + vvv
-                        v = "\n".join(vv)
+                if isinstance(v, (np.ndarray, list)):
+                    v = np.array2string(
+                        np.asarray(v),
+                        separator=",",
+                        precision=1,
+                        threshold=100,
+                    )
                 msg += f"{k}:\n{v}"
 
         axis.text(0, 0, msg, fontsize=5.5)
