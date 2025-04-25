@@ -3,6 +3,7 @@ import tempfile
 
 import h5py
 import numpy as np
+from scipy.signal import firls
 import spikeinterface.core as sc
 import torch
 from dartsort.config import FeaturizationConfig, SubtractionConfig, ComputationConfig
@@ -21,12 +22,15 @@ fixedlenkeys = (
 
 two_jobs_cfg_cpu = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2, device="cpu")
 two_jobs_cfg = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
+two_jobs_cfg_spawn = ComputationConfig(
+    n_jobs_cpu=2, n_jobs_gpu=2, executor="ProcessPoolExecutor"
+)
 
 
 def test_fakedata_nonn():
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 9.5
+    T_s = 15.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)
@@ -70,15 +74,18 @@ def test_fakedata_nonn():
 
     # make fake spike trains
     spikes_per_unit = 51
+    refrac_t = 100
+    t_remaining = T_samples - spikes_per_unit * refrac_t - 2 * 121 - 1
+    mnp = np.ones(spikes_per_unit) / spikes_per_unit
+    assert t_remaining > spikes_per_unit
     sts = []
     labels = []
     for i in range(len(templates)):
-        while True:
-            st = rg.choice(T_samples - 121, size=spikes_per_unit)
-            st.sort()
-            if np.diff(st).min() > 15:
-                sts.append(st)
-                break
+        dt = refrac_t + rg.multinomial(t_remaining, mnp)
+        assert dt.shape == (spikes_per_unit,)
+        st = 121 + np.cumsum(dt)
+        assert st.max() < T_samples - 121
+        sts.append(st)
         labels.append(np.full((spikes_per_unit,), i))
     times = np.concatenate(sts)
     labels = np.concatenate(labels)
@@ -101,6 +108,9 @@ def test_fakedata_nonn():
         subtraction_denoising_config=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
+        first_denoiser_thinning=0.0,
+        first_denoiser_spatial_jitter=0,
+        first_denoiser_temporal_jitter=0,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
@@ -110,6 +120,7 @@ def test_fakedata_nonn():
 
     with tempfile.TemporaryDirectory() as tempdir:
         print("first one")
+        torch.manual_seed(0)
         st = subtract(
             rec,
             tempdir,
@@ -119,6 +130,7 @@ def test_fakedata_nonn():
         )
         out_h5 = st.parent_h5_path
         ns0 = len(st)
+        print(ns0)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
@@ -134,6 +146,7 @@ def test_fakedata_nonn():
 
         # test that resuming works
         print("resume")
+        torch.manual_seed(0)
         st = subtract(
             rec,
             tempdir,
@@ -144,6 +157,7 @@ def test_fakedata_nonn():
         ns1 = len(st)
         out_h5 = st.parent_h5_path
         assert ns0 == ns1
+        print(ns1)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
             assert h5["channels"].shape == (ns0,)
@@ -159,6 +173,7 @@ def test_fakedata_nonn():
 
         # test overwrite
         print("overwrite")
+        torch.manual_seed(0)
         st = subtract(
             rec,
             tempdir,
@@ -168,6 +183,7 @@ def test_fakedata_nonn():
         )
         out_h5 = st.parent_h5_path
         ns2 = len(st)
+        print(ns2)
         assert ns0 == ns2
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)
@@ -182,82 +198,91 @@ def test_fakedata_nonn():
                 channel_index.shape[1],
             )
 
-    with tempfile.TemporaryDirectory() as tempdir:
-        print("parallel first one")
-        st = subtract(
-            rec,
-            tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
-            overwrite=True,
-            computation_config=two_jobs_cfg,
-        )
-        out_h5 = st.parent_h5_path
-        ns0 = len(st)
-        with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert h5["collisioncleaned_tpca_features"].shape == (
-                ns0,
-                featconf.tpca_rank,
-                channel_index.shape[1],
+    for ccfg in (two_jobs_cfg, two_jobs_cfg_spawn):
+        print(f"---- {ccfg=}")
+        with tempfile.TemporaryDirectory() as tempdir:
+            print("parallel first one")
+            torch.manual_seed(0)
+            st = subtract(
+                rec,
+                tempdir,
+                featurization_config=featconf,
+                subtraction_config=subconf,
+                overwrite=True,
+                computation_config=ccfg,
             )
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
+            out_h5 = st.parent_h5_path
+            ns0 = len(st)
+            print(ns0)
+            assert ns2 == ns0
+            with h5py.File(out_h5, locking=False) as h5:
+                assert h5["times_samples"].shape == (ns0,)
+                assert h5["channels"].shape == (ns0,)
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
+                assert np.array_equal(h5["channel_index"][:], channel_index)
+                assert h5["collisioncleaned_tpca_features"].shape == (
+                    ns0,
+                    featconf.tpca_rank,
+                    channel_index.shape[1],
+                )
+                assert np.array_equal(h5["geom"][()], geom)
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
 
-        # test that resuming works
-        print("parallel resume")
-        st = subtract(
-            rec,
-            tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
-            overwrite=False,
-            computation_config=two_jobs_cfg,
-        )
-        out_h5 = st.parent_h5_path
-        ns1 = len(st)
-        assert ns0 == ns1
-        with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-            assert h5["collisioncleaned_tpca_features"].shape == (
-                ns0,
-                featconf.tpca_rank,
-                channel_index.shape[1],
+            # test that resuming works
+            print("parallel resume")
+            torch.manual_seed(0)
+            st = subtract(
+                rec,
+                tempdir,
+                featurization_config=featconf,
+                subtraction_config=subconf,
+                overwrite=False,
+                computation_config=ccfg,
             )
+            out_h5 = st.parent_h5_path
+            ns1 = len(st)
+            print(ns1)
+            assert ns0 == ns1
+            with h5py.File(out_h5, locking=False) as h5:
+                assert h5["times_samples"].shape == (ns0,)
+                assert h5["channels"].shape == (ns0,)
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
+                assert np.array_equal(h5["channel_index"][:], channel_index)
+                assert np.array_equal(h5["geom"][()], geom)
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
+                assert h5["collisioncleaned_tpca_features"].shape == (
+                    ns0,
+                    featconf.tpca_rank,
+                    channel_index.shape[1],
+                )
 
-        # test overwrite
-        print("parallel overwrite")
-        st = subtract(
-            rec,
-            tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
-            overwrite=True,
-            computation_config=two_jobs_cfg,
-        )
-        out_h5 = st.parent_h5_path
-        ns2 = len(st)
-        assert ns0 == ns2
-        with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-            assert h5["collisioncleaned_tpca_features"].shape == (
-                ns0,
-                featconf.tpca_rank,
-                channel_index.shape[1],
+            # test overwrite
+            print("parallel overwrite")
+            torch.manual_seed(0)
+            st = subtract(
+                rec,
+                tempdir,
+                featurization_config=featconf,
+                subtraction_config=subconf,
+                overwrite=True,
+                computation_config=ccfg,
             )
+            out_h5 = st.parent_h5_path
+            ns2 = len(st)
+            print(ns2)
+            assert ns0 == ns2
+            with h5py.File(out_h5, locking=False) as h5:
+                assert h5["times_samples"].shape == (ns0,)
+                assert h5["channels"].shape == (ns0,)
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
+                assert np.array_equal(h5["channel_index"][:], channel_index)
+                assert np.array_equal(h5["geom"][()], geom)
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
+                assert h5["collisioncleaned_tpca_features"].shape == (
+                    ns0,
+                    featconf.tpca_rank,
+                    channel_index.shape[1],
+                )
 
     # simulate resuming a job that got cancelled in the middle
     print("test resume1")
@@ -469,7 +494,7 @@ def test_small_default_config_subex():
 
 
 if __name__ == "__main__":
-    # test_fakedata_nonn()
-    # test_small_nonn()
+    test_fakedata_nonn()
+    test_small_nonn()
     test_small_default_config()
     test_small_default_config_subex()

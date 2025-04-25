@@ -267,11 +267,11 @@ def threshold_chunk(
     energies = energies[keep]
 
     # want only peaks in the chunk
-    min_time = max(left_margin, spike_length_samples)
-    max_time = traces.shape[0] - max(
-        right_margin, spike_length_samples - trough_offset_samples
-    )
-    valid = (orig_times_rel >= min_time) & (orig_times_rel < max_time)
+    min_time = left_margin + trough_offset_samples
+    tail_samples = spike_length_samples - trough_offset_samples
+    max_time = traces.shape[0] - right_margin - tail_samples - 1
+    valid = orig_times_rel == orig_times_rel.clamp(min_time, max_time)
+    (valid,) = valid.nonzero(as_tuple=True)
     orig_times_rel = orig_times_rel[valid]
     times_rel = times_rel[valid]
     channels = channels[valid]
