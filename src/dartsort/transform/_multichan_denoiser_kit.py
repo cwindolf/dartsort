@@ -468,7 +468,6 @@ class AsyncBatchDataset(RefreshableDataset):
     def __getitem__(self, index):
         assert self._indices is not None
         assert self._cur_data_ix is not None
-        assert self._cur_chunk_ix is not None
 
         bs = len(index)
         my_indices = self._indices[self._cur_data_ix : self._cur_data_ix + bs]
@@ -478,6 +477,7 @@ class AsyncBatchDataset(RefreshableDataset):
         if self._cur_chunk is None:
             self._cur_chunk = self._queue.get()
             self._cur_chunk_ix = 0
+        assert self._cur_chunk_ix is not None
 
         chunk_end_ix = min(self._cur_chunk_ix + bs, len(self._cur_chunk))
         noise_batch = self._cur_chunk[self._cur_chunk_ix : chunk_end_ix]
