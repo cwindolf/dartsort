@@ -22,6 +22,7 @@ def refine_clustering(
     return_step_labels=False,
     save_step_labels_format=None,
     save_step_labels_dir=None,
+    save_cfg=None,
 ):
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_stragegy == "splitmerge":
@@ -109,6 +110,7 @@ def refine_clustering(
                 save_step_labels_format.format(stepname=f"refstepaem{it}"),
                 gmm.to_sorting(),
                 save_step_labels_dir,
+                save_cfg,
             )
 
         assert gmm.log_liks is not None
@@ -137,6 +139,7 @@ def refine_clustering(
                     save_step_labels_format.format(stepname=f"refstepbsplit{it}"),
                     gmm.to_sorting(),
                     save_step_labels_dir,
+                    save_cfg,
                 )
         assert gmm.log_liks is not None
         gmm.em(n_iter=1, force_refit=True)
@@ -151,6 +154,7 @@ def refine_clustering(
                 save_step_labels_format.format(stepname=f"refstepcmerge{it}"),
                 gmm.to_sorting(),
                 save_step_labels_dir,
+                save_cfg,
             )
 
     if refinement_config.truncated:

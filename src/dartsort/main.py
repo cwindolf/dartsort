@@ -112,6 +112,7 @@ def dartsort(
         computation_config=cfg.computation_config,
         save_step_labels_format=sfmt,
         save_step_labels_dir=sdir,
+        save_cfg=cfg,
     )
     logger.info(f"Initial refinement: {sorting}")
     ds_tasks("refined0", sorting, output_dir, cfg)
@@ -151,6 +152,7 @@ def dartsort(
                 computation_config=cfg.computation_config,
                 save_step_labels_format=sfmt,
                 save_step_labels_dir=sdir,
+                save_cfg=cfg,
             )
             logger.info(f"Refinement step {step}: {sorting}")
             ds_tasks(f"refined{step}", sorting, output_dir, cfg)
