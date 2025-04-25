@@ -361,7 +361,7 @@ class StaticSimulatedRecording:
         self.template_simulator = template_simulator
         self.geom = template_simulator.geom
         self.noise = noise
-        assert not cmr and highpass_spatial_filter
+        assert not (cmr and highpass_spatial_filter)
         self.cmr = cmr
         self.highpass_spatial_filter = highpass_spatial_filter
 
