@@ -35,9 +35,8 @@ def refine_clustering(
         )
         return ref, {}
 
-    saving = (
-        (save_step_labels_format is not None)
-        and (save_step_labels_dir is not None)
+    saving = (save_step_labels_format is not None) and (
+        save_step_labels_dir is not None
     )
 
     # below is all gmm stuff
@@ -121,6 +120,7 @@ def refine_clustering(
             logger.dartsortdebug(f"{gmm.log_liks.shape=}, skipping split.")
         else:
             # TODO: not this.
+            gmm.em(n_iter=1, force_refit=True)
             gmm.split()
             gmm.log_liks = None
 
@@ -139,6 +139,7 @@ def refine_clustering(
                     save_step_labels_dir,
                 )
         assert gmm.log_liks is not None
+        gmm.em(n_iter=1, force_refit=True)
         gmm.merge(gmm.log_liks)
         gmm.log_liks = None
 

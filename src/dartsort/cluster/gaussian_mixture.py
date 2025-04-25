@@ -2165,15 +2165,15 @@ class SpikeMixtureModel(torch.nn.Module):
                     ip = np.array(ip)
                     conn = cos_connectivity(cosines[ip][:, ip])
                     min_conn = min(conn, min_conn)
-            for i in level_current_ids:
-                if (i,) not in units_memo:
-                    logger.dartsortverbose(f"brute_merge: Fit %s.", i)
-                    try:
-                        units_memo[(i,)] = self.fit_unit(
-                            unit_ids=torch.tensor((i,)), likelihoods=log_likelihoods
-                        )
-                    except ValueError as e:
-                        raise ValueError(f"Couldn't fit {i=} in merge.") from e
+            # for i in level_current_ids:
+            #     if (i,) not in units_memo:
+            #         logger.dartsortverbose(f"brute_merge: Fit %s.", i)
+            #         try:
+            #             units_memo[(i,)] = self.fit_unit(
+            #                 unit_ids=torch.tensor((i,)), likelihoods=log_likelihoods
+            #             )
+            #         except ValueError as e:
+            #             raise ValueError(f"Couldn't fit {i=} in merge.") from e
             if min_conn < min_cosine:
                 logger.dartsortverbose(
                     f"brute_merge: Bail on %s (%s) because conn was %s.",
@@ -2195,7 +2195,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 hyp_units=level_units,
                 hyp_log_props=level_lp,
                 reevaluate_cur_liks=reevaluate_cur_liks,
-                cur_units=[units_memo[(i,)] for i in level_current_ids],
+                # cur_units=[units_memo[(i,)] for i in level_current_ids],
                 in_bag=not criterion.startswith("heldout_"),
             )
             overlap = crit["overlap"]
