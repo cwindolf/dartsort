@@ -155,6 +155,7 @@ class Decollider(BaseMultichannelDenoiser):
         else:
             self.den_net = self.inf_net
         self.to(self.device)
+        print(f"{self.device=}")
 
     def fit(self, waveforms, max_channels, recording, weights=None):
         train_data, val_data = self._construct_datasets_from_waveforms(
@@ -651,7 +652,7 @@ class DecolliderDataLoader:
         for batch in self.loader:
             batch_flat = []
             for item in batch:
-                if isinstance(item, tuple):
+                if isinstance(item, (list, tuple)):
                     batch_flat.extend(item)
                 else:
                     batch_flat.append(item)

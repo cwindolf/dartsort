@@ -889,7 +889,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 )
                 if ix is not None:
                     if self.log_proportions is not None:
-                        ll.add_(self.log_proportions[j])
+                        ll.add_(self.log_proportions[j].to(ll))
                     ix = ix.numpy(force=True)
                     ll = ll.numpy(force=True)
             split_ix = None
