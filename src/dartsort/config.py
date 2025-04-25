@@ -199,5 +199,6 @@ class DeveloperConfig(DARTsortUserConfig):
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
     laplace_ard: bool = True
+    core_radius: float = 35.0
 
     save_intermediate_labels: bool = False
