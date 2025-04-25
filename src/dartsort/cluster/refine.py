@@ -3,6 +3,7 @@ from logging import getLogger
 
 from .. import config
 from ..util import job_util, noise_util
+from ..util.main_util import ds_tasks
 from .split import split_clusters
 from .merge import merge_templates
 from .stable_features import StableSpikeDataset
@@ -19,6 +20,8 @@ def refine_clustering(
     refinement_config=config.default_refinement_config,
     computation_config=None,
     return_step_labels=False,
+    save_step_labels_format=None,
+    save_step_labels_dir=None,
 ):
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_stragegy == "splitmerge":
@@ -31,6 +34,11 @@ def refine_clustering(
             computation_config=computation_config,
         )
         return ref, {}
+
+    saving = (
+        (save_step_labels_format is not None)
+        and (save_step_labels_dir is not None)
+    )
 
     # below is all gmm stuff
     assert refinement_config.refinement_stragegy == "gmm"
@@ -97,6 +105,12 @@ def refine_clustering(
             gmm.log_liks = gmm.em(final_split=intermediate_split)
         if return_step_labels:
             step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
+        if saving:
+            ds_tasks(
+                save_step_labels_format.format(stepname=f"refstepaem{it}"),
+                gmm.to_sorting(),
+                save_step_labels_dir,
+            )
 
         assert gmm.log_liks is not None
         # TODO: if split is self-consistent enough, we don't need this.
@@ -118,6 +132,12 @@ def refine_clustering(
                 gmm.log_liks = gmm.em(final_split=intermediate_split)
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
+            if saving:
+                ds_tasks(
+                    save_step_labels_format.format(stepname=f"refstepbsplit{it}"),
+                    gmm.to_sorting(),
+                    save_step_labels_dir,
+                )
         assert gmm.log_liks is not None
         gmm.merge(gmm.log_liks)
         gmm.log_liks = None
@@ -125,20 +145,18 @@ def refine_clustering(
         gc.collect()
         if return_step_labels:
             step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
+        if saving:
+            ds_tasks(
+                save_step_labels_format.format(stepname=f"refstepcmerge{it}"),
+                gmm.to_sorting(),
+                save_step_labels_dir,
+            )
 
     if refinement_config.truncated:
-        res = gmm.tvi(final_split="full")
-        gmm.log_liks = res  # not actually! but just to del it later.
+        gmm.tvi(final_split="full")
     else:
-        gmm.log_liks = gmm.em(final_split="full")
-    gmm.log_liks = None
-
-    gc.collect()
-    gmm.cpu()
+        gmm.em(final_split="full")
     sorting = gmm.to_sorting()
-    del gmm
-
-    gc.collect()
     return sorting, step_labels
 
 
