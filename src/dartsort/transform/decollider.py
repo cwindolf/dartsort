@@ -18,7 +18,7 @@ from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     BaseMultichannelDenoiser,
     get_noise,
-    AsyncSameChannelNoiseDataset,
+    AsyncSameChannelRecordingNoiseDataset,
     AOTIndicesWeightedRandomBatchSampler,
     NoneDataset,
 )
@@ -546,7 +546,7 @@ class Decollider(BaseMultichannelDenoiser):
         train_waveforms = waveforms[train_indices]
         train_channels = channels[train_indices]
         train_dataset = TensorDataset(train_waveforms, train_channels)
-        train_noise_dataset = AsyncSameChannelNoiseDataset(
+        train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
             recording,
             train_channels.numpy(force=True),
             self.model_channel_index_np,
@@ -554,7 +554,7 @@ class Decollider(BaseMultichannelDenoiser):
             generator=spawn_torch_rg(self.rg),
         )
         if self.cycle_loss_alpha:
-            train_cycle_noise_dataset = AsyncSameChannelNoiseDataset(
+            train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
                 recording,
                 train_channels.numpy(force=True),
                 self.model_channel_index_np,
