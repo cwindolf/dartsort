@@ -602,6 +602,7 @@ def to_internal_config(cfg):
         laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
+        core_radius=cfg.core_radius,
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

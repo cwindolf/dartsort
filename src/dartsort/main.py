@@ -35,6 +35,7 @@ from dartsort.util.data_util import (
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 from dartsort.util.py_util import resolve_path
+from dartsort.util.main_util import ds_tasks
 
 
 logger = getLogger(__name__)
@@ -99,17 +100,20 @@ def dartsort(
     ds_tasks("initial", sorting, output_dir, cfg)
 
     # clustering: model
+    sdir = sfmt = None
+    if cfg.save_intermediate_labels:
+        sdir = output_dir
+        sfmt = "refined0{stepname}"
     sorting, info = refine_clustering(
         recording=recording,
         sorting=sorting,
         motion_est=motion_est,
         refinement_config=cfg.refinement_config,
         computation_config=cfg.computation_config,
-        return_step_labels=cfg.save_intermediate_labels,
+        save_step_labels_format=sfmt,
+        save_step_labels_dir=sdir,
     )
     logger.info(f"Initial refinement: {sorting}")
-    for k, v in info.items():
-        ds_tasks(f"refined0{k}", sorting, output_dir, cfg, step_labels=v)
     ds_tasks("refined0", sorting, output_dir, cfg)
 
     for step in range(1, cfg.matching_iterations + 1):
@@ -135,19 +139,21 @@ def dartsort(
         ds_tasks(f"matching{step}", sorting, output_dir, cfg)
 
         if cfg.final_refinement or not is_final:
+            sdir = sfmt = None
+            if cfg.save_intermediate_labels:
+                sdir = output_dir
+                sfmt = f"refined{step}{{stepname}}"
             sorting, info = refine_clustering(
                 recording=recording,
                 sorting=sorting,
                 motion_est=motion_est,
                 refinement_config=cfg.refinement_config,
                 computation_config=cfg.computation_config,
-                return_step_labels=cfg.save_intermediate_labels,
+                save_step_labels_format=sfmt,
+                save_step_labels_dir=sdir,
             )
             logger.info(f"Refinement step {step}: {sorting}")
-            refn = f"refined{step}"
-            for k, v in info.items():
-                ds_tasks(f"{refn}{k}", sorting, output_dir, cfg, step_labels=v)
-            ds_tasks(refn, sorting, output_dir, cfg)
+            ds_tasks(f"refined{step}", sorting, output_dir, cfg)
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting
@@ -390,14 +396,3 @@ def match_chunked(
         hdf5_filenames.append(chunk_h5)
 
     return sortings, hdf5_filenames
-
-
-def ds_tasks(step_name, step_sorting, output_dir, cfg, step_labels=None):
-    output_dir = resolve_path(output_dir, strict=True)
-
-    if cfg.save_intermediate_labels:
-        step_labels_npy = output_dir / f"{step_name}_labels.npy"
-        logger.info(f"Saving {step_name} labels to {step_labels_npy}")
-        if step_labels is None:
-            step_labels = step_sorting.labels
-        np.save(step_labels_npy, step_labels, allow_pickle=False)
