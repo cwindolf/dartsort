@@ -624,7 +624,12 @@ class SpikeMixtureModel(torch.nn.Module):
         return result
 
     def em(
-        self, n_iter=None, show_progress=True, final_e_step=True, final_split="kept"
+        self,
+        n_iter=None,
+        force_refit=False,
+        show_progress=True,
+        final_e_step=True,
+        final_split="kept",
     ):
         n_iter = self.n_em_iters if n_iter is None else n_iter
         step_progress = False
@@ -636,8 +641,11 @@ class SpikeMixtureModel(torch.nn.Module):
         train_ix = self.data.split_indices["train"]
 
         # if we have no units, we can't E step.
-        missing_ids = self.missing_ids()
-        if len(missing_ids):
+        if force_refit:
+            missing_ids = None
+        else:
+            missing_ids = self.missing_ids()
+        if missing_ids is None or len(missing_ids):
             self.m_step(show_progress=step_progress, fit_ids=missing_ids)
             self.cleanup(min_count=1)
 
