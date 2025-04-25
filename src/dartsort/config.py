@@ -195,5 +195,6 @@ class DeveloperConfig(DARTsortUserConfig):
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
+    laplace_ard: bool = True
 
     save_intermediate_labels: bool = False

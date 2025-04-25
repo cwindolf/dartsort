@@ -82,6 +82,7 @@ def refine_clustering(
         split_decision_algorithm=refinement_config.split_decision_algorithm,
         merge_decision_algorithm=refinement_config.merge_decision_algorithm,
         prior_pseudocount=refinement_config.prior_pseudocount,
+        laplace_ard=refinement_config.laplace_ard,
     )
 
     # these are for benchmarking

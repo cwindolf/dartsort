@@ -414,6 +414,7 @@ class RefinementConfig:
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
+    laplace_ard: bool = True
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -597,6 +598,7 @@ def to_internal_config(cfg):
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
+        laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
     )
