@@ -515,6 +515,7 @@ class AsyncSameChannelNoiseDataset(AsyncBatchDataset):
     def __init__(
         self,
         channel_index,
+        n_examples=None,
         channels=None,
         spike_length_samples=121,
         generator=None,

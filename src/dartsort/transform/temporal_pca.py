@@ -2,12 +2,11 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-from dartsort.util.waveform_util import (
+from ..util.waveform_util import (
     channel_subset_by_radius,
     get_channels_in_probe,
     set_channels_in_probe,
 )
-
 from .transform_base import (
     BaseWaveformAutoencoder,
     BaseWaveformDenoiser,
@@ -53,7 +52,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.max_waveforms = max_waveforms
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
-        if weights is not None:
+        if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)

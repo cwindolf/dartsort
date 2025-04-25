@@ -588,7 +588,7 @@ class Decollider(BaseMultichannelDenoiser):
             sampler=train_sampler,
             noise_dataset=train_noise_dataset,
             cycle_noise_dataset=train_cycle_noise_dataset,
-            spike_length_samples=waveforms.shape[1],
+            spike_length_samples=spike_length_samples,
         )
 
         # initialize validation datasets only if val_split_p > 0
@@ -628,7 +628,7 @@ class Decollider(BaseMultichannelDenoiser):
                 sampler=None,
                 noise_dataset=val_noise_dataset,
                 cycle_noise_dataset=cycle_val_noise,
-                spike_length_samples=waveforms.shape[1],
+                spike_length_samples=spike_length_samples,
             )
         else:
             val_data = None

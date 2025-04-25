@@ -196,7 +196,7 @@ class MatchingConfig:
     threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 4
-    template_min_channel_amplitude: float = 1.0
+    template_min_channel_amplitude: float = 0.0
     refractory_radius_frames: int = 10
     amplitude_scaling_variance: float = 0.1**2
     amplitude_scaling_boundary: float = 1.0

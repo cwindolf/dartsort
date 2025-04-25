@@ -254,6 +254,10 @@ class SubtractionPeeler(BasePeeler):
             n_singlechan_templates=subtraction_config.n_singlechan_templates,
             singlechan_threshold=subtraction_config.singlechan_threshold,
             singlechan_alignment_padding=singlechan_alignment_padding,
+            first_denoiser_max_waveforms_fit=subtraction_config.first_denoiser_max_waveforms_fit,
+            first_denoiser_thinning=subtraction_config.first_denoiser_thinning,
+            first_denoiser_temporal_jitter=subtraction_config.first_denoiser_temporal_jitter,
+            first_denoiser_spatial_jitter=subtraction_config.first_denoiser_spatial_jitter,
         )
 
     def peel_chunk(
@@ -646,8 +650,8 @@ def subtract_chunk(
             break
 
         # throw away spikes which cannot be subtracted
-        keep = torch.logical_and(
-            times_samples >= trough_offset_samples, times_samples < max_trough_time
+        keep = times_samples == times_samples.clamp(
+            trough_offset_samples, max_trough_time
         )
         (keep,) = keep.nonzero(as_tuple=True)
 
@@ -742,9 +746,8 @@ def subtract_chunk(
     del spike_features_list
 
     # discard spikes in the margins and sort times_samples for caller
-    keep = torch.logical_and(
-        spike_times >= left_margin, spike_times < traces.shape[0] - right_margin
-    )
+    max_valid_t = traces.shape[0] - right_margin - 1
+    keep = spike_times == spike_times.clamp(left_margin, max_valid_t)
     (keep,) = keep.cpu().nonzero(as_tuple=True)
     if not keep.numel():
         return empty_chunk_subtraction_result(

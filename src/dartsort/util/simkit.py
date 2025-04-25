@@ -352,6 +352,8 @@ class StaticSimulatedRecording:
         amplitude_jitter=0.0,
         refractory_samples=40,
         globally_refractory=False,
+        cmr=False,
+        highpass_spatial_filter=False,
         seed: int | np.random.Generator = 0,
     ):
         self.n_units = n_units
@@ -359,6 +361,9 @@ class StaticSimulatedRecording:
         self.template_simulator = template_simulator
         self.geom = template_simulator.geom
         self.noise = noise
+        assert not (cmr and highpass_spatial_filter)
+        self.cmr = cmr
+        self.highpass_spatial_filter = highpass_spatial_filter
 
         self.rg = np.random.default_rng(seed)
         self.torch_rg = spawn_torch_rg(self.rg)
@@ -555,7 +560,15 @@ class StaticSimulatedRecording:
             self.maxchans[batch] = ptp(btemps).argmax(1)
             np.add.at(x, (tix, chan_ix[None, None]), btemps)
 
+        if self.cmr:
+            x -= np.median(x, axis=0)
+
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
         recording.set_dummy_probe_from_locations(self.geom)
+
+        if self.highpass_spatial_filter:
+            from spikeinterface.preprocessing import highpass_spatial_filter
+
+            recording = highpass_spatial_filter(recording)
 
         return recording
