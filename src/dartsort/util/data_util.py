@@ -167,8 +167,9 @@ class DARTsortSorting:
         channels_dataset="channels",
         labels_dataset="labels",
         load_simple_features=True,
-        simple_feature_names=None,
+        load_feature_names=None,
         simple_feature_maxshape=1000,
+        load_all_features=False,
         labels=None,
     ):
         channels = None
@@ -184,23 +185,31 @@ class DARTsortSorting:
 
             n_spikes = len(times_samples)
             extra_features = None
-            if load_simple_features:
+            if load_simple_features or load_all_features:
                 extra_features = {}
                 loaded = (
                     times_samples_dataset,
                     channels_dataset,
                     labels_dataset,
                 )
-                if simple_feature_names is None:
-                    simple_feature_names = h5.keys()
-                for k in simple_feature_names:
-                    if (
+                if load_feature_names is None:
+                    load_feature_names = h5.keys()
+                else:
+                    load_all_features = True
+                for k in load_feature_names:
+                    is_loadable = (
                         k not in loaded
-                        and 1 <= h5[k].ndim <= 2
+                        and 1 <= h5[k].ndim
+                        and h5[k].shape[0] == n_spikes
+                    )
+                    is_simple = (
+                        is_loadable
+                        and h5[k].ndim <= 2
                         and h5[k].shape[0] == n_spikes
                         and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)
-                    ):
-                        extra_features[k] = h5[k][:]
+                    )
+                    if (load_all_features and is_loadable) or is_simple:
+                        extra_features[k] = h5[k][()]
                     elif k not in loaded and (
                         k.endswith("channel_index") or k == "geom"
                     ):
@@ -245,7 +254,7 @@ def get_labels(h5_path):
 
 
 def get_residual_snips(h5_path):
-    with h5py.File(h5_path, "r") as h5:
+    with h5py.File(h5_path, "r", locking=False) as h5:
         return h5["residual"][:]
 
 
