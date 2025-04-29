@@ -149,6 +149,8 @@ class DARTsortUserConfig:
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
+    initial_split_only: bool = True
+
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
     use_universal_templates: bool = False

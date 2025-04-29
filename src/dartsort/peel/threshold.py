@@ -36,6 +36,7 @@ class ThresholdAndFeaturize(BasePeeler):
         fit_subsampling_random_state=0,
         thinning=0.0,
         time_jitter=0,
+        trough_priority=None,
         spatial_jitter_channel_index=None,
         dtype=torch.float,
     ):
@@ -59,6 +60,7 @@ class ThresholdAndFeaturize(BasePeeler):
         self.relative_peak_radius_samples = relative_peak_radius_samples
         self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
         self.peak_sign = peak_sign
+        self.trough_priority = trough_priority
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index", spatial_dedup_channel_index
@@ -145,6 +147,7 @@ class ThresholdAndFeaturize(BasePeeler):
             thinning=thresholding_config.thinning,
             time_jitter=thresholding_config.time_jitter,
             spatial_jitter_channel_index=spatial_jitter_channel_index,
+            trough_priority=thresholding_config.trough_priority,
         )
 
     def out_datasets(self):
@@ -185,6 +188,7 @@ class ThresholdAndFeaturize(BasePeeler):
             rg=self.rg if self.is_random else None,
             max_spikes_per_chunk=None,
             return_waveforms=return_waveforms,
+            trough_priority=self.trough_priority,
             quiet=False,
         )
 
@@ -226,6 +230,7 @@ def threshold_chunk(
     max_spikes_per_chunk=None,
     thinning=0,
     time_jitter=0,
+    trough_priority=None,
     spatial_jitter_channel_index=None,
     return_waveforms=True,
     rg=None,
@@ -240,6 +245,7 @@ def threshold_chunk(
         dedup_temporal_radius=dedup_temporal_radius,
         relative_peak_radius=relative_peak_radius,
         return_energies=True,
+        trough_priority=trough_priority,
     )
     if not times_rel.numel():
         return dict(

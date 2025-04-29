@@ -13,6 +13,7 @@ def detect_and_deduplicate(
     exclude_edges=True,
     return_energies=False,
     detection_mask=None,
+    trough_priority=None,
 ):
     """Detect and deduplicate peaks
 
@@ -35,9 +36,6 @@ def detect_and_deduplicate(
     dedup_temporal_radius : int
         Only the largest peak within this sliding radius
         will be kept
-    detection_mask : tensor
-        If supplied, this floating tensor of 1s or 0s will act
-        as a gate to suppress detections in the 0s
 
     Returns
     -------
@@ -60,10 +58,6 @@ def detect_and_deduplicate(
         # no need to copy since max pooling will
         energies = traces
 
-    # optionally remove censored peaks
-    if detection_mask is not None:
-        energies.mul_(detection_mask)
-
     # -- torch temporal relative maxima as pooling operation
     # we used to implement with max_pool2d -> unique, but
     # we can use max_unpool2d to speed up the second step
@@ -85,8 +79,13 @@ def detect_and_deduplicate(
     )
     # remove peaks smaller than our threshold
     F.threshold_(energies, threshold, 0.0)
+    if trough_priority and peak_sign == "both":
+        tp = torch.where(traces.T < 0, trough_priority, 1.0)
+        energies.mul_(tp)
 
     # -- temporal deduplication
+    if detection_mask is not None:
+        energies.mul_(detection_mask.to(energies))
     if dedup_temporal_radius:
         max_energies = F.max_pool1d(
             energies,
@@ -127,7 +126,7 @@ def detect_and_deduplicate(
     times, chans = torch.nonzero(max_energies, as_tuple=True)
 
     if return_energies:
-        return times, chans, max_energies[times, chans]
+        return times, chans, energies[times, chans]
 
     return times, chans
 

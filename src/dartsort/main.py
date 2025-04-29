@@ -108,7 +108,7 @@ def dartsort(
         recording=recording,
         sorting=sorting,
         motion_est=motion_est,
-        refinement_config=cfg.refinement_config,
+        refinement_config=cfg.initial_refinement_config,
         computation_config=cfg.computation_config,
         save_step_labels_format=sfmt,
         save_step_labels_dir=sdir,

@@ -155,9 +155,13 @@ class SubtractionConfig:
     # subtraction
     detection_threshold: float = 4.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float | None = 150.0
+    spatial_dedup_radius: float | None = 100.0
+    temporal_dedup_radius_samples: int = 11
+    positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = math.sqrt(0.1 * 10**2)  # sqrt(10)
+    residnorm_decrease_threshold: float = 0.1 * 10**2
+    growth_tolerance: float | None = 0.5
+    trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
@@ -179,6 +183,9 @@ class SubtractionConfig:
     first_denoiser_thinning: float = 0.5
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
+
+    # for debugging / vis
+    save_iteration: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -227,6 +234,7 @@ class ThresholdingConfig:
     thinning: float = 0.0
     time_jitter: int = 0
     spatial_jitter_radius: float = 0.0
+    trough_priority: float | None = 2.0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -409,6 +417,7 @@ class RefinementConfig:
     em_converged_churn: float = 0.01
     em_converged_atol: float = 1e-4
     n_total_iters: int = 3
+    one_split_only: bool = False
     hard_noise: bool = False
     truncated: bool = True
     split_decision_algorithm: str = "brute"
@@ -464,6 +473,7 @@ class DARTsortInternalConfig:
     subtraction_config: SubtractionConfig = SubtractionConfig()
     template_config: TemplateConfig = TemplateConfig()
     clustering_config: ClusteringConfig = ClusteringConfig()
+    initial_refinement_config: RefinementConfig = RefinementConfig()
     refinement_config: RefinementConfig = RefinementConfig()
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
@@ -562,13 +572,12 @@ def to_internal_config(cfg):
         singlechan_alignment_padding_ms=cfg.alignment_ms,
         use_singlechan_templates=cfg.use_singlechan_templates,
         use_universal_templates=cfg.use_universal_templates,
-        subtraction_denoising_config=subtraction_denoising_config,
-        residnorm_decrease_threshold=np.sqrt(
-            cfg.denoiser_badness_factor * cfg.matching_threshold**2
-        ),
+        residnorm_decrease_threshold=cfg.denoiser_badness_factor
+        * cfg.matching_threshold**2,
         chunk_length_samples=cfg.chunk_length_samples,
         first_denoiser_thinning=cfg.first_denoiser_thinning,
         first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+        subtraction_denoising_config=subtraction_denoising_config,
     )
     template_config = TemplateConfig(
         registered_template_localization_radius_um=cfg.localization_radius_um,
@@ -604,6 +613,9 @@ def to_internal_config(cfg):
         glasso_alpha=cfg.glasso_alpha,
         core_radius=cfg.core_radius,
     )
+    initial_refinement_config = dataclasses.replace(
+        refinement_config, one_split_only=cfg.initial_split_only
+    )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
     )
@@ -627,6 +639,7 @@ def to_internal_config(cfg):
         subtraction_config=subtraction_config,
         template_config=template_config,
         clustering_config=clustering_config,
+        initial_refinement_config=initial_refinement_config,
         refinement_config=refinement_config,
         matching_config=matching_config,
         motion_estimation_config=motion_estimation_config,

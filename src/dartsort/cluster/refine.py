@@ -97,6 +97,7 @@ def refine_clustering(
     step_labels = {}
     intermediate_split = "full" if return_step_labels else "kept"
     gmm.log_liks = None  # TODO
+
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
             res = gmm.tvi(final_split=intermediate_split)
@@ -120,11 +121,17 @@ def refine_clustering(
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
             logger.dartsortdebug(f"{gmm.log_liks.shape=}, skipping split.")
+
+            if refinement_config.one_split_only:
+                break
         else:
             # TODO: not this.
             gmm.em(n_iter=1, force_refit=True)
             gmm.split()
             gmm.log_liks = None
+
+            if refinement_config.one_split_only:
+                break
 
             gc.collect()
             if refinement_config.truncated:
@@ -141,6 +148,7 @@ def refine_clustering(
                     save_step_labels_dir,
                     save_cfg,
                 )
+
         assert gmm.log_liks is not None
         gmm.em(n_iter=1, force_refit=True)
         gmm.merge(gmm.log_liks)

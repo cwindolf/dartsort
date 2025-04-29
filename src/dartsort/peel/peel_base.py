@@ -695,7 +695,7 @@ class BasePeeler(torch.nn.Module):
             ordered=ordered,
             skip_last=skip_last,
         )
-        self.peel(
+        return self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
             chunk_length_samples=chunk_length_samples,
