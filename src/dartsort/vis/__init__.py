@@ -7,4 +7,5 @@ from .vismain import *
 from .waveforms import *
 from .gt import *
 from .colors import *
+from .recanim import RecordingAnimation
 from . import gmm
