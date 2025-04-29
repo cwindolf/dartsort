@@ -193,12 +193,12 @@ class PointSource3ExpSimulator:
         geom,
         # timing params
         tip_before_min=0.1,
-        tip_before_max=0.8,
-        peak_after_min=0.4,
-        peak_after_max=1.5,
+        tip_before_max=0.5,
+        peak_after_min=0.2,
+        peak_after_max=0.8,
         # width params
         trough_width_min=0.01,
-        trough_width_max=0.1,
+        trough_width_max=0.05,
         tip_width_min=0.01,
         tip_width_max=0.15,
         peak_width_min=0.1,
