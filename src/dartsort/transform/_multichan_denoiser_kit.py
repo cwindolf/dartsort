@@ -29,7 +29,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         name=None,
         name_prefix="",
         batch_size=256,
-        learning_rate=4e-4,
+        learning_rate=3e-4,
         weight_decay=0.0,
         n_epochs=75,
         channelwise_dropout_p=0.0,
