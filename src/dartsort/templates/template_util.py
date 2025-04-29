@@ -126,7 +126,7 @@ def get_realigned_sorting(
     )
     sorting = results["sorting"]
     if reassign_channels:
-        max_chans = np.ptp(results["templates"], 1).argmax(1)
+        max_chans = np.abs(results["templates"]).max(1).argmax(1)
         new_channels = max_chans[sorting.labels]
         sorting = replace(sorting, channels=new_channels)
     return sorting

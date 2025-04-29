@@ -45,7 +45,6 @@ def get_templates(
     n_jobs=0,
     dtype=np.float32,
     show_progress=True,
-    with_std_dev=False,
     device=None,
 ):
     """Raw, denoised, and shifted templates
