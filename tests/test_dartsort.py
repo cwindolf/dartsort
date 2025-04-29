@@ -1,4 +1,4 @@
-import numpy as np
+import pytest
 import tempfile
 import subprocess
 
@@ -7,7 +7,8 @@ import dartsort
 from dartsort.util import simkit
 
 
-def test_fakedata():
+@pytest.fixture
+def fake_recording():
     geom = simkit.generate_geom()
     rec_sim = simkit.StaticSimulatedRecording(
         duration_samples=10 * 30_000,
@@ -19,7 +20,31 @@ def test_fakedata():
         temporal_jitter=4,
     )
     rec = rec_sim.simulate()
+    return rec
 
+
+@pytest.mark.parametrize("do_motion_estimation", [False, True])
+def test_fakedata_nonn(fake_recording, do_motion_estimation):
+    with tempfile.TemporaryDirectory() as tempdir:
+        cfg = dartsort.DARTsortInternalConfig(
+            subtraction_config=dartsort.SubtractionConfig(
+                subtraction_denoising_config=dartsort.FeaturizationConfig(
+                    denoise_only=True, do_nn_denoise=False
+                )
+            ),
+            initial_refinement_config=dartsort.RefinementConfig(
+                min_count=10, n_total_iters=1, one_split_only=True
+            ),
+            refinement_config=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
+            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
+            motion_estimation_config=dartsort.MotionEstimationConfig(
+                do_motion_estimation=do_motion_estimation, rigid=True
+            ),
+        )
+        res = dartsort.dartsort(fake_recording, output_dir=tempdir, cfg=cfg)
+
+
+def test_fakedata(fake_recording):
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
@@ -35,7 +60,7 @@ def test_fakedata():
                 ),
                 first_denoiser_thinning=0.0,
             ),
-            # pc based clust
+            # test pc based clust
             clustering_config=dartsort.ClusteringConfig(
                 initial_amp_feat=False, initial_pc_feats=1
             ),
@@ -52,25 +77,7 @@ def test_fakedata():
             # test the dev tasks pipeline
             save_intermediate_labels=True,
         )
-        res = dartsort.dartsort(rec, output_dir=tempdir, cfg=cfg)
-
-    for do_motion_estimation in (False, True):
-        with tempfile.TemporaryDirectory() as tempdir:
-            cfg = dartsort.DARTsortInternalConfig(
-                subtraction_config=dartsort.SubtractionConfig(
-                    subtraction_denoising_config=dartsort.FeaturizationConfig(
-                        denoise_only=True, do_nn_denoise=False
-                    )
-                ),
-                refinement_config=dartsort.RefinementConfig(
-                    min_count=10, n_total_iters=1
-                ),
-                featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
-                motion_estimation_config=dartsort.MotionEstimationConfig(
-                    do_motion_estimation=do_motion_estimation, rigid=True
-                ),
-            )
-            res = dartsort.dartsort(rec, output_dir=tempdir, cfg=cfg)
+        res = dartsort.dartsort(fake_recording, output_dir=tempdir, cfg=cfg)
 
 
 def test_cli_help():
@@ -80,4 +87,4 @@ def test_cli_help():
 
 
 if __name__ == "__main__":
-    test_fakedata()
+    test_fakedata(fake_recording())
