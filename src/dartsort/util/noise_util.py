@@ -1064,8 +1064,8 @@ def fp_control_threshold(
         return threshold
 
     # resolution-spaced grid which will be used for searches below
-    start = resolution * (threshold // resolution)
-    end = resolution * (fp_dataframe.scores.max() // resolution)
+    start = resolution * np.ceil(threshold / resolution)
+    end = resolution * np.ceil(fp_dataframe.scores.max() / resolution)
     domain = np.arange(start, end + resolution, resolution)
     domaini = 0
 
