@@ -1,4 +1,6 @@
 from logging import getLogger
+import pickle
+import shutil
 
 import numpy as np
 
@@ -20,27 +22,71 @@ def ds_save_intermediate_labels(
         np.save(step_labels_npy, step_labels, allow_pickle=False)
 
 
-def ds_all_to_workdir(output_dir, work_dir=None):
+def ds_all_to_workdir(cfg, output_dir, work_dir=None, overwrite=False):
     if work_dir is None:
         return
+    if overwrite:
+        # no need for past stuff if overwriting
+        return
+    # TODO: maybe no need to copy everything, esp. if fast forwarding?
+    logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
+    shutil.copytree(output_dir, work_dir, symlinks=True, dirs_exist_ok=True)
 
 
-def ds_save_motion_est(motion_est, output_dir, work_dir=None):
+def ds_save_motion_est(motion_est, output_dir, work_dir=None, overwrite=False):
     if work_dir is None:
         return
-    # if save int feats, find h5 and models dir and copy
+    if motion_est is None:
+        return
+
+    motion_est_pkl = output_dir / "motion_est.pkl"
+    if overwrite or not motion_est_pkl.exists():
+        with open(motion_est_pkl, "wb") as jar:
+            pickle.dump(motion_est, jar)
 
 
 def ds_save_intermediate_features(cfg, sorting, output_dir, work_dir=None):
     if work_dir is None:
+        # nothing to copy
         return
-    # if save int feats, find h5 and models dir and copy
+    if not cfg.keep_initial_features:
+        return
+
+    # find h5 and models and copy
+    h5_path = sorting.parent_h5_path
+    assert h5_path.exists()
+    models_path = h5_path.parent / f"{h5_path.stem}_models"
+
+    targ_h5 = output_dir / h5_path.name
+    logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
+    shutil.copy2(h5_path, targ_h5, follow_symlinks=False)
+
+    if models_path.exists():
+        targ_models = output_dir / models_path
+        logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
+        shutil.copytree(models_path, targ_models, symlinks=True, dirs_exist_ok=True)
 
 
 def ds_handle_delete_intermediate_features(
     cfg, final_sorting, output_dir, work_dir=None
 ):
     if work_dir is not None:
-        # they'll get deleted anyway.
+        # they'll get deleted anyway and were not copied
         return
+    if cfg.keep_initial_features:
+        return
+
     # find all non-final h5s, models and delete them
+    final_h5 = final_sorting.parent_h5_path
+    assert final_h5 is not None
+    assert final_h5.parent == output_dir
+
+    for h5_name in output_dir.glob("*.h5"):
+        if h5_name == final_h5.name:
+            continue
+
+        h5_path = output_dir / h5_name
+        models_path = output_dir / f"{h5_path.stem}_models"
+
+        logger.dartsortdebug(f"Clean up: remove {h5_path=}.")
+        h5_path.unlink()

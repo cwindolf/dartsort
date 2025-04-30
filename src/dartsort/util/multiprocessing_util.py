@@ -2,6 +2,7 @@ import multiprocessing
 from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from multiprocessing import get_context
+import queue
 
 from . import job_util
 
@@ -183,7 +184,9 @@ def get_pool(
     context = get_context(context)
 
     if with_rank_queue:
-        if do_parallel:
+        if do_parallel and is_local:
+            rank_queue = queue.SimpleQueue()
+        elif do_parallel:
             manager = context.Manager()
             rank_queue = manager.Queue()
         else:

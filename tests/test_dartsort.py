@@ -40,8 +40,12 @@ def test_fakedata_nonn(sim_recording, do_motion_estimation):
             motion_estimation_config=dartsort.MotionEstimationConfig(
                 do_motion_estimation=do_motion_estimation, rigid=True
             ),
+            work_in_tmpdir=True,
+            keep_initial_features=True,
         )
         res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
+        assert res["sorting"].parent_h5_path.exists()
+        assert (Path(tempdir) / "dartsort_sorting.npz").exists()
 
 
 usual_sdcfg = dartsort.FeaturizationConfig(denoise_only=True)
@@ -81,8 +85,11 @@ def test_fakedata(sim_recording, sdcfg):
             matching_config=dartsort.MatchingConfig(threshold="fp_control"),
             # test the dev tasks pipeline
             save_intermediate_labels=True,
+            keep_initial_features=False,
         )
         res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
+        assert res["sorting"].parent_h5_path.exists()
+        assert (Path(tempdir) / "dartsort_sorting.npz").exists()
 
 
 def test_cli_help():

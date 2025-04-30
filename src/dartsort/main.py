@@ -64,10 +64,7 @@ def dartsort(
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             work_dir = resolve_path(work_dir)
-
-            ## copy everything to work dir
-            ds_all_to_workdir(output_dir, work_dir)
-
+            ds_all_to_workdir(output_dir, work_dir, overwrite)
             return _dartsort_impl(
                 recording, output_dir, cfg, motion_est, work_dir, overwrite
             )
@@ -113,7 +110,7 @@ def _dartsort_impl(
             **asdict(cfg.motion_estimation_config),
         )
     ret["motion_est"] = motion_est
-    ds_save_motion_est(motion_est, output_dir, work_dir)
+    ds_save_motion_est(motion_est, output_dir, work_dir, overwrite)
 
     if cfg.dredge_only:
         ret["sorting"] = sorting

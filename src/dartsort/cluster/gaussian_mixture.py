@@ -1767,17 +1767,17 @@ class SpikeMixtureModel(torch.nn.Module):
             distance_normalization_kind=distance_normalization_kind,
         )
         if split_labels is None:
-            logger.dartsortdebug(f"Split {unit_id} bailed.")
+            logger.dartsortverbose(f"Split {unit_id} bailed.")
             return result
         # flatten the label space
         kept = np.flatnonzero(split_labels >= 0)
         if not kept.size:
-            logger.dartsortdebug(f"Split {unit_id} threw away all spikes.")
+            logger.dartsortverbose(f"Split {unit_id} threw away all spikes.")
             return result
         split_ids, flat_labels, split_counts = np.unique(
             split_labels[kept], return_inverse=True, return_counts=True
         )
-        logger.dartsortdebug(
+        logger.dartsortverbose(
             f"Split {unit_id} into {split_ids.size} / {split_counts.tolist()}, "
             f"with {split_labels.numel() - kept.size} -1s; original had "
             f"{indices_full.numel()} train spikes in full, split ran on {len(sp)}."

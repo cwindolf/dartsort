@@ -399,11 +399,7 @@ class BasePeeler(torch.nn.Module):
             channel_indices=None,
             margin=self.chunk_margin_samples,
         )
-        chunk = torch.tensor(
-            chunk,
-            device=self.channel_index.device,
-            dtype=self.dtype,
-        )
+        chunk = torch.tensor(chunk, device=self.channel_index.device, dtype=self.dtype)
         peel_result = self.peel_chunk(
             chunk,
             chunk_start_samples=chunk_start_samples,
