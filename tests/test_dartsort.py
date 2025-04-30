@@ -8,7 +8,7 @@ from dartsort.util import simkit
 
 
 @pytest.fixture
-def fake_recording():
+def sim_recording():
     geom = simkit.generate_geom()
     rec_sim = simkit.StaticSimulatedRecording(
         duration_samples=10 * 30_000,
@@ -24,7 +24,7 @@ def fake_recording():
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(fake_recording, do_motion_estimation):
+def test_fakedata_nonn(sim_recording, do_motion_estimation):
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
@@ -41,23 +41,28 @@ def test_fakedata_nonn(fake_recording, do_motion_estimation):
                 do_motion_estimation=do_motion_estimation, rigid=True
             ),
         )
-        res = dartsort.dartsort(fake_recording, output_dir=tempdir, cfg=cfg)
+        res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
 
 
-def test_fakedata(fake_recording):
+usual_sdcfg = dartsort.FeaturizationConfig(denoise_only=True)
+decollider_sdcfg = dartsort.FeaturizationConfig(
+    denoise_only=True,
+    do_nn_denoise=True,
+    nn_denoiser_class_name="Decollider",
+    # not good parameters -- don't want to explode CI
+    nn_denoiser_train_epochs=25,
+    nn_denoiser_epoch_size=256,
+    nn_denoiser_pretrained_path=None,
+    nn_denoiser_extra_kwargs=dict(hidden_dims=[512] * 2, batch_size=32),
+)
+
+
+@pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
+def test_fakedata(sim_recording, sdcfg):
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
-                subtraction_denoising_config=dartsort.FeaturizationConfig(
-                    denoise_only=True,
-                    do_nn_denoise=True,
-                    nn_denoiser_class_name="Decollider",
-                    # not good parameters -- don't want to explode CI
-                    nn_denoiser_train_epochs=25,
-                    nn_denoiser_epoch_size=256,
-                    nn_denoiser_pretrained_path=None,
-                    nn_denoiser_extra_kwargs=dict(hidden_dims=[512] * 2, batch_size=32),
-                ),
+                subtraction_denoising_config=sdcfg,
                 first_denoiser_thinning=0.0,
             ),
             # test pc based clust
@@ -77,7 +82,7 @@ def test_fakedata(fake_recording):
             # test the dev tasks pipeline
             save_intermediate_labels=True,
         )
-        res = dartsort.dartsort(fake_recording, output_dir=tempdir, cfg=cfg)
+        res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
 
 
 def test_cli_help():
@@ -87,4 +92,4 @@ def test_cli_help():
 
 
 if __name__ == "__main__":
-    test_fakedata(fake_recording())
+    test_fakedata(sim_recording())
