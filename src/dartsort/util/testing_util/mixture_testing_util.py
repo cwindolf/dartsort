@@ -192,7 +192,6 @@ def fit_moppcas(
         n_spikes_fit=N,
         cov_kind=cov_kind,
         ppca_rank=M,
-        prior_pseudocount=0.0,
         ppca_inner_em_iter=inner_em_iter,
         ppca_atol=em_converged_atol,
         em_converged_churn=1e-6,
@@ -210,7 +209,7 @@ def fit_moppcas(
 
     if inference_algorithm == "em":
         mm.log_liks = mm.em()
-    elif inference_algorithm == "tem":
+    elif inference_algorithm in ("tem", "tvi"):
         res = mm.tvi()
         mm.log_liks = res["log_liks"]
     elif inference_algorithm == "tsgd":
@@ -224,7 +223,7 @@ def fit_moppcas(
 
         if inference_algorithm == "em":
             mm.log_liks = mm.em()
-        elif inference_algorithm == "tem":
+        elif inference_algorithmin("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
         elif inference_algorithm == "tsgd":
@@ -237,7 +236,7 @@ def fit_moppcas(
 
         if inference_algorithm == "em":
             mm.log_liks = mm.em()
-        elif inference_algorithm == "tem":
+        elif inference_algorithmin("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
         elif inference_algorithm == "tsgd":
@@ -260,6 +259,8 @@ def fit_ppca(
     em_converged_atol=1e-6,
     cache_local_direct=False,
     W_initialization="svd",
+    prior_pseudocount=0,
+    laplace_ard=False,
 ):
     from dartsort.cluster import ppcalib
 
@@ -278,6 +279,8 @@ def fit_ppca(
         em_converged_atol=em_converged_atol,
         cache_local_direct=cache_local_direct,
         W_initialization=W_initialization,
+        prior_pseudocount=prior_pseudocount,
+        laplace_ard=laplace_ard,
     )
     return res
 
@@ -394,6 +397,8 @@ def test_ppca(
     normalize=True,
     cache_local=False,
     W_initialization="svd",
+    prior_pseudocount=0,
+    laplace_ard=False,
     rg=0,
 ):
     rg = np.random.default_rng(rg)
@@ -424,6 +429,8 @@ def test_ppca(
         em_converged_atol=em_converged_atol,
         cache_local_direct=cache_local,
         W_initialization=W_initialization,
+        prior_pseudocount=prior_pseudocount,
+        laplace_ard=laplace_ard,
     )
 
     muerr, werr, panel = compare_subspaces(

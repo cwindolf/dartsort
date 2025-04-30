@@ -539,7 +539,8 @@ class EmbeddedNoise(torch.nn.Module):
             if self._full_cov is None:
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
-                fcov = operators.CholLinearOperator(fcov.cholesky())
+                if not isinstance(fcov, operators.ConstantDiagLinearOperator):
+                    fcov = operators.CholLinearOperator(fcov.cholesky())
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
