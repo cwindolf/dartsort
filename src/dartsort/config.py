@@ -93,7 +93,7 @@ class DARTsortUserConfig:
         "when denoising and subtracting NN-denoised events.",
     )
     deduplication_radius_um: Annotated[float, Field(gt=0)] = argfield(
-        default=150.0,
+        default=100.0,
         doc="During initial detection, if two spike events occur at the "
         "same time within this radius, then the smaller of the two is "
         "ignored. But also all of the secondary channels of the big one, "
