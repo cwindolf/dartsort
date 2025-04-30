@@ -39,6 +39,13 @@ class DARTsortUserConfig:
     executor: str = "threading_unless_multigpu"
     chunk_length_samples: int = 30_000
 
+    # -- storage behavior
+    work_in_tmpdir: bool = False
+    tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
+    save_intermediate_labels: bool = False
+    keep_initial_features: bool = False
+    keep_final_features: bool = True
+
     # -- waveform snippet length parameters
     ms_before: Annotated[float, Field(gt=0)] = argfield(
         default=1.4,
@@ -202,5 +209,3 @@ class DeveloperConfig(DARTsortUserConfig):
     glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
     laplace_ard: bool = True
     core_radius: float = 35.0
-
-    save_intermediate_labels: bool = False

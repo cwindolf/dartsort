@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from logging import getLogger
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
@@ -35,7 +36,13 @@ from dartsort.util.data_util import (
 from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 from dartsort.util.py_util import resolve_path
-from dartsort.util.main_util import ds_tasks
+from dartsort.util.main_util import (
+    ds_save_intermediate_labels,
+    ds_all_to_workdir,
+    ds_save_motion_est,
+    ds_save_intermediate_features,
+    ds_handle_delete_intermediate_features,
+)
 
 
 logger = getLogger(__name__)
@@ -54,13 +61,35 @@ def dartsort(
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
     cfg = to_internal_config(cfg)
+    if cfg.work_in_tmpdir:
+        with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
+            work_dir = resolve_path(work_dir)
 
+            ## copy everything to work dir
+            ds_all_to_workdir(output_dir, work_dir)
+
+            return _dartsort_impl(
+                recording, output_dir, cfg, motion_est, work_dir, overwrite
+            )
+    return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
+
+
+def _dartsort_impl(
+    recording,
+    output_dir,
+    cfg: DARTsortInternalConfig = default_dartsort_config,
+    motion_est=None,
+    work_dir=None,
+    overwrite=False,
+):
     ret = {}
+
+    store_dir = output_dir if work_dir is None else work_dir
 
     # first step: initial detection and motion estimation
     sorting = subtract(
         recording,
-        output_dir,
+        store_dir,
         waveform_config=cfg.waveform_config,
         featurization_config=cfg.featurization_config,
         subtraction_config=cfg.subtraction_config,
@@ -68,6 +97,7 @@ def dartsort(
         overwrite=overwrite,
     )
     logger.info(f"Initial detection: {sorting}")
+    ds_save_intermediate_features(cfg, sorting, output_dir, work_dir)
 
     if cfg.subtract_only:
         ret["sorting"] = sorting
@@ -77,12 +107,13 @@ def dartsort(
         motion_est = estimate_motion(
             recording,
             sorting,
-            output_dir,
+            store_dir,
             overwrite=overwrite,
             device=cfg.computation_config.actual_device(),
             **asdict(cfg.motion_estimation_config),
         )
     ret["motion_est"] = motion_est
+    ds_save_motion_est(motion_est, output_dir, work_dir)
 
     if cfg.dredge_only:
         ret["sorting"] = sorting
@@ -97,7 +128,7 @@ def dartsort(
         computation_config=cfg.computation_config,
     )
     logger.info(f"Initial clustering: {sorting}")
-    ds_tasks("initial", sorting, output_dir, cfg)
+    ds_save_intermediate_labels("initial", sorting, output_dir, cfg)
 
     # clustering: model
     sdir = sfmt = None
@@ -115,7 +146,7 @@ def dartsort(
         save_cfg=cfg,
     )
     logger.info(f"Initial refinement: {sorting}")
-    ds_tasks("refined0", sorting, output_dir, cfg)
+    ds_save_intermediate_labels("refined0", sorting, output_dir, cfg)
 
     for step in range(1, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
@@ -137,7 +168,9 @@ def dartsort(
             model_subdir=f"matching{step}_models",
         )
         logger.info(f"Matching step {step}: {sorting}")
-        ds_tasks(f"matching{step}", sorting, output_dir, cfg)
+        ds_save_intermediate_labels(f"matching{step}", sorting, output_dir, cfg)
+        if not is_final:
+            ds_save_intermediate_features(cfg, sorting, output_dir, work_dir)
 
         if cfg.final_refinement or not is_final:
             sdir = sfmt = None
@@ -155,7 +188,9 @@ def dartsort(
                 save_cfg=cfg,
             )
             logger.info(f"Refinement step {step}: {sorting}")
-            ds_tasks(f"refined{step}", sorting, output_dir, cfg)
+            ds_save_intermediate_labels(f"refined{step}", sorting, output_dir, cfg)
+
+    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting

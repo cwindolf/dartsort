@@ -3,7 +3,7 @@ from logging import getLogger
 
 from .. import config
 from ..util import job_util, noise_util
-from ..util.main_util import ds_tasks
+from ..util.main_util import ds_save_intermediate_labels
 from .split import split_clusters
 from .merge import merge_templates
 from .stable_features import StableSpikeDataset
@@ -107,7 +107,7 @@ def refine_clustering(
         if return_step_labels:
             step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
         if saving:
-            ds_tasks(
+            ds_save_intermediate_labels(
                 save_step_labels_format.format(stepname=f"refstepaem{it}"),
                 gmm.to_sorting(),
                 save_step_labels_dir,
@@ -142,7 +142,7 @@ def refine_clustering(
             if return_step_labels:
                 step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
             if saving:
-                ds_tasks(
+                ds_save_intermediate_labels(
                     save_step_labels_format.format(stepname=f"refstepbsplit{it}"),
                     gmm.to_sorting(),
                     save_step_labels_dir,
@@ -158,7 +158,7 @@ def refine_clustering(
         if return_step_labels:
             step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
         if saving:
-            ds_tasks(
+            ds_save_intermediate_labels(
                 save_step_labels_format.format(stepname=f"refstepcmerge{it}"),
                 gmm.to_sorting(),
                 save_step_labels_dir,

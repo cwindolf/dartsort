@@ -1,6 +1,6 @@
 import dataclasses
 from dataclasses import field, fields
-import math
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -488,7 +488,11 @@ class DARTsortInternalConfig:
     overwrite_matching: bool = False
 
     # development / debugging flags
+    work_in_tmpdir: bool = False
+    tmpdir_parent: str | Path | None = None
     save_intermediate_labels: bool = False
+    keep_initial_features: bool = False
+    keep_final_features: bool = True
 
 
 default_waveform_config = WaveformConfig()
@@ -647,5 +651,9 @@ def to_internal_config(cfg):
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
         overwrite_matching=cfg.overwrite_matching,
+        work_in_tmpdir=cfg.work_in_tmpdir,
+        tmpdir_parent=cfg.tmpdir_parent,
         save_intermediate_labels=cfg.save_intermediate_labels,
+        keep_initial_features=cfg.keep_initial_features,
+        keep_final_features=cfg.keep_final_features,
     )
