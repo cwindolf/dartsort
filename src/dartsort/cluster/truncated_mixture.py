@@ -57,7 +57,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
-        prior_pseudocount=5,
+        prior_pseudocount=5.0,
         laplace_ard=False,
         alpha_max=1e6,
         alpha_min=1e-6,
