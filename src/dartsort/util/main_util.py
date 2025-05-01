@@ -1,16 +1,24 @@
 from logging import getLogger
 import pickle
 import shutil
+from pathlib import Path
 
 import numpy as np
 
 from dartsort.util.py_util import resolve_path
+from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.internal_config import DARTsortInternalConfig
 
 logger = getLogger(__name__)
 
 
 def ds_save_intermediate_labels(
-    step_name, step_sorting, output_dir, cfg, step_labels=None, work_dir=None
+    step_name: str,
+    step_sorting: DARTsortSorting,
+    output_dir: Path | str,
+    cfg: DARTsortInternalConfig,
+    step_labels: np.ndarray | None = None,
+    work_dir: str | Path | None = None,
 ):
     if not cfg.save_intermediate_labels:
         return
@@ -32,7 +40,7 @@ def ds_save_intermediate_labels(
         shutil.copy2(step_labels_npy, targ_labels_npy)
 
 
-def ds_all_to_workdir(cfg, output_dir, work_dir=None, overwrite=False):
+def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False):
     if work_dir is None:
         return
     if overwrite:
@@ -43,7 +51,12 @@ def ds_all_to_workdir(cfg, output_dir, work_dir=None, overwrite=False):
     shutil.copytree(output_dir, work_dir, symlinks=True, dirs_exist_ok=True)
 
 
-def ds_save_motion_est(motion_est, output_dir, work_dir=None, overwrite=False):
+def ds_save_motion_est(
+    motion_est,
+    output_dir: Path,
+    work_dir: Path | None = None,
+    overwrite=False,
+):
     if work_dir is None:
         return
     if motion_est is None:
@@ -55,7 +68,12 @@ def ds_save_motion_est(motion_est, output_dir, work_dir=None, overwrite=False):
             pickle.dump(motion_est, jar)
 
 
-def ds_save_intermediate_features(cfg, sorting, output_dir, work_dir=None):
+def ds_save_intermediate_features(
+    cfg: DARTsortInternalConfig,
+    sorting: DARTsortSorting,
+    output_dir: Path,
+    work_dir: Path | None = None,
+):
     if work_dir is None:
         # nothing to copy
         return
@@ -63,7 +81,8 @@ def ds_save_intermediate_features(cfg, sorting, output_dir, work_dir=None):
         return
 
     # find h5 and models and copy
-    h5_path = sorting.parent_h5_path
+    assert sorting.parent_h5_path is not None
+    h5_path = resolve_path(sorting.parent_h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
 
@@ -78,7 +97,10 @@ def ds_save_intermediate_features(cfg, sorting, output_dir, work_dir=None):
 
 
 def ds_handle_delete_intermediate_features(
-    cfg, final_sorting, output_dir, work_dir=None
+    cfg: DARTsortInternalConfig,
+    final_sorting: DARTsortSorting,
+    output_dir: Path,
+    work_dir: Path | None = None,
 ):
     if work_dir is not None:
         # they'll get deleted anyway and were not copied
@@ -87,7 +109,8 @@ def ds_handle_delete_intermediate_features(
         return
 
     # find all non-final h5s, models and delete them
-    final_h5 = final_sorting.parent_h5_path
+    assert final_sorting.parent_h5_path is not None
+    final_h5 = resolve_path(final_sorting.parent_h5_path)
     assert final_h5 is not None
     assert final_h5.parent == output_dir
 
@@ -100,3 +123,6 @@ def ds_handle_delete_intermediate_features(
 
         logger.dartsortdebug(f"Clean up: remove {h5_path=}.")
         h5_path.unlink()
+        if models_path.exists():
+            assert models_path.is_dir()
+            shutil.rmtree(models_path)

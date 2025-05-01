@@ -72,7 +72,7 @@ def merge_templates(
         computation_config = job_util.get_global_computation_config()
 
     if template_data is None:
-        template_data, sorting = TemplateData.from_config(
+        template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
             template_config,
@@ -81,9 +81,9 @@ def merge_templates(
             save_folder=template_save_folder,
             overwrite=overwrite_templates,
             save_npz_name=template_npz_filename,
-            return_realigned_sorting=True,
             tsvd=denoising_tsvd,
         )
+        assert sorting is not None
 
     dist_matrix_kwargs = dict(
         superres_linkage=superres_linkage,

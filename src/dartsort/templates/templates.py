@@ -161,20 +161,52 @@ class TemplateData:
         with_locs=False,
         units_per_job=8,
         tsvd=None,
-        return_realigned_sorting=False,
+        computation_config=None,
+    ):
+        self, _ = cls.from_config_with_realigned_sorting(
+            recording=recording,
+            sorting=sorting,
+            template_config=template_config,
+            waveform_config=waveform_config,
+            save_folder=save_folder,
+            overwrite=overwrite,
+            motion_est=motion_est,
+            save_npz_name=save_npz_name,
+            localizations_dataset_name=localizations_dataset_name,
+            with_locs=with_locs,
+            units_per_job=units_per_job,
+            tsvd=tsvd,
+            computation_config=computation_config,
+        )
+        return self
+
+    @classmethod
+    def from_config_with_realigned_sorting(
+        cls,
+        recording,
+        sorting,
+        template_config,
+        waveform_config=config.default_waveform_config,
+        save_folder=None,
+        overwrite=False,
+        motion_est=None,
+        save_npz_name="template_data.npz",
+        localizations_dataset_name="point_source_localizations",
+        with_locs=False,
+        units_per_job=8,
+        tsvd=None,
         computation_config=None,
     ):
         if computation_config is None:
             computation_config = job_util.get_global_computation_config()
 
         if save_folder is not None:
-            assert not return_realigned_sorting
             save_folder = Path(save_folder)
             if not save_folder.exists():
                 save_folder.mkdir()
             npz_path = save_folder / save_npz_name
             if npz_path.exists() and not overwrite:
-                return cls.from_npz(npz_path)
+                return cls.from_npz(npz_path), None
 
         if sorting is None:
             raise ValueError(
@@ -312,10 +344,7 @@ class TemplateData:
         if save_folder is not None:
             obj.to_npz(npz_path)
 
-        if return_realigned_sorting:
-            return obj, sorting
-
-        return obj
+        return obj, sorting
 
 
 def get_chunked_templates(

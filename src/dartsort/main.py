@@ -1,8 +1,10 @@
 from dataclasses import asdict
 from logging import getLogger
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+from spikeinterface.core import BaseRecording
 
 from dartsort.cluster.initial import initial_clustering
 from dartsort.cluster.refine import refine_clustering
@@ -49,8 +51,8 @@ logger = getLogger(__name__)
 
 
 def dartsort(
-    recording,
-    output_dir,
+    recording: BaseRecording,
+    output_dir: str | Path,
     cfg: (
         DARTsortUserConfig | DeveloperConfig | DARTsortInternalConfig
     ) = default_dartsort_config,
@@ -72,8 +74,8 @@ def dartsort(
 
 
 def _dartsort_impl(
-    recording,
-    output_dir,
+    recording: BaseRecording,
+    output_dir: Path,
     cfg: DARTsortInternalConfig = default_dartsort_config,
     motion_est=None,
     work_dir=None,
@@ -85,8 +87,8 @@ def _dartsort_impl(
 
     # first step: initial detection and motion estimation
     sorting = subtract(
-        recording,
-        store_dir,
+        output_dir=store_dir,
+        recording=recording,
         waveform_config=cfg.waveform_config,
         featurization_config=cfg.featurization_config,
         subtraction_config=cfg.subtraction_config,
@@ -102,9 +104,9 @@ def _dartsort_impl(
 
     if motion_est is None:
         motion_est = estimate_motion(
-            recording,
-            sorting,
-            store_dir,
+            output_directory=store_dir,
+            recording=recording,
+            sorting=sorting,
             overwrite=overwrite,
             device=cfg.computation_config.actual_device(),
             **asdict(cfg.motion_estimation_config),
@@ -118,7 +120,7 @@ def _dartsort_impl(
 
     # clustering: initialization
     sorting = initial_clustering(
-        recording,
+        recording=recording,
         sorting=sorting,
         motion_est=motion_est,
         clustering_config=cfg.clustering_config,
@@ -132,7 +134,7 @@ def _dartsort_impl(
     if cfg.save_intermediate_labels:
         sdir = output_dir
         sfmt = "refined0{stepname}"
-    sorting, info = refine_clustering(
+    sorting, _ = refine_clustering(
         recording=recording,
         sorting=sorting,
         motion_est=motion_est,
@@ -147,13 +149,14 @@ def _dartsort_impl(
 
     for step in range(1, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
+
         # TODO
-        prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+        # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
         sorting = match(
-            recording,
-            sorting,
-            output_dir,
+            output_dir=store_dir,
+            recording=recording,
+            sorting=sorting,
             motion_est=motion_est,
             template_config=cfg.template_config,
             waveform_config=cfg.waveform_config,
@@ -174,7 +177,7 @@ def _dartsort_impl(
             if cfg.save_intermediate_labels:
                 sdir = output_dir
                 sfmt = f"refined{step}{{stepname}}"
-            sorting, info = refine_clustering(
+            sorting, _ = refine_clustering(
                 recording=recording,
                 sorting=sorting,
                 motion_est=motion_est,
@@ -195,19 +198,20 @@ def _dartsort_impl(
 
 
 def subtract(
-    recording,
-    output_dir,
+    output_dir: str | Path,
+    recording: BaseRecording,
     waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     subtraction_config=default_subtraction_config,
     computation_config=default_computation_config,
     chunk_starts_samples=None,
     overwrite=False,
-    residual_filename=None,
+    residual_filename: str | None = None,
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
 ) -> DARTsortSorting:
+    output_dir = resolve_path(output_dir)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording,
@@ -231,9 +235,9 @@ def subtract(
 
 
 def match(
-    recording,
-    sorting=None,
-    output_dir=None,
+    output_dir: str | Path,
+    recording: BaseRecording,
+    sorting: DARTsortSorting | None = None,
     motion_est=None,
     waveform_config=default_waveform_config,
     template_config=default_template_config,
@@ -241,16 +245,16 @@ def match(
     matching_config=default_matching_config,
     chunk_starts_samples=None,
     overwrite=False,
-    residual_filename=None,
+    residual_filename: str | None = None,
     show_progress=True,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
-    template_data=None,
+    template_data: TemplateData | None = None,
     template_npz_filename="template_data.npz",
     computation_config=default_computation_config,
 ) -> DARTsortSorting:
-    assert output_dir is not None
-    model_dir = resolve_path(output_dir) / model_subdir
+    output_dir = resolve_path(output_dir)
+    model_dir = output_dir / model_subdir
 
     # compute templates
     if template_data is None:
@@ -292,9 +296,9 @@ def match(
 
 
 def grab(
-    recording,
-    sorting,
-    output_dir,
+    output_dir: str | Path,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
     waveform_config=default_waveform_config,
     featurization_config=default_featurization_config,
     chunk_starts_samples=None,
@@ -304,6 +308,7 @@ def grab(
     model_subdir="grab_models",
     computation_config=default_computation_config,
 ) -> DARTsortSorting:
+    output_dir = resolve_path(output_dir)
     grabber = GrabAndFeaturize.from_config(
         sorting,
         recording,
@@ -325,8 +330,8 @@ def grab(
 
 
 def threshold(
-    recording,
-    output_dir,
+    output_dir: str | Path,
+    recording: BaseRecording,
     waveform_config=default_waveform_config,
     thresholding_config=default_thresholding_config,
     featurization_config=default_featurization_config,
@@ -337,6 +342,7 @@ def threshold(
     model_subdir="threshold_models",
     computation_config=default_computation_config,
 ) -> DARTsortSorting:
+    output_dir = resolve_path(output_dir)
     thresholder = ThresholdAndFeaturize.from_config(
         recording, waveform_config, thresholding_config, featurization_config
     )

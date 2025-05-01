@@ -1,7 +1,6 @@
 from dataclasses import replace
 
 import numpy as np
-import torch
 import torch.nn.functional as F
 
 from .. import config
@@ -26,16 +25,16 @@ def realign_and_chuck_noisy_template_units(
     change, and the number of templates will change.
     """
     if template_data is None:
-        template_data, sorting = TemplateData.from_config(
+        template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
             template_config,
             motion_est=motion_est,
             tsvd=tsvd,
             waveform_config=waveform_config,
-            return_realigned_sorting=True,
             computation_config=computation_config,
         )
+        assert sorting is not None
 
     template_ptps = np.ptp(template_data.templates, 1).max(1)
     template_snrs = template_ptps * np.sqrt(template_data.spike_counts)

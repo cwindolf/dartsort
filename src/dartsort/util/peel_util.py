@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import h5py
 import numpy as np
 import torch
@@ -6,18 +8,20 @@ from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting, batched_h5_read
 from . import job_util
 from .py_util import resolve_path
+from ..peel.peel_base import BasePeeler
+from .internal_config import FeaturizationConfig, ComputationConfig
 
 
 def run_peeler(
-    peeler,
-    output_directory,
-    hdf5_filename,
-    model_subdir,
-    featurization_config,
-    computation_config=None,
+    peeler: BasePeeler,
+    output_directory: str | Path,
+    hdf5_filename: str,
+    model_subdir: str,
+    featurization_config: FeaturizationConfig,
+    computation_config: ComputationConfig | None = None,
     chunk_starts_samples=None,
     overwrite=False,
-    residual_filename=None,
+    residual_filename: str | Path | None = None,
     show_progress=True,
     localization_dataset_name="point_source_localizations",
 ):
@@ -26,7 +30,8 @@ def run_peeler(
     model_dir = output_directory / model_subdir
     output_hdf5_filename = output_directory / hdf5_filename
     if residual_filename is not None:
-        residual_filename = output_directory / residual_filename
+        if not isinstance(residual_filename, Path):
+            residual_filename = output_directory / residual_filename
     do_localization_later = (
         not featurization_config.denoise_only
         and featurization_config.do_localization
