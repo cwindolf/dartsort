@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -39,11 +39,12 @@ from dartsort.util.peel_util import run_peeler
 from dartsort.util.registration_util import estimate_motion
 from dartsort.util.py_util import resolve_path
 from dartsort.util.main_util import (
-    ds_save_intermediate_labels,
     ds_all_to_workdir,
-    ds_save_motion_est,
-    ds_save_intermediate_features,
+    ds_dump_config,
     ds_handle_delete_intermediate_features,
+    ds_save_features,
+    ds_save_intermediate_labels,
+    ds_save_motion_est,
 )
 
 
@@ -62,10 +63,15 @@ def dartsort(
     """TODO: fast forward."""
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
+
+    # convert cfg to internal format and store it for posterity
     cfg = to_internal_config(cfg)
+    ds_dump_config(cfg, output_dir)
+
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             work_dir = resolve_path(work_dir)
+            logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
             ds_all_to_workdir(output_dir, work_dir, overwrite)
             return _dartsort_impl(
                 recording, output_dir, cfg, motion_est, work_dir, overwrite
@@ -96,7 +102,8 @@ def _dartsort_impl(
         overwrite=overwrite,
     )
     logger.info(f"Initial detection: {sorting}")
-    ds_save_intermediate_features(cfg, sorting, output_dir, work_dir)
+    is_final = cfg.subtract_only or cfg.dredge_only or not cfg.matching_iterations
+    ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
 
     if cfg.subtract_only:
         ret["sorting"] = sorting
@@ -127,7 +134,7 @@ def _dartsort_impl(
         computation_config=cfg.computation_config,
     )
     logger.info(f"Initial clustering: {sorting}")
-    ds_save_intermediate_labels("initial", sorting, output_dir, cfg)
+    ds_save_intermediate_labels("initial", sorting, output_dir, cfg, work_dir=work_dir)
 
     # clustering: model
     sdir = sfmt = None
@@ -145,7 +152,7 @@ def _dartsort_impl(
         save_cfg=cfg,
     )
     logger.info(f"Initial refinement: {sorting}")
-    ds_save_intermediate_labels("refined0", sorting, output_dir, cfg)
+    ds_save_intermediate_labels("refined0", sorting, output_dir, cfg, work_dir=work_dir)
 
     for step in range(1, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
@@ -169,8 +176,7 @@ def _dartsort_impl(
         )
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_intermediate_labels(f"matching{step}", sorting, output_dir, cfg)
-        if not is_final:
-            ds_save_intermediate_features(cfg, sorting, output_dir, work_dir)
+        ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
 
         if cfg.final_refinement or not is_final:
             sdir = sfmt = None
@@ -188,9 +194,13 @@ def _dartsort_impl(
                 save_cfg=cfg,
             )
             logger.info(f"Refinement step {step}: {sorting}")
-            ds_save_intermediate_labels(f"refined{step}", sorting, output_dir, cfg)
+            ds_save_intermediate_labels(f"refined{step}", sorting, output_dir, cfg, work_dir=work_dir)
 
     ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
+
+    if work_dir is not None:
+        final_h5_path = output_dir / sorting.parent_h5_path.name
+        sorting = replace(sorting, parent_h5_path=final_h5_path)
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting

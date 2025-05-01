@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from logging import getLogger
 import pickle
 import shutil
@@ -40,6 +41,13 @@ def ds_save_intermediate_labels(
         shutil.copy2(step_labels_npy, targ_labels_npy)
 
 
+def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
+    import json
+
+    with open(output_dir / "_dartsort_internal_config.json", "w") as jsonf:
+        json.dump(asdict(internal_cfg), jsonf)
+
+
 def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False):
     if work_dir is None:
         return
@@ -68,16 +76,17 @@ def ds_save_motion_est(
             pickle.dump(motion_est, jar)
 
 
-def ds_save_intermediate_features(
+def ds_save_features(
     cfg: DARTsortInternalConfig,
     sorting: DARTsortSorting,
     output_dir: Path,
     work_dir: Path | None = None,
+    is_final=False,
 ):
     if work_dir is None:
         # nothing to copy
         return
-    if not cfg.keep_initial_features:
+    if not (cfg.keep_initial_features or is_final):
         return
 
     # find h5 and models and copy
@@ -91,7 +100,7 @@ def ds_save_intermediate_features(
     shutil.copy2(h5_path, targ_h5, follow_symlinks=False)
 
     if models_path.exists():
-        targ_models = output_dir / models_path
+        targ_models = output_dir / models_path.name
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
         shutil.copytree(models_path, targ_models, symlinks=True, dirs_exist_ok=True)
 

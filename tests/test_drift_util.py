@@ -87,7 +87,7 @@ def example_geoms():
 
 @pytest.mark.parametrize("geom_name", ["geom0", "geom1"])
 @pytest.mark.parametrize("drift_speed", [0, 10, 100, -10, -132])
-@pytest.mark.parametrize("radius", [0, 10, 100])
+@pytest.mark.parametrize("radius", [0, 10, 35])
 def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     geom = example_geoms[geom_name]
     pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)

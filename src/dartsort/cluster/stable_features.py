@@ -664,6 +664,7 @@ class SpikeNeighborhoods(torch.nn.Module):
         name=None,
     ):
         neighborhoods = torch.asarray(neighborhoods)
+        neighborhood_ids = torch.asarray(neighborhood_ids)
         if device is not None:
             neighborhoods = neighborhoods.to(device)
             neighborhood_ids = neighborhood_ids.to(device)
