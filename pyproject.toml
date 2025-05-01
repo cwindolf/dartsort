@@ -30,3 +30,6 @@ classifiers = [
 [tool.coverage.run]
 source = ["dartsort"]
 omit = ["*/vis/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

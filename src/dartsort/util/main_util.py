@@ -10,16 +10,26 @@ logger = getLogger(__name__)
 
 
 def ds_save_intermediate_labels(
-    step_name, step_sorting, output_dir, cfg, step_labels=None
+    step_name, step_sorting, output_dir, cfg, step_labels=None, work_dir=None
 ):
+    if not cfg.save_intermediate_labels:
+        return
     output_dir = resolve_path(output_dir, strict=True)
+    if work_dir is None:
+        store_dir = output_dir
+    else:
+        store_dir = resolve_path(work_dir, strict=True)
 
-    if cfg.save_intermediate_labels:
-        step_labels_npy = output_dir / f"{step_name}_labels.npy"
-        logger.info(f"Saving {step_name} labels to {step_labels_npy}")
-        if step_labels is None:
-            step_labels = step_sorting.labels
-        np.save(step_labels_npy, step_labels, allow_pickle=False)
+    step_labels_npy = store_dir / f"{step_name}_labels.npy"
+    logger.info(f"Saving {step_name} labels to {step_labels_npy}")
+    if step_labels is None:
+        step_labels = step_sorting.labels
+    np.save(step_labels_npy, step_labels, allow_pickle=False)
+
+    if work_dir is not None:
+        targ_labels_npy = output_dir / step_labels_npy.name
+        logger.dartsortdebug(f"Copy {step_labels_npy} -> {targ_labels_npy}.")
+        shutil.copy2(step_labels_npy, targ_labels_npy)
 
 
 def ds_all_to_workdir(cfg, output_dir, work_dir=None, overwrite=False):

@@ -652,7 +652,9 @@ class SpikeMixtureModel(torch.nn.Module):
         convergence_props = {}
         log_liks = None
         self.train_meanlogpxs = []
-        for _ in its:
+        for it in its:
+            is_final = it == n_iter - 1
+
             # for convergence testing...
             log_liks, convergence_props = self.cleanup(
                 log_liks, min_count=1, clean_props=convergence_props
@@ -702,10 +704,12 @@ class SpikeMixtureModel(torch.nn.Module):
 
             if reas_prop < self.em_converged_prop:
                 logger.info(f"Labels converged with {reas_prop=}.")
-                break
+                if not is_final:
+                    break
             if max_adif is not None and max_adif < self.em_converged_atol:
                 logger.info(f"Parameters converged with {max_adif=}.")
-                break
+                if not is_final:
+                    break
             if len(self.train_meanlogpxs) > 2:
                 logp_improvement = self.train_meanlogpxs[-1] - self.train_meanlogpxs[-2]
                 if logp_improvement < self.em_converged_logpx_tol:
@@ -713,7 +717,8 @@ class SpikeMixtureModel(torch.nn.Module):
                         f"Log likelihood converged with {logp_improvement=} "
                         f"and {self.train_meanlogpxs=}."
                     )
-                    break
+                    if not is_final:
+                        break
 
         if not final_e_step:
             return
@@ -3438,7 +3443,7 @@ class GaussianUnit(torch.nn.Module):
         # achans = achans.cpu()
         je_suis = bool(achans.numel())
         if not je_suis:
-            logger.dartsortdebug("Unit had no active channels.")
+            logger.dartsortverbose("Unit had no active channels.")
         do_pca = self.cov_kind == "ppca" and self.ppca_rank
 
         can_warm_start = False
@@ -3513,8 +3518,11 @@ class GaussianUnit(torch.nn.Module):
 
         if je_suis and res.get("alpha") is not None:
             self.register_buffer("alpha", res["alpha"])
-            self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()
-            logger.dartsortverbose(f"New unit had alpha={self.annotations['alpha']}")
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()
+                logger.dartsortverbose(
+                    f"New unit had alpha={self.annotations['alpha']}"
+                )
         else:
             self.alpha = None
 

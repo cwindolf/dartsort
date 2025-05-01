@@ -19,7 +19,7 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
 from .spiketorch import fast_nanmedian
-from .waveform_util import get_pitch
+from .waveform_util import get_pitch, make_channel_index
 
 # -- registered geometry and templates helpers
 
@@ -131,7 +131,9 @@ def registered_geometry(
     return registered_geom
 
 
-def registered_channels(channels, geom, n_pitches_shift, registered_geom, distance_upper_bound=None):
+def registered_channels(
+    channels, geom, n_pitches_shift, registered_geom, distance_upper_bound=None
+):
     """What registered channels do `channels` land on after shifting by `n_pitches_shift`?"""
     pitch = get_pitch(geom)
     shifted_positions = geom.copy()[channels]
@@ -268,7 +270,7 @@ def get_spike_pitch_shifts(
     times_s=None,
     motion_est=None,
     pitch=None,
-    mode="floor",
+    mode="round",
 ):
     """Figure out coarse pitch shifts based on spike positions
 
@@ -577,7 +579,8 @@ def _full_probe_shifting_fast(
     ] = waveforms
     return static_waveforms[:, :, : target_kdtree.n]
 
-#TODO make sure thoroughly unit tested
+
+# TODO make sure thoroughly unit tested
 def static_channel_neighborhoods(
     geom,
     main_channels,
@@ -639,26 +642,35 @@ def static_channel_neighborhoods(
         )
     uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
     uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
-    uniq_moving_pos = (
+    uniq_moving_neighbs = (
         padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
     )
-    uniq_valid = channel_index[uniq_channels] < n_channels_tot
+    ii, jj = np.nonzero(channel_index[uniq_channels] < n_channels_tot)
 
     _, uniq_shifted_channels = target_kdtree.query(
-        uniq_moving_pos[uniq_valid],
+        uniq_moving_neighbs[ii, jj],
         distance_upper_bound=match_distance,
         workers=workers,
     )
     if uniq_shifted_channels.size < uniq_channels.shape[0] * c:
         uniq_shifted_channels_ = uniq_shifted_channels
         uniq_shifted_channels = np.full((uniq_channels.shape[0], c), target_kdtree.n)
-        uniq_shifted_channels[uniq_valid] = uniq_shifted_channels_
+        uniq_shifted_channels[ii, jj] = uniq_shifted_channels_
     uniq_shifted_channels = uniq_shifted_channels.reshape(uniq_channels.shape[0], c)
 
-    # ok, now we can return to non-unique world
-    shifted_channels = uniq_shifted_channels[uniq_inv]
+    # now, typically the unique channel-shift pairs are very redundant. many of
+    # those unique values correspond to the same final neighborhood. and it's well
+    # worth it for other parts of the code if we can cut down the number of
+    # neighborhoods. so, we do a last round of deduplication.
+    neighborhoods, scid_to_neighborhood_id = np.unique(
+        uniq_shifted_channels, axis=0, return_inverse=True
+    )
+    neighborhood_ids = scid_to_neighborhood_id[uniq_inv]
 
-    return shifted_channels
+    # ok, now we can return to non-unique world
+    shifted_channels = neighborhoods[neighborhood_ids]
+
+    return shifted_channels, neighborhoods, neighborhood_ids
 
 
 def grab_static(waveforms, shifted_channels, n_static_channels, fill_value=np.nan):
@@ -688,6 +700,7 @@ def grab_static(waveforms, shifted_channels, n_static_channels, fill_value=np.na
         static_waveforms = static_waveforms[:, 0, :]
 
     return static_waveforms
+
 
 # -- which templates appear at which shifts in a recording?
 #    and, which pairs of shifted templates appear together?
@@ -822,3 +835,125 @@ def get_shift_and_unit_pairs(
         cooccurrence[shifted_ids_a[:, None], shifted_ids_b[None, :]] = 1
 
     return template_shift_index_a, template_shift_index_b, cooccurrence
+
+
+def get_shift_info(sorting, motion_est, geom, motion_depth_mode, channels_mode="round"):
+    """
+    shifts = reg_depths - depths
+    reg_depths = depths + shifts
+    i.e., target_pos = source_pos + shifts
+          target_pos - shifts = source_pos
+    where by source pos i mean the true moving positions.
+    """
+    times_s = sorting.times_seconds
+    channels = sorting.channels
+    if motion_depth_mode == "localization":
+        depths = sorting.point_source_localizations[:, 2]
+    elif motion_depth_mode == "channel":
+        depths = geom[:, 1][channels]
+    else:
+        assert False
+
+    rdepths = depths
+    if motion_est is not None:
+        rdepths = motion_est.correct_s(times_s, depths)
+    shifts = rdepths - depths
+
+    if motion_est is None:
+        n_pitches_shift = np.zeros(len(depths), dtype=int)
+    else:
+        n_pitches_shift = get_spike_pitch_shifts(
+            depths,
+            geom=geom,
+            motion_est=motion_est,
+            times_s=times_s,
+            registered_depths_um=rdepths,
+            mode=channels_mode,
+        )
+
+    # pitch = drift_util.get_pitch(geom)
+    # remaining_shift = shifts - pitch * n_pitches_shift
+
+    return channels, shifts, n_pitches_shift
+
+
+def get_stable_channels(
+    geom,
+    channels,
+    channel_index,
+    registered_geom,
+    n_pitches_shift,
+    core_radius=None,
+    workers=-1,
+    device=None,
+):
+    core_channel_index = None
+    if core_radius is not None:
+        core_channel_index = make_channel_index(geom, core_radius)
+
+    pitch = get_pitch(geom)
+    registered_kdtree = KDTree(registered_geom)
+    match_distance = pdist(geom).min() / 2
+
+    # extract the main unique chans computation
+    c = torch.asarray(channels, dtype=torch.int32)
+    s = torch.asarray(n_pitches_shift, dtype=torch.int32)
+    cs = torch.column_stack((c, s))
+    if device is not None:
+        cs = cs.to(device)
+    uniq_channels_and_shifts, uniq_inv = torch.unique(cs, dim=0, return_inverse=True)
+    uniq_channels_and_shifts = uniq_channels_and_shifts.numpy(force=True)
+    uniq_inv = uniq_inv.numpy(force=True)
+
+    extract_channels, extract_neighborhoods, extract_neighborhood_ids = (
+        static_channel_neighborhoods(
+            geom,
+            channels,
+            channel_index,
+            pitch=pitch,
+            n_pitches_shift=n_pitches_shift,
+            registered_geom=registered_geom,
+            target_kdtree=registered_kdtree,
+            match_distance=match_distance,
+            uniq_channels_and_shifts=uniq_channels_and_shifts,
+            uniq_inv=uniq_inv,
+            workers=workers,
+        )
+    )
+    core_channels = core_neighborhoods = core_neighborhood_ids = None
+    if core_radius is not None:
+        core_channels, core_neighborhoods, core_neighborhood_ids = (
+            static_channel_neighborhoods(
+                geom,
+                channels,
+                core_channel_index,
+                pitch=pitch,
+                n_pitches_shift=n_pitches_shift,
+                registered_geom=registered_geom,
+                target_kdtree=registered_kdtree,
+                match_distance=match_distance,
+                uniq_channels_and_shifts=uniq_channels_and_shifts,
+                uniq_inv=uniq_inv,
+                workers=workers,
+            )
+        )
+
+    return (
+        extract_channels,
+        extract_neighborhoods,
+        extract_neighborhood_ids,
+        core_channels,
+        core_neighborhoods,
+        core_neighborhood_ids,
+    )
+
+
+def unique_with_index(x, dim=0):
+    # https://github.com/pytorch/pytorch/issues/36748
+    unique, inverse, counts = torch.unique(
+        x, dim=dim, sorted=True, return_inverse=True, return_counts=True
+    )
+    inv_sorted = inverse.argsort(stable=True)
+    tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
+    index = inv_sorted[tot_counts]
+    return unique, inverse, counts, index
