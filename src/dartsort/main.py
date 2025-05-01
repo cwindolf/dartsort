@@ -196,11 +196,11 @@ def _dartsort_impl(
             logger.info(f"Refinement step {step}: {sorting}")
             ds_save_intermediate_labels(f"refined{step}", sorting, output_dir, cfg, work_dir=work_dir)
 
-    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
-
     if work_dir is not None:
         final_h5_path = output_dir / sorting.parent_h5_path.name
+        assert final_h5_path.exists()
         sorting = replace(sorting, parent_h5_path=final_h5_path)
+    ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting

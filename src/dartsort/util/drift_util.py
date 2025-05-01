@@ -109,20 +109,43 @@ def registered_geometry(
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
-    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+    min_distance = np.sqrt(pdist(geom, metric="sqeuclidean").min()) / 2
 
     # find all registered site positions
-    # TODO make this not quadratic
-    unique_shifted_positions = list(geom)
+    # the following naive algorithm is both quadratic now banished to a test
+    # for each shift:
+    #   - shift all site positions
+    #   - if any site is not eps-close to set of unique shifted pos,
+    #     add it
+    # to un-quadratic it, make a kdtree of the geom, and shift the
+    # unique positions inversely
+
+    # better loop
+    chan_ix = np.arange(len(geom))
+    kdt = KDTree(geom)
+    n_shifts = pitches_pad_up + pitches_pad_down + 1
+    unique_shifted_positions_toobig = np.zeros((n_shifts * len(geom), geom.shape[1]), dtype=geom.dtype)
+    unique_shifted_positions_toobig[:len(geom)] = geom
+    cur_ix = len(geom)
     for shift in range(-pitches_pad_down, pitches_pad_up + 1):
-        shifted_geom = geom + [0, pitch * shift]
-        for site in shifted_geom:
-            if not any(
-                np.square(p - site).sum() < min_distance
-                for p in unique_shifted_positions
-            ):
-                unique_shifted_positions.append(site)
-    unique_shifted_positions = np.array(unique_shifted_positions)
+        cur_pos = unique_shifted_positions_toobig[:cur_ix]
+
+        # sign is flipped, since we're shifting the bad guys
+        cur_pos_shifted = cur_pos - [0, pitch * shift]
+        d, i = kdt.query(cur_pos_shifted, distance_upper_bound=min_distance)
+
+        # figure out which were unmatched
+        i_unobs = np.setdiff1d(chan_ix, i)
+
+        # add them to the set
+        n_new = len(i_unobs)
+        if not n_new:
+            continue
+        unique_shifted_positions_toobig[cur_ix:cur_ix + n_new] = geom[i_unobs] + [0, pitch * shift]
+        cur_ix += n_new
+        assert cur_ix <= len(unique_shifted_positions_toobig)
+
+    unique_shifted_positions = unique_shifted_positions_toobig[:cur_ix]
 
     # order by depth first, then horizontal position (unique goes the other way)
     registered_geom = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]

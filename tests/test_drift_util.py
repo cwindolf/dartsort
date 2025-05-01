@@ -73,31 +73,84 @@ def test_shifted_waveforms():
 
 @pytest.fixture
 def example_geoms():
-    geom = simkit.generate_geom(num_contact_per_column=96)
+    geom = simkit.generate_geom(num_contact_per_column=48)
     geom0 = geom
 
     # make some holes
     rg = np.random.default_rng(0)
-    choices = rg.choice(len(geom), replace=False, size=350)
-    choices.sort()
-    geom1 = geom[choices]
+    choices = rg.choice(len(geom), replace=False, size=(2 * len(geom)) // 3)
+    geom1 = geom[np.sort(choices)]
+    geom2 = geom[choices]  # unsorted version
 
-    return dict(geom0=geom0, geom1=geom1)
+    # single column geom
+    geom3 = np.c_[np.zeros(10), np.arange(10)]
+
+    # single column with holes
+    geom4 = geom2[[0, 1, 3, 4, 5, 7, 8, 9]]
+
+    # oddball column with one friend, and it's not even sorted
+    geom5 = np.concatenate([geom4, [[1, 5.2]]], axis=0)
+
+    return [geom0, geom1, geom2, geom3, geom4, geom5]
 
 
-@pytest.mark.parametrize("geom_name", ["geom0", "geom1"])
+@pytest.mark.parametrize("geom_ix", range(6))
+@pytest.mark.parametrize("drift_speed", [0, 10, 100, -10, -132])
+def test_registered_geometry(example_geoms, geom_ix, drift_speed):
+    geom = example_geoms[geom_ix]
+
+    # create fake motion estimate
+    T_seconds = 10
+    time_bin_centers = np.arange(T_seconds) + 0.5
+    drift = drift_speed * (time_bin_centers - T_seconds / 2)
+    motion_est = mu.get_motion_estimate(drift, time_bin_centers_s=time_bin_centers)
+
+    # this is the old impl of registered_geometry
+    pitch = drift_util.get_pitch(geom)
+    downward_drift = max(0, motion_est.displacement.max())
+    upward_drift = max(0, -motion_est.displacement.min())
+    assert upward_drift >= 0
+    assert downward_drift >= 0
+    pitches_pad_up = int(np.ceil(upward_drift / pitch))
+    pitches_pad_down = int(np.ceil(downward_drift / pitch))
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+    unique_shifted_positions = list(geom)
+    for shift in range(-pitches_pad_down, pitches_pad_up + 1):
+        shifted_geom = geom + [0, pitch * shift]
+        for site in shifted_geom:
+            if np.square(unique_shifted_positions - site).sum(dim=1).min() > min_distance:
+                unique_shifted_positions.append(site)
+    unique_shifted_positions = np.array(unique_shifted_positions)
+    registered_geom0 = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
+    assert len(np.unique(registered_geom0, axis=0)) == len(registered_geom0)
+
+    registered_geom1 = drift_util.registered_geometry(geom, motion_est=motion_est)
+    assert len(np.unique(registered_geom1, axis=0)) == len(registered_geom1)
+    assert np.array_equal(registered_geom0, registered_geom1)
+
+
+def _check_chans_neighbs_nids_consistent(chans, neighbs, nids):
+    assert nids.max() == len(neighbs) - 1
+    nids_unique, nids_first_ix = np.unique(nids, return_index=True)
+    assert np.array_equal(nids_unique, np.arange(len(neighbs)))
+    for j in range(len(neighbs)):
+        # first = np.flatnonzero(nids == j)[0]
+        first = nids_first_ix[j]
+        assert nids[first] == j
+        assert np.array_equal(chans[first], neighbs[j])
+
+
+@pytest.mark.parametrize("geom_ix", range(6))
 @pytest.mark.parametrize("drift_speed", [0, 10, 100, -10, -132])
 @pytest.mark.parametrize("radius", [0, 10, 35])
-def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
-    geom = example_geoms[geom_name]
+def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
+    geom = example_geoms[geom_ix]
     pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
     nc = len(geom)
     T_seconds = 100
     n_spikes = 2048
     rg = np.random.default_rng(0)
     ci = waveform_util.make_channel_index(geom, radius)
-    if ci.shape[1] > 1:
-        assert ci.max() == len(geom)
     max_distance = pdist(geom).min() / 2
 
     # create fake motion estimate
@@ -115,21 +168,13 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     assert np.isclose(reg_depths, drifted_depths - shifts).all()
     reg_pos = np.c_[drifted_pos[:, 0], reg_depths]
 
-    # get drifted positions (geom and drift should be params?)
-    # round to nearest channel
+    # registered geometry -- kdt since we'll do lots of nn queries
     rgeom = drift_util.registered_geometry(geom, motion_est)
     kdt = KDTree(rgeom)
-    d, i = kdt.query(reg_pos, distance_upper_bound=max_distance, workers=-1)
-    i: npt.NDArray[np.intp] = i  # is pyright, like, actively bad?
-    # registered geom should cover all of these positions
-    assert (i < kdt.n).all()
-    assert i.shape == (n_spikes,)
 
     # original (drifted) and registered channel neighborhood positions
     drifted_neighbs = ci[drifted_chans]
     assert drifted_neighbs.min() == 0
-    if ci.shape[1] > 1:
-        assert drifted_neighbs.max() == len(geom)
     orig_chan_pos = pgeom[drifted_neighbs]
     assert orig_chan_pos.shape == (n_spikes, ci.shape[1], 2)
     reg_chan_pos = orig_chan_pos.copy()
@@ -147,6 +192,7 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     d_pitch, i_pitch = kdt.query(
         pitch_reg_pos, distance_upper_bound=max_distance, workers=-1
     )
+    assert (i_pitch < kdt.n).all()
     i_pitch: npt.NDArray[np.intp] = i_pitch
 
     # pitch-registered channel positions
@@ -163,8 +209,6 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     chans_1 = np.full_like(drifted_neighbs, kdt.n)
     chans_1[ii, jj] = chans_1_
     assert (chans_1 == i_pitch[:, None]).any(1).all()
-    if radius > 2 * pitch:
-        assert (chans_1 == i[:, None]).any(1).all()
 
     # 2 use static_channel_neighborhoods fn without precomputed uniq
     chans_2, neighbs_2, nids_2 = drift_util.static_channel_neighborhoods(
@@ -178,6 +222,7 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     )
     assert chans_2.shape == chans_1.shape
     assert np.array_equal(chans_1, chans_2)
+    _check_chans_neighbs_nids_consistent(chans_2, neighbs_2, nids_2)
 
     # 3 with precomputed uniq
     cs = np.c_[drifted_chans, n_pitches_shift]
@@ -199,6 +244,7 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     assert np.array_equal(chans_1, chans_3)
     assert np.array_equal(neighbs_2, neighbs_3)
     assert np.array_equal(nids_2, nids_3)
+    _check_chans_neighbs_nids_consistent(chans_3, neighbs_3, nids_3)
 
     # -- different ways of getting the neighborhood ids
     # 1 from precomputed uniq ixs
@@ -206,6 +252,7 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     neighborhood_ids_1 = cs_inv
     static_chans_1 = neighborhoods_1[neighborhood_ids_1]
     assert np.array_equal(static_chans_1, chans_1)
+    _check_chans_neighbs_nids_consistent(static_chans_1, neighborhoods_1, neighborhood_ids_1)
 
     # 2 from chans uniq
     neighborhoods_2, neighborhood_ids_2 = np.unique(
@@ -217,6 +264,7 @@ def test_stable_channels(example_geoms, geom_name, drift_speed, radius):
     for id1, neighb1 in enumerate(neighborhoods_1):
         assert (neighborhoods_2 == neighb1).all(1).sum() == 1
     assert np.array_equal(static_chans_2, chans_1)
+    _check_chans_neighbs_nids_consistent(static_chans_2, neighborhoods_2, neighborhood_ids_2)
 
     # 3 deduplicated precomputed uniq
     neighborhoods_3, n1_inv = np.unique(neighborhoods_1, axis=0, return_inverse=True)

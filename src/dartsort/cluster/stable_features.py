@@ -676,6 +676,7 @@ class SpikeNeighborhoods(torch.nn.Module):
             kept_ids, neighborhood_ids = torch.unique(
                 neighborhood_ids, return_inverse=True
             )
+            neighborhoods = neighborhoods[kept_ids]
         return cls(
             n_channels=n_channels,
             neighborhoods=neighborhoods,

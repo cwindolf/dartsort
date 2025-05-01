@@ -120,14 +120,15 @@ def ds_handle_delete_intermediate_features(
     # find all non-final h5s, models and delete them
     assert final_sorting.parent_h5_path is not None
     final_h5 = resolve_path(final_sorting.parent_h5_path)
-    assert final_h5 is not None
+    assert final_h5.exists()
     assert final_h5.parent == output_dir
 
-    for h5_name in output_dir.glob("*.h5"):
-        if h5_name == final_h5.name:
+    for h5_path in output_dir.glob("*.h5"):
+        if h5_path == final_h5:
             continue
+        assert h5_path.name != final_h5.name
 
-        h5_path = output_dir / h5_name
+        h5_path = output_dir / h5_path.name
         models_path = output_dir / f"{h5_path.stem}_models"
 
         logger.dartsortdebug(f"Clean up: remove {h5_path=}.")
