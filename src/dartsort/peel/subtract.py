@@ -17,7 +17,7 @@ from ..transform import (
     Waveform,
     WaveformPipeline,
 )
-from ..util.data_util import SpikeDataset
+from ..util.data_util import subsample_waveforms, SpikeDataset
 from ..util import peel_util, spiketorch, job_util
 from ..util.waveform_util import (
     get_relative_subset,
@@ -467,7 +467,7 @@ class SubtractionPeeler(BasePeeler):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms, weights = peel_util.subsample_waveforms(
+                channels, waveforms, weights = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -532,7 +532,7 @@ class SubtractionPeeler(BasePeeler):
                 )
 
                 # get fit weights
-                channels, waveforms, weights = peel_util.subsample_waveforms(
+                channels, waveforms, weights = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,

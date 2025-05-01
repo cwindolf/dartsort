@@ -13,8 +13,7 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from tqdm.auto import tqdm
 
 from dartsort.transform import WaveformPipeline
-from dartsort.util import peel_util
-from dartsort.util.data_util import SpikeDataset
+from dartsort.util.data_util import subsample_waveforms, SpikeDataset
 from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
 from dartsort.util import job_util
@@ -593,7 +592,7 @@ class BasePeeler(torch.nn.Module):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms, weights = peel_util.subsample_waveforms(
+                channels, waveforms, weights = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
