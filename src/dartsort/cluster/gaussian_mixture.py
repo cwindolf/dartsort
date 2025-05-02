@@ -1817,7 +1817,7 @@ class SpikeMixtureModel(torch.nn.Module):
             # new indices are already >= 1, so subtract 1
             split_labels[split_labels >= 1] += next_label - 1
             split_labels[split_labels == 0] = unit_id
-            logger.dartsortdebug(
+            logger.dartsortverbose(
                 f"Split {unit_id}: my new labels are {split_labels.unique()}."
             )
 
