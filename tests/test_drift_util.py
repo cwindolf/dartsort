@@ -118,7 +118,7 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     for shift in range(-pitches_pad_down, pitches_pad_up + 1):
         shifted_geom = geom + [0, pitch * shift]
         for site in shifted_geom:
-            if np.square(unique_shifted_positions - site).sum(dim=1).min() > min_distance:
+            if np.square(unique_shifted_positions - site).sum(1).min() > min_distance:
                 unique_shifted_positions.append(site)
     unique_shifted_positions = np.array(unique_shifted_positions)
     registered_geom0 = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
@@ -252,7 +252,9 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     neighborhood_ids_1 = cs_inv
     static_chans_1 = neighborhoods_1[neighborhood_ids_1]
     assert np.array_equal(static_chans_1, chans_1)
-    _check_chans_neighbs_nids_consistent(static_chans_1, neighborhoods_1, neighborhood_ids_1)
+    _check_chans_neighbs_nids_consistent(
+        static_chans_1, neighborhoods_1, neighborhood_ids_1
+    )
 
     # 2 from chans uniq
     neighborhoods_2, neighborhood_ids_2 = np.unique(
@@ -264,7 +266,9 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     for id1, neighb1 in enumerate(neighborhoods_1):
         assert (neighborhoods_2 == neighb1).all(1).sum() == 1
     assert np.array_equal(static_chans_2, chans_1)
-    _check_chans_neighbs_nids_consistent(static_chans_2, neighborhoods_2, neighborhood_ids_2)
+    _check_chans_neighbs_nids_consistent(
+        static_chans_2, neighborhoods_2, neighborhood_ids_2
+    )
 
     # 3 deduplicated precomputed uniq
     neighborhoods_3, n1_inv = np.unique(neighborhoods_1, axis=0, return_inverse=True)

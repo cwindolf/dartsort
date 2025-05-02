@@ -17,4 +17,6 @@ def test_sim():
     rec = rec_sim.simulate()
 
     with tempfile.TemporaryDirectory() as tempdir:
-        st = dartsort.threshold(rec, output_dir=dartsort.resolve_path(tempdir))
+        st = dartsort.threshold(
+            recording=rec, output_dir=dartsort.resolve_path(tempdir)
+        )

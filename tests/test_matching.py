@@ -556,7 +556,7 @@ def _test_fakedata_nonn(threshold):
         for rec in [rec1, rec0]:
             (Path(tdir) / "match").mkdir()
             st = main.match(
-                rec,
+                recording=rec,
                 sorting=gts,
                 output_dir=Path(tdir) / "match",
                 motion_est=None,
@@ -568,7 +568,7 @@ def _test_fakedata_nonn(threshold):
 
             (Path(tdir) / "match2").mkdir()
             st2 = main.match(
-                rec,
+                recording=rec,
                 sorting=st,
                 output_dir=Path(tdir) / "match2",
                 motion_est=None,

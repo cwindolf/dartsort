@@ -3,7 +3,6 @@ import tempfile
 
 import h5py
 import numpy as np
-from scipy.signal import firls
 import spikeinterface.core as sc
 import torch
 from dartsort.config import FeaturizationConfig, SubtractionConfig, ComputationConfig
@@ -122,8 +121,8 @@ def test_fakedata_nonn():
         print("first one")
         torch.manual_seed(0)
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
@@ -148,8 +147,8 @@ def test_fakedata_nonn():
         print("resume")
         torch.manual_seed(0)
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=False,
@@ -175,8 +174,8 @@ def test_fakedata_nonn():
         print("overwrite")
         torch.manual_seed(0)
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
@@ -204,8 +203,8 @@ def test_fakedata_nonn():
             print("parallel first one")
             torch.manual_seed(0)
             st = subtract(
-                rec,
-                tempdir,
+                recording=rec,
+                output_dir=tempdir,
                 featurization_config=featconf,
                 subtraction_config=subconf,
                 overwrite=True,
@@ -232,8 +231,8 @@ def test_fakedata_nonn():
             print("parallel resume")
             torch.manual_seed(0)
             st = subtract(
-                rec,
-                tempdir,
+                recording=rec,
+                output_dir=tempdir,
                 featurization_config=featconf,
                 subtraction_config=subconf,
                 overwrite=False,
@@ -260,8 +259,8 @@ def test_fakedata_nonn():
             print("parallel overwrite")
             torch.manual_seed(0)
             st = subtract(
-                rec,
-                tempdir,
+                recording=rec,
+                output_dir=tempdir,
                 featurization_config=featconf,
                 subtraction_config=subconf,
                 overwrite=True,
@@ -299,8 +298,8 @@ def test_fakedata_nonn():
     print(nolocfeatconf)
     with tempfile.TemporaryDirectory() as tempdir:
         st0 = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
@@ -308,14 +307,14 @@ def test_fakedata_nonn():
 
     with tempfile.TemporaryDirectory() as tempdir:
         sta = subtract(
-            rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
-            tempdir,
+            recording=rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
+            output_dir=tempdir,
             featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
         stb = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=nolocfeatconf,
             subtraction_config=subconf,
         )
@@ -356,8 +355,8 @@ def _test_small_nonn(nn_localization=False):
     print("No parallel")
     with tempfile.TemporaryDirectory() as tempdir:
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             featurization_config=featconf,
             subtraction_config=subconf,
             overwrite=True,
@@ -374,8 +373,8 @@ def _test_small_nonn(nn_localization=False):
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             overwrite=True,
             featurization_config=featconf,
             subtraction_config=subconf,
@@ -393,8 +392,8 @@ def _test_small_nonn(nn_localization=False):
     with tempfile.TemporaryDirectory() as tempdir:
         # test default config
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             overwrite=True,
             featurization_config=featconf,
             subtraction_config=subconf,
@@ -446,8 +445,8 @@ def small_default_config(extract_radius=200):
         # test default config
         print("test_small_default_config first")
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             overwrite=True,
             subtraction_config=cfg,
             featurization_config=fcfg,
@@ -466,8 +465,8 @@ def small_default_config(extract_radius=200):
         # test default config
         print("test_small_default_config second")
         st = subtract(
-            rec,
-            tempdir,
+            recording=rec,
+            output_dir=tempdir,
             overwrite=True,
             computation_config=two_jobs_cfg,
             subtraction_config=cfg,
