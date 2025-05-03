@@ -334,7 +334,13 @@ def fit_tsvd(
 
     # subset spikes used to fit tsvd
     rg = np.random.default_rng(random_seed)
-    choices = np.flatnonzero(sorting.labels >= 0)
+    max_time = recording.get_num_samples() - (spike_length_samples - trough_offset_samples)
+    t_clip = sorting.times_samples.clip(trough_offset_samples, max_time)
+    valid = np.logical_and(
+        sorting.labels >= 0,
+        sorting.times_samples == t_clip,
+    )
+    choices = np.flatnonzero(valid)
     if choices.size > denoising_spikes_fit:
         choices = rg.choice(choices, denoising_spikes_fit, replace=False)
         choices.sort()
