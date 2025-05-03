@@ -153,7 +153,6 @@ class Decollider(BaseMultichannelDenoiser):
         else:
             self.den_net = self.inf_net
         self.to(self.device)
-        print(f"{self.device=}")
 
     def fit(self, waveforms, max_channels, recording, weights=None):
         train_data, val_data = self._construct_datasets_from_waveforms(
@@ -186,7 +185,7 @@ class Decollider(BaseMultichannelDenoiser):
                 m = get_noise(
                     self.recording,
                     max_channels.numpy(force=True),
-                    self.model_channel_index_np,
+                    self.model_channel_index.numpy(force=True),
                     spike_length_samples=self.spike_length_samples,
                     rg=None,
                 )
@@ -339,14 +338,14 @@ class Decollider(BaseMultichannelDenoiser):
                 )
         return loss_dict
 
-    def get_losses(self, waveforms, channels, recording):
+    def get_losses(self, waveforms, channels, recording, random_seed=None):
         n = len(waveforms)
         noise = get_noise(
             recording,
             channels.numpy(force=True),
-            self.model_channel_index_np,
+            self.model_channel_index.numpy(force=True),
             spike_length_samples=self.spike_length_samples,
-            rg=self.rg,
+            rg=np.random.default_rng(random_seed if random_seed is not None else self.random_seed),
         )
         dataset = TensorDataset(waveforms, channels, noise)
         loader = DataLoader(dataset, batch_size=self.inference_batch_size)
@@ -529,6 +528,8 @@ class Decollider(BaseMultichannelDenoiser):
     def _construct_datasets_from_waveforms(
         self, waveforms, channels, recording, weights=None
     ):
+        rg = np.random.default_rng(self.random_seed)
+
         val_size = 0
         train_indices = slice(None)
         val_indices = None
@@ -536,7 +537,7 @@ class Decollider(BaseMultichannelDenoiser):
             num_samples = len(waveforms)
             val_size = int(self.val_split_p * num_samples)
             train_size = num_samples - val_size
-            train_indices = self.rg.choice(num_samples, size=train_size, replace=False)
+            train_indices = rg.choice(num_samples, size=train_size, replace=False)
             val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
 
         spike_length_samples = waveforms.shape[1]
@@ -548,17 +549,17 @@ class Decollider(BaseMultichannelDenoiser):
         train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
             recording,
             train_channels.numpy(force=True),
-            self.model_channel_index_np,
+            self.model_channel_index.numpy(force=True),
             spike_length_samples=spike_length_samples,
-            generator=spawn_torch_rg(self.rg),
+            generator=spawn_torch_rg(rg),
         )
         if self.cycle_loss_alpha:
             train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
                 recording,
                 train_channels.numpy(force=True),
-                self.model_channel_index_np,
+                self.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
-                generator=spawn_torch_rg(self.rg),
+                generator=spawn_torch_rg(rg),
             )
         else:
             train_cycle_noise_dataset = NoneDataset(len(train_channels))
@@ -572,7 +573,7 @@ class Decollider(BaseMultichannelDenoiser):
             weights=train_weights,
             replacement=train_weights is not None,
             batch_size=self.batch_size,
-            generator=spawn_torch_rg(self.rg),
+            generator=spawn_torch_rg(rg),
             epoch_size=self.epoch_size,
         )
         train_loader = DataLoader(
@@ -596,17 +597,17 @@ class Decollider(BaseMultichannelDenoiser):
             val_noise = get_noise(
                 recording,
                 val_channels.numpy(force=True),
-                self.model_channel_index_np,
+                self.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
-                rg=self.rg,
+                rg=rg,
             )
             if self.cycle_loss_alpha:
                 cycle_val_noise = get_noise(
                     recording,
                     val_channels.numpy(force=True),
-                    self.model_channel_index_np,
+                    self.model_channel_index.numpy(force=True),
                     spike_length_samples=spike_length_samples,
-                    rg=self.rg,
+                    rg=rg,
                 )
                 cycle_val_noise = TensorDataset(cycle_val_noise)
             else:

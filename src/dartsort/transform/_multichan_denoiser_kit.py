@@ -76,11 +76,11 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.res_type = res_type
         self.inference_batch_size = inference_batch_size
 
-        self.model_channel_index_np = regularize_channel_index(
+        model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
         )
         self.register_buffer(
-            "model_channel_index", torch.from_numpy(self.model_channel_index_np)
+            "model_channel_index", torch.from_numpy(model_channel_index)
         )
         self.register_buffer(
             "relative_index",
@@ -92,8 +92,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             get_relative_index(self.model_channel_index, self.channel_index),
         )
         self._needs_fit = True
-        self.rg = np.random.default_rng(random_seed)
-        self.generator = spawn_torch_rg(self.rg)
+        self.random_seed = random_seed
 
     @classmethod
     def load_from_pt(cls, pretrained_path, **kwargs):

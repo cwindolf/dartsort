@@ -33,7 +33,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         hidden_dims=(256, 128),
         name=None,
         name_prefix="",
-        epochs=100,
+        n_epochs=100,
         learning_rate=3e-3,
         batch_size=16,
         inference_batch_size=2**14,
@@ -46,7 +46,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         scale_loss_by_mean=True,
         reference="main_channel",
         channelwise_dropout_p=0.00,
-        examples_per_epoch=50_000,
+        epoch_size=50_000,
         val_split_p=0.3,
         random_seed=0,
     ):
@@ -62,7 +62,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
         self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim
-        self.epochs = epochs
+        self.n_epochs = n_epochs
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.encoder = None
@@ -79,7 +79,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.scale_loss_by_mean = scale_loss_by_mean
         self.channelwise_dropout_p = channelwise_dropout_p
         self.reference = reference
-        self.examples_per_epoch = examples_per_epoch
+        self.epoch_size = epoch_size
         self.val_split_p = val_split_p
         self.random_seed = random_seed
         self.inference_batch_size = inference_batch_size
@@ -313,7 +313,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         self.train()
         mse_history = []
-        with trange(self.epochs, desc="Train localizer", unit="epoch") as pbar:
+        with trange(self.n_epochs, desc="Train localizer", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
                 total_mse = 0
@@ -353,7 +353,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         total_kld += kld.item()
 
                     n_examples += self.batch_size
-                    if n_examples >= self.examples_per_epoch:
+                    if n_examples >= self.epoch_size:
                         break
 
                 valbatch = 0
