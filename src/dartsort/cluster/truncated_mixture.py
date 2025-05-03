@@ -61,6 +61,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         laplace_ard=False,
         alpha_max=1e6,
         alpha_min=1e-6,
+        min_log_prop=-50.0,
     ):
         super().__init__()
         if n_search is None:
@@ -88,6 +89,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.laplace_ard = laplace_ard
         self.alpha_max = alpha_max
         self.alpha_min = alpha_min
+        self.min_log_prop = min_log_prop
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
         logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
@@ -263,7 +265,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self._N[1:] = result.N
             lp = torch.log_softmax(self._N.log(), dim=0)
             self.noise_log_prop.fill_(lp[0])
-            self.log_proportions[:] = lp[1:]
+            self.log_proportions[:] = lp[1:].clamp_(min=self.min_log_prop)
 
         if self.exact_kl:
             self.update_dkl()
@@ -1321,5 +1323,6 @@ class CandidateSet:
                 f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
                 f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
             )
+        assert (candidates[:, :self.n_candidates] >= 0).all()
 
         return candidates, unit_neighborhood_counts

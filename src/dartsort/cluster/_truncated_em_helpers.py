@@ -132,19 +132,20 @@ def _te_batch_e(
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     lls = lls_unnorm + log_proportions
 
-    if ds_verbose:
-        llsfinite = lls.isfinite()
-        if not llsfinite.all():
-            llsinf = torch.logical_not(llsfinite)
-            infspk = llsinf.any(1)
-            infcands = candidates[torch.logical_not(llsfinite)].unique()
-            logger.dartsortverbose(
-                f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[llsinf]=} {inv_quad[llsinf]=}"
-                f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
-                f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
-            )
-            if wburyroot is not None:
-                logger.dartsortverbose(f"{wburyroot[infcands]=}")
+    # if ds_verbose:
+    llsfinite = lls.isfinite()
+    if not torch.logical_or(candidates < 0, llsfinite).all():
+        bad = torch.logical_and(candidates >= 0, torch.logical_not(llsfinite))
+        infspk = bad.any(1)
+        infcands = candidates[bad].unique()
+        msg = (
+            f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[bad]=} {inv_quad[bad]=}"
+            f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
+            f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
+        )
+        if wburyroot is not None:
+            msg += (f" {wburyroot[infcands]=}")
+        raise ValueError(f"{bad.sum()=} {msg}")
 
     cvalid = candidates >= 0
     lls = torch.where(cvalid, lls, -torch.inf)
@@ -158,7 +159,9 @@ def _te_batch_e(
     all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
-    assert (new_candidates >= 0).all()
+    if not (new_candidates >= 0).all():
+        (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
+        raise ValueError(f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=} {cvalid[bad_ix]=} {cvalid[topinds][bad_ix]=}")
 
     ncc = dkl = None
     if with_kl:

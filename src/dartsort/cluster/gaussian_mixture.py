@@ -3499,17 +3499,20 @@ class GaussianUnit(torch.nn.Module):
             W_full = new_zeros((self.noise.rank, self.noise.n_channels, self.ppca_rank))
 
         if je_suis:
-            if not res["mu"].isfinite().all():
-                mu = res["mu"]
+            mu = res["mu"]
+            if not mu.isfinite().all():
                 raise ValueError(
                     f"Fit exploded, with {mu.shape=} {mu.isnan().any()=} "
                     f"{mu.isinf().any()=} {mu.isfinite().sum()/mu.numel()=} "
                     f"{achan_counts=}."
                 )
-            mean_full[:, achans] = res["mu"]
-            if res.get("W", None) is not None:
-                assert res["W"].isfinite().all()
-                W_full[:, achans] = res["W"]
+            mean_full[:, achans] = mu
+            W = res.get("W")
+            if do_pca:
+                assert W is not None
+                assert W.isfinite().all()
+                W_full[:, achans] = W
+
         self.register_buffer("mean", mean_full)
         if do_pca:
             self.register_buffer("W", W_full)
@@ -3578,11 +3581,13 @@ class GaussianUnit(torch.nn.Module):
                 channels, cache_key=cache_key, device=device
             )
         zero_signal = (
-            self.cov_kind == "zero" or self.cov_kind == "ppca" and not self.ppca_rank
+            self.cov_kind == "zero"
+            or (self.cov_kind == "ppca" and not self.ppca_rank)
+            or not hasattr(self, "W")
         )
         if zero_signal:
             return ncov
-        if self.cov_kind == "ppca" and self.ppca_rank and hasattr(self, "W"):
+        if self.cov_kind == "ppca" and self.ppca_rank:
             root = self.W[:, channels_].reshape(-1, self.ppca_rank)
             root = operators.LowRankRootLinearOperator(root)
             if signal_only:
