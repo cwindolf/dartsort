@@ -15,14 +15,14 @@ class BaseWaveformModule(torch.nn.Module):
             if name_prefix:
                 name = f"{name_prefix}_{name}"
         self.name = name
+        # these buffers below need to be copied, else they share references
+        # across all the transformers which seems to cause problems!
         if channel_index is not None:
-            self.register_buffer(
-                "channel_index", torch.asarray(channel_index, copy=True)
-            )
+            channel_index = torch.asarray(channel_index, copy=True)
+            self.register_buffer("channel_index", channel_index)
         if geom is not None:
-            self.register_buffer(
-                "geom", torch.asarray(geom, dtype=torch.float, copy=True)
-            )
+            geom = torch.asarray(geom, dtype=torch.float, copy=True)
+            self.register_buffer("geom", geom)
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
         pass

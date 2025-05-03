@@ -21,16 +21,21 @@ class WaveformPipeline(torch.nn.Module):
     def from_class_names_and_kwargs(cls, geom, channel_index, class_names_and_kwargs):
         from .all_transformers import transformers_by_class_name
 
-        return cls(
-            [
-                transformers_by_class_name[name](
-                    channel_index=torch.as_tensor(channel_index),
-                    geom=torch.as_tensor(geom),
-                    **kwargs,
-                )
-                for name, kwargs in class_names_and_kwargs
-            ]
-        )
+        channel_index = torch.as_tensor(channel_index)
+        geom = torch.as_tensor(geom)
+        probe_kw = dict(channel_index=channel_index, geom=geom)
+
+        transformers = []
+        for name, kwargs in class_names_and_kwargs:
+            transformer_cls = transformers_by_class_name[name]
+            if kwargs.get("pretrained_path") is not None:
+                transformer = transformer_cls.load_from_pt(**probe_kw, **kwargs)
+            else:
+                assert kwargs.pop("pretrained_path", None) is None
+                transformer = transformer_cls(**probe_kw, **kwargs)
+            transformers.append(transformer)
+
+        return cls(transformers)
 
     @classmethod
     def from_config(

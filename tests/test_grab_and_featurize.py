@@ -157,7 +157,7 @@ def test_grab_locations():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index),
-            transform.SingleChannelWaveformDenoiser(channel_index),
+            transform.SingleChannelWaveformDenoiser.load_from_pt(channel_index=channel_index),
             transform.TemporalPCADenoiser(
                 channel_index=torch.tensor(channel_index),
                 geom=torch.tensor(geom),
@@ -209,7 +209,7 @@ def test_grab_locations():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index),
-            transform.SingleChannelWaveformDenoiser(channel_index),
+            transform.SingleChannelWaveformDenoiser.load_from_pt(channel_index=channel_index),
             transform.TemporalPCADenoiser(
                 channel_index=torch.tensor(channel_index),
                 geom=torch.tensor(geom),

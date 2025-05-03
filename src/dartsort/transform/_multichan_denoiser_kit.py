@@ -34,7 +34,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         n_epochs=75,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
-        pretrained_path=None,
         val_split_p=0.0,
         min_epochs=10,
         earlystop_eps=None,
@@ -50,7 +49,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         signal_gates=True,
         step_callback=None,
     ):
-        assert pretrained_path is None, "Need to implement loading."
         super().__init__(
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
         )
@@ -96,6 +94,17 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self._needs_fit = True
         self.rg = np.random.default_rng(random_seed)
         self.generator = spawn_torch_rg(self.rg)
+
+    @classmethod
+    def load_from_pt(cls, pretrained_path, **kwargs):
+        net = cls(**kwargs)
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+        net.load_state_dict(state_dict)
+        net._needs_fit = False
+        return net
+
+    def save_to_pt(self, pretrained_path):
+        torch.save(self.state_dict(), pretrained_path)
 
     def forward(self, waveforms, max_channels):
         out = torch.empty_like(waveforms)
