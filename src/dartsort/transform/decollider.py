@@ -54,7 +54,7 @@ class Decollider(BaseMultichannelDenoiser):
         inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
-        nonlinearity="ELU",
+        nonlinearity="PReLU",
         scaling="max",
         signal_gates=True,
         step_callback=None,

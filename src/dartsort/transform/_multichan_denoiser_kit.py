@@ -44,7 +44,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
-        nonlinearity="ELU",
+        nonlinearity="PReLU",
         scaling="max",
         signal_gates=True,
         step_callback=None,
@@ -98,12 +98,15 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def load_from_pt(cls, pretrained_path, **kwargs):
         net = cls(**kwargs)
         state_dict = torch.load(pretrained_path, map_location='cpu')
+        self.initialize_nets(state_dict.pop("spike_length_samples"))
         net.load_state_dict(state_dict)
         net._needs_fit = False
         return net
 
     def save_to_pt(self, pretrained_path):
-        torch.save(self.state_dict(), pretrained_path)
+        state = self.state_dict()
+        state['spike_length_samples'] = self.spike_length_samples
+        torch.save(state, pretrained_path)
 
     def forward(self, waveforms, max_channels):
         out = torch.empty_like(waveforms)
