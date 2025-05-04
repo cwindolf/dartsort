@@ -34,7 +34,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         n_epochs=75,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
-        pretrained_path=None,
         val_split_p=0.0,
         min_epochs=10,
         earlystop_eps=None,
@@ -45,12 +44,11 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
-        nonlinearity="ELU",
+        nonlinearity="PReLU",
         scaling="max",
         signal_gates=True,
         step_callback=None,
     ):
-        assert pretrained_path is None, "Need to implement loading."
         super().__init__(
             geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
         )
@@ -78,11 +76,11 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.res_type = res_type
         self.inference_batch_size = inference_batch_size
 
-        self.model_channel_index_np = regularize_channel_index(
+        model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index
         )
         self.register_buffer(
-            "model_channel_index", torch.from_numpy(self.model_channel_index_np)
+            "model_channel_index", torch.from_numpy(model_channel_index)
         )
         self.register_buffer(
             "relative_index",
@@ -94,8 +92,21 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             get_relative_index(self.model_channel_index, self.channel_index),
         )
         self._needs_fit = True
-        self.rg = np.random.default_rng(random_seed)
-        self.generator = spawn_torch_rg(self.rg)
+        self.random_seed = random_seed
+
+    @classmethod
+    def load_from_pt(cls, pretrained_path, **kwargs):
+        net = cls(**kwargs)
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+        self.initialize_nets(state_dict.pop("spike_length_samples"))
+        net.load_state_dict(state_dict)
+        net._needs_fit = False
+        return net
+
+    def save_to_pt(self, pretrained_path):
+        state = self.state_dict()
+        state['spike_length_samples'] = self.spike_length_samples
+        torch.save(state, pretrained_path)
 
     def forward(self, waveforms, max_channels):
         out = torch.empty_like(waveforms)

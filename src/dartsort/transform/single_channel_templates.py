@@ -58,11 +58,11 @@ class SingleChannelTemplates(BaseWaveformModule):
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
         if weights is not None:
-            self.random_state = np.random.default_rng(self.random_state)
+            rg = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
-            choices = self.random_state.choice(
+            choices = rg.choice(
                 len(weights), p=weights, size=self.max_waveforms
             )
             choices.sort()

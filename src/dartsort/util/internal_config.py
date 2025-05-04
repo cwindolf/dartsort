@@ -151,6 +151,7 @@ class SubtractionConfig:
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "amp_reweighted"
     fit_max_reweighting: float = 4.0
+    fit_only: bool = False
 
     # subtraction
     detection_threshold: float = 4.0

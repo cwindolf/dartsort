@@ -77,11 +77,11 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
             )
 
         if self.compute_minmax_vectors:
-            max_vectors = torch.nan_to_num(waveforms.max(dim=1).values)
-            min_vectors = torch.nan_to_num(waveforms.min(dim=1).values)
+            max_vectors = waveforms.amax(dim=1)
+            min_vectors = waveforms.amin(dim=1)
             ptp_vectors = max_vectors - min_vectors
         if self.compute_maxchan:
-            maxchans = torch.argmax(torch.nan_to_num(ptp_vectors), dim=1, keepdim=True)
+            maxchans = torch.argmax(ptp_vectors.nan_to_num(), dim=1, keepdim=True)
             if self.log_peak_to_trough:
                 maxs = torch.take_along_dim(max_vectors, maxchans, dim=1)[:, 0]
                 mins = torch.take_along_dim(min_vectors, maxchans, dim=1)[:, 0]

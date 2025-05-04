@@ -26,10 +26,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         denoiser=None,
         batch_size=1024,
         in_place=False,
-        pretrained_path=default_pretrained_path,
         name=None,
         name_prefix="",
-        clsname="SingleChannelDenoiser",
         n_epochs=None,
         epoch_size=None,
     ):
@@ -38,9 +36,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         )
         self.batch_size = batch_size
         self.in_place = in_place
-
         if denoiser is None:
-            denoiser = dnclss[clsname]().load(pretrained_path)
+            denoiser = SingleChannelDenoiser().load(default_pretrained_path)
         self.denoiser = denoiser
 
     @property
@@ -70,6 +67,11 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         )
 
         return waveforms
+
+    @classmethod
+    def load_from_pt(cls, pretrained_path=default_pretrained_path, clsname="SingleChannelDenoiser", **kwargs):
+        denoiser = dnclss[clsname]().load(pretrained_path)
+        return cls(denoiser=denoiser, **kwargs)
 
 
 class SingleChannelDenoiser(nn.Module):

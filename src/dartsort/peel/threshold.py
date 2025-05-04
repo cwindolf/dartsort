@@ -276,7 +276,7 @@ def threshold_chunk(
     min_time = left_margin + trough_offset_samples
     tail_samples = spike_length_samples - trough_offset_samples
     max_time = traces.shape[0] - right_margin - tail_samples - 1
-    valid = orig_times_rel == orig_times_rel.clamp(min_time, max_time)
+    valid = times_rel == times_rel.clamp(min_time, max_time)
     (valid,) = valid.nonzero(as_tuple=True)
     orig_times_rel = orig_times_rel[valid]
     times_rel = times_rel[valid]

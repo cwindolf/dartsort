@@ -23,6 +23,7 @@ def run_peeler(
     overwrite=False,
     residual_filename: str | Path | None = None,
     show_progress=True,
+    fit_only=False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -54,6 +55,8 @@ def run_peeler(
     peeler.load_or_fit_and_save_models(
         model_dir, overwrite=overwrite, computation_config=computation_config
     )
+    if fit_only:
+        return
 
     # run main
     n_resid_now = featurization_config.n_residual_snips * int(

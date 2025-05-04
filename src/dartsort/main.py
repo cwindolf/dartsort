@@ -101,6 +101,7 @@ def _dartsort_impl(
         computation_config=cfg.computation_config,
         overwrite=overwrite,
     )
+    assert sorting is not None
     logger.info(f"Initial detection: {sorting}")
     is_final = cfg.subtract_only or cfg.dredge_only or not cfg.matching_iterations
     ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
@@ -220,7 +221,7 @@ def subtract(
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
-) -> DARTsortSorting:
+) -> DARTsortSorting | None:
     output_dir = resolve_path(output_dir)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
@@ -240,6 +241,7 @@ def subtract(
         computation_config=computation_config,
         residual_filename=residual_filename,
         show_progress=show_progress,
+        fit_only=subtraction_config.fit_only,
     )
     return detections
 
