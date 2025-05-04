@@ -175,6 +175,7 @@ class SubtractionConfig:
     subtraction_denoising_config: FeaturizationConfig = FeaturizationConfig(
         denoise_only=True,
         do_nn_denoise=True,
+        extract_radius=200.0,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
     )
@@ -550,6 +551,7 @@ def to_internal_config(cfg):
     )
     subtraction_denoising_config = FeaturizationConfig(
         denoise_only=True,
+        extract_radius=cfg.subtraction_radius_um,
         do_nn_denoise=cfg.use_nn_in_subtraction,
         do_tpca_denoise=cfg.do_tpca_denoise,
         tpca_rank=cfg.temporal_pca_rank,
