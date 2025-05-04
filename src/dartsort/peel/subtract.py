@@ -140,7 +140,6 @@ class SubtractionPeeler(BasePeeler):
                 n_centroids=n_singlechan_templates,
                 alignment_padding=singlechan_alignment_padding,
                 trough_offset_samples=self.trough_offset_samples,
-                spike_length_samples=self.spike_length_samples,
                 max_waveforms=n_waveforms_fit,
             )
             if self.featurization_pipeline is None:

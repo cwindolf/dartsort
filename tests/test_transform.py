@@ -11,6 +11,17 @@ from dartsort.util.waveform_util import make_channel_index
 from test_util import dense_layout
 
 
+def _check_state_equal(d1, d2):
+    for k1, v1 in d1.items():
+        assert k1 in d2
+        if isinstance(v1, dict):
+            _check_state_equal(v1, d2[k1])
+        elif torch.is_tensor(v1):
+            assert torch.equal(v1, d2[k1])
+        else:
+            assert v1 == d2[k1]
+
+
 def _check_saveload(geom, channel_index, pipeline):
     # check saving and loading before fit
     with tempfile.TemporaryDirectory() as tdir:
@@ -40,18 +51,22 @@ def _check_saveload(geom, channel_index, pipeline):
 
         # now the full thing, save/load...
         nf = pipeline.needs_fit()
+        orig_state_dict = pipeline.state_dict()
         torch.save(pipeline, pt)
         pipeline2 = torch.load(pt)
+        _check_state_equal(orig_state_dict, pipeline2.state_dict())
         assert pipeline2.needs_fit() == nf
 
         # now with state dict
         torch.save(pipeline.state_dict(), pt)
         pipeline.load_state_dict(torch.load(pt))
         assert pipeline.needs_fit() == nf
+        _check_state_equal(orig_state_dict, pipeline.state_dict())
 
         # now tith from_state_dict_pt
         pipeline2 = WaveformPipeline.from_state_dict_pt(geom, channel_index, pt)
         assert pipeline2.needs_fit() == nf
+        _check_state_equal(orig_state_dict, pipeline2.state_dict())
 
 
 def test_all_transformers():

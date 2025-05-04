@@ -10,9 +10,8 @@ from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from tqdm.auto import trange
 from sklearn.covariance import graphical_lasso, GraphicalLassoCV
-from sklearn.exceptions import ConvergenceWarning
 
-from ..util import drift_util, more_operators, spiketorch
+from ..util import more_operators, spiketorch
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
 
 logger = getLogger(__name__)
@@ -795,7 +794,6 @@ class EmbeddedNoise(torch.nn.Module):
                 invalid = np.isnan(xx)
                 xx[invalid] = np.random.default_rng(0).normal(size=invalid.sum())
                 with warnings.catch_warnings(action="ignore"):
-                    print("hi3", logger.isEnabledFor(DARTSORTVERBOSE))
                     glasso.fit(xx)
                 print(f"Best alpha was {glasso.alpha_=}")
                 logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
