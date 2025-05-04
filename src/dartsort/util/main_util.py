@@ -44,15 +44,17 @@ def ds_save_intermediate_labels(
 def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     import json
 
-    with open(output_dir / "_dartsort_internal_config.json", "w") as jsonf:
+    json_path = output_dir / "_dartsort_internal_config.json"
+    with open(json_path, "w") as jsonf:
         json.dump(asdict(internal_cfg), jsonf)
+    logger.dartsortdebug(f"Recorded config to {json_path}.")
 
 
 def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False):
     if work_dir is None:
         return
     if overwrite:
-        # no need for past stuff if overwriting
+        logger.dartsortdebug(f"Working in {work_dir}. No copy since {overwrite=}.")
         return
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
     logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")

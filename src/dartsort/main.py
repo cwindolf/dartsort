@@ -92,6 +92,7 @@ def _dartsort_impl(
     store_dir = output_dir if work_dir is None else work_dir
 
     # first step: initial detection and motion estimation
+    logger.dartsortdebug("-- Start initial detection")
     sorting = subtract(
         output_dir=store_dir,
         recording=recording,
@@ -111,6 +112,7 @@ def _dartsort_impl(
         return ret
 
     if motion_est is None:
+        logger.dartsortdebug("-- Estimate motion")
         motion_est = estimate_motion(
             output_directory=store_dir,
             recording=recording,
@@ -127,6 +129,7 @@ def _dartsort_impl(
         return ret
 
     # clustering: initialization
+    logger.dartsortdebug("-- Initial clustering")
     sorting = initial_clustering(
         recording=recording,
         sorting=sorting,
@@ -142,6 +145,7 @@ def _dartsort_impl(
     if cfg.save_intermediate_labels:
         sdir = output_dir
         sfmt = "refined0{stepname}"
+    logger.dartsortdebug("-- Refine clustering")
     sorting, _ = refine_clustering(
         recording=recording,
         sorting=sorting,
@@ -161,6 +165,7 @@ def _dartsort_impl(
         # TODO
         # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
+        logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(
             output_dir=store_dir,
             recording=recording,
