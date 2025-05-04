@@ -1,14 +1,14 @@
-"""A class which manages pipelines of denoisers and featurizers
-"""
+"""A class which manages pipelines of denoisers and featurizers"""
 
 import torch
 
 
 class WaveformPipeline(torch.nn.Module):
-    def __init__(self, transformers):
+    def __init__(self, transformers, kwargs_to_store=None):
         super().__init__()
         check_unique_feature_names(transformers)
         self.transformers = torch.nn.ModuleList(transformers)
+        self.kwargs_to_store = kwargs_to_store
 
     def __len__(self):
         return len(self.transformers)
@@ -16,6 +16,39 @@ class WaveformPipeline(torch.nn.Module):
     def __bool__(self):
         # if I am False, I return empty dicts always.
         return bool(len(self.transformers))
+
+    def get_extra_state(self):
+        if self.kwargs_to_store is None:
+            return {}
+        return dict(class_names_and_kwargs=self.kwargs_to_store)
+
+    def set_extra_state(self, state):
+        # needed so that load_state_dict doesn't complain if there's
+        # extra state in there.
+        pass
+
+    @classmethod
+    def from_state_dict_pt(cls, geom, channel_index, state_dict_pt):
+        state_dict = torch.load(state_dict_pt)
+        extra_state = state_dict.get("_extra_state", {})
+        class_names_and_kwargs = extra_state.get("class_names_and_kwargs")
+        if class_names_and_kwargs is None:
+            raise ValueError(
+                "Can't load a featurization pipeline from state dict if it "
+                "wasn't initially created with from_config() or "
+                "from_class_names_and_kwargs(). Instead, you can instantiate "
+                "it the same way you originally did and use .load_state_dict() "
+                "directly. (You may want to just use torch.save() and load()!)"
+            )
+        self = cls.from_class_names_and_kwargs(
+            geom, channel_index, class_names_and_kwargs
+        )
+        self.precompute()
+        # strict=False is needed here, because some transformers don't have
+        # parameters initialized until their pre-load hooks are called, and
+        # the strict check happens before that...
+        self.load_state_dict(state_dict, strict=False)
+        return self
 
     @classmethod
     def from_class_names_and_kwargs(cls, geom, channel_index, class_names_and_kwargs):
@@ -35,7 +68,7 @@ class WaveformPipeline(torch.nn.Module):
                 transformer = transformer_cls(**probe_kw, **kwargs)
             transformers.append(transformer)
 
-        return cls(transformers)
+        return cls(transformers, kwargs_to_store=class_names_and_kwargs)
 
     @classmethod
     def from_config(

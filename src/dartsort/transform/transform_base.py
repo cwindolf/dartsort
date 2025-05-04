@@ -24,7 +24,47 @@ class BaseWaveformModule(torch.nn.Module):
             geom = torch.asarray(geom, dtype=torch.float, copy=True)
             self.register_buffer("geom", geom)
 
-    def fit(self, waveforms, max_channels, recording=None, weights=None):
+        self.spike_length_samples = None
+
+    def fit(self, waveforms, max_channels, recording, weights=None):
+        self.spike_length_samples = waveforms.shape[1]
+        self.initialize_spike_length_dependent_params()
+        pass
+
+    def get_extra_state(self):
+        return dict(
+            spike_length_samples=self.spike_length_samples, needs_fit=self.needs_fit()
+        )
+
+    def set_extra_state(self, extra_state):
+        self.spike_length_samples = extra_state["spike_length_samples"]
+        if hasattr(self, "_needs_fit"):
+            self._needs_fit = extra_state["needs_fit"]
+
+    def _pre_load_state(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        extra_state = state_dict["_extra_state"]
+        print(f"tfbase pre hook {extra_state=}")
+
+        # some modules want to know the spike length before loading the state dict
+        # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
+        self.spike_length_samples = extra_state["spike_length_samples"]
+
+        # and this is how subclasses use that info
+        # if state dict was dumped before fit, then sls was never known and we
+        # don't want to call that initializer, so don't if sls is None.
+        if self.spike_length_samples is not None:
+            self.initialize_spike_length_dependent_params()
+
+    def initialize_spike_length_dependent_params(self):
         pass
 
     def needs_fit(self) -> bool:

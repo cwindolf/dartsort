@@ -19,8 +19,8 @@ from ..util import waveform_util
 class SupervisedDenoiser(BaseMultichannelDenoiser):
     default_name = "superviseddenoiser"
 
-    def initialize_nets(self, spike_length_samples):
-        self.initialize_shapes(spike_length_samples)
+    def initialize_spike_length_dependent_params(self):
+        self.initialize_shapes()
         self.exy = self.get_mlp(res_type=self.res_type)
         self.to(self.device)
 
@@ -34,6 +34,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         return pred
 
     def fit(self, waveforms, gt_waveforms, max_channels):
+        super().fit(waveforms, max_channels, None, None)
         train_loader, val_loader = self._waveforms_to_loaders(
             waveforms, gt_waveforms, max_channels
         )
@@ -53,7 +54,6 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         val_loader: DataLoader | None = None,
     ):
         _wf, *_ = next(iter(train_loader))
-        self.initialize_nets(_wf.shape[1])
 
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)

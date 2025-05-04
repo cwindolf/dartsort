@@ -51,7 +51,17 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.n_oversamples = n_oversamples
         self.max_waveforms = max_waveforms
 
+    def initialize_spike_length_dependent_params(self):
+        nt = self.spike_length_samples
+        assert nt is not None
+        if self.temporal_slice is not None:
+            nt = torch.arange(nt)[self.temporal_slice].numel()
+        self.register_buffer("mean", torch.zeros(nt))
+        self.register_buffer("components", torch.zeros(self.rank, nt))
+        self.register_buffer("whitener", torch.zeros(self.rank))
+
     def fit(self, waveforms, max_channels, recording=None, weights=None):
+        super().fit(waveforms, max_channels, recording, weights)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -106,9 +116,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         explained_variance = (S**2) / (n_samples - 1)
         whitener = torch.sqrt(explained_variance)
 
-        self.register_buffer("mean", mean)
-        self.register_buffer("components", components)
-        self.register_buffer("whitener", whitener)
+        self.mean[:] = mean
+        self.components[:] = components
+        self.whitener[:] = whitener
+
         self._needs_fit = False
 
     def needs_fit(self):

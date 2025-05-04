@@ -11,6 +11,49 @@ from dartsort.util.waveform_util import make_channel_index
 from test_util import dense_layout
 
 
+def _check_saveload(geom, channel_index, pipeline):
+    # check saving and loading before fit
+    with tempfile.TemporaryDirectory() as tdir:
+        pt = Path(tdir) / "pt.pt"
+
+        # try them individually first with save/load
+        for f in pipeline.transformers:
+            nf = f.needs_fit()
+            try:
+                torch.save(f, pt)
+                ff = torch.load(pt)
+                assert ff.needs_fit() == nf
+            except pickle.UnpicklingError as e:
+                raise ValueError(f"Save/load failed for {f=}") from e
+            pt.unlink()
+
+        # individually with state dict
+        for f in pipeline.transformers:
+            nf = f.needs_fit()
+            try:
+                torch.save(f.state_dict(), pt)
+                f.load_state_dict(torch.load(pt))
+                assert f.needs_fit() == nf
+            except pickle.UnpicklingError as e:
+                raise ValueError(f"Save/load failed for {f=}") from e
+            pt.unlink()
+
+        # now the full thing, save/load...
+        nf = pipeline.needs_fit()
+        torch.save(pipeline, pt)
+        pipeline2 = torch.load(pt)
+        assert pipeline2.needs_fit() == nf
+
+        # now with state dict
+        torch.save(pipeline.state_dict(), pt)
+        pipeline.load_state_dict(torch.load(pt))
+        assert pipeline.needs_fit() == nf
+
+        # now tith from_state_dict_pt
+        pipeline2 = WaveformPipeline.from_state_dict_pt(geom, channel_index, pt)
+        assert pipeline2.needs_fit() == nf
+
+
 def test_all_transformers():
     # make a bunch of fake waveforms, put all of the transformers into
     # one long pipeline, and try running its fit and forward
@@ -39,8 +82,8 @@ def test_all_transformers():
     noise_rec.set_dummy_probe_from_locations(geom)
 
     smoke_test_kwargs = {
-        'Decollider': dict(n_epochs=1, epoch_size=n_spikes),
-        'AmortizedLocalization': dict(n_epochs=1, epoch_size=n_spikes),
+        "Decollider": dict(n_epochs=1, epoch_size=n_spikes),
+        "AmortizedLocalization": dict(n_epochs=1, epoch_size=n_spikes),
     }
     skip_me = {"SupervisedDenoiser"}
 
@@ -56,9 +99,14 @@ def test_all_transformers():
 
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
+    print("-- Precompute")
     pipeline.precompute()
+    print("-- Pre-fit check")
+    _check_saveload(geom, channel_index, pipeline)
+    print("-- Fit")
     pipeline.fit(waveforms, channels, noise_rec)
     assert not pipeline.needs_fit()
+    print("-- Forward")
     twaveforms, features = pipeline(waveforms, channels)
     assert twaveforms.dtype == waveforms.dtype
     assert twaveforms.shape == waveforms.shape
@@ -72,31 +120,15 @@ def test_all_transformers():
 
         if v.ndim == 3 and v.shape[2] == waveforms.shape[2]:
             # TPCAs can have nans
-            assert 'pca' in k.lower() or 'waveform' in k.lower()
+            assert "pca" in k.lower() or "waveform" in k.lower()
             assert torch.equal(v[:, 0].isnan(), waveforms[:, 0].isnan())
-        elif 'amplitude_vector' in k.lower():
+        elif "amplitude_vector" in k.lower():
             assert v.ndim == 2 and v.shape[1] == waveforms.shape[2]
             assert torch.equal(v.isnan(), waveforms[:, 0].isnan())
         else:
             assert v.isfinite().all()
-
-    # check saving/loading -- won't compare equality, but this crashes
-    # if you forget to tell torch about any custom modules...
-    with tempfile.TemporaryDirectory() as tdir:
-        pt = Path(tdir) / "pt.pt"
-        # try them individually first
-        # this is to get a better error message
-        for f in pipeline.transformers:
-            try:
-                torch.save(f, pt)
-                torch.load(pt)
-            except pickle.UnpicklingError as e:
-                raise ValueError(f"Save/load failed for {f=}") from e
-            pt.unlink()
-
-        # now the full thing...
-        torch.save(pipeline, pt)
-        torch.load(pt)
+    print("-- Final check")
+    _check_saveload(geom, channel_index, pipeline)
 
 
 if __name__ == "__main__":

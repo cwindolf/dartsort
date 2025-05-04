@@ -72,10 +72,7 @@ class BasePeeler(torch.nn.Module):
         self.n_waveforms_fit = n_waveforms_fit
         self.fit_sampling = fit_sampling
         self.fit_max_reweighting = fit_max_reweighting
-        if featurization_pipeline is not None:
-            self.add_module("featurization_pipeline", featurization_pipeline)
-        else:
-            self.featurization_pipeline = None
+        self.featurization_pipeline = featurization_pipeline
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
@@ -705,10 +702,11 @@ class BasePeeler(torch.nn.Module):
         )
 
     def save_models(self, save_folder):
-        torch.save(
-            self.featurization_pipeline,
-            Path(save_folder) / "featurization_pipeline.pt",
-        )
+        if self.featurization_pipeline is not None:
+            torch.save(
+                self.featurization_pipeline.state_dict(),
+                Path(save_folder) / "featurization_pipeline.pt",
+            )
 
     def load_models(self, save_folder):
         if not save_folder.exists():
@@ -716,7 +714,9 @@ class BasePeeler(torch.nn.Module):
 
         feats_pt = Path(save_folder) / "featurization_pipeline.pt"
         if feats_pt.exists():
-            self.featurization_pipeline = torch.load(feats_pt, weights_only=True)
+            assert self.featurization_pipeline is not None
+            state_dict = torch.load(feats_pt)
+            self.featurization_pipeline.load_state_dict(state_dict)
 
     def check_resuming(self, output_hdf5_filename, overwrite=False) -> tuple[int, int]:
         output_hdf5_filename = Path(output_hdf5_filename)

@@ -225,9 +225,9 @@ class DARTsortSorting:
         )
 
 
-def get_tpca(sorting):
-    """Look for the TemporalPCAFeaturizer in the usual place."""
-    from dartsort.transform import TemporalPCAFeaturizer
+def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
+    """Look for the pipeline in the usual place."""
+    from dartsort.transform import WaveformPipeline
 
     if isinstance(sorting, Path):
         base_dir = sorting.parent
@@ -236,11 +236,26 @@ def get_tpca(sorting):
         base_dir = sorting.parent_h5_path.parent
         stem = sorting.parent_h5_path.stem
     model_dir = base_dir / f"{stem}_models"
-    pipeline = torch.load(
-        model_dir / "featurization_pipeline.pt",
-        weights_only=True,
-        map_location="cpu",
+    if hasattr(sorting, "geom"):
+        geom = sorting.geom
+        channel_index = sorting.channel_index
+    else:
+        with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
+            geom = h5["geom"][:]
+            channel_index = h5["channel_index"][:]
+    if featurization_pipeline_pt is None:
+        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+    pipeline = WaveformPipeline.from_state_dict_pt(
+        geom, channel_index, featurization_pipeline_pt
     )
+    return pipeline
+
+
+def get_tpca(sorting):
+    """Look for the TemporalPCAFeaturizer in the usual place."""
+    from dartsort.transform import TemporalPCAFeaturizer
+
+    pipeline = get_featurization_pipeline(sorting)
     tpcas = [t for t in pipeline.transformers if isinstance(t, TemporalPCAFeaturizer)]
     if not tpcas:
         print("Looking for a TPCA featurizer, but there aren't any.")

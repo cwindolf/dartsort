@@ -94,20 +94,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self._needs_fit = True
         self.random_seed = random_seed
 
-    @classmethod
-    def load_from_pt(cls, pretrained_path, **kwargs):
-        net = cls(**kwargs)
-        state_dict = torch.load(pretrained_path, map_location='cpu')
-        self.initialize_nets(state_dict.pop("spike_length_samples"))
-        net.load_state_dict(state_dict)
-        net._needs_fit = False
-        return net
-
-    def save_to_pt(self, pretrained_path):
-        state = self.state_dict()
-        state['spike_length_samples'] = self.spike_length_samples
-        torch.save(state, pretrained_path)
-
     def forward(self, waveforms, max_channels):
         out = torch.empty_like(waveforms)
         odev = waveforms.device
@@ -122,13 +108,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
 
         return out
 
-    def initialize_shapes(self, spike_length_samples):
+    def initialize_shapes(self):
         logger.dartsortdebug(
-            f"Initialize {self.__class__.__name__} with {spike_length_samples=}."
+            f"Initialize {self.__class__.__name__} with {self.spike_length_samples=}."
         )
         # we don't know these dimensions til we see a spike
-        self.spike_length_samples = spike_length_samples
-        self.wf_dim = spike_length_samples * self.model_channel_index.shape[1]
+        self.wf_dim = self.spike_length_samples * self.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
     def get_optimizer(self):

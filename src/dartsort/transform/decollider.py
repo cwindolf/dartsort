@@ -131,11 +131,11 @@ class Decollider(BaseMultichannelDenoiser):
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
 
-    def initialize_nets(self, spike_length_samples):
+    def initialize_spike_length_dependent_params(self):
         if hasattr(self, "inf_net"):
             logger.dartsortdebug("Already initialized.")
             return
-        self.initialize_shapes(spike_length_samples)
+        self.initialize_shapes()
         if self.exz_estimator in ("n2n", "n3n"):
             self.eyz = self.get_mlp(
                 res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims
@@ -155,6 +155,7 @@ class Decollider(BaseMultichannelDenoiser):
         self.to(self.device)
 
     def fit(self, waveforms, max_channels, recording, weights=None):
+        super().fit(waveforms, max_channels, recording, weights)
         train_data, val_data = self._construct_datasets_from_waveforms(
             waveforms, max_channels, recording, weights
         )
@@ -345,7 +346,9 @@ class Decollider(BaseMultichannelDenoiser):
             channels.numpy(force=True),
             self.model_channel_index.numpy(force=True),
             spike_length_samples=self.spike_length_samples,
-            rg=np.random.default_rng(random_seed if random_seed is not None else self.random_seed),
+            rg=np.random.default_rng(
+                random_seed if random_seed is not None else self.random_seed
+            ),
         )
         dataset = TensorDataset(waveforms, channels, noise)
         loader = DataLoader(dataset, batch_size=self.inference_batch_size)
@@ -397,8 +400,6 @@ class Decollider(BaseMultichannelDenoiser):
         train_data: "DecolliderDataLoader",
         val_data: "DecolliderDataLoader | None",
     ):
-        self.initialize_nets(train_data.spike_length_samples)
-
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
 

@@ -5,12 +5,13 @@ from typing import Optional
 import h5py
 import numpy as np
 import torch
-from dartsort.util import drift_util, waveform_util
+from dartsort.util import drift_util, waveform_util, get_featurization_pipeline
 from dartsort.util.data_util import DARTsortSorting, batched_h5_read
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from scipy.spatial.distance import cdist, pdist
 from sklearn.decomposition import PCA
+
 # from sklearn.metrics.pairwise import nan_euclidean_distances
 from tqdm.auto import tqdm
 
@@ -426,7 +427,7 @@ class FeatureSplit(SplitStrategy):
                 new_labels[idx_subsample[kept]] = clust_labels
             else:
                 new_labels[kept] = clust_labels
-        
+
         if is_split and self.pca_reassign:
             if subsampling:
                 new_labels[idx_subsample] = self.tpca_reassignment(
@@ -436,7 +437,7 @@ class FeatureSplit(SplitStrategy):
                 new_labels = self.tpca_reassignment(
                     new_labels, in_unit, n_pitches_shift
                 )
-        
+
         if self.return_localization_features and self.use_localization_features:
             return SplitResult(
                 is_split=is_split,
@@ -971,8 +972,10 @@ class FeatureSplit(SplitStrategy):
                     registered_geom=self.registered_geom,
                     match_distance=self.match_distance,
                 )
-            
-            d = nan_sqeuclidean_distances(batch.reshape(batch.shape[0], -1), centroids.reshape(n_units, -1))
+
+            d = nan_sqeuclidean_distances(
+                batch.reshape(batch.shape[0], -1), centroids.reshape(n_units, -1)
+            )
             # d = batch.reshape(batch.shape[0], -1)[:, None] - centroids.reshape(n_units, -1)[None, :]
             # np.nan_to_num(d, copy=False)
             # d *= d
@@ -1053,7 +1056,9 @@ class FeatureSplit(SplitStrategy):
         if (self.n_pca_features or self.use_wfs_L2_norm) and self.relocated:
             # load up featurization pipeline for tpca inversion
             assert peeling_featurization_pt is not None
-            feature_pipeline = torch.load(peeling_featurization_pt)
+            feature_pipeline = get_featurization_pipeline(
+                peeling_hdf5_filename, featurization_pipeline_pt
+            )
             tpca_feature = [
                 f
                 for f in feature_pipeline.transformers
@@ -1263,7 +1268,7 @@ def nan_sqeuclidean_distances(X, Y, copy_X=False, copy_Y=True):
     X[missing_X] = 0
     Y[missing_Y] = 0
     distances = cdist(X, Y, metric="sqeuclidean")
-    
+
     # Adjust distances for missing values
     X *= X
     Y *= Y
@@ -1271,4 +1276,3 @@ def nan_sqeuclidean_distances(X, Y, copy_X=False, copy_Y=True):
     distances -= np.dot(missing_X, Y.T)
 
     return distances
-        

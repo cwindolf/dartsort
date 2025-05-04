@@ -24,7 +24,7 @@ from ..cluster import merge, relocate
 from ..config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
-from .data_util import DARTsortSorting, batched_h5_read
+from .data_util import DARTsortSorting, batched_h5_read, get_featurization_pipeline
 from .drift_util import (
     get_spike_pitch_shifts,
     get_waveforms_on_static_channels,
@@ -103,13 +103,7 @@ class DARTsortAnalysis:
         hdf5_path = sorting.parent_h5_path
         featurization_pipeline = None
         if hdf5_path:
-            model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
-            assert model_dir.exists()
-
-            featurization_pipeline = torch.load(
-                model_dir / "featurization_pipeline.pt",
-                weights_only=True,
-            )
+            featurization_pipeline = get_featurization_pipeline(sorting)
 
         have_templates = False
         template_data = None
@@ -196,15 +190,9 @@ class DARTsortAnalysis:
             if (hdf5_path.parent / motion_est_pkl).exists():
                 with open(hdf5_path.parent / motion_est_pkl, "rb") as jar:
                     motion_est = pickle.load(jar)
-        pipeline = torch.load(model_dir / "featurization_pipeline.pt")
+        pipeline = get_featurization_pipeline(hdf5_path)
         return cls(
-            sorting,
-            recording,
-            template_data,
-            hdf5_path,
-            pipeline,
-            motion_est,
-            **kwargs,
+            sorting, recording, template_data, hdf5_path, pipeline, motion_est, **kwargs
         )
 
     # pickle/h5py gizmos

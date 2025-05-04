@@ -87,27 +87,23 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
         )
-        self.register_buffer(
-            "model_channel_index",
-            make_regular_channel_index(geom=self.geom, radius=radius, to_torch=True),
-        )
-        self.register_buffer(
-            "relative_index",
-            get_relative_index(self.channel_index, self.model_channel_index),
-        )
-        self.nc = len(self.geom)
+        mci = make_regular_channel_index(geom=self.geom, radius=radius, to_torch=True)
+        self.register_buffer("model_channel_index", mci)
+        ri = get_relative_index(self.channel_index, self.model_channel_index)
+        self.register_buffer("relative_index", ri)
         self._needs_fit = True
 
     def needs_fit(self):
         return self._needs_fit
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
+        super().fit(waveforms, max_channels, recording, weights)
         with torch.enable_grad():
             self._fit(waveforms, max_channels, weights=weights)
         self.eval()
         self._needs_fit = False
 
-    def initialize_net(self, spike_length_samples):
+    def initialize_spike_length_dependent_params(self):
         if self.encoder is not None:
             return
 
@@ -116,7 +112,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             n_latent *= 2
 
         self.encoder = nn_util.get_waveform_mlp(
-            spike_length_samples,
+            1 if self.amplitudes_only else self.spike_length_samples,
             self.model_channel_index.shape[1],
             self.hidden_dims,
             n_latent,
@@ -273,9 +269,10 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 amps = waveforms.abs().max(dim=1).values
         assert amps is not None
 
+        rg = np.random.default_rng(self.random_seed)
+
         # make a validation set for early stopping
         if self.val_split_p:
-            rg = np.random.default_rng(self.random_seed)
             istrain = rg.binomial(1, p=self.val_split_p, size=len(waveforms))
             istrain = istrain.astype(bool)
             isval = np.logical_not(istrain)
@@ -292,17 +289,15 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             val_amps = amps
             val_channels = channels
 
-        self.initialize_net(waveforms.shape[1])
-
         dataset = TensorDataset(waveforms, amps, channels)
         if weights is None:
-            sampler = RandomSampler(dataset, generator=spawn_torch_rg(self.random_seed))
+            sampler = RandomSampler(dataset, generator=spawn_torch_rg(rg))
         else:
             assert len(weights) == len(dataset)
             sampler = WeightedRandomSampler(
                 weights,
                 num_samples=len(dataset),
-                generator=spawn_torch_rg(self.random_seed),
+                generator=spawn_torch_rg(rg),
             )
         sampler = BatchSampler(sampler, batch_size=self.batch_size, drop_last=True)
         dataloader = DataLoader(dataset, sampler=sampler)
@@ -324,12 +319,6 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     waveform_batch = waveform_batch[0]
                     amps_batch = amps_batch[0]
                     chans_batch = chans_batch[0]
-                    assert (
-                        self.batch_size
-                        == len(waveform_batch)
-                        == len(amps_batch)
-                        == len(chans_batch)
-                    )
 
                     optimizer.zero_grad()
                     channels_mask = self.model_channel_index[chans_batch] < len(
@@ -423,7 +412,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             obs_amps = None
 
         # nn inputs
-        mask = self.model_channel_index[max_channels] < self.nc
+        mask = self.model_channel_index[max_channels] < self.geom.shape[0]
         mask = mask.to(waveforms)
         x_mask = torch.cat((waveforms, mask.unsqueeze(1)), dim=1)
 
