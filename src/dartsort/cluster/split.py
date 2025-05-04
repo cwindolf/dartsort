@@ -5,8 +5,12 @@ from typing import Optional
 import h5py
 import numpy as np
 import torch
-from dartsort.util import drift_util, waveform_util, get_featurization_pipeline
-from dartsort.util.data_util import DARTsortSorting, batched_h5_read
+from dartsort.util import drift_util, waveform_util
+from dartsort.util.data_util import (
+    DARTsortSorting,
+    batched_h5_read,
+    get_featurization_pipeline,
+)
 from dartsort.util.multiprocessing_util import get_pool
 from hdbscan import HDBSCAN
 from scipy.spatial.distance import cdist, pdist
