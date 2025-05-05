@@ -1,14 +1,17 @@
 """Knobs"""
 
-from typing import Annotated
+from typing import Annotated, Literal
+from pathlib import Path
 
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
-from .util.internal_config import *
+from .util.internal_config import _strict_config, default_pretrained_path
+from .util.py_util import int_or_float, str_or_none
+from .util.cli_util import argfield
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class DARTsortUserConfig:
     """User-facing configuration options"""
 
@@ -43,8 +46,8 @@ class DARTsortUserConfig:
     work_in_tmpdir: bool = False
     tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
     save_intermediate_labels: bool = False
-    keep_initial_features: bool = False
-    keep_final_features: bool = True
+    save_intermediate_features: bool = True
+    save_final_features: bool = True
 
     # -- waveform snippet length parameters
     ms_before: Annotated[float, Field(gt=0)] = argfield(
@@ -111,7 +114,7 @@ class DARTsortUserConfig:
         doc="Radius around detection channel or template peak channel used "
         "to extract spike features for clustering.",
     )
-    fit_radius_um: Annotated[int, Field(gt=0)] = argfield(
+    fit_radius_um: Annotated[float, Field(gt=0)] = argfield(
         default=75.0,
         doc="Extraction radius when fitting features like PCA; "
         "smaller than other radii to include less noise.",
@@ -152,7 +155,7 @@ class DARTsortUserConfig:
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 

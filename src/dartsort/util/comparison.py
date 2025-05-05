@@ -22,11 +22,11 @@ class DARTsortGroundTruthComparison:
     exhaustive_gt: bool = False
     n_jobs: int = -1
     match_mode: str = "hungarian"
-    compute_labels: bool = True
-    verbose: bool = True
+    compute_labels: bool = False
+    verbose: bool = False
     device: Optional[str] = None
 
-    compute_distances: bool = True
+    compute_distances: bool = False
     compute_unsorted_recall: bool = True
     unsorted_match_radius: float = 50.0
 

@@ -15,9 +15,10 @@ from dataclasses import replace
 
 import h5py
 import numpy as np
-from dartsort.util import job_util
-from dartsort.util.data_util import DARTsortSorting, chunk_time_ranges
-from dartsort.config import ClusteringConfig
+
+from ..util import job_util
+from ..util.data_util import DARTsortSorting, chunk_time_ranges
+from ..util.internal_config import ClusteringConfig
 
 from . import cluster_util, density, ensemble_utils, forward_backward
 

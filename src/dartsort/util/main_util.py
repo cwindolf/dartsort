@@ -88,7 +88,7 @@ def ds_save_features(
     if work_dir is None:
         # nothing to copy
         return
-    if not (cfg.keep_initial_features or is_final):
+    if not (cfg.save_intermediate_features or is_final):
         return
 
     # find h5 and models and copy
@@ -116,7 +116,7 @@ def ds_handle_delete_intermediate_features(
     if work_dir is not None:
         # they'll get deleted anyway and were not copied
         return
-    if cfg.keep_initial_features:
+    if cfg.save_intermediate_features:
         return
 
     # find all non-final h5s, models and delete them

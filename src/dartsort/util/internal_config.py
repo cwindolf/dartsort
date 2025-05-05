@@ -5,6 +5,7 @@ from typing import Literal
 
 import numpy as np
 from pydantic.dataclasses import dataclass
+from pydantic import ConfigDict
 import torch
 
 from .py_util import int_or_inf, int_or_float, float_or_str, str_or_none
@@ -23,7 +24,10 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 default_pretrained_path = str(default_pretrained_path)
 
 
-@dataclass(frozen=True, kw_only=True)
+_strict_config = ConfigDict(strict=True, extra='forbid')
+
+
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
@@ -65,7 +69,7 @@ class WaveformConfig:
         return slice(start_offset, other_len - end_offset)
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class FeaturizationConfig:
     """Featurization and denoising configuration
 
@@ -141,7 +145,7 @@ class FeaturizationConfig:
     output_waveforms_name: str = "denoised"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -190,7 +194,7 @@ class SubtractionConfig:
     save_iteration: bool = False
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -215,7 +219,7 @@ class MatchingConfig:
     coarse_objective: bool = True
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -239,7 +243,7 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class MotionEstimationConfig:
     """Configure motion estimation."""
 
@@ -262,7 +266,7 @@ class MotionEstimationConfig:
     rigid: bool = False
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class TemplateConfig:
     spikes_per_unit: int = 500
 
@@ -293,7 +297,7 @@ class TemplateConfig:
     chunk_size_s: int = 300
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class SplitMergeConfig:
     # -- split
     split_strategy: str = "FeatureSplit"
@@ -310,7 +314,7 @@ class SplitMergeConfig:
     min_spatial_cosine: float = 0.0
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class ClusteringConfig:
     # -- initial clustering
     cluster_strategy: str = "dpc"
@@ -370,13 +374,13 @@ class ClusteringConfig:
     split_merge_ensemble_config: SplitMergeConfig | None = None
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class RefinementConfig:
     refinement_strategy: Literal["gmm", "splitmerge"] = "gmm"
 
     # -- gmm parameters
     # noise params
-    cov_kind = "factorizednoise"
+    cov_kind: str = "factorizednoise"
     glasso_alpha: float | int = 0
 
     # feature params
@@ -420,7 +424,7 @@ class RefinementConfig:
     split_merge_config: SplitMergeConfig | None = None
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
@@ -455,7 +459,7 @@ class ComputationConfig:
         return torch.cuda.device_count() > 1
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
 class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
@@ -482,8 +486,8 @@ class DARTsortInternalConfig:
     work_in_tmpdir: bool = False
     tmpdir_parent: str | Path | None = None
     save_intermediate_labels: bool = False
-    keep_initial_features: bool = False
-    keep_final_features: bool = True
+    save_intermediate_features: bool = True
+    save_final_features: bool = True
 
 
 default_waveform_config = WaveformConfig()
@@ -646,6 +650,6 @@ def to_internal_config(cfg):
         work_in_tmpdir=cfg.work_in_tmpdir,
         tmpdir_parent=cfg.tmpdir_parent,
         save_intermediate_labels=cfg.save_intermediate_labels,
-        keep_initial_features=cfg.keep_initial_features,
-        keep_final_features=cfg.keep_final_features,
+        save_intermediate_features=cfg.save_intermediate_features,
+        save_final_features=cfg.save_final_features,
     )

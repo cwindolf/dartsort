@@ -12,6 +12,7 @@ from .cluster.stable_features import (
     StableSpikeDataset,
 )
 from .cluster.refine import refine_clustering
+from .util.internal_config import *
 from .config import *
 from .localize.localize_util import (
     localize_amplitude_vectors,

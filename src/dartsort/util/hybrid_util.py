@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from .data_util import DARTsortSorting
-from ..config import unshifted_raw_template_config, ComputationConfig
+from .internal_config import unshifted_raw_template_config, ComputationConfig
 from . import simkit
 
 
@@ -286,3 +286,50 @@ def sorting_from_spikeinterface(
         template_config=template_config,
         n_jobs=n_jobs,
     )
+
+
+def load_dartsort_step_sortings(
+    sorting_dir,
+    load_simple_features=False,
+    load_feature_names=('times_seconds',),
+) -> list[str, DARTsortSorting]:
+    """Returns list of step names and sortings, ordered."""
+    h5s = [sorting_dir / 'subtraction.h5']
+    for j in range(1, 100):
+        if (sorting_dir / f"matching{j}.h5").exists():
+            h5s.append(sorting_dir / f"matching{j}.h5")
+        else:
+            break
+
+    step_sortings = []
+    for step, h5 in enumerate(h5s):
+        if not h5.exists():
+            continue
+        st0 = DARTsortSorting.from_peeling_hdf5(
+            h5, load_simple_features=load_simple_features, load_feature_names=load_feature_names
+        )
+
+        # initial clust or matching res
+        if h5.stem == 'subtraction':
+            npy = sorting_dir / 'initial_labels.npy'
+            if npy.exists():
+                step_sortings.append(
+                    ('initial', dataclasses.replace(st0, labels=np.load(npy)))
+                )
+        else:
+            step_sortings.append((h5.stem, st0))
+
+        # refinement steps
+        for npy in sorted(sorting_dir.glob(f"refined{step}refstep*.npy")):
+            step_sortings.append(
+                (npy.stem.removesuffix("_labels"), dataclasses.replace(st0, labels=np.load(npy)))
+            )
+
+        # refinement final
+        npy = sorting_dir / f'refined{step}_labels.npy'
+        if npy.exists():
+            step_sortings.append(
+                (f'refined{step}', dataclasses.replace(st0, labels=np.load(npy)))
+            )
+
+    return step_sortings

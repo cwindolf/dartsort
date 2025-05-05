@@ -2,20 +2,21 @@ from dataclasses import replace
 from typing import Optional
 
 import numpy as np
-from dartsort.config import TemplateConfig
-from dartsort.templates import TemplateData, template_util
-from dartsort.templates.pairwise_util import (
-    construct_shift_indices,
-    iterate_compressed_pairwise_convolutions,
-)
-from dartsort.util.data_util import DARTsortSorting, combine_sortings
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm, trange
 
+
+from ..util.internal_config import TemplateConfig
+from ..templates import TemplateData, template_util
+from ..templates.pairwise_util import (
+    construct_shift_indices,
+    iterate_compressed_pairwise_convolutions,
+)
+from ..util.data_util import DARTsortSorting, combine_sortings
 from . import cluster_util
-from dartsort.util import job_util
+from ..util import job_util
 
 
 def merge_templates(

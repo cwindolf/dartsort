@@ -1,7 +1,7 @@
 import gc
 from logging import getLogger
 
-from .. import config
+from ..util.internal_config import default_refinement_config, default_split_merge_config
 from ..util import job_util, noise_util
 from ..util.main_util import ds_save_intermediate_labels
 from .split import split_clusters
@@ -17,7 +17,7 @@ def refine_clustering(
     recording,
     sorting,
     motion_est=None,
-    refinement_config=config.default_refinement_config,
+    refinement_config=default_refinement_config,
     computation_config=None,
     return_step_labels=False,
     save_step_labels_format=None,
@@ -55,7 +55,7 @@ def gmm_refine(
     recording,
     sorting,
     motion_est=None,
-    refinement_config=config.default_refinement_config,
+    refinement_config=default_refinement_config,
     computation_config=None,
     return_step_labels=False,
     save_step_labels_format=None,
@@ -128,10 +128,10 @@ def gmm_refine(
         else:
             gmm.log_liks = gmm.em(final_split=intermediate_split)
         if return_step_labels:
-            step_labels[f"refstepaem{it}"] = gmm.labels.numpy(force=True).copy()
+            step_labels[f"refstep{it}aem"] = gmm.labels.numpy(force=True).copy()
         if saving:
             ds_save_intermediate_labels(
-                save_step_labels_format.format(stepname=f"refstepaem{it}"),
+                save_step_labels_format.format(stepname=f"refstep{it}aem"),
                 gmm.to_sorting(),
                 save_step_labels_dir,
                 save_cfg,
@@ -162,10 +162,10 @@ def gmm_refine(
             else:
                 gmm.log_liks = gmm.em(final_split=intermediate_split)
             if return_step_labels:
-                step_labels[f"refstepbsplit{it}"] = gmm.labels.numpy(force=True).copy()
+                step_labels[f"refstep{it}bsplit"] = gmm.labels.numpy(force=True).copy()
             if saving:
                 ds_save_intermediate_labels(
-                    save_step_labels_format.format(stepname=f"refstepbsplit{it}"),
+                    save_step_labels_format.format(stepname=f"refstep{it}bsplit"),
                     gmm.to_sorting(),
                     save_step_labels_dir,
                     save_cfg,
@@ -178,10 +178,10 @@ def gmm_refine(
 
         gc.collect()
         if return_step_labels:
-            step_labels[f"refstepcmerge{it}"] = gmm.labels.numpy(force=True).copy()
+            step_labels[f"refstep{it}cmerge"] = gmm.labels.numpy(force=True).copy()
         if saving:
             ds_save_intermediate_labels(
-                save_step_labels_format.format(stepname=f"refstepcmerge{it}"),
+                save_step_labels_format.format(stepname=f"refstep{it}cmerge"),
                 gmm.to_sorting(),
                 save_step_labels_dir,
                 save_cfg,
@@ -199,7 +199,7 @@ def split_merge(
     recording,
     sorting,
     motion_est=None,
-    split_merge_config=config.default_split_merge_config,
+    split_merge_config=default_split_merge_config,
     computation_config=None,
 ):
     if computation_config is None:

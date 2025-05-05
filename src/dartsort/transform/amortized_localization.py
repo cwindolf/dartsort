@@ -35,7 +35,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         name_prefix="",
         n_epochs=100,
         learning_rate=3e-3,
-        batch_size=16,
+        batch_size=32,
         inference_batch_size=2**14,
         norm_kind="layernorm",
         alpha_closed_form=True,

@@ -21,7 +21,7 @@ from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
 
 from ..cluster import merge, relocate
-from ..config import TemplateConfig
+from ..util.internal_config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from .data_util import DARTsortSorting, batched_h5_read, get_featurization_pipeline
