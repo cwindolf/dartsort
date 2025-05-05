@@ -134,7 +134,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_logpx_tol: float = 1e-5,
         min_overlap: float = 0.0,
         hard_noise=False,
-        min_log_prop=-16.0,
+        min_log_prop=-50.0,
         random_seed: int = 0,
         lls_keep_k: int | None = 3,
         laplace_ard=False,
@@ -388,9 +388,6 @@ class SpikeMixtureModel(torch.nn.Module):
         atol=None,
     ):
         # TODO: hang on to this and update it in place
-        logger.dartsortdebug(
-            f"TEM with {self.data.n_spikes=} {self.data.n_spikes_kept=}"
-        )
         if n_threads is None:
             n_threads = self.n_threads
         if atol is None:
@@ -402,7 +399,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # initialize me
         missing_ids = self.missing_ids()
-        logger.dartsortdebug(f"Before TVI, fitting {missing_ids=}")
+        logger.dartsortdebug(f"Before TVI, fitting {len(missing_ids)} units.")
         if len(missing_ids):
             self.m_step(show_progress=step_progress, fit_ids=missing_ids)
         self.cleanup()
@@ -674,7 +671,7 @@ class SpikeMixtureModel(torch.nn.Module):
             log_liks, convergence_props = self.cleanup(
                 log_liks, clean_props=convergence_props
             )
-            assert convergence_props is not None  # for typing.
+            assert convergence_props is not None
             meanlogpx = spike_logliks.mean()
             self.train_meanlogpxs.append(meanlogpx.item())
 
@@ -779,7 +776,7 @@ class SpikeMixtureModel(torch.nn.Module):
             max_sizes=spike_counts.clamp(max=self.n_spikes_fit).numpy(force=True),
         )
 
-        logger.dartsortdebug(f"M step with {fit_ids=}")
+        logger.dartsortdebug(f"M step for {len(fit_ids)} units.")
 
         pool = Parallel(self.n_threads, backend="threading", return_as="generator")
         results = pool(
@@ -868,8 +865,15 @@ class SpikeMixtureModel(torch.nn.Module):
                 core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
 
+        if split_indices is None or split_indices == slice(None):
+            n_spikes = self.data.n_spikes
+            prefix = "Log likelihoods"
+        else:
+            n_spikes = split_indices.numel()
+            prefix = f"{split.capitalize()} log likelihoods"
         logger.dartsortdebug(
-            f"Log likelihoods: {nnz=} {len(unit_ids)=} {nnz/len(unit_ids)=}"
+            f"{prefix}: {nnz} total for {len(unit_ids)} units. That's "
+            f"{nnz/len(unit_ids):0.1f}/unit or {nnz/n_spikes:0.1f}/spike."
         )
 
         # how many units does each spike overlap with? needed to write csc
@@ -880,10 +884,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # add in space for the noise unit
         if with_noise_unit:
-            if split_indices is None or split_indices == slice(None):
-                nnz = nnz + self.data.n_spikes
-            else:
-                nnz = nnz + split_indices.numel()
+            nnz = nnz + n_spikes
 
         @delayed
         def _ll_job(args):
@@ -956,8 +957,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 nlls = self.noise_log_likelihoods(indices=split_indices)
                 if self.log_proportions is not None:
                     nlls = nlls + self.log_proportions[-1].numpy(force=True)
-                # j += 1
-                # topk_sparse_insert(j, np.arange(len(split_indi)), nlls, topk_arr)
             log_liks = topk_sparse_tocsc(
                 topk_arr,
                 j + 1,
@@ -1008,7 +1007,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # since we have log softmaxes, that means need to exp, then take mean, then log
         log_props = logmeanexp(log_resps)
         log_props = torch.asarray(log_props, dtype=torch.float, device=self.data.device)
-        log_props = log_props.clamp_(min=self.min_log_prop).log_softmax(dim=0)
+        log_props = log_props.log_softmax(dim=0).clamp_(min=self.min_log_prop)
         self.log_proportions = log_props
 
     def reassign(self, log_liks):
@@ -1049,6 +1048,10 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels.fill_(-1)
         self.labels[spike_ix] = assignments
 
+        logger.dartsortdebug(
+            f"Reassign with {100*unit_churn.mean().item():0.2f}% mean churn."
+        )
+
         return unit_churn, reassign_count, spike_logliks, log_liks_csc
 
     def cleanup(
@@ -1074,7 +1077,9 @@ class SpikeMixtureModel(torch.nn.Module):
         if label_ids.numel():
             n_units = max(label_ids.max().item() + 1, len(self._units))
         keep = torch.zeros(n_units, dtype=bool)
+        countsf = torch.zeros(n_units, dtype=int)
         keep[label_ids] = big_enough
+        countsf[label_ids] = counts
         blank = None
         if check_mean and label_ids.numel():
             ids, means, _, _ = self.stack_units(
@@ -1087,9 +1092,15 @@ class SpikeMixtureModel(torch.nn.Module):
             keep[infs] = False
         self._stack = None
 
+        kept_count = "n/a" if not keep.any() else countsf[keep].min()
+        logger.dartsortdebug(
+            f"New unit count {keep.sum()}, smallest count was {kept_count}. "
+            f"{big_enough.sum()} met yield, kept {keep[label_ids[big_enough]].sum()}."
+        )
         if logger.isEnabledFor(DARTSORTVERBOSE):
             logger.dartsortverbose(
-                f"Cleanup: {counts=} {big_enough=} {blank=} {keep=} {label_ids=} {keep[label_ids]=} {keep.sum()=}"
+                f"Cleanup: {counts=} {big_enough=} {blank=} {keep=} "
+                f"{label_ids=} {keep[label_ids]=} {keep.sum()=}."
             )
 
         if keep.all():
@@ -1115,6 +1126,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if self.log_proportions is not None:
             self.log_proportions = self.log_proportions[keep_noise].log_softmax(0)
+            self.log_proportions.clamp_(min=self.min_log_prop)
 
         if not self.empty():
             keep_units = {ni: self[oi] for oi, ni in zip(kept_ids, new_ids)}
@@ -1197,12 +1209,17 @@ class SpikeMixtureModel(torch.nn.Module):
                 results, total=len(unit_ids), desc="Split", unit="unit", **tqdm_kw
             )
 
+        new_count = 0
         clear_ids = []
         for res in results:
+            new_count += 1
             if "new_ids" in res:
+                new_count += len(res["new_ids"]) - 1
                 for nid in res["new_ids"]:
                     self.schedule_annotations(nid, split_parent=res["parent_id"])
             clear_ids.extend(res["clear_ids"])
+
+        logger.dartsortdebug(f"{new_count} units after split.")
 
         # split invalidates labels outside train set
         self.clear_units(clear_ids)

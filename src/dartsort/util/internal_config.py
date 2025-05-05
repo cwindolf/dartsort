@@ -372,7 +372,7 @@ class ClusteringConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class RefinementConfig:
-    refinement_stragegy: Literal["gmm", "splitmerge"] = "gmm"
+    refinement_strategy: Literal["gmm", "splitmerge"] = "gmm"
 
     # -- gmm parameters
     # noise params

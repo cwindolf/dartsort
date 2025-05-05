@@ -25,7 +25,7 @@ def refine_clustering(
     save_cfg=None,
 ):
     """Refine a clustering using the strategy specified by the config."""
-    if refinement_config.refinement_stragegy == "splitmerge":
+    if refinement_config.refinement_strategy == "splitmerge":
         assert refinement_config.split_merge_config is not None
         ref = split_merge(
             recording,
@@ -35,13 +35,37 @@ def refine_clustering(
             computation_config=computation_config,
         )
         return ref, {}
+    elif refinement_config.refinement_strategy == "gmm":
+        return gmm_refine(
+            recording,
+            sorting,
+            motion_est=motion_est,
+            refinement_config=refinement_config,
+            computation_config=computation_config,
+            return_step_labels=return_step_labels,
+            save_step_labels_format=save_step_labels_format,
+            save_step_labels_dir=save_step_labels_dir,
+            save_cfg=save_cfg,
+        )
+    else:
+        assert False
 
+
+def gmm_refine(
+    recording,
+    sorting,
+    motion_est=None,
+    refinement_config=config.default_refinement_config,
+    computation_config=None,
+    return_step_labels=False,
+    save_step_labels_format=None,
+    save_step_labels_dir=None,
+    save_cfg=None,
+):
     saving = (save_step_labels_format is not None) and (
         save_step_labels_dir is not None
     )
-
-    # below is all gmm stuff
-    assert refinement_config.refinement_stragegy == "gmm"
+    assert refinement_config.refinement_strategy == "gmm"
     if computation_config is None:
         computation_config = job_util.get_global_computation_config()
 
@@ -93,10 +117,9 @@ def refine_clustering(
         laplace_ard=refinement_config.laplace_ard,
     )
 
-    # these are for benchmarking
     step_labels = {}
     intermediate_split = "full" if return_step_labels else "kept"
-    gmm.log_liks = None  # TODO
+    gmm.log_liks = None
 
     for it in range(refinement_config.n_total_iters):
         if refinement_config.truncated:
@@ -115,17 +138,16 @@ def refine_clustering(
             )
 
         assert gmm.log_liks is not None
-        # TODO: if split is self-consistent enough, we don't need this.
         if (
             gmm.log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
         ):
-            logger.dartsortdebug(f"{gmm.log_liks.shape=}, skipping split.")
-
+            logger.dartsortdebug(
+                f"Skipping split ({gmm.log_liks.shape[0]} is too many units already)."
+            )
             if refinement_config.one_split_only:
                 break
         else:
-            # TODO: not this.
             gmm.em(n_iter=1, force_refit=True)
             gmm.split()
             gmm.log_liks = None
