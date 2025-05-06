@@ -99,7 +99,11 @@ def ds_save_features(
 
     targ_h5 = output_dir / h5_path.name
     logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
-    shutil.copy2(h5_path, targ_h5, follow_symlinks=False)
+    try:
+        shutil.copy2(h5_path, targ_h5, follow_symlinks=False)
+    except shutil.SameFileError:
+        # this happens in a symlink workflow that I use sometimes
+        return
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
