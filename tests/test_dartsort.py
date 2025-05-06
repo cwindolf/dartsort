@@ -42,11 +42,13 @@ def test_fakedata_nonn(sim_recording, do_motion_estimation):
                 do_motion_estimation=do_motion_estimation, rigid=True
             ),
             work_in_tmpdir=True,
-            keep_initial_features=True,
+            save_intermediate_features=True,
         )
         res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
         assert res["sorting"].parent_h5_path.exists()
         assert (Path(tempdir) / "dartsort_sorting.npz").exists()
+        assert (Path(tempdir) / "subtraction.h5").exists()
+        assert (Path(tempdir) / "matching1.h5").exists()
 
 
 usual_sdcfg = dartsort.FeaturizationConfig(denoise_only=True)
@@ -72,7 +74,7 @@ def test_fakedata(sim_recording, sdcfg):
             ),
             # test pc based clust
             clustering_config=dartsort.ClusteringConfig(
-                initial_amp_feat=False, initial_pc_feats=1
+                use_amplitude=False, n_main_channel_pcs=1
             ),
             refinement_config=dartsort.RefinementConfig(
                 min_count=10, channels_strategy="count", n_total_iters=1
@@ -86,11 +88,13 @@ def test_fakedata(sim_recording, sdcfg):
             matching_config=dartsort.MatchingConfig(threshold="fp_control"),
             # test the dev tasks pipeline
             save_intermediate_labels=True,
-            keep_initial_features=False,
+            save_intermediate_features=False,
         )
         res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
         assert res["sorting"].parent_h5_path.exists()
         assert (Path(tempdir) / "dartsort_sorting.npz").exists()
+        assert not (Path(tempdir) / "subtraction.h5").exists()
+        assert (Path(tempdir) / "matching1.h5").exists()
 
 
 def test_cli_help():

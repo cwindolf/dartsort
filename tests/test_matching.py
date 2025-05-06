@@ -6,7 +6,8 @@ import numpy as np
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
-from dartsort import main
+
+import dartsort
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.templates import TemplateData, template_util
 from dredge import motion_util
@@ -75,7 +76,7 @@ def _test_tiny(tmp_path, scaling=0.0):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
                 dartsort.default_waveform_config,
                 dartsort.MatchingConfig(
@@ -106,7 +107,7 @@ def _test_tiny(tmp_path, scaling=0.0):
             assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
             assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
                 dartsort.default_waveform_config,
                 dartsort.MatchingConfig(
@@ -196,7 +197,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
                 dartsort.default_waveform_config,
                 dartsort.MatchingConfig(
@@ -360,7 +361,7 @@ def static_tester(tmp_path, up_factor=1):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
                 dartsort.default_waveform_config,
                 dartsort.MatchingConfig(
@@ -524,7 +525,7 @@ def _test_fakedata_nonn(threshold):
     order = np.argsort(times)
     times = times[order]
     labels = labels[order]
-    gts = main.DARTsortSorting(
+    gts = dartsort.DARTsortSorting(
         times_samples=times + 42, labels=labels, channels=np.zeros_like(labels)
     )
 
@@ -555,7 +556,7 @@ def _test_fakedata_nonn(threshold):
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec1, rec0]:
             (Path(tdir) / "match").mkdir()
-            st = main.match(
+            st = dartsort.match(
                 recording=rec,
                 sorting=gts,
                 output_dir=Path(tdir) / "match",
@@ -567,7 +568,7 @@ def _test_fakedata_nonn(threshold):
             assert np.all(st.scores > 0)
 
             (Path(tdir) / "match2").mkdir()
-            st2 = main.match(
+            st2 = dartsort.match(
                 recording=rec,
                 sorting=st,
                 output_dir=Path(tdir) / "match2",
