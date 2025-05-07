@@ -1,18 +1,16 @@
 import numpy as np
 import probeinterface
-from spikeinterface.core import NumpySorting, NumpyRecording
+from dredge import motion_util
 from scipy.spatial.distance import cdist
+from spikeinterface.core import NumpyRecording, NumpySorting
 from tqdm.auto import tqdm
 
-from dartsort.templates.templates import TemplateData
-
-from dredge import motion_util
-
-from .noise_util import StationaryFactorizedNoise, WhiteNoise
+from ..templates.templates import TemplateData
 from .data_util import DARTsortSorting
+from .noise_util import StationaryFactorizedNoise, WhiteNoise
+from .waveform_util import upsample_singlechan
 from .spiketorch import spawn_torch_rg, ptp
 from .drift_util import registered_geometry
-from .waveform_util import upsample_singlechan
 
 
 # -- spike train sims
@@ -171,12 +169,14 @@ def rbf_kernel(geom, bandwidth=35.0):
     return np.exp(-d / (2 * bandwidth))
 
 
-def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="squared"):
+def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="32"):
     dtype = waveforms.dtype
     if decay_model == "pointsource":
         amp = alpha / cdist(pos, geom3).astype(dtype)
     elif decay_model == "squared":
         amp = alpha * (cdist(pos, geom3).astype(dtype) ** -2)
+    elif decay_model == "32":
+        amp = alpha * (cdist(pos, geom3).astype(dtype) ** -(3/2))
     else:
         assert False
     n_dims_expand = waveforms.ndim - 1
@@ -460,6 +460,8 @@ class StaticSimulatedRecording:
             self.template_simulator.geom3,
             decay_model=self.template_simulator.decay_model,
         )
+        if self.cmr:
+            templates -= np.median(templates, axis=-1, keepdims=True)
         if up:
             assert templates.shape == (
                 self.n_units,
@@ -534,6 +536,10 @@ class StaticSimulatedRecording:
         assert x.shape == (1, self.duration_samples, len(self.geom))
         x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
 
+        if self.cmr:
+            # before adding temps, since already cmrd.
+            x -= np.median(x, axis=1, keepdims=True)
+
         t_rel_ix = np.arange(self.template_simulator.spike_length_samples())
         t_rel_ix -= self.template_simulator.trough_offset_samples()
         chan_ix = np.arange(len(self.geom))
@@ -559,9 +565,6 @@ class StaticSimulatedRecording:
             btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
             self.maxchans[batch] = ptp(btemps).argmax(1)
             np.add.at(x, (tix, chan_ix[None, None]), btemps)
-
-        if self.cmr:
-            x -= np.median(x, axis=0)
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
         recording.set_dummy_probe_from_locations(self.geom)
