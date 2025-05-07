@@ -35,13 +35,14 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         name_prefix="",
         n_epochs=100,
         learning_rate=3e-3,
-        batch_size=16,
+        batch_size=32,
         inference_batch_size=2**14,
         norm_kind="layernorm",
         alpha_closed_form=True,
         amplitudes_only=True,
         prior_variance=None,
-        convergence_eps=0.01,
+        convergence_rtol=0.01,
+        convergence_atol=1e-4,
         min_epochs=10,
         scale_loss_by_mean=True,
         reference="main_channel",
@@ -74,7 +75,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.prior_variance = (
             torch.tensor(prior_variance) if prior_variance is not None else None
         )
-        self.convergence_eps = convergence_eps
+        self.convergence_atol = convergence_atol
+        self.convergence_rtol = convergence_rtol
         self.min_epochs = min_epochs
         self.scale_loss_by_mean = scale_loss_by_mean
         self.channelwise_dropout_p = channelwise_dropout_p
@@ -383,8 +385,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     continue
 
                 # positive if cur is smaller than prev
-                diff = min(mse_history[:-1]) - mse
-                if diff / min(mse_history[:-1]) < self.convergence_eps:
+                adiff = min(mse_history[:-1]) - mse
+                rdiff = adiff / min(mse_history[:-1])
+                if rdiff < self.convergence_rtol or adiff < self.convergence_atol:
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
 

@@ -12,6 +12,7 @@ from .cluster.stable_features import (
     StableSpikeDataset,
 )
 from .cluster.refine import refine_clustering
+from .util.internal_config import *
 from .config import *
 from .localize.localize_util import (
     localize_amplitude_vectors,
@@ -38,7 +39,7 @@ from .transform import WaveformPipeline
 from .util import data_util, noise_util, spiketorch, waveform_util
 from .util.analysis import DARTsortAnalysis
 from .util.comparison import DARTsortGroundTruthComparison
-from .util.data_util import DARTsortSorting
+from .util.data_util import DARTsortSorting, get_featurization_pipeline
 from .util.drift_util import registered_geometry
 from .util.noise_util import EmbeddedNoise
 from .util.waveform_util import make_channel_index

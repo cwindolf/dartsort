@@ -44,15 +44,17 @@ def ds_save_intermediate_labels(
 def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     import json
 
-    with open(output_dir / "_dartsort_internal_config.json", "w") as jsonf:
+    json_path = output_dir / "_dartsort_internal_config.json"
+    with open(json_path, "w") as jsonf:
         json.dump(asdict(internal_cfg), jsonf)
+    logger.dartsortdebug(f"Recorded config to {json_path}.")
 
 
 def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False):
     if work_dir is None:
         return
     if overwrite:
-        # no need for past stuff if overwriting
+        logger.dartsortdebug(f"Working in {work_dir}. No copy since {overwrite=}.")
         return
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
     logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
@@ -86,7 +88,7 @@ def ds_save_features(
     if work_dir is None:
         # nothing to copy
         return
-    if not (cfg.keep_initial_features or is_final):
+    if not (cfg.save_intermediate_features or is_final):
         return
 
     # find h5 and models and copy
@@ -114,7 +116,7 @@ def ds_handle_delete_intermediate_features(
     if work_dir is not None:
         # they'll get deleted anyway and were not copied
         return
-    if cfg.keep_initial_features:
+    if cfg.save_intermediate_features:
         return
 
     # find all non-final h5s, models and delete them

@@ -6,13 +6,14 @@ import numpy as np
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
-from dartsort import config, main
+
+import dartsort
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.templates import TemplateData, template_util
 from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
 
-nofeatcfg = config.FeaturizationConfig(
+nofeatcfg = dartsort.FeaturizationConfig(
     do_nn_denoise=False,
     do_tpca_denoise=False,
     do_enforce_decrease=False,
@@ -62,7 +63,7 @@ def _test_tiny(tmp_path, scaling=0.0):
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
 
-            template_config = config.TemplateConfig(
+            template_config = dartsort.TemplateConfig(
                 low_rank_denoising=False,
                 superres_bin_min_spikes=0,
             )
@@ -75,10 +76,10 @@ def _test_tiny(tmp_path, scaling=0.0):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
-                config.default_waveform_config,
-                config.MatchingConfig(
+                dartsort.default_waveform_config,
+                dartsort.MatchingConfig(
                     amplitude_scaling_variance=scaling,
                     threshold=0.01,
                     template_temporal_upsampling_factor=1,
@@ -106,10 +107,10 @@ def _test_tiny(tmp_path, scaling=0.0):
             assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
             assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
-                config.default_waveform_config,
-                config.MatchingConfig(
+                dartsort.default_waveform_config,
+                dartsort.MatchingConfig(
                     threshold=0.01,
                     amplitude_scaling_variance=0.0,
                     template_temporal_upsampling_factor=8,
@@ -183,7 +184,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     with tempfile.TemporaryDirectory() as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
-            template_config = config.TemplateConfig(
+            template_config = dartsort.TemplateConfig(
                 low_rank_denoising=False,
                 superres_bin_min_spikes=0,
             )
@@ -196,10 +197,10 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
-                config.default_waveform_config,
-                config.MatchingConfig(
+                dartsort.default_waveform_config,
+                dartsort.MatchingConfig(
                     threshold=0.01,
                     amplitude_scaling_variance=scaling,
                     template_temporal_upsampling_factor=up_factor,
@@ -348,7 +349,7 @@ def static_tester(tmp_path, up_factor=1):
     with tempfile.TemporaryDirectory() as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
-            template_config = config.TemplateConfig(
+            template_config = dartsort.TemplateConfig(
                 low_rank_denoising=False, superres_bin_min_spikes=0
             )
             template_data = TemplateData.from_config(
@@ -360,10 +361,10 @@ def static_tester(tmp_path, up_factor=1):
                 with_locs=True,
             )
 
-            matcher = main.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
                 rec,
-                config.default_waveform_config,
-                config.MatchingConfig(
+                dartsort.default_waveform_config,
+                dartsort.MatchingConfig(
                     threshold=0.01,
                     template_temporal_upsampling_factor=up_factor,
                     amplitude_scaling_variance=0.0,
@@ -524,7 +525,7 @@ def _test_fakedata_nonn(threshold):
     order = np.argsort(times)
     times = times[order]
     labels = labels[order]
-    gts = main.DARTsortSorting(
+    gts = dartsort.DARTsortSorting(
         times_samples=times + 42, labels=labels, channels=np.zeros_like(labels)
     )
 
@@ -539,23 +540,23 @@ def _test_fakedata_nonn(threshold):
     rec0 = si.NumpyRecording(rec0, fs)
     rec0.set_dummy_probe_from_locations(geom)
 
-    featconf = config.FeaturizationConfig(
+    featconf = dartsort.FeaturizationConfig(
         do_nn_denoise=False, do_tpca_denoise=False, n_residual_snips=8
     )
-    tempconf = config.TemplateConfig(
+    tempconf = dartsort.TemplateConfig(
         realign_peaks=False,
         low_rank_denoising=True,
         superres_templates=False,
         registered_templates=False,
     )
-    matchconf = config.MatchingConfig(threshold=threshold)
-    matchconf_fp = config.MatchingConfig(threshold="fp_control")
+    matchconf = dartsort.MatchingConfig(threshold=threshold)
+    matchconf_fp = dartsort.MatchingConfig(threshold="fp_control")
 
     with tempfile.TemporaryDirectory() as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec1, rec0]:
             (Path(tdir) / "match").mkdir()
-            st = main.match(
+            st = dartsort.match(
                 recording=rec,
                 sorting=gts,
                 output_dir=Path(tdir) / "match",
@@ -567,7 +568,7 @@ def _test_fakedata_nonn(threshold):
             assert np.all(st.scores > 0)
 
             (Path(tdir) / "match2").mkdir()
-            st2 = main.match(
+            st2 = dartsort.match(
                 recording=rec,
                 sorting=st,
                 output_dir=Path(tdir) / "match2",

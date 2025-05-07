@@ -98,10 +98,10 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
         featurization_pipeline = WaveformPipeline.from_config(
-            geom,
-            channel_index,
-            featurization_config,
-            waveform_config,
+            geom=geom,
+            channel_index=channel_index,
+            featurization_config=featurization_config,
+            waveform_config=waveform_config,
             sampling_frequency=recording.sampling_frequency,
         )
 

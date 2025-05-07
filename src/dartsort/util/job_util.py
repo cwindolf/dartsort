@@ -1,4 +1,4 @@
-from ..config import ComputationConfig, default_computation_config
+from .internal_config import ComputationConfig, default_computation_config
 
 comp_cfg_holder = {}
 

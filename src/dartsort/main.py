@@ -6,12 +6,10 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from spikeinterface.core import BaseRecording
 
-from dartsort.cluster.initial import initial_clustering
-from dartsort.cluster.refine import refine_clustering
-from dartsort.config import (
-    DARTsortUserConfig,
+from .cluster.initial import initial_clustering
+from .cluster.refine import refine_clustering
+from .util.internal_config import (
     DARTsortInternalConfig,
-    DeveloperConfig,
     to_internal_config,
     default_dartsort_config,
     default_waveform_config,
@@ -22,23 +20,25 @@ from dartsort.config import (
     default_matching_config,
     default_thresholding_config,
     default_computation_config,
+
 )
-from dartsort.peel import (
+from .config import DARTsortUserConfig, DeveloperConfig
+from .peel import (
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
     GrabAndFeaturize,
     ThresholdAndFeaturize,
 )
-from dartsort.templates import TemplateData
-from dartsort.util.data_util import (
+from .templates import TemplateData
+from .util.data_util import (
     DARTsortSorting,
     check_recording,
     keep_only_most_recent_spikes,
 )
-from dartsort.util.peel_util import run_peeler
-from dartsort.util.registration_util import estimate_motion
-from dartsort.util.py_util import resolve_path
-from dartsort.util.main_util import (
+from .util.peel_util import run_peeler
+from .util.registration_util import estimate_motion
+from .util.py_util import resolve_path
+from .util.main_util import (
     ds_all_to_workdir,
     ds_dump_config,
     ds_handle_delete_intermediate_features,
@@ -92,6 +92,7 @@ def _dartsort_impl(
     store_dir = output_dir if work_dir is None else work_dir
 
     # first step: initial detection and motion estimation
+    logger.dartsortdebug("-- Start initial detection")
     sorting = subtract(
         output_dir=store_dir,
         recording=recording,
@@ -111,6 +112,7 @@ def _dartsort_impl(
         return ret
 
     if motion_est is None:
+        logger.dartsortdebug("-- Estimate motion")
         motion_est = estimate_motion(
             output_directory=store_dir,
             recording=recording,
@@ -127,6 +129,7 @@ def _dartsort_impl(
         return ret
 
     # clustering: initialization
+    logger.dartsortdebug("-- Initial clustering")
     sorting = initial_clustering(
         recording=recording,
         sorting=sorting,
@@ -142,6 +145,7 @@ def _dartsort_impl(
     if cfg.save_intermediate_labels:
         sdir = output_dir
         sfmt = "refined0{stepname}"
+    logger.dartsortdebug("-- Refine clustering")
     sorting, _ = refine_clustering(
         recording=recording,
         sorting=sorting,
@@ -161,6 +165,7 @@ def _dartsort_impl(
         # TODO
         # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
+        logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(
             output_dir=store_dir,
             recording=recording,

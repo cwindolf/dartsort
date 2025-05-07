@@ -17,7 +17,6 @@ class SingleChannelTemplates(BaseWaveformModule):
         geom=None,
         n_centroids=10,
         pca_rank=8,
-        spike_length_samples=121,
         trough_offset_samples=42,
         dtype=torch.float,
         alignment_padding=20,
@@ -41,12 +40,8 @@ class SingleChannelTemplates(BaseWaveformModule):
 
         # input waveform details
         self.channel_index = channel_index
-        self.spike_length_samples = spike_length_samples
         self.trough_offset_samples = trough_offset_samples
-
-        # output details
-        self.template_length = spike_length_samples - 2 * alignment_padding
-        self.template_trough = trough_offset_samples - alignment_padding
+        self.alignment_padding = alignment_padding
 
         # gizmos
         self.random_state = random_state
@@ -56,7 +51,14 @@ class SingleChannelTemplates(BaseWaveformModule):
     def needs_fit(self):
         return self._needs_fit
 
+    def initialize_spike_length_dependent_params(self):
+        self.template_trough = self.trough_offset_samples - self.alignment_padding
+        self.template_length = self.spike_length_samples - 2 * self.alignment_padding
+        self.register_buffer("templates", torch.zeros((self.n_centroids, self.template_length)))
+        self.to(self.channel_index.device)
+
     def fit(self, waveforms, max_channels, recording=None, weights=None):
+        super().fit(waveforms, max_channels, recording, weights)
         if weights is not None:
             rg = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -88,5 +90,5 @@ class SingleChannelTemplates(BaseWaveformModule):
             kmeanspp_initial=self.kmeanspp_initial,
             random_seed=self.random_state,
         )
-        self.register_buffer("templates", templates)
+        self.templates[:] = templates
         self._needs_fit = False

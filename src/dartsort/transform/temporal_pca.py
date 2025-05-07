@@ -59,6 +59,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.register_buffer("mean", torch.zeros(nt))
         self.register_buffer("components", torch.zeros(self.rank, nt))
         self.register_buffer("whitener", torch.zeros(self.rank))
+        self.to(self.channel_index.device)
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
         super().fit(waveforms, max_channels, recording, weights)

@@ -140,7 +140,6 @@ class SubtractionPeeler(BasePeeler):
                 n_centroids=n_singlechan_templates,
                 alignment_padding=singlechan_alignment_padding,
                 trough_offset_samples=self.trough_offset_samples,
-                spike_length_samples=self.spike_length_samples,
                 max_waveforms=n_waveforms_fit,
             )
             if self.featurization_pipeline is None:
@@ -214,17 +213,17 @@ class SubtractionPeeler(BasePeeler):
 
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
-            geom,
-            subtract_channel_index,
-            subtraction_config.subtraction_denoising_config,
-            waveform_config,
+            geom=geom,
+            channel_index=subtract_channel_index,
+            featurization_config=subtraction_config.subtraction_denoising_config,
+            waveform_config=waveform_config,
             sampling_frequency=recording.sampling_frequency,
         )
         featurization_pipeline = WaveformPipeline.from_config(
-            geom,
-            channel_index,
-            featurization_config,
-            waveform_config,
+            geom=geom,
+            channel_index=channel_index,
+            featurization_config=featurization_config,
+            waveform_config=waveform_config,
             sampling_frequency=recording.sampling_frequency,
         )
 

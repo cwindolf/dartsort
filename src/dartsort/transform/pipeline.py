@@ -73,12 +73,25 @@ class WaveformPipeline(torch.nn.Module):
     @classmethod
     def from_config(
         cls,
-        geom,
-        channel_index,
         featurization_config,
         waveform_config,
+        recording=None,
+        geom=None,
+        channel_index=None,
         sampling_frequency=30_000,
     ):
+        if geom is None:
+            from dartsort.util.waveform_util import make_channel_index
+
+            assert recording is not None
+            sampling_frequency = recording.sampling_frequency
+            geom = torch.tensor(recording.get_channel_locations())
+            channel_index = make_channel_index(
+                geom, featurization_config.extract_radius, to_torch=True
+            )
+        else:
+            assert recording is None
+            assert channel_index is not None
         args = featurization_config_to_class_names_and_kwargs(
             featurization_config, waveform_config, sampling_frequency=sampling_frequency
         )

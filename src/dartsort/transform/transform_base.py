@@ -25,6 +25,17 @@ class BaseWaveformModule(torch.nn.Module):
             self.register_buffer("geom", geom)
 
         self.spike_length_samples = None
+        self._hook = self.register_load_state_dict_pre_hook(self.__class__._pre_load_state)
+
+    def __getstate__(self):
+        self._hook.remove()
+        state = self.__dict__.copy()
+        del state['_hook']
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._hook = self.register_load_state_dict_pre_hook(self.__class__._pre_load_state)
 
     def fit(self, waveforms, max_channels, recording, weights=None):
         self.spike_length_samples = waveforms.shape[1]
@@ -51,8 +62,10 @@ class BaseWaveformModule(torch.nn.Module):
         unexpected_keys,
         error_msgs,
     ):
-        extra_state = state_dict["_extra_state"]
-        print(f"tfbase pre hook {extra_state=}")
+        # wish torch would strip the prefix for us?
+        extra_state_keys = [k for k in state_dict.keys() if k.endswith("_extra_state")]
+        assert len(extra_state_keys) == 1
+        extra_state = state_dict[extra_state_keys[0]]
 
         # some modules want to know the spike length before loading the state dict
         # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.

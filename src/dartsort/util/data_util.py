@@ -257,8 +257,6 @@ def get_tpca(sorting):
 
     pipeline = get_featurization_pipeline(sorting)
     tpcas = [t for t in pipeline.transformers if isinstance(t, TemporalPCAFeaturizer)]
-    if not tpcas:
-        print("Looking for a TPCA featurizer, but there aren't any.")
     tpca = tpcas[0]
     return tpca
 

@@ -3,14 +3,13 @@ from pathlib import Path
 
 import numpy as np
 
-from dartsort import config
-from dartsort.localize.localize_util import localize_waveforms
-from dartsort.util import data_util, drift_util
+from ..localize.localize_util import localize_waveforms
+from ..util import data_util, drift_util, job_util
+from ..util.internal_config import default_waveform_config
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, get_template_depths, weighted_average
-from ..util import job_util
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -152,7 +151,7 @@ class TemplateData:
         recording,
         sorting,
         template_config,
-        waveform_config=config.default_waveform_config,
+        waveform_config=default_waveform_config,
         save_folder=None,
         overwrite=False,
         motion_est=None,
@@ -186,7 +185,7 @@ class TemplateData:
         recording,
         sorting,
         template_config,
-        waveform_config=config.default_waveform_config,
+        waveform_config=default_waveform_config,
         save_folder=None,
         overwrite=False,
         motion_est=None,
@@ -221,7 +220,8 @@ class TemplateData:
         realign_max_sample_shift = int(template_config.realign_shift_ms * (fs / 1000))
 
         motion_aware = (
-            template_config.registered_templates or template_config.superres_templates
+            (template_config.registered_templates or template_config.superres_templates)
+            and motion_est is not None
         )
         has_localizations = hasattr(sorting, localizations_dataset_name)
         if motion_aware and not has_localizations:
@@ -364,7 +364,7 @@ def get_chunked_templates(
     tsvd=None,
     random_seed=0,
     computation_config=None,
-    waveform_config=config.default_waveform_config,
+    waveform_config=default_waveform_config,
 ):
     """Save the effort of recomputing several TPCAs"""
     rg = np.random.default_rng(random_seed)

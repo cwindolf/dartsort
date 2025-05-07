@@ -45,6 +45,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
                     self.channel_index.numpy(force=True),
                 )
             ),
+            persistent=False,
         )
 
     def forward(self, waveforms, max_channels):
@@ -125,10 +126,8 @@ def make_parents_index(geom, channel_index):
         g_rel = g - g_detect
 
         # compute all angles ACB
-        # print(i)
         cos_across_detect = 1.0 - cdist(g_rel, g_rel, metric="cosine")
         cos_across_detect[i_rel, :] = cos_across_detect[:, i_rel] = 1
-        # print(np.array2string(cos_across_detect, max_line_width=200))
 
         # compute all angles CBA
         # these are segments BA (parent is on the second axis)

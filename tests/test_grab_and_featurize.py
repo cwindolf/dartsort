@@ -12,10 +12,10 @@ from dartsort import transform
 from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel.grab import GrabAndFeaturize
 from dartsort.util.waveform_util import make_channel_index
-from dartsort import config
+from dartsort.util.internal_config import ComputationConfig
 
 
-two_jobs_config = config.ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
+two_jobs_config = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
 
 
 def test_grab_and_featurize():

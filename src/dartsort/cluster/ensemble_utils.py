@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm.auto import tqdm
 
-from ..config import default_split_merge_config
+from ..util.internal_config import default_split_merge_config
 from . import merge, split
 
 

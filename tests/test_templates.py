@@ -3,7 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import spikeinterface.core as sc
-from dartsort import config
+
+import dartsort
 from dartsort.templates import (
     get_templates,
     pairwise,
@@ -21,7 +22,7 @@ def test_roundtrip(tmp_path):
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     template_data = templates.TemplateData.from_config(
         *no_overlap_recording_sorting(temps, pad=0),
-        template_config=config.TemplateConfig(
+        template_config=dartsort.TemplateConfig(
             low_rank_denoising=False,
             superres_bin_min_spikes=0,
             realign_peaks=False,
@@ -170,13 +171,13 @@ def test_main_object():
     tdata = templates.TemplateData.from_config(
         rec,
         sorting,
-        config.TemplateConfig(
+        dartsort.TemplateConfig(
             realign_peaks=False,
             superres_templates=False,
             denoising_rank=2,
         ),
         motion_est=me,
-        waveform_config=config.WaveformConfig(ms_before=0, ms_after=2000),
+        waveform_config=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
 
 

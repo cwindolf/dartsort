@@ -3,7 +3,7 @@ from dataclasses import replace
 import numpy as np
 import torch.nn.functional as F
 
-from .. import config
+from ..util.internal_config import default_waveform_config, coarse_template_config
 from ..templates import TemplateData
 
 
@@ -14,8 +14,8 @@ def realign_and_chuck_noisy_template_units(
     motion_est=None,
     min_n_spikes=5,
     min_template_snr=15,
-    waveform_config=config.default_waveform_config,
-    template_config=config.coarse_template_config,
+    waveform_config=default_waveform_config,
+    template_config=coarse_template_config,
     tsvd=None,
     computation_config=None,
 ):

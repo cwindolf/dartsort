@@ -200,6 +200,23 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     def get_masks(self, max_channels):
         return self.model_channel_index[max_channels] < self.n_channels
 
+    # -- these two below are used for storing pretrained net weights
+
+    @classmethod
+    def load_from_pt(cls, pretrained_path, **kwargs):
+        net = cls(**kwargs)
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+        net.spike_length_samples = state_dict.pop("spike_length_samples")
+        net.initialize_spike_length_dependent_params()
+        net.load_state_dict(state_dict)
+        net._needs_fit = False
+        return net
+
+    def save_to_pt(self, pretrained_path):
+        state = self.state_dict()
+        state['spike_length_samples'] = self.spike_length_samples
+        torch.save(state, pretrained_path)
+
 
 # -- torch data / noise utilities
 

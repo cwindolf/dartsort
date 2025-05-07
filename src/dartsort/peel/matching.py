@@ -441,10 +441,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             geom, featurization_config.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
-            geom,
-            channel_index,
-            featurization_config,
-            waveform_config,
+            geom=geom,
+            channel_index=channel_index,
+            featurization_config=featurization_config,
+            waveform_config=waveform_config,
             sampling_frequency=recording.sampling_frequency,
         )
         trough_offset_samples = waveform_config.trough_offset_samples(
