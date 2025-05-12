@@ -98,7 +98,7 @@ def fill_geom_holes(geom):
     return filled_geom, is_original
 
 
-def regularize_geom(geom, radius=0):
+def regularize_geom(geom, radius=0, depth_only=False):
     """Re-order, fill holes, and optionally expand geometry to make it 'regular'
 
     Used in make_regular_channel_index. That docstring has some info about what's
@@ -112,7 +112,8 @@ def regularize_geom(geom, radius=0):
         geom = geom.numpy()
 
     rgeom = geom.copy()
-    for j in range(geom.shape[1]):
+    dims = [1] if depth_only else range(geom.shape[1])
+    for j in dims:
         # skip empty dims
         if np.ptp(geom[:, j]) < eps:
             continue
@@ -243,7 +244,7 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     return channel_index
 
 
-def make_regular_channel_index(geom, radius, p=2, to_torch=False):
+def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=False):
     """Channel index for multi-channel models
 
     In this channel index, the layout of channels around the max channel is
@@ -285,7 +286,7 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
     is way bigger than the others and serves as a reference, etc -- throw those
     away!
     """
-    rgeom, eps = regularize_geom(geom=geom, radius=radius)
+    rgeom, eps = regularize_geom(geom=geom, radius=radius, depth_only=depth_only)
     if np.array(radius).size > 1:
         radius = np.sqrt(np.square(radius).sum())
 
@@ -312,7 +313,7 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False):
     return channel_index
 
 
-def regularize_channel_index(geom, channel_index, p=2, to_torch=False):
+def regularize_channel_index(geom, channel_index, p=2, to_torch=False, depth_only=False):
     """Convert a channel index to the "regular" format
 
     Need to know the p used in the first place.
@@ -325,7 +326,7 @@ def regularize_channel_index(geom, channel_index, p=2, to_torch=False):
         row = row[row < nchans]
         radius = max(radius, cdist(geom[row], geom[j][None]).max())
 
-    regular_channel_index = make_regular_channel_index(geom, radius, p=p)
+    regular_channel_index = make_regular_channel_index(geom, radius, p=p, depth_only=depth_only)
 
     for c in range(nchans):
         regrow = regular_channel_index[c]

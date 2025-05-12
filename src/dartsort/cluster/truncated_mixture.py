@@ -92,7 +92,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.min_log_prop = min_log_prop
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
-        logger.dartsortdebug(f"TMM will fit to {train_indices.shape=} {self.n_spikes=}")
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
             neighborhoods=self.train_neighborhoods,
@@ -128,9 +127,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert log_proportions.isfinite().all()
         assert noise_log_prop.isfinite()
 
-        logger.dartsortdebug(
-            f"Setting TMM parameters {labels.shape=} {means.shape=} {log_proportions.shape=} {kl_divergences.shape=}"
-        )
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
 
         self.register_buffer("_N", torch.zeros(nu + 1))
@@ -875,10 +871,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # with numerics for us if we do everything via chol.
         Coo_chol = [C.cholesky() for C in Coo]
         Coo_invsqrt = [L.inverse().to_dense() for L in Coo_chol]
-        if logger.isEnabledFor(DARTSORTDEBUG):
-            logger.dartsortdebug(
-                f"Are Coo_invsqrts finite? {all(c.isfinite().all() for c in Coo_invsqrt)}"
-            )
+        assert all(c.isfinite().all() for c in Coo_invsqrt)
         Coo_inv = [Li.T @ Li for Li in Coo_invsqrt]
         Coo_logdet = [2 * L.to_dense().diagonal().log().sum() for L in Coo_chol]
         Coo_logdet = torch.tensor(Coo_logdet, device=device)

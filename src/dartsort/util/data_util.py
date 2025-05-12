@@ -1,7 +1,8 @@
 from collections import namedtuple
 from dataclasses import dataclass, replace
 from pathlib import Path
-from warnings import warn
+from typing import Generator
+import warnings
 
 import h5py
 import numpy as np
@@ -335,7 +336,7 @@ def check_recording(
     max_abs = np.max(random_chunks)
 
     if avg_detections_per_second > expected_spikes_per_sec:
-        warn(
+        warnings.warn(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is "
             "large. You may want to check that your data has been preprocessed, "
             "including standardization. If it seems right, then you may need to "
@@ -346,7 +347,7 @@ def check_recording(
         failed = True
 
     if max_abs > expected_value_range:
-        warn(
+        warnings.warn(
             f"Recording values exceed |{expected_value_range}|. You may want to "
             "check that your data has been preprocessed, including standardization.",
             RuntimeWarning,
@@ -513,18 +514,43 @@ def _read_by_chunk(mask, dataset, show_progress=True):
     return out
 
 
-def yield_chunks(dataset, show_progress=True, desc_prefix=None):
-    """Iterate chunks of an h5py dataset which is only chunked on axis=0."""
-    chunks = dataset.iter_chunks()
+def yield_chunks(
+    dataset, show_progress=True, desc_prefix=None, fallback_chunk_length=4096
+) -> Generator[tuple[slice, np.ndarray], None, None]:
+    """Iterate chunks of an h5py dataset
+
+    The dataset can either not be chunked or chunked only on the first axis.
+    """
+    if dataset.chunks is None:
+        chunks = (
+            slice(s, min(s + fallback_chunk_length, len(dataset)))
+            for s in range(0, len(dataset), fallback_chunk_length)
+        )
+    else:
+        try:
+            assert dataset.chunks[0] <= dataset.shape[0]
+            for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
+                assert c == s
+        except AssertionError:
+            raise ValueError(
+                f"Dataset {dataset} can only be chunked along the first axis."
+            )
+
+        chunks = dataset.iter_chunks()
+        # throw away slices along other axes
+        chunks = (chunk[0] for chunk in chunks)
 
     if show_progress:
         desc = dataset.name
         if desc_prefix:
             desc = f"{desc_prefix} {desc}"
-        n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
+        if dataset.chunks is None:
+            n_chunks = int(np.ceil(dataset.shape[0] / fallback_chunk_length))
+        else:
+            n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
         chunks = tqdm(chunks, total=n_chunks, desc=desc)
 
-    for sli, *_ in chunks:
+    for sli in chunks:
         yield sli, dataset[sli]
 
 
@@ -539,7 +565,23 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
         offset += source_ixs.size
 
 
-# --
+# -- residual
+
+
+def extract_random_snips(rg, chunk, n, sniplen):
+    if sniplen * n > chunk.shape[0]:
+        warnings.warn("Can't extract this many non-overlapping snips.")
+        times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
+        times.sort()
+    else:
+        empty_len = chunk.shape[0] - sniplen * n
+        times = rg.choice(empty_len, size=n, replace=False)
+        times += np.arange(n) * sniplen
+    tixs = times[:, None] + np.arange(sniplen)
+    return chunk[tixs], times
+
+
+# -- dataset subsampling
 
 
 def subsample_waveforms(
@@ -554,7 +596,6 @@ def subsample_waveforms(
     subsample_by_weighting=False,
     replace=True,
 ):
-
     random_state = np.random.default_rng(random_state)
     hdf5_filename = resolve_path(hdf5_filename, strict=True)
 

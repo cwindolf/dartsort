@@ -32,6 +32,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         learning_rate=3e-4,
         weight_decay=0.0,
         n_epochs=75,
+        pad_depth_only=True,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
         val_split_p=0.0,
@@ -77,7 +78,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.inference_batch_size = inference_batch_size
 
         model_channel_index = regularize_channel_index(
-            geom=self.geom, channel_index=channel_index
+            geom=self.geom, channel_index=channel_index, depth_only=pad_depth_only
         )
         self.register_buffer(
             "model_channel_index", torch.from_numpy(model_channel_index)

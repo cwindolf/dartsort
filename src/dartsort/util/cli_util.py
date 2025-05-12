@@ -1,12 +1,13 @@
 # TODO: arg_group to group arguments in the -h.
 from pathlib import Path
-from dataclasses import MISSING, fields, field, asdict
+from dataclasses import _MISSING_TYPE, MISSING, fields, field, asdict
 from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
 import typing
+from typing import Any, Callable
 from annotated_types import Gt, Ge, Lt, Le
 
 
-def ensurepath(path, strict=True):
+def ensurepath(path: str | Path, strict=True):
     path = Path(path)
     path = path.expanduser()
     path = path.resolve(strict=strict)
@@ -14,7 +15,11 @@ def ensurepath(path, strict=True):
 
 
 def argfield(
-    default=MISSING, default_factory=MISSING, arg_type=MISSING, cli=True, doc=""
+    default: Any = MISSING,
+    default_factory: Callable | _MISSING_TYPE = MISSING,
+    arg_type: Callable | _MISSING_TYPE = MISSING,
+    cli=True,
+    doc="",
 ):
     """Helper for defining fields with extended CLI behavior.
 
@@ -25,7 +30,7 @@ def argfield(
 
     Fields with cli=False will not be available from the command line.
     """
-    metadata = dict(cli=cli, doc=doc)
+    metadata: dict[str, Any] = dict(cli=cli, doc=doc)
     if arg_type is not MISSING:
         metadata["arg_type"] = arg_type
     return field(default=default, default_factory=default_factory, metadata=metadata)

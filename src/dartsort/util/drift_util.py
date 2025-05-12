@@ -302,21 +302,21 @@ def get_spike_pitch_shifts(
     """
     if pitch is None:
         pitch = get_pitch(geom)
+
     if registered_depths_um is None and motion_est is None:
         probe_displacement = np.zeros_like(depths_um)
     elif registered_depths_um is None:
         probe_displacement = -motion_est.disp_at_s(times_s, depths_um)
     else:
         probe_displacement = registered_depths_um - depths_um
+    assert np.isfinite(probe_displacement).all()
 
-    # if probe_displacement > 0, then the registered position is below the original
-    # and, to be conservative, round towards 0 rather than using //
-    # sometimes nans can sneak in here... let's just give them 0 disps.
-    probe_displacement = np.nan_to_num(probe_displacement)
     if mode == "floor":
         n_pitches_shift = (probe_displacement / pitch).astype(int)
     elif mode == "round":
-        n_pitches_shift = (probe_displacement / pitch).astype(int)
+        n_pitches_shift = np.round(probe_displacement / pitch).astype(int)
+    else:
+        assert False
 
     return n_pitches_shift
 
@@ -603,7 +603,6 @@ def _full_probe_shifting_fast(
     return static_waveforms[:, :, : target_kdtree.n]
 
 
-# TODO make sure thoroughly unit tested
 def static_channel_neighborhoods(
     geom,
     main_channels,
@@ -860,7 +859,7 @@ def get_shift_and_unit_pairs(
     return template_shift_index_a, template_shift_index_b, cooccurrence
 
 
-def get_shift_info(sorting, motion_est, geom, motion_depth_mode, channels_mode="round"):
+def get_shift_info(sorting, motion_est, geom, motion_depth_mode="channel", channels_mode="round"):
     """
     shifts = reg_depths - depths
     reg_depths = depths + shifts
@@ -880,6 +879,8 @@ def get_shift_info(sorting, motion_est, geom, motion_depth_mode, channels_mode="
     rdepths = depths
     if motion_est is not None:
         rdepths = motion_est.correct_s(times_s, depths)
+
+    # shift = -displacement and rz = z - displacement
     shifts = rdepths - depths
 
     if motion_est is None:
@@ -914,10 +915,6 @@ def get_stable_channels(
     if core_radius is not None:
         core_channel_index = make_channel_index(geom, core_radius)
 
-    pitch = get_pitch(geom)
-    registered_kdtree = KDTree(registered_geom)
-    match_distance = pdist(geom).min() / 2
-
     # extract the main unique chans computation
     c = torch.asarray(channels, dtype=torch.int32)
     s = torch.asarray(n_pitches_shift, dtype=torch.int32)
@@ -927,6 +924,11 @@ def get_stable_channels(
     uniq_channels_and_shifts, uniq_inv = torch.unique(cs, dim=0, return_inverse=True)
     uniq_channels_and_shifts = uniq_channels_and_shifts.numpy(force=True)
     uniq_inv = uniq_inv.numpy(force=True)
+
+    # precompute these, shared across next two calls
+    pitch = get_pitch(geom)
+    registered_kdtree = KDTree(registered_geom)
+    match_distance = pdist(geom).min() / 2
 
     extract_channels, extract_neighborhoods, extract_neighborhood_ids = (
         static_channel_neighborhoods(

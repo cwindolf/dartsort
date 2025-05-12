@@ -168,8 +168,8 @@ class DeveloperConfig(DARTsortUserConfig):
     truncated: bool = True
     overwrite_matching: bool = False
 
-    merge_criterion_threshold: float = 0.0
-    merge_criterion: Literal[
+    criterion_threshold: float = 0.0
+    criterion: Literal[
         "heldout_loglik", "heldout_elbo", "loglik", "elbo", "bimodality"
     ] = "heldout_elbo"
     merge_bimodality_threshold: float = 0.05
@@ -198,6 +198,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
+    interpolation_method: str = "thinplate"
     glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
     laplace_ard: bool = True
     core_radius: float = 35.0

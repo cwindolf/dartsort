@@ -5,22 +5,22 @@ import subprocess
 
 
 import dartsort
-from dartsort.util import simkit
+from dartsort.util import simkit, noise_util
 
 
 @pytest.fixture
-def sim_recording():
+def sim_recording(tmp_path):
     geom = simkit.generate_geom()
-    rec_sim = simkit.StaticSimulatedRecording(
+    rec_sim = simkit.SimulatedRecording(
         duration_samples=10 * 30_000,
         n_units=40,
         template_simulator=simkit.PointSource3ExpSimulator(geom),
-        noise=simkit.WhiteNoise(len(geom)),
+        noise=noise_util.WhiteNoise(len(geom)),
         min_fr_hz=20.0,
         max_fr_hz=31.0,
         temporal_jitter=4,
     )
-    rec = rec_sim.simulate()
+    rec = rec_sim.simulate(Path(tmp_path) / "sim.h5")
     return rec
 
 

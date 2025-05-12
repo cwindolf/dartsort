@@ -4,7 +4,6 @@ from typing import Optional
 
 import h5py
 import numpy as np
-import torch
 from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import (
     DARTsortSorting,

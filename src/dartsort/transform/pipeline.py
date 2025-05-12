@@ -104,6 +104,8 @@ class WaveformPipeline(torch.nn.Module):
         return any(t.needs_fit() for t in self.transformers)
 
     def forward(self, waveforms, max_channels):
+        waveforms = torch.asarray(waveforms)
+        max_channels = torch.asarray(max_channels)
         assert waveforms.ndim == 3
         assert max_channels.shape[0] == waveforms.shape[0]
 
@@ -130,6 +132,8 @@ class WaveformPipeline(torch.nn.Module):
         return waveforms, features
 
     def fit(self, waveforms, max_channels, recording, weights=None):
+        waveforms = torch.asarray(waveforms)
+        max_channels = torch.asarray(max_channels)
         assert waveforms.ndim == 3
         assert max_channels.shape[0] == waveforms.shape[0]
 

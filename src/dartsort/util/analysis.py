@@ -9,9 +9,9 @@ This should also make it easier to compute drift-aware metrics
 """
 
 import pickle
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Literal
 
 import h5py
 import numpy as np
@@ -61,7 +61,7 @@ class DARTsortAnalysis:
 
     # hdf5 keys
     localizations_dataset: str = "point_source_localizations"
-    amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
+    amplitudes_dataset: str = "denoised_ptp_amplitudes"
     amplitude_vectors_dataset: str = "denoised_ptp_amplitude_vectors"
     tpca_features_dataset: str = "collisioncleaned_tpca_features"
     template_indices_dataset: str = "template_indices"
@@ -75,7 +75,7 @@ class DARTsortAnalysis:
     merge_distance_min_spatial_cosine: float = 0.5
     merge_temporal_upsampling: int = 1
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
-    compute_distances: bool = "if_hdf5"
+    compute_distances: bool | Literal["if_hdf5"] = "if_hdf5"
     n_jobs: int = 0
     default_channel_index_radius: float = 100.0
 
@@ -108,6 +108,7 @@ class DARTsortAnalysis:
         have_templates = False
         template_data = None
         if allow_template_reload:
+            model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
             if have_templates:
@@ -118,6 +119,9 @@ class DARTsortAnalysis:
                 template_data = TemplateData.from_npz(template_npz)
 
         if not have_templates and template_config is not None:
+            tkw = {}
+            if "localizations_dataset" in kwargs:
+                tkw = dict(localizations_dataset_name=kwargs["localizations_dataset"])
             template_data = TemplateData.from_config(
                 recording,
                 sorting,
@@ -126,6 +130,7 @@ class DARTsortAnalysis:
                 motion_est=motion_est,
                 computation_config=computation_config,
                 tsvd=denoising_tsvd,
+                **tkw,
             )
 
         if computation_config is None:
@@ -154,9 +159,8 @@ class DARTsortAnalysis:
         **kwargs,
     ):
         return cls(
-            DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
-            Path(hdf5_path),
-            recording,
+            sorting=DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
+            recording=recording,
             template_data=template_data,
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
@@ -272,9 +276,9 @@ class DARTsortAnalysis:
     @property
     def max_chan_amplitudes(self):
         if self._max_chan_amplitudes is None:
-            if hasattr(self.sorting, self.amplitudes_dataset_name):
-                return getattr(self.sorting, self.amplitudes_dataset_name)
-            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset_name][:]
+            if hasattr(self.sorting, self.amplitudes_dataset):
+                return getattr(self.sorting, self.amplitudes_dataset)
+            self._max_chan_amplitudes = self.h5[self.amplitudes_dataset][:]
         return self._max_chan_amplitudes
 
     @property
@@ -282,7 +286,10 @@ class DARTsortAnalysis:
         if self._amplitude_vectors is None:
             if hasattr(self.sorting, self.amplitude_vectors_dataset):
                 return getattr(self.sorting, self.amplitude_vectors_dataset)
-            self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
+            if self.amplitude_vectors_dataset in self.h5:
+                self._amplitude_vectors = self.h5[self.amplitude_vectors_dataset][:]
+            else:
+                self._amplitude_vectors = np.linalg.norm(self.tpca_features(), axis=1)
         return self._amplitude_vectors
 
     @property

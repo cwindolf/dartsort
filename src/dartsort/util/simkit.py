@@ -1,18 +1,20 @@
+from logging import getLogger
+
 import numpy as np
 import probeinterface
-from spikeinterface.core import NumpySorting, NumpyRecording
+from dredge import motion_util
+import h5py
 from scipy.spatial.distance import cdist
+from spikeinterface.core import NumpyRecording, NumpySorting
 from tqdm.auto import tqdm
 
-from dartsort.templates.templates import TemplateData
-
-from dredge import motion_util
-
-from .noise_util import StationaryFactorizedNoise, WhiteNoise
-from .data_util import DARTsortSorting
+from ..templates.templates import TemplateData
+from .data_util import DARTsortSorting, extract_random_snips
+from .waveform_util import make_channel_index, upsample_singlechan
 from .spiketorch import spawn_torch_rg, ptp
 from .drift_util import registered_geometry
-from .waveform_util import upsample_singlechan
+
+logger = getLogger(__name__)
 
 
 # -- spike train sims
@@ -171,12 +173,14 @@ def rbf_kernel(geom, bandwidth=35.0):
     return np.exp(-d / (2 * bandwidth))
 
 
-def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="squared"):
+def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="32"):
     dtype = waveforms.dtype
     if decay_model == "pointsource":
         amp = alpha / cdist(pos, geom3).astype(dtype)
     elif decay_model == "squared":
         amp = alpha * (cdist(pos, geom3).astype(dtype) ** -2)
+    elif decay_model == "32":
+        amp = alpha * (cdist(pos, geom3).astype(dtype) ** -(3 / 2))
     else:
         assert False
     n_dims_expand = waveforms.ndim - 1
@@ -208,10 +212,13 @@ class PointSource3ExpSimulator:
         peak_rel_max=0.5,
         # pos/amplitude params
         pos_margin_um=40.0,
-        orthdist_min_um=20.0,
-        orthdist_max_um=30.0,
-        alpha_mean=8000.0,
-        alpha_var=400.0,
+        orthdist_min_um=50.0,
+        orthdist_max_um=125.0,
+        alpha_family="uniform",
+        alpha_min=100.0,
+        alpha_max=1000.0,
+        alpha_mean=10.0 * np.square(100.0),
+        alpha_var=5.0 * np.square(100.0),
         # config
         ms_before=1.4,
         ms_after=2.6,
@@ -247,6 +254,9 @@ class PointSource3ExpSimulator:
         self.pos_margin_um = pos_margin_um
         self.orthdist_min_um = orthdist_min_um
         self.orthdist_max_um = orthdist_max_um
+        self.alpha_family = alpha_family
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
         self.alpha_mean = alpha_mean
         self.alpha_var = alpha_var
         theta = alpha_var / alpha_mean
@@ -315,9 +325,17 @@ class PointSource3ExpSimulator:
 
         x = self.rg.uniform(x_low, x_high, size=size)
         y = self.rg.uniform(y_low, y_high, size=size)
+
         orth = self.rg.uniform(self.orthdist_min_um, self.orthdist_max_um, size=size)
 
-        alpha = self.rg.gamma(shape=self.alpha_shape, scale=self.alpha_scale, size=size)
+        if self.alpha_family == "gamma":
+            alpha = self.rg.gamma(
+                shape=self.alpha_shape, scale=self.alpha_scale, size=size
+            )
+        elif self.alpha_family == "uniform":
+            alpha = self.rg.gamma(self.alpha_min, self.alpha_max, size=size)
+        else:
+            assert False
 
         pos = np.c_[x, y, orth].astype(self.dtype)
         alpha = alpha.astype(self.dtype)
@@ -338,7 +356,7 @@ class PointSource3ExpSimulator:
 # -- recording sim
 
 
-class StaticSimulatedRecording:
+class SimulatedRecording:
     def __init__(
         self,
         template_simulator,
@@ -365,6 +383,7 @@ class StaticSimulatedRecording:
         self.cmr = cmr
         self.highpass_spatial_filter = highpass_spatial_filter
 
+        self.seed = seed
         self.rg = np.random.default_rng(seed)
         self.torch_rg = spawn_torch_rg(self.rg)
 
@@ -460,6 +479,8 @@ class StaticSimulatedRecording:
             self.template_simulator.geom3,
             decay_model=self.template_simulator.decay_model,
         )
+        if self.cmr:
+            templates -= np.median(templates, axis=-1, keepdims=True)
         if up:
             assert templates.shape == (
                 self.n_units,
@@ -474,12 +495,12 @@ class StaticSimulatedRecording:
                 len(self.template_simulator.geom),
             )
 
-        return templates
+        return pos, templates
 
     def template_data(self):
         if not self.drift_speed:
             return TemplateData(
-                templates=self.templates(),
+                templates=self.templates()[1],
                 unit_ids=np.arange(self.n_units),
                 spike_counts=np.ones(self.n_units),
                 registered_geom=self.geom,
@@ -488,7 +509,7 @@ class StaticSimulatedRecording:
             )
 
         rgeom, matches = self.registered_geom()
-        templates = self.templates()
+        pos, templates = self.templates()
         rtemplates = np.zeros(
             (*templates.shape[:-1], len(rgeom)), dtype=templates.dtype
         )
@@ -517,14 +538,29 @@ class StaticSimulatedRecording:
             extra_features=dict(times_seconds=times / self.template_simulator.fs),
         )
 
-    def simulate(self):
+    def simulate(self, gt_h5_path, extract_radius=100.0):
         """
+        If gt_h5_path is not None, will save datasets:
+         - times_samples
+         - channels
+         - labels
+         - scalings
+         - ptp_amplitudes
+         - localizations
+         - upsampling_ix
+         - displacements
+         - residual (residual snippets)
+         - injected_waveforms
+         - collisioncleaned_waveforms
+        Will also save a channel_index and geom for good measure. These are
+        full-probe.
+
         Returns
         -------
         recording : NumpyRecording
-        sorting : NumpySorting
+        gt_sorting: DARTSortSorting | None
         """
-        print("Simulate noise...")
+        logger.dartsortdebug("Simulate noise...")
         x = self.noise.simulate(
             size=1,
             t=self.duration_samples,
@@ -534,6 +570,10 @@ class StaticSimulatedRecording:
         assert x.shape == (1, self.duration_samples, len(self.geom))
         x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
 
+        if self.cmr:
+            # before adding temps, since already cmrd.
+            x -= np.median(x, axis=1, keepdims=True)
+
         t_rel_ix = np.arange(self.template_simulator.spike_length_samples())
         t_rel_ix -= self.template_simulator.trough_offset_samples()
         chan_ix = np.arange(len(self.geom))
@@ -542,26 +582,97 @@ class StaticSimulatedRecording:
         times = sv["sample_index"]
         labels = sv["unit_index"]
 
-        chunks = (times // self.template_simulator.fs).astype(np.int32)
-        the_chunks = np.unique(chunks)
+        with h5py.File(gt_h5_path, "w") as h5:
+            h5.create_dataset("times_samples", data=times)
+            h5.create_dataset("times_seconds", data=times / self.template_simulator.fs)
+            h5.create_dataset("labels", data=labels)
+            h5.create_dataset("upsampling_ix", data=self.jitter_ix)
+            h5.create_dataset("scalings", data=self.scalings)
+            h5.create_dataset("geom", data=self.geom)
+            ci = make_channel_index(self.geom, extract_radius)
+            h5.create_dataset("channel_index", data=ci)
+            h5.create_dataset("sampling_frequency", data=self.template_simulator.fs)
 
-        for chunk in tqdm(the_chunks, "Adding templates..."):
-            batch = np.flatnonzero(chunks == chunk)
-            bt = times[batch]
-            bl = labels[batch]
-            bjitter = self.jitter_ix[batch]
-            tix = bt[:, None, None] + t_rel_ix[None, :, None]
-
-            temps = self.templates(
-                t_samples=(chunk + 0.5) * self.template_simulator.fs, up=True
+            # residual snips. use separate rg so this doesn't change sim data.
+            rsnips, rtimes = extract_random_snips(
+                np.random.default_rng(self.seed),
+                x,
+                n=4096,
+                sniplen=self.template_simulator.spike_length_samples(),
+            )
+            h5.create_dataset("residual", data=rsnips)
+            h5.create_dataset(
+                "residual_times_seconds", data=rtimes / self.template_simulator.fs
             )
 
-            btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
-            self.maxchans[batch] = ptp(btemps).argmax(1)
-            np.add.at(x, (tix, chan_ix[None, None]), btemps)
+            # saved in loop below
+            ds_channels = h5.create_dataset("channels", shape=len(times), dtype="int32")
+            ds_displacements = h5.create_dataset(
+                "displacements", shape=len(times), dtype="float32"
+            )
+            ds_localizations = h5.create_dataset(
+                "localizations", shape=(len(times), 3), dtype="float32"
+            )
+            ds_ptp_amplitudes = h5.create_dataset(
+                "ptp_amplitudes", shape=len(times), dtype="float32"
+            )
+            wf_shape = (
+                len(times),
+                self.template_simulator.spike_length_samples(),
+                ci.shape[1],
+            )
+            ds_injected_waveforms = h5.create_dataset(
+                "injected_waveforms", shape=wf_shape, dtype="float32"
+            )
+            ds_collisioncleaned_waveforms = h5.create_dataset(
+                "collisioncleaned_waveforms", shape=wf_shape, dtype="float32"
+            )
 
-        if self.cmr:
-            x -= np.median(x, axis=0)
+            chunks = (times // self.template_simulator.fs).astype(np.int32)
+            the_chunks = np.unique(chunks)
+
+            for chunk in tqdm(the_chunks, "Adding templates..."):
+                batch = np.flatnonzero(chunks == chunk)
+                assert np.all(np.diff(batch) == 1)
+                batch = slice(batch[0], batch[-1] + 1)
+
+                bt = times[batch]
+                bl = labels[batch]
+                bjitter = self.jitter_ix[batch]
+                tix = bt[:, None, None] + t_rel_ix[None, :, None]
+
+                t_samples = (chunk + 0.5) * self.template_simulator.fs
+                pos, temps = self.templates(t_samples=t_samples, up=True)
+
+                btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
+                amps = ptp(btemps)
+                maxamps = amps.max(1)
+                self.maxchans[batch] = amps.argmax(1)
+
+                if h5 is not None:
+                    # extract background before its too late
+                    chans = ci[self.maxchans[batch]]
+                    ccwf = x[tix, chan_ix[None, None]]
+                    ccwf = np.pad(
+                        ccwf, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan
+                    )
+                    ccwf = np.take_along_axis(ccwf, chans[:, None, :], axis=2)
+
+                np.add.at(x, (tix, chan_ix[None, None]), btemps)
+
+                if h5 is not None:
+                    ds_channels[batch] = self.maxchans[batch]
+                    ds_displacements[batch] = self.drift(t_samples)
+                    ds_localizations[batch] = pos[bl]
+                    ds_ptp_amplitudes[batch] = maxamps
+
+                    chans = ci[self.maxchans[batch]]
+                    btemps = np.pad(
+                        btemps, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan
+                    )
+                    inj_wfs = np.take_along_axis(btemps, chans[:, None, :], axis=2)
+                    ds_injected_waveforms[batch] = inj_wfs
+                    ds_collisioncleaned_waveforms[batch] = ccwf + inj_wfs
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
         recording.set_dummy_probe_from_locations(self.geom)

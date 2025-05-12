@@ -39,7 +39,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
             waveforms, gt_waveforms, max_channels
         )
         with torch.enable_grad():
-            res = self._fit(train_loader, val_loader)
+            res = self.fit_with_loaders(train_loader, val_loader)
         self._needs_fit = False
         return res
 

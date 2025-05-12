@@ -37,8 +37,8 @@ def scatter_spike_features(
     limits="probe_margin",
     label_axes=True,
     random_seed=0,
-    amplitudes_dataset_name="denoised_ptp_amplitudes",
-    localizations_dataset_name="point_source_localizations",
+    amplitudes_dataset_name=("denoised_ptp_amplitudes", "ptp_amplitudes", "amplitudes"),
+    localizations_dataset_name=("point_source_localizations", "localizations"),
     extra_features=None,
     show_triaged=True,
     remove_outliers=True,
@@ -76,12 +76,12 @@ def scatter_spike_features(
         if times_s is None:
             times_s = getattr(sorting, "times_seconds", None)
         if x is None:
-            x = getattr(sorting, localizations_dataset_name, None)
+            x = _try_getattr(sorting, localizations_dataset_name, None)
             if x is not None:
                 depths_um = x[:, 2]
                 x = x[:, 0]
         if amplitudes is None:
-            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+            amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
@@ -90,12 +90,14 @@ def scatter_spike_features(
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
             if times_s is None:
                 times_s = h5["times_seconds"][:]
+            if x is None or depths_um is None:
+                localizations = _try_load(h5, localizations_dataset_name)
             if x is None:
-                x = h5[localizations_dataset_name][:, 0]
+                x = localizations[:, 0]
             if depths_um is None:
-                depths_um = h5[localizations_dataset_name][:, 2]
+                depths_um = localizations[:, 2]
             if amplitudes is None:
-                amplitudes = h5[amplitudes_dataset_name][:]
+                amplitudes = _try_load(h5, amplitudes_dataset_name)
             if geom is None:
                 geom = h5["geom"][:]
 
@@ -276,11 +278,11 @@ def scatter_time_vs_depth(
         if times_s is None:
             times_s = getattr(sorting, "times_seconds", None)
         if depths_um is None:
-            depths_um = getattr(sorting, localizations_dataset_name, None)
+            depths_um = _try_getattr(sorting, localizations_dataset_name, None)
             if depths_um is not None:
                 depths_um = depths_um[:, 2]
         if amplitudes is None:
-            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+            amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
@@ -290,9 +292,9 @@ def scatter_time_vs_depth(
             if times_s is None:
                 times_s = h5["times_seconds"][:]
             if depths_um is None:
-                depths_um = h5[localizations_dataset_name][:, 2]
+                depths_um = _try_load(h5, localizations_dataset_name)[:, 2]
             if amplitudes is None:
-                amplitudes = h5[amplitudes_dataset_name][:]
+                amplitudes = _try_load(h5, amplitudes_dataset_name)
             if geom is None:
                 geom = h5["geom"][:]
 
@@ -357,11 +359,11 @@ def scatter_x_vs_depth(
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
     if x is None and sorting is not None:
-        x = getattr(sorting, localizations_dataset_name)[:, 0]
+        x = _try_getattr(sorting, localizations_dataset_name)[:, 0]
     if depths_um is None and sorting is not None:
-        depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
+        depths_um = _try_getattr(sorting, localizations_dataset_name)[:, 2]
     if amplitudes is None and sorting is not None:
-        amplitudes = getattr(sorting, amplitudes_dataset_name)
+        amplitudes = _try_getattr(sorting, amplitudes_dataset_name)
 
     if to_show is None and geom is not None:
         to_show = np.flatnonzero(
@@ -433,11 +435,11 @@ def scatter_amplitudes_vs_depth(
     """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
     if sorting is not None:
         if depths_um is None:
-            depths_um = getattr(sorting, localizations_dataset_name, None)
+            depths_um = _try_getattr(sorting, localizations_dataset_name, None)
             if depths_um is not None:
                 depths_um = x[:, 2]
         if amplitudes is None:
-            amplitudes = getattr(sorting, amplitudes_dataset_name, None)
+            amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
@@ -704,3 +706,21 @@ def add_ellipses(
             ellip[uid] = ell
             ax.add_patch(ell)
     return ellip
+
+
+def _try_load(h5, dataset_name_or_names):
+    if isinstance(dataset_name_or_names, str):
+        return h5[dataset_name_or_names][:]
+    for dset in dataset_name_or_names:
+        if dset in h5:
+            return h5[dset]
+    raise ValueError(f"{dataset_name_or_names} not present in {h5.filename}.")
+
+
+def _try_getattr(obj, attr_name_or_names, default=None):
+    if isinstance(attr_name_or_names, str):
+        return getattr(obj, attr_name_or_names, default)
+    for name in attr_name_or_names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return default

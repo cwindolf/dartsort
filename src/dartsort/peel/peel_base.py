@@ -4,7 +4,6 @@ from threading import local, Lock
 from contextlib import contextmanager
 from pathlib import Path
 from itertools import repeat
-import warnings
 
 import h5py
 import numpy as np
@@ -13,7 +12,7 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from tqdm.auto import tqdm
 
 from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import subsample_waveforms, SpikeDataset
+from dartsort.util.data_util import subsample_waveforms, SpikeDataset, extract_random_snips
 from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
 from dartsort.util import job_util
@@ -909,19 +908,3 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             return_residual=_peeler_process_context.ctx.compute_residual,
             skip_features=_peeler_process_context.ctx.skip_features,
         )
-
-
-# -- specific utils
-
-
-def extract_random_snips(rg, chunk, n, sniplen):
-    if sniplen * n > chunk.shape[0]:
-        warnings.warn("Can't extract this many non-overlapping snips.")
-        times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
-        times.sort()
-    else:
-        empty_len = chunk.shape[0] - sniplen * n
-        times = rg.choice(empty_len, size=n, replace=False)
-        times += np.arange(n) * sniplen
-    tixs = times[:, None] + np.arange(sniplen)
-    return chunk[tixs], times
