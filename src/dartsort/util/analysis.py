@@ -9,9 +9,9 @@ This should also make it easier to compute drift-aware metrics
 """
 
 import pickle
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Literal
 
 import h5py
 import numpy as np
@@ -75,7 +75,7 @@ class DARTsortAnalysis:
     merge_distance_min_spatial_cosine: float = 0.5
     merge_temporal_upsampling: int = 1
     merge_superres_linkage: Callable[[np.ndarray], float] = np.max
-    compute_distances: bool = "if_hdf5"
+    compute_distances: bool | Literal["if_hdf5"] = "if_hdf5"
     n_jobs: int = 0
     default_channel_index_radius: float = 100.0
 
@@ -108,6 +108,7 @@ class DARTsortAnalysis:
         have_templates = False
         template_data = None
         if allow_template_reload:
+            model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
             if have_templates:
@@ -158,9 +159,8 @@ class DARTsortAnalysis:
         **kwargs,
     ):
         return cls(
-            DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
-            Path(hdf5_path),
-            recording,
+            sorting=DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
+            recording=recording,
             template_data=template_data,
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
