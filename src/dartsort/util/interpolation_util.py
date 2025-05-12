@@ -187,6 +187,8 @@ def thin_plate_precompute(source_geom, channel_index, sigma, source_geom_is_padd
     """Precompute data for 2D thin plate spline interpolation
 
     This is copying skimage, more or less.
+    https://www.geometrictools.com/Documentation/ThinPlateSplines.pdf
+    is also a helpful reference.
     """
     assert source_geom.shape[1] == 2  # 3d also possible...
     n_source_chans = len(source_geom) - source_geom_is_padded
@@ -286,17 +288,23 @@ def kernel_interpolate(
     """
     assert interpolation_method in interp_kinds
 
-    if interpolation_method == "thinplate":
+    thinplate = interpolation_method == "thinplate"
+    features_in = targ_extrap = None
+    if thinplate:
         assert thin_plate_data is not None
         Linv = thin_plate_data
 
         features = torch.nan_to_num(features, out=features if allow_destroy else None)
-        features = thin_plate_solve(source_pos, target_pos, Linv, features, sigma)
+        features_in = thin_plate_solve(source_pos, target_pos, Linv, features, sigma)
 
         needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
-        needs_nan = needs_nan.broadcast_to(features.shape)
-        features[needs_nan] = torch.nan
-        return features
+        needs_nan = needs_nan.broadcast_to(features_in.shape)
+        features_in[needs_nan] = torch.nan
+
+        # are we extrapolating anywhere? if so, thinplate is a bad choice.
+        targ_extrap = extrap_mask(source_pos, target_pos)
+        # we'll use normalized to extrapolate below
+        interpolation_method = "normalized"
 
     # -- build kernel
     if interpolation_method == "nearest":
@@ -335,6 +343,12 @@ def kernel_interpolate(
     needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
     needs_nan = needs_nan.broadcast_to(features.shape)
     features[needs_nan] = torch.nan
+
+    if thinplate:
+        # finish up extrapolation business
+        assert targ_extrap is not None
+        assert features_in is not None
+        features = torch.where(targ_extrap[:, None], features, features_in)
 
     return features
 
@@ -399,7 +413,6 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
 
 
 def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
-
     alpha = 1.0 / (8 * torch.pi)
     single = source_pos.ndim == 2
     if sigma != 1.0:
@@ -421,3 +434,33 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     if single:
         kernel = kernel[0]
     return kernel
+
+
+def extrap_mask(source_pos, target_pos, eps=1e-3):
+    """Only works for vertical shift."""
+    source_x_uniq = source_pos[..., 0].unique()
+    source_x_uniq = source_x_uniq[source_x_uniq.isfinite()]
+    x_low, x_high = source_x_uniq.amin() - eps, source_x_uniq.amax() + eps
+
+    targ_x, targ_y = target_pos[..., 0], target_pos[..., 1]
+
+    # targ_extrap = target_pos[..., 0].clamp(x_low, x_high) != target_pos[..., 0]
+    targ_extrap = targ_y.isfinite()
+
+    for x in source_x_uniq:
+        source_in_col = torch.isclose(source_pos[..., 0], x)
+        targ_in_col = torch.isclose(targ_x, x)
+
+        source_col_y = torch.where(source_in_col, source_pos[..., 1], torch.nan)
+        targ_col_y = torch.where(targ_in_col, targ_y, torch.nan)
+
+        source_low = source_col_y.nan_to_num(nan=torch.inf).amin(dim=1) - 1e-3
+        source_high = source_col_y.nan_to_num(nan=-torch.inf).amax(dim=1) + 1e-3
+        assert torch.isfinite(source_low).all()
+        assert torch.isfinite(source_high).all()
+
+        col_mask = (targ_col_y > source_high[:, None]).logical_or_(targ_col_y < source_low[:, None])
+        targ_extrap[targ_in_col] = targ_extrap[targ_in_col].logical_and_(col_mask[targ_in_col])
+
+    targ_extrap = torch.logical_and(targ_extrap, targ_y.isfinite())
+    return targ_extrap
