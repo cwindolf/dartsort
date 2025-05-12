@@ -24,7 +24,7 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 default_pretrained_path = str(default_pretrained_path)
 
 
-_strict_config = ConfigDict(strict=True, extra='forbid')
+_strict_config = ConfigDict(strict=True, extra="forbid")
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
@@ -380,6 +380,7 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
+    interpolation_method: str = "thinplate"
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int = 0
 
@@ -402,8 +403,8 @@ class RefinementConfig:
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 2.0
     # if None, switches to bimodality
-    merge_criterion_threshold: float | None = 0.0
-    merge_criterion: Literal[
+    criterion_threshold: float | None = 0.0
+    criterion: Literal[
         "heldout_loglik", "heldout_elbo", "loglik", "elbo", "bimodality"
     ] = "heldout_elbo"
     merge_bimodality_threshold: float = 0.05
@@ -490,45 +491,6 @@ class DARTsortInternalConfig:
     save_final_features: bool = True
 
 
-default_waveform_config = WaveformConfig()
-default_featurization_config = FeaturizationConfig()
-default_subtraction_config = SubtractionConfig()
-default_thresholding_config = ThresholdingConfig()
-default_template_config = TemplateConfig()
-default_clustering_config = ClusteringConfig()
-default_split_merge_config = SplitMergeConfig()
-coarse_template_config = TemplateConfig(superres_templates=False)
-raw_template_config = TemplateConfig(
-    realign_peaks=False, low_rank_denoising=False, superres_templates=False
-)
-unshifted_raw_template_config = TemplateConfig(
-    registered_templates=False,
-    realign_peaks=False,
-    low_rank_denoising=False,
-    superres_templates=False,
-)
-unaligned_coarse_denoised_template_config = TemplateConfig(
-    realign_peaks=False, low_rank_denoising=True, superres_templates=False
-)
-default_matching_config = MatchingConfig()
-default_motion_estimation_config = MotionEstimationConfig()
-default_computation_config = ComputationConfig()
-default_dartsort_config = DARTsortInternalConfig()
-default_refinement_config = RefinementConfig()
-
-waveforms_only_featurization_config = FeaturizationConfig(
-    do_tpca_denoise=False,
-    do_enforce_decrease=False,
-    n_residual_snips=0,
-    save_input_tpca_projs=False,
-    save_amplitudes=False,
-    do_localization=False,
-    input_waveforms_name="raw",
-    save_input_voltages=True,
-    save_input_waveforms=True,
-)
-
-
 def to_internal_config(cfg):
     from dartsort.config import DARTsortUserConfig, DeveloperConfig
 
@@ -596,8 +558,8 @@ def to_internal_config(cfg):
     refinement_config = RefinementConfig(
         signal_rank=cfg.signal_rank,
         interpolation_sigma=cfg.interpolation_bandwidth,
-        merge_criterion=cfg.merge_criterion,
-        merge_criterion_threshold=cfg.merge_criterion_threshold,
+        criterion=cfg.criterion,
+        criterion_threshold=cfg.criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
         n_total_iters=cfg.n_refinement_iters,
         n_em_iters=cfg.n_em_iters,
@@ -608,6 +570,7 @@ def to_internal_config(cfg):
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
+        interpolation_method=cfg.interpolation_method,
         laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
@@ -653,3 +616,44 @@ def to_internal_config(cfg):
         save_intermediate_features=cfg.save_intermediate_features,
         save_final_features=cfg.save_final_features,
     )
+
+
+# default configs, used as defaults for kwargs in main.py etc
+default_waveform_config = WaveformConfig()
+default_featurization_config = FeaturizationConfig()
+default_subtraction_config = SubtractionConfig()
+default_thresholding_config = ThresholdingConfig()
+default_template_config = TemplateConfig()
+default_clustering_config = ClusteringConfig()
+default_split_merge_config = SplitMergeConfig()
+default_matching_config = MatchingConfig()
+default_motion_estimation_config = MotionEstimationConfig()
+default_computation_config = ComputationConfig()
+default_dartsort_config = DARTsortInternalConfig()
+default_refinement_config = RefinementConfig()
+
+# configs which are commonly used for specific tasks
+coarse_template_config = TemplateConfig(superres_templates=False)
+raw_template_config = TemplateConfig(
+    realign_peaks=False, low_rank_denoising=False, superres_templates=False
+)
+unshifted_raw_template_config = TemplateConfig(
+    registered_templates=False,
+    realign_peaks=False,
+    low_rank_denoising=False,
+    superres_templates=False,
+)
+unaligned_coarse_denoised_template_config = TemplateConfig(
+    realign_peaks=False, low_rank_denoising=True, superres_templates=False
+)
+waveforms_only_featurization_config = FeaturizationConfig(
+    do_tpca_denoise=False,
+    do_enforce_decrease=False,
+    n_residual_snips=0,
+    save_input_tpca_projs=False,
+    save_amplitudes=False,
+    do_localization=False,
+    input_waveforms_name="raw",
+    save_input_voltages=True,
+    save_input_waveforms=True,
+)

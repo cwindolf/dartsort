@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Rectangle
+import numpy as np
+import torch
 
 
 def geomplot(
@@ -32,11 +33,41 @@ def geomplot(
     return_chans=False,
     linestyles=None,
     linewidths=None,
+    randomize=False,
+    random_seed=0,
     **plot_kwargs,
 ):
     """Plot waveforms according to geometry using channel index"""
     assert geom is not None
     ax = ax or plt.gca()
+
+    # args to numpy if necessary
+    if torch.is_tensor(waveforms):
+        waveforms = waveforms.numpy(force=True)
+    if torch.is_tensor(max_channels):
+        max_channels = max_channels.numpy(force=True)
+    if torch.is_tensor(channels):
+        channels = channels.numpy(force=True)
+    if torch.is_tensor(geom):
+        geom = geom.numpy(force=True)
+    if torch.is_tensor(c):
+        c = c.numpy(force=True)
+
+
+    # randomize if asked to
+    if randomize:
+        rg = np.random.default_rng(random_seed)
+        o = rg.permutation(len(waveforms))
+        if waveforms is not None:
+            waveforms = waveforms[o]
+        if max_channels is not None:
+            max_channels = max_channels[o]
+        if channels is not None:
+            channels = channels[o]
+        if c is not None and len(c) == len(o):
+            c = c[o]
+        if colors is not None and len(colors) == len(o):
+            colors = colors[o]
 
     # -- validate shapes
     if waveforms.ndim == 2:

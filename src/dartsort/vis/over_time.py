@@ -5,14 +5,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
 
-from .. import config
 from ..cluster import merge
 from ..templates import templates
 from ..templates.get_templates import fit_tsvd
-from ..util import data_util, spike_features, analysis
+from ..util import data_util, spike_features, analysis, internal_config
 from . import analysis_plots, scatterplots, layout, unit
 
-basic_template_config = config.TemplateConfig(
+basic_template_config = internal_config.TemplateConfig(
     realign_peaks=False, superres_templates=False
 )
 
@@ -39,11 +38,8 @@ class UnitPlotOverTime(OverTimePlot):
         super().notify_global_params(**params)
         self.unit_plot.notify_global_params(**params)
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        chunk_sorting_analyses = sorting_analysis
-        axes = panel.subplots(
-            ncols=len(chunk_sorting_analyses), sharey=self.sharey
-        )
+    def draw(self, panel, chunk_sorting_analyses, unit_id):
+        axes = panel.subplots(ncols=len(chunk_sorting_analyses), sharey=self.sharey)
         first = True
         for j, (ax, csa) in enumerate(zip(axes, chunk_sorting_analyses)):
             if unit_id not in csa.unit_ids:
@@ -67,8 +63,7 @@ class SelfDistanceOverTime(OverTimePlot):
         super().__init__()
         self.show_values = show_values
 
-    def draw(self, panel, sorting_analysis, unit_id):
-        chunk_sorting_analyses = sorting_analysis
+    def draw(self, panel, chunk_sorting_analyses, unit_id):
         imax, longax = panel.subplots(ncols=2, width_ratios=[1, 2])
         nchunks = len(chunk_sorting_analyses)
 
@@ -90,9 +85,7 @@ class SelfDistanceOverTime(OverTimePlot):
         counts = np.ravel(counts)
         chunkixs = np.array(chunkixs)
         chunks_td = templates.TemplateData(temps, chunkixs, counts)
-        chunks, dists, _, _ = merge.calculate_merge_distances(
-            chunks_td, n_jobs=0
-        )
+        chunks, dists, _, _ = merge.calculate_merge_distances(chunks_td, n_jobs=0)
 
         im = imax.imshow(
             dists,
@@ -311,9 +304,7 @@ usual_feature_getters = {
 }
 
 
-def get_template_features(
-    template_data, feature_names, scatter_template_features
-):
+def get_template_features(template_data, feature_names, scatter_template_features):
     if not scatter_template_features:
         return {}
 
@@ -355,9 +346,7 @@ def update_frame(
     # main traces
     if show_template_main_traces and chunk_template_data is not None:
         axes[0].clear()
-        analysis_plots.scatter_max_channel_waveforms(
-            axes[0], chunk_template_data, lw=1
-        )
+        analysis_plots.scatter_max_channel_waveforms(axes[0], chunk_template_data, lw=1)
         xmin, dx = geom[:, 0].min(), np.ptp(geom[:, 0])
         axes[0].set_xlim([xmin - dx / 2, xmin + 3 * dx / 2])
         axes = axes[1:]
@@ -404,9 +393,7 @@ def update_frame(
                 geom_scatter[0].set_offsets(geom - disp)
             else:
                 geom_scatter.append(
-                    axes[j].scatter(
-                        *(geom - disp).T, s=5, marker="s", color="k", lw=0
-                    )
+                    axes[j].scatter(*(geom - disp).T, s=5, marker="s", color="k", lw=0)
                 )
 
         if chunk_template_features is not None:
@@ -462,11 +449,11 @@ def make_animation(
                 depth_feature in all_spike_features
                 and sorting_analysis.motion_est is not None
             ):
-                all_spike_features[
-                    depth_feature
-                ] = sorting_analysis.motion_est.correct_s(
-                    t_s=h5["times_seconds"][()],
-                    depth_um=all_spike_features[depth_feature],
+                all_spike_features[depth_feature] = (
+                    sorting_analysis.motion_est.correct_s(
+                        t_s=h5["times_seconds"][()],
+                        depth_um=all_spike_features[depth_feature],
+                    )
                 )
     else:
         all_spike_features = {}

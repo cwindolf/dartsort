@@ -795,7 +795,6 @@ class EmbeddedNoise(torch.nn.Module):
                 xx[invalid] = np.random.default_rng(0).normal(size=invalid.sum())
                 with warnings.catch_warnings(action="ignore"):
                     glasso.fit(xx)
-                print(f"Best alpha was {glasso.alpha_=}")
                 logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
                 glasso_alpha = glasso.alpha_
 
@@ -914,6 +913,22 @@ def interpolate_residual_snippets(
     source_geom = torch.asarray(geom).to(snippets)
     source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
+    # - precompute
+    # if kriging, we need a pseudoinverse
+    skis = None
+    if interpolation_method.startswith("kriging"):
+        skis = interpolation_util.get_source_kernel_pinvs(
+            source_geom, None, sigma=sigma
+        )
+        skis = skis.broadcast_to((len(snippets), *skis.shape[1:])).to(snippets)
+    # if thin plate, same
+    tpd = None
+    if interpolation_method == "thinplate":
+        tpd = interpolation_util.thin_plate_precompute(
+            source_geom, None, sigma=sigma, source_geom_is_padded=False
+        )
+        tpd = tpd.broadcast_to((len(snippets), *tpd.shape[1:])).to(snippets)
+
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
         # statistical differences between drifty/no drift versions of the sorter
@@ -921,18 +936,12 @@ def interpolate_residual_snippets(
         assert torch.equal(source_geom, target_geom)
         target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
-        skis = None
-        if interpolation_method.startswith("kriging"):
-            skis = interpolation_util.get_source_kernel_pinvs(
-                source_geom, None, sigma=sigma
-            )
-            skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
-
         snippets = interpolation_util.kernel_interpolate(
             snippets,
             source_pos,
             target_pos,
             source_kernel_invs=skis,
+            thin_plate_data=tpd,
             sigma=sigma,
             allow_destroy=True,
             interpolation_method=interpolation_method,
@@ -971,21 +980,13 @@ def interpolate_residual_snippets(
     target_pos_shifted = target_pos - source_shifts_xy
     target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
-    # if kriging, we need a pseudoinverse
-    skis = None
-    if interpolation_method.startswith("kriging"):
-        skis = interpolation_util.get_source_kernel_pinvs(
-            source_geom, None, sigma=sigma
-        )
-        skis = skis.broadcast_to((len(snippets), *skis.shape[1:]))
-        skis = skis.to(snippets)
-
     # allocate output storage with an extra channel of NaN needed later
     snippets = interpolation_util.kernel_interpolate(
         snippets,
         source_pos,
         target_pos_shifted,
         source_kernel_invs=skis,
+        thin_plate_data=tpd,
         sigma=sigma,
         allow_destroy=True,
         interpolation_method=interpolation_method,
@@ -1054,7 +1055,7 @@ def fp_control_threshold(
     fp_units = np.unique(fp_dataframe.units)
     assert np.isin(fp_units, tp_unit_ids).all()
     has_fp = np.isin(tp_unit_ids, fp_units)
-    logger.dartsortdebug(f"{has_fp.mean()*100:.1f}% of units had FPs")
+    logger.dartsortdebug(f"{has_fp.mean() * 100:.1f}% of units had FPs")
 
     # initialize the threshold with a min factor
     threshold = max(min_threshold, min_threshold_factor * template_normsqs.min())

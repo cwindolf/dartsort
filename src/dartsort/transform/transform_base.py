@@ -1,4 +1,3 @@
-from os import pipe
 import torch
 from dartsort.util.data_util import SpikeDataset
 
@@ -25,17 +24,21 @@ class BaseWaveformModule(torch.nn.Module):
             self.register_buffer("geom", geom)
 
         self.spike_length_samples = None
-        self._hook = self.register_load_state_dict_pre_hook(self.__class__._pre_load_state)
+        self._hook = self.register_load_state_dict_pre_hook(
+            self.__class__._pre_load_state
+        )
 
     def __getstate__(self):
         self._hook.remove()
         state = self.__dict__.copy()
-        del state['_hook']
+        del state["_hook"]
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self._hook = self.register_load_state_dict_pre_hook(self.__class__._pre_load_state)
+        self._hook = self.register_load_state_dict_pre_hook(
+            self.__class__._pre_load_state
+        )
 
     def fit(self, waveforms, max_channels, recording, weights=None):
         self.spike_length_samples = waveforms.shape[1]
@@ -139,7 +142,6 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
 
 class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
-
     def __init__(
         self, pipeline=None, geom=None, channel_index=None, name=None, name_prefix=None
     ):

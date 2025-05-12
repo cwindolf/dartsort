@@ -111,8 +111,8 @@ class SpikeMixtureModel(torch.nn.Module):
         merge_linkage: str = "single",
         merge_distance_threshold: float = 3.0,
         merge_bimodality_threshold: float = 0.1,
-        merge_criterion_threshold: float | None = 0.0,
-        merge_criterion: Literal[
+        criterion_threshold: float | None = 0.0,
+        criterion: Literal[
             "heldout_loglik",
             "heldout_elbo",
             "loglik",
@@ -162,8 +162,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.distance_normalization_kind = distance_normalization_kind
         self.criterion_normalization_kind = criterion_normalization_kind
         self.merge_distance_threshold = merge_distance_threshold
-        self.merge_criterion = merge_criterion
-        self.merge_criterion_threshold = merge_criterion_threshold
+        self.criterion = criterion
+        self.criterion_threshold = criterion_threshold
         self.merge_bimodality_threshold = merge_bimodality_threshold
         self.split_bimodality_threshold = split_bimodality_threshold
         self.merge_bimodality_cut = merge_bimodality_cut
@@ -1362,32 +1362,34 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         unit_id=None,
         unit_ids=None,
-        indices_full=None,
         max_size=None,
         split_name="train",
     ):
+        # localize labels to the split
         labels = self.labels
         if split_name is not None:
             labels = self.labels[self.data.split_indices[split_name]]
 
-        if indices_full is None:
-            if unit_id is not None:
-                in_u = labels == unit_id
-            elif unit_ids is not None:
-                in_u = torch.isin(labels, unit_ids)
-            else:
-                assert False
-            (indices_full,) = in_u.nonzero(as_tuple=True)
+        # split_indices_full are inds relative to the split
+        if unit_id is not None:
+            in_u = labels == unit_id
+        elif unit_ids is not None:
+            in_u = torch.isin(labels, unit_ids)
+        else:
+            assert False
+        (split_indices_full,) = in_u.nonzero(as_tuple=True)
 
-        split_indices_full = None
-        if split_name is not None:
-            split_indices_full = indices_full
-            indices_full = self.data.split_indices[split_name][indices_full]
+        # convert to the full index space if nec
+        if split_name is not None and split_name != "full":
+            split_ixs = self.data.split_indices[split_name]
+            assert isinstance(split_ixs, torch.Tensor)
+            indices_full = split_ixs[split_indices_full]
+        else:
+            indices_full = split_indices_full
 
         split_indices = split_indices_full
         indices, choices = shrinkfit(indices_full, max_size, self.rg)
-        if split_name is not None:
-            split_indices = split_indices[choices]
+        split_indices = split_indices[choices]
 
         return indices_full, indices, split_indices
 
@@ -1397,7 +1399,6 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_ids=None,
         indices=None,
         split_indices=None,
-        indices_full=None,
         max_size=None,
         neighborhood="extract",
         split_name="train",
@@ -1411,7 +1412,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 unit_id=unit_id,
                 unit_ids=unit_ids,
                 max_size=max_size,
-                indices_full=indices_full,
                 split_name=split_name,
             )
         elif indices is None and split_indices is not None:
@@ -1719,7 +1719,7 @@ class SpikeMixtureModel(torch.nn.Module):
         distance_normalization_kind=None,
     ):
         if criterion is None:
-            criterion = self.merge_criterion
+            criterion = self.criterion
         if kmeans_n_iter is None:
             kmeans_n_iter = self.kmeans_n_iter
         logger.dartsortverbose(
@@ -1974,7 +1974,7 @@ class SpikeMixtureModel(torch.nn.Module):
         of its descendants.
         """
         if threshold is None:
-            threshold = self.merge_criterion_threshold
+            threshold = self.criterion_threshold
         if decision_algorithm is None:
             decision_algorithm = self.merge_decision_algorithm
         if min_overlap is None:
@@ -2116,10 +2116,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     overlaps[i] = brute_overlap
                     leaf_scores[leaves] = brute_improvement
 
-        logger.dartsortdebug(
-            f"Post merge: {group_ids.shape=} {np.unique(group_ids).shape=}"
-        )
-
         return Z, group_ids, improvements, overlaps, brute_indicator
 
     def _brute_merge_job(
@@ -2154,7 +2150,7 @@ class SpikeMixtureModel(torch.nn.Module):
         reevaluate_cur_liks=True,
     ):
         if criterion is None:
-            criterion = self.merge_criterion
+            criterion = self.criterion
         units = [self[cuid] for cuid in current_unit_ids]
         current_unit_ids = torch.tensor(current_unit_ids)
         n_cur = len(units)
@@ -2262,7 +2258,7 @@ class SpikeMixtureModel(torch.nn.Module):
         debug = debug_info is not None
         current_unit_ids = [unit_id]
         if criterion is None:
-            criterion = self.merge_criterion
+            criterion = self.criterion
         if max_distance is None:
             max_distance = self.merge_distance_threshold
         if decision_algorithm is None:
@@ -3093,7 +3089,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # merge behavior is either a hierarchical merge or this tree-based
         # idea, depending on the value of a parameter
         if merge_criterion is None:
-            merge_criterion = self.merge_criterion
+            merge_criterion = self.criterion
         if merge_kind is None:
             if merge_criterion == "bimodality":
                 merge_kind = "hierarchical"

@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 
 from ..cluster import split
-from ..config import raw_template_config
+from ..util.internal_config import raw_template_config
 from ..util.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
@@ -381,7 +381,7 @@ class WaveformPlot(UnitPlot):
         color="k",
         alpha=0.1,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap="winter",
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.5,
@@ -400,7 +400,7 @@ class WaveformPlot(UnitPlot):
         self.show_template = show_template
         self.template_color = template_color
         self.show_superres_templates = show_superres_templates
-        self.superres_template_cmap = superres_template_cmap
+        self.superres_template_cmap = plt.get_cmap(superres_template_cmap)
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
         self.template_index = template_index
@@ -688,7 +688,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
             neighbor_dists,
             vmin=0,
             vmax=self.dist_vmax,
-            cmap=plt.cm.RdGy,
+            cmap="RdGy",
             origin="lower",
             interpolation="none",
         )
@@ -1134,7 +1134,6 @@ _summary_job_context = None
 def _summary_init(*args):
     global _summary_job_context
     if len(args) == 1:
-
         args = cloudpickle.loads(args[0])
     _summary_job_context = SummaryJobContext(*args)
 

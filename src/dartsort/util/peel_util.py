@@ -1,11 +1,9 @@
 from pathlib import Path
 
 import h5py
-import numpy as np
-import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
-from .data_util import DARTsortSorting, batched_h5_read
+from .data_util import DARTsortSorting
 from . import job_util
 from .py_util import resolve_path
 from ..peel.peel_base import BasePeeler

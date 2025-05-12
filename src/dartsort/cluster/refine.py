@@ -78,12 +78,14 @@ def gmm_refine(
         sigma=refinement_config.interpolation_sigma,
         device=computation_config.actual_device(),
         glasso_alpha=refinement_config.glasso_alpha,
+        interpolation_method=refinement_config.interpolation_method,
     )
     data = StableSpikeDataset.from_sorting(
         sorting,
         motion_est=motion_est,
         core_radius=refinement_config.core_radius,
         max_n_spikes=refinement_config.max_n_spikes,
+        interpolation_method=refinement_config.interpolation_method,
         interpolation_sigma=refinement_config.interpolation_sigma,
         split_proportions=(
             1.0 - refinement_config.val_proportion,
@@ -103,8 +105,8 @@ def gmm_refine(
         distance_metric=refinement_config.distance_metric,
         distance_normalization_kind=refinement_config.distance_normalization_kind,
         merge_distance_threshold=refinement_config.merge_distance_threshold,
-        merge_criterion_threshold=refinement_config.merge_criterion_threshold,
-        merge_criterion=refinement_config.merge_criterion,
+        criterion_threshold=refinement_config.criterion_threshold,
+        criterion=refinement_config.criterion,
         merge_bimodality_threshold=refinement_config.merge_bimodality_threshold,
         em_converged_prop=refinement_config.em_converged_prop,
         em_converged_churn=refinement_config.em_converged_churn,

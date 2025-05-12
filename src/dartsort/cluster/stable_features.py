@@ -203,7 +203,7 @@ class StableSpikeDataset(torch.nn.Module):
         max_n_spikes=np.inf,
         discard_triaged=False,
         interpolation_sigma=20.0,
-        interpolation_method="kriging",
+        interpolation_method="thinplate",
         motion_depth_mode="channel",
         features_dataset_name="collisioncleaned_tpca_features",
         split_names=("train", "val"),
@@ -445,7 +445,6 @@ class StableSpikeDataset(torch.nn.Module):
             spike_data,
             channels,
             self.prgeom,
-            interpolation_method=self.interpolation_method,
             interpolation_sigma=self.interpolation_sigma,
         )
 
@@ -835,7 +834,7 @@ def interp_to_chans(
     spike_data,
     channels,
     prgeom,
-    interpolation_method="kriging",
+    interpolation_method="normalized",
     interpolation_sigma=20.0,
     batch_size=256,
 ):
@@ -913,4 +912,4 @@ def get_channel_reindexer(channels, n_channels):
     reindexer = channels.new_full((n_channels + 1,), channels.numel())
     (rel_ixs,) = torch.nonzero(channels < n_channels, as_tuple=True)
     reindexer[channels[rel_ixs]] = rel_ixs
-    return reindexerx
+    return reindexer
