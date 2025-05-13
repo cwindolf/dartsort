@@ -580,8 +580,8 @@ def _test_fakedata_nonn(tmp_path, threshold):
         shutil.rmtree(tmp_path / "match2")
 
 
-def test_fakedata_nonn():
-    _test_fakedata_nonn(7.0)
+def test_fakedata_nonn(tmp_path):
+    _test_fakedata_nonn(tmp_path, 7.0)
 
 
 @pytest.mark.parametrize("rec_type", ["static", "drifting"])

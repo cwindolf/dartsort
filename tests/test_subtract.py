@@ -408,9 +408,9 @@ def _test_small_nonn(tmp_path, nn_localization=False):
             assert np.unique(lens).size == 1
 
 
-def test_small_nonn():
-    _test_small_nonn(False)
-    _test_small_nonn(True)
+def test_small_nonn(tmp_path):
+    _test_small_nonn(tmp_path, False)
+    _test_small_nonn(tmp_path, True)
 
 
 def small_default_config(tmp_path, extract_radius=200):
@@ -484,16 +484,9 @@ def small_default_config(tmp_path, extract_radius=200):
             assert lens[0] == len(gt_times)
 
 
-def test_small_default_config():
-    small_default_config()
+def test_small_default_config(tmp_path):
+    small_default_config(tmp_path)
 
 
-def test_small_default_config_subex():
-    small_default_config(extract_radius=100.0)
-
-
-if __name__ == "__main__":
-    test_fakedata_nonn()
-    test_small_nonn()
-    test_small_default_config()
-    test_small_default_config_subex()
+def test_small_default_config_subex(tmp_path):
+    small_default_config(tmp_path, extract_radius=100.0)
