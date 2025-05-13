@@ -112,12 +112,11 @@ def simulate_moppca(
         ]
         clus_neighbs = np.array(clus_neighbs)
         channels = clus_neighbs[labels]
+    channels = torch.asarray(channels, dtype=torch.long)
 
     if t_missing:
-        channels = torch.asarray(channels)
         x = torch.take_along_dim(y, channels.unsqueeze(1), dim=2)
 
-    channels = torch.asarray(channels)
     neighbs = dartsort.SpikeNeighborhoods.from_channels(channels, nc)
 
     init_labels = labels.clone()

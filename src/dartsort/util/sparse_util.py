@@ -153,7 +153,7 @@ def topk_sparse_insert(row, row_column_indices, row_data, topk):
 
 
 @numba.njit(
-    "i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]",
+    ["i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]", "i4,i8[::1],f4[::1],i4[:,::1],f4[:,::1]"]
     error_model="numpy",
     nogil=True,
     parallel=True,

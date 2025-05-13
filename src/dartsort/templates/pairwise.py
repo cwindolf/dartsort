@@ -195,7 +195,7 @@ class CompressedPairwiseConv:
 
     @classmethod
     def from_h5(cls, hdf5_filename, in_memory=True):
-        ff = [f for f in fields(cls) if f.name not in ("in_memory", "device")]
+        ff = [f for f in fields(cls) if f.name not in ("in_memory", "device", "_h5")]
         if in_memory:
             with h5py.File(hdf5_filename, "r") as h5:
                 data = {f.name: torch.from_numpy(h5[f.name][:]) for f in ff}
