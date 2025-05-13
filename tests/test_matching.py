@@ -73,7 +73,6 @@ def _test_tiny(tmp_path, scaling=0.0):
                 motion_est=motion_util.IdentityMotionEstimate(),
                 save_folder=tmp_path,
                 overwrite=True,
-                with_locs=True,
             )
 
             matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -194,7 +193,6 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 motion_est=motion_util.IdentityMotionEstimate(),
                 save_folder=tmp_path,
                 overwrite=True,
-                with_locs=True,
             )
 
             matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -358,7 +356,6 @@ def static_tester(tmp_path, up_factor=1):
                 motion_est=motion_util.IdentityMotionEstimate(),
                 save_folder=tmp_path,
                 overwrite=True,
-                with_locs=True,
             )
 
             matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(

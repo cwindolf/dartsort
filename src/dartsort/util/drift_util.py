@@ -798,8 +798,8 @@ def get_shift_and_unit_pairs(
         cooccurrence = np.ones((na, nb), dtype=bool)
         return shift_index_a, shift_index_b, cooccurrence
 
-    reg_depths_um_a = template_data_a.registered_template_depths_um
-    reg_depths_um_b = template_data_b.registered_template_depths_um
+    reg_depths_um_a = template_data_a.registered_depths_um()
+    reg_depths_um_b = template_data_b.registered_depths_um()
     same = np.array_equal(reg_depths_um_a, reg_depths_um_b)
     if same:
         reg_depths_um = reg_depths_um_a

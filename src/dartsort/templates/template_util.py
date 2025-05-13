@@ -48,8 +48,6 @@ def get_registered_templates(
     spike_depths_um,
     geom,
     motion_est,
-    registered_template_depths_um=None,
-    localization_radius_um=100,
     trough_offset_samples=42,
     spike_length_samples=121,
     spikes_per_unit=500,
@@ -94,15 +92,6 @@ def get_registered_templates(
         n_jobs=n_jobs,
         show_progress=show_progress,
     )
-
-    # and, localize them since users of these templates will want locations
-    registered_template_depths_um = get_template_depths(
-        results["templates"],
-        registered_geom,
-        localization_radius_um=localization_radius_um,
-    )
-
-    results["registered_template_depths_um"] = registered_template_depths_um
     results["registered_geom"] = registered_geom
     results["registered_templates"] = results["templates"]
 
@@ -152,15 +141,6 @@ def weighted_average(unit_ids, templates, weights):
 
 
 # -- template drift handling
-
-
-def get_template_depths(templates, geom, localization_radius_um=100):
-    template_locs = localize_waveforms(
-        templates, geom=geom, radius=localization_radius_um
-    )
-    template_depths_um = template_locs["z_abs"]
-
-    return template_depths_um
 
 
 def templates_at_time(

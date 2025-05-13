@@ -1,5 +1,8 @@
+import contextlib
 import signal
 import time
+import os
+import threading
 
 
 class timer:
@@ -35,4 +38,8 @@ class NoKeyboardInterrupt:
             self.old_handler(*self.sig)
 
 
-noint = NoKeyboardInterrupt()
+
+if threading.current_thread() is threading.main_thread() and os.name == "posix":
+    noint = NoKeyboardInterrupt()
+else:
+    noint = contextlib.nullcontext()

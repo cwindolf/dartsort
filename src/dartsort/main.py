@@ -285,7 +285,6 @@ def match(
             overwrite=overwrite,
             save_npz_name=template_npz_filename,
             computation_config=computation_config,
-            with_locs=motion_est is not None,
         )
 
     # instantiate peeler

@@ -9,7 +9,7 @@ from ..util.internal_config import default_waveform_config
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
-from .template_util import get_realigned_sorting, get_template_depths, weighted_average
+from .template_util import get_realigned_sorting, weighted_average
 
 _motion_error_prefix = (
     "If template_config has registered_templates==True "
@@ -32,13 +32,37 @@ class TemplateData:
     raw_std_dev: np.ndarray | None = None
 
     registered_geom: np.ndarray | None = None
-    registered_template_depths_um: np.ndarray | None = None
-    localization_radius_um: float = 100.0
     trough_offset_samples: int = 42
     spike_length_samples: int = 121
 
     # always set if initialized from a sorting which has one
     parent_sorting_hdf5_path: str | None = None
+
+    def main_channels(self):
+        amp_vecs = np.nan_to_num(np.ptp(self.templates, axis=1), nan=-np.inf)
+        if self.spike_counts_by_channel is not None:
+            amp_vecs *= np.sqrt(self.spike_counts_by_channel)
+        return amp_vecs.argmax(axis=1)
+
+    def template_locations(self, mode="channel", radius=100.0):
+        assert mode in ("localization", "channel")
+
+        if mode == "channel":
+            assert self.registered_geom is not None
+            return self.registered_geom[self.main_channels()]
+
+        assert mode == "localization"
+        rdepths = localize_waveforms(
+            waveforms=self.templates,
+            geom=self.registered_geom,
+            main_channels=self.main_channels(),
+            radius=radius,
+        )
+        rdepths = np.c_[rdepths["x"], rdepths["z_abs"]]
+        return rdepths
+
+    def registered_depths_um(self, mode="channel", radius=100.0):
+        return self.template_locations(mode=mode, radius=radius)[:, 1]
 
     @classmethod
     def from_npz(cls, npz_path):
@@ -58,10 +82,6 @@ class TemplateData:
         )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom
-        if self.registered_template_depths_um is not None:
-            to_save["registered_template_depths_um"] = (
-                self.registered_template_depths_um
-            )
         if self.spike_counts_by_channel is not None:
             to_save["spike_counts_by_channel"] = self.spike_counts_by_channel
         if self.raw_std_dev is not None:
@@ -93,18 +113,12 @@ class TemplateData:
                 self.raw_std_dev[subset] if self.raw_std_dev is not None else None
             ),
             registered_geom=self.registered_geom,
-            registered_template_depths_um=(
-                self.registered_template_depths_um[subset]
-                if self.registered_template_depths_um is not None
-                else None
-            ),
-            localization_radius_um=self.localization_radius_um,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
         )
 
-    def coarsen(self, with_locs=True):
-        """Weighted average all templates that share a unit id and re-localize."""
+    def coarsen(self):
+        """Weighted average all templates that share a unit id."""
         # update templates
         unit_ids_unique, flat_ids = np.unique(self.unit_ids, return_inverse=True)
         templates = weighted_average(flat_ids, self.templates, self.spike_counts)
@@ -113,31 +127,12 @@ class TemplateData:
         spike_counts = np.zeros(len(templates))
         np.add.at(spike_counts, flat_ids, self.spike_counts)
 
-        # re-localize
-        registered_template_depths_um = None
-        if with_locs and self.registered_geom is not None:
-            registered_template_depths_um = get_template_depths(
-                templates,
-                self.registered_geom,
-                localization_radius_um=self.localization_radius_um,
-            )
-
         return replace(
             self,
             templates=templates,
             unit_ids=unit_ids_unique,
             spike_counts=spike_counts,
-            registered_template_depths_um=registered_template_depths_um,
         )
-
-    def template_locations(self):
-        template_locations = localize_waveforms(
-            self.templates,
-            self.registered_geom,
-            main_channels=np.ptp(self.templates, 1).argmax(1),
-            radius=self.localization_radius_um,
-        )
-        return template_locations
 
     def unit_mask(self, unit_id):
         return np.isin(self.unit_ids, unit_id)
@@ -157,7 +152,6 @@ class TemplateData:
         motion_est=None,
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
-        with_locs=False,
         units_per_job=8,
         tsvd=None,
         computation_config=None,
@@ -172,7 +166,6 @@ class TemplateData:
             motion_est=motion_est,
             save_npz_name=save_npz_name,
             localizations_dataset_name=localizations_dataset_name,
-            with_locs=with_locs,
             units_per_job=units_per_job,
             tsvd=tsvd,
             computation_config=computation_config,
@@ -191,7 +184,6 @@ class TemplateData:
         motion_est=None,
         save_npz_name="template_data.npz",
         localizations_dataset_name="point_source_localizations",
-        with_locs=False,
         units_per_job=8,
         tsvd=None,
         computation_config=None,
@@ -199,6 +191,7 @@ class TemplateData:
         if computation_config is None:
             computation_config = job_util.get_global_computation_config()
 
+        npz_path = None
         if save_folder is not None:
             save_folder = Path(save_folder)
             if not save_folder.exists():
@@ -234,12 +227,13 @@ class TemplateData:
             )
 
         # load motion features if necessary
+        geom = recording.get_channel_locations()
+        spike_depths_um = None
         if motion_aware and has_localizations:
             # load spike depths
             # TODO: relying on this index feels wrong
             spike_depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
             spike_x_um = sorting.extra_features[localizations_dataset_name][:, 0]
-            geom = recording.get_channel_locations()
 
         kwargs = dict(
             trough_offset_samples=trough_offset_samples,
@@ -254,10 +248,13 @@ class TemplateData:
             device=computation_config.actual_device(),
             units_per_job=units_per_job,
         )
+        rgeom = geom
         if template_config.registered_templates and motion_est is not None:
-            kwargs["registered_geom"] = drift_util.registered_geometry(
+            rgeom = drift_util.registered_geometry(
                 geom, motion_est=motion_est
             )
+            kwargs["registered_geom"] = rgeom
+            assert spike_depths_um is not None
             kwargs["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
                 spike_depths_um,
                 geom,
@@ -301,42 +298,23 @@ class TemplateData:
 
         # handle registered templates
         if template_config.registered_templates and motion_est is not None:
-            registered_template_depths_um = None
-            if with_locs:
-                registered_template_depths_um = get_template_depths(
-                    results["templates"],
-                    kwargs["registered_geom"],
-                    localization_radius_um=template_config.registered_template_localization_radius_um,
-                )
             obj = cls(
                 results["templates"],
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
                 spike_counts_by_channel=results["spike_counts_by_channel"],
-                registered_geom=kwargs["registered_geom"],
-                registered_template_depths_um=registered_template_depths_um,
-                localization_radius_um=template_config.registered_template_localization_radius_um,
+                registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
                 parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         else:
-            geom = recording.get_channel_locations()
-            depths_um = None
-            if with_locs:
-                depths_um = get_template_depths(
-                    results["templates"],
-                    geom,
-                    localization_radius_um=template_config.registered_template_localization_radius_um,
-                )
             obj = cls(
                 results["templates"],
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
                 spike_counts_by_channel=results["spike_counts_by_channel"],
-                registered_geom=geom,
-                registered_template_depths_um=depths_um,
-                localization_radius_um=template_config.registered_template_localization_radius_um,
+                registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
                 parent_sorting_hdf5_path=parent_sorting_hdf5_path,
@@ -359,7 +337,6 @@ def get_chunked_templates(
     motion_est=None,
     save_npz_name="chunked_template_data.npz",
     localizations_dataset_name="point_source_localizations",
-    with_locs=True,
     units_per_job=8,
     tsvd=None,
     random_seed=0,
@@ -420,7 +397,6 @@ def get_chunked_templates(
         motion_est=motion_est,
         save_npz_name=save_npz_name,
         localizations_dataset_name=localizations_dataset_name,
-        with_locs=with_locs,
         units_per_job=units_per_job,
         computation_config=computation_config,
         waveform_config=waveform_config,
@@ -436,16 +412,12 @@ def get_chunked_templates(
         # chunk_unit_ids = np.flatnonzero(label_to_sorting_index == i)
         # chunk_mask = np.flatnonzero(np.isin(full_template_data.unit_ids, chunk_unit_ids))
         orig_unit_ids = label_to_original_label[full_template_data.unit_ids[chunk_mask]]
-        depths = None
-        if full_template_data.registered_template_depths_um is not None:
-            depths = full_template_data.registered_template_depths_um[chunk_mask]
         chunk_template_data.append(
             replace(
                 full_template_data,
                 templates=full_template_data.templates[chunk_mask],
                 unit_ids=orig_unit_ids,
                 spike_counts=full_template_data.spike_counts[chunk_mask],
-                registered_template_depths_um=depths,
             )
         )
 

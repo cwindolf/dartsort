@@ -273,7 +273,6 @@ class TemplateConfig:
     # -- template construction parameters
     # registered templates?
     registered_templates: bool = True
-    registered_template_localization_radius_um: float = 100.0
 
     # superresolved templates
     superres_templates: bool = False
@@ -542,7 +541,6 @@ def to_internal_config(cfg):
         subtraction_denoising_config=subtraction_denoising_config,
     )
     template_config = TemplateConfig(
-        registered_template_localization_radius_um=cfg.localization_radius_um,
         denoising_fit_radius=cfg.fit_radius_um,
         realign_shift_ms=cfg.alignment_ms,
     )

@@ -116,7 +116,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.is_drifting = motion_est is not None
         self.motion_est = motion_est
         self.registered_geom = template_data.registered_geom
-        self.registered_template_depths_um = template_data.registered_template_depths_um
+        self.registered_template_depths_um = template_data.registered_depths_um()
         if self.is_drifting:
             self.fixed_output_data.append(
                 ("registered_geom", template_data.registered_geom)
@@ -325,7 +325,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 dtype
             )
             self.objective_template_depths_um = (
-                objective_temp_data.registered_template_depths_um
+                objective_temp_data.registered_depths_um()
             )
             self.register_buffer(
                 "objective_temporal_components", torch.tensor(temporal_components)

@@ -99,7 +99,6 @@ def test_drifting_templates():
                 spike_depths_um=[0, 0, 0, 0],
                 geom=geom,
                 motion_est=me,
-                registered_template_depths_um=[0, 0],
                 trough_offset_samples=0,
                 spike_length_samples=2,
                 realign_peaks=False,
@@ -211,7 +210,6 @@ def test_pconv():
         unit_ids=np.array([0, 0, 1, 1, 2]),
         spike_counts=np.ones(5),
         registered_geom=None,
-        registered_template_depths_um=None,
     )
     svd_compressed = template_util.svd_compress_templates(temps, rank=1)
     ctempup = template_util.compressed_upsampled_templates(
@@ -257,7 +255,6 @@ def test_pconv():
         unit_ids=np.array([0, 0, 1, 1, 2]),
         spike_counts=np.ones(5),
         registered_geom=reg_geom,
-        registered_template_depths_um=np.zeros(5),
     )
     geom = np.c_[np.zeros(c), np.arange(1, c + 1).astype(float)]
     motion_est = get_motion_estimate(

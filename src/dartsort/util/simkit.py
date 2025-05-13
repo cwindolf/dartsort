@@ -522,7 +522,6 @@ class SimulatedRecording:
             registered_geom=rgeom,
             trough_offset_samples=self.template_simulator.trough_offset_samples(),
             spike_length_samples=self.template_simulator.spike_length_samples(),
-            registered_template_depths_um=pos,
         )
 
     def to_dartsort_sorting(self, sorting=None):
