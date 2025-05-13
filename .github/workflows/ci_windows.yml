@@ -1,0 +1,58 @@
+name: CI (Windows)
+
+on:
+  workflow_dispatch:
+    branches:
+      - "*"
+
+jobs:
+
+  build:
+    runs-on: "windows-latest"
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: dartsort
+
+      - name: Setup Mamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: dartsort/environment.yml
+          init-shell: bash
+        
+      - name: Install Pip Requirements
+        run: |
+          pip install -r dartsort/requirements-ci.txt
+        shell: bash
+
+      - name: Get DREDge
+        uses: actions/checkout@v4
+        with:
+          repository: evarol/dredge
+          path: dredge
+
+      - name: Install DREDge
+        run: |
+          pip install dredge/
+        shell: bash
+
+      - name: Install DARTsort
+        run: |
+          pip install -e dartsort/
+        shell: bash
+
+      - name: Pytest
+        run: |
+          pytest --log-level=15 --cov=dartsort/src/dartsort  --cov-config=dartsort/pyproject.toml --cov-report lcov --cov-report term dartsort/tests/
+        shell: bash
+
+      - name: Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          path-to-lcov: coverage.lcov
