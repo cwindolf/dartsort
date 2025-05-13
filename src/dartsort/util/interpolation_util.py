@@ -194,6 +194,7 @@ def thin_plate_precompute(source_geom, channel_index, sigma, source_geom_is_padd
     n_source_chans = len(source_geom) - source_geom_is_padded
     if channel_index is None:
         channel_index = torch.arange(n_source_chans)[None]
+        channel_index = channel_index.to(source_geom.device)
     else:
         assert len(channel_index) == n_source_chans
 
@@ -214,7 +215,7 @@ def thin_plate_precompute(source_geom, channel_index, sigma, source_geom_is_padd
         M = thin_plate_greens(source_pos)
 
         # design matrix
-        N = torch.cat([source_pos, torch.ones(npres)[:, None]], dim=1)
+        N = torch.cat([source_pos, source_pos.new_ones((npres, 1))], dim=1)
 
         Ltop = torch.cat([M, N], dim=1)
         Lbot = torch.cat([N.T, zeros3], dim=1)
@@ -232,7 +233,7 @@ def thin_plate_solve(source_pos, target_pos, Linv, features, sigma):
     Y = torch.cat([features, features.new_zeros((n, rank, 3))], dim=2)
     AB = torch.einsum("nij,npj->npi", Linv, Y)
     A = AB[..., :-3]
-    N = torch.cat([target_pos / sigma, torch.ones_like(target_pos[:, :, :1])], dim=2)
+    N = torch.cat([target_pos / sigma, torch.ones_like(target_pos[..., :1])], dim=2)
     offset = torch.einsum("npd,nid->npi", AB[..., -3:], N)
 
     pred = torch.baddbmm(offset, A, G)
