@@ -1,4 +1,5 @@
 import dataclasses
+from typing import Generator
 import warnings
 
 import numpy as np
@@ -292,7 +293,7 @@ def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
     load_feature_names=('times_seconds',),
-) -> list[str, DARTsortSorting]:
+) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered."""
     h5s = [sorting_dir / 'subtraction.h5']
     for j in range(1, 100):
@@ -301,7 +302,6 @@ def load_dartsort_step_sortings(
         else:
             break
 
-    step_sortings = []
     for step, h5 in enumerate(h5s):
         if not h5.exists():
             continue
@@ -313,23 +313,15 @@ def load_dartsort_step_sortings(
         if h5.stem == 'subtraction':
             npy = sorting_dir / 'initial_labels.npy'
             if npy.exists():
-                step_sortings.append(
-                    ('initial', dataclasses.replace(st0, labels=np.load(npy)))
-                )
+                yield ('initial', dataclasses.replace(st0, labels=np.load(npy)))
         else:
-            step_sortings.append((h5.stem, st0))
+            yield (h5.stem, st0)
 
         # refinement steps
         for npy in sorted(sorting_dir.glob(f"refined{step}refstep*.npy")):
-            step_sortings.append(
-                (npy.stem.removesuffix("_labels"), dataclasses.replace(st0, labels=np.load(npy)))
-            )
+            yield (npy.stem.removesuffix("_labels"), dataclasses.replace(st0, labels=np.load(npy)))
 
         # refinement final
         npy = sorting_dir / f'refined{step}_labels.npy'
         if npy.exists():
-            step_sortings.append(
-                (f'refined{step}', dataclasses.replace(st0, labels=np.load(npy)))
-            )
-
-    return step_sortings
+            yield (f'refined{step}', dataclasses.replace(st0, labels=np.load(npy)))
