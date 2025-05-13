@@ -30,10 +30,8 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: dartsort/environment.yml
-          init-shell: >-
-            bash
-            powershell
-        
+          init-shell: bash
+          
       - name: Install dependencies
         run: |
           python -m pip install -U pip  # seems necessary to make sure pip is my pip
@@ -43,4 +41,4 @@ jobs:
 
       - name: Pytest
         run: |
-          pytest --log-level=15 dartsort/tests/
+          pytest --maxfail=30 --log-level=15 dartsort/tests/
