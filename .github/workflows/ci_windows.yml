@@ -43,10 +43,4 @@ jobs:
 
       - name: Pytest
         run: |
-          pytest --log-level=15 --cov=dartsort/src/dartsort  --cov-config=dartsort/pyproject.toml --cov-report lcov --cov-report term dartsort/tests/
-        shell: micromamba-shell {0}
-
-      - name: Coveralls
-        uses: coverallsapp/github-action@master
-        with:
-          path-to-lcov: coverage.lcov
+          pytest --log-level=15 dartsort/tests/
