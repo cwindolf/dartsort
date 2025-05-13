@@ -38,7 +38,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         coarse_objective=True,
         temporal_upsampling_factor=8,
         upsampling_peak_window_radius=8,
-        min_channel_amplitude=1.0,
+        min_channel_amplitude=0.0,
         refractory_radius_frames=10,
         amplitude_scaling_variance=0.0,
         amplitude_scaling_boundary=0.5,

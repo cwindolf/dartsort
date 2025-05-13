@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
@@ -62,7 +63,6 @@ def _test_tiny(tmp_path, scaling=0.0):
     with tempfile.TemporaryDirectory() as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
-
             template_config = dartsort.TemplateConfig(
                 low_rank_denoising=False,
                 superres_bin_min_spikes=0,
@@ -588,6 +588,31 @@ def _test_fakedata_nonn(threshold):
 
 def test_fakedata_nonn():
     _test_fakedata_nonn(7.0)
+
+
+@pytest.mark.parametrize("rec_type", ["static", "drifting"])
+@pytest.mark.parametrize("threshold", ["check", "fp_control"])
+def test_with_simkit(sim_recordings, rec_type, threshold):
+    sim = sim_recordings[rec_type]
+    rec = sim["rec"]
+    template_data = sim["template_data"]
+    motion_est = sim["motion_est"]
+    gt_st = sim["sorting"]
+
+    with tempfile.TemporaryDirectory() as tdir:
+        if threshold == "check":
+            threshold = 0.5 * np.sqrt(np.square(template_data.templates).sum((1, 2)).min())
+        st = dartsort.match(
+            recording=rec,
+            sorting=gt_st,
+            output_dir=tdir,
+            motion_est=motion_est,
+            template_data=template_data,
+            featurization_config=dartsort.FeaturizationConfig(skip=True),
+            matching_config=dartsort.MatchingConfig(threshold=threshold),
+        )
+        print(f"{threshold=} {st=}")
+        assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.1
 
 
 if __name__ == "__main__":

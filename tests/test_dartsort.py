@@ -8,24 +8,11 @@ import dartsort
 from dartsort.util import simkit, noise_util
 
 
-@pytest.fixture
-def sim_recording(tmp_path):
-    geom = simkit.generate_geom()
-    rec_sim = simkit.SimulatedRecording(
-        duration_samples=10 * 30_000,
-        n_units=40,
-        template_simulator=simkit.PointSource3ExpSimulator(geom),
-        noise=noise_util.WhiteNoise(len(geom)),
-        min_fr_hz=20.0,
-        max_fr_hz=31.0,
-        temporal_jitter=4,
-    )
-    rec = rec_sim.simulate(Path(tmp_path) / "sim.h5")
-    return rec
-
-
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(sim_recording, do_motion_estimation):
+def test_fakedata_nonn(sim_recordings, do_motion_estimation):
+    sim_recording = sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
+    sim_recording = sim_recording["rec"]
+
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
@@ -65,7 +52,9 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 
 
 @pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
-def test_fakedata(sim_recording, sdcfg):
+def test_fakedata(sim_recordings, sdcfg):
+    sim_recording = sim_recordings["static"]["rec"]
+
     with tempfile.TemporaryDirectory() as tempdir:
         cfg = dartsort.DARTsortInternalConfig(
             subtraction_config=dartsort.SubtractionConfig(
@@ -99,7 +88,7 @@ def test_fakedata(sim_recording, sdcfg):
 
 def test_cli_help():
     # at least make sure the cli can do -h
-    res = subprocess.run(["dartsort", "-h"])
+    res = subprocess.run(["dartsort", "-h"], capture_output=True)
     assert not res.returncode
 
 

@@ -309,6 +309,7 @@ def match(
         show_progress=show_progress,
         computation_config=computation_config,
     )
+    assert sorting is not None
     return sorting
 
 
