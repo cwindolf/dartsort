@@ -60,8 +60,8 @@ def _test_tiny(tmp_path, scaling=0.0):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
+    with tempfile.TemporaryDirectory(dir=tmp_path) as tdir:
+        rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
             template_config = dartsort.TemplateConfig(
                 low_rank_denoising=False,
@@ -71,7 +71,7 @@ def _test_tiny(tmp_path, scaling=0.0):
                 *no_overlap_recording_sorting(templates),
                 template_config,
                 motion_est=motion_util.IdentityMotionEstimate(),
-                save_folder=tmp_path,
+                save_folder=tdir,
                 overwrite=True,
             )
 
@@ -87,7 +87,7 @@ def _test_tiny(tmp_path, scaling=0.0):
                 template_data,
                 motion_est=motion_util.IdentityMotionEstimate(),
             )
-            matcher.precompute_peeling_data(tmp_path)
+            matcher.precompute_peeling_data(tdir)
             res = matcher.peel_chunk(
                 torch.from_numpy(rec.get_traces().copy()),
                 return_residual=True,
@@ -133,6 +133,8 @@ def _test_tiny(tmp_path, scaling=0.0):
             print(f'{torch.square(res["conv"]).mean()=}')
             assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
             assert torch.all(res["scores"] > 0)
+
+        del matcher, rec1, rec, pconv # trying to help windows runner?
 
 
 def test_tiny_unscaled(tmp_path):
@@ -180,7 +182,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path) as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
             template_config = dartsort.TemplateConfig(
@@ -191,7 +193,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 *no_overlap_recording_sorting(templates),
                 template_config,
                 motion_est=motion_util.IdentityMotionEstimate(),
-                save_folder=tmp_path,
+                save_folder=tdir,
                 overwrite=True,
             )
 
@@ -207,7 +209,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 template_data,
                 motion_est=motion_util.IdentityMotionEstimate(),
             )
-            matcher.precompute_peeling_data(tmp_path)
+            matcher.precompute_peeling_data(tdir)
 
             lrt = template_util.svd_compress_templates(
                 template_data.templates, rank=matcher.svd_compression_rank
@@ -284,6 +286,8 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
             print(f'{torch.square(res["conv"]).mean()=}')
             assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
             assert torch.all(res["scores"] > 0)
+
+        del matcher, rec1, rec, pconv, pconv2 # trying to help windows runner?
 
 
 def test_tiny_up_1_0(tmp_path):

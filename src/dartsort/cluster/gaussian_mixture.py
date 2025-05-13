@@ -4178,7 +4178,10 @@ def quick_indices(rg, unit_ids, labels, split_indices=None, max_sizes=4096):
     return orig_indices, in_split_indices
 
 
-sig = "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])"
+sig = [
+    "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])",
+    "void(i4, i4[::1], i4[::1], i4[:, ::1], i4[::1])",  # windows runner
+]
 
 
 @numba.njit(sig, error_model="numpy", nogil=True)
