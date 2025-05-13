@@ -1,9 +1,12 @@
-import signal
-import time
+import contextlib
 from importlib.metadata import Distribution
-import sys
 import json
+import os
 from pathlib import Path
+import signal
+import sys
+import threading
+import time
 
 
 # check if we are installed in editable mode
@@ -54,7 +57,10 @@ class NoKeyboardInterrupt:
             self.old_handler(*self.sig)
 
 
-delay_keyboard_interrupt = NoKeyboardInterrupt()
+if threading.current_thread() is threading.main_thread() and os.name == "posix":
+    delay_keyboard_interrupt = NoKeyboardInterrupt()
+else:
+    delay_keyboard_interrupt = contextlib.nullcontext()
 
 
 def int_or_inf(s):

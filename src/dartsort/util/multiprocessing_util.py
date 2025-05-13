@@ -1,6 +1,7 @@
-import multiprocessing
 from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+import multiprocessing
+import os
 from multiprocessing import get_context
 import queue
 
@@ -161,7 +162,7 @@ def get_pool(
 
     if isinstance(cls, str):
         if cls == "threading_unless_multigpu":
-            if n_jobs > 1 and multi_gpu:
+            if (n_jobs > 1 and multi_gpu) or os.name == 'nt':
                 cls = "ProcessPoolExecutor"
             else:
                 cls = "ThreadPoolExecutor"
