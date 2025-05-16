@@ -4147,7 +4147,7 @@ def quick_indices(rg, unit_ids, labels, split_indices=None, max_sizes=4096):
     counts_so_far[unit_ids] = 0
     n_active = unit_ids.size
     reordered_indices = np.full(
-        (unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1
+        (unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1, dtype=labels.dtype
     )
 
     full_max_sizes = np.zeros(unit_ids.max() + 1, dtype=np.int32)
