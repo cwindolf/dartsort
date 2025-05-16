@@ -195,7 +195,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
         labels = self.data.original_sorting.labels
-        self.labels = torch.asarray(labels, copy=True)
+        self.labels = torch.asarray(labels, dtype=torch.long, copy=True)
 
         # this is populated by self.m_step()
         self._units = torch.nn.ModuleDict()
@@ -1029,7 +1029,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # intersection
         n_units = max(log_liks.shape[0] - self.with_noise_unit, original.max() + 1)
-        intersection = torch.zeros(n_units, dtype=int)
+        intersection = torch.zeros(n_units, dtype=torch.long)
         spiketorch.add_at_(intersection, assignments[kept], same[kept])
 
         # union by include/exclude
@@ -1075,8 +1075,8 @@ class SpikeMixtureModel(torch.nn.Module):
         n_units = 0
         if label_ids.numel():
             n_units = max(label_ids.max().item() + 1, len(self._units))
-        keep = torch.zeros(n_units, dtype=bool)
-        countsf = torch.zeros(n_units, dtype=int)
+        keep = torch.zeros(n_units, dtype=torch.bool)
+        countsf = torch.zeros(n_units, dtype=torch.long)
         keep[label_ids] = big_enough
         countsf[label_ids] = counts
         blank = None
@@ -1567,7 +1567,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 (len(spike_indices),), -torch.inf, device=self.data.device
             )
         else:
-            spike_indices = torch.empty(ns, dtype=int)
+            spike_indices = torch.empty(ns, dtype=torch.long)
             offset = 0
             log_likelihoods = torch.empty(ns)
 

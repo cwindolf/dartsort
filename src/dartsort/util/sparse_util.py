@@ -490,7 +490,7 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
 
     # see scipy csc argmin/argmax for reference here. this is just numba-ing
     # a special case of that code which has a python hot loop.
-    assignments = np.full(nnz, -1)
+    assignments = np.full(nnz, -1, dtype=np.int64)
     # these will be filled with logsumexps
     likelihoods = np.full(nnz, -np.inf, dtype=np.float32)
 
