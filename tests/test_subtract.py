@@ -5,7 +5,11 @@ import h5py
 import numpy as np
 import spikeinterface.core as sc
 import torch
-from dartsort.util.internal_config import FeaturizationConfig, SubtractionConfig, ComputationConfig
+from dartsort.util.internal_config import (
+    FeaturizationConfig,
+    SubtractionConfig,
+    ComputationConfig,
+)
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.util import waveform_util
@@ -117,7 +121,9 @@ def test_fakedata_nonn(tmp_path):
     assert channel_index.max() == len(geom)
     assert channel_index.min() == 0
 
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         print("first one")
         torch.manual_seed(0)
         st = subtract(
@@ -199,7 +205,9 @@ def test_fakedata_nonn(tmp_path):
 
     for ccfg in (two_jobs_cfg, two_jobs_cfg_spawn):
         print(f"---- {ccfg=}")
-        with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+        with tempfile.TemporaryDirectory(
+            dir=tmp_path, ignore_cleanup_errors=True
+        ) as tempdir:
             print("parallel first one")
             torch.manual_seed(0)
             st = subtract(
@@ -296,7 +304,9 @@ def test_fakedata_nonn(tmp_path):
     nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
     print(subconf)
     print(nolocfeatconf)
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         st0 = subtract(
             recording=rec,
             output_dir=tempdir,
@@ -305,7 +315,9 @@ def test_fakedata_nonn(tmp_path):
         )
         ns0 = len(st0)
 
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         sta = subtract(
             recording=rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
             output_dir=tempdir,
@@ -353,7 +365,9 @@ def _test_small_nonn(tmp_path, nn_localization=False):
     )
 
     print("No parallel")
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         st = subtract(
             recording=rec,
             output_dir=tempdir,
@@ -370,7 +384,9 @@ def _test_small_nonn(tmp_path, nn_localization=False):
             assert np.unique(lens).size == 1
 
     print("CPU parallel")
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         # test default config
         st = subtract(
             recording=rec,
@@ -389,7 +405,9 @@ def _test_small_nonn(tmp_path, nn_localization=False):
             assert np.unique(lens).size == 1
 
     print("Yes parallel")
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         # test default config
         st = subtract(
             recording=rec,
@@ -441,7 +459,9 @@ def small_default_config(tmp_path, extract_radius=200):
     cfg = SubtractionConfig(detection_threshold=15.0)
     fcfg = FeaturizationConfig(extract_radius=extract_radius, n_residual_snips=8)
 
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tempdir:
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
         # test default config
         print("test_small_default_config first")
         st = subtract(

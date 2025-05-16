@@ -1,6 +1,5 @@
 import shutil
 import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -222,9 +221,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
         assert np.array_equal(
             matcher.objective_spatial_components, lrt.spatial_components
         )
-        assert np.array_equal(
-            matcher.objective_singular_values, lrt.singular_values
-        )
+        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
         assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
         assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
@@ -239,9 +236,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 tempupb = tempup.compressed_upsampled_templates[
                     tempup.compressed_upsampling_map[ib, up]
                 ]
-                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[
-                    ib
-                ]
+                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
                 tc = (templates[ia] * tupb).sum()
 
                 template_a = torch.as_tensor(templates[ia][None])
@@ -250,9 +245,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
                 conv_in = torch.as_tensor(tempupb[None]).mT[None]
                 pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(
-                    force=True
-                )
+                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
                 assert torch.isclose(pcf, pconv_).all()
 
                 pconv2 = (
@@ -282,7 +275,6 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
         print(f'{torch.square(res["conv"]).mean()=}')
         assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
         assert torch.all(res["scores"] > 0)
-
 
 
 def test_tiny_up_1_0(tmp_path):
@@ -388,9 +380,7 @@ def static_tester(tmp_path, up_factor=1):
         assert np.array_equal(
             matcher.objective_spatial_components, lrt.spatial_components
         )
-        assert np.array_equal(
-            matcher.objective_singular_values, lrt.singular_values
-        )
+        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
         assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
         assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
@@ -405,9 +395,7 @@ def static_tester(tmp_path, up_factor=1):
                 tempupb = tempup.compressed_upsampled_templates[
                     tempup.compressed_upsampling_map[ib, up]
                 ]
-                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[
-                    ib
-                ]
+                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
                 tc = (templates[ia] * tupb).sum()
 
                 template_a = torch.as_tensor(templates[ia][None])
@@ -416,9 +404,7 @@ def static_tester(tmp_path, up_factor=1):
                 conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
                 conv_in = torch.as_tensor(tempupb[None]).mT[None]
                 pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(
-                    force=True
-                )
+                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
                 assert torch.isclose(pcf, pconv_).all()
 
                 pconv2 = (
@@ -595,7 +581,9 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
 
     with tempfile.TemporaryDirectory() as tdir:
         if threshold == "check":
-            threshold = 0.5 * np.sqrt(np.square(template_data.templates).sum((1, 2)).min())
+            threshold = 0.5 * np.sqrt(
+                np.square(template_data.templates).sum((1, 2)).min()
+            )
         st = dartsort.match(
             recording=rec,
             sorting=gt_st,
@@ -607,29 +595,3 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
         )
         print(f"{threshold=} {st=}")
         assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.1
-
-
-if __name__ == "__main__":
-    test_fakedata_nonn()
-
-    print("\n\ntest tiny unscaled")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_tiny_unscaled(Path(tdir))
-
-    print("\n\ntest tiny scaled")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_tiny_scaled(Path(tdir))
-
-    for up in (1, 8):
-        for sc in (0.0, 0.01):
-            print(f"\n\ntest tiny_up {up=} {sc=}")
-            with tempfile.TemporaryDirectory() as tdir:
-                _test_tiny_up(Path(tdir), up_factor=up, scaling=sc)
-
-    print("\n\ntest test_static_noup")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_static_noup(Path(tdir))
-
-    print("\n\ntest test_static_up")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_static_up(Path(tdir))

@@ -348,7 +348,6 @@ def fit_tsvd(
     channels = sorting.channels[choices]
 
     # grab waveforms
-    # waveforms = spikeio.read_waveforms_channel_index_chunked(
     waveforms = spikeio.read_waveforms_channel_index(
         recording,
         times,

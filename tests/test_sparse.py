@@ -247,34 +247,3 @@ def test_csc_getrow():
         x0coo = x0.tocoo()
         assert np.array_equal(columns, x0coo.coords[1])
         assert np.array_equal(data, x0coo.data)
-
-
-def test_double_searchsorted():
-    rg = np.random.default_rng(0)
-
-    a = np.arange(10)
-    v = np.array([0, 1, 3])
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(a[i], v)
-    assert np.array_equal(i, v)
-
-    a = np.arange(100)
-    v = rg.choice(100, size=50, replace=False)
-    v.sort()
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(i, v)
-    assert np.array_equal(a[i], v)
-
-    a = rg.choice(1000, size=100, replace=False)
-    a.sort()
-    v = rg.choice(a, size=50, replace=False)
-    v.sort()
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(a[i], v)
-
-
-if __name__ == "__main__":
-    test_topk_sparse()
-    # test_csc_getrow()
-    # test_csc_insert()
-    # test_csc_mask()

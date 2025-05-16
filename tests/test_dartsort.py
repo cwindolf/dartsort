@@ -1,16 +1,14 @@
-from pathlib import Path
 import pytest
-import tempfile
 import subprocess
 
-
 import dartsort
-from dartsort.util import simkit, noise_util
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
 def test_fakedata_nonn(tmp_path, sim_recordings, do_motion_estimation):
-    sim_recording = sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
+    sim_recording = (
+        sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
+    )
     sim_recording = sim_recording["rec"]
 
     cfg = dartsort.DARTsortInternalConfig(

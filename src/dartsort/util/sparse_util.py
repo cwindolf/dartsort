@@ -153,7 +153,10 @@ def topk_sparse_insert(row, row_column_indices, row_data, topk):
 
 
 @numba.njit(
-    ["i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]", "i4,i8[::1],f4[::1],i4[:,::1],f4[:,::1]"],
+    [
+        "i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]",
+        "i4,i8[::1],f4[::1],i4[:,::1],f4[:,::1]",
+    ],
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -281,25 +284,6 @@ def _topk_pack_extra(
         dstorage[nzix] = extra_row[j]
         istorage[nzix] = extra_row_ind
         nzix += 1
-
-
-def double_searchsorted(a, v):
-    i0 = np.searchsorted(a, v[0])
-    assert a[i0] == v[0]
-    out = np.empty(v.shape, dtype=int)
-    out[0] = i0
-    _double_searchsorted(a, v, out)
-    return out
-
-
-@numba.njit("i8[::1],i8[::1],i8[::1]", error_model="numpy", nogil=True)
-def _double_searchsorted(a, v, out):
-    i = out[0]
-    for vix in range(1, v.shape[0]):
-        val = v[vix]
-        while val > a[i]:
-            i += 1
-        out[vix] = i
 
 
 def coo_sparse_mask_rows(coo, keep_mask):
@@ -610,7 +594,7 @@ def searchsorted_along_columns(arr, value):
 
 
 @numba.njit(
-    "i8[::1],i8[:,::1],i8",
+    ["i8[::1],i8[:,::1],i8", "i4[::1],i4[:,::1],i8"],
     error_model="numpy",
     nogil=True,
     parallel=True,
