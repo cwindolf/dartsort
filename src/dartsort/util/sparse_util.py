@@ -251,7 +251,10 @@ def topk_sparse_tocsc(
 
 
 @numba.njit(
-    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1]",
+    [
+        "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1]",
+        "i4[::1],f4[::1],i4[::1],f4[:,::1],i4[:,::1]",
+    ],
     error_model="numpy",
     nogil=True,
 )
@@ -266,7 +269,10 @@ def _topk_pack(istorage, dstorage, start, topk_data, topk_inds):
 
 
 @numba.njit(
-    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1],f4[::1],i8",
+    [
+        "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1],f4[::1],i8",
+        "i4[::1],f4[::1],i4[::1],f4[:,::1],i4[:,::1],f4[::1],i4",
+    ],
     error_model="numpy",
     nogil=True,
 )
