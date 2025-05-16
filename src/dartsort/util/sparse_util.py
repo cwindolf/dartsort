@@ -442,14 +442,12 @@ def sparse_topk(liks, log_proportions=None, k=3):
     return nz_lines, topk
 
 
-sigs = [
-    "void(i8[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-]
-
-
 @numba.njit(
-    sigs,
+    [
+        "void(i8[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+        "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
+        "void(i4[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+    ],
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -535,15 +533,12 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
     return nz_lines, liks, assignments, likelihoods
 
 
-# csc can have int32 or 64 coos on dif platforms? is this an intp? :P
-sigs = [
-    "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-]
-
-
 @numba.njit(
-    sigs,
+    [
+        "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+        "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
+        "void(i4[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+    ],
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -565,7 +560,11 @@ def hot_argmax_loop(
 
 
 @numba.njit(
-    sigs,
+    [
+        "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+        "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
+        "void(i4[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
+    ],
     error_model="numpy",
     nogil=True,
     parallel=True,
