@@ -855,8 +855,7 @@ class PeelerProcessContext:
         self.chunk_length_samples = chunk_length_samples
 
 
-# this state will be set on each process
-# it means that BasePeeler.peel() itself is not thread-safe but that's ok
+# this state will be set on each thread globally
 _peeler_process_context = local()
 
 
