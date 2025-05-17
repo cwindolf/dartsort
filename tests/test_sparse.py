@@ -56,7 +56,7 @@ def test_topk_sparse():
     k = nrows // 2
 
     # we'll only ever insert on half the columns just for fun
-    cols_valid = np.arange(0, ncols, 2)
+    cols_valid = np.arange(0, ncols, 2, dtype=np.int64)
 
     # allocate topk sparse array
     topk = sparse_util.allocate_topk(ncols, k)
@@ -126,7 +126,7 @@ def test_topk_sparse_sparse():
     k = nrows // 2
 
     # we'll only ever insert on half the columns just for fun
-    cols_valid = np.arange(0, ncols, 2)
+    cols_valid = np.arange(0, ncols, 2, dtype=np.int64)
     ins_inds = np.arange(cols_valid.size)
 
     # allocate topk sparse array

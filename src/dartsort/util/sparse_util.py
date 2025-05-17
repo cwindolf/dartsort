@@ -66,7 +66,7 @@ def coo_to_scipy(coo_tensor):
 
 def get_csc_storage(ns_total, storage, use_storage):
     if not use_storage:
-        csc_row_indices = np.empty(ns_total, dtype=int)
+        csc_row_indices = np.empty(ns_total, dtype=np.int64)
         csc_data = np.empty(ns_total, dtype=np.float32)
         return csc_row_indices, csc_data
 
@@ -74,10 +74,10 @@ def get_csc_storage(ns_total, storage, use_storage):
         if storage.csc_data.size < ns_total:
             del storage.csc_row_indices
             del storage.csc_data
-        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_row_indices = np.empty(ns_total, dtype=np.int64)
         storage.csc_data = np.empty(ns_total, dtype=np.float32)
     else:
-        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_row_indices = np.empty(ns_total, dtype=np.int64)
         storage.csc_data = np.empty(ns_total, dtype=np.float32)
 
     return storage.csc_row_indices, storage.csc_data
@@ -122,7 +122,7 @@ def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
 
 def allocate_topk(n_columns, k):
     data = np.full((n_columns, k), -np.inf, dtype="float32")
-    row_indices = np.full((n_columns, k), -1, dtype=int)
+    row_indices = np.full((n_columns, k), -1, dtype=np.int64)
     return row_indices, data
 
 

@@ -2301,7 +2301,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_fit_liks = self.get_log_likelihoods(hyp_fit_spikes.indices, self.log_liks)
         cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
         cur_resp = cur_resp.index_select(
-            dim=0, index=torch.tensor(current_unit_ids).to(cur_resp.device)
+            dim=0, index=torch.asarray(current_unit_ids, dtype=torch.long, device=cur_resp.device)
         )
         cur_resp = cur_resp.sum(dim=0).to_dense()
 
