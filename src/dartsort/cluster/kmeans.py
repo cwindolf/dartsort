@@ -4,7 +4,13 @@ import torch.nn.functional as F
 from .density import guess_mode
 
 
-def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="random", mode_dim=2):
+def kmeanspp(
+    X,
+    n_components=10,
+    random_state: np.random.Generator | int = 0,
+    kmeanspp_initial="random",
+    mode_dim=2,
+):
     """K-means++ initialization
 
     Start at a random point (kmeanspp_initial=='random') or at the point
@@ -50,7 +56,7 @@ def kmeans_inner(
     n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
-    random_state=0,
+    random_state: np.random.Generator | int = 0,
     kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,
@@ -73,6 +79,7 @@ def kmeans_inner(
         if phi < best_phi:
             centroid_ixs = _centroid_ixs
             labels = _labels
+    assert labels is not None
 
     centroids = X[centroid_ixs]
     dists = torch.cdist(X, centroids).square_()
@@ -119,7 +126,7 @@ def kmeans(
     n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
-    random_state=0,
+    random_state: np.random.Generator | int = 0,
     kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,
@@ -144,6 +151,7 @@ def kmeans(
         )
         if dists is None:
             continue
+        assert ee is not None
         phi = (ee * dists).sum(1).mean().numpy(force=True)
         if phi < best_phi:
             best_phi = phi
