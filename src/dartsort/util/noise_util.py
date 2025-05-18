@@ -147,6 +147,7 @@ class WhiteNoise(torch.nn.Module):
     """White noise to mimic the StationaryFactorizedNoise for use in sims."""
 
     def __init__(self, n_channels, scale=1.0):
+        super().__init__()
         self.n_channels = n_channels
         self.scale = scale
 
@@ -639,7 +640,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     @classmethod
     def estimate(
-        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0, eps=1e-4
+        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha: int | float | None=None, eps=1e-4
     ):
         """Factory method to estimate noise model from TPCA snippets
 
@@ -798,7 +799,7 @@ class EmbeddedNoise(torch.nn.Module):
                 logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
                 glasso_alpha = glasso.alpha_
 
-            if isinstance(glasso_alpha, float):
+            if glasso_alpha and isinstance(glasso_alpha, float):
                 logger.dartsortdebug(f"Run glasso on {cov.shape=}")
                 res = graphical_lasso(
                     cov.numpy(force=True),
@@ -836,10 +837,13 @@ class EmbeddedNoise(torch.nn.Module):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion_est=None,
-        interpolation_method="kriging",
+        interpolation_method="normalized",
+        kernel_name="rbf",
         sigma=20.0,
+        rq_alpha=1.0,
+        kriging_poly_degree=-1,
         device=None,
-        glasso_alpha=0,
+        glasso_alpha: int | float | None=None,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -857,8 +861,11 @@ class EmbeddedNoise(torch.nn.Module):
             hdf5_path,
             geom,
             rgeom,
+            method=interpolation_method,
+            kernel_name=kernel_name,
             sigma=sigma,
-            interpolation_method=interpolation_method,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
             device=device,
         )
         return cls.estimate(
@@ -871,11 +878,13 @@ def interpolate_residual_snippets(
     hdf5_path,
     geom,
     registered_geom,
-    sigma=10.0,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    channels_mode="round",
-    interpolation_method="normalized",
+    method="normalized",
+    kernel_name="rbf",
+    sigma=20.0,
+    rq_alpha=1.0,
+    kriging_poly_degree=-1,
     workers=None,
     device=None,
 ):
@@ -883,7 +892,6 @@ def interpolate_residual_snippets(
     from dartsort.util import interpolation_util, data_util, drift_util
 
     assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
-    assert channels_mode == "round"
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else None
@@ -914,20 +922,19 @@ def interpolate_residual_snippets(
     source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
     # - precompute
-    # if kriging, we need a pseudoinverse
-    skis = None
-    if interpolation_method.startswith("kriging"):
-        skis = interpolation_util.get_source_kernel_pinvs(
-            source_geom, None, sigma=sigma
-        )
-        skis = skis.broadcast_to((len(snippets), *skis.shape[1:])).to(snippets)
-    # if thin plate, same
-    tpd = None
-    if interpolation_method == "thinplate":
-        tpd = interpolation_util.thin_plate_precompute(
-            source_geom, None, sigma=sigma, source_geom_is_padded=False
-        )
-        tpd = tpd.broadcast_to((len(snippets), *tpd.shape[1:])).to(snippets)
+    precomputed_data = interpolation_util.interp_precompute(
+        source_geom,
+        channel_index=None,
+        method=method,
+        kernel_name=kernel_name,
+        sigma=sigma,
+        rq_alpha=rq_alpha,
+        kriging_poly_degree=kriging_poly_degree,
+        source_geom_is_padded=False,
+    )
+    if precomputed_data is not None:
+        shp = (n, *precomputed_data.shape[1:])
+        precomputed_data = precomputed_data.broadcast_to(shp)
 
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
@@ -940,11 +947,13 @@ def interpolate_residual_snippets(
             snippets,
             source_pos,
             target_pos,
-            source_kernel_invs=skis,
-            thin_plate_data=tpd,
+            method=method,
+            kernel_name=kernel_name,
             sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+            precomputed_data=precomputed_data,
             allow_destroy=True,
-            interpolation_method=interpolation_method,
         )
         return snippets
 
@@ -985,11 +994,13 @@ def interpolate_residual_snippets(
         snippets,
         source_pos,
         target_pos_shifted,
-        source_kernel_invs=skis,
-        thin_plate_data=tpd,
+        method=method,
+        kernel_name=kernel_name,
         sigma=sigma,
+        rq_alpha=rq_alpha,
+        kriging_poly_degree=kriging_poly_degree,
+        precomputed_data=precomputed_data,
         allow_destroy=True,
-        interpolation_method=interpolation_method,
     )
 
     # now, let's embed these into the full registered probe

@@ -1,23 +1,11 @@
 """Library for flavors of kernel interpolation and data interp utilities"""
 
-from linear_operator import to_linear_operator
-from linear_operator.operators import CholLinearOperator
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from .data_util import yield_masked_chunks
 from .drift_util import get_spike_pitch_shifts, static_channel_neighborhoods
-
-interp_kinds = (
-    "nearest",
-    "rbf",
-    "normalized",
-    "kriging",
-    "kriging_normalized",
-    "idw",
-    "thinplate",
-)
 
 
 def interpolate_by_chunk(
@@ -29,8 +17,12 @@ def interpolate_by_chunk(
     shifts,
     registered_geom,
     target_channels,
+    method="normalized",
+    extrap_method=None,
+    kernel_name="rbf",
+    kriging_poly_degree=-1,
     sigma=10.0,
-    interpolation_method="normalized",
+    rq_alpha=1.0,
     device=None,
     store_on_device=False,
     show_progress=True,
@@ -74,7 +66,6 @@ def interpolate_by_chunk(
         (n_spikes, feature_dim, n_target_chans)
     """
     # devices, dtypes, shapes
-    assert interpolation_method in interp_kinds
     assert geom.shape[1] == 2, "Haven't implemented 3d."
 
     if device is None:
@@ -105,15 +96,15 @@ def interpolate_by_chunk(
     channels = torch.as_tensor(channels)
 
     # if needed, precompute things
-    skis = tpd = None
-    source_kernel_invs = thin_plate_data = None
-    do_skis = interpolation_method.startswith("kriging")
-    if do_skis:
-        source_kernel_invs = get_source_kernel_pinvs(
-            source_geom, channel_index, sigma=sigma
-        )
-    if interpolation_method == "thinplate":
-        thin_plate_data = thin_plate_precompute(source_geom, channel_index, sigma)
+    precomputed_data = interp_precompute(
+        source_geom=source_geom,
+        channel_index=channel_index,
+        method=method,
+        kernel_name=kernel_name,
+        sigma=sigma,
+        rq_alpha=rq_alpha,
+        kriging_poly_degree=kriging_poly_degree,
+    )
 
     for ixs, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
@@ -142,12 +133,9 @@ def interpolate_by_chunk(
         # where are they going?
         target_pos = target_geom[target_channels[ixs]] - source_shifts
 
-        if do_skis:
-            assert source_kernel_invs is not None
-            skis = source_kernel_invs[channels[ixs]]
-        if interpolation_method == "thinplate":
-            assert thin_plate_data is not None
-            tpd = thin_plate_data[channels[ixs]]
+        pcomp_batch = None
+        if precomputed_data is not None:
+            pcomp_batch = precomputed_data[channels[ixs]]
 
         # interpolate, store
         chunk_features = torch.from_numpy(chunk_features).to(device)
@@ -155,89 +143,165 @@ def interpolate_by_chunk(
             chunk_features,
             source_pos,
             target_pos,
-            source_kernel_invs=skis,
-            thin_plate_data=tpd,
+            method=method,
+            extrap_method=extrap_method,
+            kernel_name=kernel_name,
             sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+            precomputed_data=pcomp_batch,
             allow_destroy=True,
-            interpolation_method=interpolation_method,
         )
         out[ixs] = chunk_res.to(out)
 
     return out
 
 
-def get_source_kernel_pinvs(source_geom, channel_index=None, sigma=20.0, eps=1e-5):
-    """channel_index None means we'll make one inv of the full probe."""
-    if channel_index is None:
-        source_pos = source_geom[None]
-    else:
+def interp_precompute(
+    source_geom=None,
+    channel_index=None,
+    source_pos=None,
+    method="normalized",
+    kernel_name="rbf",
+    sigma=20.0,
+    rq_alpha=1.0,
+    kriging_poly_degree=-1,
+    source_geom_is_padded=True,
+):
+    if method in ("nearest", "kernel", "normalized", "zero"):
+        return None
+    assert method in ("kriging", "krigingnormalized")
+
+    if source_pos is None:
+        assert source_geom is not None
+        n_source_chans = len(source_geom) - source_geom_is_padded
+        if channel_index is None:
+            channel_index = torch.arange(n_source_chans)[None]
+            channel_index = channel_index.to(source_geom.device)
+        else:
+            assert len(channel_index) == n_source_chans
         source_pos = source_geom[channel_index]
-    source_kernels = log_rbf(source_pos, sigma=sigma)
-    invs = torch.zeros_like(source_kernels)
-    for j, sk in enumerate(source_kernels):
-        (m,) = sk[0].isfinite().nonzero(as_tuple=True)
-        sk = sk[m[:, None], m[None, :]]
-        assert sk.isfinite().all()
-        sk = sk.exp_()
-        invs[j, m[:, None], m[None, :]] = torch.linalg.inv(sk)
-    return invs
-
-
-def thin_plate_precompute(source_geom, channel_index, sigma, source_geom_is_padded=True):
-    """Precompute data for 2D thin plate spline interpolation
-
-    This is copying skimage, more or less.
-    https://www.geometrictools.com/Documentation/ThinPlateSplines.pdf
-    is also a helpful reference.
-    """
-    assert source_geom.shape[1] == 2  # 3d also possible...
-    n_source_chans = len(source_geom) - source_geom_is_padded
-    if channel_index is None:
-        channel_index = torch.arange(n_source_chans)[None]
-        channel_index = channel_index.to(source_geom.device)
+        valid = channel_index < n_source_chans
     else:
-        assert len(channel_index) == n_source_chans
+        assert source_geom is None
+        assert channel_index is None
+        valid = source_pos[..., 0].isfinite()
+    assert source_pos.ndim == 3
+    valid = valid.cpu()
 
-    n_source_neighbs = len(channel_index)
-    neighb_size = channel_index.shape[1]
-    Linv = source_geom.new_zeros((n_source_neighbs, neighb_size + 3, neighb_size + 3))
-    design_inds = torch.arange(neighb_size, neighb_size + 3).to(source_geom.device)
-    zeros3 = source_geom.new_zeros((3, 3))
+    ns = len(source_pos)
+    neighb_size = source_pos.shape[1]
+    if kriging_poly_degree < 0:
+        design_vars = 0
+    elif kriging_poly_degree == 0:
+        design_vars = 1
+    elif kriging_poly_degree == 1:
+        design_vars = 1 + source_pos.shape[2]
+    else:
+        assert False
 
-    for j in range(n_source_neighbs):
-        chans = channel_index[j]
-        (present,) = (chans < n_source_chans).nonzero(as_tuple=True)
-        npres = present.numel()
-        source_pos = source_geom[chans[present]] / sigma
-        assert source_pos.isfinite().all()
-        ix = torch.concatenate((present, design_inds), dim=0)
+    solvers = source_pos.new_zeros(
+        (ns, neighb_size + design_vars, neighb_size + design_vars)
+    )
+    design_inds = torch.arange(neighb_size, neighb_size + design_vars).to(
+        source_pos.device
+    )
+    design_zeros = source_pos.new_zeros((design_vars, design_vars))
 
-        M = thin_plate_greens(source_pos)
+    source_kernels = get_kernel(
+        source_pos, kernel_name=kernel_name, sigma=sigma, rq_alpha=rq_alpha
+    )
+    for j in range(ns):
+        (present,) = valid[j].nonzero(as_tuple=True)
+        kernel = source_kernels[j][present][:, present]
 
-        # design matrix
-        N = torch.cat([source_pos, source_pos.new_ones((npres, 1))], dim=1)
+        if design_vars:
+            pos = source_pos[j][present] / sigma
+            const = pos.new_ones((pos.shape[0], 1))
+            ix = torch.concatenate((present, design_inds), dim=0)
+            if kriging_poly_degree == 0:
+                design = const
+            else:
+                design = torch.cat([pos, const], dim=1)
 
-        Ltop = torch.cat([M, N], dim=1)
-        Lbot = torch.cat([N.T, zeros3], dim=1)
-        L = torch.cat([Ltop, Lbot], dim=0)
+            top = torch.cat([kernel, design], dim=1)
+            bot = torch.cat([design.T, design_zeros], dim=1)
+            to_solve = torch.cat([top, bot], dim=0)
+        else:
+            to_solve = kernel
+            ix = present
 
-        Linv[j, ix[:, None], ix[None]] = torch.linalg.inv(L)
+        # pinv is helpful here. numerics can get weird with large domains.
+        solvers[j, ix[:, None], ix[None, :]] = torch.linalg.pinv(to_solve)
 
-    return Linv
+    return solvers
 
 
-def thin_plate_solve(source_pos, target_pos, Linv, features, sigma):
-    G = thin_plate_greens(source_pos, target_pos, sigma).nan_to_num_()
+def get_kernel(
+    source_pos,
+    target_pos=None,
+    kernel_name="rbf",
+    sigma=20.0,
+    rq_alpha=1.0,
+    normalized=False,
+):
+    assert source_pos.ndim == 3
+    assert source_pos.shape[2] in (1, 2, 3)
 
-    n, rank, neighb_size = features.shape
-    Y = torch.cat([features, features.new_zeros((n, rank, 3))], dim=2)
-    AB = torch.einsum("nij,npj->npi", Linv, Y)
-    A = AB[..., :-3]
-    N = torch.cat([target_pos / sigma, torch.ones_like(target_pos[..., :1])], dim=2)
-    offset = torch.einsum("npd,nid->npi", AB[..., -3:], N)
+    if kernel_name == "zero":
+        tc = source_pos.shape[1] if target_pos is None else target_pos.shape[1]
+        return source_pos.new_zeros(*source_pos.shape[:2], tc)
+    elif kernel_name == "nearest":
+        kernel = nearest_kernel(source_pos, target_pos)
+    elif kernel_name == "idw":
+        kernel = idw_kernel(source_pos, target_pos)
+    elif kernel_name == "rbf":
+        kernel = log_rbf(source_pos=source_pos, target_pos=target_pos, sigma=sigma)
+        if normalized:
+            kernel = F.softmax(kernel, dim=1)
+        else:
+            kernel = kernel.exp_()
+    elif kernel_name == "rq":
+        kernel = rq_kernel(
+            source_pos=source_pos, target_pos=target_pos, sigma=sigma, alpha=rq_alpha
+        )
+    elif kernel_name == "thinplate":
+        kernel = thin_plate_greens(
+            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+        )
+    else:
+        assert False
 
-    pred = torch.baddbmm(offset, A, G)
-    return pred
+    kernel = kernel.nan_to_num_()
+    if normalized and kernel_name not in ("rbf", "nearest"):
+        kernel = kernel.div_(kernel.sum(dim=1, keepdim=True))
+
+    return kernel
+
+
+def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree=-1):
+    n, rank = features.shape[:2]
+    n_, n_targ, dim = target_pos.shape
+    assert n == n_
+
+    if poly_degree == -1:
+        y = features
+        pass
+    elif poly_degree == 0:
+        zero = features.new_zeros((n, rank, 1))
+        y = torch.concatenate([features, zero], dim=2)
+        const = features.new_ones((n, 1, n_targ))
+        kernels = torch.concatenate([kernels, const], dim=1)
+    elif poly_degree == 1:
+        zero = features.new_zeros((n, rank, 1 + dim))
+        y = torch.concatenate([features, zero], dim=2)
+        const = features.new_ones((n, 1, n_targ))
+        xy = (target_pos / sigma).nan_to_num_().mT
+        kernels = torch.concatenate([kernels, xy, const], dim=1)
+    else:
+        assert False
+
+    return y.bmm(solvers).bmm(kernels)
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -250,11 +314,14 @@ def kernel_interpolate(
     features,
     source_pos,
     target_pos,
-    source_kernel_invs=None,
-    thin_plate_data=None,
-    sigma=10.0,
+    method="normalized",
+    extrap_method=None,
+    kernel_name="rbf",
+    sigma=20.0,
+    rq_alpha=1.0,
+    kriging_poly_degree=-1,
+    precomputed_data=None,
     allow_destroy=False,
-    interpolation_method="normalized",
     out=None,
 ):
     """Kernel interpolation of multi-channel features or waveforms
@@ -271,9 +338,6 @@ def kernel_interpolate(
         n_spikes, n_target_channels, spatial_dim
         These can also be masked, indicate with nans and you will
         get nans in those positions
-    source_kernel_invs : optional torch.Tensor
-        Precomputed inverses of source-to-source kernel matrices,
-        if you have them, for use in kriging
     sigma : float
         Spatial bandwidth of RBF kernels
     allow_destroy : bool
@@ -287,92 +351,87 @@ def kernel_interpolate(
     features : torch.Tensor
         n_spikes, feature_dim, n_target_channels
     """
-    assert interpolation_method in interp_kinds
+    if method == "nearest":
+        method = "kernel"
+        kernel_name = "nearest"
+    elif method == "zero":
+        method = "kernel"
+        kernel_name = "zero"
+    extrap_kernel_name = kernel_name
+    if extrap_method == "nearest":
+        extrap_method = "kernel"
+        extrap_kernel_name = "nearest"
+    elif method == "zero":
+        method = "kernel"
+        kernel_name = "zero"
+    extrap_diff = extrap_method != method or extrap_kernel_name != kernel_name
 
-    thinplate = interpolation_method == "thinplate"
-    features_in = targ_extrap = None
-    if thinplate:
-        assert thin_plate_data is not None
-        Linv = thin_plate_data
+    features_out = None
+    if extrap_method is not None and extrap_diff:
+        features_out = kernel_interpolate(
+            features,
+            source_pos,
+            target_pos,
+            method=extrap_method,
+            kernel_name=extrap_kernel_name,
+            sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+            precomputed_data=precomputed_data,
+        )
 
-        features = torch.nan_to_num(features, out=features if allow_destroy else None)
-        features_in = thin_plate_solve(source_pos, target_pos, Linv, features, sigma)
+    if precomputed_data is None:
+        # if at all possible, don't hit this branch. it's just here for vis.
+        precomputed_data = interp_precompute(
+            source_pos=source_pos,
+            method=method,
+            kernel_name=kernel_name,
+            sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+        )
 
-        needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
-        needs_nan = needs_nan.broadcast_to(features_in.shape)
-        features_in[needs_nan] = torch.nan
+    kernel = get_kernel(
+        source_pos=source_pos,
+        target_pos=target_pos,
+        kernel_name=kernel_name,
+        sigma=sigma,
+        rq_alpha=rq_alpha,
+        normalized=method.endswith("normalized"),
+    )
 
-        # are we extrapolating anywhere? if so, thinplate is a bad choice.
-        targ_extrap = extrap_mask(source_pos, target_pos)
-        # we'll use normalized to extrapolate below
-        interpolation_method = "normalized"
-
-    # -- build kernel
-    if interpolation_method == "nearest":
-        d = torch.cdist(source_pos, target_pos).nan_to_num(nan=torch.inf)
-        n, ns, nt = d.shape
-        kernel = torch.zeros_like(d)
-        kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
-    elif interpolation_method == "idw":
-        kernel = idw_kernel(source_pos, target_pos)
-    else:
-        kernel = log_rbf(source_pos, target_pos, sigma)
-        if interpolation_method == "normalized":
-            kernel = F.softmax(kernel, dim=1)
-            kernel.nan_to_num_()
-        elif interpolation_method.startswith("kriging"):
-            kernel = kernel.exp_()
-            if source_kernel_invs is None:
-                sk = log_rbf(source_pos, sigma=sigma).exp_()
-                kernel = torch.linalg.lstsq(sk.cpu(), kernel.cpu(), driver="gelsd")
-                kernel = kernel.solution.to(features)
-            else:
-                kernel = source_kernel_invs @ kernel
-                kernel = kernel.nan_to_num_()
-            if interpolation_method == "kriging_normalized":
-                kernel = kernel / kernel.sum(1, keepdim=True)
-        elif interpolation_method == "rbf":
-            kernel = kernel.exp_()
-        else:
-            assert False
-
-    # -- apply kernel
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
-    features = torch.bmm(features, kernel, out=out)
+    if method == "kriging":
+        assert precomputed_data is not None
+        precomputed_data = precomputed_data.to(features)
+        features = kriging_solve(
+            target_pos,
+            kernel,
+            features,
+            precomputed_data,
+            sigma=sigma,
+            poly_degree=kriging_poly_degree,
+        )
+    else:
+        features = torch.bmm(features, kernel, out=out)
 
     # nan-ify nonexistent chans
     needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
     needs_nan = needs_nan.broadcast_to(features.shape)
     features[needs_nan] = torch.nan
 
-    if thinplate:
-        # finish up extrapolation business
-        assert targ_extrap is not None
-        assert features_in is not None
-        features = torch.where(targ_extrap[:, None], features, features_in)
+    if extrap_method is not None and extrap_diff:
+        # control over extrapolation with another method...
+        assert features_out is not None
+        targ_extrap = extrap_mask(source_pos, target_pos)
+        features = torch.where(
+            targ_extrap[:, None], features_out, features, out=features
+        )
 
     return features
 
 
 def idw_kernel(source_pos, target_pos=None):
-    """Log of RBF kernel
-
-    This handles missing values in source_pos or target_pos, indicated by
-    nans, by replacing them with -inf so that they exp to 0.
-
-    Arguments
-    ---------
-    source_pos : torch.tensor
-        n source locations
-    target_pos : torch.tensor
-        m target locations
-    sigma : float
-
-    Returns
-    -------
-    kernel : torch.tensor
-        n by m
-    """
     source_pos = source_pos
     if target_pos is None:
         target_pos = source_pos
@@ -380,6 +439,17 @@ def idw_kernel(source_pos, target_pos=None):
     kernel = kernel.square_().sum(dim=3).sqrt_().reciprocal_()
     kernel = kernel.nan_to_num_()
     kernel /= kernel.sum(dim=0)
+    return kernel
+
+
+def nearest_kernel(source_pos, target_pos=None):
+    source_pos = source_pos
+    if target_pos is None:
+        target_pos = source_pos
+    d = source_pos[:, :, None] - target_pos[:, None, :]
+    d = d.square_().sum(dim=3).nan_to_num_(nan=torch.inf)
+    kernel = torch.zeros_like(d)
+    kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     return kernel
 
 
@@ -413,27 +483,32 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     return kernel
 
 
+def rq_kernel(source_pos, target_pos=None, sigma=None, alpha=1.0):
+    source_pos = source_pos / sigma
+    if target_pos is None:
+        target_pos = source_pos
+    else:
+        target_pos = target_pos / sigma
+    kernel = source_pos[:, :, None] - target_pos[:, None, :]
+    kernel = kernel.square_().sum(dim=3).nan_to_num_()
+    kernel = kernel.add_(1.0).pow_(-alpha)
+    return kernel
+
+
 def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
-    alpha = 1.0 / (8 * torch.pi)
-    single = source_pos.ndim == 2
-    if sigma != 1.0:
+    if not isinstance(sigma, (float, int)) or sigma != 1.0:
         source_pos = source_pos / sigma
     if target_pos is None:
         target_pos = source_pos
-    elif sigma != 1.0:
+    elif not isinstance(sigma, (float, int)) or sigma != 1.0:
         target_pos = target_pos / sigma
-    if single:
-        source_pos = source_pos[None]
-        target_pos = target_pos[None]
 
     rsq = source_pos[:, :, None] - target_pos[:, None, :]
     rsq = rsq.square_().sum(dim=3)
     r = rsq.sqrt()
 
-    kernel = alpha * torch.where(r < 1, r * torch.log(r ** r), rsq * r.log())
+    kernel = torch.where(r < 1, r * torch.log(r**r), rsq * r.log())
 
-    if single:
-        kernel = kernel[0]
     return kernel
 
 
@@ -441,7 +516,6 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
     """Only works for vertical shift."""
     source_x_uniq = source_pos[..., 0].unique()
     source_x_uniq = source_x_uniq[source_x_uniq.isfinite()]
-    x_low, x_high = source_x_uniq.amin() - eps, source_x_uniq.amax() + eps
 
     targ_x, targ_y = target_pos[..., 0], target_pos[..., 1]
 
@@ -460,8 +534,12 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
         assert torch.isfinite(source_low).all()
         assert torch.isfinite(source_high).all()
 
-        col_mask = (targ_col_y > source_high[:, None]).logical_or_(targ_col_y < source_low[:, None])
-        targ_extrap[targ_in_col] = targ_extrap[targ_in_col].logical_and_(col_mask[targ_in_col])
+        col_mask = (targ_col_y > source_high[:, None]).logical_or_(
+            targ_col_y < source_low[:, None]
+        )
+        targ_extrap[targ_in_col] = targ_extrap[targ_in_col].logical_and_(
+            col_mask[targ_in_col]
+        )
 
     targ_extrap = torch.logical_and(targ_extrap, targ_y.isfinite())
     return targ_extrap

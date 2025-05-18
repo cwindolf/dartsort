@@ -1,6 +1,5 @@
 import shutil
 import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -60,79 +59,78 @@ def _test_tiny(tmp_path, scaling=0.0):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
-        for rec in [rec0, rec1]:
-            template_config = dartsort.TemplateConfig(
-                low_rank_denoising=False,
-                superres_bin_min_spikes=0,
-            )
-            template_data = TemplateData.from_config(
-                *no_overlap_recording_sorting(templates),
-                template_config,
-                motion_est=motion_util.IdentityMotionEstimate(),
-                save_folder=tmp_path,
-                overwrite=True,
-            )
+    rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
+    for rec in [rec0, rec1]:
+        template_config = dartsort.TemplateConfig(
+            low_rank_denoising=False,
+            superres_bin_min_spikes=0,
+        )
+        template_data = TemplateData.from_config(
+            *no_overlap_recording_sorting(templates),
+            template_config,
+            motion_est=motion_util.IdentityMotionEstimate(),
+            save_folder=tmp_path,
+            overwrite=True,
+        )
 
-            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-                rec,
-                dartsort.default_waveform_config,
-                dartsort.MatchingConfig(
-                    amplitude_scaling_variance=scaling,
-                    threshold=0.01,
-                    template_temporal_upsampling_factor=1,
-                ),
-                nofeatcfg,
-                template_data,
-                motion_est=motion_util.IdentityMotionEstimate(),
-            )
-            matcher.precompute_peeling_data(tmp_path)
-            res = matcher.peel_chunk(
-                torch.from_numpy(rec.get_traces().copy()),
-                return_residual=True,
-                return_conv=True,
-            )
+        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            rec,
+            dartsort.default_waveform_config,
+            dartsort.MatchingConfig(
+                amplitude_scaling_variance=scaling,
+                threshold=0.01,
+                template_temporal_upsampling_factor=1,
+            ),
+            nofeatcfg,
+            template_data,
+            motion_est=motion_util.IdentityMotionEstimate(),
+        )
+        matcher.precompute_peeling_data(tmp_path)
+        res = matcher.peel_chunk(
+            torch.from_numpy(rec.get_traces().copy()),
+            return_residual=True,
+            return_conv=True,
+        )
 
-            ixa, ixb, pconv = matcher.pairwise_conv_db.query(
-                [0, 1], [0, 1], upsampling_indices_b=[0, 0], grid=True
-            )
-            maxpc = pconv.max(dim=1).values
-            for ia, ib, pc in zip(ixa, ixb, maxpc):
-                assert np.isclose(pc, (templates[ia] * templates[ib]).sum())
-            assert res["n_spikes"] == len(times)
-            assert np.array_equal(res["times_samples"], times)
-            assert np.array_equal(res["labels"], labels)
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+            [0, 1], [0, 1], upsampling_indices_b=[0, 0], grid=True
+        )
+        maxpc = pconv.max(dim=1).values
+        for ia, ib, pc in zip(ixa, ixb, maxpc):
+            assert np.isclose(pc, (templates[ia] * templates[ib]).sum())
+        assert res["n_spikes"] == len(times)
+        assert np.array_equal(res["times_samples"], times)
+        assert np.array_equal(res["labels"], labels)
+        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
+        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
 
-            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-                rec,
-                dartsort.default_waveform_config,
-                dartsort.MatchingConfig(
-                    threshold=0.01,
-                    amplitude_scaling_variance=0.0,
-                    template_temporal_upsampling_factor=8,
-                ),
-                nofeatcfg,
-                template_data,
-                motion_est=motion_util.IdentityMotionEstimate(),
-            )
-            matcher.precompute_peeling_data(tmp_path)
-            res = matcher.peel_chunk(
-                torch.from_numpy(rec.get_traces().copy()),
-                return_residual=True,
-                return_conv=True,
-            )
-            assert res["n_spikes"] == len(times)
-            assert np.array_equal(res["times_samples"], times)
-            assert np.array_equal(res["labels"], labels)
-            assert np.array_equal(res["upsampling_indices"], [0, 0])
-            print(f'{torch.square(res["residual"]).mean()=}')
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-            print(f'{torch.square(res["conv"]).mean()=}')
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
-            assert torch.all(res["scores"] > 0)
+        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            rec,
+            dartsort.default_waveform_config,
+            dartsort.MatchingConfig(
+                threshold=0.01,
+                amplitude_scaling_variance=0.0,
+                template_temporal_upsampling_factor=8,
+            ),
+            nofeatcfg,
+            template_data,
+            motion_est=motion_util.IdentityMotionEstimate(),
+        )
+        matcher.precompute_peeling_data(tmp_path)
+        res = matcher.peel_chunk(
+            torch.from_numpy(rec.get_traces().copy()),
+            return_residual=True,
+            return_conv=True,
+        )
+        assert res["n_spikes"] == len(times)
+        assert np.array_equal(res["times_samples"], times)
+        assert np.array_equal(res["labels"], labels)
+        assert np.array_equal(res["upsampling_indices"], [0, 0])
+        print(f'{torch.square(res["residual"]).mean()=}')
+        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
+        print(f'{torch.square(res["conv"]).mean()=}')
+        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        assert torch.all(res["scores"] > 0)
 
 
 def test_tiny_unscaled(tmp_path):
@@ -180,110 +178,103 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
-        for rec in [rec0, rec1]:
-            template_config = dartsort.TemplateConfig(
-                low_rank_denoising=False,
-                superres_bin_min_spikes=0,
-            )
-            template_data = TemplateData.from_config(
-                *no_overlap_recording_sorting(templates),
-                template_config,
-                motion_est=motion_util.IdentityMotionEstimate(),
-                save_folder=tmp_path,
-                overwrite=True,
-            )
+    rec1 = rec0.save_to_folder(tmp_path / "rec")
+    for rec in [rec0, rec1]:
+        template_config = dartsort.TemplateConfig(
+            low_rank_denoising=False,
+            superres_bin_min_spikes=0,
+        )
+        template_data = TemplateData.from_config(
+            *no_overlap_recording_sorting(templates),
+            template_config,
+            motion_est=motion_util.IdentityMotionEstimate(),
+            save_folder=tmp_path,
+            overwrite=True,
+        )
 
-            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-                rec,
-                dartsort.default_waveform_config,
-                dartsort.MatchingConfig(
-                    threshold=0.01,
-                    amplitude_scaling_variance=scaling,
-                    template_temporal_upsampling_factor=up_factor,
-                ),
-                nofeatcfg,
-                template_data,
-                motion_est=motion_util.IdentityMotionEstimate(),
-            )
-            matcher.precompute_peeling_data(tmp_path)
+        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            rec,
+            dartsort.default_waveform_config,
+            dartsort.MatchingConfig(
+                threshold=0.01,
+                amplitude_scaling_variance=scaling,
+                template_temporal_upsampling_factor=up_factor,
+            ),
+            nofeatcfg,
+            template_data,
+            motion_est=motion_util.IdentityMotionEstimate(),
+        )
+        matcher.precompute_peeling_data(tmp_path)
 
-            lrt = template_util.svd_compress_templates(
-                template_data.templates, rank=matcher.svd_compression_rank
+        lrt = template_util.svd_compress_templates(
+            template_data.templates, rank=matcher.svd_compression_rank
+        )
+        tempup = template_util.compressed_upsampled_templates(
+            lrt.temporal_components,
+            ptps=np.ptp(template_data.templates, 1).max(1),
+            max_upsample=up_factor,
+        )
+        assert np.array_equal(
+            matcher.compressed_upsampled_temporal,
+            tempup.compressed_upsampled_templates,
+        )
+        assert np.array_equal(
+            matcher.objective_spatial_components, lrt.spatial_components
+        )
+        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
+        assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
+        assert np.array_equal(matcher.singular_values, lrt.singular_values)
+        for up in range(up_factor):
+            ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+                np.arange(1),
+                np.arange(1),
+                upsampling_indices_b=up,
+                grid=True,
             )
-            tempup = template_util.compressed_upsampled_templates(
-                lrt.temporal_components,
-                ptps=np.ptp(template_data.templates, 1).max(1),
-                max_upsample=up_factor,
-            )
-            assert np.array_equal(
-                matcher.compressed_upsampled_temporal,
-                tempup.compressed_upsampled_templates,
-            )
-            assert np.array_equal(
-                matcher.objective_spatial_components, lrt.spatial_components
-            )
-            assert np.array_equal(
-                matcher.objective_singular_values, lrt.singular_values
-            )
-            assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
-            assert np.array_equal(matcher.singular_values, lrt.singular_values)
-            for up in range(up_factor):
-                ixa, ixb, pconv = matcher.pairwise_conv_db.query(
-                    np.arange(1),
-                    np.arange(1),
-                    upsampling_indices_b=up,
-                    grid=True,
+            centerpc = pconv[:, spike_length_samples - 1]
+            for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
+                tempupb = tempup.compressed_upsampled_templates[
+                    tempup.compressed_upsampling_map[ib, up]
+                ]
+                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
+                tc = (templates[ia] * tupb).sum()
+
+                template_a = torch.as_tensor(templates[ia][None])
+                ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
+                conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
+                conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
+                conv_in = torch.as_tensor(tempupb[None]).mT[None]
+                pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
+                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
+                assert torch.isclose(pcf, pconv_).all()
+
+                pconv2 = (
+                    F.conv2d(
+                        torch.as_tensor(templates[ia])[None, None],
+                        torch.as_tensor(tupb)[None, None],
+                    )
+                    .squeeze()
+                    .numpy(force=True)
                 )
-                centerpc = pconv[:, spike_length_samples - 1]
-                for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
-                    tempupb = tempup.compressed_upsampled_templates[
-                        tempup.compressed_upsampling_map[ib, up]
-                    ]
-                    tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[
-                        ib
-                    ]
-                    tc = (templates[ia] * tupb).sum()
+                assert np.isclose(pconv2, tc)
+                assert np.isclose(pc, tc)
+                assert np.isclose(pconv1, pc)
+                print(f" - {ia=} {ib=} {up=} {pc=} {tc=}")
 
-                    template_a = torch.as_tensor(templates[ia][None])
-                    ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
-                    conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
-                    conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
-                    conv_in = torch.as_tensor(tempupb[None]).mT[None]
-                    pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                    pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(
-                        force=True
-                    )
-                    assert torch.isclose(pcf, pconv_).all()
+        res = matcher.peel_chunk(
+            torch.from_numpy(rec.get_traces().copy()),
+            return_residual=True,
+            return_conv=True,
+        )
 
-                    pconv2 = (
-                        F.conv2d(
-                            torch.as_tensor(templates[ia])[None, None],
-                            torch.as_tensor(tupb)[None, None],
-                        )
-                        .squeeze()
-                        .numpy(force=True)
-                    )
-                    assert np.isclose(pconv2, tc)
-                    assert np.isclose(pc, tc)
-                    assert np.isclose(pconv1, pc)
-                    print(f" - {ia=} {ib=} {up=} {pc=} {tc=}")
-
-            res = matcher.peel_chunk(
-                torch.from_numpy(rec.get_traces().copy()),
-                return_residual=True,
-                return_conv=True,
-            )
-
-            assert res["n_spikes"] == len(times)
-            assert np.array_equal(res["times_samples"], times)
-            assert np.array_equal(res["labels"], labels)
-            print(f'{torch.square(res["residual"]).mean()=}')
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-            print(f'{torch.square(res["conv"]).mean()=}')
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
-            assert torch.all(res["scores"] > 0)
+        assert res["n_spikes"] == len(times)
+        assert np.array_equal(res["times_samples"], times)
+        assert np.array_equal(res["labels"], labels)
+        print(f'{torch.square(res["residual"]).mean()=}')
+        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
+        print(f'{torch.square(res["conv"]).mean()=}')
+        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        assert torch.all(res["scores"] > 0)
 
 
 def test_tiny_up_1_0(tmp_path):
@@ -344,110 +335,103 @@ def static_tester(tmp_path, up_factor=1):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
-        for rec in [rec0, rec1]:
-            template_config = dartsort.TemplateConfig(
-                low_rank_denoising=False, superres_bin_min_spikes=0
-            )
-            template_data = TemplateData.from_config(
-                *no_overlap_recording_sorting(templates),
-                template_config,
-                motion_est=motion_util.IdentityMotionEstimate(),
-                save_folder=tmp_path,
-                overwrite=True,
-            )
+    rec1 = rec0.save_to_folder(tmp_path / "rec")
+    for rec in [rec0, rec1]:
+        template_config = dartsort.TemplateConfig(
+            low_rank_denoising=False, superres_bin_min_spikes=0
+        )
+        template_data = TemplateData.from_config(
+            *no_overlap_recording_sorting(templates),
+            template_config,
+            motion_est=motion_util.IdentityMotionEstimate(),
+            save_folder=tmp_path,
+            overwrite=True,
+        )
 
-            matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-                rec,
-                dartsort.default_waveform_config,
-                dartsort.MatchingConfig(
-                    threshold=0.01,
-                    template_temporal_upsampling_factor=up_factor,
-                    amplitude_scaling_variance=0.0,
-                    coarse_approx_error_threshold=0.0,
-                    conv_ignore_threshold=0.0,
-                    template_svd_compression_rank=2,
-                ),
-                nofeatcfg,
-                template_data,
-                motion_est=motion_util.IdentityMotionEstimate(),
-            )
-            matcher.precompute_peeling_data(tmp_path)
+        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            rec,
+            dartsort.default_waveform_config,
+            dartsort.MatchingConfig(
+                threshold=0.01,
+                template_temporal_upsampling_factor=up_factor,
+                amplitude_scaling_variance=0.0,
+                coarse_approx_error_threshold=0.0,
+                conv_ignore_threshold=0.0,
+                template_svd_compression_rank=2,
+            ),
+            nofeatcfg,
+            template_data,
+            motion_est=motion_util.IdentityMotionEstimate(),
+        )
+        matcher.precompute_peeling_data(tmp_path)
 
-            lrt = template_util.svd_compress_templates(
-                template_data.templates, rank=matcher.svd_compression_rank
+        lrt = template_util.svd_compress_templates(
+            template_data.templates, rank=matcher.svd_compression_rank
+        )
+        tempup = template_util.compressed_upsampled_templates(
+            lrt.temporal_components,
+            ptps=np.ptp(template_data.templates, 1).max(1),
+            max_upsample=up_factor,
+        )
+        assert np.array_equal(
+            matcher.compressed_upsampled_temporal,
+            tempup.compressed_upsampled_templates,
+        )
+        assert np.array_equal(
+            matcher.objective_spatial_components, lrt.spatial_components
+        )
+        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
+        assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
+        assert np.array_equal(matcher.singular_values, lrt.singular_values)
+        for up in range(up_factor):
+            ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+                np.arange(3),
+                np.arange(3),
+                upsampling_indices_b=up + np.zeros(3, dtype=np.int64),
+                grid=True,
             )
-            tempup = template_util.compressed_upsampled_templates(
-                lrt.temporal_components,
-                ptps=np.ptp(template_data.templates, 1).max(1),
-                max_upsample=up_factor,
-            )
-            assert np.array_equal(
-                matcher.compressed_upsampled_temporal,
-                tempup.compressed_upsampled_templates,
-            )
-            assert np.array_equal(
-                matcher.objective_spatial_components, lrt.spatial_components
-            )
-            assert np.array_equal(
-                matcher.objective_singular_values, lrt.singular_values
-            )
-            assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
-            assert np.array_equal(matcher.singular_values, lrt.singular_values)
-            for up in range(up_factor):
-                ixa, ixb, pconv = matcher.pairwise_conv_db.query(
-                    np.arange(3),
-                    np.arange(3),
-                    upsampling_indices_b=up + np.zeros(3, dtype=int),
-                    grid=True,
+            centerpc = pconv[:, spike_length_samples - 1]
+            for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
+                tempupb = tempup.compressed_upsampled_templates[
+                    tempup.compressed_upsampling_map[ib, up]
+                ]
+                tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
+                tc = (templates[ia] * tupb).sum()
+
+                template_a = torch.as_tensor(templates[ia][None])
+                ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
+                conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
+                conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
+                conv_in = torch.as_tensor(tempupb[None]).mT[None]
+                pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
+                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
+                assert torch.isclose(pcf, pconv_).all()
+
+                pconv2 = (
+                    F.conv2d(
+                        torch.as_tensor(templates[ia])[None, None],
+                        torch.as_tensor(tupb)[None, None],
+                    )
+                    .squeeze()
+                    .numpy(force=True)
                 )
-                centerpc = pconv[:, spike_length_samples - 1]
-                for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
-                    tempupb = tempup.compressed_upsampled_templates[
-                        tempup.compressed_upsampling_map[ib, up]
-                    ]
-                    tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[
-                        ib
-                    ]
-                    tc = (templates[ia] * tupb).sum()
+                assert np.isclose(pconv2, tc)
+                assert np.isclose(pc, tc)
+                assert np.isclose(pconv1, pc)
 
-                    template_a = torch.as_tensor(templates[ia][None])
-                    ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
-                    conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
-                    conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
-                    conv_in = torch.as_tensor(tempupb[None]).mT[None]
-                    pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                    pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(
-                        force=True
-                    )
-                    assert torch.isclose(pcf, pconv_).all()
+        res = matcher.peel_chunk(
+            torch.from_numpy(rec.get_traces().copy()),
+            return_residual=True,
+            return_conv=True,
+        )
 
-                    pconv2 = (
-                        F.conv2d(
-                            torch.as_tensor(templates[ia])[None, None],
-                            torch.as_tensor(tupb)[None, None],
-                        )
-                        .squeeze()
-                        .numpy(force=True)
-                    )
-                    assert np.isclose(pconv2, tc)
-                    assert np.isclose(pc, tc)
-                    assert np.isclose(pconv1, pc)
-
-            res = matcher.peel_chunk(
-                torch.from_numpy(rec.get_traces().copy()),
-                return_residual=True,
-                return_conv=True,
-            )
-
-            assert res["n_spikes"] == len(times)
-            assert np.array_equal(res["times_samples"], times)
-            assert np.array_equal(res["labels"], labels)
-            assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
-            print(f"D {torch.square(res['conv']).mean()=}")
-            assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-3)
-            assert torch.all(res["scores"] > 0)
+        assert res["n_spikes"] == len(times)
+        assert np.array_equal(res["times_samples"], times)
+        assert np.array_equal(res["labels"], labels)
+        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
+        print(f"D {torch.square(res['conv']).mean()=}")
+        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-3)
+        assert torch.all(res["scores"] > 0)
 
 
 def test_static_noup(tmp_path):
@@ -458,7 +442,7 @@ def test_static_up(tmp_path):
     static_tester(tmp_path, up_factor=8)
 
 
-def _test_fakedata_nonn(threshold):
+def _test_fakedata_nonn(tmp_path, threshold):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
     T_s = 9.5
@@ -549,42 +533,41 @@ def _test_fakedata_nonn(threshold):
     matchconf = dartsort.MatchingConfig(threshold=threshold)
     matchconf_fp = dartsort.MatchingConfig(threshold="fp_control")
 
-    with tempfile.TemporaryDirectory() as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
-        for rec in [rec1, rec0]:
-            (Path(tdir) / "match").mkdir()
-            st = dartsort.match(
-                recording=rec,
-                sorting=gts,
-                output_dir=Path(tdir) / "match",
-                motion_est=None,
-                template_config=tempconf,
-                featurization_config=featconf,
-                matching_config=matchconf,
-            )
-            assert np.all(st.scores > 0)
+    rec1 = rec0.save_to_folder(tmp_path / "rec")
+    for rec in [rec1, rec0]:
+        (tmp_path / "match").mkdir()
+        st = dartsort.match(
+            recording=rec,
+            sorting=gts,
+            output_dir=tmp_path / "match",
+            motion_est=None,
+            template_config=tempconf,
+            featurization_config=featconf,
+            matching_config=matchconf,
+        )
+        assert np.all(st.scores > 0)
 
-            (Path(tdir) / "match2").mkdir()
-            st2 = dartsort.match(
-                recording=rec,
-                sorting=st,
-                output_dir=Path(tdir) / "match2",
-                motion_est=None,
-                template_config=tempconf,
-                featurization_config=featconf,
-                matching_config=matchconf_fp,
-            )
-            assert np.all(st.scores > 0)
+        (tmp_path / "match2").mkdir()
+        st2 = dartsort.match(
+            recording=rec,
+            sorting=st,
+            output_dir=tmp_path / "match2",
+            motion_est=None,
+            template_config=tempconf,
+            featurization_config=featconf,
+            matching_config=matchconf_fp,
+        )
+        assert np.all(st.scores > 0)
 
-            print(f"{st=}")
-            print(f"{st2=}")
+        print(f"{st=}")
+        print(f"{st2=}")
 
-            shutil.rmtree(Path(tdir) / "match")
-            shutil.rmtree(Path(tdir) / "match2")
+        shutil.rmtree(tmp_path / "match")
+        shutil.rmtree(tmp_path / "match2")
 
 
-def test_fakedata_nonn():
-    _test_fakedata_nonn(7.0)
+def test_fakedata_nonn(tmp_path):
+    _test_fakedata_nonn(tmp_path, 7.0)
 
 
 @pytest.mark.parametrize("rec_type", ["static", "drifting"])
@@ -598,7 +581,9 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
 
     with tempfile.TemporaryDirectory() as tdir:
         if threshold == "check":
-            threshold = 0.5 * np.sqrt(np.square(template_data.templates).sum((1, 2)).min())
+            threshold = 0.5 * np.sqrt(
+                np.square(template_data.templates).sum((1, 2)).min()
+            )
         st = dartsort.match(
             recording=rec,
             sorting=gt_st,
@@ -610,29 +595,3 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
         )
         print(f"{threshold=} {st=}")
         assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.1
-
-
-if __name__ == "__main__":
-    test_fakedata_nonn()
-
-    print("\n\ntest tiny unscaled")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_tiny_unscaled(Path(tdir))
-
-    print("\n\ntest tiny scaled")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_tiny_scaled(Path(tdir))
-
-    for up in (1, 8):
-        for sc in (0.0, 0.01):
-            print(f"\n\ntest tiny_up {up=} {sc=}")
-            with tempfile.TemporaryDirectory() as tdir:
-                _test_tiny_up(Path(tdir), up_factor=up, scaling=sc)
-
-    print("\n\ntest test_static_noup")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_static_noup(Path(tdir))
-
-    print("\n\ntest test_static_up")
-    with tempfile.TemporaryDirectory() as tdir:
-        test_static_up(Path(tdir))

@@ -1,41 +1,38 @@
-from pathlib import Path
 import pytest
-import tempfile
 import subprocess
 
-
 import dartsort
-from dartsort.util import simkit, noise_util
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(sim_recordings, do_motion_estimation):
-    sim_recording = sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
+def test_fakedata_nonn(tmp_path, sim_recordings, do_motion_estimation):
+    sim_recording = (
+        sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
+    )
     sim_recording = sim_recording["rec"]
 
-    with tempfile.TemporaryDirectory() as tempdir:
-        cfg = dartsort.DARTsortInternalConfig(
-            subtraction_config=dartsort.SubtractionConfig(
-                subtraction_denoising_config=dartsort.FeaturizationConfig(
-                    denoise_only=True, do_nn_denoise=False
-                )
-            ),
-            initial_refinement_config=dartsort.RefinementConfig(
-                min_count=10, n_total_iters=1, one_split_only=True
-            ),
-            refinement_config=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
-            featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
-            motion_estimation_config=dartsort.MotionEstimationConfig(
-                do_motion_estimation=do_motion_estimation, rigid=True
-            ),
-            work_in_tmpdir=True,
-            save_intermediate_features=True,
-        )
-        res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
-        assert res["sorting"].parent_h5_path.exists()
-        assert (Path(tempdir) / "dartsort_sorting.npz").exists()
-        assert (Path(tempdir) / "subtraction.h5").exists()
-        assert (Path(tempdir) / "matching1.h5").exists()
+    cfg = dartsort.DARTsortInternalConfig(
+        subtraction_config=dartsort.SubtractionConfig(
+            subtraction_denoising_config=dartsort.FeaturizationConfig(
+                denoise_only=True, do_nn_denoise=False
+            )
+        ),
+        initial_refinement_config=dartsort.RefinementConfig(
+            min_count=10, n_total_iters=1, one_split_only=True
+        ),
+        refinement_config=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
+        featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
+        motion_estimation_config=dartsort.MotionEstimationConfig(
+            do_motion_estimation=do_motion_estimation, rigid=True
+        ),
+        work_in_tmpdir=True,
+        save_intermediate_features=True,
+    )
+    res = dartsort.dartsort(sim_recording, output_dir=tmp_path, cfg=cfg)
+    assert res["sorting"].parent_h5_path.exists()
+    assert (tmp_path / "dartsort_sorting.npz").exists()
+    assert (tmp_path / "subtraction.h5").exists()
+    assert (tmp_path / "matching1.h5").exists()
 
 
 usual_sdcfg = dartsort.FeaturizationConfig(denoise_only=True)
@@ -52,38 +49,37 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 
 
 @pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
-def test_fakedata(sim_recordings, sdcfg):
+def test_fakedata(tmp_path, sim_recordings, sdcfg):
     sim_recording = sim_recordings["static"]["rec"]
 
-    with tempfile.TemporaryDirectory() as tempdir:
-        cfg = dartsort.DARTsortInternalConfig(
-            subtraction_config=dartsort.SubtractionConfig(
-                subtraction_denoising_config=sdcfg,
-                first_denoiser_thinning=0.0,
-            ),
-            # test pc based clust
-            clustering_config=dartsort.ClusteringConfig(
-                use_amplitude=False, n_main_channel_pcs=1
-            ),
-            refinement_config=dartsort.RefinementConfig(
-                min_count=10, channels_strategy="count", n_total_iters=1
-            ),
-            featurization_config=dartsort.FeaturizationConfig(
-                n_residual_snips=512, nn_localization=False
-            ),
-            motion_estimation_config=dartsort.MotionEstimationConfig(
-                do_motion_estimation=False
-            ),
-            matching_config=dartsort.MatchingConfig(threshold="fp_control"),
-            # test the dev tasks pipeline
-            save_intermediate_labels=True,
-            save_intermediate_features=False,
-        )
-        res = dartsort.dartsort(sim_recording, output_dir=tempdir, cfg=cfg)
-        assert res["sorting"].parent_h5_path.exists()
-        assert (Path(tempdir) / "dartsort_sorting.npz").exists()
-        assert not (Path(tempdir) / "subtraction.h5").exists()
-        assert (Path(tempdir) / "matching1.h5").exists()
+    cfg = dartsort.DARTsortInternalConfig(
+        subtraction_config=dartsort.SubtractionConfig(
+            subtraction_denoising_config=sdcfg,
+            first_denoiser_thinning=0.0,
+        ),
+        # test pc based clust
+        clustering_config=dartsort.ClusteringConfig(
+            use_amplitude=False, n_main_channel_pcs=1
+        ),
+        refinement_config=dartsort.RefinementConfig(
+            min_count=10, channels_strategy="count", n_total_iters=1
+        ),
+        featurization_config=dartsort.FeaturizationConfig(
+            n_residual_snips=512, nn_localization=False
+        ),
+        motion_estimation_config=dartsort.MotionEstimationConfig(
+            do_motion_estimation=False
+        ),
+        matching_config=dartsort.MatchingConfig(threshold="fp_control"),
+        # test the dev tasks pipeline
+        save_intermediate_labels=True,
+        save_intermediate_features=False,
+    )
+    res = dartsort.dartsort(sim_recording, output_dir=tmp_path, cfg=cfg)
+    assert res["sorting"].parent_h5_path.exists()
+    assert (tmp_path / "dartsort_sorting.npz").exists()
+    assert not (tmp_path / "subtraction.h5").exists()
+    assert (tmp_path / "matching1.h5").exists()
 
 
 def test_cli_help():

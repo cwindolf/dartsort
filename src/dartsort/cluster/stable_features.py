@@ -79,8 +79,6 @@ class StableSpikeDataset(torch.nn.Module):
         core_features: torch.Tensor,
         train_extract_features: torch.Tensor,
         features_on_device: bool = False,
-        interpolation_method: str = "kriging",
-        interpolation_sigma: float = 20.0,
         split_names: Optional[Sequence[str]] = None,
         split_mask: Optional[torch.Tensor] = None,
         core_radius: float = 35.0,
@@ -88,6 +86,10 @@ class StableSpikeDataset(torch.nn.Module):
         extract_neighborhood_ids=None,
         core_neighborhoods=None,
         core_neighborhood_ids=None,
+        extrap_method="normalized",
+        kernel_name="rbf",
+        sigma=20.0,
+        rq_alpha=1.0,
         device=None,
         _core_feature_splits=("train", "kept"),
     ):
@@ -97,6 +99,7 @@ class StableSpikeDataset(torch.nn.Module):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(device)
+        self.original_sorting = original_sorting
 
         self.features_on_device = features_on_device
 
@@ -108,11 +111,12 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_spikes = len(original_sorting)
         # train is modified below if there is a train split.
         self.n_spikes_train = self.n_spikes_kept = len(kept_indices)
-        self.interpolation_method = interpolation_method
-        self.interpolation_sigma = interpolation_sigma
         self.core_radius = core_radius
-
-        self.original_sorting = original_sorting
+        # assert extrap_method != "kriging"
+        self.extrap_method = extrap_method
+        self.kernel_name = kernel_name
+        self.sigma = sigma
+        self.rq_alpha = rq_alpha
 
         # spike collection indices
         self.kept_indices = torch.from_numpy(kept_indices)
@@ -131,7 +135,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.tpca = tpca
 
         # neighborhoods module, for querying spikes by channel group
-        self.not_train_indices = torch.tensor([], dtype=int)
+        self.not_train_indices = torch.tensor([], dtype=torch.long)
         if self.has_splits and "train" in self.split_indices:
             train_ixs = self.split_indices["train"]
             self.n_spikes_train = len(train_ixs)
@@ -148,8 +152,8 @@ class StableSpikeDataset(torch.nn.Module):
                 name="extract",
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
-            self.not_train_indices = torch.from_numpy(
-                np.setdiff1d(np.arange(self.n_spikes), train_ixs)
+            self.not_train_indices = torch.asarray(
+                np.setdiff1d(np.arange(self.n_spikes), train_ixs), dtype=torch.long
             )
         core_channel_index = waveform_util.make_channel_index(
             prgeom, core_radius, to_torch=True
@@ -202,10 +206,15 @@ class StableSpikeDataset(torch.nn.Module):
         core_radius=35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
-        interpolation_sigma=20.0,
-        interpolation_method="thinplate",
-        motion_depth_mode="channel",
+        interpolation_method="kriging",
+        kernel_name="thinplate",
+        sigma=10.0,
+        rq_alpha=0.5,
+        kriging_poly_degree=1,
+        extrap_method: str | None="kernel",
+        extrap_kernel: str | None="rq",
         features_dataset_name="collisioncleaned_tpca_features",
+        motion_depth_mode="channel",
         split_names=("train", "val"),
         split_proportions=(0.75, 0.25),
         show_progress=True,
@@ -305,11 +314,15 @@ class StableSpikeDataset(torch.nn.Module):
                 geom,
                 extract_channel_index,
                 sorting.channels[train_mask],
-                shifts,
+                shifts[train_mask],
                 registered_geom,
                 extract_channels[train_mask],
-                sigma=interpolation_sigma,
-                interpolation_method=interpolation_method,
+                method=interpolation_method,
+                extrap_method=None,
+                kernel_name=kernel_name,
+                sigma=sigma,
+                rq_alpha=rq_alpha,
+                kriging_poly_degree=kriging_poly_degree,
                 device=device,
                 store_on_device=store_on_device,
                 show_progress=show_progress,
@@ -324,8 +337,12 @@ class StableSpikeDataset(torch.nn.Module):
                 shifts,
                 registered_geom,
                 core_channels,
-                sigma=interpolation_sigma,
-                interpolation_method=interpolation_method,
+                method=interpolation_method,
+                extrap_method=None,
+                kernel_name=kernel_name,
+                sigma=sigma,
+                rq_alpha=rq_alpha,
+                kriging_poly_degree=kriging_poly_degree,
                 device=device,
                 store_on_device=store_on_device,
                 show_progress=show_progress,
@@ -348,12 +365,14 @@ class StableSpikeDataset(torch.nn.Module):
             core_features=core_features,
             train_extract_features=train_extract_features,
             features_on_device=store_on_device,
-            interpolation_method=interpolation_method,
-            interpolation_sigma=interpolation_sigma,
             split_names=split_names,
             split_mask=split_mask,
             core_radius=core_radius,
             device=device,
+            extrap_method=extrap_method or interpolation_method,
+            kernel_name=extrap_kernel or kernel_name,
+            sigma=sigma,
+            rq_alpha=rq_alpha,
             _core_feature_splits=_core_feature_splits,
         )
         self.to(device)
@@ -445,7 +464,10 @@ class StableSpikeDataset(torch.nn.Module):
             spike_data,
             channels,
             self.prgeom,
-            interpolation_sigma=self.interpolation_sigma,
+            method=self.extrap_method,
+            kernel_name=self.kernel_name,
+            sigma=self.sigma,
+            rq_alpha=self.rq_alpha,
         )
 
 
@@ -834,8 +856,10 @@ def interp_to_chans(
     spike_data,
     channels,
     prgeom,
-    interpolation_method="normalized",
-    interpolation_sigma=20.0,
+    method="normalized",
+    kernel_name="rbf",
+    sigma=20.0,
+    rq_alpha=1.0,
     batch_size=256,
 ):
     source_pos = prgeom[spike_data.channels]
@@ -854,9 +878,12 @@ def interp_to_chans(
             spike_data.features[sl],
             source_pos[sl],
             target_pos_,
-            sigma=interpolation_sigma,
+            method="nearest",
+            extrap_method=method,
+            sigma=sigma,
+            kernel_name=kernel_name,
+            rq_alpha=rq_alpha,
             allow_destroy=False,
-            interpolation_method=interpolation_method,
             out=output[sl],
         )
     return output

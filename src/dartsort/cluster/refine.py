@@ -75,10 +75,13 @@ def gmm_refine(
         sorting.parent_h5_path,
         cov_kind=refinement_config.cov_kind,
         motion_est=motion_est,
-        sigma=refinement_config.interpolation_sigma,
         device=computation_config.actual_device(),
         glasso_alpha=refinement_config.glasso_alpha,
         interpolation_method=refinement_config.interpolation_method,
+        kernel_name=refinement_config.kernel_name,
+        sigma=refinement_config.interpolation_sigma,
+        rq_alpha=refinement_config.rq_alpha,
+        kriging_poly_degree=refinement_config.kriging_poly_degree,
     )
     data = StableSpikeDataset.from_sorting(
         sorting,
@@ -86,7 +89,12 @@ def gmm_refine(
         core_radius=refinement_config.core_radius,
         max_n_spikes=refinement_config.max_n_spikes,
         interpolation_method=refinement_config.interpolation_method,
-        interpolation_sigma=refinement_config.interpolation_sigma,
+        extrap_method=refinement_config.extrapolation_method,
+        extrap_kernel=refinement_config.extrapolation_kernel,
+        kernel_name=refinement_config.kernel_name,
+        sigma=refinement_config.interpolation_sigma,
+        rq_alpha=refinement_config.rq_alpha,
+        kriging_poly_degree=refinement_config.kriging_poly_degree,
         split_proportions=(
             1.0 - refinement_config.val_proportion,
             refinement_config.val_proportion,

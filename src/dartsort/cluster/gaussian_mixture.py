@@ -34,7 +34,6 @@ from ..util.sparse_util import (
     allocate_topk,
     topk_sparse_insert,
     topk_sparse_tocsc,
-    double_searchsorted,
 )
 from .cluster_util import (
     agglomerate,
@@ -196,7 +195,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
         labels = self.data.original_sorting.labels
-        self.labels = torch.asarray(labels, copy=True)
+        self.labels = torch.asarray(labels, dtype=torch.long, copy=True)
 
         # this is populated by self.m_step()
         self._units = torch.nn.ModuleDict()
@@ -445,7 +444,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 log_proportions=self.log_proportions[ids].numpy(force=True),
                 k=tmm.n_candidates,
             )
-            init = np.empty((n_spikes, tmm.n_candidates), dtype=int)
+            init = np.empty((n_spikes, tmm.n_candidates), dtype=np.int64)
             z_lines = np.setdiff1d(np.arange(n_spikes), nz_lines)
             z_init = integers_without_inner_replacement(
                 self.rg, high=n_units, size=(len(z_lines), init.shape[1])
@@ -916,12 +915,12 @@ class SpikeMixtureModel(torch.nn.Module):
             # get the big nnz-length csc buffers. these can be huge so we cache them.
             csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
             # csc compressed indptr. spikes are columns.
-            indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=int)))
+            indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=np.int64)))
             del spike_overlaps
             # each spike starts at writing at its indptr. as we gather more units for each
             # spike, we increment the spike's "write head". idea is to directly make csc
             write_offsets = indptr[:-1].copy()
-            row_nnz = np.zeros(max(unit_ids) + 1, dtype=int)
+            row_nnz = np.zeros(max(unit_ids) + 1, dtype=np.int64)
         else:
             ncols = (
                 self.data.n_spikes
@@ -966,7 +965,7 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             assert log_liks.shape[0] == j + 1 + with_noise_unit
             rows, counts = np.unique(log_liks.indices, return_counts=True)
-            row_nnz = np.zeros(log_liks.shape[0], dtype=int)
+            row_nnz = np.zeros(log_liks.shape[0], dtype=np.int64)
             row_nnz[rows] = counts
             log_liks.row_nnz = row_nnz[: log_liks.shape[0] - with_noise_unit]
         else:
@@ -1030,7 +1029,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # intersection
         n_units = max(log_liks.shape[0] - self.with_noise_unit, original.max() + 1)
-        intersection = torch.zeros(n_units, dtype=int)
+        intersection = torch.zeros(n_units, dtype=torch.long)
         spiketorch.add_at_(intersection, assignments[kept], same[kept])
 
         # union by include/exclude
@@ -1076,8 +1075,8 @@ class SpikeMixtureModel(torch.nn.Module):
         n_units = 0
         if label_ids.numel():
             n_units = max(label_ids.max().item() + 1, len(self._units))
-        keep = torch.zeros(n_units, dtype=bool)
-        countsf = torch.zeros(n_units, dtype=int)
+        keep = torch.zeros(n_units, dtype=torch.bool)
+        countsf = torch.zeros(n_units, dtype=torch.long)
         keep[label_ids] = big_enough
         countsf[label_ids] = counts
         blank = None
@@ -1568,7 +1567,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 (len(spike_indices),), -torch.inf, device=self.data.device
             )
         else:
-            spike_indices = torch.empty(ns, dtype=int)
+            spike_indices = torch.empty(ns, dtype=torch.long)
             offset = 0
             log_likelihoods = torch.empty(ns)
 
@@ -2302,7 +2301,7 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_fit_liks = self.get_log_likelihoods(hyp_fit_spikes.indices, self.log_liks)
         cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
         cur_resp = cur_resp.index_select(
-            dim=0, index=torch.tensor(current_unit_ids).to(cur_resp.device)
+            dim=0, index=torch.asarray(current_unit_ids, dtype=torch.long, device=cur_resp.device)
         )
         cur_resp = cur_resp.sum(dim=0).to_dense()
 
@@ -3786,7 +3785,7 @@ class GaussianUnit(torch.nn.Module):
 
 def all_partitions(ids):
     ids = np.array(ids).ravel()
-    group_ids = np.zeros(len(ids), dtype=int)
+    group_ids = np.zeros(len(ids), dtype=np.int64)
     for m in range(1, len(ids) + 1):
         for partition in multiset_partitions(len(ids), m=m):
             ids_partition = []
@@ -4148,7 +4147,7 @@ def quick_indices(rg, unit_ids, labels, split_indices=None, max_sizes=4096):
     counts_so_far[unit_ids] = 0
     n_active = unit_ids.size
     reordered_indices = np.full(
-        (unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1
+        (unit_ids.max() + 1, np.max(max_sizes)), labels.size + 1, dtype=labels.dtype
     )
 
     full_max_sizes = np.zeros(unit_ids.max() + 1, dtype=np.int32)
@@ -4178,7 +4177,10 @@ def quick_indices(rg, unit_ids, labels, split_indices=None, max_sizes=4096):
     return orig_indices, in_split_indices
 
 
-sig = "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])"
+sig = [
+    "void(i4, i4[::1], i8[::1], i8[:, ::1], i4[::1])",
+    "void(i4, i4[::1], i4[::1], i4[:, ::1], i4[::1])",  # windows runner
+]
 
 
 @numba.njit(sig, error_model="numpy", nogil=True)

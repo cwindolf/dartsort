@@ -92,6 +92,7 @@ class DARTsortAnalysis:
         allow_template_reload=False,
         denoising_tsvd=None,
         computation_config=None,
+        skip_templates=False,
         **kwargs,
     ):
         """Try to re-load as much info as possible from the sorting itself
@@ -118,7 +119,8 @@ class DARTsortAnalysis:
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
 
-        if not have_templates and template_config is not None:
+        template_data = None
+        if not have_templates and template_config is not None and not skip_templates:
             tkw = {}
             if "localizations_dataset" in kwargs:
                 tkw = dict(localizations_dataset_name=kwargs["localizations_dataset"])

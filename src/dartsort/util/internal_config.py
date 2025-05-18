@@ -379,16 +379,23 @@ class RefinementConfig:
 
     # -- gmm parameters
     # noise params
-    interpolation_method: str = "thinplate"
     cov_kind: str = "factorizednoise"
-    glasso_alpha: float | int = 0
+    glasso_alpha: float | int | None = None
 
     # feature params
     core_radius: float = 35.0
-    interpolation_sigma: float = 20.0
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
     max_avg_units: int = 3
+
+    # feature interpolation
+    interpolation_method: str = "kriging"
+    extrapolation_method: str | None = "kernel"
+    kernel_name: str = "thinplate"
+    extrapolation_kernel: str | None = "rq"
+    interpolation_sigma: float = 10.0
+    rq_alpha: float = 0.5
+    kriging_poly_degree: int = 1
 
     # model params
     channels_strategy: str = "count"
@@ -403,9 +410,9 @@ class RefinementConfig:
     merge_distance_threshold: float = 2.0
     # if None, switches to bimodality
     criterion_threshold: float | None = 0.0
-    criterion: Literal[
-        "heldout_loglik", "heldout_elbo", "loglik", "elbo", "bimodality"
-    ] = "heldout_elbo"
+    criterion: Literal["heldout_loglik", "heldout_elbo", "loglik", "elbo"] = (
+        "heldout_elbo"
+    )
     merge_bimodality_threshold: float = 0.05
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
@@ -555,7 +562,6 @@ def to_internal_config(cfg):
     )
     refinement_config = RefinementConfig(
         signal_rank=cfg.signal_rank,
-        interpolation_sigma=cfg.interpolation_bandwidth,
         criterion=cfg.criterion,
         criterion_threshold=cfg.criterion_threshold,
         merge_bimodality_threshold=cfg.merge_bimodality_threshold,
@@ -568,11 +574,16 @@ def to_internal_config(cfg):
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
-        interpolation_method=cfg.interpolation_method,
         laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
         core_radius=cfg.core_radius,
+        interpolation_method=cfg.interpolation_method,
+        extrapolation_method=cfg.extrapolation_method,
+        kernel_name=cfg.interpolation_kernel,
+        interpolation_sigma=cfg.interpolation_bandwidth,
+        rq_alpha=cfg.interpolation_rq_alpha,
+        kriging_poly_degree=cfg.interpolation_degree,
     )
     initial_refinement_config = dataclasses.replace(
         refinement_config, one_split_only=cfg.initial_split_only

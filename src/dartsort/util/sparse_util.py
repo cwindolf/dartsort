@@ -8,8 +8,7 @@ from scipy.special import logsumexp
 
 def get_coo_storage(ns_total, storage, use_storage):
     if not use_storage:
-        # coo_uix = np.empty(ns_total, dtype=int)
-        coo_six = np.empty(ns_total, dtype=int)
+        coo_six = np.empty(ns_total, dtype=np.int64)
         coo_data = np.empty(ns_total, dtype=np.float32)
         return coo_six, coo_data
 
@@ -18,12 +17,12 @@ def get_coo_storage(ns_total, storage, use_storage):
             # del storage.coo_uix
             del storage.coo_six
             del storage.coo_data
-        # storage.coo_uix = np.empty(ns_total, dtype=int)
-        storage.coo_six = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=np.int64)
+        storage.coo_six = np.empty(ns_total, dtype=np.int64)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
     else:
-        # storage.coo_uix = np.empty(ns_total, dtype=int)
-        storage.coo_six = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=np.int64)
+        storage.coo_six = np.empty(ns_total, dtype=np.int64)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
 
     # return storage.coo_uix, storage.coo_six, storage.coo_data
@@ -66,7 +65,7 @@ def coo_to_scipy(coo_tensor):
 
 def get_csc_storage(ns_total, storage, use_storage):
     if not use_storage:
-        csc_row_indices = np.empty(ns_total, dtype=int)
+        csc_row_indices = np.empty(ns_total, dtype=np.int64)
         csc_data = np.empty(ns_total, dtype=np.float32)
         return csc_row_indices, csc_data
 
@@ -74,10 +73,10 @@ def get_csc_storage(ns_total, storage, use_storage):
         if storage.csc_data.size < ns_total:
             del storage.csc_row_indices
             del storage.csc_data
-        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_row_indices = np.empty(ns_total, dtype=np.int64)
         storage.csc_data = np.empty(ns_total, dtype=np.float32)
     else:
-        storage.csc_row_indices = np.empty(ns_total, dtype=int)
+        storage.csc_row_indices = np.empty(ns_total, dtype=np.int64)
         storage.csc_data = np.empty(ns_total, dtype=np.float32)
 
     return storage.csc_row_indices, storage.csc_data
@@ -122,7 +121,7 @@ def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
 
 def allocate_topk(n_columns, k):
     data = np.full((n_columns, k), -np.inf, dtype="float32")
-    row_indices = np.full((n_columns, k), -1, dtype=int)
+    row_indices = np.full((n_columns, k), -1, dtype=np.int64)
     return row_indices, data
 
 
@@ -211,19 +210,19 @@ def topk_sparse_tocsc(
     shape = (n_rows + (extra_row is not None), ncols)
     dtype = topk_data.dtype
     data_storage = np.empty((nnz,), dtype=dtype)
-    index_storage = np.empty((nnz,), dtype=int)
+    index_storage = np.empty((nnz,), dtype=np.int64)
 
     if (
         column_support is None
         or isinstance(column_support, slice)
         and column_support == slice(None)
     ):
-        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=int)
+        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=np.int64)
         indptr[0] = 0
         indptr[1:] -= start
         np.cumsum(indptr[1:], out=indptr[1:])
     else:
-        indptr = np.zeros((ncols + 1,), dtype=int)
+        indptr = np.zeros((ncols + 1,), dtype=np.int64)
         indptr[1 + column_support] = k + (extra_row is not None)
         indptr[1 + column_support] -= start
         np.cumsum(indptr[1:], out=indptr[1:])
@@ -283,25 +282,6 @@ def _topk_pack_extra(
         nzix += 1
 
 
-def double_searchsorted(a, v):
-    i0 = np.searchsorted(a, v[0])
-    assert a[i0] == v[0]
-    out = np.empty(v.shape, dtype=int)
-    out[0] = i0
-    _double_searchsorted(a, v, out)
-    return out
-
-
-@numba.njit("i8[::1],i8[::1],i8[::1]", error_model="numpy", nogil=True)
-def _double_searchsorted(a, v, out):
-    i = out[0]
-    for vix in range(1, v.shape[0]):
-        val = v[vix]
-        while val > a[i]:
-            i += 1
-        out[vix] = i
-
-
 def coo_sparse_mask_rows(coo, keep_mask):
     """Row indexing with a boolean mask."""
     if keep_mask.all():
@@ -329,7 +309,7 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
     rowix_dtype = csc.indices.dtype
     kept_row_inds = np.flatnonzero(keep_mask).astype(rowix_dtype)
     oldrow_to_newrow = np.zeros(len(keep_mask), dtype=rowix_dtype)
-    oldrow_to_newrow[kept_row_inds] = np.arange(len(kept_row_inds))
+    oldrow_to_newrow[kept_row_inds] = np.arange(len(kept_row_inds), dtype=rowix_dtype)
     nnz = _csc_sparse_mask_rows(
         csc.indices, csc.indptr, csc.data, oldrow_to_newrow, keep_mask
     )
@@ -340,13 +320,11 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
     )
 
 
-sigs = [
+@numba.njit(
     "i8(i8[::1], i8[::1], f4[::1], i8[::1], bool_[::1])",
-    "i8(i4[::1], i4[::1], f4[::1], i4[::1], bool_[::1])",
-]
-
-
-@numba.njit(sigs, error_model="numpy", nogil=True)
+    error_model="numpy",
+    nogil=True,
+)
 def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
     write_ix = 0
 
@@ -394,13 +372,11 @@ def csc_sparse_getrow(csc, row, rowcount):
     return columns_out, data_out
 
 
-sigs = [
+@numba.njit(
     "void(i8[::1], i8[::1], f4[::1], i8[::1], f4[::1], i8, i8)",
-    "void(i4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4, i8)",
-]
-
-
-@numba.njit(sigs, error_model="numpy", nogil=True)
+    error_model="numpy",
+    nogil=True,
+)
 def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row, count):
     write_ix = 0
 
@@ -432,7 +408,7 @@ def sparse_topk(liks, log_proportions=None, k=3):
 
     # see scipy csc argmin/argmax for reference here. this is just numba-ing
     # a special case of that code which has a python hot loop.
-    topk = np.full((nnz, k), -1)
+    topk = np.full((nnz, k), -1, dtype=np.int64)
     if log_proportions is None:
         log_proportions = np.zeros(liks.shape[0], dtype=np.float32)
     else:
@@ -452,14 +428,8 @@ def sparse_topk(liks, log_proportions=None, k=3):
     return nz_lines, topk
 
 
-sigs = [
-    "void(i8[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-]
-
-
 @numba.njit(
-    sigs,
+    "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -489,9 +459,9 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
     """
     if not liks.nnz:
         return (
-            np.arange(0),
+            np.arange(0, dtype=np.int64),
             liks,
-            np.full(liks.shape[1], -1),
+            np.full(liks.shape[1], -1, dtype=np.int64),
             np.full(liks.shape[1], -np.inf),
         )
 
@@ -502,7 +472,7 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
 
     # see scipy csc argmin/argmax for reference here. this is just numba-ing
     # a special case of that code which has a python hot loop.
-    assignments = np.full(nnz, -1)
+    assignments = np.full(nnz, -1, dtype=np.int64)
     # these will be filled with logsumexps
     likelihoods = np.full(nnz, -np.inf, dtype=np.float32)
 
@@ -545,15 +515,8 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
     return nz_lines, liks, assignments, likelihoods
 
 
-# csc can have int32 or 64 coos on dif platforms? is this an intp? :P
-sigs = [
-    "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-]
-
-
 @numba.njit(
-    sigs,
+    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -575,7 +538,7 @@ def hot_argmax_loop(
 
 
 @numba.njit(
-    sigs,
+    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -604,7 +567,7 @@ def hard_noise_argmax_loop(
 
 
 def searchsorted_along_columns(arr, value):
-    out = np.empty((arr.shape[0],), dtype=int)
+    out = np.empty((arr.shape[0],), dtype=np.int64)
     _searchsorted_along_columns(out, arr, value)
     return out
 

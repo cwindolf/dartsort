@@ -7,6 +7,9 @@ import seaborn as sns
 import torch
 from tqdm.auto import tqdm
 
+from dartsort.util.drift_util import get_shift_info, get_spike_pitch_shifts
+from dartsort.util.waveform_util import get_pitch
+
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch
 from ..util.multiprocessing_util import (
@@ -90,10 +93,16 @@ class TextInfo(GMMPlot):
     width = 2
     height = 3
 
+    def __init__(self, title=None):
+        self.title = title
+
     def draw(self, panel, gmm, unit_id):
         axis = panel.subplots()
         axis.axis("off")
         msg = f"unit {unit_id}\n"
+
+        if self.title:
+            axis.set_title(f"{self.title} {unit_id}")
 
         nspikes = (gmm.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
@@ -290,13 +299,6 @@ class CovarianceResidual(GMMPlot):
             color = colors[name]
             vm = cov.abs().max().numpy(force=True) * 0.9
             mimk = imk | dict(vmax=vm, vmin=-vm)
-            # if name == "mmT":
-            #     vm = cov.abs().max() * 0.9
-            #     mimk = dict(
-            #         vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none"
-            #     )
-            # else:
-            #     mimk = imk
             im = ax.imshow(cov.numpy(force=True), **mimk)
             cb = plt.colorbar(im, ax=ax, shrink=0.2)
             cb.outline.set_visible(False)
@@ -317,6 +319,75 @@ class CovarianceResidual(GMMPlot):
         ax_eig.axhline(0, color="k", lw=0.8)
         # ax_r2.set_ylabel('1-R^2')
         # ax_eig.axhline([0, 1], color='k', lw=0.8)
+
+
+class WaveformCheck(GMMPlot):
+    kind = "mstep"
+    width = 5
+    height = 4.5
+
+    def __init__(self, neighborhood="extract", split="train", colorvar="displacement", cmap="viridis", localizations_name="localizations", randomize=True):
+        assert colorvar in ("time", "depth", "chandepth", "displacement", "npitches", "subpitch")
+        self.neighborhood = neighborhood
+        self.split = split
+        self.colorvar = colorvar
+        self.cmap = plt.get_cmap(cmap)
+        self.localizations_name = localizations_name
+        self.randomize = randomize
+
+    def draw(self, panel, gmm, unit_id, axes=None):
+        s = object()
+        me = getattr(gmm, 'motion_est', s)
+        if me is s:
+            raise ValueError(
+                f"Sorry, hacky, but to use {self.__class__.__name__} you need to "
+                "assign the motion estimate as the property .motion_est of the GMM."
+            )
+
+
+        _, ixs, splitixs = gmm.random_indices(unit_id=unit_id, split_name=self.split)
+        sp = gmm.data.spike_data(
+            ixs, split_indices=splitixs, with_reconstructions=True, neighborhood=self.neighborhood)
+
+        if self.colorvar == "time":
+            c = gmm.data.times_seconds[ixs].numpy(force=True)
+        elif self.colorvar == "chandepth":
+            chans = gmm.data.original_sorting.channels[ixs]
+            c = gmm.data.original_sorting.geom[chans, 1]
+        elif self.colorvar == "depth":
+            pos = getattr(self.data.original_sorting, self.localizations_name)
+            c = pos[ixs, 2]
+        else:
+            channels, shifts, n_pitches_shift = get_shift_info(
+                gmm.data.original_sorting, motion_est=me, geom=gmm.data.original_sorting.geom
+            )
+            shifts = shifts[ixs]
+            n_pitches_shift = n_pitches_shift[ixs]
+            if self.colorvar == "displacement":
+                c = shifts
+            elif self.colorvar == "npitches":
+                c = n_pitches_shift
+            elif self.colorvar == "subpitch":
+                pitch = get_pitch(gmm.data.original_sorting.geom)
+                c = shifts - pitch * n_pitches_shift
+            else:
+                assert False
+
+        ax = panel.subplots()
+        s = geomplot(
+            sp.waveforms.numpy(),
+            channels=sp.channels.numpy(),
+            geom=gmm.data.prgeom[:-1].numpy(),
+            c=self.cmap(minmax(c)),
+            alpha=0.1,
+            ax=ax,
+            randomize=self.randomize,
+        )
+        ax.axis('off')
+        st = f"{self.split}/{self.neighborhood} by {self.colorvar}"
+        if self.randomize:
+            st += ", rand order"
+        ax.set_title(st)
 
 
 class Likelihoods(GMMPlot):
@@ -431,7 +502,7 @@ class KMeansSplit(GMMPlot):
         self.distance_normalization_kind = distance_normalization_kind
 
     def draw(self, panel, gmm, unit_id, split_info=None):
-        criterion = self.criterion or gmm.merge_criterion
+        criterion = self.criterion or gmm.criterion
         ickw = {}
         if self.ignore_channels is not None:
             ickw["ignore_channels"] = self.ignore_channels
@@ -948,7 +1019,7 @@ class NeighborTreeMerge(GMMPlot):
 
         criterion = self.criterion
         if criterion is None:
-            criterion = gmm.merge_criterion
+            criterion = gmm.criterion
 
         metric = self.metric
         if metric is None:
@@ -1276,3 +1347,9 @@ def _summary_job(unit_id):
     finally:
         if tmp_out.exists():
             tmp_out.unlink()
+
+
+def minmax(x):
+    y = x - x.min().astype(float)
+    y /= np.ptp(y)
+    return y

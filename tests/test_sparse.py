@@ -56,7 +56,7 @@ def test_topk_sparse():
     k = nrows // 2
 
     # we'll only ever insert on half the columns just for fun
-    cols_valid = np.arange(0, ncols, 2)
+    cols_valid = np.arange(0, ncols, 2, dtype=np.int64)
 
     # allocate topk sparse array
     topk = sparse_util.allocate_topk(ncols, k)
@@ -76,7 +76,7 @@ def test_topk_sparse():
         # this one below is stochastic but should succeed whp
         if ncols > 80:
             assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-        counts = np.zeros(ncols, dtype=int)
+        counts = np.zeros(ncols, dtype=np.int64)
         counts[cols_valid] = min(k, j + 1)
         assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     csc_last = csc
@@ -95,7 +95,7 @@ def test_topk_sparse():
     # this one below is stochastic but should succeed whp
     if ncols > 80:
         assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] = k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
 
@@ -109,7 +109,7 @@ def test_topk_sparse():
         assert np.array_equal(
             np.unique(csc.indices), np.concatenate([np.arange(j + 1), [nrows]])
         )
-    counts = np.ones(ncols, dtype=int)
+    counts = np.ones(ncols, dtype=np.int64)
     counts[cols_valid] += k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     dns = csc.todense()
@@ -126,8 +126,8 @@ def test_topk_sparse_sparse():
     k = nrows // 2
 
     # we'll only ever insert on half the columns just for fun
-    cols_valid = np.arange(0, ncols, 2)
-    ins_inds = np.arange(cols_valid.size)
+    cols_valid = np.arange(0, ncols, 2, dtype=np.int64)
+    ins_inds = np.arange(cols_valid.size, dtype=np.int64)
 
     # allocate topk sparse array
     topk = sparse_util.allocate_topk(cols_valid.size, k)
@@ -149,7 +149,7 @@ def test_topk_sparse_sparse():
         # this one below is stochastic but should succeed whp
         if ncols > 80:
             assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-        counts = np.zeros(ncols, dtype=int)
+        counts = np.zeros(ncols, dtype=np.int64)
         counts[cols_valid] = min(k, j + 1)
         assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     csc_last = csc
@@ -170,7 +170,7 @@ def test_topk_sparse_sparse():
     # this one below is stochastic but should succeed whp
     if ncols > 80:
         assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] = k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
 
@@ -186,7 +186,7 @@ def test_topk_sparse_sparse():
         assert np.array_equal(
             np.unique(csc.indices), np.concatenate([np.arange(j + 1), [nrows]])
         )
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] += k + 1
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     dns = csc.todense()
@@ -247,34 +247,3 @@ def test_csc_getrow():
         x0coo = x0.tocoo()
         assert np.array_equal(columns, x0coo.coords[1])
         assert np.array_equal(data, x0coo.data)
-
-
-def test_double_searchsorted():
-    rg = np.random.default_rng(0)
-
-    a = np.arange(10)
-    v = np.array([0, 1, 3])
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(a[i], v)
-    assert np.array_equal(i, v)
-
-    a = np.arange(100)
-    v = rg.choice(100, size=50, replace=False)
-    v.sort()
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(i, v)
-    assert np.array_equal(a[i], v)
-
-    a = rg.choice(1000, size=100, replace=False)
-    a.sort()
-    v = rg.choice(a, size=50, replace=False)
-    v.sort()
-    i = sparse_util.double_searchsorted(a, v)
-    assert np.array_equal(a[i], v)
-
-
-if __name__ == "__main__":
-    test_topk_sparse()
-    # test_csc_getrow()
-    # test_csc_insert()
-    # test_csc_mask()

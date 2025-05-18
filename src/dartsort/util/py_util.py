@@ -77,6 +77,15 @@ def int_or_float(s):
     return float(s)
 
 
+def int_or_float_or_none(s):
+    s = s.strip()
+    if s.lower() in ("none", ""):
+        return None
+    if not s.strip("0123456789"):
+        return int(s)
+    return float(s)
+
+
 def float_or_str(s):
     try:
         return float(s)

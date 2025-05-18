@@ -361,7 +361,7 @@ def compressed_upsampled_templates(
             np.arange(n_templates)[:, None],
             np.arange(n_templates)[:, None],
             np.arange(n_templates),
-            np.zeros(n_templates, dtype=int),
+            np.zeros(n_templates, dtype=np.int64),
         )
 
     # how many copies should each unit get?
@@ -376,8 +376,8 @@ def compressed_upsampled_templates(
         n_upsamples = n_upsamples_map(ptps, max_upsample=max_upsample)
 
     # build the compressed upsampling map
-    compressed_upsampling_map = np.full((n_templates, max_upsample), -1, dtype=int)
-    compressed_upsampling_index = np.full((n_templates, max_upsample), -1, dtype=int)
+    compressed_upsampling_map = np.full((n_templates, max_upsample), -1, dtype=np.int64)
+    compressed_upsampling_index = np.full((n_templates, max_upsample), -1, dtype=np.int64)
     template_indices = []
     upsampling_indices = []
     current_compressed_index = 0

@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from .util.internal_config import _strict_config, default_pretrained_path
-from .util.py_util import int_or_float, str_or_none
+from .util.py_util import int_or_float, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
@@ -126,7 +126,7 @@ class DARTsortUserConfig:
 
     # -- clustering parameters
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
-    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 20.0
+    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
@@ -198,7 +198,11 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
-    interpolation_method: str = "thinplate"
-    glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
+    interpolation_method: str = "kriging"
+    extrapolation_method: str | None = argfield(default="kernel", arg_type=str_or_none)
+    interpolation_kernel: str = "thinplate"
+    interpolation_rq_alpha: float = 0.5
+    interpolation_degree: int = 1
+    glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
     laplace_ard: bool = True
     core_radius: float = 35.0

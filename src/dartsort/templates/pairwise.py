@@ -57,6 +57,7 @@ class CompressedPairwiseConv:
     pconv: np.ndarray
     in_memory: bool = False
     device: torch.device = torch.device("cpu")
+    _h5: h5py.File | None = None
 
     def query(
         self,
@@ -158,6 +159,10 @@ class CompressedPairwiseConv:
 
         return template_indices_a, template_indices_b, pconvs
 
+    def __del__(self):
+        if self._h5 is not None:
+            self._h5.close()
+
     def __post_init__(self):
         assert self.shifts_a.ndim == self.shifts_b.ndim == 1
         assert self.shifts_a.shape == (self.shifted_template_index_a.shape[1],)
@@ -190,7 +195,7 @@ class CompressedPairwiseConv:
 
     @classmethod
     def from_h5(cls, hdf5_filename, in_memory=True):
-        ff = [f for f in fields(cls) if f.name not in ("in_memory", "device")]
+        ff = [f for f in fields(cls) if f.name not in ("in_memory", "device", "_h5")]
         if in_memory:
             with h5py.File(hdf5_filename, "r") as h5:
                 data = {f.name: torch.from_numpy(h5[f.name][:]) for f in ff}
@@ -202,7 +207,7 @@ class CompressedPairwiseConv:
                 data[f.name] = _h5[f.name]
             else:
                 data[f.name] = torch.from_numpy(_h5[f.name][:])
-        return cls(**data, in_memory=in_memory)
+        return cls(**data, in_memory=in_memory, _h5=_h5)
 
     @classmethod
     def from_template_data(

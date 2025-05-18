@@ -1,4 +1,5 @@
 import dataclasses
+from pathlib import Path
 from typing import Generator
 import warnings
 
@@ -155,7 +156,7 @@ def closest_clustering(
 
     extra_features = peel_st.extra_features or {}
     extra_features = extra_features.copy()
-    extra_features['match_ix'] = torch.from_numpy(peelix2gtix)
+    extra_features["match_ix"] = torch.from_numpy(peelix2gtix)
     return dataclasses.replace(peel_st, labels=labels, extra_features=extra_features)
 
 
@@ -291,10 +292,15 @@ def sorting_from_spikeinterface(
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
-    load_feature_names=('times_seconds',),
+    load_feature_names=("times_seconds",),
+    detection_h5_name="subtraction.h5",
+    detection_h5_path: Path | str | None = None,
+    step_format="refined{step}",
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered."""
-    h5s = [sorting_dir / 'subtraction.h5']
+    if detection_h5_path is None:
+        detection_h5_path = sorting_dir / detection_h5_name
+    h5s = [detection_h5_path]
     for j in range(1, 100):
         if (sorting_dir / f"matching{j}.h5").exists():
             h5s.append(sorting_dir / f"matching{j}.h5")
@@ -305,14 +311,16 @@ def load_dartsort_step_sortings(
         if not h5.exists():
             continue
         st0 = DARTsortSorting.from_peeling_hdf5(
-            h5, load_simple_features=load_simple_features, load_feature_names=load_feature_names
+            h5,
+            load_simple_features=load_simple_features,
+            load_feature_names=load_feature_names,
         )
 
         # initial clust or matching res
-        if h5.stem == 'subtraction':
-            npy = sorting_dir / 'initial_labels.npy'
+        if h5.stem == "subtraction":
+            npy = sorting_dir / "initial_labels.npy"
             if npy.exists():
-                yield ('initial', dataclasses.replace(st0, labels=np.load(npy)))
+                yield ("initial", dataclasses.replace(st0, labels=np.load(npy)))
             else:
                 warnings.warn(f"Initial {npy} does not exist.")
                 yield None, None
@@ -320,10 +328,15 @@ def load_dartsort_step_sortings(
             yield (h5.stem, st0)
 
         # refinement steps
-        for npy in sorted(sorting_dir.glob(f"refined{step}refstep*.npy")):
-            yield (npy.stem.removesuffix("_labels"), dataclasses.replace(st0, labels=np.load(npy)))
+        stepstr = step_format.format(step=step)
+        for npy in sorted(sorting_dir.glob(f"{stepstr}refstep*.npy")):
+            print(f"{npy=} {npy.stem=} {npy.stem.removesuffix('_labels')=}")
+            yield (
+                npy.stem.removesuffix("_labels"),
+                dataclasses.replace(st0, labels=np.load(npy)),
+            )
 
         # refinement final
-        npy = sorting_dir / f'refined{step}_labels.npy'
+        npy = sorting_dir / f"{stepstr}_labels.npy"
         if npy.exists():
-            yield (f'refined{step}', dataclasses.replace(st0, labels=np.load(npy)))
+            yield (stepstr, dataclasses.replace(st0, labels=np.load(npy)))

@@ -447,8 +447,7 @@ def get_waveforms_on_static_channels(
     # figure out the positions of the channels that the waveforms live on
     pitch = get_pitch(geom)
     if n_pitches_shift is None:
-        n_pitches_shift = np.zeros(n_spikes, dtype=int)
-    # shifts = np.c_[np.zeros(n_spikes), n_pitches_shift * pitch]
+        n_pitches_shift = np.zeros(n_spikes, dtype=np.int64)
     if main_channels is None:
         # the case where all waveforms live on all channels, but
         # these channels may be shifting
@@ -472,7 +471,7 @@ def get_waveforms_on_static_channels(
 
     # the case where each waveform lives on its own channels
     # nans will never be matched in k-d query below
-    padded_geom = np.pad(geom.astype(float), [(0, 1), (0, 0)], constant_values=np.nan)
+    padded_geom = np.pad(geom.astype(np.float64), [(0, 1), (0, 0)], constant_values=np.nan)
 
     # ok, the kdtree query can get expensive when we have lots of these shifting
     # positions. it turns out to be worth it to go through the effort of figuring
@@ -648,7 +647,7 @@ def static_channel_neighborhoods(
     if pitch is None:
         pitch = get_pitch(geom)
     if n_pitches_shift is None:
-        n_pitches_shift = np.zeros(n_spikes, dtype=int)
+        n_pitches_shift = np.zeros(n_spikes, dtype=np.int64)
 
     # the case where each waveform lives on its own channels
     # nans will never be matched in k-d query below
@@ -884,7 +883,7 @@ def get_shift_info(sorting, motion_est, geom, motion_depth_mode="channel", chann
     shifts = rdepths - depths
 
     if motion_est is None:
-        n_pitches_shift = np.zeros(len(depths), dtype=int)
+        n_pitches_shift = np.zeros(len(depths), dtype=np.int64)
     else:
         n_pitches_shift = get_spike_pitch_shifts(
             depths,

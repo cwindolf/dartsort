@@ -34,7 +34,7 @@ def test_roundtrip(tmp_path):
     assert np.array_equal(template_data.templates, temps)
 
 
-def test_static_templates():
+def test_static_templates(tmp_path):
     rec0 = np.zeros((11, 10))
     # geom = np.c_[np.zeros(10), np.arange(10).astype(float)]
     rec0[0, 1] = 1
@@ -46,7 +46,7 @@ def test_static_templates():
         times_samples=[0, 2], labels=[0, 1], channels=[1, 5], sampling_frequency=1
     )
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec")
         for rec in [rec0, rec1]:
             res = get_templates.get_templates(
@@ -67,7 +67,7 @@ def test_static_templates():
             assert np.all(temps == 0)
 
 
-def test_drifting_templates():
+def test_drifting_templates(tmp_path):
     geom = np.c_[np.zeros(7), np.arange(7).astype(float)]
     rec0 = np.zeros((11, 7))
     rec0[0, 1] = 1
@@ -77,7 +77,7 @@ def test_drifting_templates():
     rec0 = sc.NumpyRecording(rec0, 1)
     rec0.set_dummy_probe_from_locations(geom)
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(Path(tdir) / "rec", n_jobs=1)
         for rec in [rec0, rec1]:
             me = get_motion_estimate(
@@ -180,7 +180,7 @@ def test_main_object():
     )
 
 
-def test_pconv():
+def test_pconv(tmp_path):
     # want to make sure drift handling is as expected
     # design an experiment
 
@@ -219,7 +219,7 @@ def test_pconv():
         kind="cubic",
     )
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
             geom=geom,
@@ -274,7 +274,7 @@ def test_pconv():
     #         print(f"{shift=}")
     #         print(f"{spatial_shifted=}")
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",
             geom=geom,
@@ -339,14 +339,3 @@ def test_pconv():
                             assert not ixb.numel()
                             assert not pconv.numel()
 
-
-if __name__ == "__main__":
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as tdir:
-        test_roundtrip(Path(tdir))
-    # test_static_templates()
-    # test_drifting_templates()
-    # test_main_object()
-    # test_pconv()

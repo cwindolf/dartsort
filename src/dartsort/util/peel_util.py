@@ -71,7 +71,6 @@ def run_peeler(
         stop_after_n_waveforms=featurization_config.stop_after_n,
         shuffle=featurization_config.shuffle,
     )
-    _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
 
     if featurization_config.residual_later:
         peeler.run_subsampled_peeling(
@@ -102,7 +101,6 @@ def run_peeler(
             device=computation_config.actual_device(),
             localization_model=featurization_config.localization_model,
         )
-        _gc(computation_config.actual_n_jobs(), computation_config.actual_device())
 
     return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -151,21 +149,3 @@ def peeler_is_done(
         chunk_starts_samples=chunk_starts_samples
     )
     return last_chunk_start >= max(chunk_starts_samples)
-
-
-def _gc(n_jobs, device):
-    if n_jobs:
-        # work happened off main process
-        return
-
-    import gc
-    import torch
-
-    gc.collect()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    if torch.device(device).type == "cuda" or (
-        torch.cuda.is_available() and device is None
-    ):
-        torch.cuda.empty_cache()

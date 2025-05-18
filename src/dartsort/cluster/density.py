@@ -274,7 +274,14 @@ def density_peaks(
     sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
     density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
     if sigma_regional is not None:
-        density = density[0] / density[1]
+        d0, d1 = density
+        assert isinstance(d0, np.ndarray)
+        assert isinstance(d1, np.ndarray)
+        d1_0 = np.flatnonzero(d1 == 0)
+        assert np.all(d0[d1_0] == 0.0)
+        d1[d1_0] = 1.0
+        density = d0
+        density /= d1
     else:
         density = density[0]
 

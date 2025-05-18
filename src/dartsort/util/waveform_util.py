@@ -201,7 +201,7 @@ def make_channel_index(
     # others will be filled with the total number of channels
     # (an invalid index into the recording, but this behavior
     # is useful e.g. in the spatial max pooling for deduplication)
-    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=np.int64)
 
     # fill every row in the matrix (one per channel)
     for c in range(C):
@@ -228,7 +228,7 @@ def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     assert np.array_equal(filled_geom[original_inds], geom)
     neighbors = cdist(geom, filled_geom, metric="minkowski", p=p) <= radius
     n_neighbors = np.max(np.sum(neighbors, 0))
-    channel_index = np.full((C, n_neighbors), pad_val, dtype=int)
+    channel_index = np.full((C, n_neighbors), pad_val, dtype=np.int64)
 
     # fill every row in the matrix (one per channel)
     for c in range(C):
@@ -306,6 +306,7 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=Fal
     real_reg_ix = reg2orig[real_reg]
     ordered_real_reg = real_reg[np.argsort(real_reg_ix)]
     channel_index = reg2orig[rci[ordered_real_reg]]
+    channel_index = channel_index.astype(np.int64)
 
     if to_torch:
         channel_index = torch.from_numpy(channel_index)
@@ -313,7 +314,9 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=Fal
     return channel_index
 
 
-def regularize_channel_index(geom, channel_index, p=2, to_torch=False, depth_only=False):
+def regularize_channel_index(
+    geom, channel_index, p=2, to_torch=False, depth_only=False
+):
     """Convert a channel index to the "regular" format
 
     Need to know the p used in the first place.
@@ -326,7 +329,9 @@ def regularize_channel_index(geom, channel_index, p=2, to_torch=False, depth_onl
         row = row[row < nchans]
         radius = max(radius, cdist(geom[row], geom[j][None]).max())
 
-    regular_channel_index = make_regular_channel_index(geom, radius, p=p, depth_only=depth_only)
+    regular_channel_index = make_regular_channel_index(
+        geom, radius, p=p, depth_only=depth_only
+    )
 
     for c in range(nchans):
         regrow = regular_channel_index[c]
@@ -353,14 +358,17 @@ def make_contiguous_channel_index(n_channels, n_neighbors=40):
         low = max(0, c - n_neighbors // 2)
         low = min(n_channels - n_neighbors, low)
         channel_index.append(np.arange(low, low + n_neighbors))
-    channel_index = np.array(channel_index)
+    channel_index = np.array(channel_index, dtype=np.int64)
 
     return channel_index
 
 
 def full_channel_index(n_channels, to_torch=False):
     """Everyone is everone's neighbor"""
-    ci = np.arange(n_channels)[None, :] * np.ones(n_channels, dtype=int)[:, None]
+    ci = (
+        np.arange(n_channels, dtype=np.int64)[None, :]
+        * np.ones(n_channels, dtype=np.int64)[:, None]
+    )
     if to_torch:
         ci = torch.tensor(ci)
     return ci
@@ -368,7 +376,7 @@ def full_channel_index(n_channels, to_torch=False):
 
 def single_channel_index(n_channels, to_torch=False):
     """Lonely islands"""
-    ci = np.arange(n_channels)[:, None]
+    ci = np.arange(n_channels, dtype=np.int64)[:, None]
     if to_torch:
         ci = torch.tensor(ci)
     return ci
@@ -515,10 +523,11 @@ def mask_to_relative(channel_index_mask):
             (n_channels_tot, max_sub_chans),
             original_max_neighbs,
             device=channel_index_mask.device,
+            dtype=torch.long,
         )
     else:
         rel_sub_channel_index = np.full(
-            (n_channels_tot, max_sub_chans), original_max_neighbs
+            (n_channels_tot, max_sub_chans), original_max_neighbs, dtype=np.int64
         )
 
     for i, mask in enumerate(channel_index_mask):
@@ -545,9 +554,12 @@ def mask_to_channel_index(channel_index, channel_index_mask):
             (n_channels, max_sub_chans),
             n_channels,
             device=channel_index_mask.device,
+            dtype=torch.long,
         )
     else:
-        new_channel_index = np.full((n_channels, max_sub_chans), fill_value=n_channels)
+        new_channel_index = np.full(
+            (n_channels, max_sub_chans), fill_value=n_channels, dtype=np.int64
+        )
 
     for i, mask in enumerate(channel_index_mask):
         if is_tensor:
@@ -592,7 +604,7 @@ def get_channel_subset(
     if rel_sub_channel_index is None:
         rel_sub_channel_index = mask_to_relative(channel_index_mask)
         if is_torch:
-            rel_sub_channel_index = torch.as_tensor(rel_sub_channel_index)
+            rel_sub_channel_index = torch.asarray(rel_sub_channel_index)
     n_chan_sub = rel_sub_channel_index.shape[1]
 
     if in_place and out is None:
@@ -672,7 +684,7 @@ def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
 
 def grab_main_channels_torch(waveforms, channels, channel_index):
     nc = len(channel_index)
-    chans_arange = torch.arange(nc).to(channel_index)
+    chans_arange = torch.arange(nc, dtype=torch.long).to(channel_index)
     _, rpos = (channel_index == chans_arange.unsqueeze(1)).nonzero(as_tuple=True)
     assert rpos.shape == (nc,)
     inds = rpos[channels]
