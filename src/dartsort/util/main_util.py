@@ -17,11 +17,11 @@ def ds_save_intermediate_labels(
     step_name: str,
     step_sorting: DARTsortSorting,
     output_dir: Path | str,
-    cfg: DARTsortInternalConfig,
+    cfg: DARTsortInternalConfig | None,
     step_labels: np.ndarray | None = None,
     work_dir: str | Path | None = None,
 ):
-    if not cfg.save_intermediate_labels:
+    if cfg is not None and not cfg.save_intermediate_labels:
         return
     output_dir = resolve_path(output_dir, strict=True)
     if work_dir is None:

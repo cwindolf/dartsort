@@ -53,7 +53,6 @@ def geomplot(
     if torch.is_tensor(c):
         c = c.numpy(force=True)
 
-
     # randomize if asked to
     if randomize:
         rg = np.random.default_rng(random_seed)
@@ -64,7 +63,7 @@ def geomplot(
             max_channels = max_channels[o]
         if channels is not None:
             channels = channels[o]
-        if c is not None and len(c) == len(o):
+        if c is not None and hasattr(c, "__len__") and len(c) == len(o):
             c = c[o]
         if colors is not None and len(colors) == len(o):
             colors = colors[o]
@@ -73,6 +72,8 @@ def geomplot(
     if waveforms.ndim == 2:
         waveforms = waveforms[None]
     assert waveforms.ndim == 3
+    if c is not None and (hasattr(c, "__len__") and len(c) > 1):
+        assert len(c) == len(waveforms)
     if channels is None:
         if max_channels is None and channel_index is None:
             max_channels = np.zeros(waveforms.shape[0], dtype=int)

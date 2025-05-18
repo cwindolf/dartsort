@@ -1,9 +1,10 @@
 import torch
-from dartsort.util import spiketorch
+import numpy as np
 
 from .peel_base import BasePeeler, SpikeDataset
-from ..util.waveform_util import make_channel_index
 from ..transform import WaveformPipeline
+from ..util.waveform_util import make_channel_index
+from ..util import spiketorch
 
 
 class GrabAndFeaturize(BasePeeler):
@@ -46,7 +47,7 @@ class GrabAndFeaturize(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        datasets.append(SpikeDataset(name="indices", shape_per_spike=(), dtype=int))
+        datasets.append(SpikeDataset(name="indices", shape_per_spike=(), dtype=np.int64))
         return datasets
 
     def process_chunk(

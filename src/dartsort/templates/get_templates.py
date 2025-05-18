@@ -295,7 +295,7 @@ def realign_sorting(
     # find unit sample time shifts
     template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
     template_shifts_[np.abs(template_shifts_) > max_shift] = 0
-    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=int)
+    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=np.int64)
     template_shifts[unit_ids] = template_shifts_
 
     # create aligned spike train

@@ -440,7 +440,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if neighborhoods is None:
             neighborhoods = self.train_neighborhoods
         shp = self.n_units, neighborhoods.n_neighborhoods
-        unit_neighborhood_counts = np.zeros(shp, dtype=int)
+        unit_neighborhood_counts = np.zeros(shp, dtype=np.int64)
 
         labels = labels.numpy(force=True).copy()
         if count_per_unit:
@@ -1273,7 +1273,7 @@ class CandidateSet:
         # this is how "explore" candidates are suggested. the policy is strict:
         # just the top unit counts for each spike. this is to keep the lut smallish,
         # tho it is still huge, hopefully without making the search too bad...
-        unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=int)
+        unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=np.int64)
         np.add.at(unit_neighborhood_counts, (top[:, 0], neighb_ids), 1)
 
         # which to explore?

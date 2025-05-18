@@ -435,7 +435,7 @@ class SimulatedRecording:
         if temporal_jitter > 1:
             self.jitter_ix = self.rg.integers(temporal_jitter, size=self.n_spikes)
         else:
-            self.jitter_ix = np.zeros(1, dtype=int)
+            self.jitter_ix = np.zeros(1, dtype=np.int64)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
 
     def drift(self, t_samples):
@@ -566,6 +566,7 @@ class SimulatedRecording:
             generator=self.torch_rg,
             chunk_t=int(self.template_simulator.fs),
         )
+        print(f"{x.shape=} {self.duration_samples=} {self.geom.shape=}")
         assert x.shape == (1, self.duration_samples, len(self.geom))
         x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
 

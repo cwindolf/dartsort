@@ -204,9 +204,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def out_datasets(self):
         datasets = super().out_datasets()
         return datasets + [
-            SpikeDataset(name="template_indices", shape_per_spike=(), dtype=int),
-            SpikeDataset(name="labels", shape_per_spike=(), dtype=int),
-            SpikeDataset(name="upsampling_indices", shape_per_spike=(), dtype=int),
+            SpikeDataset(name="template_indices", shape_per_spike=(), dtype=np.int64),
+            SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
+            SpikeDataset(name="upsampling_indices", shape_per_spike=(), dtype=np.int64),
             SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
             SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
         ]
@@ -1147,23 +1147,23 @@ class MatchingPeaks:
             device = times.device
         if times is None:
             self.cur_buf_size = self.BUFFER_INIT
-            self._times = torch.zeros(self.cur_buf_size, dtype=int, device=device)
+            self._times = torch.zeros(self.cur_buf_size, dtype=torch.long, device=device)
         else:
             self.cur_buf_size = times.numel()
             assert self.cur_buf_size == n_spikes
         if template_indices is None:
             self._template_indices = torch.zeros(
-                self.cur_buf_size, dtype=int, device=device
+                self.cur_buf_size, dtype=torch.long, device=device
             )
         if objective_template_indices is None:
             self._objective_template_indices = torch.zeros(
-                self.cur_buf_size, dtype=int, device=device
+                self.cur_buf_size, dtype=torch.long, device=device
             )
         if scalings is None:
             self._scalings = torch.ones(self.cur_buf_size, device=device)
         if upsampling_indices is None:
             self._upsampling_indices = torch.zeros(
-                self.cur_buf_size, dtype=int, device=device
+                self.cur_buf_size, dtype=torch.long, device=device
             )
         if scores is None:
             self._scores = torch.zeros(self.cur_buf_size, device=device)

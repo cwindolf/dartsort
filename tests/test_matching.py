@@ -387,7 +387,7 @@ def static_tester(tmp_path, up_factor=1):
             ixa, ixb, pconv = matcher.pairwise_conv_db.query(
                 np.arange(3),
                 np.arange(3),
-                upsampling_indices_b=up + np.zeros(3, dtype=int),
+                upsampling_indices_b=up + np.zeros(3, dtype=np.int64),
                 grid=True,
             )
             centerpc = pconv[:, spike_length_samples - 1]

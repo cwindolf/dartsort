@@ -147,6 +147,7 @@ class WhiteNoise(torch.nn.Module):
     """White noise to mimic the StationaryFactorizedNoise for use in sims."""
 
     def __init__(self, n_channels, scale=1.0):
+        super().__init__()
         self.n_channels = n_channels
         self.scale = scale
 

@@ -78,7 +78,7 @@ def simulate_moppca(
         x = y
         channels = torch.arange(nc).unsqueeze(0).broadcast_to(N, nc)
     elif t_missing == "random":
-        possible_neighbs = np.zeros(nc - n_missing, dtype=int)[None]
+        possible_neighbs = np.zeros(nc - n_missing, dtype=np.int64)[None]
         npair = (nc * (nc - 1)) // 2
         possible_neighbs = np.broadcast_to(possible_neighbs, (npair, nc - n_missing))
         possible_neighbs = np.ascontiguousarray(possible_neighbs)
@@ -102,7 +102,7 @@ def simulate_moppca(
         neighbs = np.stack((n0, n1), axis=0)
         ns_missing = 100
         choices = np.concatenate(
-            (np.zeros(ns_missing, dtype=int), np.ones(N - ns_missing, dtype=int))
+            (np.zeros(ns_missing, dtype=np.int64), np.ones(N - ns_missing, dtype=np.int64))
         )
         rg.shuffle(choices)
         channels = neighbs[choices]
@@ -127,15 +127,15 @@ def simulate_moppca(
         )
 
     init_sorting = dartsort.DARTsortSorting(
-        times_samples=torch.arange(N),
-        channels=torch.zeros(N, dtype=int),
+        times_samples=torch.arange(N).to(torch.long),
+        channels=torch.zeros(N, dtype=torch.long),
         labels=init_labels,
         sampling_frequency=100.0,
         extra_features=dict(times_seconds=torch.arange(N) / 100.0),
     )
 
     _tpca = dartsort.transform.TemporalPCAFeaturizer(
-        channel_index=torch.zeros(nc, nc - n_missing, dtype=int),
+        channel_index=torch.zeros(nc, nc - n_missing, dtype=torch.long),
         rank=rank,
     )
     splits = rg.binomial(1, p=0.3, size=N)

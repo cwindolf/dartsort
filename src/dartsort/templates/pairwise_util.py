@@ -99,7 +99,7 @@ def compressed_convolve_to_h5(
             template_shift_index_a.n_shifted_templates,
             upsampled_shifted_template_index.n_upsampled_shifted_templates,
         ),
-        dtype=int,
+        dtype=np.int64,
     )
     n_pconvs = 1
     with h5py.File(output_hdf5_filename, "w") as h5:
@@ -365,7 +365,7 @@ def conv_to_resid(
 
     # for loop to reduce over all (upsampled etc) member templates
     deconv_resid_norms = np.zeros(n_pairs)
-    shifts = np.zeros(n_pairs, dtype=int)
+    shifts = np.zeros(n_pairs, dtype=np.int64)
     template_indices_a, template_indices_b = pairs.T
 
     # low rank template norms
@@ -921,7 +921,7 @@ def shift_deduplicated_pairs(
             pair_ix_b,
             nco_range,
             nco_range,
-            np.zeros(nco, dtype=int),
+            np.zeros(nco, dtype=np.int64),
         )
 
     # shift deduplication. algorithm:
@@ -1096,7 +1096,7 @@ def compressed_upsampled_pairs(
     up_factor = compressed_upsampled_temporal.compressed_upsampling_map.shape[1]
     compression_dup_ix = slice(None)
     if up_factor == 1:
-        upinds = np.zeros(len(conv_ix), dtype=int)
+        upinds = np.zeros(len(conv_ix), dtype=np.int64)
         # temp_comps = compressed_upsampled_temporal.compressed_upsampled_templates[
         #     np.atleast_1d(temp_ix_b[ix_b[conv_ix]])
         # ]

@@ -43,7 +43,7 @@ def test_shifted_waveforms():
     n_pitches_shift = np.array([3, 2, 1, 1, 3])
     shifted_waveforms = drift_util.get_waveforms_on_static_channels(
         waveforms,
-        main_channels=np.zeros(5, dtype=int),
+        main_channels=np.zeros(5, dtype=np.int64),
         channel_index=waveform_util.full_channel_index(3),
         target_channels=np.array([3]),
         n_pitches_shift=n_pitches_shift,

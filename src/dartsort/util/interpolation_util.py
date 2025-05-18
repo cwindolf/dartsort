@@ -17,6 +17,14 @@ interp_kinds = (
     "kriging_normalized",
     "idw",
     "thinplate",
+    "rq",
+    "rq_0.5",
+    "rq_1",
+    "rq_2",
+    "rq_normalized",
+    "rq_normalized_0.5",
+    "rq_normalized_1",
+    "rq_normalized_2",
 )
 
 
@@ -315,6 +323,16 @@ def kernel_interpolate(
         kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     elif interpolation_method == "idw":
         kernel = idw_kernel(source_pos, target_pos)
+    elif interpolation_method.startswith("rq"):
+        try:
+            alpha = interpolation_method.removeprefix("rq_")
+            alpha = alpha.removeprefix("normalized_")
+            alpha = float(alpha)
+        except ValueError:
+            alpha = 1.0
+        kernel = rq_kernel(source_pos, target_pos, sigma, alpha)
+        if "normalized" in interpolation_method:
+            kernel /= kernel.sum(1, keepdim=True)
     else:
         kernel = log_rbf(source_pos, target_pos, sigma)
         if interpolation_method == "normalized":
@@ -410,6 +428,18 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     kernel = source_pos[:, :, None] - target_pos[:, None, :]
     kernel = kernel.square_().sum(dim=3).div_(-2.0)
     kernel = kernel.nan_to_num_(nan=-torch.inf)
+    return kernel
+
+
+def rq_kernel(source_pos, target_pos=None, sigma=None, alpha=1.0):
+    source_pos = source_pos / sigma
+    if target_pos is None:
+        target_pos = source_pos
+    else:
+        target_pos = target_pos / sigma
+    kernel = source_pos[:, :, None] - target_pos[:, None, :]
+    kernel = kernel.square_().sum(dim=3).nan_to_num_()
+    kernel = kernel.add_(1.0).pow_(-alpha)
     return kernel
 
 

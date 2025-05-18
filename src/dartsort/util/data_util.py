@@ -47,16 +47,16 @@ class DARTsortSorting:
     extra_features: dict[str, np.ndarray] | None = None
 
     def __post_init__(self):
-        self.times_samples = np.asarray(self.times_samples, dtype=int)
+        self.times_samples = np.asarray(self.times_samples, dtype=np.int64)
 
         if self.labels is None:
             self.labels = np.zeros_like(self.times_samples)
-        self.labels = np.asarray(self.labels, dtype=int)
+        self.labels = np.asarray(self.labels, dtype=np.int64)
         self._n_units = None
         if self.parent_h5_path is not None:
             self.parent_h5_path = Path(self.parent_h5_path).absolute()
 
-        self.channels = np.asarray(self.channels, dtype=int)
+        self.channels = np.asarray(self.channels, dtype=np.int64)
         assert self.times_samples.shape == self.channels.shape
 
         unit_ids = np.unique(self.labels)

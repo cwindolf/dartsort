@@ -444,7 +444,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 log_proportions=self.log_proportions[ids].numpy(force=True),
                 k=tmm.n_candidates,
             )
-            init = np.empty((n_spikes, tmm.n_candidates), dtype=int)
+            init = np.empty((n_spikes, tmm.n_candidates), dtype=np.int64)
             z_lines = np.setdiff1d(np.arange(n_spikes), nz_lines)
             z_init = integers_without_inner_replacement(
                 self.rg, high=n_units, size=(len(z_lines), init.shape[1])
@@ -915,12 +915,12 @@ class SpikeMixtureModel(torch.nn.Module):
             # get the big nnz-length csc buffers. these can be huge so we cache them.
             csc_indices, csc_data = get_csc_storage(nnz, self.storage, use_storage)
             # csc compressed indptr. spikes are columns.
-            indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=int)))
+            indptr = np.concatenate(([0], np.cumsum(spike_overlaps, dtype=np.int64)))
             del spike_overlaps
             # each spike starts at writing at its indptr. as we gather more units for each
             # spike, we increment the spike's "write head". idea is to directly make csc
             write_offsets = indptr[:-1].copy()
-            row_nnz = np.zeros(max(unit_ids) + 1, dtype=int)
+            row_nnz = np.zeros(max(unit_ids) + 1, dtype=np.int64)
         else:
             ncols = (
                 self.data.n_spikes
@@ -965,7 +965,7 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             assert log_liks.shape[0] == j + 1 + with_noise_unit
             rows, counts = np.unique(log_liks.indices, return_counts=True)
-            row_nnz = np.zeros(log_liks.shape[0], dtype=int)
+            row_nnz = np.zeros(log_liks.shape[0], dtype=np.int64)
             row_nnz[rows] = counts
             log_liks.row_nnz = row_nnz[: log_liks.shape[0] - with_noise_unit]
         else:
@@ -3785,7 +3785,7 @@ class GaussianUnit(torch.nn.Module):
 
 def all_partitions(ids):
     ids = np.array(ids).ravel()
-    group_ids = np.zeros(len(ids), dtype=int)
+    group_ids = np.zeros(len(ids), dtype=np.int64)
     for m in range(1, len(ids) + 1):
         for partition in multiset_partitions(len(ids), m=m):
             ids_partition = []

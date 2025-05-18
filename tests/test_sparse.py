@@ -76,7 +76,7 @@ def test_topk_sparse():
         # this one below is stochastic but should succeed whp
         if ncols > 80:
             assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-        counts = np.zeros(ncols, dtype=int)
+        counts = np.zeros(ncols, dtype=np.int64)
         counts[cols_valid] = min(k, j + 1)
         assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     csc_last = csc
@@ -95,7 +95,7 @@ def test_topk_sparse():
     # this one below is stochastic but should succeed whp
     if ncols > 80:
         assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] = k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
 
@@ -109,7 +109,7 @@ def test_topk_sparse():
         assert np.array_equal(
             np.unique(csc.indices), np.concatenate([np.arange(j + 1), [nrows]])
         )
-    counts = np.ones(ncols, dtype=int)
+    counts = np.ones(ncols, dtype=np.int64)
     counts[cols_valid] += k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     dns = csc.todense()
@@ -149,7 +149,7 @@ def test_topk_sparse_sparse():
         # this one below is stochastic but should succeed whp
         if ncols > 80:
             assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-        counts = np.zeros(ncols, dtype=int)
+        counts = np.zeros(ncols, dtype=np.int64)
         counts[cols_valid] = min(k, j + 1)
         assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     csc_last = csc
@@ -170,7 +170,7 @@ def test_topk_sparse_sparse():
     # this one below is stochastic but should succeed whp
     if ncols > 80:
         assert np.array_equal(np.unique(csc.indices), np.arange(j + 1))
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] = k
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
 
@@ -186,7 +186,7 @@ def test_topk_sparse_sparse():
         assert np.array_equal(
             np.unique(csc.indices), np.concatenate([np.arange(j + 1), [nrows]])
         )
-    counts = np.zeros(ncols, dtype=int)
+    counts = np.zeros(ncols, dtype=np.int64)
     counts[cols_valid] += k + 1
     assert np.array_equal(csc.indptr, np.concatenate([[0], np.cumsum(counts)]))
     dns = csc.todense()

@@ -8,8 +8,7 @@ from scipy.special import logsumexp
 
 def get_coo_storage(ns_total, storage, use_storage):
     if not use_storage:
-        # coo_uix = np.empty(ns_total, dtype=int)
-        coo_six = np.empty(ns_total, dtype=int)
+        coo_six = np.empty(ns_total, dtype=np.int64)
         coo_data = np.empty(ns_total, dtype=np.float32)
         return coo_six, coo_data
 
@@ -18,12 +17,12 @@ def get_coo_storage(ns_total, storage, use_storage):
             # del storage.coo_uix
             del storage.coo_six
             del storage.coo_data
-        # storage.coo_uix = np.empty(ns_total, dtype=int)
-        storage.coo_six = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=np.int64)
+        storage.coo_six = np.empty(ns_total, dtype=np.int64)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
     else:
-        # storage.coo_uix = np.empty(ns_total, dtype=int)
-        storage.coo_six = np.empty(ns_total, dtype=int)
+        # storage.coo_uix = np.empty(ns_total, dtype=np.int64)
+        storage.coo_six = np.empty(ns_total, dtype=np.int64)
         storage.coo_data = np.empty(ns_total, dtype=np.float32)
 
     # return storage.coo_uix, storage.coo_six, storage.coo_data
@@ -214,19 +213,19 @@ def topk_sparse_tocsc(
     shape = (n_rows + (extra_row is not None), ncols)
     dtype = topk_data.dtype
     data_storage = np.empty((nnz,), dtype=dtype)
-    index_storage = np.empty((nnz,), dtype=int)
+    index_storage = np.empty((nnz,), dtype=np.int64)
 
     if (
         column_support is None
         or isinstance(column_support, slice)
         and column_support == slice(None)
     ):
-        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=int)
+        indptr = np.full((n + 1,), k + (extra_row is not None), dtype=np.int64)
         indptr[0] = 0
         indptr[1:] -= start
         np.cumsum(indptr[1:], out=indptr[1:])
     else:
-        indptr = np.zeros((ncols + 1,), dtype=int)
+        indptr = np.zeros((ncols + 1,), dtype=np.int64)
         indptr[1 + column_support] = k + (extra_row is not None)
         indptr[1 + column_support] -= start
         np.cumsum(indptr[1:], out=indptr[1:])
@@ -593,7 +592,7 @@ def hard_noise_argmax_loop(
 
 
 def searchsorted_along_columns(arr, value):
-    out = np.empty((arr.shape[0],), dtype=int)
+    out = np.empty((arr.shape[0],), dtype=np.int64)
     _searchsorted_along_columns(out, arr, value)
     return out
 

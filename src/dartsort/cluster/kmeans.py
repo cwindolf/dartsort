@@ -29,7 +29,7 @@ def kmeanspp(X, n_components=10, random_state=0, kmeanspp_initial="random", mode
         assert False
 
     dists = (X - X[centroid_ixs[-1]]).square_().sum(1)
-    assignments = torch.zeros((n,), dtype=int, device=X.device)
+    assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
 
     for j in range(1, n_components):
         p = (dists / dists.sum()).numpy(force=True)
@@ -128,7 +128,7 @@ def kmeans(
 ):
     best_phi = np.inf
     random_state = np.random.default_rng(random_state)
-    assignments = torch.zeros(len(X), dtype=int)
+    assignments = torch.zeros(len(X), dtype=torch.long)
     e = centroids = None
     for j in range(n_kmeans_tries):
         aa, ee, cc, dists = kmeans_inner(
