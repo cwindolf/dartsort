@@ -126,7 +126,7 @@ class DARTsortUserConfig:
 
     # -- clustering parameters
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
-    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 20.0
+    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
