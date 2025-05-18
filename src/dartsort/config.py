@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from .util.internal_config import _strict_config, default_pretrained_path
-from .util.py_util import int_or_float, str_or_none
+from .util.py_util import int_or_float, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
@@ -199,10 +199,10 @@ class DeveloperConfig(DARTsortUserConfig):
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
     interpolation_method: str = "normalized"
-    extrapolation_method: str | None = None
+    extrapolation_method: str | None = argfield(default=None, arg_type=str_or_none)
     interpolation_kernel: str = "rbf"
     interpolation_rq_alpha: float = 1.0
     interpolation_degree: int = 0
-    glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
+    glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
     laplace_ard: bool = True
     core_radius: float = 35.0

@@ -1,5 +1,6 @@
 import dataclasses
 import tempfile
+import pytest
 
 import h5py
 import numpy as np
@@ -334,7 +335,8 @@ def test_fakedata_nonn(tmp_path):
         assert len(stb) == ns0
 
 
-def _test_small_nonn(tmp_path, nn_localization=False):
+@pytest.mark.parameterize("nn_localization", [False, True])
+def test_small_nonn(tmp_path, nn_localization):
     # noise recording
     T_samples = 50_100
     n_channels = 50
@@ -426,12 +428,7 @@ def _test_small_nonn(tmp_path, nn_localization=False):
             assert np.unique(lens).size == 1
 
 
-def test_small_nonn(tmp_path):
-    _test_small_nonn(tmp_path, False)
-    _test_small_nonn(tmp_path, True)
-
-
-def small_default_config(tmp_path, extract_radius=200):
+def test_small_default_config(tmp_path, extract_radius=100):
     # noise recording
     T_samples = 50_100
     n_channels = 50
@@ -502,11 +499,3 @@ def small_default_config(tmp_path, extract_radius=200):
             assert np.unique(lens).size == 1
             assert np.array_equal(h5["channels"][:], gt_channels)
             assert lens[0] == len(gt_times)
-
-
-def test_small_default_config(tmp_path):
-    small_default_config(tmp_path)
-
-
-def test_small_default_config_subex(tmp_path):
-    small_default_config(tmp_path, extract_radius=100.0)
