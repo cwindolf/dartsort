@@ -335,7 +335,7 @@ def test_fakedata_nonn(tmp_path):
         assert len(stb) == ns0
 
 
-@pytest.mark.parameterize("nn_localization", [False, True])
+@pytest.mark.parametrize("nn_localization", [False, True])
 def test_small_nonn(tmp_path, nn_localization):
     # noise recording
     T_samples = 50_100
