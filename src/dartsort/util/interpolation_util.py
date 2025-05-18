@@ -168,9 +168,9 @@ def interp_precompute(
     kriging_poly_degree=-1,
     source_geom_is_padded=True,
 ):
-    if method in ("kernel", "normalized"):
+    if method in ("nearest", "kernel", "normalized", "zero"):
         return None
-    assert method == "kriging"
+    assert method in ("kriging", "krigingnormalized")
 
     if source_pos is None:
         assert source_geom is not None
@@ -213,16 +213,16 @@ def interp_precompute(
     )
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
-        kernel = source_kernels[j]
+        kernel = source_kernels[j][present][:, present]
 
         if design_vars:
-            source_pos = source_pos[j][present] / sigma
-            const = source_pos.new_ones((source_pos.shape[0], 1))
+            pos = source_pos[j][present] / sigma
+            const = pos.new_ones((pos.shape[0], 1))
             ix = torch.concatenate((present, design_inds), dim=0)
             if kriging_poly_degree == 0:
                 design = const
             else:
-                design = torch.cat([source_pos, const], dim=1)
+                design = torch.cat([pos, const], dim=1)
 
             top = torch.cat([kernel, design], dim=1)
             bot = torch.cat([design.T, design_zeros], dim=1)
@@ -231,7 +231,8 @@ def interp_precompute(
             to_solve = kernel
             ix = present
 
-        solvers[j, ix[:, None], ix[None, :]] = torch.linalg.inv(to_solve)
+        # pinv is helpful here. numerics can get weird with large domains.
+        solvers[j, ix[:, None], ix[None, :]] = torch.linalg.pinv(to_solve)
 
     return solvers
 
@@ -247,7 +248,10 @@ def get_kernel(
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
 
-    if kernel_name == "nearest":
+    if kernel_name == "zero":
+        tc = source_pos.shape[1] if target_pos is None else target_pos.shape[1]
+        return source_pos.new_zeros(*source_pos.shape[:2], tc)
+    elif kernel_name == "nearest":
         kernel = nearest_kernel(source_pos, target_pos)
     elif kernel_name == "idw":
         kernel = idw_kernel(source_pos, target_pos)
@@ -277,21 +281,23 @@ def get_kernel(
 
 def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree=-1):
     n, rank = features.shape[:2]
+    n_, n_targ, dim = target_pos.shape
+    assert n == n_
 
     if poly_degree == -1:
         y = features
         pass
     elif poly_degree == 0:
         zero = features.new_zeros((n, rank, 1))
-        const = features.new_ones((n, rank, 1))
         y = torch.concatenate([features, zero], dim=2)
-        kernels = torch.concatenate([features, const], dim=1)
+        const = features.new_ones((n, 1, n_targ))
+        kernels = torch.concatenate([kernels, const], dim=1)
     elif poly_degree == 1:
-        zero = features.new_zeros((n, rank, 1 + target_pos.shape[2]))
-        const = features.new_ones((n, rank, 1))
-        xy = (target_pos / sigma).nan_to_num_()
-        y = torch.concatenate([features, xy, zero], dim=2)
-        kernels = torch.concatenate([features, xy, const], dim=1)
+        zero = features.new_zeros((n, rank, 1 + dim))
+        y = torch.concatenate([features, zero], dim=2)
+        const = features.new_ones((n, 1, n_targ))
+        xy = (target_pos / sigma).nan_to_num_().mT
+        kernels = torch.concatenate([kernels, xy, const], dim=1)
     else:
         assert False
 
@@ -345,21 +351,29 @@ def kernel_interpolate(
     features : torch.Tensor
         n_spikes, feature_dim, n_target_channels
     """
-    if extrap_method == "nearest":
-        extrap_method = "kernel"
-        assert method == "nearest"
     if method == "nearest":
         method = "kernel"
         kernel_name = "nearest"
+    elif method == "zero":
+        method = "kernel"
+        kernel_name = "zero"
+    extrap_kernel_name = kernel_name
+    if extrap_method == "nearest":
+        extrap_method = "kernel"
+        extrap_kernel_name = "nearest"
+    elif method == "zero":
+        method = "kernel"
+        kernel_name = "zero"
+    extrap_diff = extrap_method != method or extrap_kernel_name != kernel_name
 
     features_out = None
-    if extrap_method is not None and extrap_method != method:
+    if extrap_method is not None and extrap_diff:
         features_out = kernel_interpolate(
             features,
             source_pos,
             target_pos,
             method=extrap_method,
-            kernel_name=kernel_name,
+            kernel_name=extrap_kernel_name,
             sigma=sigma,
             rq_alpha=rq_alpha,
             kriging_poly_degree=kriging_poly_degree,
@@ -383,7 +397,7 @@ def kernel_interpolate(
         kernel_name=kernel_name,
         sigma=sigma,
         rq_alpha=rq_alpha,
-        normalized=method == "normalized",
+        normalized=method.endswith("normalized"),
     )
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
@@ -406,11 +420,13 @@ def kernel_interpolate(
     needs_nan = needs_nan.broadcast_to(features.shape)
     features[needs_nan] = torch.nan
 
-    if extrap_method is not None and extrap_method != method:
+    if extrap_method is not None and extrap_diff:
         # control over extrapolation with another method...
         assert features_out is not None
         targ_extrap = extrap_mask(source_pos, target_pos)
-        features = torch.where(targ_extrap[:, None], features_out, features)
+        features = torch.where(
+            targ_extrap[:, None], features_out, features, out=features
+        )
 
     return features
 
@@ -480,19 +496,18 @@ def rq_kernel(source_pos, target_pos=None, sigma=None, alpha=1.0):
 
 
 def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
-    alpha = 1.0 / (8 * torch.pi)
-    if sigma != 1.0:
+    if not isinstance(sigma, (float, int)) or sigma != 1.0:
         source_pos = source_pos / sigma
     if target_pos is None:
         target_pos = source_pos
-    elif sigma != 1.0:
+    elif not isinstance(sigma, (float, int)) or sigma != 1.0:
         target_pos = target_pos / sigma
 
     rsq = source_pos[:, :, None] - target_pos[:, None, :]
     rsq = rsq.square_().sum(dim=3)
     r = rsq.sqrt()
 
-    kernel = torch.where(r < 1, r * torch.log(r**r), rsq * r.log()).mul_(alpha)
+    kernel = torch.where(r < 1, r * torch.log(r**r), rsq * r.log())
 
     return kernel
 

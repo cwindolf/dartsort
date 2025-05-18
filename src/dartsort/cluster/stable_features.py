@@ -112,7 +112,7 @@ class StableSpikeDataset(torch.nn.Module):
         # train is modified below if there is a train split.
         self.n_spikes_train = self.n_spikes_kept = len(kept_indices)
         self.core_radius = core_radius
-        assert extrap_method != "kriging"
+        # assert extrap_method != "kriging"
         self.extrap_method = extrap_method
         self.kernel_name = kernel_name
         self.sigma = sigma
@@ -206,12 +206,13 @@ class StableSpikeDataset(torch.nn.Module):
         core_radius=35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
-        interpolation_method="normalized",
-        extrap_method=None,
-        kernel_name="rbf",
-        sigma=20.0,
-        rq_alpha=1.0,
-        kriging_poly_degree=-1,
+        interpolation_method="kriging",
+        kernel_name="thinplate",
+        sigma=10.0,
+        rq_alpha=0.5,
+        kriging_poly_degree=1,
+        extrap_method: str | None="kernel",
+        extrap_kernel: str | None="rq",
         features_dataset_name="collisioncleaned_tpca_features",
         motion_depth_mode="channel",
         split_names=("train", "val"),
@@ -313,11 +314,11 @@ class StableSpikeDataset(torch.nn.Module):
                 geom,
                 extract_channel_index,
                 sorting.channels[train_mask],
-                shifts,
+                shifts[train_mask],
                 registered_geom,
                 extract_channels[train_mask],
                 method=interpolation_method,
-                extrap_method=extrap_method,
+                extrap_method=None,
                 kernel_name=kernel_name,
                 sigma=sigma,
                 rq_alpha=rq_alpha,
@@ -337,7 +338,7 @@ class StableSpikeDataset(torch.nn.Module):
                 registered_geom,
                 core_channels,
                 method=interpolation_method,
-                extrap_method=extrap_method,
+                extrap_method=None,
                 kernel_name=kernel_name,
                 sigma=sigma,
                 rq_alpha=rq_alpha,
@@ -369,7 +370,7 @@ class StableSpikeDataset(torch.nn.Module):
             core_radius=core_radius,
             device=device,
             extrap_method=extrap_method or interpolation_method,
-            kernel_name=kernel_name,
+            kernel_name=extrap_kernel or kernel_name,
             sigma=sigma,
             rq_alpha=rq_alpha,
             _core_feature_splits=_core_feature_splits,

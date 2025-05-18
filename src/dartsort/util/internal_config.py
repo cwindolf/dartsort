@@ -380,7 +380,7 @@ class RefinementConfig:
     # -- gmm parameters
     # noise params
     cov_kind: str = "factorizednoise"
-    glasso_alpha: float | int = 0
+    glasso_alpha: float | int | None = None
 
     # feature params
     core_radius: float = 35.0
@@ -389,12 +389,13 @@ class RefinementConfig:
     max_avg_units: int = 3
 
     # feature interpolation
-    interpolation_method: str = "normalized"
-    extrapolation_method: str | None = None
-    kernel_name: str = "rbf"
-    interpolation_sigma: float = 20.0
-    rq_alpha: float = 1.0
-    kriging_poly_degree: int = 0
+    interpolation_method: str = "kriging"
+    extrapolation_method: str | None = "kernel"
+    kernel_name: str = "thinplate"
+    extrapolation_kernel: str | None = "rq"
+    interpolation_sigma: float = 10.0
+    rq_alpha: float = 0.5
+    kriging_poly_degree: int = 1
 
     # model params
     channels_strategy: str = "count"

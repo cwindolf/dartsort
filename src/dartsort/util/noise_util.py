@@ -640,7 +640,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     @classmethod
     def estimate(
-        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha=0, eps=1e-4
+        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha: int | float | None=None, eps=1e-4
     ):
         """Factory method to estimate noise model from TPCA snippets
 
@@ -799,7 +799,7 @@ class EmbeddedNoise(torch.nn.Module):
                 logger.dartsortdebug(f"Best alpha was {glasso.alpha_=}")
                 glasso_alpha = glasso.alpha_
 
-            if isinstance(glasso_alpha, float):
+            if glasso_alpha and isinstance(glasso_alpha, float):
                 logger.dartsortdebug(f"Run glasso on {cov.shape=}")
                 res = graphical_lasso(
                     cov.numpy(force=True),
@@ -838,13 +838,12 @@ class EmbeddedNoise(torch.nn.Module):
         cov_kind="factorizednoise",
         motion_est=None,
         interpolation_method="normalized",
-        extrap_method=None,
         kernel_name="rbf",
         sigma=20.0,
         rq_alpha=1.0,
         kriging_poly_degree=-1,
         device=None,
-        glasso_alpha=0.0,
+        glasso_alpha: int | float | None=None,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -863,7 +862,6 @@ class EmbeddedNoise(torch.nn.Module):
             geom,
             rgeom,
             method=interpolation_method,
-            extrap_method=extrap_method,
             kernel_name=kernel_name,
             sigma=sigma,
             rq_alpha=rq_alpha,
@@ -883,7 +881,6 @@ def interpolate_residual_snippets(
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     method="normalized",
-    extrap_method=None,
     kernel_name="rbf",
     sigma=20.0,
     rq_alpha=1.0,
@@ -935,6 +932,9 @@ def interpolate_residual_snippets(
         kriging_poly_degree=kriging_poly_degree,
         source_geom_is_padded=False,
     )
+    if precomputed_data is not None:
+        shp = (n, *precomputed_data.shape[1:])
+        precomputed_data = precomputed_data.broadcast_to(shp)
 
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
@@ -948,7 +948,6 @@ def interpolate_residual_snippets(
             source_pos,
             target_pos,
             method=method,
-            extrap_method=extrap_method,
             kernel_name=kernel_name,
             sigma=sigma,
             rq_alpha=rq_alpha,
@@ -996,7 +995,6 @@ def interpolate_residual_snippets(
         source_pos,
         target_pos_shifted,
         method=method,
-        extrap_method=extrap_method,
         kernel_name=kernel_name,
         sigma=sigma,
         rq_alpha=rq_alpha,
