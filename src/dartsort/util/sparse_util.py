@@ -152,10 +152,7 @@ def topk_sparse_insert(row, row_column_indices, row_data, topk):
 
 
 @numba.njit(
-    [
-        "i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]",
-        "i4,i8[::1],f4[::1],i4[:,::1],f4[:,::1]",
-    ],
+    "i8,i8[::1],f4[::1],i8[:,::1],f4[:,::1]",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -250,10 +247,7 @@ def topk_sparse_tocsc(
 
 
 @numba.njit(
-    [
-        "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1]",
-        "i4[::1],f4[::1],i4[::1],f4[:,::1],i4[:,::1]",
-    ],
+    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1]",
     error_model="numpy",
     nogil=True,
 )
@@ -268,10 +262,7 @@ def _topk_pack(istorage, dstorage, start, topk_data, topk_inds):
 
 
 @numba.njit(
-    [
-        "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1],f4[::1],i8",
-        "i4[::1],f4[::1],i4[::1],f4[:,::1],i4[:,::1],f4[::1],i4",
-    ],
+    "i8[::1],f4[::1],i8[::1],f4[:,::1],i8[:,::1],f4[::1],i8",
     error_model="numpy",
     nogil=True,
 )
@@ -318,7 +309,7 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
     rowix_dtype = csc.indices.dtype
     kept_row_inds = np.flatnonzero(keep_mask).astype(rowix_dtype)
     oldrow_to_newrow = np.zeros(len(keep_mask), dtype=rowix_dtype)
-    oldrow_to_newrow[kept_row_inds] = np.arange(len(kept_row_inds))
+    oldrow_to_newrow[kept_row_inds] = np.arange(len(kept_row_inds), dtype=rowix_dtype)
     nnz = _csc_sparse_mask_rows(
         csc.indices, csc.indptr, csc.data, oldrow_to_newrow, keep_mask
     )
@@ -329,13 +320,11 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
     )
 
 
-sigs = [
+@numba.njit(
     "i8(i8[::1], i8[::1], f4[::1], i8[::1], bool_[::1])",
-    "i8(i4[::1], i4[::1], f4[::1], i4[::1], bool_[::1])",
-]
-
-
-@numba.njit(sigs, error_model="numpy", nogil=True)
+    error_model="numpy",
+    nogil=True,
+)
 def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
     write_ix = 0
 
@@ -383,13 +372,11 @@ def csc_sparse_getrow(csc, row, rowcount):
     return columns_out, data_out
 
 
-sigs = [
+@numba.njit(
     "void(i8[::1], i8[::1], f4[::1], i8[::1], f4[::1], i8, i8)",
-    "void(i4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4, i8)",
-]
-
-
-@numba.njit(sigs, error_model="numpy", nogil=True)
+    error_model="numpy",
+    nogil=True,
+)
 def _csc_sparse_getrow(indices, indptr, data, columns_out, data_out, the_row, count):
     write_ix = 0
 
@@ -421,7 +408,7 @@ def sparse_topk(liks, log_proportions=None, k=3):
 
     # see scipy csc argmin/argmax for reference here. this is just numba-ing
     # a special case of that code which has a python hot loop.
-    topk = np.full((nnz, k), -1)
+    topk = np.full((nnz, k), -1, dtype=np.int64)
     if log_proportions is None:
         log_proportions = np.zeros(liks.shape[0], dtype=np.float32)
     else:
@@ -442,11 +429,7 @@ def sparse_topk(liks, log_proportions=None, k=3):
 
 
 @numba.njit(
-    [
-        "void(i8[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-        "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-        "void(i4[:, ::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    ],
+    "void(i8[:, ::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -476,9 +459,9 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
     """
     if not liks.nnz:
         return (
-            np.arange(0),
+            np.arange(0, dtype=np.int64),
             liks,
-            np.full(liks.shape[1], -1),
+            np.full(liks.shape[1], -1, dtype=np.int64),
             np.full(liks.shape[1], -np.inf),
         )
 
@@ -533,11 +516,7 @@ def sparse_reassign(liks, proportions=None, log_proportions=None, hard_noise=Fal
 
 
 @numba.njit(
-    [
-        "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-        "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-        "void(i4[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    ],
+    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -559,11 +538,7 @@ def hot_argmax_loop(
 
 
 @numba.njit(
-    [
-        "void(i8[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-        "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
-        "void(i4[::1], f4[::1], i8[::1], i4[::1], f4[::1], i4[::1], f4[::1])",
-    ],
+    "void(i8[::1], f4[::1], i8[::1], i8[::1], f4[::1], i8[::1], f4[::1])",
     error_model="numpy",
     nogil=True,
     parallel=True,
@@ -598,7 +573,7 @@ def searchsorted_along_columns(arr, value):
 
 
 @numba.njit(
-    ["i8[::1],i8[:,::1],i8", "i4[::1],i4[:,::1],i8"],
+    "i8[::1],i8[:,::1],i8",
     error_model="numpy",
     nogil=True,
     parallel=True,

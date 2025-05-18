@@ -127,7 +127,7 @@ def test_topk_sparse_sparse():
 
     # we'll only ever insert on half the columns just for fun
     cols_valid = np.arange(0, ncols, 2, dtype=np.int64)
-    ins_inds = np.arange(cols_valid.size)
+    ins_inds = np.arange(cols_valid.size, dtype=np.int64)
 
     # allocate topk sparse array
     topk = sparse_util.allocate_topk(cols_valid.size, k)
