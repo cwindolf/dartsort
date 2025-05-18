@@ -198,7 +198,11 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
-    interpolation_method: str = "thinplate"
+    interpolation_method: str = "normalized"
+    extrapolation_method: str | None = None
+    interpolation_kernel: str = "rbf"
+    interpolation_rq_alpha: float = 1.0
+    interpolation_degree: int = 0
     glasso_alpha: float | int = argfield(default=0, arg_type=int_or_float)
     laplace_ard: bool = True
     core_radius: float = 35.0
