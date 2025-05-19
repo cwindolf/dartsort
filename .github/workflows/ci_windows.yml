@@ -1,6 +1,9 @@
 name: CI (Windows)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     branches:
       - "*"
@@ -14,7 +17,6 @@ jobs:
         shell: bash -el {0}
 
     steps:
-      
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -26,11 +28,10 @@ jobs:
           repository: evarol/dredge
           path: dredge
 
-      - name: Setup Mamba
-        uses: mamba-org/setup-micromamba@v1
+      - uses: actions/setup-python@v5
         with:
-          environment-file: dartsort/environment.yml
-          init-shell: bash
+          python-version: '3.12'
+          cache: 'pip' # caching pip dependencies
           
       - name: Install dependencies
         run: |
@@ -39,6 +40,6 @@ jobs:
           pip install dredge/
           pip install -e dartsort/
 
-      - name: Pytest
+      - name: pytest
         run: |
           PYTHONFAULTHANDLER=1 pytest --maxfail=30 --log-level=15 dartsort/tests/
