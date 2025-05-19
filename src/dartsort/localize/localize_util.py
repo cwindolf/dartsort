@@ -1,5 +1,6 @@
 """Helper functions for localizing things other than torch Tensors
 """
+import threading
 
 import h5py
 import numpy as np
@@ -7,7 +8,6 @@ import torch
 from tqdm.auto import tqdm
 
 from ..util.multiprocessing_util import get_pool
-from ..util.py_util import delay_keyboard_interrupt
 from ..util.spiketorch import ptp
 from .localize_torch import localize_amplitude_vectors, vmap_point_source_find_alpha
 
@@ -94,7 +94,7 @@ def localize_hdf5(
                 logbarrier,
             ),
         ) as pool:
-            with h5py.File(hdf5_filename, "r+") as h5:
+            with h5py.File(hdf5_filename, "r+", locking=False) as h5:
                 n_spikes = h5[main_channels_dataset_name].shape[0]
                 if do_delete:
                     del h5[output_dataset_name]
@@ -118,12 +118,11 @@ def localize_hdf5(
                 if show_progress:
                     results = tqdm(results, total=len(batches), desc="Localization")
                 for start_ix, end_ix, xyza_batch in results:
-                    with delay_keyboard_interrupt:
-                        localizations_dataset[start_ix:end_ix] = xyza_batch
+                    localizations_dataset[start_ix:end_ix] = xyza_batch
+                pool.shutdown()
     finally:
-        global _loc_context
-        if _loc_context is not None:
-            _loc_context = None
+        if hasattr(_loc_context, 'ctx'):
+            del _loc_context.ctx
 
 
 def check_resume_or_overwrite(
@@ -135,7 +134,7 @@ def check_resume_or_overwrite(
     done = False
     do_delete = False
     next_batch_start = 0
-    with h5py.File(hdf5_filename, "r") as h5:
+    with h5py.File(hdf5_filename, "r", locking=False) as h5:
         if output_dataset_name in h5:
             n_spikes = h5[main_channels_dataset_name].shape[0]
             shape = h5[output_dataset_name].shape
@@ -171,7 +170,7 @@ class H5LocalizationContext:
         localization_model,
         logbarrier,
     ):
-        h5 = h5py.File(hdf5_filename, "r", swmr=True)
+        h5 = h5py.File(hdf5_filename, "r", swmr=True, locking=False)
         channels = h5[main_channels_dataset_name][:]
         amp_vecs = h5[amplitude_vectors_dataset_name]
         channel_index = h5[channel_index_dataset_name][:]
@@ -193,8 +192,7 @@ class H5LocalizationContext:
         self.logbarrier = logbarrier
 
 
-global _loc_context
-_loc_context = None
+_loc_context = threading.local()
 
 
 def _h5_localize_init(
@@ -211,8 +209,6 @@ def _h5_localize_init(
     spikes_per_batch,
     logbarrier,
 ):
-    global _loc_context
-
     my_rank = rank_queue.get()
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -221,7 +217,7 @@ def _h5_localize_init(
         if torch.cuda.device_count() > 1:
             device = torch.device("cuda", index=my_rank % torch.cuda.device_count())
 
-    _loc_context = H5LocalizationContext(
+    _loc_context.ctx = H5LocalizationContext(
         hdf5_filename,
         main_channels_dataset_name,
         amplitude_vectors_dataset_name,
@@ -237,8 +233,7 @@ def _h5_localize_init(
 
 
 def _h5_localize_job(start_ix):
-    global _loc_context
-    p = _loc_context
+    p = _loc_context.ctx
 
     end_ix = min(p.n_spikes, start_ix + p.spikes_per_batch)
     channels_batch = p.channels[start_ix:end_ix]
