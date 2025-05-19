@@ -241,7 +241,6 @@ def sorting_from_times_labels(
         recording,
         sorting,
         template_config,
-        with_locs=False,
         computation_config=comp_cfg,
     )
 
@@ -322,6 +321,9 @@ def load_dartsort_step_sortings(
             npy = sorting_dir / "initial_labels.npy"
             if npy.exists():
                 yield ("initial", dataclasses.replace(st0, labels=np.load(npy)))
+            else:
+                warnings.warn(f"Initial {npy} does not exist.")
+                yield None, None
         else:
             yield (h5.stem, st0)
 
