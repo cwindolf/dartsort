@@ -187,7 +187,7 @@ def interp_precompute(
         assert channel_index is None
         valid = source_pos[..., 0].isfinite()
     assert source_pos.ndim == 3
-    valid = valid.cpu()
+    valid = valid.to(source_pos.device)
 
     ns = len(source_pos)
     neighb_size = source_pos.shape[1]
@@ -203,9 +203,8 @@ def interp_precompute(
     solvers = source_pos.new_zeros(
         (ns, neighb_size + design_vars, neighb_size + design_vars)
     )
-    design_inds = torch.arange(neighb_size, neighb_size + design_vars).to(
-        source_pos.device
-    )
+    design_inds = torch.arange(neighb_size, neighb_size + design_vars)
+    design_inds = design_inds.to(source_pos.device)
     design_zeros = source_pos.new_zeros((design_vars, design_vars))
 
     source_kernels = get_kernel(
