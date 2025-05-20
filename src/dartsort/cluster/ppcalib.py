@@ -108,6 +108,8 @@ def ppca_em(
             assert False
 
     alpha = None
+    if M > 0 and laplace_ard:
+        assert prior_pseudocount
     if prior_pseudocount and laplace_ard and M > 0:
         alpha = sp.features.new_full((M,), float(prior_pseudocount))
 

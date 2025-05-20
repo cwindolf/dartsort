@@ -35,6 +35,8 @@ def test_ppca(
     laplace_ard,
 ):
     print(f"{t_mu=} {t_cov=} {t_w=} {t_missing=}")
+    if laplace_ard and not prior_pseudocount:
+        return
     res = mixture_testing_util.test_ppca(
         t_mu=t_mu,
         t_cov=t_cov,
