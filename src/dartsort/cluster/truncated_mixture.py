@@ -257,8 +257,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert isinstance(self.alpha, nn.Parameter)
             assert result.R is not None
 
-            nc = (result.R[:, :, 0] != 0).sum(dim=2)
-            denom = W.to(torch.float64, copy=True).square().sum(dim=2) / nc
+            nc = (result.R[:, :, 0] != 0).sum(dim=2).clamp_(min=1)
+            denom = W.to(torch.float64, copy=True).square_().sum(dim=2).div_(nc)
             assert denom.shape == self.alpha.shape
             amin = self.alpha_min * result.N.clamp(min=1.0).unsqueeze(1)
             amax = self.alpha_max * result.N.clamp(min=1.0).unsqueeze(1)

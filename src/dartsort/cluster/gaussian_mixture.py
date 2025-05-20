@@ -479,7 +479,7 @@ class SpikeMixtureModel(torch.nn.Module):
             labels=torch.from_numpy(init),
             means=means[ids],
             bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
-            alpha=alpha[ids],
+            alpha=alpha[ids] if alpha is not None else None,
             log_proportions=self.log_proportions[ids],
             noise_log_prop=self.log_proportions[-1],
             kl_divergences=dkl[keep_ids[:, None], keep_ids[None, :]],
@@ -3541,7 +3541,7 @@ class GaussianUnit(torch.nn.Module):
         nobs = res["nobs"] if je_suis else None
         self.pick_channels(achans, nobs)
 
-        if je_suis and res.get("alpha") is not None:
+        if je_suis and self.laplace_ard:
             self.register_buffer("alpha", res["alpha"])
             if logger.isEnabledFor(DARTSORTDEBUG):
                 self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()
