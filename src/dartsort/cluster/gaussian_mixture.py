@@ -3487,7 +3487,8 @@ class GaussianUnit(torch.nn.Module):
             assert active_W.isfinite().all()
         if can_warm_start and hasattr(self, "alpha") and self.ppca_warm_start:
             active_alpha = self.alpha
-            assert active_alpha.isfinite().all()
+            if active_alpha is not None:
+                assert active_alpha.isfinite().all()
 
         if je_suis:
             try:
