@@ -30,9 +30,7 @@ def scatter_max_channel_waveforms(
     zscale = dz * waveform_height / max_abs_amp
 
     xrel = np.linspace(-dx / 2, dx / 2, num=template_data.templates.shape[1])
-    locs = template_data.template_locations()
-    locsx = locs["x"]
-    locsz = locs["z_abs"]
+    locsx, locsz = template_data.template_locations().T
 
     if show_geom:
         axis.scatter(*rgeom.T, **geom_scatter_kwargs)

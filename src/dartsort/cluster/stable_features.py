@@ -191,7 +191,7 @@ class StableSpikeDataset(torch.nn.Module):
         self.register_buffer("prgeom", prgeom)
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.prgeom.device
 
     @property

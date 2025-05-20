@@ -5,14 +5,14 @@ import numpy as np
 import torch
 
 from ..util import spiketorch
-from ..util.logging_util import DARTSORTVERBOSE
+from ..util.logging_util import DARTSORTVERBOSE, DARTSORTDEBUG
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
 logger = getLogger(__name__)
 
 
 ds_verbose = logger.isEnabledFor(DARTSORTVERBOSE)
-FRZ = not ds_verbose
+FRZ = not DARTSORTDEBUG
 
 
 def __debug_init__(self):
@@ -196,6 +196,7 @@ def _te_batch_e(
 def _te_batch_m_counts(n_units, candidates, Q):
     """Part 1/2 of the M step within the E step"""
     Q_ = Q[:, :-1]
+    assert Q_.shape == candidates.shape
     N = Q.new_zeros(n_units)
     spiketorch.add_at_(N, candidates.view(-1), Q_.reshape(-1))
     noise_N = Q[:, -1].sum()
@@ -421,16 +422,19 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
     return d.view(R.shape)
 
 
-def _elbo_prior_correction(prior_pseudocount, total_count, mu, W, Cinv, alpha=None):
-    mu_term = torch.einsum("ki,ij,kj->", mu, Cinv, mu).double()
-    mu_term = -0.5 * (prior_pseudocount / total_count) * mu_term
+def _elbo_prior_correction(alpha0, total_count, mu, W, Cinv, alpha=None, mean_prior=False):
+    # return 0.0
+    mu_term = 0.0
+    if mean_prior:
+        mu_term = torch.einsum("ki,ij,kj->", mu, Cinv, mu).double()
+        mu_term = -0.5 * (alpha0 / total_count) * mu_term
     if alpha is None:
         W_term = 0
         if W is not None:
-            W_term = torch.einsum("kli,ij,klj->", W, Cinv, W).double()
-        return mu_term - 0.5 * (prior_pseudocount / total_count) * W_term
+            W_term = torch.einsum("kli,ij,klj->", W, Cinv.to(W), W).double()
+        return mu_term - 0.5 * (alpha0 / total_count) * W_term
 
-    W_term = torch.einsum("kli,ij,klj,kl->", W, Cinv, W, alpha.to(W)).double()
+    W_term = torch.einsum("kli,ij,klj,kl->", W, Cinv.to(W), W, alpha.to(W)).double()
     alpha_term = (W.shape[2] / 2) * alpha.log().sum() / total_count
     return mu_term - 0.5 * W_term / total_count + alpha_term
 

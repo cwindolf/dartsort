@@ -377,8 +377,7 @@ def test_small_nonn(tmp_path, nn_localization):
             subtraction_config=subconf,
             overwrite=True,
         )
-        out_h5 = st.parent_h5_path
-        with h5py.File(out_h5, locking=False) as h5:
+        with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:
@@ -398,8 +397,7 @@ def test_small_nonn(tmp_path, nn_localization):
             subtraction_config=subconf,
             computation_config=two_jobs_cfg_cpu,
         )
-        out_h5 = st.parent_h5_path
-        with h5py.File(out_h5, locking=False) as h5:
+        with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:

@@ -28,6 +28,7 @@ def ppca_em(
     cache_global_direct=True,
     cache_local_direct=False,
     laplace_ard=False,
+    prior_scales_mean=False,
     alpha_min=1e-6,
     alpha_max=1e6,
 ):
@@ -91,7 +92,7 @@ def ppca_em(
             neighb_data,
             active_channels,
             weights=weights,
-            prior_pseudocount=prior_pseudocount,
+            prior_pseudocount=prior_pseudocount * prior_scales_mean,
             nobs_only=True,
         )
 
@@ -111,7 +112,7 @@ def ppca_em(
         alpha = sp.features.new_full((M,), float(prior_pseudocount))
 
     iters = trange(n_iter, desc="PPCA") if show_progress else range(n_iter)
-    state = dict(mu=active_mean, W=active_W)
+    state = dict(mu=active_mean, W=active_W, alpha=alpha)
     for i in iters:
         e = ppca_e_step(
             sp=sp,
@@ -137,13 +138,13 @@ def ppca_em(
             noise=noise,
             active_channels=active_channels,
             rescale=True,
-            alpha=alpha,
+            alpha=state["alpha"],
+            prior_pseudocount=prior_pseudocount,
+            prior_scales_mean=prior_scales_mean,
             laplace_ard=laplace_ard,
             alpha_min=alpha_min,
             alpha_max=alpha_max,
         )
-        if state.get("alpha") is not None:
-            alpha = alpha
         dmu = torch.abs(state["mu"] - old_state["mu"]).abs().max()
         dW = 0
         if state["W"] is not None:
@@ -613,6 +614,7 @@ def ppca_m_step(
     noise=None,
     active_cov_chol_factor=None,
     active_channels=None,
+    prior_scales_mean=False,
     prior_pseudocount=0.0,
     alpha=0.0,
     laplace_ard=False,
@@ -627,8 +629,8 @@ def ppca_m_step(
     mu = e_y
     if e_u is not None:
         mu -= W_old @ e_u
-    if prior_pseudocount:
-        mu *= ess / (ess + alpha)
+    if prior_scales_mean and prior_pseudocount:
+        mu *= ess / (ess + prior_pseudocount)
 
     # initialize W via SVD of whitened residual
     if yc is not None and M:
@@ -641,7 +643,7 @@ def ppca_m_step(
         yc = yc.view(n, rank * nc)
         ycw = torch.linalg.solve_triangular(L, yc.T, upper=False).T
         if prior_pseudocount:
-            ycw *= ess / (ess + alpha)
+            ycw.view(n, rank, nc).mul_(ess / (ess + prior_pseudocount))
         assert ycw.shape == (n, rank * nc)
 
         try:
@@ -664,10 +666,10 @@ def ppca_m_step(
         W = L @ W
         W = W.view(rank, nc, M)
 
-        return dict(mu=mu, W=W)
+        return dict(mu=mu, W=W, alpha=alpha)
 
     if e_u is None:
-        return dict(mu=mu, W=None)
+        return dict(mu=mu, W=None, alpha=alpha)
 
     if laplace_ard:
         e_uu.diagonal(dim1=-2, dim2=-1).add_(alpha / ess)

@@ -85,6 +85,7 @@ class SpikeMixtureModel(torch.nn.Module):
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
         prior_pseudocount: float = 5.0,
+        prior_scales_mean = False,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 5,
         ppca_inner_em_iter: int = 3,
@@ -191,6 +192,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.lls_keep_k = lls_keep_k
         self.laplace_ard = laplace_ard
         self.prior_corrected_criterion = prior_corrected_criterion
+        self.prior_scales_mean = prior_scales_mean
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -212,6 +214,7 @@ class SpikeMixtureModel(torch.nn.Module):
             channels_count_min=channels_count_min,
             channels_snr_amp=channels_snr_amp,
             prior_pseudocount=prior_pseudocount,
+            prior_scales_mean=prior_scales_mean,
             ppca_rank=ppca_rank,
             ppca_initial_em_iter=ppca_initial_em_iter,
             ppca_inner_em_iter=ppca_inner_em_iter,
@@ -398,13 +401,12 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # initialize me
         missing_ids = self.missing_ids()
-        logger.dartsortdebug(f"Before TVI, fitting {len(missing_ids)} units.")
         if len(missing_ids):
             self.m_step(show_progress=step_progress, fit_ids=missing_ids)
         self.cleanup()
 
         # update from my stack
-        ids, means, covs, logdets = self.stack_units(mean_only=False)
+        ids, means, covs, logdets, alpha = self.stack_units(mean_only=False, with_alpha=True)
         ids_, dkl = self.distances(kind="kl", normalization_kind="none")
         assert torch.equal(torch.asarray(ids), torch.asarray(ids_))
 
@@ -418,6 +420,7 @@ class SpikeMixtureModel(torch.nn.Module):
         keep_mask = self.log_proportions[ids].isfinite().cpu()
         (keep_ids,) = keep_mask.nonzero(as_tuple=True)
         ids = ids[keep_ids]
+        assert torch.equal(torch.asarray(ids), torch.asarray(keep_ids))
         keep_mask_nonoise = torch.concatenate(
             (keep_mask, torch.zeros((1,), dtype=torch.bool))
         )
@@ -433,8 +436,9 @@ class SpikeMixtureModel(torch.nn.Module):
             n_threads=n_threads,
             batch_size=batch_size,
             n_units=n_units,
-            prior_pseudocount=self.prior_pseudocount,
+            alpha0=self.prior_pseudocount,
             laplace_ard=self.laplace_ard,
+            prior_scales_mean=self.prior_scales_mean,
             **tmm_kwargs,
         )
 
@@ -475,6 +479,7 @@ class SpikeMixtureModel(torch.nn.Module):
             labels=torch.from_numpy(init),
             means=means[ids],
             bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
+            alpha=alpha[ids],
             log_proportions=self.log_proportions[ids],
             noise_log_prop=self.log_proportions[-1],
             kl_divergences=dkl[keep_ids[:, None], keep_ids[None, :]],
@@ -576,7 +581,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 basis = tmm.bases[j, ..., :-1].permute(1, 2, 0)
             alpha = None
             if tmm.M and tmm.laplace_ard:
-                alpha = (tmm.laplace_alpha[j].numpy(force=True).tolist(),)
+                alpha = tmm.alpha[j].numpy(force=True).tolist()
             self[j] = GaussianUnit.from_parameters(
                 self.noise,
                 mean=tmm.means[j, :, :-1],
@@ -3245,6 +3250,7 @@ class GaussianUnit(torch.nn.Module):
         ppca_rank=0,
         ppca_warm_start: bool = True,
         laplace_ard=False,
+        prior_scales_mean=False,
         **annotations,
     ):
         super().__init__()
@@ -3264,6 +3270,7 @@ class GaussianUnit(torch.nn.Module):
         self.ppca_atol = ppca_atol
         self.ppca_warm_start = ppca_warm_start
         self.laplace_ard = laplace_ard
+        self.prior_scales_mean = prior_scales_mean
 
         self.annotations = annotations
 
@@ -3329,6 +3336,7 @@ class GaussianUnit(torch.nn.Module):
         ppca_warm_start=True,
         channels=None,
         laplace_ard=False,
+        prior_scales_mean=False,
         **annotations,
     ):
         self = cls(
@@ -3347,6 +3355,7 @@ class GaussianUnit(torch.nn.Module):
             ppca_atol=ppca_atol,
             ppca_warm_start=ppca_warm_start,
             laplace_ard=laplace_ard,
+            prior_scales_mean=prior_scales_mean,
             **annotations,
         )
         self.fit(
@@ -3492,6 +3501,7 @@ class GaussianUnit(torch.nn.Module):
                     show_progress=show_progress,
                     cache_local_direct=needs_direct,
                     laplace_ard=self.laplace_ard,
+                    prior_scales_mean=self.prior_scales_mean,
                 )
             except ValueError as e:
                 warnings.warn(f"ppca_em {e}")
@@ -3533,7 +3543,7 @@ class GaussianUnit(torch.nn.Module):
 
         if je_suis and res.get("alpha") is not None:
             self.register_buffer("alpha", res["alpha"])
-            if logger.isEnabledFor(DARTSORTVERBOSE):
+            if logger.isEnabledFor(DARTSORTDEBUG):
                 self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()
                 logger.dartsortverbose(
                     f"New unit had alpha={self.annotations['alpha']}"

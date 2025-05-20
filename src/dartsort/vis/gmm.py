@@ -54,7 +54,7 @@ class ISIHistogram(GMMPlot):
         counts, _ = np.histogram(dt_ms, bin_edges)
         axis.stairs(counts, bin_edges, color=glasbey1024[unit_id], fill=True)
         axis.set_xlabel("isi (ms)")
-        axis.set_ylabel(f"count ({dt_ms.size+1} tot. sp.)")
+        axis.set_ylabel(f"count ({dt_ms.size + 1} tot. sp.)")
 
 
 class ChansHeatmap(GMMPlot):
@@ -115,12 +115,13 @@ class TextInfo(GMMPlot):
                         k = k.item()
                 if torch.is_tensor(v):
                     v = v.numpy(force=True)
-                if isinstance(v, (np.ndarray, list)):
+                if isinstance(v, (np.ndarray, list, tuple)):
                     v = np.array2string(
                         np.asarray(v),
                         separator=",",
                         precision=1,
                         threshold=100,
+                        max_line_width=32,
                     )
                 msg += f"{k}:\n{v}"
 
@@ -326,8 +327,23 @@ class WaveformCheck(GMMPlot):
     width = 5
     height = 4.5
 
-    def __init__(self, neighborhood="extract", split="train", colorvar="displacement", cmap="viridis", localizations_name="localizations", randomize=True):
-        assert colorvar in ("time", "depth", "chandepth", "displacement", "npitches", "subpitch")
+    def __init__(
+        self,
+        neighborhood="extract",
+        split="train",
+        colorvar="displacement",
+        cmap="viridis",
+        localizations_name="localizations",
+        randomize=True,
+    ):
+        assert colorvar in (
+            "time",
+            "depth",
+            "chandepth",
+            "displacement",
+            "npitches",
+            "subpitch",
+        )
         self.neighborhood = neighborhood
         self.split = split
         self.colorvar = colorvar
@@ -337,17 +353,20 @@ class WaveformCheck(GMMPlot):
 
     def draw(self, panel, gmm, unit_id, axes=None):
         s = object()
-        me = getattr(gmm, 'motion_est', s)
+        me = getattr(gmm, "motion_est", s)
         if me is s:
             raise ValueError(
                 f"Sorry, hacky, but to use {self.__class__.__name__} you need to "
                 "assign the motion estimate as the property .motion_est of the GMM."
             )
 
-
         _, ixs, splitixs = gmm.random_indices(unit_id=unit_id, split_name=self.split)
         sp = gmm.data.spike_data(
-            ixs, split_indices=splitixs, with_reconstructions=True, neighborhood=self.neighborhood)
+            ixs,
+            split_indices=splitixs,
+            with_reconstructions=True,
+            neighborhood=self.neighborhood,
+        )
 
         if self.colorvar == "time":
             c = gmm.data.times_seconds[ixs].numpy(force=True)
@@ -359,7 +378,9 @@ class WaveformCheck(GMMPlot):
             c = pos[ixs, 2]
         else:
             channels, shifts, n_pitches_shift = get_shift_info(
-                gmm.data.original_sorting, motion_est=me, geom=gmm.data.original_sorting.geom
+                gmm.data.original_sorting,
+                motion_est=me,
+                geom=gmm.data.original_sorting.geom,
             )
             shifts = shifts[ixs]
             n_pitches_shift = n_pitches_shift[ixs]
@@ -383,7 +404,7 @@ class WaveformCheck(GMMPlot):
             ax=ax,
             randomize=self.randomize,
         )
-        ax.axis('off')
+        ax.axis("off")
         st = f"{self.split}/{self.neighborhood} by {self.colorvar}"
         if self.randomize:
             st += ", rand order"
@@ -970,7 +991,7 @@ class NeighborInfoCriteria(GMMPlot):
             if merged_ll.numel():
                 ax.hist(merged_ll.cpu(), color="k", **histkw)
 
-            message = f"{100*kept:.1f}%"
+            message = f"{100 * kept:.1f}%"
             if "improvements" in res:
                 message = f"{message} {bag} full/merge/imp:"
                 fc, mc = res["full_criteria"], res["merged_criteria"]

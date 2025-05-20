@@ -902,8 +902,10 @@ def interpolate_residual_snippets(
         tpca = tpca.to(device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
+        channel_index = h5["channel_index"][:]
         snippets = h5[residual_dataset_name][:]
         times_s = h5[residual_times_s_dataset_name][:]
+    channel_index = torch.from_numpy(channel_index).to(tpca.components.device)
     snippets = torch.from_numpy(snippets).to(tpca.components)
     times_s = torch.from_numpy(times_s).to(tpca.components)
 
@@ -923,18 +925,33 @@ def interpolate_residual_snippets(
 
     # - precompute
     precomputed_data = interpolation_util.interp_precompute(
-        source_geom,
-        channel_index=None,
+        interpolation_util.pad_geom(source_geom),
+        channel_index=channel_index,
         method=method,
         kernel_name=kernel_name,
         sigma=sigma,
         rq_alpha=rq_alpha,
         kriging_poly_degree=kriging_poly_degree,
-        source_geom_is_padded=False,
+        source_geom_is_padded=True,
     )
     if precomputed_data is not None:
-        shp = (n, *precomputed_data.shape[1:])
-        precomputed_data = precomputed_data.broadcast_to(shp)
+        nc, nc_pc, nc_pc_ = precomputed_data.shape
+        assert nc_pc == nc_pc_
+        assert nc == c
+        extra_dim = nc_pc - channel_index.shape[1]
+        assert extra_dim >= 0
+        # embed into full probe...
+        pc_full = precomputed_data.new_zeros((c, c + extra_dim, c + extra_dim))
+        for j in range(c):
+            chans = channel_index[j]
+            (valid,) = (chans < c).nonzero(as_tuple=True)
+            cvalid = chans[valid]
+            pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[j, valid[:, None], valid[None, :]]
+            if extra_dim > 0:
+                pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[j, -extra_dim:, -extra_dim:]
+                pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[j, -extra_dim:, valid[None, :]]
+                pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[j, valid[:, None], -extra_dim:]
+        precomputed_data = pc_full[None]
 
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid

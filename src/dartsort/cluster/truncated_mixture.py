@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.stats import alpha
 import torch
 from logging import getLogger
 from torch import nn
@@ -57,10 +56,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
-        prior_pseudocount=5.0,
+        alpha0=5.0,
         laplace_ard=False,
         alpha_max=1e6,
         alpha_min=1e-6,
+        prior_scales_mean=False,
         min_log_prop=-50.0,
     ):
         super().__init__()
@@ -68,9 +68,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             n_search = n_candidates
         if n_explore is None:
             n_explore = n_search
-        logger.dartsortdebug(
-            f"Making a TMM with {n_units=} {data.n_spikes=} {data.n_spikes_kept=} {M=}"
-        )
         if n_units is not None:
             n_candidates = min(n_units, n_candidates)
             remainder = n_units - n_candidates
@@ -80,15 +77,23 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.n_candidates = n_candidates
         self.data = data
         self.noise = noise
+
         self.M = M
+        self.data_dim = self.data.rank * self.data.n_channels
+
+        if laplace_ard:
+            assert alpha0 and alpha0 > 0
+        self.has_prior = bool(alpha0)
+        self.alpha0 = alpha0
+        self.laplace_ard = laplace_ard
+        self.alpha_max = alpha_max
+        self.alpha_min = alpha_min
+        self.prior_scales_mean = prior_scales_mean
+
         self.covariance_radius = covariance_radius
         self.fixed_noise_proportion = fixed_noise_proportion
         self.exact_kl = exact_kl
         self.sgd_batch_size = sgd_batch_size
-        self.prior_pseudocount = prior_pseudocount
-        self.laplace_ard = laplace_ard
-        self.alpha_max = alpha_max
-        self.alpha_min = alpha_min
         self.min_log_prop = min_log_prop
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
         self.n_spikes = train_indices.numel()
@@ -113,10 +118,17 @@ class SpikeTruncatedMixtureModel(nn.Module):
             random_seed=random_seed,
             device=self.data.device,
         )
-        self.to(self.data.device)
+        self.to(device=self.data.device)
 
     def set_parameters(
-        self, labels, means, log_proportions, noise_log_prop, kl_divergences, bases=None
+        self,
+        labels,
+        means,
+        log_proportions,
+        noise_log_prop,
+        kl_divergences,
+        bases=None,
+        alpha=None,
     ):
         """Parameters are stored padded with an extra channel."""
         self.n_units = nu = means.shape[0]
@@ -157,23 +169,25 @@ class SpikeTruncatedMixtureModel(nn.Module):
             labels, self.search_sets(n_search=self.candidates.n_candidates)
         )
 
-        self.M = 0 if bases is None else bases.shape[1]
-        if self.M:
+        M = 0 if bases is None else bases.shape[1]
+        assert M == self.M
+        if M:
             assert bases is not None
             assert bases.shape == (nu, self.M, self.data.rank, self.data.n_channels)
             self.bases = nn.Parameter(F.pad(bases, (0, 1)), requires_grad=False)
         else:
             self.bases = None
 
-        if self.M and self.laplace_ard:
-            assert self.prior_pseudocount
+        if self.M and self.laplace_ard and self.has_prior:
             assert bases is not None
-            alpha = bases.new_full(
-                (nu, self.M), self.prior_pseudocount, dtype=torch.float64
-            )
-            self.laplace_alpha = nn.Parameter(alpha, requires_grad=False)
+            if alpha is None:
+                alpha = bases.new_full((nu, self.M), self.alpha0, dtype=torch.float64)
+            else:
+                alpha = torch.asarray(alpha, dtype=torch.float64, device=bases.device)
+                assert alpha.shape == (nu, self.M)
+            self.alpha = nn.Parameter(alpha, requires_grad=False)
         else:
-            self.laplace_alpha = self.prior_pseudocount
+            self.alpha = self.alpha0
 
         self.to(means.device)
 
@@ -210,53 +224,58 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert result.N is not None
         assert result.m is not None
 
-        if self.prior_pseudocount:
-            sc = result.N / (result.N + self.prior_pseudocount)
-            if logger.isEnabledFor(DARTSORTVERBOSE):
-                logger.dartsortverbose(f"TVI mean {sc=}")
-            result.m.mul_(sc[:, None, None])
-        self.means[..., :-1] = result.m
+        if self.has_prior and self.prior_scales_mean:
+            mean_scale = result.N / (result.N + self.alpha0)
+            self.means[..., :-1] = result.m * mean_scale[:, None, None]
+        else:
+            self.means[..., :-1] = result.m
+
         W = None
         if self.bases is not None:
             assert result.R is not None
             assert result.U is not None
+
             blank = torch.all(result.U.diagonal(dim1=-2, dim2=-1) == 0, dim=1)
+            assert torch.equal(blank, result.N == 0)
             if blank.any():
                 # just to avoid numerical issues when a unit dies
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
-            if self.prior_pseudocount:
-                denom = result.N.clamp(min=1.0).unsqueeze(1).to(torch.float64)
-                tikh = self.laplace_alpha / denom
-                if logger.isEnabledFor(DARTSORTVERBOSE):
-                    logger.dartsortverbose(f"TVI basis {tikh=}")
+
+            if self.has_prior:
+                N_denom = result.N.clamp(min=1.0)
+                tikh = self.alpha / N_denom.unsqueeze(1)
                 result.U.diagonal(dim1=-2, dim2=-1).add_(tikh.to(result.U))
-            Uc = psd_safe_cholesky(result.U)
-            W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
+
+            # Uc = psd_safe_cholesky(result.U)
+            # W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
+            W = torch.linalg.solve(result.U, result.R.view(*result.U.shape[:-1], -1))
+            assert W.shape == (self.n_units, self.M, self.data_dim)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
 
-        if self.laplace_ard and self.M:
+        if self.has_prior and self.laplace_ard and self.M:
             assert W is not None
-            assert isinstance(self.laplace_alpha, nn.Parameter)
-            denom = W.to(torch.float64, copy=True).square_().mean(dim=2)
-            assert denom.shape == self.laplace_alpha.shape
+            assert isinstance(self.alpha, nn.Parameter)
+            assert result.R is not None
+
+            nc = (result.R[:, :, 0] != 0).sum(dim=2)
+            denom = W.to(torch.float64, copy=True).square().sum(dim=2) / nc
+            assert denom.shape == self.alpha.shape
             amin = self.alpha_min * result.N.clamp(min=1.0).unsqueeze(1)
             amax = self.alpha_max * result.N.clamp(min=1.0).unsqueeze(1)
-            self.laplace_alpha[:] = (1.0 / denom).clamp_(amin, amax)
+            self.alpha[:] = (1.0 / denom).clamp_(amin, amax)
 
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
             inv_noise_log_prop = torch.log(
                 torch.tensor(1.0 - self.fixed_noise_proportion)
             )
-
-            # self._N[0] = noise_log_prop
-            # self._N[1:] = torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
-            # lp = torch.log_softmax(self._N, dim=0)
             self.noise_log_prop.fill_(noise_log_prop)
             self.log_proportions[:] = (
                 torch.log_softmax(result.N.log(), dim=0) + inv_noise_log_prop
             )
         else:
+            assert result.noise_N is not None
+            assert result.N is not None
             self._N[0] = result.noise_N
             self._N[1:] = result.N
             lp = torch.log_softmax(self._N.log(), dim=0)
@@ -266,18 +285,20 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if self.exact_kl:
             self.update_dkl()
         else:
+            assert result.kl is not None
             self.kl_divergences[:] = result.kl
 
         obs_elbo = result.obs_elbo
-        if self.prior_pseudocount:
+        if self.has_prior:
             # update elbo
             obs_elbo += _elbo_prior_correction(
-                self.prior_pseudocount,
+                self.alpha0,
                 result.count,
                 self.means[..., :-1].reshape(self.n_units, -1),
                 W,
                 self.noise.full_inverse(),
-                alpha=self.laplace_alpha if self.laplace_ard and self.M else None,
+                alpha=self.alpha if self.laplace_ard and self.M else None,
+                mean_prior=self.prior_scales_mean,
             )
 
         result = dict(
@@ -519,7 +540,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         assert hasattr(self, "Coo_logdet")
         return self.Coo_logdet.device
 
@@ -537,22 +558,22 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         """
         # sufficient statistics
         dev = self.device
-        m = torch.zeros(
-            (self.n_units, self.rank, self.nc), device=dev, dtype=torch.double
-        )
+        mean_shp = (self.n_units, self.rank, self.nc)
+        m = torch.zeros(mean_shp, device=dev, dtype=torch.double)
         N = torch.zeros((self.n_units,), device=dev, dtype=torch.double)
         dkl = None
         if with_kl:
-            dkl = torch.zeros(
-                (self.n_units, self.n_units), device=dev, dtype=torch.double
-            )
-        ncc = torch.zeros((self.n_units, self.n_units), device=dev, dtype=torch.double)
+            nu2 = (self.n_units, self.n_units)
+            dkl = torch.zeros(nu2, device=dev, dtype=torch.double)
+            ncc = dkl.clone()
         noise_N = torch.tensor(0.0, device=dev, dtype=torch.double)
         obs_elbo = torch.tensor(0.0, device=dev, dtype=torch.double)
         R = U = None
         if self.M:
-            R = torch.zeros((self.n_units, self.M, self.rank, self.nc), device=dev)
-            U = torch.zeros((self.n_units, self.M, self.M), device=dev)
+            r_shp = (self.n_units, self.M, self.rank, self.nc)
+            R = torch.zeros(r_shp, device=dev, dtype=torch.double)
+            u_shp = (self.n_units, self.M, self.M)
+            U = torch.zeros(u_shp, device=dev, dtype=torch.double)
 
         # will be updated...
         top_candidates = candidates[:, : self.n_candidates]
@@ -583,7 +604,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_N += result.noise_N
             N += result.N
 
-            # weight for the welford summations below
+            # weight for the welford running averages below
             n1_n01 = result.N.div(N.clamp(min=1.0))[:, None, None]
 
             # welford for the mean
@@ -925,7 +946,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             )
             self.Coo_invsqrt[ni].view(R, nco, R, nco)[
                 :, oi[:, None], :, oi[None, :]
-            ] = (Coo_invsqrt[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device))
+            ] = Coo_invsqrt[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device)
 
     def precompute_invx(self):
         # precomputed Cooinv_x and whitenedx
@@ -1316,6 +1337,6 @@ class CandidateSet:
                 f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
                 f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
             )
-        assert (candidates[:, :self.n_candidates] >= 0).all()
+        assert (candidates[:, : self.n_candidates] >= 0).all()
 
         return candidates, unit_neighborhood_counts
