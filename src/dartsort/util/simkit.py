@@ -233,7 +233,8 @@ class PointSource3ExpSimulator:
         self.geom = geom
         self.geom3 = geom
         if geom.shape[1] == 2:
-            self.geom3 = np.pad(geom, [(0, 0), (0, 1)])
+            self.geom3 = np.zeros((geom.shape[0], 3))
+            self.geom3[:, [0, 2]] = geom
         self.geom3 = self.geom3.astype(self.dtype)
         self.ms_before = ms_before
         self.ms_after = ms_after
@@ -320,11 +321,11 @@ class PointSource3ExpSimulator:
         size = self.expand_size(size)
         x_low = self.geom[:, 0].min() - self.pos_margin_um
         x_high = self.geom[:, 0].max() + self.pos_margin_um
-        y_low = self.geom[:, 1].min() - self.pos_margin_um
-        y_high = self.geom[:, 1].max() + self.pos_margin_um
+        z_low = self.geom[:, 1].min() - self.pos_margin_um
+        z_high = self.geom[:, 1].max() + self.pos_margin_um
 
         x = self.rg.uniform(x_low, x_high, size=size)
-        y = self.rg.uniform(y_low, y_high, size=size)
+        z = self.rg.uniform(z_low, z_high, size=size)
 
         orth = self.rg.uniform(self.orthdist_min_um, self.orthdist_max_um, size=size)
 
@@ -337,7 +338,7 @@ class PointSource3ExpSimulator:
         else:
             assert False
 
-        pos = np.c_[x, y, orth].astype(self.dtype)
+        pos = np.c_[x, orth, z].astype(self.dtype)
         alpha = alpha.astype(self.dtype)
         return pos, alpha
 
@@ -470,7 +471,7 @@ class SimulatedRecording:
             pos = self.template_pos
         else:
             drift = self.drift(t_samples)
-            pos = self.template_pos + [0, drift, 0]
+            pos = self.template_pos + [0, 0, drift]
 
         templates = singlechan_to_probe(
             pos,
@@ -509,12 +510,11 @@ class SimulatedRecording:
             )
 
         rgeom, matches = self.registered_geom()
-        pos, templates = self.templates()
+        _, templates = self.templates()
         rtemplates = np.zeros(
             (*templates.shape[:-1], len(rgeom)), dtype=templates.dtype
         )
         rtemplates[:, :, matches] = templates
-        pos = rgeom[np.ptp(rtemplates, axis=1).argmax(1), 1]
         return TemplateData(
             templates=rtemplates,
             unit_ids=np.arange(self.n_units),
@@ -566,7 +566,6 @@ class SimulatedRecording:
             generator=self.torch_rg,
             chunk_t=int(self.template_simulator.fs),
         )
-        print(f"{x.shape=} {self.duration_samples=} {self.geom.shape=}")
         assert x.shape == (1, self.duration_samples, len(self.geom))
         x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
 
