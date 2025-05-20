@@ -140,6 +140,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert noise_log_prop.isfinite()
 
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
+        assert self.means.isfinite().all()
 
         self.register_buffer("_N", torch.zeros(nu + 1))
         if self.fixed_noise_proportion:
@@ -159,6 +160,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.noise_log_prop = nn.Parameter(
                 noise_log_prop.clone(), requires_grad=False
             )
+            assert self.log_proportions.isfinite().all()
 
         self.register_buffer(
             "kl_divergences",
@@ -175,6 +177,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert bases is not None
             assert bases.shape == (nu, self.M, self.data.rank, self.data.n_channels)
             self.bases = nn.Parameter(F.pad(bases, (0, 1)), requires_grad=False)
+            assert self.bases.isfinite().all()
         else:
             self.bases = None
 
@@ -186,6 +189,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 alpha = torch.asarray(alpha, dtype=torch.float64, device=bases.device)
                 assert alpha.shape == (nu, self.M)
             self.alpha = nn.Parameter(alpha, requires_grad=False)
+            assert self.alpha.isfinite().all()
         else:
             self.alpha = self.alpha0
 
@@ -229,6 +233,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.means[..., :-1] = result.m * mean_scale[:, None, None]
         else:
             self.means[..., :-1] = result.m
+        if logger.isEnabledFor(DARTSORTDEBUG):
+            assert self.means[..., :-1].isfinite().all()
 
         W = None
         if self.bases is not None:
@@ -251,6 +257,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             W = torch.linalg.solve(result.U, result.R.view(*result.U.shape[:-1], -1))
             assert W.shape == (self.n_units, self.M, self.data_dim)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                assert self.bases[..., :-1].isfinite().all()
 
         if self.has_prior and self.laplace_ard and self.M:
             assert W is not None
@@ -263,6 +271,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             amin = self.alpha_min * result.N.clamp(min=1.0).unsqueeze(1)
             amax = self.alpha_max * result.N.clamp(min=1.0).unsqueeze(1)
             self.alpha[:] = (1.0 / denom).clamp_(amin, amax)
+            if logger.isEnabledFor(DARTSORTDEBUG):
+                assert self.alpha.isfinite().all()
 
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))

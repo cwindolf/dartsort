@@ -430,9 +430,9 @@ class SpikeMixtureModel(torch.nn.Module):
         n_spikes = lls_keep.shape[1]
 
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            self.data,
-            self.noise,
-            self.ppca_rank,
+            data=self.data,
+            noise=self.noise,
+            M=self.ppca_rank * (self.cov_kind == "ppca"),
             n_threads=n_threads,
             batch_size=batch_size,
             n_units=n_units,
@@ -3541,7 +3541,7 @@ class GaussianUnit(torch.nn.Module):
         nobs = res["nobs"] if je_suis else None
         self.pick_channels(achans, nobs)
 
-        if je_suis and self.laplace_ard:
+        if je_suis and do_pca and self.laplace_ard:
             self.register_buffer("alpha", res["alpha"])
             if logger.isEnabledFor(DARTSORTDEBUG):
                 self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()

@@ -107,7 +107,7 @@ def ppca_em(
         else:
             assert False
 
-    alpha = prior_pseudocount
+    alpha = None
     if prior_pseudocount and laplace_ard and M > 0:
         alpha = sp.features.new_full((M,), float(prior_pseudocount))
 
@@ -616,7 +616,7 @@ def ppca_m_step(
     active_channels=None,
     prior_scales_mean=False,
     prior_pseudocount=0.0,
-    alpha=0.0,
+    alpha=None,
     laplace_ard=False,
     alpha_min=1e-6,
     alpha_max=1e6,
@@ -683,11 +683,12 @@ def ppca_m_step(
     if rescale:
         W.mul_(scales)
 
-    alpha = None
     if laplace_ard:
         amin = alpha_min * max(ess, 1)
         amax = alpha_max * max(ess, 1)
         alpha = (1.0 / W.square().mean(0)).clamp_(amin, amax)
+    else:
+        assert alpha is None
     W = W.view(rank, nc, M)
 
     return dict(mu=mu, W=W, alpha=alpha)
