@@ -231,8 +231,9 @@ def interp_precompute(
             to_solve = kernel
             ix = present
 
-        # pinv is helpful here. numerics can get weird with large domains.
-        solvers[j, ix[:, None], ix[None, :]] = torch.linalg.pinv(to_solve)
+        # double+pinv is helpful here. numerics can get weird with large domains.
+        solver = torch.linalg.pinv(to_solve.double(), hermitian=True)
+        solvers[j, ix[:, None], ix[None, :]] = solver.to(solvers.dtype)
 
     return solvers
 
@@ -261,6 +262,8 @@ def get_kernel(
             kernel = F.softmax(kernel, dim=1)
         else:
             kernel = kernel.exp_()
+    elif kernel_name == "multiquadric":
+        kernel = multiquadric_kernel(source_pos=source_pos, target_pos=target_pos, sigma=sigma)
     elif kernel_name == "rq":
         kernel = rq_kernel(
             source_pos=source_pos, target_pos=target_pos, sigma=sigma, alpha=rq_alpha
@@ -301,7 +304,26 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
     else:
         assert False
 
-    return y.bmm(solvers).bmm(kernels)
+    if solvers.ndim == 3:
+        return y.bmm(solvers).bmm(kernels)
+
+    assert solvers.ndim == 4
+    assert solvers.shape[0] == 1
+    # per-channel case (each output chan has its own local neighb)
+    # this is meant to mimic the "neighbors" option to scipy's RBFInterpolator,
+    # but the implementation here is obscure. the rest of the logic is only shown
+    # once, and that's in the residual interpolation in noise_util.
+    # assumes that output channels and input channels are the same, and that all
+    # inputs share the same neighborhood-solver per channel.
+    solvers = solvers[0]
+    c = kernels.shape[2]
+    assert c == solvers.shape[0]
+    c_ = kernels.shape[1]
+    assert c_ >= c
+    assert c_ == solvers.shape[1] == solvers.shape[2]
+    return torch.einsum(
+        "ntp,cpq,nqc->ntc", y, solvers, kernels
+    )
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -408,7 +430,7 @@ def kernel_interpolate(
             target_pos,
             kernel,
             features,
-            precomputed_data,
+            solvers=precomputed_data,
             sigma=sigma,
             poly_degree=kriging_poly_degree,
         )
@@ -493,6 +515,19 @@ def rq_kernel(source_pos, target_pos=None, sigma=None, alpha=1.0):
     kernel = kernel.square_().sum(dim=3).nan_to_num_()
     kernel = kernel.add_(1.0).pow_(-alpha)
     return kernel
+
+
+def multiquadric_kernel(source_pos, target_pos=None, sigma=None):
+    source_pos = source_pos / sigma
+    if target_pos is None:
+        target_pos = source_pos
+    else:
+        target_pos = target_pos / sigma
+    kernel = source_pos[:, :, None] - target_pos[:, None, :]
+    kernel = kernel.square_().sum(dim=3).nan_to_num_()
+    kernel = kernel.add_(1.0).pow_(-0.5).neg_()
+    return kernel
+
 
 
 def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
