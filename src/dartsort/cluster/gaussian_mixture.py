@@ -85,7 +85,7 @@ class SpikeMixtureModel(torch.nn.Module):
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
         prior_pseudocount: float = 5.0,
-        prior_scales_mean = False,
+        prior_scales_mean=False,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 5,
         ppca_inner_em_iter: int = 3,
@@ -406,7 +406,9 @@ class SpikeMixtureModel(torch.nn.Module):
         self.cleanup()
 
         # update from my stack
-        ids, means, covs, logdets, alpha = self.stack_units(mean_only=False, with_alpha=True)
+        ids, means, covs, logdets, alpha = self.stack_units(
+            mean_only=False, with_alpha=True
+        )
         ids_, dkl = self.distances(kind="kl", normalization_kind="none")
         assert torch.equal(torch.asarray(ids), torch.asarray(ids_))
 
@@ -557,7 +559,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if logger.isEnabledFor(DARTSORTDEBUG):
             es = np.array([r["obs_elbo"] for r in records])
             logger.dartsortdebug(
-                f"Any ELBO decrease? {(np.diff(es)<0).any()}. "
+                f"Any ELBO decrease? {(np.diff(es) < 0).any()}. "
                 f"The most negative change was {np.diff(es).min()}."
             )
             logger.dartsortdebug(f"ELBOs: {es.tolist()}")
@@ -581,14 +583,16 @@ class SpikeMixtureModel(torch.nn.Module):
                 basis = tmm.bases[j, ..., :-1].permute(1, 2, 0)
             alpha = None
             if tmm.M and tmm.laplace_ard:
-                alpha = tmm.alpha[j].numpy(force=True).tolist()
+                alpha = tmm.alpha[j]
             self[j] = GaussianUnit.from_parameters(
-                self.noise,
+                rank=self.data.rank,
+                n_channels=self.data.n_channels,
                 mean=tmm.means[j, :, :-1],
                 basis=basis,
                 channels=channels[j],
                 channel_counts=counts[j],
                 alpha=alpha,
+                **self.unit_args,
             )
         assert self.log_proportions is not None
         lps = torch.concatenate((tmm.log_proportions, tmm.noise_log_prop.view(-1)))
@@ -877,7 +881,7 @@ class SpikeMixtureModel(torch.nn.Module):
             prefix = f"{split.capitalize()} log likelihoods"
         logger.dartsortdebug(
             f"{prefix}: {nnz} total for {len(unit_ids)} units. That's "
-            f"{nnz/len(unit_ids):0.1f}/unit or {nnz/n_spikes:0.1f}/spike."
+            f"{nnz / len(unit_ids):0.1f}/unit or {nnz / n_spikes:0.1f}/spike."
         )
 
         # how many units does each spike overlap with? needed to write csc
@@ -1053,7 +1057,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.labels[spike_ix] = assignments
 
         logger.dartsortdebug(
-            f"Reassign with {100*unit_churn.mean().item():0.2f}% mean churn."
+            f"Reassign with {100 * unit_churn.mean().item():0.2f}% mean churn."
         )
 
         return unit_churn, reassign_count, spike_logliks, log_liks_csc
@@ -2306,7 +2310,10 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_fit_liks = self.get_log_likelihoods(hyp_fit_spikes.indices, self.log_liks)
         cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
         cur_resp = cur_resp.index_select(
-            dim=0, index=torch.asarray(current_unit_ids, dtype=torch.long, device=cur_resp.device)
+            dim=0,
+            index=torch.asarray(
+                current_unit_ids, dtype=torch.long, device=cur_resp.device
+            ),
         )
         cur_resp = cur_resp.sum(dim=0).to_dense()
 
@@ -3042,6 +3049,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 logdets[j] = unit.logdet()
             if with_alpha and unit.alpha is not None:
                 alpha[j] = unit.alpha
+                assert alpha[j].isfinite().all()
 
         if use_cache:
             self._stack = ids, means, covs, logdets
@@ -3277,28 +3285,23 @@ class GaussianUnit(torch.nn.Module):
     @classmethod
     def from_parameters(
         cls,
-        noise: noise_util.EmbeddedNoise,
         mean,
         basis=None,
         channels=None,
         channel_counts=None,
         channels_amp=0.25,
-        **annotations,
+        alpha=None,
+        **unit_args,
     ):
         M = 0 if basis is None else basis.shape[-1]
-        # TODO: pick channels somehow...
-        self = cls(
-            noise.rank,
-            noise.n_channels,
-            noise,
-            cov_kind="ppca",
-            ppca_rank=M,
-            channels_strategy="count",
-            **annotations,
-        )
+        self = cls(**unit_args)
         self.register_buffer("mean", mean)
         if basis is not None:
             self.register_buffer("W", basis)
+        if alpha is not None:
+            self.register_buffer("alpha", alpha)
+        else:
+            self.alpha = None
 
         snr = mean.square().sum(dim=0).sqrt()
         if channels is not None:
@@ -3469,11 +3472,11 @@ class GaussianUnit(torch.nn.Module):
 
         can_warm_start = False
         if je_suis and hasattr(self, "channels"):
-            can_warm_start = spiketorch.isin_sorted(
-                achans.cpu(), self.channels.cpu()
-            ).all()
+            can_warm_start = (
+                spiketorch.isin_sorted(achans.cpu(), self.channels.cpu()).all().item()
+            )
 
-        active_mean = active_W = None
+        active_mean = active_W = active_alpha = None
         n_iter = self.ppca_initial_em_iter
         if can_warm_start and hasattr(self, "mean") and self.ppca_warm_start:
             active_mean = self.mean[:, achans]
@@ -3482,6 +3485,9 @@ class GaussianUnit(torch.nn.Module):
         if can_warm_start and hasattr(self, "W") and self.ppca_warm_start:
             active_W = self.W[:, achans]
             assert active_W.isfinite().all()
+        if can_warm_start and hasattr(self, "alpha") and self.ppca_warm_start:
+            active_alpha = self.alpha
+            assert active_alpha.isfinite().all()
 
         if je_suis:
             try:
@@ -3502,6 +3508,7 @@ class GaussianUnit(torch.nn.Module):
                     cache_local_direct=needs_direct,
                     laplace_ard=self.laplace_ard,
                     prior_scales_mean=self.prior_scales_mean,
+                    alpha=active_alpha,
                 )
             except ValueError as e:
                 warnings.warn(f"ppca_em {e}")
@@ -3543,11 +3550,6 @@ class GaussianUnit(torch.nn.Module):
 
         if je_suis and do_pca and self.laplace_ard:
             self.register_buffer("alpha", res["alpha"])
-            if logger.isEnabledFor(DARTSORTDEBUG):
-                self.annotations["alpha"] = res["alpha"].numpy(force=True).tolist()
-                logger.dartsortverbose(
-                    f"New unit had alpha={self.annotations['alpha']}"
-                )
         else:
             self.alpha = None
 

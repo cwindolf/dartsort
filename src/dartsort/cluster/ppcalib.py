@@ -29,6 +29,7 @@ def ppca_em(
     cache_local_direct=False,
     laplace_ard=False,
     prior_scales_mean=False,
+    alpha=None,
     alpha_min=1e-6,
     alpha_max=1e6,
 ):
@@ -107,11 +108,13 @@ def ppca_em(
         else:
             assert False
 
-    alpha = None
     if M > 0 and laplace_ard:
         assert prior_pseudocount
     if prior_pseudocount and laplace_ard and M > 0:
-        alpha = sp.features.new_full((M,), float(prior_pseudocount))
+        if alpha is None:
+            alpha = sp.features.new_full((M,), float(prior_pseudocount))
+        else:
+            assert alpha.shape == (M,)
 
     iters = trange(n_iter, desc="PPCA") if show_progress else range(n_iter)
     state = dict(mu=active_mean, W=active_W, alpha=alpha)
