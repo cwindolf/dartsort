@@ -187,6 +187,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 alpha = bases.new_full((nu, self.M), self.alpha0, dtype=torch.float64)
             else:
                 alpha = torch.asarray(alpha, dtype=torch.float64, device=bases.device)
+                alpha = torch.where(alpha.isnan(), self.alpha0, alpha)
                 assert alpha.shape == (nu, self.M)
             self.alpha = nn.Parameter(alpha, requires_grad=False)
             assert self.alpha.isfinite().all()
