@@ -65,8 +65,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
     ):
         super().__init__()
 
-        self.M = M
-        self.data_dim = self.data.rank * self.data.n_channels
+        self.data = data
+        self.noise = noise
+        train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
 
         if laplace_ard:
             assert alpha0 and alpha0 > 0
@@ -76,8 +77,15 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.alpha_max = alpha_max
         self.alpha_min = alpha_min
         self.prior_scales_mean = prior_scales_mean
-        self.data = data
-        self.noise = noise
+        self.covariance_radius = covariance_radius
+        self.fixed_noise_proportion = fixed_noise_proportion
+        self.exact_kl = exact_kl
+        self.sgd_batch_size = sgd_batch_size
+        self.min_log_prop = min_log_prop
+
+        self.n_spikes = train_indices.numel()
+        self.M = M
+        self.data_dim = self.data.rank * self.data.n_channels
 
         self.candidates = CandidateSet(
             neighborhoods=self.train_neighborhoods,
@@ -89,14 +97,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.initial_n_search = n_search
         self.initial_n_explore = n_explore
         self.set_sizes(n_units)
-
-        self.covariance_radius = covariance_radius
-        self.fixed_noise_proportion = fixed_noise_proportion
-        self.exact_kl = exact_kl
-        self.sgd_batch_size = sgd_batch_size
-        self.min_log_prop = min_log_prop
-        train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
-        self.n_spikes = train_indices.numel()
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
             neighborhoods=self.train_neighborhoods,
@@ -233,7 +233,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             unit_neighborhood_counts=unit_neighborhood_counts,
         )
         result = self.processor.truncated_e_step(
-            candidates,
+            candidates=candidates,
+            n_candidates=self.n_candidates,
             show_progress=show_progress,
             with_kl=not self.exact_kl,
             with_hard_labels=hard_label,
@@ -533,7 +534,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # initialize fixed noise-related arrays
         self.noise = noise
-        self.n_spikes, self.nc_obs = features.shape[:2]
+        self.n_spikes = features.shape[0]
+        self.nc_obs = features.shape[2]
         assert self.nc_obs == neighborhoods.neighborhoods.shape[1]
         if features.isnan().any():
             # TODO: something about this...?
@@ -572,6 +574,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def truncated_e_step(
         self,
         candidates,
+        n_candidates,
         with_kl=False,
         show_progress=False,
         with_hard_labels=False,
@@ -601,13 +604,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             U = torch.zeros(u_shp, device=dev, dtype=torch.double)
 
         # will be updated...
-        top_candidates = candidates[:, : self.n_candidates]
+        top_candidates = candidates[:, : n_candidates]
         hard_labels = None
         if with_hard_labels:
             hard_labels = torch.empty_like(top_candidates[:, 0])
         probs = None
         if with_probs:
-            probs = torch.empty(candidates[:, : self.n_candidates].shape)
+            probs = torch.empty(candidates[:, : n_candidates].shape)
 
         # do we need to initialize the noise log likelihoods?
         first_run = not hasattr(self, "noise_logliks")
@@ -618,7 +621,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # run loop
         jobs = (
             self._te_step_job(
-                candidates, batchix, with_kl, with_hard_labels, with_probs
+                candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs
             )
             for batchix in self.batches(show_progress=show_progress)
         )
@@ -693,10 +696,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
     @joblib.delayed
     def _te_step_job(
-        self, candidates, batch_indices, with_kl, with_hard_labels, with_probs
+        self, candidates, n_candidates, batch_indices, with_kl, with_hard_labels, with_probs
     ):
         return self.process_batch(
             candidates=candidates,
+            n_candidates=n_candidates,
             batch_indices=batch_indices,
             with_stats=True,
             with_obs_elbo=True,
@@ -735,6 +739,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self,
         batch_indices,
         candidates,
+        n_candidates,
         with_grads=False,
         with_stats=False,
         with_kl=False,
@@ -762,7 +767,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
         eres = _te_batch_e(  # pyright: ignore [reportCallIssue]
             n_units=self.n_units,
-            n_candidates=self.n_candidates,
+            n_candidates=n_candidates,
             noise_log_prop=self.noise_log_prop,
             candidates=candidates,
             with_kl=with_kl,
@@ -771,10 +776,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
         candidates = eres["candidates"]
         assert candidates is not None
-        assert candidates.shape == (n, self.n_candidates)
+        assert candidates.shape == (n, n_candidates)
         Q = eres["Q"]
         assert Q is not None
-        assert Q.shape == (n, self.n_candidates + 1)
+        assert Q.shape == (n, n_candidates + 1)
 
         oelbo = None
         if with_obs_elbo:
