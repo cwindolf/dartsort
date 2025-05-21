@@ -47,7 +47,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_search: int | None = 5,
         n_explore: int | None = None,
         n_units: int | None = None,
-        covariance_radius: float | None = 250.0,
+        covariance_radius: float | None = None,
         noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
@@ -187,6 +187,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 alpha = bases.new_full((nu, self.M), self.alpha0, dtype=torch.float64)
             else:
                 alpha = torch.asarray(alpha, dtype=torch.float64, device=bases.device)
+                alpha = torch.where(alpha.isnan(), self.alpha0, alpha)
                 assert alpha.shape == (nu, self.M)
             self.alpha = nn.Parameter(alpha, requires_grad=False)
             assert self.alpha.isfinite().all()
