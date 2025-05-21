@@ -6,6 +6,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
+elbo_atol = 1e-5
 
 t_missing_test = (None, "random")
 t_mu_test = ("zero", "random")
@@ -120,6 +121,10 @@ def test_mixture(
         gmm_kw=dict(laplace_ard=laplace_ard, prior_pseudocount=prior_pseudocount),
     )
     res = mixture_testing_util.test_moppcas(**kw, return_before_fit=False)
+    if inference_algorithm == "tvi":
+        assert len(res["fit_info"]["elbos"])
+        for elbo in res["fit_info"]["elbos"]:
+            assert np.all(np.diff(elbo) >= -elbo_atol)
 
     sf = res["sim_res"]["data"]
     train = sf.split_indices["train"]

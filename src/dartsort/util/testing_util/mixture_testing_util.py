@@ -203,14 +203,17 @@ def fit_moppcas(
         **gmm_kw,
     )
     torch.manual_seed(0)
+    elbos = []
+
     if return_before_fit:
-        return mm
+        return mm, dict(elbos=elbos)
 
     if inference_algorithm == "em":
         mm.log_liks = mm.em()
     elif inference_algorithm in ("tem", "tvi"):
         res = mm.tvi()
         mm.log_liks = res["log_liks"]
+        elbos.append(np.array([r["obs_elbo"] for r in res["records"]]))
     elif inference_algorithm == "tsgd":
         res = mm.tvi(algorithm="adam")
         mm.log_liks = res["log_liks"]
@@ -225,6 +228,7 @@ def fit_moppcas(
         elif inference_algorithmin("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
+            elbos.append(np.array([r["obs_elbo"] for r in res["records"]]))
         elif inference_algorithm == "tsgd":
             res = mm.tvi(algorithm="adam")
             mm.log_liks = res["log_liks"]
@@ -238,13 +242,14 @@ def fit_moppcas(
         elif inference_algorithmin("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
+            elbos.append(np.array([r["obs_elbo"] for r in res["records"]]))
         elif inference_algorithm == "tsgd":
             res = mm.tvi(algorithm="adam")
             mm.log_liks = res["log_liks"]
         else:
             assert False
 
-    return mm
+    return mm, dict(elbos=elbos)
 
 
 def fit_ppca(
@@ -495,7 +500,7 @@ def test_moppcas(
         snr=snr,
         rg=rg,
     )
-    mm = fit_moppcas(
+    mm, fit_info = fit_moppcas(
         sim_res["data"],
         sim_res["noise"],
         M=M,
@@ -511,7 +516,7 @@ def test_moppcas(
         gmm_kw=gmm_kw,
     )
     if return_before_fit:
-        return dict(sim_res=sim_res, gmm=mm)
+        return dict(sim_res=sim_res, gmm=mm, fit_info=fit_info)
 
     acc = (mm.labels == sim_res["labels"]).sum() / N
     print(f"accuracy: {acc}")
@@ -553,5 +558,6 @@ def test_moppcas(
         init_label_corruption=init_label_corruption,
         M=M,
         ari=ari,
+        fit_info=fit_info,
     )
     return results
