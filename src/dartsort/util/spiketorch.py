@@ -490,7 +490,7 @@ def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_siz
         # else, better to do this later
         for bs in range(0, n, batch_size):
             osl = slice(bs, min(bs + batch_size, n))
-            out[osl] = (mu_[osl, None] - mu_[None]).square_().sum(dim=2)
+            out[osl] = (mu_[None] - mu_[osl, None]).square_().sum(dim=2)
         out *= 0.5
         return out
 

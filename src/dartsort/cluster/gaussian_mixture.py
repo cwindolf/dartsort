@@ -431,6 +431,8 @@ class SpikeMixtureModel(torch.nn.Module):
         n_units = len(ids)
         n_spikes = lls_keep.shape[1]
 
+        print(f"{ids=}")
+
         tmm = truncated_mixture.SpikeTruncatedMixtureModel(
             data=self.data,
             noise=self.noise,
@@ -466,6 +468,10 @@ class SpikeMixtureModel(torch.nn.Module):
         else:
             assert False
 
+        print(f"{init.shape=}")
+        print(f"{np.unique(init)=}")
+        print(f"{np.unique(labels)=}")
+
         unmatched = labels < 0
         if unmatched.any():
             g = self.data.prgeom[:-1]
@@ -476,6 +482,7 @@ class SpikeMixtureModel(torch.nn.Module):
             _, closest = coms.query(ux, workers=-1)
             assert (closest < coms.n).all()
             labels[unmatched] = closest
+        print(f"{np.unique(labels)=}")
 
         tmm.set_parameters(
             labels=torch.from_numpy(init),
@@ -1130,6 +1137,7 @@ class SpikeMixtureModel(torch.nn.Module):
         kept_ids = label_ids[keep[label_ids]]
         new_ids = torch.arange(kept_ids.numel())
         old2new = dict(zip(kept_ids, new_ids))
+        print(f"relabel {relabel_split=} {kept_ids=} {old2new=}")
         self._relabel(kept_ids, split=relabel_split)
 
         if self.log_proportions is not None:
@@ -2987,6 +2995,9 @@ class SpikeMixtureModel(torch.nn.Module):
             label_indices = original[kept]
         else:
             label_indices = torch.searchsorted(old_labels, original, right=True) - 1
+            print(f"{original=}")
+            print(f"{old_labels[label_indices]=}")
+            print(f"{label_indices=}")
             kept = old_labels[label_indices] == original
             label_indices = label_indices[kept]
 
@@ -2997,6 +3008,8 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if new_labels is not None:
             label_indices = new_labels.to(self.labels)[label_indices]
+        print(f"{self.labels[kept]=}")
+        print(f"{label_indices=}")
 
         self.labels[kept] = label_indices
         self.labels[unkept] = -1

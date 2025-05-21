@@ -65,20 +65,27 @@ def interpolate_by_chunk(
     out : torch.Tensor
         (n_spikes, feature_dim, n_target_chans)
     """
-    # devices, dtypes, shapes
+    # check shapes
     assert geom.shape[1] == 2, "Haven't implemented 3d."
+    if torch.is_tensor(mask):
+        mask = mask.numpy(force=True)
+    (n_spikes_full,) = mask.shape
+    assert mask.dtype == np.bool_
+    n_spikes = mask.sum()
+    assert channels.shape == (n_spikes,)
+    n_source_chans = channel_index.shape[1]
+    assert n_source_chans == dataset.shape[2]
+    assert n_spikes_full == dataset.shape[0]
+    n_target_chans = target_channels.shape[1]
+    assert target_channels.shape == (n_spikes, n_target_chans)
+    assert shifts.shape == (n_spikes,)
+    assert len(geom) == len(channel_index)
+    feature_dim = dataset.shape[1]
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
     dtype = torch.from_numpy(np.empty((), dtype=dataset.dtype)).dtype
-    n_spikes = mask.sum()
-    assert channels.shape == (n_spikes,)
-    n_source_chans = channel_index.shape[1]
-    assert n_source_chans == dataset.shape[2]
-    n_target_chans = target_channels.shape[1]
-    assert target_channels.shape == (n_spikes, n_target_chans)
-    feature_dim = dataset.shape[1]
 
     # allocate output
     storage_device = device if store_on_device else "cpu"

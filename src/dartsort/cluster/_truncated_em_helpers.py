@@ -125,14 +125,11 @@ def _te_batch_e(
     # observed log likelihoods
     if ds_verbose:
         logger.dartsortverbose(f"{whitenednu.isfinite().all()=}")
-    inv_quad = woodbury_inv_quad(
-        whitenedx, whitenednu, wburyroot=wburyroot, overwrite_nu=True
-    )
+    inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot)
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     lls = lls_unnorm + log_proportions
 
-    # if ds_verbose:
     llsfinite = lls.isfinite()
     if not torch.logical_or(candidates < 0, llsfinite).all():
         bad = torch.logical_and(candidates >= 0, torch.logical_not(llsfinite))
@@ -144,7 +141,7 @@ def _te_batch_e(
             f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
         )
         if wburyroot is not None:
-            msg += (f" {wburyroot[infcands]=}")
+            msg += f" {wburyroot[infcands]=}"
         raise ValueError(f"{bad.sum()=} {msg}")
 
     cvalid = candidates >= 0
@@ -161,7 +158,9 @@ def _te_batch_e(
     new_candidates = candidates.take_along_dim(topinds, 1)
     if not (new_candidates >= 0).all():
         (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
-        raise ValueError(f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=} {cvalid[bad_ix]=} {cvalid[topinds][bad_ix]=}")
+        raise ValueError(
+            f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=} {cvalid[bad_ix]=} {cvalid[topinds][bad_ix]=}"
+        )
 
     ncc = dkl = None
     if with_kl:
@@ -227,17 +226,15 @@ def _te_batch_m_rank0(
     n, C = Qn.shape
     arange_rank = torch.arange(rank, device=Q.device)
 
-    xc = torch.sub(x[:, None], nu, out=nu)
-    del nu
+    # xc = torch.sub(x[:, None], nu, out=nu)
+    # del nu
 
     mm = tnu
     del tnu
     mm += Cmo_Cooinv_x[:, None]
     mm -= Cmo_Cooinv_nu
     mm.mul_(Qn.unsqueeze(2))
-    out = xc.view(n, C, rank, nc_obs)
-    del xc
-    mo = torch.mul(Qn[:, :, None, None], x.view(n, 1, rank, nc_obs), out=out)
+    mo = Qn[:, :, None, None] * x.view(n, 1, rank, nc_obs)
 
     m = Qn.new_zeros((n_units, rank, nc + 1))
     spiketorch.add_at_(
@@ -422,7 +419,9 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
     return d.view(R.shape)
 
 
-def _elbo_prior_correction(alpha0, total_count, mu, W, Cinv, alpha=None, mean_prior=False):
+def _elbo_prior_correction(
+    alpha0, total_count, mu, W, Cinv, alpha=None, mean_prior=False
+):
     # return 0.0
     mu_term = 0.0
     if mean_prior:
@@ -439,7 +438,7 @@ def _elbo_prior_correction(alpha0, total_count, mu, W, Cinv, alpha=None, mean_pr
     return mu_term - 0.5 * W_term / total_count + alpha_term
 
 
-def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False):
+def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None):
     """Faster inv quad term in log likelihoods
 
     We want to compute
@@ -462,14 +461,7 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_nu=False)
         (B-) (x-nu)' Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1 (x-nu)
                 = | A (x'-z') |^2.
     """
-    out = whitenednu if overwrite_nu else None
-    wdxz = torch.sub(
-        whitenedx.unsqueeze(1),
-        whitenednu,
-        # out=out,
-    )
-    if ds_verbose:
-        logger.dartsortverbose(f"{wdxz.isfinite().all()=}")
+    wdxz = whitenedx.unsqueeze(1) - whitenednu
     if wburyroot is None:
         return wdxz.square_().sum(dim=2)
     term_b = torch.einsum("ncj,ncjp->ncp", wdxz, wburyroot)

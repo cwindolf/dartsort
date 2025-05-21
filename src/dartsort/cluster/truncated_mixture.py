@@ -47,7 +47,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_search: int | None = 5,
         n_explore: int | None = None,
         n_units: int | None = None,
-        covariance_radius: float | None = 250.0,
+        covariance_radius: float | None = None,
         noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
@@ -232,7 +232,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
             mean_scale = result.N / (result.N + self.alpha0)
             self.means[..., :-1] = result.m * mean_scale[:, None, None]
         else:
+            print(f"00 {torch.linalg.norm(self.means[..., :-1], dim=(1, 2))=}")
+            print(f"{torch.linalg.norm(result.m, dim=(1, 2))=}")
             self.means[..., :-1] = result.m
+            print(f"{torch.linalg.norm(self.means[..., :-1], dim=(1, 2))=}")
         if logger.isEnabledFor(DARTSORTDEBUG):
             assert self.means[..., :-1].isfinite().all()
 
