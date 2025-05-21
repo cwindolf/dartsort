@@ -52,9 +52,10 @@ from .stable_features import (
 )
 from ._truncated_em_helpers import _elbo_prior_correction
 from . import truncated_mixture
-from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
+from ..util.logging_util import DARTsortLogger, DARTSORTDEBUG, DARTSORTVERBOSE
 
-logger = getLogger(__name__)
+logger: DARTsortLogger = getLogger(__name__)
+
 
 # -- main class
 
@@ -250,6 +251,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.lock = threading.Lock()
         self.storage = threading.local()
         self.next_round_annotations = {}
+        self.tmm = None
 
         self.to(self.data.device)
 
@@ -376,20 +378,18 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         n_iter=None,
         show_progress=True,
-        lls=None,
         liks_from_tmm="if_train",
         final_e_step=True,
         final_split="kept",
         n_threads=None,
         batch_size=1024,
-        tmm_kwargs={},
+        tmm_kwargs=None,
         algorithm="em",
         scheduler=None,
         sgd_lr=0.1,
         initialization="topk",
         atol=None,
     ):
-        # TODO: hang on to this and update it in place
         if n_threads is None:
             n_threads = self.n_threads
         if atol is None:
@@ -433,26 +433,29 @@ class SpikeMixtureModel(torch.nn.Module):
 
         print(f"{ids=}")
 
-        tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-            data=self.data,
-            noise=self.noise,
-            M=self.ppca_rank * (self.cov_kind == "ppca"),
-            n_threads=n_threads,
-            batch_size=batch_size,
-            n_units=n_units,
-            alpha0=self.prior_pseudocount,
-            laplace_ard=self.laplace_ard,
-            prior_scales_mean=self.prior_scales_mean,
-            **tmm_kwargs,
-        )
+        if self.tmm is None:
+            if tmm_kwargs is None:
+                tmm_kwargs = {}
+            self.tmm = truncated_mixture.SpikeTruncatedMixtureModel(
+                data=self.data,
+                noise=self.noise,
+                M=self.ppca_rank * (self.cov_kind == "ppca"),
+                n_threads=n_threads,
+                batch_size=batch_size,
+                alpha0=self.prior_pseudocount,
+                laplace_ard=self.laplace_ard,
+                prior_scales_mean=self.prior_scales_mean,
+                **tmm_kwargs,
+            )
+        self.tmm.set_sizes(n_units)
 
         if initialization == "topk":
             nz_lines, nz_init = sparse_topk(
                 lls_keep,
                 log_proportions=self.log_proportions[ids].numpy(force=True),
-                k=tmm.n_candidates,
+                k=self.tmm.n_candidates,
             )
-            init = np.empty((n_spikes, tmm.n_candidates), dtype=np.int64)
+            init = np.empty((n_spikes, self.tmm.n_candidates), dtype=np.int64)
             z_lines = np.setdiff1d(np.arange(n_spikes), nz_lines)
             z_init = integers_without_inner_replacement(
                 self.rg, high=n_units, size=(len(z_lines), init.shape[1])
@@ -468,10 +471,6 @@ class SpikeMixtureModel(torch.nn.Module):
         else:
             assert False
 
-        print(f"{init.shape=}")
-        print(f"{np.unique(init)=}")
-        print(f"{np.unique(labels)=}")
-
         unmatched = labels < 0
         if unmatched.any():
             g = self.data.prgeom[:-1]
@@ -482,9 +481,8 @@ class SpikeMixtureModel(torch.nn.Module):
             _, closest = coms.query(ux, workers=-1)
             assert (closest < coms.n).all()
             labels[unmatched] = closest
-        print(f"{np.unique(labels)=}")
 
-        tmm.set_parameters(
+        self.tmm.set_parameters(
             labels=torch.from_numpy(init),
             means=means[ids],
             bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
@@ -500,17 +498,9 @@ class SpikeMixtureModel(torch.nn.Module):
             its = range(n_iter)
 
         if algorithm == "adam":
-            opt = torch.optim.Adam(
-                tmm.parameters(),
-                lr=sgd_lr,
-                maximize=True,
-            )
+            opt = torch.optim.Adam(tmm.parameters(), lr=sgd_lr, maximize=True)
         elif algorithm == "sgd":
-            opt = torch.optim.SGD(
-                tmm.parameters(),
-                lr=sgd_lr,
-                maximize=True,
-            )
+            opt = torch.optim.SGD(tmm.parameters(), lr=sgd_lr, maximize=True)
         else:
             assert algorithm == "em"
 
@@ -528,7 +518,7 @@ class SpikeMixtureModel(torch.nn.Module):
         for j in its:
             is_final = done or j == n_iter - 1
             if is_final or algorithm == "em":
-                res = tmm.step(
+                res = self.tmm.step(
                     show_progress=step_progress,
                     hard_label=is_final,
                     with_probs=is_final and liks_from_tmm,
@@ -543,7 +533,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     )
                 prev_elbo = res["obs_elbo"]
             elif algorithm in ("sgd", "adam"):
-                res = tmm.sgd_epoch(opt, show_progress=step_progress, tic=tic)
+                res = self.tmm.sgd_epoch(opt, show_progress=step_progress, tic=tic)
                 if scheduler is not None:
                     sched.step()
                 train_records.extend(res["train_records"])
@@ -576,7 +566,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.clear_units()
         # not needed. we'll do e step.
         # self.labels[self.data.split_indices["train"]] = labels
-        channels, counts = tmm.channel_occupancy(
+        channels, counts = self.tmm.channel_occupancy(
             labels,
             min_count=self.channels_count_min,
             # min_prop=0.05,
@@ -584,17 +574,17 @@ class SpikeMixtureModel(torch.nn.Module):
             # neighborhoods=self.data.neighborhoods(neighborhood="core")[1],
             rg=self.rg,
         )
-        for j in range(len(tmm.means)):
+        for j in range(len(self.tmm.means)):
             basis = None
-            if tmm.bases is not None:
-                basis = tmm.bases[j, ..., :-1].permute(1, 2, 0)
+            if self.tmm.bases is not None:
+                basis = self.tmm.bases[j, ..., :-1].permute(1, 2, 0)
             alpha = None
-            if tmm.M and tmm.laplace_ard:
-                alpha = tmm.alpha[j]
+            if self.tmm.M and self.tmm.laplace_ard:
+                alpha = self.tmm.alpha[j]
             self[j] = GaussianUnit.from_parameters(
                 rank=self.data.rank,
                 n_channels=self.data.n_channels,
-                mean=tmm.means[j, :, :-1],
+                mean=self.tmm.means[j, :, :-1],
                 basis=basis,
                 channels=channels[j],
                 channel_counts=counts[j],
@@ -602,7 +592,9 @@ class SpikeMixtureModel(torch.nn.Module):
                 **self.unit_args,
             )
         assert self.log_proportions is not None
-        lps = torch.concatenate((tmm.log_proportions, tmm.noise_log_prop.view(-1)))
+        lps = torch.concatenate(
+            (self.tmm.log_proportions, self.tmm.noise_log_prop.view(-1))
+        )
         self.log_proportions = lps.log_softmax(dim=0)
 
         result = dict(records=records, train_records=train_records)
@@ -615,13 +607,15 @@ class SpikeMixtureModel(torch.nn.Module):
         ) or liks_from_tmm is True:
             assert final_split == "train"
             topk_arr = (
-                tmm.candidates.candidates[:, : tmm.n_candidates].numpy(force=True),
+                self.tmm.candidates.candidates[:, : self.tmm.n_candidates].numpy(
+                    force=True
+                ),
                 res["probs"].numpy(force=True),
             )
             log_liks = topk_sparse_tocsc(
                 topk_arr,
-                n_rows=len(tmm.log_proportions),  # does not include noise
-                extra_row=tmm.processor.noise_logliks.numpy(force=True),
+                n_rows=len(self.tmm.log_proportions),  # does not include noise
+                extra_row=self.tmm.processor.noise_logliks.numpy(force=True),
                 column_support=self.data.split_indices[final_split],
                 n_columns_full=self.data.n_spikes,
             )

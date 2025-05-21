@@ -51,7 +51,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
-        batch_size=2**12,
+        batch_size=2**11,
         exact_kl=True,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
@@ -64,19 +64,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         min_log_prop=-50.0,
     ):
         super().__init__()
-        if n_search is None:
-            n_search = n_candidates
-        if n_explore is None:
-            n_explore = n_search
-        if n_units is not None:
-            n_candidates = min(n_units, n_candidates)
-            remainder = n_units - n_candidates
-            n_search = max(0, min(remainder // n_candidates, n_search))
-            remainder -= n_candidates * n_search
-            n_explore = max(0, min(remainder, n_explore))
-        self.n_candidates = n_candidates
-        self.data = data
-        self.noise = noise
 
         self.M = M
         self.data_dim = self.data.rank * self.data.n_channels
@@ -89,6 +76,19 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.alpha_max = alpha_max
         self.alpha_min = alpha_min
         self.prior_scales_mean = prior_scales_mean
+        self.data = data
+        self.noise = noise
+
+        self.candidates = CandidateSet(
+            neighborhoods=self.train_neighborhoods,
+            random_seed=random_seed,
+            device=self.data.device,
+        )
+
+        self.initial_n_candidates = n_candidates
+        self.initial_n_search = n_search
+        self.initial_n_explore = n_explore
+        self.set_sizes(n_units)
 
         self.covariance_radius = covariance_radius
         self.fixed_noise_proportion = fixed_noise_proportion
@@ -101,7 +101,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             noise=noise,
             neighborhoods=self.train_neighborhoods,
             features=self.data._train_extract_features,
-            n_candidates=n_candidates,
             random_seed=random_seed,
             n_threads=n_threads,
             batch_size=batch_size,
@@ -110,15 +109,29 @@ class SpikeTruncatedMixtureModel(nn.Module):
             Cinv_in_grad=Cinv_in_grad,
             noise_trunc_factors=noise_trunc_factors,
         )
-        self.candidates = CandidateSet(
-            neighborhoods=self.train_neighborhoods,
-            n_candidates=n_candidates,
-            n_search=n_search,
-            n_explore=n_explore,
-            random_seed=random_seed,
-            device=self.data.device,
-        )
         self.to(device=self.data.device)
+
+    def set_sizes(self, n_units: int | None = None):
+        n_candidates = self.initial_n_candidates
+        n_search = self.initial_n_search
+        n_explore = self.initial_n_explore
+        if n_units is not None:
+            n_candidates = min(n_units, n_candidates)
+        if n_search is None:
+            n_search = n_candidates
+        if n_explore is None:
+            n_explore = n_search
+        if n_units is not None:
+            remainder = n_units - n_candidates
+            n_search = max(0, min(remainder // n_candidates, n_search))
+            remainder -= n_candidates * n_search
+            n_explore = max(0, min(remainder, n_explore))
+
+        self.n_candidates = n_candidates
+        self.n_search = n_search
+        self.n_explore = n_explore
+
+        self.candidates.update_sizes(self.n_candidates, self.n_search, self.n_explore)
 
     def set_parameters(
         self,
@@ -131,10 +144,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
         alpha=None,
     ):
         """Parameters are stored padded with an extra channel."""
-        self.n_units = nu = means.shape[0]
-        assert means.shape == (nu, self.noise.rank, self.noise.n_channels)
-        assert log_proportions.shape == (nu,)
-        assert kl_divergences.shape == (nu, nu)
+        self.n_units = means.shape[0]
+        self.set_sizes(self.n_units)
+        assert means.shape == (self.n_units, self.noise.rank, self.noise.n_channels)
+        assert log_proportions.shape == (self.n_units,)
+        assert kl_divergences.shape == (self.n_units, self.n_units)
         assert means.isfinite().all()
         assert log_proportions.isfinite().all()
         assert noise_log_prop.isfinite()
@@ -142,7 +156,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
         assert self.means.isfinite().all()
 
-        self.register_buffer("_N", torch.zeros(nu + 1))
+        self.register_buffer("_N", torch.zeros(self.n_units + 1))
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
             inv_noise_log_prop = torch.log(
@@ -175,7 +189,12 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert M == self.M
         if M:
             assert bases is not None
-            assert bases.shape == (nu, self.M, self.data.rank, self.data.n_channels)
+            assert bases.shape == (
+                self.n_units,
+                self.M,
+                self.data.rank,
+                self.data.n_channels,
+            )
             self.bases = nn.Parameter(F.pad(bases, (0, 1)), requires_grad=False)
             assert self.bases.isfinite().all()
         else:
@@ -184,24 +203,19 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if self.M and self.laplace_ard and self.has_prior:
             assert bases is not None
             if alpha is None:
-                alpha = bases.new_full((nu, self.M), self.alpha0, dtype=torch.float64)
+                alpha = bases.new_full(
+                    (self.n_units, self.M), self.alpha0, dtype=torch.float64
+                )
             else:
                 alpha = torch.asarray(alpha, dtype=torch.float64, device=bases.device)
                 alpha = torch.where(alpha.isnan(), self.alpha0, alpha)
-                assert alpha.shape == (nu, self.M)
+                assert alpha.shape == (self.n_units, self.M)
             self.alpha = nn.Parameter(alpha, requires_grad=False)
             assert self.alpha.isfinite().all()
         else:
             self.alpha = self.alpha0
 
         self.to(means.device)
-
-    def initialize_parameters(self, train_labels):
-        # run ppcas, or svds?
-        # compute noise log liks? or does TEP want to do that? or, perhaps we do
-        # that by setting noise to the explore unit in the first iteration, and
-        # then storing?
-        raise NotImplementedError
 
     def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
         search_neighbors = self.search_sets()
@@ -233,10 +247,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             mean_scale = result.N / (result.N + self.alpha0)
             self.means[..., :-1] = result.m * mean_scale[:, None, None]
         else:
-            print(f"00 {torch.linalg.norm(self.means[..., :-1], dim=(1, 2))=}")
-            print(f"{torch.linalg.norm(result.m, dim=(1, 2))=}")
             self.means[..., :-1] = result.m
-            print(f"{torch.linalg.norm(self.means[..., :-1], dim=(1, 2))=}")
         if logger.isEnabledFor(DARTSORTDEBUG):
             assert self.means[..., :-1].isfinite().all()
 
@@ -509,7 +520,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
-        n_candidates: int,
         batch_size: int = 2**14,
         n_threads: int = 0,
         random_seed: int = 0,
@@ -523,6 +533,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # initialize fixed noise-related arrays
         self.noise = noise
+        self.n_spikes, self.nc_obs = features.shape[:2]
+        assert self.nc_obs == neighborhoods.neighborhoods.shape[1]
         if features.isnan().any():
             # TODO: something about this...?
             self.features = features.nan_to_num()
@@ -542,7 +554,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if precompute_invx:
             self.precompute_invx()
         self.batch_size = batch_size
-        self.n_candidates = n_candidates
 
         # M is updated by self.update() when a basis is assigned here.
         self.M = 0
@@ -602,7 +613,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         first_run = not hasattr(self, "noise_logliks")
         noise_logliks = None
         if first_run:
-            noise_logliks = torch.empty((len(self.features),), device=dev)
+            noise_logliks = torch.empty((self.n_spikes,), device=dev)
 
         # run loop
         jobs = (
@@ -695,11 +706,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
 
     def batches(self, shuffle=False, show_progress=False, batch_size=None):
-        n = len(self.features)
         if batch_size is None:
             batch_size = self.batch_size
         if shuffle:
-            shuf = torch.from_numpy(self._rg.permutation(n))
+            shuf = torch.from_numpy(self._rg.permutation(self.n_spikes))
             for sl in self.batches(show_progress=show_progress, batch_size=batch_size):
                 ix = shuf[sl]
                 ix.sort()
@@ -707,13 +717,18 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         else:
             if show_progress:
                 starts = trange(
-                    0, n, batch_size, desc="Batches", smoothing=0, mininterval=0.2
+                    0,
+                    self.n_spikes,
+                    batch_size,
+                    desc="Batches",
+                    smoothing=0,
+                    mininterval=0.2,
                 )
             else:
-                starts = range(0, n, batch_size)
+                starts = range(0, self.n_spikes, batch_size)
 
             for batch_start in starts:
-                batch_end = min(n, batch_start + batch_size)
+                batch_end = min(self.n_spikes, batch_start + batch_size)
                 yield slice(batch_start, batch_end)
 
     def process_batch(
@@ -914,10 +929,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
-        # self.nc_obs = nco = nc_obs.max().to(int)
-        self.nc_obs = nco = self.features.shape[2]
-        assert nco == neighborhoods.neighborhoods.shape[1]
         self.nc_miss = ncm = max(map(len, missing_chans))
+        nco = self.nc_obs
 
         # understand channel subsets
         # these arrays are used to scatter into D-shaped dims.
@@ -1088,7 +1101,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # this is used in the log lik Woodbury, and it's also the posterior
         # covariance of the ppca embedding (usually I call that T).
-
         wburyroot = torch.empty_like(Cooinv_WobsT)
         inv_cap_Wobs_Cooinv = torch.empty_like(wburyroot.mT)
         W_WCC = Wmiss
@@ -1189,15 +1201,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
 
 class CandidateSet:
-    def __init__(
-        self,
-        neighborhoods,
-        n_candidates=3,
-        n_search=2,
-        n_explore=1,
-        random_seed=0,
-        device=None,
-    ):
+    def __init__(self, neighborhoods, random_seed=0, device=None):
         """
         Invariant 1: self.candidates[:, :self.n_candidates] are the best units for
         each spike.
@@ -1214,19 +1218,25 @@ class CandidateSet:
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.n_spikes = self.neighborhood_ids.numel()
-        logger.doublecheck(
-            f"Initialize CandidateSet with {self.n_spikes=} {n_candidates=} {n_search=} {n_explore=}"
-        )
+        self.device = device
+        self.rg = np.random.default_rng(random_seed)
+        self._candidates = None
+        self._initialized = False
+
+    def update_sizes(self, n_candidates=3, n_search=2, n_explore=1):
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
         n_total = self.n_candidates + self.n_candidates * self.n_search + self.n_explore
-
-        can_pin = device is not None and device.type == "cuda"
-        self.candidates = torch.empty(
-            (self.n_spikes, n_total), dtype=torch.long, pin_memory=can_pin
-        )
-        self.rg = np.random.default_rng(random_seed)
+        if self._candidates is None:
+            can_pin = self.device is not None and self.device.type == "cuda"
+            self._candidates = torch.empty(
+                (self.n_spikes, n_total), dtype=torch.long, pin_memory=can_pin
+            )
+        elif n_total > self._candidates.shape[1]:
+            self._candidates.resize_((self.n_spikes, n_total))
+        self.candidates = self._candidates[:, :n_total]
+        self._initialized = False
 
     def initialize_candidates(self, labels, closest_neighbors):
         """Imposes invariant 1, or at least tries to start off well."""
@@ -1265,6 +1275,7 @@ class CandidateSet:
                     f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
                     f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
                 )
+        self._initialized = True
 
     def propose_candidates(self, unit_search_neighbors, indices=None):
         """Assumes invariant 1 and does not mess it up.
@@ -1274,6 +1285,8 @@ class CandidateSet:
         unit_search_neighbors: LongTensor (n_units, n_search)
         """
         assert unit_search_neighbors.shape[1] <= self.n_search
+        assert self._initialized
+
         n_search = unit_search_neighbors.shape[1]
 
         full = indices is None
