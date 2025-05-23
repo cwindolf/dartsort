@@ -51,7 +51,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
-        batch_size=2**11,
+        batch_size=2**8,
         exact_kl=True,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
