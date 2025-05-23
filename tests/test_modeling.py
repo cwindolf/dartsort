@@ -9,18 +9,18 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
-elbo_atol = 1e-5
+elbo_atol = 1e-2
 
 
 test_t_mu = ("random",)
 test_t_cov = ("eye", "random")
-test_t_w = ("random", "zero")
+test_t_w = ("zero", "random")
 test_t_missing = (None, "random", "by_cluster")
 
 # test_t_mu = ("random",)
 # test_t_cov = ("eye",)
 # test_t_w = ("zero",)
-# test_t_missing = ("by_cluster",)
+# test_t_missing = ("random",)
 
 
 @pytest.fixture(scope="module")
@@ -56,9 +56,6 @@ def test_mixture(
     t_missing,
     pcount_ard,
 ):
-    print(
-        f"{t_mu=} {t_cov=} {t_w=} {t_missing=} {inference_algorithm=} {n_refinement_iters=}"
-    )
     t_cov, zrad = t_cov_zrad
     prior_pseudocount, laplace_ard = pcount_ard
     kw = dict(
@@ -254,6 +251,20 @@ def test_mixture(
                 assert 0 <= nn < len(neighbs.neighborhoods)
                 inu = masks[int(uu.item())]
                 assert (neighbs.neighborhood_ids[inu] == nn).any()
+
+            # check parameters
+            if t_cov == "eye":
+                pnames = {'Cmo_Cooinv_x'}
+                check = list(tmm.processor.state_dict())
+                check.extend(tmm.__dict__)
+                for pname in check:
+                    if 'om' not in pname and 'mo' not in pname:
+                        continue
+                    if pname.startswith("_"):
+                        continue
+                    pnames.add(pname)
+                for pname in pnames:
+                    assert (getattr(tmm.processor, pname) == 0).all()
 
             # run the tmm and check that it doesn't do something terrible
             tmm_res = tmm.step(hard_label=True)

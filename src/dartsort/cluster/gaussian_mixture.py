@@ -34,7 +34,6 @@ from ..util.sparse_util import (
     allocate_topk,
     topk_sparse_insert,
     topk_sparse_tocsc,
-    torch_coo_to_dense,
 )
 from .cluster_util import (
     agglomerate,

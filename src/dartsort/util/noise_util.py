@@ -648,7 +648,7 @@ class EmbeddedNoise(torch.nn.Module):
         snippets,
         mean_kind="zero",
         cov_kind="scalar",
-        shrinkage=5e-3,
+        shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         eps=1e-4,
         zero_radius: float | None = None,
@@ -873,7 +873,7 @@ class EmbeddedNoise(torch.nn.Module):
         rq_alpha=1.0,
         kriging_poly_degree=-1,
         device=None,
-        shrinkage=5e-3,
+        shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
     ):

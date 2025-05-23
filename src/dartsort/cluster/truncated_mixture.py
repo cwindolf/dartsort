@@ -70,7 +70,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         if laplace_ard:
             assert alpha0 and alpha0 > 0
-        self.has_prior = bool(alpha0)
+        self.has_prior = bool(alpha0) and (prior_scales_mean or M)
         self.alpha0 = alpha0
         self.laplace_ard = laplace_ard
         self.alpha_max = alpha_max
@@ -414,7 +414,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             with_obs_elbo=True,
             with_grads=True,
         )
-
         return result
 
     def set_grads(self, ddlogpi, ddlognoisep, ddm, ddW):
@@ -802,6 +801,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 nc=self.nc,
                 nc_obs=self.nc_obs,
                 nc_miss=self.nc_miss,
+                nc_miss_full=self.nc_miss_full,
             )
             ekw = dict(candidates=candidates, Q=Q, N=N)
             if self.M:
@@ -875,14 +875,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # determine missing channels
         missing_chans = []
+        full_missing_chans = []
+        missing_to_full = []
         truncate = noise.zero_radius and np.isfinite(noise.zero_radius)
         for ni in range(neighborhoods.n_neighborhoods):
             mix = neighborhoods.missing_channels(ni)
+            full_missing_chans.append(mix)
             if truncate:
                 assert pgeom is not None
                 oix = neighborhoods.neighborhood_channels(ni)
                 d = torch.cdist(pgeom[mix], pgeom[oix]).min(dim=1).values
-                mix = mix[d < noise.zero_radius]
+                (kept,) = (d < noise.zero_radius).cpu().nonzero(as_tuple=True)
+                mix = mix[kept]
+                missing_to_full.append(kept)
             missing_chans.append(mix)
 
         # Get Coos
@@ -925,6 +930,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # figure out dimensions
         nc_obs = neighborhoods.channel_counts
         self.nc_miss = ncm = max(map(len, missing_chans))
+        self.nc_miss_full = max(map(len, full_missing_chans))
         nco = self.nc_obs
 
         # understand channel subsets
@@ -936,8 +942,27 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             (neighborhoods.n_neighborhoods, ncm), fill_value=nc, device=device
         )
         self.register_buffer("miss_ix", miss_ix)
+        miss_ix_full = torch.full(
+            (neighborhoods.n_neighborhoods, self.nc_miss_full),
+            fill_value=nc,
+            device=device,
+        )
+        if missing_to_full:
+            # here missings will be 0, which would be bad if relevant empties were not
+            # zero always, but they are.
+            self.register_buffer("missing_to_full", torch.zeros_like(miss_ix))
+        else:
+            self.missing_to_full = None
+        self.register_buffer("miss_ix_full", miss_ix_full)
         for ni in range(neighborhoods.n_neighborhoods):
             self.miss_ix[ni, : missing_chans[ni].numel()] = missing_chans[ni]
+            self.miss_ix_full[ni, : full_missing_chans[ni].numel()] = (
+                full_missing_chans[ni]
+            )
+            if missing_to_full:
+                self.missing_to_full[ni, : missing_to_full[ni].numel()] = (
+                    missing_to_full[ni]
+                )
 
         # allocate buffers
         self.register_buffer("Coo_logdet", Coo_logdet)
@@ -1022,6 +1047,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         obs_ix = self.obs_ix[self.lut_neighbs]
         miss_ix = self.miss_ix[self.lut_neighbs]
+        miss_ix_full = self.miss_ix_full[self.lut_neighbs]
 
         # proportions stuff
         self.register_buffer("noise_log_prop", noise_log_prop)
@@ -1032,7 +1058,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # mean obs/hid parts
         nu = mu[self.lut_units[:, None], :, obs_ix].permute(0, 2, 1)
-        tnu = mu[self.lut_units[:, None], :, miss_ix].permute(0, 2, 1)
+        tnu = mu[self.lut_units[:, None], :, miss_ix_full].permute(0, 2, 1)
 
         # whitened means
         self.register_buffer("nu", nu)
@@ -1060,9 +1086,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         Wobs = W[self.lut_units[:, None], :, :, obs_ix].permute(0, 2, 3, 1)
         assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
         Wobs = Wobs.reshape(nlut, self.M, -1)
-        Wmiss = W[self.lut_units[:, None], :, :, miss_ix].permute(0, 2, 3, 1)
-        assert Wmiss.shape == (nlut, self.M, r, self.nc_miss)
+        Wmiss = W[self.lut_units[:, None], :, :, miss_ix_full].permute(0, 2, 3, 1)
+        assert Wmiss.shape == (nlut, self.M, r, self.nc_miss_full)
         Wmiss = Wmiss.reshape(nlut, self.M, -1)
+        # self.register_buffer("Wmiss", Wmiss)
         self.register_buffer("Wobs", Wobs)
 
         Cooinv_WobsT = torch.empty(
@@ -1103,25 +1130,36 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         del Wmiss
         for bs in range(0, nlut, batch_size):
             be = min(nlut, bs + batch_size)
-            Cooinv = self.Coo_inv[self.lut_neighbs[bs:be]]
-            Cooinvsqrt = self.Coo_invsqrt[self.lut_neighbs[bs:be]]
+            lut_neighbs_batch = self.lut_neighbs[bs:be]
+            nbatch = be - bs
+
+            Cooinv = self.Coo_inv[lut_neighbs_batch]
+            Cooinvsqrt = self.Coo_invsqrt[lut_neighbs_batch]
             coeft = Wobs[bs:be].mT.bmm(cap_invsqrt[bs:be].mT)
             torch.bmm(Cooinvsqrt, coeft, out=wburyroot[bs:be])
 
-            inv_cap_Wobs_Cooinv[bs:be] = cap_inv[bs:be].bmm(Wobs[bs:be]).bmm(Cooinv)
+            Cooinv_WobsT_batch = Cooinv_WobsT[bs:be]
+            Cmo_Cooinv_WobsT_batch = self.Cmo_Cooinv_WobsT[bs:be]
 
-            W_WCC[bs:be].baddbmm_(
-                Wobs[bs:be], self.Cooinv_Com[self.lut_neighbs[bs:be]], alpha=-1
-            )
+            inv_cap_Wobs_Cooinv[bs:be] = cap_inv[bs:be].bmm(Cooinv_WobsT_batch.mT)
+
+            if self.missing_to_full is not None:
+                miss2full = self.missing_to_full[lut_neighbs_batch]
+                msk = miss2full[:, None, None].broadcast_to(nbatch, self.M, r, self.nc_miss)
+                W_WCC[bs:be].view(nbatch, self.M, r, self.nc_miss_full).scatter_add_(
+                    dim=3,
+                    index=miss2full[:, None, None],
+                    src=Cmo_Cooinv_WobsT_batch.mT.view(
+                        nbatch, self.M, r, self.nc_miss
+                    ).neg(),
+                )
+            else:
+                W_WCC[bs:be] -= Cmo_Cooinv_WobsT_batch.mT
             inv_cap_W_WCC[bs:be] = cap_inv[bs:be].bmm(W_WCC[bs:be])
         self.register_buffer("wburyroot", wburyroot)
         self.register_buffer("inv_cap_Wobs_Cooinv", inv_cap_Wobs_Cooinv)
         self.register_buffer("W_WCC", W_WCC)
         self.register_buffer("inv_cap_W_WCC", inv_cap_W_WCC)
-
-        # gizmo matrix used in a certain part of the "imputation"
-        for bs in range(0, nlut, batch_size):
-            be = min(len(W_WCC), bs + batch_size)
 
     def load_batch_e(
         self, batch_indices, candidates
@@ -1174,6 +1212,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         data = dict(
             obs_ix=self.obs_ix[neighborhood_ids],
             miss_ix=self.miss_ix[neighborhood_ids],
+            miss_ix_full=self.miss_ix_full[neighborhood_ids],
             x=self.features[batch_indices].view(n, -1).to(self.device),
             nu=self.nu[lut_ixs].reshape(n, C, -1),
             tnu=self.tnu[lut_ixs].reshape(n, C, -1),
