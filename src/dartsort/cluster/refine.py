@@ -82,6 +82,7 @@ def gmm_refine(
         sigma=refinement_config.interpolation_sigma,
         rq_alpha=refinement_config.rq_alpha,
         kriging_poly_degree=refinement_config.kriging_poly_degree,
+        zero_radius=refinement_config.cov_radius,
     )
     data = StableSpikeDataset.from_sorting(
         sorting,

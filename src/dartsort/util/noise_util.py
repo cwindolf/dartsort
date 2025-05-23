@@ -5,6 +5,7 @@ import h5py
 import linear_operator
 import numpy as np
 import pandas as pd
+from scipy.spatial.distance import pdist, squareform
 import torch
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
@@ -405,6 +406,7 @@ class EmbeddedNoise(torch.nn.Module):
         channel_std=None,
         channel_vt=None,
         full_cov=None,
+        zero_radius=None,
     ):
         super().__init__()
         self.rank = rank
@@ -412,6 +414,7 @@ class EmbeddedNoise(torch.nn.Module):
         self.mean_kind = mean_kind
         self.cov_kind = cov_kind
         self.D = rank * n_channels
+        self.zero_radius = zero_radius
 
         self.register_buffer("chans_arange", torch.arange(n_channels))
         if mean is not None:
@@ -640,7 +643,14 @@ class EmbeddedNoise(torch.nn.Module):
 
     @classmethod
     def estimate(
-        cls, snippets, mean_kind="zero", cov_kind="scalar", glasso_alpha: int | float | None=None, eps=1e-4
+        cls,
+        snippets,
+        mean_kind="zero",
+        cov_kind="scalar",
+        glasso_alpha: int | float | None = None,
+        eps=1e-4,
+        zero_radius: float | None = None,
+        rgeom=None,
     ):
         """Factory method to estimate noise model from TPCA snippets
 
@@ -656,6 +666,9 @@ class EmbeddedNoise(torch.nn.Module):
         )
         x = torch.asarray(snippets)
         x = x.to(torch.promote_types(x.dtype, torch.float))
+        if zero_radius is not None:
+            assert cov_kind.startswith("factorized")
+            assert rgeom is not None
 
         # estimate mean and center data
         if mean_kind == "zero":
@@ -739,6 +752,12 @@ class EmbeddedNoise(torch.nn.Module):
             x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
             x_spatial.mul_(correction)
 
+        spatial_mask = None
+        if zero_radius:
+            assert rgeom is not None
+            assert rgeom.shape[0] == n_channels
+            spatial_mask = squareform(pdist(rgeom)) < zero_radius
+
         # spatial part could be "by rank" or same for all ranks
         # either way, there are nans afoot
         if "by_rank" in cov_kind:
@@ -750,6 +769,8 @@ class EmbeddedNoise(torch.nn.Module):
                 covq = spiketorch.nancov(xq[:, validq])
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
+                if spatial_mask is not None:
+                    fullcovq *= torch.asarray(spatial_mask).to(fullcovq)
                 if glasso_alpha:
                     res = graphical_lasso(
                         fullcovq.numpy(force=True),
@@ -816,6 +837,8 @@ class EmbeddedNoise(torch.nn.Module):
                     x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
                 )
                 cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
+            if spatial_mask is not None:
+                cov_spatial *= torch.asarray(spatial_mask).to(cov_spatial)
             channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
             channel_std = channel_eig.sqrt()
             channel_vt = channel_v.T.contiguous()
@@ -827,6 +850,7 @@ class EmbeddedNoise(torch.nn.Module):
             rank_vt=rank_vt,
             channel_std=channel_std,
             channel_vt=channel_vt,
+            zero_radius=zero_radius,
             **init_kw,
         )
 
@@ -843,7 +867,8 @@ class EmbeddedNoise(torch.nn.Module):
         rq_alpha=1.0,
         kriging_poly_degree=-1,
         device=None,
-        glasso_alpha: int | float | None=None,
+        glasso_alpha: int | float | None = None,
+        zero_radius: float | None = None,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -869,7 +894,12 @@ class EmbeddedNoise(torch.nn.Module):
             device=device,
         )
         return cls.estimate(
-            snippets, mean_kind=mean_kind, cov_kind=cov_kind, glasso_alpha=glasso_alpha
+            snippets,
+            mean_kind=mean_kind,
+            cov_kind=cov_kind,
+            glasso_alpha=glasso_alpha,
+            zero_radius=zero_radius,
+            rgeom=rgeom,
         )
 
 
@@ -946,11 +976,19 @@ def interpolate_residual_snippets(
             chans = channel_index[j]
             (valid,) = (chans < c).nonzero(as_tuple=True)
             cvalid = chans[valid]
-            pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[j, valid[:, None], valid[None, :]]
+            pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[
+                j, valid[:, None], valid[None, :]
+            ]
             if extra_dim > 0:
-                pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[j, -extra_dim:, -extra_dim:]
-                pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[j, -extra_dim:, valid[None, :]]
-                pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[j, valid[:, None], -extra_dim:]
+                pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[
+                    j, -extra_dim:, -extra_dim:
+                ]
+                pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[
+                    j, -extra_dim:, valid[None, :]
+                ]
+                pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[
+                    j, valid[:, None], -extra_dim:
+                ]
         precomputed_data = pc_full[None]
 
     if motion_est is None:

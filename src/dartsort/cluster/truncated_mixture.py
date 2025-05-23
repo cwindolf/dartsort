@@ -47,7 +47,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         n_search: int | None = 5,
         n_explore: int | None = None,
         n_units: int | None = None,
-        covariance_radius: float | None = None,
         noise_trunc_factors: torch.Tensor | None = None,
         random_seed=0,
         n_threads: int = 0,
@@ -77,7 +76,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.alpha_max = alpha_max
         self.alpha_min = alpha_min
         self.prior_scales_mean = prior_scales_mean
-        self.covariance_radius = covariance_radius
         self.fixed_noise_proportion = fixed_noise_proportion
         self.exact_kl = exact_kl
         self.sgd_batch_size = sgd_batch_size
@@ -104,7 +102,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             random_seed=random_seed,
             n_threads=n_threads,
             batch_size=batch_size,
-            covariance_radius=covariance_radius,
             pgeom=data.prgeom,
             Cinv_in_grad=Cinv_in_grad,
             noise_trunc_factors=noise_trunc_factors,
@@ -185,9 +182,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             labels, self.search_sets(n_search=self.candidates.n_candidates)
         )
 
-        M = 0 if bases is None else bases.shape[1]
-        assert M == self.M
-        if M:
+        if self.M:
             assert bases is not None
             assert bases.shape == (
                 self.n_units,
@@ -473,6 +468,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.kl_divergences.diagonal().fill_(torch.inf)
         k = min(n_search, self.kl_divergences.shape[0] - 1)
         _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
+        assert topkinds.shape == (self.n_units, k)
         return topkinds
 
     def channel_occupancy(
@@ -525,7 +521,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,
-        covariance_radius=None,
         Cinv_in_grad=True,
         noise_trunc_factors=None,
         pgeom=None,
@@ -537,6 +532,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.n_spikes = features.shape[0]
         self.nc_obs = features.shape[2]
         assert self.nc_obs == neighborhoods.neighborhoods.shape[1]
+        assert (self.n_spikes,) == neighborhoods.neighborhood_ids.shape
         if features.isnan().any():
             # TODO: something about this...?
             self.features = features.nan_to_num()
@@ -546,9 +542,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             self.register_buffer("noise_trunc_factors", noise_trunc_factors)
         else:
             self.noise_trunc_factors = None
-        self.initialize_fixed(
-            noise, neighborhoods, pgeom=pgeom, covariance_radius=covariance_radius
-        )
+        self.initialize_fixed(noise, neighborhoods, pgeom=pgeom)
         self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
@@ -604,13 +598,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             U = torch.zeros(u_shp, device=dev, dtype=torch.double)
 
         # will be updated...
-        top_candidates = candidates[:, : n_candidates]
+        top_candidates = candidates[:, :n_candidates]
         hard_labels = None
         if with_hard_labels:
             hard_labels = torch.empty_like(top_candidates[:, 0])
         probs = None
         if with_probs:
-            probs = torch.empty(candidates[:, : n_candidates].shape)
+            probs = torch.empty(candidates[:, :n_candidates].shape)
 
         # do we need to initialize the noise log likelihoods?
         first_run = not hasattr(self, "noise_logliks")
@@ -696,7 +690,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
     @joblib.delayed
     def _te_step_job(
-        self, candidates, n_candidates, batch_indices, with_kl, with_hard_labels, with_probs
+        self,
+        candidates,
+        n_candidates,
+        batch_indices,
+        with_kl,
+        with_hard_labels,
+        with_probs,
     ):
         return self.process_batch(
             candidates=candidates,
@@ -853,9 +853,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             probs=eres["probs"],
         )
 
-    def initialize_fixed(
-        self, noise, neighborhoods, pgeom=None, covariance_radius=None
-    ):
+    def initialize_fixed(self, noise, neighborhoods, pgeom=None):
         """Neighborhood-dependent precomputed matrices.
 
         These are:
@@ -877,15 +875,14 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # determine missing channels
         missing_chans = []
-        truncate = covariance_radius and np.isfinite(covariance_radius)
+        truncate = noise.zero_radius and np.isfinite(noise.zero_radius)
         for ni in range(neighborhoods.n_neighborhoods):
             mix = neighborhoods.missing_channels(ni)
             if truncate:
                 assert pgeom is not None
                 oix = neighborhoods.neighborhood_channels(ni)
-                d = torch.cdist(pgeom[:nc], pgeom[oix]).min(dim=1).values
-                assert d[oix].max() < covariance_radius
-                mix = mix[d[mix] <= covariance_radius]
+                d = torch.cdist(pgeom[mix], pgeom[oix]).min(dim=1).values
+                mix = mix[d < noise.zero_radius]
             missing_chans.append(mix)
 
         # Get Coos
@@ -913,13 +910,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 channels_left=neighborhoods.neighborhood_channels(ni),
                 channels_right=missing_chans[ni],
             ).to_dense()
-            if truncate:
-                assert pgeom is not None
-                oix = neighborhoods.neighborhood_channels(ni)
-                d = torch.cdist(pgeom[oix], pgeom[missing_chans[ni]])
-                mask = (d > 0).to(torch.float)[None, :, None, :]
-                mask = mask.broadcast_to((R, d.shape[0], R, d.shape[1]))
-                Comi.view(mask.shape).mul_(mask)
             Com.append(Comi)
 
         # Get choleskys. linear_operator will jitter to help
@@ -1240,6 +1230,7 @@ class CandidateSet:
             )
         elif n_total > self._candidates.shape[1]:
             self._candidates.resize_((self.n_spikes, n_total))
+        self._candidates.fill_(-1)
         self.candidates = self._candidates[:, :n_total]
         self._initialized = False
 
@@ -1249,29 +1240,23 @@ class CandidateSet:
         assert closest_neighbors.shape[1] <= self.n_candidates
 
         if labels.ndim == 1:
+            self.candidates[:, 0] = labels
             torch.index_select(
-                closest_neighbors,
+                closest_neighbors[:, : self.n_candidates - 1],
                 dim=0,
                 index=labels,
-                out=self.candidates[:, : self.n_candidates],
+                out=self.candidates[:, 1 : self.n_candidates],
             )
         else:
             assert labels.shape == (self.n_spikes, self.n_candidates)
+            labels, ixs = labels.sort(dim=1, descending=True)
+            dup = labels.diff(dim=1) == 0
+            labels[:, 1:][dup] = -1
+            labels, ixs2 = labels.sort(dim=1, descending=True)
+            ixs = ixs.take_along_dim(ixs2, dim=1)
+            fisher_yates_replace(self.rg, len(closest_neighbors), labels.numpy())
+            labels = labels.take_along_dim(ixs.argsort(dim=1), dim=1)
             self.candidates[:, : self.n_candidates] = labels
-            invalid = labels < 0
-            if invalid.any():
-                (inv_i,) = invalid.any(dim=1).nonzero(as_tuple=True)
-                self.candidates[:, : self.n_candidates][invalid] = -1
-                self.candidates[inv_i, : self.n_candidates] = (
-                    self.candidates[inv_i, : self.n_candidates]
-                    .sort(descending=True)
-                    .values
-                )
-                fisher_yates_replace(
-                    self.rg,
-                    len(closest_neighbors),
-                    self.candidates[:, : self.n_candidates].numpy(),
-                )
             if logger.isEnabledFor(DARTSORTVERBOSE):
                 logger.dartsortverbose(
                     f"Candiate init had {invalid.sum()=} {invalid.shape=}"
@@ -1326,7 +1311,8 @@ class CandidateSet:
         # this is how "explore" candidates are suggested. the policy is strict:
         # just the top unit counts for each spike. this is to keep the lut smallish,
         # tho it is still huge, hopefully without making the search too bad...
-        unit_neighborhood_counts = np.zeros((n_units, n_neighbs), dtype=np.int64)
+        unit_neighborhood_counts = np.zeros((n_units + 1, n_neighbs), dtype=np.int32)
+        assert top[:, 0].shape == neighb_ids.shape
         np.add.at(unit_neighborhood_counts, (top[:, 0], neighb_ids), 1)
 
         # which to explore?
@@ -1356,12 +1342,6 @@ class CandidateSet:
             explore[targs < 0] = -1
             candidates[:, explore_slice] = explore
 
-        # update counts for the rest of units
-        if candidates.shape[1] > 1:
-            np.add.at(
-                unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
-            )
-
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
         if logger.isEnabledFor(DARTSORTVERBOSE):
@@ -1370,5 +1350,15 @@ class CandidateSet:
                 f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
             )
         assert (candidates[:, : self.n_candidates] >= 0).all()
+        assert candidates[:, self.n_candidates :].min() >= -1
+
+        # update counts for the rest of units
+        if candidates.shape[1] > 1:
+            np.add.at(
+                unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
+            )
+
+        # this was padded to allow for -1s in candidates
+        unit_neighborhood_counts = unit_neighborhood_counts[:-1]
 
         return candidates, unit_neighborhood_counts
