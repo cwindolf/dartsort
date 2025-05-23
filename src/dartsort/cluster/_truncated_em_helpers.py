@@ -208,10 +208,12 @@ def _te_batch_m_rank0(
     nc,
     nc_obs,
     nc_miss,
+    nc_miss_full,
     # common args
     candidates,
     obs_ix,
     miss_ix,
+    miss_ix_full,
     Q,
     N,
     x,
@@ -226,14 +228,9 @@ def _te_batch_m_rank0(
     n, C = Qn.shape
     arange_rank = torch.arange(rank, device=Q.device)
 
-    # xc = torch.sub(x[:, None], nu, out=nu)
-    # del nu
-
-    mm = tnu
-    del tnu
-    mm += Cmo_Cooinv_x[:, None]
-    mm -= Cmo_Cooinv_nu
+    mm = torch.sub(Cmo_Cooinv_x[:, None], Cmo_Cooinv_nu, out=Cmo_Cooinv_nu)
     mm.mul_(Qn.unsqueeze(2))
+    tnu.mul_(Qn.unsqueeze(2))
     mo = Qn[:, :, None, None] * x.view(n, 1, rank, nc_obs)
 
     m = Qn.new_zeros((n_units, rank, nc + 1))
@@ -255,6 +252,15 @@ def _te_batch_m_rank0(
         ),
         mm.view(n, C, rank, nc_miss),
     )
+    spiketorch.add_at_(
+        m,
+        (
+            candidates[:, :, None, None],
+            arange_rank[None, None, :, None],
+            miss_ix_full[:, None, None, :],
+        ),
+        tnu.view(n, C, rank, nc_miss_full),
+    )
 
     return dict(m=m)
 
@@ -265,10 +271,12 @@ def _te_batch_m_ppca(
     nc,
     nc_obs,
     nc_miss,
+    nc_miss_full,
     # common args
     candidates,
     obs_ix,
     miss_ix,
+    miss_ix_full,
     Q,
     N,
     x,
@@ -305,21 +313,24 @@ def _te_batch_m_ppca(
     Cmo_Cooinv_WobsT_ubar = torch.einsum("nckp,ncp->nck", Cmo_Cooinv_WobsT, ubar)
 
     R_observed = ubar[:, :, :, None] * xc[:, :, None, :]
-    R_missing = inv_cap_W_WCC
+    R_missing_full = inv_cap_W_WCC
     del inv_cap_W_WCC
-    R_missing += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
-    R_missing += ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
+    R_missing_full += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
+    R_missing = ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
 
-    m_missing = tnu.add_(Cmo_Cooinv_xc).sub_(Cmo_Cooinv_WobsT_ubar)
+    m_missing_full = tnu
     del tnu
+    m_missing = torch.sub(Cmo_Cooinv_xc, Cmo_Cooinv_WobsT_ubar, out=Cmo_Cooinv_WobsT_ubar)
     m_observed = torch.sub(x[:, None], WobsT_ubar, out=WobsT_ubar)
     del WobsT_ubar
 
     QU = EuuT.mul_(Qn[:, :, None, None])
     QRo = R_observed.mul_(Qn[:, :, None, None])
     QRm = R_missing.mul_(Qn[:, :, None, None])
+    QRmf = R_missing_full.mul_(Qn[:, :, None, None])
     Qmo = m_observed.mul_(Qn[:, :, None])
     Qmm = m_missing.mul_(Qn[:, :, None])
+    Qmmf = m_missing_full.mul_(Qn[:, :, None])
 
     U = Q.new_zeros((n_units, M, M))
     spiketorch.add_at_(
@@ -355,6 +366,16 @@ def _te_batch_m_ppca(
         ),
         QRm,
     )
+    spiketorch.add_at_(
+        R,
+        (
+            candidates[:, :, None, None, None],
+            arange_M[None, None, :, None, None],
+            arange_rank[None, None, None, :, None],
+            miss_ix_full[:, None, None, None, :],
+        ),
+        QRmf,
+    )
 
     m = Qn.new_zeros((n_units, rank, nc + 1))
     Qmo = Qmo.view(n, C, *m.shape[1:-1], nc_obs)
@@ -376,6 +397,15 @@ def _te_batch_m_ppca(
             miss_ix[:, None, None, :],
         ),
         Qmm,
+    )
+    spiketorch.add_at_(
+        m,
+        (
+            candidates[:, :, None, None],
+            arange_rank[None, None, :, None],
+            miss_ix_full[:, None, None, :],
+        ),
+        Qmmf,
     )
     m = m.view(n_units, rank, nc + 1)
 
@@ -422,15 +452,14 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
 def _elbo_prior_correction(
     alpha0, total_count, mu, W, Cinv, alpha=None, mean_prior=False
 ):
-    # return 0.0
     mu_term = 0.0
     if mean_prior:
         mu_term = torch.einsum("ki,ij,kj->", mu, Cinv, mu).double()
-        mu_term = -0.5 * (alpha0 / total_count) * mu_term
+        mu_term *= -0.5 * (alpha0 / total_count)
+    if W is None:
+        return mu_term
     if alpha is None:
-        W_term = 0
-        if W is not None:
-            W_term = torch.einsum("kli,ij,klj->", W, Cinv.to(W), W).double()
+        W_term = torch.einsum("kli,ij,klj->", W, Cinv.to(W), W).double()
         return mu_term - 0.5 * (alpha0 / total_count) * W_term
 
     W_term = torch.einsum("kli,ij,klj,kl->", W, Cinv.to(W), W, alpha.to(W)).double()

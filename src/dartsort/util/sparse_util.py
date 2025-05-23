@@ -30,9 +30,10 @@ def get_coo_storage(ns_total, storage, use_storage):
 
 
 def torch_coo_to_dense(coo_array, fill_value):
-    data = coo_array.data()
+    data = coo_array.values()
     out = data.new_full(coo_array.shape, fill_value)
-    out[coo_array.indices()] = data
+    print(f"{coo_array.indices().shape}")
+    out[*coo_array.indices()] = data
     return out
 
 
@@ -588,6 +589,8 @@ def _searchsorted_along_columns(out, arr, value):
 
 
 def integers_without_inner_replacement(rg, high, size):
+    """
+    """
     assert len(size) == 2
     out = np.empty(size, dtype=np.int64)
     out_write = out.reshape((-1, size[-1]))
@@ -630,7 +633,7 @@ def _fisher_yates_loop_vec(rg, high, out):
         for j in range(k - 1, -1, -1):
             for jj in range(j - 1, -1, -1):
                 if out[i, j] == out[i, jj]:
-                    out[i, j] = h - jj - 1
+                    out[i, j] = max(-1, h - jj - 1)
 
 
 def fisher_yates_replace(rg, high, data):
@@ -643,16 +646,16 @@ def fisher_yates_replace(rg, high, data):
 
 
 @numba.njit(error_model="numpy")
-def _fisher_yates_replace(rg, h, out):
+def _fisher_yates_replace(rg, high, out):
     k = out.shape[1]
     for i in range(out.shape[0]):
         for j in range(k):
             if out[i, j] < 0:
-                out[i, j] = rg.integers(0, h - j)
+                out[i, j] = rg.integers(0, high - j)
         for j in range(k - 1, -1, -1):
             for jj in range(j - 1, -1, -1):
                 if out[i, j] == out[i, jj]:
-                    out[i, j] = h - jj - 1
+                    out[i, j] = max(-1, high - jj - 1)
 
 
 @numba.njit(parallel=True, error_model="numpy")

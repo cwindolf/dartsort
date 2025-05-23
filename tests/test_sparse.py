@@ -247,3 +247,90 @@ def test_csc_getrow():
         x0coo = x0.tocoo()
         assert np.array_equal(columns, x0coo.coords[1])
         assert np.array_equal(data, x0coo.data)
+
+
+def test_integers_without_inner_replacement():
+    from scipy.stats import chisquare
+
+    rg = np.random.default_rng(0)
+    n = 1024
+    alpha = 0.05
+
+    x = sparse_util.integers_without_inner_replacement(rg, 10, (n, 1))
+    u, c = np.unique(x, return_counts=True)
+    assert np.array_equal(u, np.arange(10))
+    assert chisquare(c).pvalue > alpha
+
+    x = sparse_util.integers_without_inner_replacement(rg, 3, (n, 3))
+    u, c = np.unique(x, return_counts=True)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(3))
+    assert (x_sorted == np.arange(3)[None]).all()
+    assert chisquare(c).pvalue > alpha
+
+    x = sparse_util.integers_without_inner_replacement(rg, np.full(n, 3), (n, 3))
+    u, c = np.unique(x, return_counts=True)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(3))
+    assert (x_sorted == np.arange(3)[None]).all()
+    assert chisquare(c).pvalue > alpha
+
+    x = sparse_util.integers_without_inner_replacement(rg, 10, (n, 3))
+    u, c = np.unique(x, return_counts=True)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(10))
+    assert np.all(np.diff(x_sorted, axis=1) > 0)
+    assert chisquare(c).pvalue > alpha
+
+    x = sparse_util.integers_without_inner_replacement(rg, np.full(n, 10), (n, 3))
+    u, c = np.unique(x, return_counts=True)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(10))
+    assert np.all(np.diff(x_sorted, axis=1) > 0)
+    assert chisquare(c).pvalue > alpha
+
+    limit = rg.integers(5, 11, size=n)
+    x = sparse_util.integers_without_inner_replacement(rg, limit, (n, 3))
+    u = np.unique(x)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(10))
+    assert np.all(np.diff(x_sorted, axis=1) > 0)
+    for l in range(5, 11):
+        assert np.array_equal(np.unique(x[limit == l]), np.arange(l))
+
+    limit = rg.integers(1, 6, size=n)
+    x = sparse_util.integers_without_inner_replacement(rg, limit, (n, 3))
+    u = np.unique(x)
+    x_sorted = np.sort(x, axis=1)
+    assert np.array_equal(u, np.arange(-1, 5))
+    for l in range(1, 6):
+        if l < 3:
+            assert np.array_equal(np.unique(x[limit == l]), np.arange(-1, l))
+        else:
+            assert np.array_equal(np.unique(x[limit == l]), np.arange(l))
+
+
+def test_fisher_yates_replace():
+    rg = np.random.default_rng(0)
+    n = 1024
+
+    x = sparse_util.integers_without_inner_replacement(rg, 10, (n, 5))
+    x[rg.binomial(1, 0.5, size=x.shape).astype(bool)] = -1
+    x = np.ascontiguousarray(np.sort(x, axis=1)[:, ::-1])
+    y = x.copy()
+    sparse_util.fisher_yates_replace(rg, 5, y)
+    assert np.array_equal(y[x >= 0], x[x >= 0])
+    y_sorted = np.sort(y, axis=1)
+    assert np.all(np.diff(y_sorted, axis=1) > 0)
+
+    x = sparse_util.integers_without_inner_replacement(rg, 10, (n, 5))
+    x[rg.binomial(1, 0.5, size=x.shape).astype(bool)] = rg.integers(10)
+    x = np.ascontiguousarray(np.sort(x, axis=1)[:, ::-1])
+    dup = np.diff(x, axis=1) == 0
+    x[:, 1:][dup] = -1
+    x = np.ascontiguousarray(np.sort(x, axis=1)[:, ::-1])
+    y = x.copy()
+    sparse_util.fisher_yates_replace(rg, 5, y)
+    y_sorted = np.sort(y, axis=1)
+    assert np.all(np.diff(y_sorted, axis=1) > 0)
+

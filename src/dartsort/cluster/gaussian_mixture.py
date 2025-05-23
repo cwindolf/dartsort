@@ -88,7 +88,7 @@ class SpikeMixtureModel(torch.nn.Module):
         prior_pseudocount: float = 5.0,
         prior_scales_mean=False,
         ppca_rank: int = 0,
-        ppca_initial_em_iter: int = 5,
+        ppca_initial_em_iter: int = 3,
         ppca_inner_em_iter: int = 3,
         ppca_atol: float = 0.05,
         ppca_warm_start: bool = True,
@@ -383,7 +383,6 @@ class SpikeMixtureModel(torch.nn.Module):
         final_split="kept",
         n_threads=None,
         batch_size=1024,
-        tmm_kwargs=None,
         algorithm="em",
         scheduler=None,
         sgd_lr=0.1,
@@ -431,11 +430,7 @@ class SpikeMixtureModel(torch.nn.Module):
         n_units = len(ids)
         n_spikes = lls_keep.shape[1]
 
-        print(f"{ids=}")
-
         if self.tmm is None:
-            if tmm_kwargs is None:
-                tmm_kwargs = {}
             self.tmm = truncated_mixture.SpikeTruncatedMixtureModel(
                 data=self.data,
                 noise=self.noise,
@@ -445,7 +440,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 alpha0=self.prior_pseudocount,
                 laplace_ard=self.laplace_ard,
                 prior_scales_mean=self.prior_scales_mean,
-                **tmm_kwargs,
             )
         self.tmm.set_sizes(n_units)
 
@@ -515,6 +509,7 @@ class SpikeMixtureModel(torch.nn.Module):
         labels = None
         prev_elbo = -np.inf
         done = False
+        tmm_labels = None
         for j in its:
             is_final = done or j == n_iter - 1
             if is_final or algorithm == "em":
@@ -524,7 +519,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     with_probs=is_final and liks_from_tmm,
                     tic=tic,
                 )
-                labels = res.pop("labels", None)
+                tmm_labels = res.pop("labels", None)
                 records.append(res)
                 done = np.isclose(prev_elbo, res["obs_elbo"], atol=atol, rtol=0)
                 if done:
@@ -552,7 +547,7 @@ class SpikeMixtureModel(torch.nn.Module):
             if is_final and j < n_iter - 1:
                 break
 
-        assert labels is not None
+        assert tmm_labels is not None
         if logger.isEnabledFor(DARTSORTDEBUG):
             es = np.array([r["obs_elbo"] for r in records])
             logger.dartsortdebug(
@@ -560,14 +555,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 f"The most negative change was {np.diff(es).min()}."
             )
             logger.dartsortdebug(f"ELBOs: {es.tolist()}")
-            logger.dartsortdebug(f"After TVI, {np.unique(labels).shape=}")
+            logger.dartsortdebug(f"After TVI, {np.unique(tmm_labels).shape=}")
 
         # reupdate my GaussianUnits
         self.clear_units()
-        # not needed. we'll do e step.
-        # self.labels[self.data.split_indices["train"]] = labels
         channels, counts = self.tmm.channel_occupancy(
-            labels,
+            tmm_labels,
             min_count=self.channels_count_min,
             # min_prop=0.05,
             # count_per_unit=self.n_spikes_fit,
@@ -866,10 +859,10 @@ class SpikeMixtureModel(torch.nn.Module):
             else:
                 assert previous_logliks is not None
                 assert hasattr(previous_logliks, "row_nnz")
-                assert "covered_neighbs" in unit.annotations
                 ns_unit = previous_logliks.row_nnz[j]
                 unit_neighb_info.append((j, ns_unit))
-                covered_neighbs = unit.annotations["covered_neighbs"]
+                if not topk_sparse:
+                    covered_neighbs = unit.annotations["covered_neighbs"]
             if not topk_sparse:
                 core_overlaps[covered_neighbs] += 1
             nnz += ns_unit
@@ -1000,8 +993,6 @@ class SpikeMixtureModel(torch.nn.Module):
         if not self.use_proportions:
             return
 
-        # have to jump through some hoops because torch sparse tensors
-        # don't implement .mean() yet??
         spike_ixs = self.data.split_indices["train"].numpy()
         spike_ixs, _ = shrinkfit(spike_ixs, self.proportions_sample_size, self.rg)
         log_liks = log_liks[:, spike_ixs]
@@ -1131,7 +1122,6 @@ class SpikeMixtureModel(torch.nn.Module):
         kept_ids = label_ids[keep[label_ids]]
         new_ids = torch.arange(kept_ids.numel())
         old2new = dict(zip(kept_ids, new_ids))
-        print(f"relabel {relabel_split=} {kept_ids=} {old2new=}")
         self._relabel(kept_ids, split=relabel_split)
 
         if self.log_proportions is not None:
@@ -2989,9 +2979,6 @@ class SpikeMixtureModel(torch.nn.Module):
             label_indices = original[kept]
         else:
             label_indices = torch.searchsorted(old_labels, original, right=True) - 1
-            print(f"{original=}")
-            print(f"{old_labels[label_indices]=}")
-            print(f"{label_indices=}")
             kept = old_labels[label_indices] == original
             label_indices = label_indices[kept]
 
@@ -3002,8 +2989,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
         if new_labels is not None:
             label_indices = new_labels.to(self.labels)[label_indices]
-        print(f"{self.labels[kept]=}")
-        print(f"{label_indices=}")
 
         self.labels[kept] = label_indices
         self.labels[unkept] = -1
@@ -3471,7 +3456,6 @@ class GaussianUnit(torch.nn.Module):
             achan_counts = achan_counts[vachans]
             needs_direct = False
 
-        # achans = achans.cpu()
         je_suis = bool(achans.numel())
         if not je_suis:
             logger.dartsortverbose("Unit had no active channels.")

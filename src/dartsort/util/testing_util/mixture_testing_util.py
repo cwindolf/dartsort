@@ -2,14 +2,13 @@
 
 from typing import Literal
 
-from numba.extending import infer
 import numpy as np
 import torch
 from sklearn.metrics import adjusted_rand_score
 
 
 def simulate_moppca(
-    N=2**15,
+    Nper=2**12,
     rank=4,
     nc=8,
     M=3,
@@ -26,8 +25,24 @@ def simulate_moppca(
 ):
     import dartsort
 
+    N = Nper * K
+
     rg = np.random.default_rng(rg)
     D = rank * nc
+
+    clus_neighbs = None
+    clus_mask = None
+    if t_missing == "by_cluster":
+        # in this case, missing chans per clus are never observed,
+        # so we should treat them as 0 in W and mu to avoid issues with metrics
+        clus_neighbs = [
+            rg.choice(nc, size=nc - n_missing, replace=False) for _ in range(K)
+        ]
+        clus_neighbs = np.array(clus_neighbs)
+        clus_neighbs = np.sort(clus_neighbs, axis=1)
+        clus_mask = np.zeros((K, nc))
+        for j, n in enumerate(clus_neighbs):
+            clus_mask[j, n] = 1.0
 
     if t_mu == "zero":
         mu = np.zeros((K, rank, nc))
@@ -35,6 +50,8 @@ def simulate_moppca(
         mu = snr * rg.normal(size=(K, rank, nc))
     else:
         assert False
+    if clus_mask is not None:
+        mu = mu * clus_mask[:, None]
 
     if t_cov == "eye":
         cov = np.eye(D)
@@ -60,6 +77,8 @@ def simulate_moppca(
         W = np.zeros((K, rank, nc, M))
     else:
         assert False
+    if clus_mask is not None:
+        W = W * clus_mask[:, None, :, None]
 
     labels = rg.integers(K, size=N)
     u = rg.normal(size=(N, M))
@@ -74,6 +93,7 @@ def simulate_moppca(
 
     y = mu[labels] + torch.einsum("nrcm,nm->nrc", W[labels], u) + eps.view(N, rank, nc)
 
+    x = None
     if not t_missing:
         x = y
         channels = torch.arange(nc).unsqueeze(0).broadcast_to(N, nc)
@@ -100,22 +120,23 @@ def simulate_moppca(
         n0 = np.arange(nc - nc_miss)
         n1 = nc_miss + n0
         neighbs = np.stack((n0, n1), axis=0)
-        ns_missing = 100
+        ns_missing = int(N / 3)
         choices = np.concatenate(
-            (np.zeros(ns_missing, dtype=np.int64), np.ones(N - ns_missing, dtype=np.int64))
+            (
+                np.zeros(ns_missing, dtype=np.int64),
+                np.ones(N - ns_missing, dtype=np.int64),
+            )
         )
         rg.shuffle(choices)
         channels = neighbs[choices]
     elif t_missing == "by_cluster":
-        clus_neighbs = [
-            rg.choice(nc, size=nc - n_missing, replace=False) for _ in range(K)
-        ]
-        clus_neighbs = np.array(clus_neighbs)
+        assert clus_neighbs is not None
         channels = clus_neighbs[labels]
     channels = torch.asarray(channels, dtype=torch.long)
 
     if t_missing:
         x = torch.take_along_dim(y, channels.unsqueeze(1), dim=2)
+    assert x is not None
 
     neighbs = dartsort.SpikeNeighborhoods.from_channels(channels, nc)
 
@@ -161,6 +182,7 @@ def simulate_moppca(
         mu=mu,
         W=W,
         labels=labels,
+        K=K,
         cov=cov,
         x=x,
     )
@@ -383,7 +405,7 @@ def visually_compare_means(gmm, mu, figsize=(3, 2)):
 
 
 def test_ppca(
-    N=2**14,
+    Nper=2**12,
     rank=4,
     nc=8,
     M=3,
@@ -394,8 +416,8 @@ def test_ppca(
     t_missing: Literal[None, "random"] = None,
     n_missing=2,
     em_iter=100,
-    em_converged_atol=1e-4,
-    make_vis=True,
+    em_converged_atol=1e-3,
+    make_vis=False,
     show_vis=False,
     figsize=(4, 3),
     normalize=True,
@@ -403,22 +425,24 @@ def test_ppca(
     W_initialization="svd",
     prior_pseudocount=0,
     laplace_ard=False,
+    sim_res=None,
     rg=0,
 ):
     rg = np.random.default_rng(rg)
-    sim_res = simulate_moppca(
-        N=N,
-        rank=rank,
-        nc=nc,
-        M=M,
-        n_missing=n_missing,
-        K=1,
-        t_mu=t_mu,
-        t_cov=t_cov,
-        t_w=t_w,
-        t_missing=t_missing,
-        rg=rg,
-    )
+    if sim_res is None:
+        sim_res = simulate_moppca(
+            Nper=Nper,
+            rank=rank,
+            nc=nc,
+            M=M,
+            n_missing=n_missing,
+            K=1,
+            t_mu=t_mu,
+            t_cov=t_cov,
+            t_w=t_w,
+            t_missing=t_missing,
+            rg=rg,
+        )
     torch.manual_seed(
         np.frombuffer(np.random.default_rng(0).bytes(8), dtype=np.int64).item()
     )
@@ -457,7 +481,7 @@ def test_ppca(
 
 
 def test_moppcas(
-    N=2**14,
+    Nper=2**12,
     rank=4,
     nc=8,
     M=3,
@@ -470,9 +494,9 @@ def test_moppcas(
     t_missing: Literal[None, "random", "by_cluster"] = None,
     init_label_corruption: float = 0.0,
     inner_em_iter=100,
-    em_converged_atol=0.05,
+    em_converged_atol=1e-3,
     with_noise_unit=True,
-    make_vis=True,
+    make_vis=False,
     figsize=(4, 3),
     return_before_fit=False,
     channels_strategy="count",
@@ -482,24 +506,28 @@ def test_moppcas(
     n_refinement_iters=0,
     n_em_iters=50,
     do_comparison=True,
+    sim_res=None,
+    zero_radius=None,
     gmm_kw={},
 ):
     rg = np.random.default_rng(rg)
-    sim_res = simulate_moppca(
-        N=N,
-        rank=rank,
-        nc=nc,
-        M=M,
-        n_missing=n_missing,
-        K=K,
-        t_mu=t_mu,
-        t_cov=t_cov,
-        t_w=t_w,
-        t_missing=t_missing,
-        init_label_corruption=init_label_corruption,
-        snr=snr,
-        rg=rg,
-    )
+    if sim_res is None:
+        sim_res = simulate_moppca(
+            Nper=Nper,
+            rank=rank,
+            nc=nc,
+            M=M,
+            n_missing=n_missing,
+            K=K,
+            t_mu=t_mu,
+            t_cov=t_cov,
+            t_w=t_w,
+            t_missing=t_missing,
+            init_label_corruption=init_label_corruption,
+            snr=snr,
+            rg=rg,
+        )
+    sim_res["noise"].zero_radius = zero_radius
     mm, fit_info = fit_moppcas(
         sim_res["data"],
         sim_res["noise"],
@@ -518,6 +546,8 @@ def test_moppcas(
     if return_before_fit:
         return dict(sim_res=sim_res, gmm=mm, fit_info=fit_info)
 
+    N = K * Nper
+    assert mm.labels.shape == sim_res["labels"].shape == (N,)
     acc = (mm.labels == sim_res["labels"]).sum() / N
     print(f"accuracy: {acc}")
     ari = adjusted_rand_score(sim_res["labels"], mm.labels)
