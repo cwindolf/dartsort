@@ -507,6 +507,7 @@ def test_moppcas(
     n_em_iters=50,
     do_comparison=True,
     sim_res=None,
+    zero_radius=None,
     gmm_kw={},
 ):
     rg = np.random.default_rng(rg)
@@ -526,6 +527,7 @@ def test_moppcas(
             snr=snr,
             rg=rg,
         )
+    sim_res["noise"].zero_radius = zero_radius
     mm, fit_info = fit_moppcas(
         sim_res["data"],
         sim_res["noise"],

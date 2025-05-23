@@ -41,28 +41,26 @@ def moppca_simulations():
 @pytest.mark.parametrize("laplace_ard", [False, True])
 @pytest.mark.parametrize("n_refinement_iters", [0])
 @pytest.mark.parametrize("t_mu", test_t_mu)
-@pytest.mark.parametrize("t_cov", test_t_cov)
+@pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
 @pytest.mark.parametrize("t_w", test_t_w)
 @pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize("prior_pseudocount", [0.0, 5.0])
+@pytest.mark.parametrize("pcount_ard", [(0, False), (5, False), (5, True)])
 def test_mixture(
     moppca_simulations,
     inference_algorithm,
     n_refinement_iters,
     laplace_ard,
     t_mu,
-    t_cov,
+    t_cov_zrad,
     t_w,
     t_missing,
-    prior_pseudocount,
+    pcount_ard,
 ):
     print(
         f"{t_mu=} {t_cov=} {t_w=} {t_missing=} {inference_algorithm=} {n_refinement_iters=}"
     )
-    if laplace_ard and not prior_pseudocount:
-        return
-    # if t_missing == "by_cluster" and inference_algorithm != "tvi":
-    #     return
+    t_cov, zrad = t_cov_zrad
+    prior_pseudocount, laplace_ard = pcount_ard
     kw = dict(
         t_mu=t_mu,
         t_cov=t_cov,
@@ -72,6 +70,7 @@ def test_mixture(
         n_refinement_iters=n_refinement_iters,
         gmm_kw=dict(laplace_ard=laplace_ard, prior_pseudocount=prior_pseudocount),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
+        zero_radius=zrad,
     )
     # res_no_fit = mixture_testing_util.test_moppcas(**kw, return_before_fit=True)
     res = mixture_testing_util.test_moppcas(**kw, return_before_fit=False)

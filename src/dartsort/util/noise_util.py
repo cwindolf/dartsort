@@ -1,16 +1,17 @@
-from logging import getLogger
 import warnings
+from logging import getLogger
 
 import h5py
 import linear_operator
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import pdist, squareform
 import torch
+import torch.nn.functional as F
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
+from scipy.spatial.distance import pdist, squareform
+from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
-from sklearn.covariance import graphical_lasso, GraphicalLassoCV
 
 from ..util import more_operators, spiketorch
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
@@ -647,6 +648,7 @@ class EmbeddedNoise(torch.nn.Module):
         snippets,
         mean_kind="zero",
         cov_kind="scalar",
+        shrinkage=5e-3,
         glasso_alpha: int | float | None = None,
         eps=1e-4,
         zero_radius: float | None = None,
@@ -666,7 +668,7 @@ class EmbeddedNoise(torch.nn.Module):
         )
         x = torch.asarray(snippets)
         x = x.to(torch.promote_types(x.dtype, torch.float))
-        if zero_radius is not None:
+        if zero_radius is not None or shrinkage:
             assert cov_kind.startswith("factorized")
             assert rgeom is not None
 
@@ -767,6 +769,8 @@ class EmbeddedNoise(torch.nn.Module):
                 xq = x_spatial[:, q]
                 validq = xq.isfinite().any(0)
                 covq = spiketorch.nancov(xq[:, validq])
+                if shrinkage:
+                    covq = F.softshrink(covq, shrinkage)
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
                 fullcovq[validq[:, None] & validq[None, :]] = covq.view(-1)
                 if spatial_mask is not None:
@@ -799,6 +803,8 @@ class EmbeddedNoise(torch.nn.Module):
 
             cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
             cov.diagonal().add_(eps)
+            if shrinkage:
+                cov = F.softshrink(cov, shrinkage)
 
             if glasso_alpha and isinstance(glasso_alpha, int):
                 logger.dartsortdebug(
@@ -867,6 +873,7 @@ class EmbeddedNoise(torch.nn.Module):
         rq_alpha=1.0,
         kriging_poly_degree=-1,
         device=None,
+        shrinkage=5e-3,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
     ):
@@ -895,6 +902,7 @@ class EmbeddedNoise(torch.nn.Module):
         )
         return cls.estimate(
             snippets,
+            shrinkage=shrinkage,
             mean_kind=mean_kind,
             cov_kind=cov_kind,
             glasso_alpha=glasso_alpha,
@@ -919,7 +927,7 @@ def interpolate_residual_snippets(
     device=None,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from dartsort.util import interpolation_util, data_util, drift_util
+    from dartsort.util import data_util, drift_util, interpolation_util
 
     assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
 
