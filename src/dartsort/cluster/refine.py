@@ -159,7 +159,8 @@ def gmm_refine(
             if refinement_config.one_split_only:
                 break
         else:
-            gmm.em(n_iter=1, force_refit=True)
+            if refinement_config.refit_before_criteria:
+                gmm.em(n_iter=1, force_refit=True)
             gmm.split()
             gmm.log_liks = None
 
@@ -183,7 +184,8 @@ def gmm_refine(
                 )
 
         assert gmm.log_liks is not None
-        gmm.em(n_iter=1, force_refit=True)
+        if refinement_config.refit_before_criteria:
+            gmm.em(n_iter=1, force_refit=True)
         gmm.merge(gmm.log_liks)
         gmm.log_liks = None
 

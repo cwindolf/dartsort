@@ -415,6 +415,7 @@ class RefinementConfig:
         "heldout_elbo"
     )
     merge_bimodality_threshold: float = 0.05
+    refit_before_criteria: bool = False
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
