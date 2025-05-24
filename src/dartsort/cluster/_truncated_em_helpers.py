@@ -321,6 +321,7 @@ def _te_batch_m_ppca(
     m_missing_full = tnu
     del tnu
     m_missing = torch.sub(Cmo_Cooinv_xc, Cmo_Cooinv_WobsT_ubar, out=Cmo_Cooinv_WobsT_ubar)
+    del Cmo_Cooinv_WobsT_ubar
     m_observed = torch.sub(x[:, None], WobsT_ubar, out=WobsT_ubar)
     del WobsT_ubar
 

@@ -9,7 +9,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
-elbo_atol = 1e-2
+elbo_atol = 1e-5
 
 
 test_t_mu = ("random",)
