@@ -1144,14 +1144,14 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             inv_cap_Wobs_Cooinv[bs:be] = cap_inv[bs:be].bmm(Cooinv_WobsT_batch.mT)
 
             if self.missing_to_full is not None:
+                src = Cmo_Cooinv_WobsT_batch.mT.view(
+                    nbatch, self.M, r, self.nc_miss
+                ).neg()
                 miss2full = self.missing_to_full[lut_neighbs_batch]
-                msk = miss2full[:, None, None].broadcast_to(nbatch, self.M, r, self.nc_miss)
+                # unfortunately have to manually broadcast for scatter_add_.
+                miss2full = miss2full[:, None, None].broadcast_to(src.shape)
                 W_WCC[bs:be].view(nbatch, self.M, r, self.nc_miss_full).scatter_add_(
-                    dim=3,
-                    index=miss2full[:, None, None],
-                    src=Cmo_Cooinv_WobsT_batch.mT.view(
-                        nbatch, self.M, r, self.nc_miss
-                    ).neg(),
+                    dim=3, index=miss2full, src=src
                 )
             else:
                 W_WCC[bs:be] -= Cmo_Cooinv_WobsT_batch.mT
