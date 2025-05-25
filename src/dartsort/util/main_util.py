@@ -157,7 +157,7 @@ def ds_fast_forward(store_dir, cfg):
 
     match_step = len(matchings)
     for j in range(match_step):
-        assert matchings[j].stem == f"matching{j + 1}.h5"
+        assert matchings[j].name == f"matching{j + 1}.h5"
 
     # reconstitute the sorting that was input into the matching
     if match_step == 1:
