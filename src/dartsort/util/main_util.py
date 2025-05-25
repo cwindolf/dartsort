@@ -142,3 +142,39 @@ def ds_handle_delete_intermediate_features(
         if models_path.exists():
             assert models_path.is_dir()
             shutil.rmtree(models_path)
+
+
+def ds_fast_forward(store_dir, cfg):
+    if not cfg.save_intermediate_labels:
+        # can't resume if we don't know the clustering labels from the
+        # last step, and this controlled whether those were saved
+        return False, 1, None
+
+    matchings = sorted(store_dir.glob("matching*.h5"))
+    matched_already = bool(matchings)
+    if not matched_already:
+        return matched_already, 1, None
+
+    match_step = len(matchings)
+    for j in range(match_step):
+        assert matchings[j].stem == f"matching{j + 1}.h5"
+
+    # reconstitute the sorting that was input into the matching
+    if match_step == 1:
+        prev_h5 = store_dir / "subtraction.h5"
+    else:
+        prev_h5 = store_dir / f"matching{match_step - 1}.h5"
+    assert prev_h5.exists()
+
+    prev_labels_npy = store_dir / f"refined{match_step - 1}_labels.npy"
+    assert prev_labels_npy.exists()
+    prev_labels = np.load(prev_labels_npy)
+
+    logger.info(
+        f"Resuming at step {match_step} with previous sorting from "
+        f"{prev_h5.stem} and {prev_labels_npy.stem}."
+    )
+
+    sorting = DARTsortSorting.from_peeling_hdf5(prev_h5, labels=prev_labels)
+
+    return matched_already, match_step, sorting
