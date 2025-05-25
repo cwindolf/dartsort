@@ -1,3 +1,4 @@
+import dataclasses
 import pytest
 import subprocess
 
@@ -27,8 +28,17 @@ def test_fakedata_nonn(tmp_path, sim_recordings, do_motion_estimation):
         ),
         work_in_tmpdir=True,
         save_intermediate_features=True,
+        matching_iterations=0,
     )
     res = dartsort.dartsort(sim_recording, output_dir=tmp_path, cfg=cfg)
+    assert res["sorting"].parent_h5_path.exists()
+    assert (tmp_path / "dartsort_sorting.npz").exists()
+    assert (tmp_path / "subtraction.h5").exists()
+    assert not (tmp_path / "matching1.h5").exists()
+
+    # test the fast-forward thing
+    cfg1 = dataclasses.replace(cfg, matching_iterations=1)
+    res = dartsort.dartsort(sim_recording, output_dir=tmp_path, cfg=cfg1)
     assert res["sorting"].parent_h5_path.exists()
     assert (tmp_path / "dartsort_sorting.npz").exists()
     assert (tmp_path / "subtraction.h5").exists()

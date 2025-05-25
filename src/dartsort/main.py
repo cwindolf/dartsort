@@ -41,6 +41,7 @@ from .util.py_util import resolve_path
 from .util.main_util import (
     ds_all_to_workdir,
     ds_dump_config,
+    ds_fast_forward,
     ds_handle_delete_intermediate_features,
     ds_save_features,
     ds_save_intermediate_labels,
@@ -90,76 +91,79 @@ def _dartsort_impl(
     ret = {}
 
     store_dir = output_dir if work_dir is None else work_dir
+    matched_already, match_step, sorting = ds_fast_forward(store_dir, cfg)
 
-    # first step: initial detection and motion estimation
-    logger.dartsortdebug("-- Start initial detection")
-    sorting = subtract(
-        output_dir=store_dir,
-        recording=recording,
-        waveform_config=cfg.waveform_config,
-        featurization_config=cfg.featurization_config,
-        subtraction_config=cfg.subtraction_config,
-        computation_config=cfg.computation_config,
-        overwrite=overwrite,
-    )
-    assert sorting is not None
-    logger.info(f"Initial detection: {sorting}")
-    is_final = cfg.subtract_only or cfg.dredge_only or not cfg.matching_iterations
-    ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
+    if not matched_already:
+        # first step: initial detection and motion estimation
+        logger.dartsortdebug("-- Start initial detection")
+        sorting = subtract(
+            output_dir=store_dir,
+            recording=recording,
+            waveform_config=cfg.waveform_config,
+            featurization_config=cfg.featurization_config,
+            subtraction_config=cfg.subtraction_config,
+            computation_config=cfg.computation_config,
+            overwrite=overwrite,
+        )
+        assert sorting is not None
+        logger.info(f"Initial detection: {sorting}")
+        is_final = cfg.subtract_only or cfg.dredge_only or not cfg.matching_iterations
+        ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
 
-    if cfg.subtract_only:
-        ret["sorting"] = sorting
-        return ret
+        if cfg.subtract_only:
+            ret["sorting"] = sorting
+            return ret
 
-    if motion_est is None:
-        logger.dartsortdebug("-- Estimate motion")
-        motion_est = estimate_motion(
-            output_directory=store_dir,
+        if motion_est is None:
+            logger.dartsortdebug("-- Estimate motion")
+            motion_est = estimate_motion(
+                output_directory=store_dir,
+                recording=recording,
+                sorting=sorting,
+                overwrite=overwrite,
+                device=cfg.computation_config.actual_device(),
+                **asdict(cfg.motion_estimation_config),
+            )
+        ret["motion_est"] = motion_est
+        ds_save_motion_est(motion_est, output_dir, work_dir, overwrite)
+
+        if cfg.dredge_only:
+            ret["sorting"] = sorting
+            return ret
+
+        # clustering: initialization
+        logger.dartsortdebug("-- Initial clustering")
+        sorting = initial_clustering(
             recording=recording,
             sorting=sorting,
-            overwrite=overwrite,
-            device=cfg.computation_config.actual_device(),
-            **asdict(cfg.motion_estimation_config),
+            motion_est=motion_est,
+            clustering_config=cfg.clustering_config,
+            computation_config=cfg.computation_config,
         )
-    ret["motion_est"] = motion_est
-    ds_save_motion_est(motion_est, output_dir, work_dir, overwrite)
+        logger.info(f"Initial clustering: {sorting}")
+        ds_save_intermediate_labels("initial", sorting, output_dir, cfg, work_dir=work_dir)
 
-    if cfg.dredge_only:
-        ret["sorting"] = sorting
-        return ret
+        # clustering: model
+        sdir = sfmt = None
+        if cfg.save_intermediate_labels:
+            sdir = output_dir
+            sfmt = "refined0{stepname}"
+        logger.dartsortdebug("-- Refine clustering")
+        sorting, _ = refine_clustering(
+            recording=recording,
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_config=cfg.initial_refinement_config,
+            computation_config=cfg.computation_config,
+            save_step_labels_format=sfmt,
+            save_step_labels_dir=sdir,
+            save_cfg=cfg,
+        )
+        logger.info(f"Initial refinement: {sorting}")
+        ds_save_intermediate_labels("refined0", sorting, output_dir, cfg, work_dir=work_dir)
+    assert sorting is not None
 
-    # clustering: initialization
-    logger.dartsortdebug("-- Initial clustering")
-    sorting = initial_clustering(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        clustering_config=cfg.clustering_config,
-        computation_config=cfg.computation_config,
-    )
-    logger.info(f"Initial clustering: {sorting}")
-    ds_save_intermediate_labels("initial", sorting, output_dir, cfg, work_dir=work_dir)
-
-    # clustering: model
-    sdir = sfmt = None
-    if cfg.save_intermediate_labels:
-        sdir = output_dir
-        sfmt = "refined0{stepname}"
-    logger.dartsortdebug("-- Refine clustering")
-    sorting, _ = refine_clustering(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        refinement_config=cfg.initial_refinement_config,
-        computation_config=cfg.computation_config,
-        save_step_labels_format=sfmt,
-        save_step_labels_dir=sdir,
-        save_cfg=cfg,
-    )
-    logger.info(f"Initial refinement: {sorting}")
-    ds_save_intermediate_labels("refined0", sorting, output_dir, cfg, work_dir=work_dir)
-
-    for step in range(1, cfg.matching_iterations + 1):
+    for step in range(match_step, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
 
         # TODO
