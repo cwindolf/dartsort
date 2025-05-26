@@ -3503,7 +3503,7 @@ class GaussianUnit(torch.nn.Module):
                     alpha=active_alpha,
                 )
             except ValueError as e:
-                warnings.warn(f"ppca_em {e}")
+                warnings.warn(f"ppca_em {e} {active_mean=} {active_alpha=} {active_W=} {weights=}")
                 self.pick_channels(None, None)
                 return
 

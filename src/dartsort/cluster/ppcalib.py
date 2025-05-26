@@ -504,6 +504,7 @@ def get_neighborhood_data(
         active_subset = torch.isin(active_channels, neighb_chans)
 
         x = sp.features[neighb_members][:, :, neighb_subset]
+        assert x.isfinite().all()
 
         chans_tuple = tuple(active_channels[active_subset].tolist())
         if chans_tuple in dedup_data:
@@ -539,6 +540,7 @@ def get_neighborhood_data(
         else:
             x = xs[0]
             neighb_members = mems[0]
+        assert x.isfinite().all()
 
         n_neighb = neighb_members.numel()
         cache_kw = {}

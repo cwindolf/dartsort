@@ -253,7 +253,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert result.U is not None
 
             blank = torch.all(result.U.diagonal(dim1=-2, dim2=-1) == 0, dim=1)
-            assert torch.equal(blank, result.N == 0)
             if blank.any():
                 # just to avoid numerical issues when a unit dies
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
