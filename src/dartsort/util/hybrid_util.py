@@ -330,7 +330,6 @@ def load_dartsort_step_sortings(
         # refinement steps
         stepstr = step_format.format(step=step)
         for npy in sorted(sorting_dir.glob(f"{stepstr}refstep*.npy")):
-            print(f"{npy=} {npy.stem=} {npy.stem.removesuffix('_labels')=}")
             yield (
                 npy.stem.removesuffix("_labels"),
                 dataclasses.replace(st0, labels=np.load(npy)),
