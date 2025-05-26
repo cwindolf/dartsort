@@ -422,6 +422,7 @@ class RefinementConfig:
     em_converged_atol: float = 1e-4
     n_total_iters: int = 3
     one_split_only: bool = False
+    skip_first_split: bool = False
     hard_noise: bool = False
     truncated: bool = True
     split_decision_algorithm: str = "brute"
@@ -586,9 +587,10 @@ def to_internal_config(cfg):
         interpolation_sigma=cfg.interpolation_bandwidth,
         rq_alpha=cfg.interpolation_rq_alpha,
         kriging_poly_degree=cfg.interpolation_degree,
+        skip_first_split=cfg.initial_split_only,
     )
     initial_refinement_config = dataclasses.replace(
-        refinement_config, one_split_only=cfg.initial_split_only
+        refinement_config, one_split_only=cfg.initial_split_only, skip_first_split=False
     )
     motion_estimation_config = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

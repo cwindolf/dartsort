@@ -149,13 +149,16 @@ def gmm_refine(
             )
 
         assert gmm.log_liks is not None
-        if (
+        skip_this_one = refinement_config.skip_first_split and not it
+        too_many_units = (
             gmm.log_liks.shape[0]
             > refinement_config.max_avg_units * recording.get_num_channels()
-        ):
-            logger.dartsortdebug(
-                f"Skipping split ({gmm.log_liks.shape[0]} is too many units already)."
-            )
+        )
+        if skip_this_one or too_many_units:
+            if too_many_units:
+                logger.dartsortdebug(
+                    f"Skipping split ({gmm.log_liks.shape[0]} is too many units already)."
+                )
             if refinement_config.one_split_only:
                 break
         else:
