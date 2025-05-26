@@ -479,7 +479,7 @@ class DARTsortInternalConfig:
     template_config: TemplateConfig = TemplateConfig()
     clustering_config: ClusteringConfig = ClusteringConfig()
     initial_refinement_config: RefinementConfig = RefinementConfig(one_split_only=True)
-    refinement_config: RefinementConfig = RefinementConfig()
+    refinement_config: RefinementConfig = RefinementConfig(skip_first_split=True)
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
     computation_config: ComputationConfig = ComputationConfig()

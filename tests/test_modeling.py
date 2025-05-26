@@ -151,7 +151,7 @@ def test_mixture(
             size=(*train_labels.shape, 3),
         )
         assert np.array_equal(np.unique(dense_init), np.arange(res["sim_res"]["K"]))
-        dense_init[:, 0] = train_labels
+        dense_init[:, 0] = train_labels.numpy(force=True)
         for initializer in (train_labels, dense_init):
             initializer = torch.asarray(initializer)
             tmm = truncated_mixture.SpikeTruncatedMixtureModel(
