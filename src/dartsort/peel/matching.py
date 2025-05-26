@@ -46,6 +46,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         coarse_approx_error_threshold=0.0,
         trough_offset_samples=42,
         threshold=100.0,
+        max_fp_per_input_spike=2.5,
         chunk_length_samples=30_000,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
@@ -84,6 +85,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.svd_compression_rank = svd_compression_rank
         self.min_channel_amplitude = min_channel_amplitude
         self.threshold = threshold
+        self.max_fp_per_input_spike = max_fp_per_input_spike
         self.conv_ignore_threshold = conv_ignore_threshold
         self.coarse_approx_error_threshold = coarse_approx_error_threshold
         self.refractory_radius_frames = refractory_radius_frames
@@ -169,6 +171,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             tp_counts=ctd.spike_counts,
             clustering_num_frames=self.recording.get_num_samples(),
             template_normsqs=fp_res["normsq"],
+            max_fp_per_input_spike=self.max_fp_per_input_spike,
             # TODO: if subsampling, indicate that here...
             # clustering_subsampling_rate=1.0,
         )
