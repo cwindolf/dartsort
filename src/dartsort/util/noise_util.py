@@ -838,16 +838,26 @@ class EmbeddedNoise(torch.nn.Module):
                 cov = torch.from_numpy(res[0]).to(cov)
 
             cov_spatial = cov = cov.to(x_spatial)
+            assert cov_spatial.isfinite().all()
             if valid != slice(None):
                 cov_spatial = torch.eye(
                     x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
                 )
                 cov_spatial[valid[:, None] & valid[None, :]] = cov.view(-1)
+            assert cov_spatial.isfinite().all()
             if spatial_mask is not None:
                 cov_spatial *= torch.asarray(spatial_mask).to(cov_spatial)
-            channel_eig, channel_v = torch.linalg.eigh(cov_spatial)
-            channel_std = channel_eig.sqrt()
-            channel_vt = channel_v.T.contiguous()
+            assert cov_spatial.isfinite().all()
+            channel_eig, channel_v = torch.linalg.eigh(cov_spatial.double())
+            if spatial_mask is None:
+                assert channel_eig.isfinite().all()
+            else:
+                # the spatial mask is, i guess, not so plausible as a cov...
+                channel_eig[channel_eig < eps] = eps
+            channel_std = channel_eig.sqrt().float()
+            channel_vt = channel_v.T.contiguous().float()
+            assert channel_std.isfinite().all()
+            assert channel_vt.isfinite().all()
 
         return cls(
             mean=mean,
@@ -954,6 +964,7 @@ def interpolate_residual_snippets(
     snippets = snippets.permute(0, 2, 1).reshape(n * c, t)
     snippets = tpca._transform_in_probe(snippets)
     snippets = snippets.reshape(n, c, -1).permute(0, 2, 1)
+    assert snippets.isfinite().all()
 
     # -- interpolate
     # fill in the registered probe with residual snippets using interpolation,
@@ -1035,6 +1046,7 @@ def interpolate_residual_snippets(
     source_t = times_s[:, None].broadcast_to(source_pos[:, :, 1].shape).reshape(-1)
     source_shifts = motion_est.disp_at_s(source_t.cpu(), source_depths.cpu())
     source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
+    assert np.isfinite(source_shifts).all()
     source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
     source_pos_shifted = source_pos.numpy(force=True) + source_shifts_xy
 
@@ -1065,6 +1077,7 @@ def interpolate_residual_snippets(
         precomputed_data=precomputed_data,
         allow_destroy=True,
     )
+    assert snippets.isfinite().all()
 
     # now, let's embed these into the full registered probe
     snippets_full = snippets.new_full((n, tpca.rank, len(registered_geom)), torch.nan)
@@ -1084,7 +1097,7 @@ def fp_control_threshold(
     clustering_subsampling_rate=1.0,
     max_fp_per_input_spike=1.0,
     resolution=1.0,
-    min_threshold_factor=0.5,
+    min_threshold_factor=0.1,
     min_threshold=5.0,
 ):
     """Global threshold for template matching to control the false positive rate

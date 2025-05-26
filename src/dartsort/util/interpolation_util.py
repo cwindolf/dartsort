@@ -327,9 +327,12 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
     c_ = kernels.shape[1]
     assert c_ >= c
     assert c_ == solvers.shape[1] == solvers.shape[2]
-    return torch.einsum(
-        "ntp,cpq,nqc->ntc", y, solvers, kernels
-    )
+    out = y.new_zeros((*y.shape[:2], c))
+    for cc in range(c):
+        # just reducing memory use here relative to the einsum below
+        out[:, :, cc] = torch.einsum("ntp,pq,nq->nt", y, solvers[cc], kernels[:, :, cc])
+    # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
+    return out
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -460,22 +463,15 @@ def kernel_interpolate(
 
 
 def idw_kernel(source_pos, target_pos=None):
-    source_pos = source_pos
-    if target_pos is None:
-        target_pos = source_pos
-    kernel = source_pos[:, :, None] - target_pos[:, None, :]
-    kernel = kernel.square_().sum(dim=3).sqrt_().reciprocal_()
+    d = get_rsq(source_pos, target_pos, nan=None)
+    kernel = d.sqrt_().reciprocal_()
     kernel = kernel.nan_to_num_()
     kernel /= kernel.sum(dim=0)
     return kernel
 
 
 def nearest_kernel(source_pos, target_pos=None):
-    source_pos = source_pos
-    if target_pos is None:
-        target_pos = source_pos
-    d = source_pos[:, :, None] - target_pos[:, None, :]
-    d = d.square_().sum(dim=3).nan_to_num_(nan=torch.inf)
+    d = get_rsq(source_pos, target_pos, nan=torch.inf)
     kernel = torch.zeros_like(d)
     kernel.scatter_(1, d.argmin(dim=1, keepdim=True), 1)
     return kernel
@@ -500,57 +496,55 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     kernel : torch.tensor
         n by m
     """
-    source_pos = source_pos / sigma
-    if target_pos is None:
-        target_pos = source_pos
-    else:
-        target_pos = target_pos / sigma
-    kernel = source_pos[:, :, None] - target_pos[:, None, :]
-    kernel = kernel.square_().sum(dim=3).div_(-2.0)
+    kernel = get_rsq(source_pos, target_pos, sigma, nan=None).div_(-2.0)
     kernel = kernel.nan_to_num_(nan=-torch.inf)
     return kernel
 
 
 def rq_kernel(source_pos, target_pos=None, sigma=None, alpha=1.0):
-    source_pos = source_pos / sigma
-    if target_pos is None:
-        target_pos = source_pos
-    else:
-        target_pos = target_pos / sigma
-    kernel = source_pos[:, :, None] - target_pos[:, None, :]
-    kernel = kernel.square_().sum(dim=3).nan_to_num_()
+    kernel = get_rsq(source_pos, target_pos, sigma)
     kernel = kernel.add_(1.0).pow_(-alpha)
     return kernel
 
 
 def multiquadric_kernel(source_pos, target_pos=None, sigma=None):
-    source_pos = source_pos / sigma
-    if target_pos is None:
-        target_pos = source_pos
-    else:
-        target_pos = target_pos / sigma
-    kernel = source_pos[:, :, None] - target_pos[:, None, :]
-    kernel = kernel.square_().sum(dim=3).nan_to_num_()
+    kernel = get_rsq(source_pos, target_pos, sigma)
     kernel = kernel.add_(1.0).pow_(-0.5).neg_()
     return kernel
 
 
-
 def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
+    rsq = get_rsq(source_pos, target_pos, sigma)
+    r = rsq.sqrt()
+    is_small = r < 1
+    small = r.mul(r.pow(r).log_())
+    big = rsq.mul_(r.log_())
+    kernel = torch.where(is_small, small, big)
+    return kernel
+
+
+def get_rsq(source_pos, target_pos=None, sigma=1.0, batch_size=16, nan=0.0):
     if not isinstance(sigma, (float, int)) or sigma != 1.0:
         source_pos = source_pos / sigma
     if target_pos is None:
         target_pos = source_pos
     elif not isinstance(sigma, (float, int)) or sigma != 1.0:
         target_pos = target_pos / sigma
+    assert source_pos.ndim == target_pos.ndim == 3
+    assert source_pos.shape[0] == target_pos.shape[0]
+    assert source_pos.shape[2] == target_pos.shape[2]
 
-    rsq = source_pos[:, :, None] - target_pos[:, None, :]
-    rsq = rsq.square_().sum(dim=3)
-    r = rsq.sqrt()
+    n, nsrc = source_pos.shape[:2]
+    rsq = source_pos.new_zeros((n, nsrc, target_pos.shape[1]))
+    for bs in range(0, nsrc, batch_size):
+        sl = slice(bs, min(bs + batch_size, nsrc))
+        tmp = source_pos[:, sl, None] - target_pos[:, None, :]
+        tmp = tmp.square_().sum(dim=3)
+        if nan is not None:
+            tmp = tmp.nan_to_num_(nan=nan)
+        rsq[:, sl] = tmp
 
-    kernel = torch.where(r < 1, r * torch.log(r**r), rsq * r.log())
-
-    return kernel
+    return rsq
 
 
 def extrap_mask(source_pos, target_pos, eps=1e-3):
