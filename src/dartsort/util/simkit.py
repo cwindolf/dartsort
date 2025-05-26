@@ -581,7 +581,7 @@ class SimulatedRecording:
         times = sv["sample_index"]
         labels = sv["unit_index"]
 
-        with h5py.File(gt_h5_path, "w") as h5:
+        with h5py.File(gt_h5_path, "w", libver="latest", locking=False) as h5:
             h5.create_dataset("times_samples", data=times)
             h5.create_dataset("times_seconds", data=times / self.template_simulator.fs)
             h5.create_dataset("labels", data=labels)
@@ -643,7 +643,8 @@ class SimulatedRecording:
                 t_samples = (chunk + 0.5) * self.template_simulator.fs
                 pos, temps = self.templates(t_samples=t_samples, up=True)
 
-                btemps = self.scalings[batch, None, None] * temps[bl, bjitter]
+                btemps = temps[bl, bjitter]
+                btemps *= self.scalings[batch, None, None]
                 amps = ptp(btemps)
                 maxamps = amps.max(1)
                 self.maxchans[batch] = amps.argmax(1)
@@ -671,7 +672,8 @@ class SimulatedRecording:
                     )
                     inj_wfs = np.take_along_axis(btemps, chans[:, None, :], axis=2)
                     ds_injected_waveforms[batch] = inj_wfs
-                    ds_collisioncleaned_waveforms[batch] = ccwf + inj_wfs
+                    ccwf += inj_wfs
+                    ds_collisioncleaned_waveforms[batch] = ccwf
 
         recording = NumpyRecording(x, sampling_frequency=self.template_simulator.fs)
         recording.set_dummy_probe_from_locations(self.geom)
