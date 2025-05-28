@@ -206,3 +206,6 @@ class DeveloperConfig(DARTsortUserConfig):
     glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
     laplace_ard: bool = True
     core_radius: float = 35.0
+
+    save_subtracted_waveforms: bool = False
+    save_collisioncleaned_waveforms: bool = False
