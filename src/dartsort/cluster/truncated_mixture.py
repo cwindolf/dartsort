@@ -1013,7 +1013,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise_log_prop,
         bases=None,
         unit_neighborhood_counts=None,
-        batch_size=1024,
+        batch_size=128,
     ):
         Nu, r, Nc = means.shape
         assert Nc in (self.nc, self.nc + 1)

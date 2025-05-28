@@ -126,6 +126,7 @@ def gmm_refine(
         merge_decision_algorithm=refinement_config.merge_decision_algorithm,
         prior_pseudocount=refinement_config.prior_pseudocount,
         laplace_ard=refinement_config.laplace_ard,
+        kmeans_k=refinement_config.kmeansk,
     )
 
     step_labels = {}

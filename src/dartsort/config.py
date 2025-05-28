@@ -160,6 +160,7 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     initial_split_only: bool = True
+    resume_with_split: bool = False
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
@@ -196,6 +197,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
+    kmeansk: int = 4
     prior_pseudocount: float = 5.0
     cov_kind: str = "factorizednoise"
     interpolation_method: str = "kriging"
