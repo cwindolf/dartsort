@@ -201,24 +201,24 @@ class PointSource3ExpSimulator:
         peak_after_min=0.2,
         peak_after_max=0.8,
         # width params
-        trough_width_min=0.01,
-        trough_width_max=0.05,
+        trough_width_min=0.005,
+        trough_width_max=0.025,
         tip_width_min=0.01,
-        tip_width_max=0.15,
-        peak_width_min=0.1,
-        peak_width_max=0.3,
+        tip_width_max=0.075,
+        peak_width_min=0.05,
+        peak_width_max=0.2,
         # rel height params
         tip_rel_max=0.3,
         peak_rel_max=0.5,
         # pos/amplitude params
-        pos_margin_um=40.0,
-        orthdist_min_um=50.0,
-        orthdist_max_um=125.0,
+        pos_margin_um=25.0,
+        orthdist_min_um=25.0,
+        orthdist_max_um=50.0,
         alpha_family="uniform",
-        alpha_min=100.0,
-        alpha_max=1000.0,
-        alpha_mean=10.0 * np.square(100.0),
-        alpha_var=5.0 * np.square(100.0),
+        alpha_min=5 * 25.0**2,
+        alpha_max=40 * 25.0**2,
+        alpha_mean=10.0 * np.square(25.0),
+        alpha_var=5.0 * np.square(25.0),
         # config
         ms_before=1.4,
         ms_after=2.6,
@@ -227,6 +227,7 @@ class PointSource3ExpSimulator:
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
     ):
+        print('hi')
         self.rg = np.random.default_rng(seed)
         self.dtype = dtype
 
@@ -334,7 +335,7 @@ class PointSource3ExpSimulator:
                 shape=self.alpha_shape, scale=self.alpha_scale, size=size
             )
         elif self.alpha_family == "uniform":
-            alpha = self.rg.gamma(self.alpha_min, self.alpha_max, size=size)
+            alpha = self.rg.uniform(self.alpha_min, self.alpha_max, size=size)
         else:
             assert False
 
@@ -351,7 +352,7 @@ class PointSource3ExpSimulator:
         if size is None:
             assert templates.shape[0] == 1
             templates = templates[0]
-        return templates
+        return pos, alpha, templates
 
 
 # -- recording sim
