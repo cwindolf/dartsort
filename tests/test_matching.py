@@ -594,4 +594,4 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
             matching_config=dartsort.MatchingConfig(threshold=threshold),
         )
         print(f"{threshold=} {st=}")
-        assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.1
+        assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.2

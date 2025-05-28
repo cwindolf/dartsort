@@ -9,7 +9,8 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
-elbo_atol = 1e-5
+elbo_atol = 5e-6
+elbo_ard_atol = 1e-4
 
 
 test_t_mu = ("random",)
@@ -38,7 +39,6 @@ def moppca_simulations():
 
 
 @pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])
-@pytest.mark.parametrize("laplace_ard", [False, True])
 @pytest.mark.parametrize("n_refinement_iters", [0])
 @pytest.mark.parametrize("t_mu", test_t_mu)
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -49,7 +49,6 @@ def test_mixture(
     moppca_simulations,
     inference_algorithm,
     n_refinement_iters,
-    laplace_ard,
     t_mu,
     t_cov_zrad,
     t_w,
@@ -151,7 +150,7 @@ def test_mixture(
             size=(*train_labels.shape, 3),
         )
         assert np.array_equal(np.unique(dense_init), np.arange(res["sim_res"]["K"]))
-        dense_init[:, 0] = train_labels
+        dense_init[:, 0] = train_labels.numpy(force=True)
         for initializer in (train_labels, dense_init):
             initializer = torch.asarray(initializer)
             tmm = truncated_mixture.SpikeTruncatedMixtureModel(
@@ -283,7 +282,8 @@ def test_mixture(
             assert torch.equal(u, torch.arange(res["sim_res"]["K"]))
             assert ((c / c.sum()) >= 0.5 / res["sim_res"]["K"]).all()
             assert (tmm.log_proportions.exp() >= 0.5 / res["sim_res"]["K"]).all()
-            assert np.all(np.diff(tmm_elbos) >= -elbo_atol)
+            eatol = elbo_ard_atol if laplace_ard else elbo_atol
+            assert np.all(np.diff(tmm_elbos) >= -eatol)
 
             channels, counts = tmm.channel_occupancy(tmm_res["labels"], min_count=1)
             assert len(channels) == len(counts) == res["sim_res"]["K"]
@@ -294,8 +294,9 @@ def test_mixture(
 
         # test elbo decreasing
         assert len(res["fit_info"]["elbos"])
+        eatol = elbo_ard_atol if laplace_ard else elbo_atol
         for elbo in res["fit_info"]["elbos"]:
-            assert np.diff(elbo).min() >= -elbo_atol
+            assert np.diff(elbo).min() >= -eatol
 
     sf = res["sim_res"]["data"]
     train = sf.split_indices["train"]

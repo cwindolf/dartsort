@@ -702,6 +702,7 @@ class BasePeeler(torch.nn.Module):
 
     def save_models(self, save_folder):
         if self.featurization_pipeline is not None:
+            Path(save_folder).mkdir(exist_ok=True)
             torch.save(
                 self.featurization_pipeline.state_dict(),
                 Path(save_folder) / "featurization_pipeline.pt",
