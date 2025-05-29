@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 from ..templates import TemplateData
 from .data_util import DARTsortSorting
 from .internal_config import unshifted_raw_template_config, ComputationConfig
-from . import simkit
+from . import simkit, analysis, comparison
 
 
 def get_drifty_hybrid_recording(
@@ -339,3 +339,32 @@ def load_dartsort_step_sortings(
         npy = sorting_dir / f"{stepstr}_labels.npy"
         if npy.exists():
             yield (stepstr, dataclasses.replace(st0, labels=np.load(npy)))
+
+
+def load_dartsort_step_unit_info_dataframes(
+    sorting_dir,
+    gt_analysis,
+    recording,
+    sorting_name=None,
+    detection_h5_name="subtraction.h5",
+    detection_h5_path: Path | str | None = None,
+    step_format="refined{step}",
+):
+    step_sortings = load_dartsort_step_sortings(
+        sorting_dir,
+        detection_h5_name=detection_h5_name,
+        detection_h5_path=detection_h5_path,
+        step_format=step_format,
+    )
+    for step_ix, (step_name, step_sorting) in enumerate(step_sortings):
+        name = f"{sorting_name}: {step_name}" if sorting_name else step_name
+        step_analysis = analysis.DARTsortAnalysis(
+            step_sorting, recording, name=name
+        )
+        step_comparison = comparison.DARTsortGroundTruthComparison(
+            gt_analysis, step_analysis
+        )
+        df = step_comparison.unit_info_dataframe()
+        df['stepix'] = step_ix
+        df['stepname'] = step_name
+        yield df
