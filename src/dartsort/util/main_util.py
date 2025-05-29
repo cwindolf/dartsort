@@ -145,36 +145,65 @@ def ds_handle_delete_intermediate_features(
 
 
 def ds_fast_forward(store_dir, cfg):
-    if not cfg.save_intermediate_labels:
-        # can't resume if we don't know the clustering labels from the
-        # last step, and this controlled whether those were saved
-        return False, 1, None
+    """Fast-forward to the where sorting left off
 
-    matchings = sorted(store_dir.glob("matching*.h5"))
-    matched_already = bool(matchings)
-    if not matched_already:
-        return matched_already, 1, None
+    Returns
+    -------
+    next_step: int
+    cur_sorting: DARTsortSorting
+    """
+    # if clustering labels 
+    can_resume_from_clustering = cfg.save_intermediate_labels
 
-    match_step = len(matchings)
-    for j in range(match_step):
-        assert matchings[j].name == f"matching{j + 1}.h5"
+    cur_h5 = sub_h5 = store_dir / "subtraction.h5"
+    cur_step = 0
+    if not sub_h5.exists():
+        return cur_step, None
 
-    # reconstitute the sorting that was input into the matching
-    if match_step == 1:
-        prev_h5 = store_dir / "subtraction.h5"
+    matching_h5s = sorted(store_dir.glob("matching*.h5"))
+    for cur_step, cur_h5 in enumerate(matching_h5s, start=1):
+        assert cur_h5.name == f"matching{cur_step}.h5"
+
+    # at this point, cur_h5 is the most recent h5 that exists, and
+    # current_step is the last step that was in progress.
+    # now, the peeling and clustering for that step may not have
+    # finished! in that case we want to resume from that step.
+    # on the other hand, the step could have finished entirely --
+    # but we would only know that if refined{step}_labels.npy exists,
+    # and that would only happen if cfg.save_intermediate_labels.
+    if cfg.save_intermediate_labels:
+        cur_labels_npy = store_dir / f"refined{cur_step}_labels.npy"
+        if cur_labels_npy.exists():
+            labels = np.load(cur_labels_npy)
+            sorting = DARTsortSorting.from_peeling_hdf5(cur_h5, labels=labels)
+            logger.info(
+                f"Resuming at step {cur_step + 1} with previous sorting from "
+                f"{cur_h5.name} and {cur_labels_npy.name}."
+            )
+            return cur_step + 1, sorting
+
+    # at this point, either the last round of peeling finished, or it
+    # didn't. we need to run peeler_is_done to check. but that's something
+    # done internally in each step anyway. so, what we do now is get the
+    # sorting for the PREVIOUS step which is the one we need to resume at
+    # the CURRENT step aka cur_step.
+    if cur_step == 0:
+        return cur_step, None
+
+    prev_labels_npy = store_dir / f"refined{cur_step - 1}_labels.npy"
+    prev_labels = None
+    if prev_labels_npy.exists():
+        prev_labels = np.load(prev_labels_npy)
+    if cur_step == 1:
+        prev_h5 = sub_h5
     else:
-        prev_h5 = store_dir / f"matching{match_step - 1}.h5"
-    assert prev_h5.exists()
-
-    prev_labels_npy = store_dir / f"refined{match_step - 1}_labels.npy"
-    assert prev_labels_npy.exists()
-    prev_labels = np.load(prev_labels_npy)
+        prev_h5 = store_dir / f"matching{cur_step - 1}.h5"
 
     logger.info(
-        f"Resuming at step {match_step} with previous sorting from "
-        f"{prev_h5.stem} and {prev_labels_npy.stem}."
+        f"Resuming at step {cur_step} with previous sorting from "
+        f"{prev_h5.name} and {prev_labels_npy.name}."
     )
 
-    sorting = DARTsortSorting.from_peeling_hdf5(prev_h5, labels=prev_labels)
+    prev_sorting = DARTsortSorting.from_peeling_hdf5(prev_h5, labels=prev_labels)
 
-    return matched_already, match_step, sorting
+    return cur_step, prev_sorting
