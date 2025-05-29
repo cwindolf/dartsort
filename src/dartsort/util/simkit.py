@@ -374,6 +374,7 @@ class SimulatedRecording:
         globally_refractory=False,
         cmr=False,
         highpass_spatial_filter=False,
+        amp_jitter_family="uniform",
         seed: int | np.random.Generator = 0,
     ):
         self.n_units = n_units
@@ -384,6 +385,7 @@ class SimulatedRecording:
         assert not (cmr and highpass_spatial_filter)
         self.cmr = cmr
         self.highpass_spatial_filter = highpass_spatial_filter
+        self.amp_jitter_family = amp_jitter_family
 
         self.seed = seed
         self.rg = np.random.default_rng(seed)
@@ -427,9 +429,16 @@ class SimulatedRecording:
         self.maxchans = np.full((self.n_spikes), -1)  # populated during simulate
 
         if amplitude_jitter:
-            alpha = 1 / amplitude_jitter**2
-            theta = amplitude_jitter**2
-            self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+            if amp_jitter_family == "gamma":
+                alpha = 1 / amplitude_jitter**2
+                theta = amplitude_jitter**2
+                self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+            elif amp_jitter_family == "uniform":
+                self.scalings = self.rg.uniform(
+                    1 - amplitude_jitter, 1 + amplitude_jitter, size=self.n_spikes
+                )
+            else:
+                assert False
         else:
             self.scalings = np.ones(1)
             self.scalings = np.broadcast_to(self.scalings, (self.n_spikes,))
