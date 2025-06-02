@@ -523,6 +523,7 @@ def to_internal_config(cfg):
         localization_radius=cfg.localization_radius_um,
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
+        save_input_waveforms=cfg.save_collisioncleaned_waveforms,
     )
     subtraction_denoising_config = FeaturizationConfig(
         denoise_only=True,
@@ -533,6 +534,7 @@ def to_internal_config(cfg):
         tpca_fit_radius=cfg.fit_radius_um,
         input_waveforms_name="raw",
         output_waveforms_name="subtracted",
+        save_input_waveforms=cfg.save_subtracted_waveforms,
         nn_denoiser_class_name=cfg.nn_denoiser_class_name,
         nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
     )
