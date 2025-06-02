@@ -4,7 +4,8 @@ import pytest
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from dartsort.util import drift_util, waveform_util, simkit
+from dartsort.util import drift_util, waveform_util
+from dartsort.eval import simkit
 import dredge.motion_util as mu
 
 

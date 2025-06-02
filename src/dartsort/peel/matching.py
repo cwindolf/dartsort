@@ -13,7 +13,7 @@ from scipy.spatial.distance import pdist
 from dartsort.templates import template_util
 from dartsort.templates.pairwise import CompressedPairwiseConv
 from dartsort.transform import WaveformPipeline
-from dartsort.util import drift_util, spiketorch, simkit
+from dartsort.util import drift_util, spiketorch
 from dartsort.util.data_util import SpikeDataset, get_residual_snips, get_labels
 from dartsort.util.waveform_util import make_channel_index
 
@@ -149,7 +149,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # be reproducible
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         self.fit_subsampling_random_state = rg
-        generator = simkit.spawn_torch_rg(rg)
+        generator = spiketorch.spawn_torch_rg(rg)
 
         # restrict my low rank templates to usual geom...
         # TODO: this is not a very logical way to handle drift here...

@@ -15,9 +15,9 @@ import torch
 from tqdm.auto import tqdm
 
 from ..templates import TemplateData
-from .data_util import DARTsortSorting
-from .internal_config import unshifted_raw_template_config, ComputationConfig
-from . import simkit, analysis, comparison
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import unshifted_raw_template_config, ComputationConfig
+from . import simkit, comparison, analysis
 
 
 def get_drifty_hybrid_recording(

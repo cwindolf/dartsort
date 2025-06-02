@@ -2,7 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from dartsort.util import simkit, noise_util, data_util
+from dartsort.util import noise_util, data_util
+from dartsort.eval import simkit
 
 
 

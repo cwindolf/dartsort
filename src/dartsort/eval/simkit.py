@@ -8,11 +8,11 @@ from scipy.spatial.distance import cdist
 from spikeinterface.core import NumpyRecording, NumpySorting
 from tqdm.auto import tqdm
 
-from ..templates.templates import TemplateData
-from .data_util import DARTsortSorting, extract_random_snips
-from .waveform_util import make_channel_index, upsample_singlechan
-from .spiketorch import spawn_torch_rg, ptp
-from .drift_util import registered_geometry
+from ..templates import TemplateData
+from ..util.data_util import DARTsortSorting, extract_random_snips
+from ..util.waveform_util import make_channel_index, upsample_singlechan
+from ..util.spiketorch import spawn_torch_rg, ptp
+from ..util.drift_util import registered_geometry
 
 logger = getLogger(__name__)
 
@@ -223,6 +223,7 @@ class PointSource3ExpSimulator:
         ms_before=1.4,
         ms_after=2.6,
         fs=30_000.0,
+        depth_order=True,
         decay_model="squared",
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
@@ -266,6 +267,7 @@ class PointSource3ExpSimulator:
         self.alpha_shape = k
         self.alpha_scale = theta
         self.decay_model = decay_model
+        self.depth_order = depth_order
 
     def trough_offset_samples(self):
         return int(self.ms_before * (self.fs / 1000))
@@ -327,6 +329,8 @@ class PointSource3ExpSimulator:
 
         x = self.rg.uniform(x_low, x_high, size=size)
         z = self.rg.uniform(z_low, z_high, size=size)
+        if self.depth_order:
+            z.sort()
 
         orth = self.rg.uniform(self.orthdist_min_um, self.orthdist_max_um, size=size)
 
@@ -546,6 +550,19 @@ class SimulatedRecording:
             channels=self.maxchans,
             extra_features=dict(times_seconds=times / self.template_simulator.fs),
         )
+
+    def gt_unit_information(self):
+        import pandas as pd
+
+        ids = np.arange(self.n_units)
+        x, y, z = self.template_pos.T
+        alpha = self.template_alpha.squeeze()
+        counts = np.zeros(self.n_units, dtype=np.int64)
+        labels = self.sorting.to_spike_vector()['unit_index']
+        u, c = np.unique(labels, return_counts=True)
+        counts[u] = c
+
+        return pd.DataFrame(dict(gt_unit_id=ids, x=x, y=y, z=z, alpha=alpha, gt_count=counts))
 
     def simulate(self, gt_h5_path, extract_radius=100.0):
         """

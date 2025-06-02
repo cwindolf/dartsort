@@ -7,8 +7,8 @@ import seaborn as sns
 import torch
 from tqdm.auto import tqdm
 
-from dartsort.util.drift_util import get_shift_info, get_spike_pitch_shifts
-from dartsort.util.waveform_util import get_pitch
+from .util.drift_util import get_shift_info, get_spike_pitch_shifts
+from .util.waveform_util import get_pitch
 
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch
@@ -171,8 +171,11 @@ class MStep(GMMPlot):
         emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(
             force=True
         )
-        model_mean = gmm[unit_id].mean[:, chans]
-        model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
+        if hasattr(gmm[unit_id], 'mean'):
+            model_mean = gmm[unit_id].mean[:, chans]
+            model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
+        else:
+            model_mean = np.zeros_like(emp_mean)
 
         geomplot(
             np.stack([emp_mean, model_mean], axis=0),
@@ -198,8 +201,8 @@ class CovarianceResidual(GMMPlot):
             unit_id, sp.indices, getattr(gmm, "log_liks", None)
         )
 
-        # achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
-        achans = gmm[unit_id].channels
+        achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
+        # achans = gmm[unit_id].channels
         if weights is None:
             weights = sp.features.new_ones(len(sp))
         afeats, aweights = stable_features.pad_to_chans(
@@ -784,6 +787,11 @@ class NeighborMeans(GMMPlot):
         self.n_neighbors = n_neighbors
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         units = [gmm[u] for u in reversed(neighbors)]
         labels = neighbors[::-1]
@@ -813,6 +821,11 @@ class NeighborDistances(GMMPlot):
         self.normalization_kind = normalization_kind
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         metric = self.metric
         if metric is None:
@@ -960,6 +973,11 @@ class NeighborInfoCriteria(GMMPlot):
         self.in_bag = in_bag
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         others = neighbors[1:]
@@ -1035,6 +1053,11 @@ class NeighborTreeMerge(GMMPlot):
         self.min_overlap = min_overlap
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
 

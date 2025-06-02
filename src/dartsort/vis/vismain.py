@@ -4,8 +4,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..util.analysis import (DARTsortAnalysis, basic_template_config,
-                             no_realign_template_config)
+from .eval.analysis import (DARTsortAnalysis, basic_template_config,
+                                        no_realign_template_config)
 from ..util.data_util import DARTsortSorting
 from . import over_time, scatterplots, unit
 from .sorting import make_sorting_summary
@@ -28,7 +28,6 @@ def visualize_sorting(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=True,
-    gt_sorting=None,
     superres_templates=True,
     sorting_analysis=None,
     amplitudes_dataset_name='denoised_ptp_amplitudes',
