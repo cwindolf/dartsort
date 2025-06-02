@@ -19,7 +19,7 @@ from matplotlib.legend_handler import HandlerTuple
 
 from ..cluster import split
 from ..util.internal_config import raw_template_config
-from ..util.analysis import DARTsortAnalysis
+from .eval.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
 from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar

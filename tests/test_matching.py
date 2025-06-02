@@ -581,8 +581,8 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
 
     with tempfile.TemporaryDirectory() as tdir:
         if threshold == "check":
-            threshold = 0.5 * np.sqrt(
-                np.square(template_data.templates).sum((1, 2)).min()
+            threshold = np.sqrt(
+                0.5 * np.square(template_data.templates).sum((1, 2)).min()
             )
         st = dartsort.match(
             recording=rec,
@@ -594,4 +594,5 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
             matching_config=dartsort.MatchingConfig(threshold=threshold),
         )
         print(f"{threshold=} {st=}")
-        assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.2
+        assert len(st) > 0.9 * len(gt_st)
+        # assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.3

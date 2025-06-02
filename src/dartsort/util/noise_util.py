@@ -351,6 +351,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
+                relative_peak_radius=1,
                 dedup_temporal_radius=radius,
                 return_energies=True,
             )

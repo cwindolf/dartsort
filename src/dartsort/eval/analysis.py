@@ -24,15 +24,15 @@ from ..cluster import merge, relocate
 from ..util.internal_config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
-from .data_util import DARTsortSorting, batched_h5_read, get_featurization_pipeline
-from .drift_util import (
+from ..util.data_util import DARTsortSorting, batched_h5_read, get_featurization_pipeline
+from ..util.drift_util import (
     get_spike_pitch_shifts,
     get_waveforms_on_static_channels,
     registered_average,
 )
-from .spikeio import read_waveforms_channel_index
-from .waveform_util import make_channel_index
-from . import job_util
+from ..util.spikeio import read_waveforms_channel_index
+from ..util.waveform_util import make_channel_index
+from ..util import job_util
 
 no_realign_template_config = TemplateConfig(realign_peaks=False)
 basic_template_config = TemplateConfig(realign_peaks=False, superres_templates=False)
