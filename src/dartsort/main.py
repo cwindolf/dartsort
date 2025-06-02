@@ -91,9 +91,9 @@ def _dartsort_impl(
     ret = {}
 
     store_dir = output_dir if work_dir is None else work_dir
-    matched_already, match_step, sorting = ds_fast_forward(store_dir, cfg)
+    next_step, sorting = ds_fast_forward(store_dir, cfg)
 
-    if not matched_already:
+    if next_step == 0:
         # first step: initial detection and motion estimation
         logger.dartsortdebug("-- Start initial detection")
         sorting = subtract(
@@ -161,9 +161,13 @@ def _dartsort_impl(
         )
         logger.info(f"Initial refinement: {sorting}")
         ds_save_intermediate_labels("refined0", sorting, output_dir, cfg, work_dir=work_dir)
-    assert sorting is not None
 
-    for step in range(match_step, cfg.matching_iterations + 1):
+        # be sure to start matching at step 1
+        next_step += 1
+    assert sorting is not None
+    assert next_step > 0  # matching starts at 1
+
+    for step in range(next_step, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
 
         # TODO

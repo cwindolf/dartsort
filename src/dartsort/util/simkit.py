@@ -201,24 +201,24 @@ class PointSource3ExpSimulator:
         peak_after_min=0.2,
         peak_after_max=0.8,
         # width params
-        trough_width_min=0.01,
-        trough_width_max=0.05,
+        trough_width_min=0.005,
+        trough_width_max=0.025,
         tip_width_min=0.01,
-        tip_width_max=0.15,
-        peak_width_min=0.1,
-        peak_width_max=0.3,
+        tip_width_max=0.075,
+        peak_width_min=0.05,
+        peak_width_max=0.2,
         # rel height params
         tip_rel_max=0.3,
         peak_rel_max=0.5,
         # pos/amplitude params
-        pos_margin_um=40.0,
-        orthdist_min_um=50.0,
-        orthdist_max_um=125.0,
+        pos_margin_um=25.0,
+        orthdist_min_um=25.0,
+        orthdist_max_um=50.0,
         alpha_family="uniform",
-        alpha_min=100.0,
-        alpha_max=1000.0,
-        alpha_mean=10.0 * np.square(100.0),
-        alpha_var=5.0 * np.square(100.0),
+        alpha_min=5 * 25.0**2,
+        alpha_max=40 * 25.0**2,
+        alpha_mean=10.0 * np.square(25.0),
+        alpha_var=5.0 * np.square(25.0),
         # config
         ms_before=1.4,
         ms_after=2.6,
@@ -227,6 +227,7 @@ class PointSource3ExpSimulator:
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
     ):
+        print('hi')
         self.rg = np.random.default_rng(seed)
         self.dtype = dtype
 
@@ -334,7 +335,7 @@ class PointSource3ExpSimulator:
                 shape=self.alpha_shape, scale=self.alpha_scale, size=size
             )
         elif self.alpha_family == "uniform":
-            alpha = self.rg.gamma(self.alpha_min, self.alpha_max, size=size)
+            alpha = self.rg.uniform(self.alpha_min, self.alpha_max, size=size)
         else:
             assert False
 
@@ -351,7 +352,7 @@ class PointSource3ExpSimulator:
         if size is None:
             assert templates.shape[0] == 1
             templates = templates[0]
-        return templates
+        return pos, alpha, templates
 
 
 # -- recording sim
@@ -373,6 +374,7 @@ class SimulatedRecording:
         globally_refractory=False,
         cmr=False,
         highpass_spatial_filter=False,
+        amp_jitter_family="uniform",
         seed: int | np.random.Generator = 0,
     ):
         self.n_units = n_units
@@ -383,6 +385,7 @@ class SimulatedRecording:
         assert not (cmr and highpass_spatial_filter)
         self.cmr = cmr
         self.highpass_spatial_filter = highpass_spatial_filter
+        self.amp_jitter_family = amp_jitter_family
 
         self.seed = seed
         self.rg = np.random.default_rng(seed)
@@ -426,9 +429,16 @@ class SimulatedRecording:
         self.maxchans = np.full((self.n_spikes), -1)  # populated during simulate
 
         if amplitude_jitter:
-            alpha = 1 / amplitude_jitter**2
-            theta = amplitude_jitter**2
-            self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+            if amp_jitter_family == "gamma":
+                alpha = 1 / amplitude_jitter**2
+                theta = amplitude_jitter**2
+                self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+            elif amp_jitter_family == "uniform":
+                self.scalings = self.rg.uniform(
+                    1 - amplitude_jitter, 1 + amplitude_jitter, size=self.n_spikes
+                )
+            else:
+                assert False
         else:
             self.scalings = np.ones(1)
             self.scalings = np.broadcast_to(self.scalings, (self.n_spikes,))

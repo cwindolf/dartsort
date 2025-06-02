@@ -429,6 +429,7 @@ class RefinementConfig:
     merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 5.0
     laplace_ard: bool = True
+    kmeansk: int = 4
 
     # if someone wants this
     split_merge_config: SplitMergeConfig | None = None
@@ -479,7 +480,7 @@ class DARTsortInternalConfig:
     template_config: TemplateConfig = TemplateConfig()
     clustering_config: ClusteringConfig = ClusteringConfig()
     initial_refinement_config: RefinementConfig = RefinementConfig(one_split_only=True)
-    refinement_config: RefinementConfig = RefinementConfig()
+    refinement_config: RefinementConfig = RefinementConfig(skip_first_split=True)
     matching_config: MatchingConfig = MatchingConfig()
     motion_estimation_config: MotionEstimationConfig = MotionEstimationConfig()
     computation_config: ComputationConfig = ComputationConfig()
@@ -546,7 +547,7 @@ def to_internal_config(cfg):
         use_singlechan_templates=cfg.use_singlechan_templates,
         use_universal_templates=cfg.use_universal_templates,
         residnorm_decrease_threshold=cfg.denoiser_badness_factor
-        * cfg.matching_threshold**2,
+        * (cfg.matching_threshold**2),
         chunk_length_samples=cfg.chunk_length_samples,
         first_denoiser_thinning=cfg.first_denoiser_thinning,
         first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
@@ -589,7 +590,8 @@ def to_internal_config(cfg):
         interpolation_sigma=cfg.interpolation_bandwidth,
         rq_alpha=cfg.interpolation_rq_alpha,
         kriging_poly_degree=cfg.interpolation_degree,
-        skip_first_split=cfg.initial_split_only,
+        skip_first_split=cfg.initial_split_only and not cfg.resume_with_split,
+        kmeansk=cfg.kmeansk,
     )
     initial_refinement_config = dataclasses.replace(
         refinement_config, one_split_only=cfg.initial_split_only, skip_first_split=False
