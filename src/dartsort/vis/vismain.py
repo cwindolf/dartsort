@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 from ..util.analysis import (DARTsortAnalysis, basic_template_config,
                              no_realign_template_config)
 from ..util.data_util import DARTsortSorting
+from ..eval.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit
 from .sorting import make_sorting_summary
 
@@ -29,7 +30,7 @@ def visualize_sorting(
     make_unit_summaries=True,
     make_animations=True,
     gt_sorting=None,
-    superres_templates=True,
+    superres_templates=False,
     sorting_analysis=None,
     amplitudes_dataset_name='denoised_ptp_amplitudes',
     channel_show_radius_um=50.0,
@@ -189,7 +190,7 @@ def visualize_all_sorting_steps(
     initial_sortings=("subtraction.h5", "initial_clustering.npz"),
     step_refinements=("split{step}.npz", "merge{step}.npz"),
     match_step_sorting="matching{step}.h5",
-    superres_templates=True,
+    superres_templates=False,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -203,36 +204,19 @@ def visualize_all_sorting_steps(
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
 
-    step_paths = list(initial_sortings)
-    step = 0
-    match_step_sortings = step_refinements + (match_step_sorting,)
-    while True:
-        this_step_paths = []
-        for s in match_step_sortings:
-            sf = s.format(step=step)
-            if not (dartsort_dir / sf).exists():
-                break
-            this_step_paths.append(sf)
-        step_paths.extend(this_step_paths)
-        if len(this_step_paths) < len(match_step_sortings):
-            break
-        step += 1
-
     motion_est_pkl = dartsort_dir / motion_est_pkl
     if motion_est_pkl.exists():
         with open(motion_est_pkl, "rb") as jar:
             motion_est = pickle.load(jar)
 
-    for j, path in enumerate(tqdm(step_paths, desc="Sorting steps", mininterval=0)):
-        sorting_path = dartsort_dir / path
-        step_name = sorting_path.with_suffix("").name
+    step_sortings = load_dartsort_step_sortings(dartsort_dir, load_simple_features=True)
 
+    for j, (step_name, step_sorting) in enumerate(tqdm(step_sortings, desc="Sorting steps", mininterval=0)):
         step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
         visualize_sorting(
             recording=recording,
-            sorting=None,
+            sorting=step_sorting,
             output_directory=visualizations_dir / step_dir_name,
-            sorting_path=sorting_path,
             motion_est=motion_est,
             make_scatterplots=make_scatterplots,
             make_sorting_summaries=make_sorting_summaries,
