@@ -7,8 +7,8 @@ import seaborn as sns
 import torch
 from tqdm.auto import tqdm
 
-from .util.drift_util import get_shift_info, get_spike_pitch_shifts
-from .util.waveform_util import get_pitch
+from ..util.drift_util import get_shift_info, get_spike_pitch_shifts
+from ..util.waveform_util import get_pitch
 
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch

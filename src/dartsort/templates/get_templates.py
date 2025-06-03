@@ -271,32 +271,26 @@ def realign_sorting(
     templates,
     snrs_by_channel,
     unit_ids,
-    realign_to="trough",
+    realign_to="trough_factor",
+    trough_factor=2.0,
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
 ):
     n, t, c = templates.shape
-
     if max_shift == 0:
         return sorting, templates
 
-    # find template peak time
     template_maxchans = snrs_by_channel.argmax(1)
-    template_maxchan_traces = templates[np.arange(n), :, template_maxchans]
-    if realign_to == "max":
-        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
-    elif realign_to == "trough":
-        # find the peak...
-        template_peak_times = template_maxchan_traces.argmin(1)
-    else:
-        assert False
-
-    # find unit sample time shifts
-    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
-    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
-    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=np.int64)
-    template_shifts[unit_ids] = template_shifts_
+    template_shifts, aligned_templates = realign_templates(
+        templates,
+        unit_ids=unit_ids,
+        main_channels=template_maxchans,
+        trough_offset_samples=trough_offset_samples,
+        max_shift=max_shift,
+        realign_to=realign_to,
+        trough_factor=trough_factor,
+    )
 
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
@@ -306,6 +300,55 @@ def realign_sorting(
         labels[(new_times < trough_offset_samples) & (new_times > highlim)] = -1
     aligned_sorting = replace(sorting, labels=labels, times_samples=new_times)
 
+    return aligned_sorting, aligned_templates
+
+
+def realign_templates(
+    templates,
+    unit_ids=None,
+    main_channels=None,
+    trough_offset_samples=42,
+    max_shift=20,
+    realign_to="trough_factor",
+    trough_factor=2.0,
+):
+    n, t, c = templates.shape
+    if main_channels is None:
+        if realign_to == "max":
+            main_channels = np.abs(templates).max(1).argmax(1)
+        elif realign_to == "trough":
+            main_channels = templates.min(1).argmin(1)
+        elif realign_to == "trough_factor":
+            align = np.abs(templates)
+            align[templates < 0] *= trough_factor
+            main_channels = align.max(1).argmax(1)
+        else:
+            assert False
+    assert main_channels is not None
+
+    # find template peak time
+    template_maxchan_traces = templates[np.arange(n), :, main_channels]
+    if realign_to == "max":
+        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
+    elif realign_to == "trough":
+        template_peak_times = template_maxchan_traces.argmin(1)
+    elif realign_to == "trough_factor":
+        neg = template_maxchan_traces < 0
+        template_maxchan_traces = np.abs(template_maxchan_traces)
+        template_maxchan_traces[neg] *= trough_factor
+        template_peak_times = template_maxchan_traces.argmax(1)
+    else:
+        assert False
+
+    # find unit sample time shifts
+    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
+    if unit_ids is None:
+        template_shifts = template_shifts_
+    else:
+        template_shifts = np.zeros(unit_ids.max() + 1, dtype=np.int64)
+        template_shifts[unit_ids] = template_shifts_
+
     # trim templates
     aligned_spike_len = t - 2 * max_shift
     aligned_templates = np.empty((n, aligned_spike_len, c))
@@ -314,7 +357,7 @@ def realign_sorting(
             i, max_shift + dt : max_shift + dt + aligned_spike_len
         ]
 
-    return aligned_sorting, aligned_templates
+    return template_shifts, aligned_templates
 
 
 def fit_tsvd(

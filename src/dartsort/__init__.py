@@ -35,7 +35,7 @@ from .main import (
 )
 from .util.internal_config import *
 from .peel.grab import GrabAndFeaturize
-from .templates import TemplateData
+from .templates import TemplateData, realign_sorting, realign_templates
 from .transform import WaveformPipeline
 from .util import data_util, noise_util, spiketorch, waveform_util
 from .eval.analysis import DARTsortAnalysis

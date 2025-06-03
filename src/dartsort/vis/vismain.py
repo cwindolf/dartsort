@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from .eval.analysis import (DARTsortAnalysis, basic_template_config,
+from ..eval.analysis import (DARTsortAnalysis, basic_template_config,
                                         no_realign_template_config)
 from ..util.data_util import DARTsortSorting
 from . import over_time, scatterplots, unit
