@@ -936,6 +936,7 @@ def interpolate_residual_snippets(
     kriging_poly_degree=-1,
     workers=None,
     device=None,
+    batch_size=16,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from dartsort.util import data_util, drift_util, interpolation_util
@@ -1018,18 +1019,20 @@ def interpolate_residual_snippets(
         assert torch.equal(source_geom, target_geom)
         target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
-        snippets = interpolation_util.kernel_interpolate(
-            snippets,
-            source_pos,
-            target_pos,
-            method=method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            precomputed_data=precomputed_data,
-            allow_destroy=True,
-        )
+        for bs in range(0, n, batch_size):
+            sl = slice(bs, min(n, bs + batch_size))
+            snippets[sl] = interpolation_util.kernel_interpolate(
+                snippets[sl],
+                source_pos[sl],
+                target_pos[sl],
+                method=method,
+                kernel_name=kernel_name,
+                sigma=sigma,
+                rq_alpha=rq_alpha,
+                kriging_poly_degree=kriging_poly_degree,
+                precomputed_data=precomputed_data,
+                allow_destroy=True,
+            )
         return snippets
 
     # goal
@@ -1066,18 +1069,20 @@ def interpolate_residual_snippets(
     target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
     # allocate output storage with an extra channel of NaN needed later
-    snippets = interpolation_util.kernel_interpolate(
-        snippets,
-        source_pos,
-        target_pos_shifted,
-        method=method,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        kriging_poly_degree=kriging_poly_degree,
-        precomputed_data=precomputed_data,
-        allow_destroy=True,
-    )
+    for bs in range(0, n, batch_size):
+        sl = slice(bs, min(n, bs + batch_size))
+        snippets[sl] = interpolation_util.kernel_interpolate(
+            snippets[sl],
+            source_pos[sl],
+            target_pos_shifted[sl],
+            method=method,
+            kernel_name=kernel_name,
+            sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+            precomputed_data=precomputed_data,
+            allow_destroy=True,
+        )
     assert snippets.isfinite().all()
 
     # now, let's embed these into the full registered probe

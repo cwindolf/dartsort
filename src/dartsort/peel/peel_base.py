@@ -235,12 +235,13 @@ class BasePeeler(torch.nn.Module):
                     n_sec_chunk = (
                         chunk_length_samples / self.recording.get_sampling_frequency()
                     )
+                    dtag = computation_config.actual_device().type
                     results = tqdm(
                         results,
                         total=n_chunks_orig,
                         initial=n_chunks_orig - len(chunks_to_do),
                         smoothing=0,
-                        desc=f"{task_name} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
+                        desc=f"{task_name}:{dtag} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
                         mininterval=0.25,
                     )
 
