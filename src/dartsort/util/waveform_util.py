@@ -713,3 +713,18 @@ def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=
     erp_y_up = erp_y_up.reshape(n, t, temporal_jitter)
     singlechan_waveforms_up = erp_y_up.transpose(0, 2, 1)
     return singlechan_waveforms_up
+
+def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
+    """ntc -> nutc"""
+    if temporal_jitter == 1:
+        return waveforms[:, None]
+    n, t, c = waveforms.shape
+    waveforms = waveforms.transpose(0, 2, 1).reshape((n * c, t), copy=True)
+    invalid = np.flatnonzero(np.isnan(waveforms[:, 0]))
+    np.nan_to_num(waveforms, copy=False)
+    waveforms = upsample_singlechan(waveforms, time_domain=time_domain, temporal_jitter=temporal_jitter)
+    waveforms[invalid] = np.nan
+    waveforms = waveforms.reshape(n, c, temporal_jitter, t)
+    waveforms = waveforms.transpose(0, 2, 3, 1)
+    waveforms = np.ascontiguousarray(waveforms)
+    return waveforms

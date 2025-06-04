@@ -1,5 +1,21 @@
 """Utility functions for dealing with drifting channels
 
+A brief note on the sign of the drift.
+
+    - Words like "displacement" or "drift" always refer to the
+      displacement of the tissue relative to the probe.
+
+      Thus if a neuron's position at time 0 is z0, it's position
+      at time t is z0 + drift(t, z0).
+
+      The observed position z(t) is the reg pos zr(t) + drift(t, z(t)).
+
+      Alternatively, estimate reg poses by zr(t) = z(t) - drift(t, z(t)).
+
+    - Alternatively, one could imagine a reference frame where the brain
+      is fixed and the probe moves. In that case, the positions of the probe
+      contacts at time t are "registered geom" + [0, drift(t, geom[:, 1])].
+
 The main concept here is the "registered geometry" made by the
 function `registered_geometry`. The idea is to extend the
 probe geometry to cover the range of drift experienced in the

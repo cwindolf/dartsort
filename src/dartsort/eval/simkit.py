@@ -10,9 +10,14 @@ from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting, extract_random_snips
-from ..util.waveform_util import make_channel_index, upsample_singlechan
+from ..util.waveform_util import (
+    make_channel_index,
+    upsample_singlechan,
+    upsample_multichan,
+)
 from ..util.spiketorch import spawn_torch_rg, ptp
 from ..util.drift_util import registered_geometry
+from ..util.interpolation_util import interp_precompute, kernel_interpolate
 
 logger = getLogger(__name__)
 
@@ -195,6 +200,9 @@ class PointSource3ExpSimulator:
     def __init__(
         self,
         geom,
+        n_units,
+        cmr=False,
+        temporal_upsampling=1,
         # timing params
         tip_before_min=0.1,
         tip_before_max=0.5,
@@ -228,9 +236,11 @@ class PointSource3ExpSimulator:
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
     ):
-        print('hi')
         self.rg = np.random.default_rng(seed)
         self.dtype = dtype
+        self.n_units = n_units
+        self.temporal_upsampling = temporal_upsampling
+        self.cmr = cmr
 
         self.geom = geom
         self.geom3 = geom
@@ -268,6 +278,35 @@ class PointSource3ExpSimulator:
         self.alpha_scale = theta
         self.decay_model = decay_model
         self.depth_order = depth_order
+
+        pos, alpha = template_simulator.simulate_location(size=n_units)
+        self.template_pos = pos
+        self.template_alpha = alpha
+        _, self.singlechan_templates = template_simulator.simulate_singlechan(
+            size=n_units
+        )
+        # n, temporal_jitter, t
+        self.singlechan_templates_up = upsample_singlechan(
+            self.singlechan_templates,
+            self.template_simulator.time_domain_ms(),
+            temporal_jitter=temporal_upsampling,
+        )
+
+    def templates(self, drift=0, up=False):
+        pos = self.template_pos
+        if drift:
+            pos = pos + [0, 0, drift]
+
+        templates = singlechan_to_probe(
+            pos,
+            self.template_alpha,
+            self.singlechan_templates_up if up else self.singlechan_templates,
+            self.template_simulator.geom3,
+            decay_model=self.template_simulator.decay_model,
+        )
+        if self.cmr:
+            templates -= np.median(templates, axis=-1, keepdims=True)
+        return pos, templates
 
     def trough_offset_samples(self):
         return int(self.ms_before * (self.fs / 1000))
@@ -359,6 +398,156 @@ class PointSource3ExpSimulator:
         return pos, alpha, templates
 
 
+class TemplateLibrarySimulator:
+    def __init__(
+        self,
+        geom,
+        templates_local,
+        pos_local,
+        temporal_jitter=1,
+        cmr=False,
+        interp_method="kriging",
+        interp_kernel_name="thinplate",
+        extrap_method="kernel",
+        extrap_kernel_name="rbf",
+        kriging_poly_degree=0,
+        trough_offset_samples=42,
+        fs=30_000.0,
+    ):
+        self.geom = geom
+        self.temporal_jitter = temporal_jitter
+        self.cmr = cmr
+        self.fs = fs
+        self._trough_offset_samples = trough_offset_samples
+
+        self.interp_method = interp_method
+        self.interp_kernel_name = interp_kernel_name
+        self.extrap_method = extrap_method
+        self.extrap_kernel_name = extrap_kernel_name
+        self.kriging_poly_degree = kriging_poly_degree
+
+        self.n_units = len(templates_local)
+        self.templates_local = templates_local
+        self.templates_local_up = upsample_multichan(
+            templates_local, temporal_jitter=temporal_jitter
+        )
+        tpos = pos_local[
+            np.arange(self.n_units),
+            np.nan_to_num(np.abs(templates_local).max(1)).argmax(1),
+        ]
+        assert tpos.shape[1] == 2
+        self.template_pos = np.c_[tpos[:, 0], 0 * tpos[:, 0], tpos[:, 1]]
+        assert np.array_equal(
+            np.isfinite(self.templates_local[:, 0]),
+            np.isfinite(self.templates_local_up[:, 0, 0]),
+        )
+        self.pos_local = pos_local
+
+        # precompute interpolation data
+        self.precomputed_data = interp_precompute(
+            source_pos=pos_local,
+            method=interp_method,
+            kernel_name=interp_kernel_name,
+            kriging_poly_degree=kriging_poly_degree,
+        )
+
+    def trough_offset_samples(self):
+        return self._trough_offset_samples
+
+    def spike_length_samples(self):
+        return self.templates_local.shape[1]
+
+    @classmethod
+    def from_template_library(
+        cls,
+        geom,
+        n_units,
+        templates,
+        randomize_position=True,
+        cmr=False,
+        temporal_jitter=1,
+        radius=250,
+        trough_offset_samples=42,
+        pos_margin_um=25.0,
+        fs=30_000.0,
+        seed=0,
+    ):
+        if templates.shape[0] > n_units:
+            rg = np.random.default_rng(seed)
+            choices = rg.choice(len(templates), size=n_units, replace=False)
+            templates = templates[choices]
+
+        assert np.isfinite(templates).all()
+        channel_index = make_channel_index(geom, radius)
+        main_channels = np.abs(templates).max(1).argmax(1)
+        template_channels = channel_index[main_channels]
+
+        geomp = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+        templatesp = np.pad(templates, [(0, 0), (0, 0), (0, 1)], constant_values=np.nan)
+        pos_local = geomp[template_channels]
+        templates_local = np.take_along_axis(
+            templatesp, template_channels[:, None], axis=2
+        )
+
+        if randomize_position:
+            z_low = geom[:, 1].min() - pos_margin_um
+            z_high = geom[:, 1].max() + pos_margin_um
+            z = rg.uniform(z_low, z_high, size=n_units)
+            pos_local[..., 1] += z[:, None] - geom[main_channels, 1][:, None]
+
+        return cls(
+            geom=geom,
+            templates_local=templates_local,
+            pos_local=pos_local,
+            temporal_jitter=temporal_jitter,
+            cmr=cmr,
+            trough_offset_samples=trough_offset_samples,
+            fs=fs,
+        )
+
+    def templates(self, drift=None, up=False):
+        source_pos = self.pos_local
+        tpos = self.template_pos
+        if drift is not None:
+            source_pos = source_pos + [0, drift]
+            tpos = tpos + [0, 0, drift]
+        target_pos = np.broadcast_to(self.geom[None], (self.n_units, *self.geom.shape))
+
+        if not up:
+            templates = kernel_interpolate(
+                self.templates_local,
+                source_pos,
+                target_pos,
+                method=self.interp_method,
+                kernel_name=self.interp_kernel_name,
+                extrap_method=self.extrap_method,
+                extrap_kernel_name=self.extrap_kernel_name,
+                kriging_poly_degree=self.kriging_poly_degree,
+                precomputed_data=self.precomputed_data,
+            ).numpy(force=True)
+        else:
+            templates = [
+                kernel_interpolate(
+                    self.templates_local_up[:, u],
+                    source_pos,
+                    target_pos,
+                    method=self.interp_method,
+                    kernel_name=self.interp_kernel_name,
+                    extrap_method=self.extrap_method,
+                    extrap_kernel_name=self.extrap_kernel_name,
+                    kriging_poly_degree=self.kriging_poly_degree,
+                    precomputed_data=self.precomputed_data,
+                ).numpy(force=True)
+                for u in range(self.temporal_jitter)
+            ]
+            templates = np.stack(templates, axis=1)
+
+        if self.cmr:
+            templates -= np.median(templates, axis=-1, keepdims=True)
+
+        return tpos, templates
+
+
 # -- recording sim
 
 
@@ -367,12 +556,10 @@ class SimulatedRecording:
         self,
         template_simulator,
         noise,
-        n_units,
         duration_samples,
         min_fr_hz=1.0,
         max_fr_hz=10.0,
         drift_speed=None,
-        temporal_jitter=1,
         amplitude_jitter=0.0,
         refractory_samples=40,
         globally_refractory=False,
@@ -380,46 +567,35 @@ class SimulatedRecording:
         highpass_spatial_filter=False,
         amp_jitter_family="uniform",
         seed: int | np.random.Generator = 0,
+        dtype="float32",
     ):
-        self.n_units = n_units
+        self.n_units = template_simulator.n_units
         self.duration_samples = duration_samples
         self.template_simulator = template_simulator
         self.geom = template_simulator.geom
         self.noise = noise
         assert not (cmr and highpass_spatial_filter)
         self.cmr = cmr
+        assert template_simulator.cmr == self.cmr
         self.highpass_spatial_filter = highpass_spatial_filter
         self.amp_jitter_family = amp_jitter_family
+        self.dtype = dtype
 
         self.seed = seed
         self.rg = np.random.default_rng(seed)
         self.torch_rg = spawn_torch_rg(self.rg)
 
         self.amplitude_jitter = amplitude_jitter
-        self.temporal_jitter = temporal_jitter
+        self.temporal_jitter = template_simulator.temporal_jitter
         self.min_fr_hz = min_fr_hz
         self.max_fr_hz = max_fr_hz
         self.drift_speed = drift_speed
 
-        # -- deterministic stuff
-        pos, alpha = template_simulator.simulate_location(size=n_units)
-        self.template_pos = pos
-        self.template_alpha = alpha
-        _, self.singlechan_templates = template_simulator.simulate_singlechan(
-            size=n_units
-        )
-        # n, temporal_jitter, t
-        self.singlechan_templates_up = upsample_singlechan(
-            self.singlechan_templates,
-            self.template_simulator.time_domain_ms(),
-            temporal_jitter=temporal_jitter,
-        )
-
         # -- random stuff
         # simulate spike trains
-        self.firing_rates = self.rg.uniform(min_fr_hz, max_fr_hz, size=n_units)
+        self.firing_rates = self.rg.uniform(min_fr_hz, max_fr_hz, size=self.n_units)
         self.sorting = simulate_sorting(
-            n_units,
+            self.n_units,
             duration_samples,
             firing_rates=self.firing_rates,
             rg=self.rg,
@@ -436,7 +612,9 @@ class SimulatedRecording:
             if amp_jitter_family == "gamma":
                 alpha = 1 / amplitude_jitter**2
                 theta = amplitude_jitter**2
-                self.scalings = self.rg.gamma(shape=alpha, scale=theta, size=self.n_spikes)
+                self.scalings = self.rg.gamma(
+                    shape=alpha, scale=theta, size=self.n_spikes
+                )
             elif amp_jitter_family == "uniform":
                 self.scalings = self.rg.uniform(
                     1 - amplitude_jitter, 1 + amplitude_jitter, size=self.n_spikes
@@ -447,8 +625,8 @@ class SimulatedRecording:
             self.scalings = np.ones(1)
             self.scalings = np.broadcast_to(self.scalings, (self.n_spikes,))
 
-        if temporal_jitter > 1:
-            self.jitter_ix = self.rg.integers(temporal_jitter, size=self.n_spikes)
+        if self.temporal_jitter > 1:
+            self.jitter_ix = self.rg.integers(self.temporal_jitter, size=self.n_spikes)
         else:
             self.jitter_ix = np.zeros(1, dtype=np.int64)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
@@ -480,22 +658,9 @@ class SimulatedRecording:
         return rgeom, matches
 
     def templates(self, t_samples=None, up=False):
-        if t_samples is None:
-            drift = 0
-            pos = self.template_pos
-        else:
-            drift = self.drift(t_samples)
-            pos = self.template_pos + [0, 0, drift]
-
-        templates = singlechan_to_probe(
-            pos,
-            self.template_alpha,
-            self.singlechan_templates_up if up else self.singlechan_templates,
-            self.template_simulator.geom3,
-            decay_model=self.template_simulator.decay_model,
-        )
-        if self.cmr:
-            templates -= np.median(templates, axis=-1, keepdims=True)
+        drift = 0 if t_samples is None else self.drift(t_samples)
+        pos, templates = self.template_simulator.templates(drift=drift, up=up)
+        templates = templates.astype(self.dtype)
         if up:
             assert templates.shape == (
                 self.n_units,
@@ -555,14 +720,15 @@ class SimulatedRecording:
         import pandas as pd
 
         ids = np.arange(self.n_units)
-        x, y, z = self.template_pos.T
-        alpha = self.template_alpha.squeeze()
+        x, y, z = self.template_simulator.template_pos.T
         counts = np.zeros(self.n_units, dtype=np.int64)
-        labels = self.sorting.to_spike_vector()['unit_index']
+        labels = self.sorting.to_spike_vector()["unit_index"]
         u, c = np.unique(labels, return_counts=True)
         counts[u] = c
 
-        return pd.DataFrame(dict(gt_unit_id=ids, x=x, y=y, z=z, alpha=alpha, gt_count=counts))
+        return pd.DataFrame(
+            dict(gt_unit_id=ids, x=x, y=y, z=z, gt_count=counts)
+        )
 
     def simulate(self, gt_h5_path, extract_radius=100.0):
         """
@@ -594,7 +760,7 @@ class SimulatedRecording:
             chunk_t=int(self.template_simulator.fs),
         )
         assert x.shape == (1, self.duration_samples, len(self.geom))
-        x = x[0].numpy(force=True).astype(self.singlechan_templates.dtype)
+        x = x[0].numpy(force=True).astype(self.dtype)
 
         if self.cmr:
             # before adding temps, since already cmrd.
