@@ -339,14 +339,14 @@ class WaveformCheck(GMMPlot):
         localizations_name="localizations",
         randomize=True,
     ):
-        assert colorvar in (
-            "time",
-            "depth",
-            "chandepth",
-            "displacement",
-            "npitches",
-            "subpitch",
-        )
+        # assert colorvar in (
+        #     "time",
+        #     "depth",
+        #     "chandepth",
+        #     "displacement",
+        #     "npitches",
+        #     "subpitch",
+        # )
         self.neighborhood = neighborhood
         self.split = split
         self.colorvar = colorvar
@@ -371,15 +371,16 @@ class WaveformCheck(GMMPlot):
             neighborhood=self.neighborhood,
         )
 
-        if self.colorvar == "time":
+        c_is_str = isinstance(self.colorvar, str) 
+        if c_is_str and self.colorvar == "time":
             c = gmm.data.times_seconds[ixs].numpy(force=True)
-        elif self.colorvar == "chandepth":
+        elif c_is_str and self.colorvar == "chandepth":
             chans = gmm.data.original_sorting.channels[ixs]
             c = gmm.data.original_sorting.geom[chans, 1]
-        elif self.colorvar == "depth":
+        elif c_is_str and self.colorvar == "depth":
             pos = getattr(self.data.original_sorting, self.localizations_name)
             c = pos[ixs, 2]
-        else:
+        elif c_is_str and self.colorvar in ("displacement", "npitches", "subpitch"):
             channels, shifts, n_pitches_shift = get_shift_info(
                 gmm.data.original_sorting,
                 motion_est=me,
@@ -396,6 +397,16 @@ class WaveformCheck(GMMPlot):
                 c = shifts - pitch * n_pitches_shift
             else:
                 assert False
+        else:
+            if isinstance(self.colorvar, np.ndarray) or torch.is_tensor(self.colorvar):
+                c = self.colorvar
+            else:
+                c = getattr(gmm.to_sorting(), self.colorvar)
+            c = c[ixs]
+            if torch.is_tensor(c):
+                c = c.numpy(force=True)
+        print(f"{c.shape=}")
+        print(f"{(c>0).sum()=}")
 
         ax = panel.subplots()
         s = geomplot(
@@ -1134,7 +1145,7 @@ class NeighborTreeMerge(GMMPlot):
                     group_ids=group_ids,
                     brute_indicator=brute_indicator,
                     threshold=self.max_distance,
-                    leaf_labels=neighbors,
+                    leaf_labels=neighbors.tolist(),
                     annotations_offset_by_n=False,
                 )
                 nstr = ""

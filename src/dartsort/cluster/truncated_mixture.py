@@ -55,11 +55,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
-        alpha0=5.0,
+        alpha0=25.0,
         laplace_ard=False,
         alpha_max=1e6,
         alpha_min=1e-6,
-        prior_scales_mean=False,
+        prior_scales_mean=True,
         min_log_prop=-50.0,
     ):
         super().__init__()
@@ -70,7 +70,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         if laplace_ard:
             assert alpha0 and alpha0 > 0
-        self.has_prior = bool(alpha0) and (prior_scales_mean or M)
+        self.has_prior = alpha0 and (prior_scales_mean or M)
         self.alpha0 = alpha0
         self.laplace_ard = laplace_ard
         self.alpha_max = alpha_max
@@ -258,18 +258,19 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 result.U[blank] += torch.eye(self.M, device=result.U.device)
 
             if self.has_prior:
-                N_denom = result.N.clamp(min=1.0)
+                N_denom = result.N.clamp(min=1e-5)
                 tikh = self.alpha / N_denom.unsqueeze(1)
-                result.U.diagonal(dim1=-2, dim2=-1).add_(tikh.to(result.U))
+                result.U.diagonal(dim1=-2, dim2=-1).add_(
+                    torch.asarray(tikh, dtype=result.U.dtype, device=result.U.device)
+                )
 
-            # Uc = psd_safe_cholesky(result.U)
-            # W = torch.cholesky_solve(result.R.view(*result.U.shape[:-1], -1), Uc)
             W = torch.linalg.solve(result.U, result.R.view(*result.U.shape[:-1], -1))
             assert W.shape == (self.n_units, self.M, self.data_dim)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
             if logger.isEnabledFor(DARTSORTDEBUG):
                 assert self.bases[..., :-1].isfinite().all()
 
+        nc = None
         if self.has_prior and self.laplace_ard and self.M:
             assert W is not None
             assert isinstance(self.alpha, nn.Parameter)
@@ -298,9 +299,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert result.N is not None
             self._N[0] = result.noise_N
             self._N[1:] = result.N
-            lp = torch.log_softmax(self._N.log(), dim=0)
+            lp = torch.log_softmax(self._N.log(), dim=0).clamp_(min=self.min_log_prop)
             self.noise_log_prop.fill_(lp[0])
-            self.log_proportions[:] = lp[1:].clamp_(min=self.min_log_prop)
+            self.log_proportions[:] = lp[1:]
 
         if self.exact_kl:
             self.update_dkl()
@@ -310,13 +311,13 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         obs_elbo = result.obs_elbo
         if self.has_prior:
-            # update elbo
             obs_elbo += _elbo_prior_correction(
-                self.alpha0,
-                result.count,
-                self.means[..., :-1].reshape(self.n_units, -1),
-                W,
-                self.noise.full_inverse(),
+                alpha0=self.alpha0,
+                total_count=result.count,
+                nc=nc,
+                mu=self.means[..., :-1].reshape(self.n_units, -1),
+                W=W,
+                Cinv=self.noise.full_inverse(),
                 alpha=self.alpha if self.laplace_ard and self.M else None,
                 mean_prior=self.prior_scales_mean,
             )
@@ -337,8 +338,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         show_progress=False,
         tic=None,
     ):
-        """"""
-
         # things that don't change...
         search_neighbors = self.search_sets()
 
@@ -625,7 +624,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             N += result.N
 
             # weight for the welford running averages below
-            n1_n01 = result.N.div(N.clamp(min=1.0))[:, None, None]
+            n1_n01 = result.N.div(N.clamp(min=1e-5))[:, None, None]
 
             # welford for the mean
             m += result.m[:, :, :-1].sub_(m).mul_(n1_n01)

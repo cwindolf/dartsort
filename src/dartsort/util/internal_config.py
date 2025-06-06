@@ -396,7 +396,7 @@ class RefinementConfig:
     extrapolation_kernel: str | None = "rq"
     interpolation_sigma: float = 10.0
     rq_alpha: float = 0.5
-    kriging_poly_degree: int = 1
+    kriging_poly_degree: int = 0
 
     # model params
     channels_strategy: str = "count"
@@ -427,7 +427,8 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 5.0
+    prior_pseudocount: float = 25.0
+    prior_scales_mean: bool = True
     laplace_ard: bool = True
     kmeansk: int = 4
 
@@ -592,6 +593,7 @@ def to_internal_config(cfg):
         kriging_poly_degree=cfg.interpolation_degree,
         skip_first_split=cfg.initial_split_only and not cfg.resume_with_split,
         kmeansk=cfg.kmeansk,
+        prior_scales_mean=cfg.prior_scales_mean,
     )
     initial_refinement_config = dataclasses.replace(
         refinement_config, one_split_only=cfg.initial_split_only, skip_first_split=False

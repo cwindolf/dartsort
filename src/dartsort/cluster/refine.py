@@ -125,6 +125,7 @@ def gmm_refine(
         split_decision_algorithm=refinement_config.split_decision_algorithm,
         merge_decision_algorithm=refinement_config.merge_decision_algorithm,
         prior_pseudocount=refinement_config.prior_pseudocount,
+        prior_scales_mean=refinement_config.prior_scales_mean,
         laplace_ard=refinement_config.laplace_ard,
         kmeans_k=refinement_config.kmeansk,
     )
