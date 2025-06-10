@@ -38,6 +38,30 @@ class TemplateData:
     # always set if initialized from a sorting which has one
     parent_sorting_hdf5_path: str | None = None
 
+    def __post_init__(self):
+        assert self.templates.shape[1] == self.spike_length_samples
+        assert self.trough_offset_samples < self.spike_length_samples
+
+        ntemp = len(self.templates)
+        assert self.unit_ids.shape == (ntemp,)
+        assert self.spike_counts.shape == (ntemp,)
+        if self.spike_counts_by_channel is not None:
+            assert self.spike_counts_by_channel.ndim == 2
+            assert self.spike_counts_by_channel.shape[0] == ntemp
+        if self.raw_std_dev is not None:
+            assert self.raw_std_dev.ndim == 2
+            assert self.raw_std_dev.shape[0] == ntemp
+
+        nc = self.templates.shape[2]
+        if self.spike_counts_by_channel is not None:
+            assert self.spike_counts_by_channel.shape[1] == nc
+        if self.raw_std_dev is not None:
+            assert self.raw_std_dev.shape[1] == nc
+        if self.registered_geom is not None:
+            assert self.registered_geom.ndim == 2
+            assert self.registered_geom.shape[0] == nc
+
+
     def main_channels(self):
         amp_vecs = np.nan_to_num(np.ptp(self.templates, axis=1), nan=-np.inf)
         if self.spike_counts_by_channel is not None:
@@ -147,10 +171,10 @@ class TemplateData:
         sorting,
         template_config,
         waveform_config=default_waveform_config,
-        save_folder=None,
+        save_folder: Path | None=None,
         overwrite=False,
         motion_est=None,
-        save_npz_name="template_data.npz",
+        save_npz_name: str | None="template_data.npz",
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
@@ -182,7 +206,7 @@ class TemplateData:
         save_folder=None,
         overwrite=False,
         motion_est=None,
-        save_npz_name="template_data.npz",
+        save_npz_name: str | None="template_data.npz",
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
@@ -198,7 +222,7 @@ class TemplateData:
                 save_folder.mkdir()
             npz_path = save_folder / save_npz_name
             if npz_path.exists() and not overwrite:
-                return cls.from_npz(npz_path), None
+                return cls.from_npz(npz_path), sorting
 
         if sorting is None:
             raise ValueError(
