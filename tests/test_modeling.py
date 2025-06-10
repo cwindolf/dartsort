@@ -163,6 +163,8 @@ def test_mixture(
                 alpha0=res["gmm"].prior_pseudocount,
                 laplace_ard=res["gmm"].laplace_ard,
                 prior_scales_mean=res["gmm"].prior_scales_mean,
+                neighborhood_adjacency_overlap=0.5,
+                search_neighborhood_steps=1,
             )
             tmm.set_sizes(res["sim_res"]["K"])
             tmm.set_parameters(
@@ -198,13 +200,13 @@ def test_mixture(
                 > 0
             ).all()
 
-            search_neighbors = tmm.search_sets()
+            search_neighbors = tmm.candidates.search_sets(tmm.kl_divergences)
             candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
-                search_neighbors
+                tmm.kl_divergences
             )
             assert unit_neighborhood_counts.shape == (
                 res["sim_res"]["K"],
-                len(neighbs.neighborhoods),
+                len(neighbs.neighborhoods)
             )
             assert torch.equal(candidates[:, 0], torch.asarray(train_labels))
             assert torch.equal(

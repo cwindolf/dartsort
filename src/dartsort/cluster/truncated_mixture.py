@@ -60,6 +60,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         alpha_max=1e6,
         alpha_min=1e-6,
         prior_scales_mean=True,
+        neighborhood_adjacency_overlap=0.75,
+        search_neighborhood_steps=0,
+        explore_neighborhood_steps=1,
         min_log_prop=-50.0,
     ):
         super().__init__()
@@ -89,6 +92,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             neighborhoods=self.train_neighborhoods,
             random_seed=random_seed,
             device=self.data.device,
+            neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
+            search_neighborhood_steps=search_neighborhood_steps,
+            explore_neighborhood_steps=explore_neighborhood_steps,
         )
 
         self.initial_n_candidates = n_candidates
@@ -128,7 +134,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.n_search = n_search
         self.n_explore = n_explore
 
-        self.candidates.update_sizes(self.n_candidates, self.n_search, self.n_explore)
+        self.candidates.update_sizes(
+            n_units, self.n_candidates, self.n_search, self.n_explore
+        )
 
     def set_parameters(
         self,
@@ -178,9 +186,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             torch.asarray(kl_divergences, dtype=self.means.dtype, copy=True),
         )
 
-        self.candidates.initialize_candidates(
-            labels, self.search_sets(n_search=self.candidates.n_candidates)
-        )
+        self.candidates.initialize_candidates(labels, self.kl_divergences)
 
         if self.M:
             assert bases is not None
@@ -213,9 +219,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.to(means.device)
 
     def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
-        search_neighbors = self.search_sets()
         candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
-            search_neighbors
+            self.kl_divergences
         )
         assert (
             candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
@@ -339,7 +344,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         tic=None,
     ):
         # things that don't change...
-        search_neighbors = self.search_sets()
+        search_neighbors = self.candidates.search_sets(self.kl_divergences)
 
         # metrics
         count = 0
@@ -395,7 +400,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
     def sgd_batch(self, batch_indices, search_neighbors):
         # mini-update of search sets and local parameters
         batch_candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
-            search_neighbors, indices=batch_indices
+            self.kl_divergences, indices=batch_indices, constrain_searches=False
         )
         self.processor.update(
             log_proportions=self.log_proportions.clone().detach(),
@@ -451,22 +456,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
             W=W,
             out=self.kl_divergences,
         )
-
-    def search_sets(self, n_search=None):
-        """Search space for evolutionary candidate updates.
-
-        The choice of dim in topk sets the direction of KL.
-        We want, for each unit p, to propose others with small
-        D(p||q)=E_p[log(p/q)]. Since self.kl_divergences[i,j]=d(i||j),
-        that means we use dim=1 in the topk.
-        """
-        if n_search is None:
-            n_search = self.candidates.n_search
-        self.kl_divergences.diagonal().fill_(torch.inf)
-        k = min(n_search, self.kl_divergences.shape[0] - 1)
-        _, topkinds = torch.topk(self.kl_divergences, k=k, dim=1, largest=False)
-        assert topkinds.shape == (self.n_units, k)
-        return topkinds
 
     def channel_occupancy(
         self,
@@ -1233,7 +1222,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
 
 class CandidateSet:
-    def __init__(self, neighborhoods, random_seed=0, device=None):
+    def __init__(
+        self,
+        neighborhoods,
+        search_neighborhood_steps=0,
+        explore_neighborhood_steps=1,
+        neighborhood_adjacency_overlap=0.75,
+        random_seed=0,
+        device=None,
+    ):
         """
         Invariant 1: self.candidates[:, :self.n_candidates] are the best units for
         each spike.
@@ -1252,13 +1249,27 @@ class CandidateSet:
         self.n_spikes = self.neighborhood_ids.numel()
         self.device = device
         self.rg = np.random.default_rng(random_seed)
+        self.search_neighborhood_steps = search_neighborhood_steps
+        self.explore_neighborhood_steps = explore_neighborhood_steps
+        self.neighb_adjacency = None
+        if search_neighborhood_steps or explore_neighborhood_steps:
+            self.neighb_adjacency = neighborhoods.adjacency(
+                neighborhood_adjacency_overlap
+            )
+            self.neighb_adjacency = self.neighb_adjacency.numpy(force=True)
+
+        # initialized in update_sizes()
         self._candidates = None
+        self.unit_neighborhood_counts = None
         self._initialized = False
 
-    def update_sizes(self, n_candidates=3, n_search=2, n_explore=1):
+    def update_sizes(self, n_units=None, n_candidates=3, n_search=2, n_explore=1):
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
+        self.n_units = n_units
+
+        # candidates buffer
         n_total = self.n_candidates + self.n_candidates * self.n_search + self.n_explore
         if self._candidates is None:
             can_pin = self.device is not None and self.device.type == "cuda"
@@ -1269,11 +1280,27 @@ class CandidateSet:
             self._candidates.resize_((self.n_spikes, n_total))
         self._candidates.fill_(-1)
         self.candidates = self._candidates[:, :n_total]
+        # has the candidates buffer been set to something other than -1s?
         self._initialized = False
 
-    def initialize_candidates(self, labels, closest_neighbors):
+        # unit neighborhood counts array
+        if n_units is None:
+            return
+        self.unit_neighborhood_counts = np.zeros(
+            (n_units + 1, self.n_neighborhoods), dtype=np.int32
+        )
+
+    def initialize_candidates(self, labels, distances):
         """Imposes invariant 1, or at least tries to start off well."""
         assert labels.shape[0] == self.n_spikes
+        cinit = labels.view(len(labels), -1)
+        (cmask,) = (cinit[:, 0] >= 0).nonzero(as_tuple=True)
+        allow_mask = self.reinit_neighborhoods(
+            cinit[cmask, 0], self.neighborhood_ids[cmask]
+        )
+        closest_neighbors = self.search_sets(
+            distances, n_search=self.n_candidates, allow_mask=allow_mask
+        )
         assert closest_neighbors.shape[1] <= self.n_candidates
 
         if labels.ndim == 1:
@@ -1304,35 +1331,94 @@ class CandidateSet:
                 )
         self._initialized = True
 
-    def propose_candidates(self, unit_search_neighbors, indices=None):
+    def search_sets(
+        self, distances, n_search=None, allow_mask=None, allow_overwrite=True
+    ):
+        """Search space for evolutionary candidate updates.
+
+        The choice of dim in topk sets the direction of KL.
+        We want, for each unit p, to propose others with small
+        D(p||q)=E_p[log(p/q)]. Since self.kl_divergences[i,j]=d(i||j),
+        that means we use dim=1 in the topk.
+        """
+        assert distances.shape == (self.n_units, self.n_units)
+        if n_search is None:
+            n_search = self.n_search
+
+        if not allow_overwrite:
+            distances = distances.clone()
+
+        distances.diagonal().fill_(torch.inf)
+
+        if allow_mask is not None:
+            allow_mask = torch.asarray(allow_mask, device=distances.device)
+            distances[torch.logical_not(allow_mask)] = torch.inf
+        max_nneighbs = distances.isfinite().sum(0).max()
+
+        k = min(n_search, distances.shape[0] - 1, max_nneighbs)
+        _, topkinds = torch.topk(distances, k=k, dim=1, largest=False)
+        assert topkinds.shape == (self.n_units, k)
+        topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
+        return topkinds
+
+    def reinit_neighborhoods(self, labels, neighb_ids, constrain_searches=True):
+        # count to determine which units are relevant to each neighborhood
+        # this is how "explore" candidates are suggested. the policy is strict:
+        # just the top unit counts for each spike. this is to keep the lut smallish,
+        # tho it is still huge, hopefully without making the search too bad...
+        assert self.unit_neighborhood_counts is not None
+        assert labels.shape == neighb_ids.shape
+        self.unit_neighborhood_counts.fill(0)
+        np.add.at(self.unit_neighborhood_counts, (labels, neighb_ids), 1)
+
+        # if `full`, then this is all done in place.
+        # determine adjacency of units and neighborhoods
+        if constrain_searches:
+            unit_neighb_ind = (self.unit_neighborhood_counts[:-1] > 0).astype("float32")
+            unit_neighb_adj = unit_neighb_ind
+            for _ in range(self.search_neighborhood_steps):
+                assert self.neighb_adjacency is not None
+                unit_neighb_adj = unit_neighb_adj @ self.neighb_adjacency
+            allow_mask = unit_neighb_adj @ unit_neighb_ind.T
+        else:
+            allow_mask = None
+
+        return allow_mask
+
+    def propose_candidates(self, distances, indices=None, constrain_searches=True):
         """Assumes invariant 1 and does not mess it up.
 
         Arguments
         ---------
         unit_search_neighbors: LongTensor (n_units, n_search)
         """
-        assert unit_search_neighbors.shape[1] <= self.n_search
         assert self._initialized
-
-        n_search = unit_search_neighbors.shape[1]
 
         full = indices is None
         if full:
             indices = slice(None)
+        n_neighbs = self.n_neighborhoods
+
+        neighb_ids = self.neighborhood_ids[indices]
+        allow_mask = self.reinit_neighborhoods(
+            self.candidates[indices, 0],
+            neighb_ids,
+            constrain_searches=constrain_searches,
+        )
+
+        # update search sets
+        unit_search_neighbors = self.search_sets(distances, allow_mask=allow_mask)
+        assert unit_search_neighbors.shape[1] <= self.n_search
+        n_search = unit_search_neighbors.shape[1]
+
+        # determine some shape parameters and nicknames
         C = self.n_candidates
         n_search_total = C * n_search
         search_slice = slice(C, C + n_search_total)
         total = C + n_search_total + self.n_explore
         explore_slice = slice(C + n_search_total, total)
-        n_neighbs = self.n_neighborhoods
-        n_units = len(unit_search_neighbors)
-
-        # if `full`, then this is all done in place.
         candidates = self.candidates[indices, :total]
-        neighb_ids = self.neighborhood_ids[indices]
-        del indices
         n_spikes = len(candidates)
-
         top = candidates[:, :C]
 
         # write the search units in place, if not batching
@@ -1344,24 +1430,19 @@ class CandidateSet:
             )
             target[:] = unit_search_neighbors[top]
 
-        # count to determine which units are relevant to each neighborhood
-        # this is how "explore" candidates are suggested. the policy is strict:
-        # just the top unit counts for each spike. this is to keep the lut smallish,
-        # tho it is still huge, hopefully without making the search too bad...
-        unit_neighborhood_counts = np.zeros((n_units + 1, n_neighbs), dtype=np.int32)
-        assert top[:, 0].shape == neighb_ids.shape
-        np.add.at(unit_neighborhood_counts, (top[:, 0], neighb_ids), 1)
-
         # which to explore?
-        neighborhood_explore_units = units_overlapping_neighborhoods(
-            unit_neighborhood_counts
-        )
+        explore_adj = self.unit_neighborhood_counts
+        for _ in range(self.explore_neighborhood_steps):
+            explore_adj = explore_adj.astype("float32") @ self.neighb_adjacency
+        neighborhood_explore_units = units_overlapping_neighborhoods(explore_adj)
         neighborhood_explore_units = torch.from_numpy(neighborhood_explore_units)
 
         # sample the explore units and then write. how many units per neighborhood?
         # explore units are chosen per neighborhood. we start by figuring out how many
         # such units there are in each neighborhood.
-        n_units_ = torch.tensor(n_units)[None].broadcast_to(n_neighbs, 1).contiguous()
+        n_units_ = (
+            torch.tensor(self.n_units)[None].broadcast_to(n_neighbs, 1).contiguous()
+        )
         if self.n_explore:
             n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
                 n_neighbs
@@ -1392,10 +1473,12 @@ class CandidateSet:
         # update counts for the rest of units
         if candidates.shape[1] > 1:
             np.add.at(
-                unit_neighborhood_counts, (candidates[:, 1:], neighb_ids[:, None]), 1
+                self.unit_neighborhood_counts,
+                (candidates[:, 1:total], neighb_ids[:, None]),
+                1,
             )
 
         # this was padded to allow for -1s in candidates
-        unit_neighborhood_counts = unit_neighborhood_counts[:-1]
+        unit_neighborhood_counts = self.unit_neighborhood_counts[:-1]
 
         return candidates, unit_neighborhood_counts
