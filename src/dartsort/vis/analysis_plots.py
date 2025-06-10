@@ -109,11 +109,17 @@ def annotated_dendro(
             leaves = leaf_descendants[n + j]
             gids = group_ids[leaves]
             groups = []
+            nomerge = True
             for gid in np.unique(gids):
+                ing = np.flatnonzero(gids == gid)
+                nomerge = nomerge and ing.size == 1
                 groups.append(
-                    [leaf_labels[leaves[ii]] for ii in np.flatnonzero(gids == gid)]
+                    ",".join([str(int(leaf_labels[leaves[ii]])) for ii in ing])
                 )
-            annot = f"brute {groups} {annotations[cluix]}"
+            gstr = " ".join(groups)
+            if nomerge:
+                gstr = "pass"
+            annot = f"brute {gstr} {annotations[cluix]}"
             ax.text(
                 *top,
                 annot,

@@ -5,10 +5,11 @@ import torch.nn.functional as F
 def detect_and_deduplicate(
     traces,
     threshold,
-    dedup_channel_index=None,
     peak_sign="neg",
     relative_peak_radius=5,
-    dedup_temporal_radius=7,
+    relative_peak_channel_index=None,
+    dedup_temporal_radius=11,
+    dedup_channel_index=None,
     spatial_dedup_batch_size=512,
     exclude_edges=True,
     return_energies=False,
@@ -19,6 +20,8 @@ def detect_and_deduplicate(
 
     torch-based peak detection and deduplication, relying
     on max pooling and scatter operations
+
+    TODO: reuse bufs and pre-pad.
 
     Arguments
     ---------
@@ -58,16 +61,26 @@ def detect_and_deduplicate(
         # no need to copy since max pooling will
         energies = traces
 
-    # -- torch temporal relative maxima as pooling operation
-    # we used to implement with max_pool2d -> unique, but
-    # we can use max_unpool2d to speed up the second step
-    # temporal max pooling
+    # we used to implement with max_pool -> unique, but we can use max_unpool
+    # to speed up the second step temporal max pooling
     energies, indices = F.max_pool1d_with_indices(
         energies.T.unsqueeze(0),
         kernel_size=2 * relative_peak_radius + 1,
         stride=1,
         padding=relative_peak_radius,
     )
+    # spatial peak criterion
+    if relative_peak_channel_index is not None:
+        # we are in 1CT right now
+        max_energies = F.pad(energies[0], (0, 0, 0, 1))
+        for batch_start in range(0, nsamples, spatial_dedup_batch_size):
+            batch_end = batch_start + spatial_dedup_batch_size
+            torch.amax(
+                max_energies[relative_peak_channel_index, batch_start:batch_end],
+                dim=1,
+                out=max_energies[:nchans, batch_start:batch_end,],
+            )
+        energies.masked_fill_(max_energies[:nchans] > energies[0], 0.0)
     # unpool will set non-maxima to 0
     energies = F.max_unpool1d(
         energies,
@@ -102,7 +115,7 @@ def detect_and_deduplicate(
     # -- spatial deduplication
     # this is max pooling within the channel index's neighborhood's
     if all_dedup:
-        max_energies = max_energies.max(dim=1, keepdim=True).values
+        max_energies = max_energies.amax(dim=1, keepdim=True)
     elif dedup_channel_index is not None:
         # pad channel axis with extra chan of 0s
         max_energies = F.pad(max_energies, (0, 1))
@@ -136,6 +149,7 @@ def singlechan_template_detect_and_deduplicate(
     singlechan_templates,
     threshold=40.0,
     trough_offset_samples=42,
+    relative_peak_channel_index=None,
     dedup_channel_index=None,
     relative_peak_radius=5,
     dedup_temporal_radius=7,
@@ -167,6 +181,7 @@ def singlechan_template_detect_and_deduplicate(
     times, chans = detect_and_deduplicate(
         obj,
         threshold=threshold,
+        relative_peak_channel_index=relative_peak_channel_index,
         dedup_channel_index=dedup_channel_index,
         peak_sign="pos",
         relative_peak_radius=relative_peak_radius,

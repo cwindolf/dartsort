@@ -85,8 +85,8 @@ class SpikeMixtureModel(torch.nn.Module):
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
-        prior_pseudocount: float = 5.0,
-        prior_scales_mean=False,
+        prior_pseudocount: float = 25.0,
+        prior_scales_mean=True,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 3,
         ppca_inner_em_iter: int = 3,
@@ -1094,8 +1094,8 @@ class SpikeMixtureModel(torch.nn.Module):
 
         kept_count = "n/a" if not keep.any() else countsf[keep].min()
         logger.dartsortdebug(
-            f"New unit count {keep.sum()}, smallest count was {kept_count}. "
-            f"{big_enough.sum()} met yield, kept {keep[label_ids[big_enough]].sum()}."
+            f"Retain {keep.sum()} of {keep.size} units, smallest kept count was {kept_count}. "
+            f"{big_enough.sum()} met yield."
         )
         if logger.isEnabledFor(DARTSORTVERBOSE):
             logger.dartsortverbose(
@@ -1821,7 +1821,8 @@ class SpikeMixtureModel(torch.nn.Module):
             with self.labels_lock:
                 self.labels[all_indices_full] = -1
                 self.labels[sp.indices[kept]] = unit_id
-            result["clear_ids"] = [unit_id]
+            if kept.size < self.min_count:
+                result["clear_ids"] = [unit_id]
             return result
 
         # else, tack new units onto the end

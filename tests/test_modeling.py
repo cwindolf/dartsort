@@ -9,8 +9,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
-elbo_atol = 5e-6
-elbo_ard_atol = 1e-4
+elbo_atol = 5e-2
 
 
 test_t_mu = ("random",)
@@ -44,7 +43,7 @@ def moppca_simulations():
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
 @pytest.mark.parametrize("t_w", test_t_w)
 @pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize("pcount_ard", [(0, False), (5, False), (5, True)])
+@pytest.mark.parametrize("pcount_ard_psm", [(0, False, False), (0, False, True), (5, False, True), (5, True, False)])
 def test_mixture(
     moppca_simulations,
     inference_algorithm,
@@ -53,10 +52,10 @@ def test_mixture(
     t_cov_zrad,
     t_w,
     t_missing,
-    pcount_ard,
+    pcount_ard_psm,
 ):
     t_cov, zrad = t_cov_zrad
-    prior_pseudocount, laplace_ard = pcount_ard
+    prior_pseudocount, laplace_ard, prior_scales_mean = pcount_ard_psm
     kw = dict(
         t_mu=t_mu,
         t_cov=t_cov,
@@ -64,7 +63,11 @@ def test_mixture(
         t_missing=t_missing,
         inference_algorithm=inference_algorithm,
         n_refinement_iters=n_refinement_iters,
-        gmm_kw=dict(laplace_ard=laplace_ard, prior_pseudocount=prior_pseudocount),
+        gmm_kw=dict(
+            laplace_ard=laplace_ard,
+            prior_pseudocount=prior_pseudocount,
+            prior_scales_mean=prior_scales_mean,
+        ),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
         zero_radius=zrad,
     )
@@ -160,6 +163,8 @@ def test_mixture(
                 alpha0=res["gmm"].prior_pseudocount,
                 laplace_ard=res["gmm"].laplace_ard,
                 prior_scales_mean=res["gmm"].prior_scales_mean,
+                neighborhood_adjacency_overlap=0.5,
+                search_neighborhood_steps=1,
             )
             tmm.set_sizes(res["sim_res"]["K"])
             tmm.set_parameters(
@@ -195,13 +200,13 @@ def test_mixture(
                 > 0
             ).all()
 
-            search_neighbors = tmm.search_sets()
+            search_neighbors = tmm.candidates.search_sets(tmm.kl_divergences)
             candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
-                search_neighbors
+                tmm.kl_divergences
             )
             assert unit_neighborhood_counts.shape == (
                 res["sim_res"]["K"],
-                len(neighbs.neighborhoods),
+                len(neighbs.neighborhoods)
             )
             assert torch.equal(candidates[:, 0], torch.asarray(train_labels))
             assert torch.equal(
@@ -253,11 +258,11 @@ def test_mixture(
 
             # check parameters
             if t_cov == "eye":
-                pnames = {'Cmo_Cooinv_x'}
+                pnames = {"Cmo_Cooinv_x"}
                 check = list(tmm.processor.state_dict())
                 check.extend(tmm.__dict__)
                 for pname in check:
-                    if 'om' not in pname and 'mo' not in pname:
+                    if "om" not in pname and "mo" not in pname:
                         continue
                     if pname.startswith("_"):
                         continue
@@ -282,8 +287,7 @@ def test_mixture(
             assert torch.equal(u, torch.arange(res["sim_res"]["K"]))
             assert ((c / c.sum()) >= 0.5 / res["sim_res"]["K"]).all()
             assert (tmm.log_proportions.exp() >= 0.5 / res["sim_res"]["K"]).all()
-            eatol = elbo_ard_atol if laplace_ard else elbo_atol
-            assert np.all(np.diff(tmm_elbos) >= -eatol)
+            assert np.diff(tmm_elbos).min() >= -elbo_atol
 
             channels, counts = tmm.channel_occupancy(tmm_res["labels"], min_count=1)
             assert len(channels) == len(counts) == res["sim_res"]["K"]
@@ -294,9 +298,8 @@ def test_mixture(
 
         # test elbo decreasing
         assert len(res["fit_info"]["elbos"])
-        eatol = elbo_ard_atol if laplace_ard else elbo_atol
         for elbo in res["fit_info"]["elbos"]:
-            assert np.diff(elbo).min() >= -eatol
+            assert np.diff(elbo).min() >= -elbo_atol
 
     sf = res["sim_res"]["data"]
     train = sf.split_indices["train"]

@@ -20,7 +20,7 @@ def interpolate_by_chunk(
     method="normalized",
     extrap_method=None,
     kernel_name="rbf",
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     sigma=10.0,
     rq_alpha=1.0,
     device=None,
@@ -172,7 +172,7 @@ def interp_precompute(
     kernel_name="rbf",
     sigma=20.0,
     rq_alpha=1.0,
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     source_geom_is_padded=True,
 ):
     if method in ("nearest", "kernel", "normalized", "zero"):
@@ -353,7 +353,7 @@ def kernel_interpolate(
     extrap_kernel_name=None,
     sigma=20.0,
     rq_alpha=1.0,
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     precomputed_data=None,
     allow_destroy=False,
     out=None,

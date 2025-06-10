@@ -3,6 +3,7 @@ from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from dartsort.cluster.postprocess import process_templates_for_matching
 import numpy as np
 from spikeinterface.core import BaseRecording
 
@@ -277,22 +278,24 @@ def match(
     template_data: TemplateData | None = None,
     template_npz_filename="template_data.npz",
     computation_config=default_computation_config,
+    template_denoising_tsvd=None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
 
     # compute templates
     if template_data is None:
-        template_data = TemplateData.from_config(
+        template_data = process_templates_for_matching(
             recording,
             sorting,
-            template_config=template_config,
-            waveform_config=waveform_config,
             motion_est=motion_est,
-            save_folder=model_dir,
-            overwrite=overwrite,
-            save_npz_name=template_npz_filename,
+            matching_config=matching_config,
+            waveform_config=waveform_config,
+            template_config=template_config,
             computation_config=computation_config,
+            tsvd=template_denoising_tsvd,
+            template_save_folder=model_dir,
+            template_npz_filename=template_npz_filename,
         )
 
     # instantiate peeler

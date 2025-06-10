@@ -339,14 +339,14 @@ class WaveformCheck(GMMPlot):
         localizations_name="localizations",
         randomize=True,
     ):
-        assert colorvar in (
-            "time",
-            "depth",
-            "chandepth",
-            "displacement",
-            "npitches",
-            "subpitch",
-        )
+        # assert colorvar in (
+        #     "time",
+        #     "depth",
+        #     "chandepth",
+        #     "displacement",
+        #     "npitches",
+        #     "subpitch",
+        # )
         self.neighborhood = neighborhood
         self.split = split
         self.colorvar = colorvar
@@ -371,15 +371,16 @@ class WaveformCheck(GMMPlot):
             neighborhood=self.neighborhood,
         )
 
-        if self.colorvar == "time":
+        c_is_str = isinstance(self.colorvar, str) 
+        if c_is_str and self.colorvar == "time":
             c = gmm.data.times_seconds[ixs].numpy(force=True)
-        elif self.colorvar == "chandepth":
+        elif c_is_str and self.colorvar == "chandepth":
             chans = gmm.data.original_sorting.channels[ixs]
             c = gmm.data.original_sorting.geom[chans, 1]
-        elif self.colorvar == "depth":
+        elif c_is_str and self.colorvar == "depth":
             pos = getattr(self.data.original_sorting, self.localizations_name)
             c = pos[ixs, 2]
-        else:
+        elif c_is_str and self.colorvar in ("displacement", "npitches", "subpitch"):
             channels, shifts, n_pitches_shift = get_shift_info(
                 gmm.data.original_sorting,
                 motion_est=me,
@@ -396,6 +397,16 @@ class WaveformCheck(GMMPlot):
                 c = shifts - pitch * n_pitches_shift
             else:
                 assert False
+        else:
+            if isinstance(self.colorvar, np.ndarray) or torch.is_tensor(self.colorvar):
+                c = self.colorvar
+            else:
+                c = getattr(gmm.to_sorting(), self.colorvar)
+            c = c[ixs]
+            if torch.is_tensor(c):
+                c = c.numpy(force=True)
+        print(f"{c.shape=}")
+        print(f"{(c>0).sum()=}")
 
         ax = panel.subplots()
         s = geomplot(
@@ -436,6 +447,7 @@ class Likelihoods(GMMPlot):
         if hasattr(gmm, "log_liks"):
             liks_ = gmm.log_liks[:, in_unit.numpy(force=True)][[unit_id]].tocoo()
             inds_ = None
+            liks = None
             if liks_.nnz:
                 inds_ = in_unit
                 liks = np.full(in_unit.shape, -np.inf, dtype=np.float32)
@@ -445,6 +457,7 @@ class Likelihoods(GMMPlot):
             inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
         if inds_ is None:
             return
+        assert liks is not None
         assert torch.equal(inds_, in_unit)
         nliks = gmm.noise_log_likelihoods()[in_unit]
         t = gmm.data.times_seconds[in_unit]
@@ -459,7 +472,12 @@ class Likelihoods(GMMPlot):
                 np.pad(small, (0, 1), constant_values=False),
             )
             ax_time.scatter(t[small], liks[small], s=3, lw=0, color="k")
-        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c)
+        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c, zorder=1)
+        nliksf = nliks[np.isfinite(nliks)]
+        liksf = liks[liks.isfinite()].numpy(force=True)
+        mn = max(nliksf.min(), liksf.min())
+        mx = min(nliksf.max(), liksf.max())
+        ax_noise.plot([mn, mx], [mn, mx], color='k', lw=0.8, zorder=11)
         histk = dict(histtype="step", orientation="horizontal")
         n, bins, _ = ax_dist.hist(
             liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk
@@ -1134,7 +1152,7 @@ class NeighborTreeMerge(GMMPlot):
                     group_ids=group_ids,
                     brute_indicator=brute_indicator,
                     threshold=self.max_distance,
-                    leaf_labels=neighbors,
+                    leaf_labels=neighbors.tolist(),
                     annotations_offset_by_n=False,
                 )
                 nstr = ""

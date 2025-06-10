@@ -44,6 +44,7 @@ class SubtractionPeeler(BasePeeler):
         detection_threshold=4,
         chunk_length_samples=30_000,
         peak_sign="both",
+        relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         temporal_dedup_radius_samples=7,
         positive_temporal_dedup_radius_samples=41,
@@ -120,6 +121,12 @@ class SubtractionPeeler(BasePeeler):
             )
         else:
             self.spatial_dedup_channel_index = None
+        if relative_peak_channel_index is not None:
+            self.register_buffer(
+                "relative_peak_channel_index", relative_peak_channel_index
+            )
+        else:
+            self.relative_peak_channel_index = None
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
@@ -211,6 +218,12 @@ class SubtractionPeeler(BasePeeler):
             geom, subtraction_config.spatial_dedup_radius, to_torch=True
         )
 
+        relative_peak_channel_index = None
+        if subtraction_config.relative_peak_radius_um:
+            relative_peak_channel_index = make_channel_index(
+                geom, subtraction_config.relative_peak_radius_um, to_torch=True
+            )
+
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
             geom=geom,
@@ -257,6 +270,7 @@ class SubtractionPeeler(BasePeeler):
             detection_threshold=subtraction_config.detection_threshold,
             chunk_length_samples=subtraction_config.chunk_length_samples,
             peak_sign=subtraction_config.peak_sign,
+            relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             temporal_dedup_radius_samples=subtraction_config.temporal_dedup_radius_samples,
             positive_temporal_dedup_radius_samples=subtraction_config.positive_temporal_dedup_radius_samples,
@@ -314,6 +328,7 @@ class SubtractionPeeler(BasePeeler):
             right_margin=right_margin,
             detection_threshold=self.detection_threshold,
             peak_sign=self.peak_sign,
+            relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             dedup_temporal_radius=self.temporal_dedup_radius_samples,
             pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
@@ -506,6 +521,7 @@ class SubtractionPeeler(BasePeeler):
             self.recording,
             detection_threshold=self.detection_threshold,
             channel_index=self.subtract_channel_index,
+            relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.subtract_channel_index,
             featurization_pipeline=waveform_pipeline,
             dedup_temporal_radius_samples=self.spike_length_samples,
@@ -577,6 +593,7 @@ def subtract_chunk(
     right_margin=0,
     detection_threshold=4,
     peak_sign="both",
+    relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
     residnorm_decrease_threshold=3.162,  # sqrt(10)
     relative_peak_radius=5,
@@ -598,6 +615,7 @@ def subtract_chunk(
             channel_index,
             detection_threshold=detection_threshold,
             peak_sign=peak_sign,
+            relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
@@ -671,6 +689,7 @@ def subtract_chunk(
             times_samples, channels = detect_and_deduplicate(
                 residual_det,
                 detection_threshold,
+                relative_peak_channel_index=relative_peak_channel_index,
                 dedup_channel_index=channel_index,
                 peak_sign=peak_sign,
                 relative_peak_radius=relative_peak_radius,
@@ -684,6 +703,7 @@ def subtract_chunk(
                 singlechan_templates,
                 threshold=singlechan_threshold,
                 trough_offset_samples=singlechan_trough_offset,
+                relative_peak_channel_index=relative_peak_channel_index,
                 dedup_channel_index=channel_index,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,

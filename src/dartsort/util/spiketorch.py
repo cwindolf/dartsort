@@ -13,7 +13,7 @@ from torch.fft import irfft, rfft
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
-_0 = torch.tensor(100)
+_0 = torch.tensor(0.0)
 
 
 def spawn_torch_rg(seed: int | np.random.Generator = 0):
@@ -52,10 +52,10 @@ def ptp(waveforms, dim=1):
 
 
 def elbo(Q, log_liks, reduce_mean=True, dim=1):
-    logQ = torch.where(Q > 0, Q, _1).log_()
-    log_liks = torch.where(Q > 0, log_liks, _0)
+    Qpos = Q > 0
+    logQ = torch.where(Qpos, Q, _1).log_()
+    log_liks = torch.where(Qpos, log_liks, _0)
     oelbo = log_liks.add_(logQ).mul_(Q).sum(dim=dim)
-    # oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
     if reduce_mean:
         oelbo = oelbo.mean()
     return oelbo

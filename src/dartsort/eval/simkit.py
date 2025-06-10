@@ -202,7 +202,7 @@ class PointSource3ExpSimulator:
         geom,
         n_units,
         cmr=False,
-        temporal_upsampling=1,
+        temporal_jitter=1,
         # timing params
         tip_before_min=0.1,
         tip_before_max=0.5,
@@ -239,7 +239,7 @@ class PointSource3ExpSimulator:
         self.rg = np.random.default_rng(seed)
         self.dtype = dtype
         self.n_units = n_units
-        self.temporal_upsampling = temporal_upsampling
+        self.temporal_jitter = temporal_jitter
         self.cmr = cmr
 
         self.geom = geom
@@ -279,17 +279,17 @@ class PointSource3ExpSimulator:
         self.decay_model = decay_model
         self.depth_order = depth_order
 
-        pos, alpha = template_simulator.simulate_location(size=n_units)
+        pos, alpha = self.simulate_location(size=n_units)
         self.template_pos = pos
         self.template_alpha = alpha
-        _, self.singlechan_templates = template_simulator.simulate_singlechan(
+        _, self.singlechan_templates = self.simulate_singlechan(
             size=n_units
         )
         # n, temporal_jitter, t
         self.singlechan_templates_up = upsample_singlechan(
             self.singlechan_templates,
-            self.template_simulator.time_domain_ms(),
-            temporal_jitter=temporal_upsampling,
+            self.time_domain_ms(),
+            temporal_jitter=temporal_jitter,
         )
 
     def templates(self, drift=0, up=False):
@@ -301,8 +301,8 @@ class PointSource3ExpSimulator:
             pos,
             self.template_alpha,
             self.singlechan_templates_up if up else self.singlechan_templates,
-            self.template_simulator.geom3,
-            decay_model=self.template_simulator.decay_model,
+            self.geom3,
+            decay_model=self.decay_model,
         )
         if self.cmr:
             templates -= np.median(templates, axis=-1, keepdims=True)

@@ -1,5 +1,6 @@
 from dataclasses import replace
 from typing import Optional
+from logging import getLogger
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -17,6 +18,9 @@ from ..templates.pairwise_util import (
 from ..util.data_util import DARTsortSorting, combine_sortings
 from . import cluster_util
 from ..util import job_util
+
+
+logger = getLogger(__name__)
 
 
 def merge_templates(
@@ -46,8 +50,7 @@ def merge_templates(
     overwrite_templates=False,
     show_progress=True,
     template_npz_filename="template_data.npz",
-    reorder_by_depth=True,
-) -> DARTsortSorting:
+):
     """Template distance based merge
 
     Pass in a sorting, recording and template config to make templates,
@@ -110,7 +113,7 @@ def merge_templates(
     )
 
     # now run hierarchical clustering
-    merged_sorting = recluster(
+    merged_sorting, new_unit_ids = recluster(
         sorting,
         units,
         dists,
@@ -122,12 +125,7 @@ def merge_templates(
         dist_matrix_kwargs=dist_matrix_kwargs,
     )
 
-    if reorder_by_depth:
-        merged_sorting = cluster_util.reorder_by_depth(
-            merged_sorting, motion_est=motion_est
-        )
-
-    return merged_sorting
+    return dict(sorting=merged_sorting, new_unit_ids=new_unit_ids)
 
 
 def merge_across_sortings(
@@ -336,7 +334,6 @@ def cross_match_distance_matrix(
     template_data, cross_mask, ids_a, ids_b = combine_templates(
         template_data_a, template_data_b
     )
-    print(f"{ids_a.shape=} {ids_b.shape=} {template_data.templates.shape=}")
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
         superres_linkage=superres_linkage,
@@ -419,8 +416,7 @@ def recluster(
     # drop in a huge value here
     finite = np.isfinite(pdist)
     if not finite.any():
-        print("no merges")
-        return sorting
+        return sorting, np.arange(dists.shape[0])
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
     # complete linkage: max dist between all pairs across clusters.
@@ -432,6 +428,8 @@ def recluster(
         Z = linkage(pdist, method=link)
     # extract flat clustering using our max dist threshold
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
+    assert new_labels.min() == 1  # start at 1 for some reason
+    new_labels -= 1
 
     # update labels
     labels_updated = np.full_like(sorting.labels, -1)
@@ -446,7 +444,8 @@ def recluster(
     clust_inverse = {i: [] for i in new_labels}
     for orig_label, new_label in enumerate(new_labels):
         clust_inverse[new_label].append(orig_label)
-    print(sum(len(v) - 1 for v in clust_inverse.values()), "merges")
+    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
+    logger.dartsortdebug(f"Merged {n_merges} templates.")
 
     # align to best snr unit
     for new_label, orig_labels in clust_inverse.items():
@@ -464,7 +463,8 @@ def recluster(
             # subtracting will move trough of og to the right.
             times_updated[in_orig_unit] -= shift_og_best
 
-    return replace(sorting, times_samples=times_updated, labels=labels_updated)
+    new_sorting = replace(sorting, times_samples=times_updated, labels=labels_updated)
+    return new_sorting, new_labels
 
 
 def cross_match(

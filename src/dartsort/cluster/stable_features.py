@@ -809,6 +809,13 @@ class SpikeNeighborhoods(torch.nn.Module):
         n_spikes = self.popcounts[covered_ids].sum()
         return neighborhood_info, n_spikes
 
+    def adjacency(self, overlap=0.5):
+        overlaps = self.indicators.T @ self.indicators
+        denom = self.indicators.sum(0)
+        overlaps /= torch.minimum(denom[:, None], denom)
+        return (overlaps >= overlap - 1e-5).to(torch.float)
+
+
 
 # -- helpers
 

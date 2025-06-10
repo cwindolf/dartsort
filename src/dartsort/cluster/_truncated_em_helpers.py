@@ -9,6 +9,7 @@ from ..util.logging_util import DARTSORTVERBOSE, DARTSORTDEBUG
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
 logger = getLogger(__name__)
+noise_eps = torch.tensor(1e-3)
 
 
 ds_verbose = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -120,7 +121,7 @@ def _te_batch_e(
         if noise_trunc_factors is not None:
             nlls += noise_trunc_factors
     # noise_log_prop changes, so can't be baked in
-    noise_lls = nlls + noise_log_prop
+    noise_lls = nlls + (noise_log_prop + noise_eps)
 
     # observed log likelihoods
     if ds_verbose:
@@ -224,13 +225,17 @@ def _te_batch_m_rank0(
 ):
     """Rank (M) 0 case of part 2/2 of the M step within the E step"""
 
-    Qn = Q[:, :-1] / N.clamp(min=1.0)[candidates]
+    Qn = Q[:, :-1] / N.clamp(min=1e-5)[candidates]
     n, C = Qn.shape
     arange_rank = torch.arange(rank, device=Q.device)
 
-    mm = torch.sub(Cmo_Cooinv_x[:, None], Cmo_Cooinv_nu, out=Cmo_Cooinv_nu)
+    mm = Cmo_Cooinv_nu
+    del Cmo_Cooinv_nu
+    mm -= Cmo_Cooinv_x[:, None]
     mm.mul_(Qn.unsqueeze(2))
-    tnu.mul_(Qn.unsqueeze(2))
+    mmf = tnu
+    del tnu
+    mmf.mul_(Qn.unsqueeze(2))
     mo = Qn[:, :, None, None] * x.view(n, 1, rank, nc_obs)
 
     m = Qn.new_zeros((n_units, rank, nc + 1))
@@ -259,7 +264,7 @@ def _te_batch_m_rank0(
             arange_rank[None, None, :, None],
             miss_ix_full[:, None, None, :],
         ),
-        tnu.view(n, C, rank, nc_miss_full),
+        mmf.view(n, C, rank, nc_miss_full),
     )
 
     return dict(m=m)
@@ -293,7 +298,7 @@ def _te_batch_m_ppca(
     Wobs,
 ):
     """Rank (M) >0 case of part 2/2 of the M step within the E step"""
-    Qn = Q[:, :-1] / N.clamp(min=1.0)[candidates]
+    Qn = Q[:, :-1] / N.clamp(min=1e-5)[candidates]
     n, C = Qn.shape
     arange_rank = torch.arange(rank, device=Q.device)
     M = inv_cap.shape[-1]
@@ -451,7 +456,7 @@ def _grad_basis(Ntot, N, R, W, U, active=slice(None), Cinv=None):
 
 
 def _elbo_prior_correction(
-    alpha0, total_count, mu, W, Cinv, alpha=None, mean_prior=False
+    alpha0, total_count, nc, mu, W, Cinv, alpha=None, mean_prior=False
 ):
     mu_term = 0.0
     if mean_prior:
@@ -459,12 +464,12 @@ def _elbo_prior_correction(
         mu_term *= -0.5 * (alpha0 / total_count)
     if W is None:
         return mu_term
-    if alpha is None:
+    if alpha is None or nc is None:
         W_term = torch.einsum("kli,ij,klj->", W, Cinv.to(W), W).double()
         return mu_term - 0.5 * (alpha0 / total_count) * W_term
 
     W_term = torch.einsum("kli,ij,klj,kl->", W, Cinv.to(W), W, alpha.to(W)).double()
-    alpha_term = (W.shape[2] / 2) * alpha.log().sum() / total_count
+    alpha_term = alpha.log().mul_(nc).sum() / (2 * total_count)
     return mu_term - 0.5 * W_term / total_count + alpha_term
 
 

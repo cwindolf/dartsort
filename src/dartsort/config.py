@@ -61,7 +61,7 @@ class DARTsortUserConfig:
         "Default value corresponds to 79 samples at 30kHz.",
     )
     alignment_ms: Annotated[float, Field(gt=0)] = argfield(
-        default=1.0,
+        default=1.5,
         doc="Time shift allowed when aligning events.",
     )
 
@@ -198,16 +198,18 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
     kmeansk: int = 4
-    prior_pseudocount: float = 5.0
+    prior_pseudocount: float = 10.0
+    prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
     interpolation_method: str = "kriging"
     extrapolation_method: str | None = argfield(default="kernel", arg_type=str_or_none)
     interpolation_kernel: str = "thinplate"
     interpolation_rq_alpha: float = 0.5
-    interpolation_degree: int = 1
+    interpolation_degree: int = 0
     glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
     laplace_ard: bool = True
     core_radius: float = 35.0
+    min_cluster_size: int = 50
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
