@@ -1,5 +1,6 @@
 from dataclasses import replace
 from pathlib import Path
+from logging import getLogger
 
 import numpy as np
 
@@ -10,6 +11,9 @@ from ..util.internal_config import (
 )
 from ..templates import TemplateData
 from ..templates.get_templates import fit_tsvd
+
+
+logger = getLogger(__name__)
 
 
 def realign_and_chuck_noisy_template_units(
@@ -60,6 +64,7 @@ def realign_and_chuck_noisy_template_units(
         template_data.spike_counts >= min_n_spikes,
         template_snrs > min_template_snr,
     )
+    logger.dartsortdebug(f"Discard {np.logical_not(good_templates).sum()} low-signal templates.")
 
     good_unit_ids = template_data.unit_ids[good_templates]
     assert np.all(np.diff(good_unit_ids) >= 0)
@@ -216,7 +221,7 @@ def process_templates_for_matching(
             ],
             axis=0,
         )
-    return TemplateData(
+    template_data = TemplateData(
         templates,
         unit_ids=np.arange(len(templates)),
         spike_counts=spike_counts,
@@ -227,3 +232,4 @@ def process_templates_for_matching(
         spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
+    return template_data

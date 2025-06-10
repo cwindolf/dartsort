@@ -1,5 +1,6 @@
 from dataclasses import replace
 from typing import Optional
+from logging import getLogger
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -17,6 +18,9 @@ from ..templates.pairwise_util import (
 from ..util.data_util import DARTsortSorting, combine_sortings
 from . import cluster_util
 from ..util import job_util
+
+
+logger = getLogger(__name__)
 
 
 def merge_templates(
@@ -330,7 +334,6 @@ def cross_match_distance_matrix(
     template_data, cross_mask, ids_a, ids_b = combine_templates(
         template_data_a, template_data_b
     )
-    print(f"{ids_a.shape=} {ids_b.shape=} {template_data.templates.shape=}")
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
         superres_linkage=superres_linkage,
@@ -413,7 +416,6 @@ def recluster(
     # drop in a huge value here
     finite = np.isfinite(pdist)
     if not finite.any():
-        print("no merges")
         return sorting, np.arange(dists.shape[0])
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
@@ -442,7 +444,8 @@ def recluster(
     clust_inverse = {i: [] for i in new_labels}
     for orig_label, new_label in enumerate(new_labels):
         clust_inverse[new_label].append(orig_label)
-    print(sum(len(v) - 1 for v in clust_inverse.values()), "merges")
+    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
+    logger.dartsortdebug(f"Merged {n_merges} templates.")
 
     # align to best snr unit
     for new_label, orig_labels in clust_inverse.items():
