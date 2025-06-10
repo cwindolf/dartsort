@@ -447,6 +447,7 @@ class Likelihoods(GMMPlot):
         if hasattr(gmm, "log_liks"):
             liks_ = gmm.log_liks[:, in_unit.numpy(force=True)][[unit_id]].tocoo()
             inds_ = None
+            liks = None
             if liks_.nnz:
                 inds_ = in_unit
                 liks = np.full(in_unit.shape, -np.inf, dtype=np.float32)
@@ -456,6 +457,7 @@ class Likelihoods(GMMPlot):
             inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
         if inds_ is None:
             return
+        assert liks is not None
         assert torch.equal(inds_, in_unit)
         nliks = gmm.noise_log_likelihoods()[in_unit]
         t = gmm.data.times_seconds[in_unit]
@@ -470,7 +472,12 @@ class Likelihoods(GMMPlot):
                 np.pad(small, (0, 1), constant_values=False),
             )
             ax_time.scatter(t[small], liks[small], s=3, lw=0, color="k")
-        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c)
+        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c, zorder=1)
+        nliksf = nliks[np.isfinite(nliks)]
+        liksf = liks[liks.isfinite()].numpy(force=True)
+        mn = max(nliksf.min(), liksf.min())
+        mx = min(nliksf.max(), liksf.max())
+        ax_noise.plot([mn, mx], [mn, mx], color='k', lw=0.8, zorder=11)
         histk = dict(histtype="step", orientation="horizontal")
         n, bins, _ = ax_dist.hist(
             liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk

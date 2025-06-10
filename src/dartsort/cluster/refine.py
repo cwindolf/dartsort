@@ -1,7 +1,7 @@
 import gc
 from logging import getLogger
 
-from ..util.internal_config import default_refinement_config, default_split_merge_config
+from ..util.internal_config import default_refinement_config
 from ..util import job_util, noise_util
 from ..util.main_util import ds_save_intermediate_labels
 from .split import split_clusters
@@ -26,12 +26,13 @@ def refine_clustering(
 ):
     """Refine a clustering using the strategy specified by the config."""
     if refinement_config.refinement_strategy == "splitmerge":
-        assert refinement_config.split_merge_config is not None
         ref = split_merge(
             recording,
             sorting,
             motion_est=motion_est,
-            split_merge_config=refinement_config.split_merge_config,
+            split_config=refinement_config.split_config,
+            merge_config=refinement_config.merge_config,
+            merge_template_config=refinement_config.merge_template_config,
             computation_config=computation_config,
         )
         return ref, {}
@@ -217,7 +218,9 @@ def split_merge(
     recording,
     sorting,
     motion_est=None,
-    split_merge_config=default_split_merge_config,
+    split_config=None,
+    merge_config=None,
+    merge_template_config=None,
     computation_config=None,
 ):
     if computation_config is None:
@@ -225,8 +228,8 @@ def split_merge(
 
     split_sorting = split_clusters(
         sorting,
-        split_strategy=split_merge_config.split_strategy,
-        recursive=split_merge_config.recursive_split,
+        split_strategy=split_config.split_strategy,
+        recursive=split_config.recursive_split,
         n_jobs=computation_config.actual_n_jobs(),
         motion_est=motion_est,
     )
@@ -235,10 +238,10 @@ def split_merge(
         split_sorting,
         recording,
         motion_est=motion_est,
-        template_config=split_merge_config.merge_template_config,
-        merge_distance_threshold=split_merge_config.merge_distance_threshold,
-        min_spatial_cosine=split_merge_config.min_spatial_cosine,
-        linkage=split_merge_config.linkage,
+        template_config=merge_template_config,
+        merge_distance_threshold=merge_config.merge_distance_threshold,
+        min_spatial_cosine=merge_config.min_spatial_cosine,
+        linkage=merge_config.linkage,
         computation_config=computation_config,
     )
 

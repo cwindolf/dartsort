@@ -1,7 +1,6 @@
 import numpy as np
 from tqdm.auto import tqdm
 
-from ..util.internal_config import default_split_merge_config
 from . import merge, split
 
 
@@ -18,7 +17,9 @@ def split_merge_ensemble(
     recording,
     chunk_sortings,
     motion_est=None,
-    split_merge_config=default_split_merge_config,
+    split_config=None,
+    merge_config=None,
+    merge_template_config=None,
     n_jobs_split=0,
     n_jobs_merge=0,
     device=None,
@@ -28,8 +29,8 @@ def split_merge_ensemble(
     chunk_sortings = [
         split.split_clusters(
             sorting,
-            split_strategy=split_merge_config.split_strategy,
-            recursive=split_merge_config.recursive_split,
+            split_strategy=split_config.split_strategy,
+            recursive=split_config.recursive_split,
             n_jobs=n_jobs_split,
             motion_est=motion_est,
             show_progress=False,
@@ -41,11 +42,11 @@ def split_merge_ensemble(
     sorting = merge.merge_across_sortings(
         chunk_sortings,
         recording,
-        template_config=split_merge_config.merge_template_config,
+        template_config=merge_template_config,
         motion_est=motion_est,
-        cross_merge_distance_threshold=split_merge_config.cross_merge_distance_threshold,
-        within_merge_distance_threshold=split_merge_config.merge_distance_threshold,
-        min_spatial_cosine=split_merge_config.min_spatial_cosine,
+        cross_merge_distance_threshold=merge_config.cross_merge_distance_threshold,
+        within_merge_distance_threshold=merge_config.merge_distance_threshold,
+        min_spatial_cosine=merge_config.min_spatial_cosine,
         device=device,
         n_jobs=n_jobs_merge,
         n_jobs_templates=n_jobs_merge,

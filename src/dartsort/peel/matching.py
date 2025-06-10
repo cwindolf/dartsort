@@ -523,9 +523,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         pitch_shifts_a = pitch_shifts_b = None
         if (
             self.objective_spatial_components.device.type == "cuda"
-            and not pconvdb.device.type == "cuda"
+            and pconvdb.device.type != "cuda"
         ):
             pconvdb.to(self.objective_spatial_components.device)
+
         if self.is_drifting:
             assert spatial_mask is None
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
@@ -564,15 +565,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 fill_value=0.0,
             )
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
-            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a)
-            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b)
             pitch_shifts_a = torch.as_tensor(
                 pitch_shifts_a, device=cur_obj_spatial.device
             )
             pitch_shifts_b = torch.as_tensor(
                 pitch_shifts_b, device=cur_obj_spatial.device
             )
-            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
@@ -580,11 +578,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 cur_spatial = cur_spatial[:, :, spatial_mask]
                 cur_obj_spatial = cur_obj_spatial[:, :, spatial_mask]
             max_channels = self.registered_template_ampvecs.argmax(1)
-
-        # if not pconvdb._is_torch:
-        # pconvdb.to("cpu")
-        # if cur_obj_spatial.device.type == "cuda" and not pconvdb.device.type == "cuda":
-        #     pconvdb.to(cur_obj_spatial.device, pin=True)
 
         return MatchingTemplateData(
             objective_spatial_components=cur_obj_spatial,
@@ -602,8 +595,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
-            # shifts_a=None,
-            # shifts_b=None,
             shifts_a=pitch_shifts_a,
             shifts_b=pitch_shifts_b,
         )

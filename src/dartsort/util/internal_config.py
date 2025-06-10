@@ -8,7 +8,7 @@ from pydantic.dataclasses import dataclass
 from pydantic import ConfigDict
 import torch
 
-from .py_util import int_or_inf, int_or_float, float_or_str, str_or_none
+from .py_util import int_or_inf, float_or_none
 from .cli_util import argfield
 
 try:
@@ -160,6 +160,7 @@ class SubtractionConfig:
     # subtraction
     detection_threshold: float = 4.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
+    relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius: float | None = 100.0
     temporal_dedup_radius_samples: int = 11
     positive_temporal_dedup_radius_samples: int = 41
@@ -170,7 +171,7 @@ class SubtractionConfig:
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
-    singlechan_alignment_padding_ms: float = 1.0
+    singlechan_alignment_padding_ms: float = 1.5
     use_universal_templates: bool = False
     universal_threshold: float = 50.0
 
@@ -192,6 +193,48 @@ class SubtractionConfig:
 
     # for debugging / vis
     save_iteration: bool = False
+
+
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
+class TemplateConfig:
+    spikes_per_unit: int = 500
+
+    # -- template construction parameters
+    # registered templates?
+    registered_templates: bool = True
+
+    # superresolved templates
+    superres_templates: bool = False
+    superres_bin_size_um: float = 10.0
+    superres_bin_min_spikes: int = 5
+    superres_strategy: str = "drift_pitch_loc_bin"
+    adaptive_bin_size: bool = False
+
+    # low rank denoising?
+    low_rank_denoising: bool = True
+    denoising_rank: int = 5
+    denoising_snr_threshold: float = 50.0
+    denoising_fit_radius: float = 75.0
+
+    # realignment
+    realign_peaks: bool = True
+    realign_shift_ms: float = 1.5
+
+    # track template over time
+    time_tracking: bool = False
+    chunk_size_s: int = 300
+
+
+@dataclass(frozen=True, kw_only=True, config=_strict_config)
+class TemplateMergeConfig:
+    linkage: str = "complete"
+    merge_distance_threshold: float = 0.25
+    cross_merge_distance_threshold: float = 0.5
+    min_spatial_cosine: float = 0.5
+    temporal_upsampling_factor: int = 4
+    amplitude_scaling_variance: float = 0.1**2
+    amplitude_scaling_boundary: float = 1.0
+    svd_compression_rank: int = 20
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
@@ -218,6 +261,13 @@ class MatchingConfig:
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
 
+    # template postprocessing parameters
+    min_template_snr: float = 15.0
+    min_template_count: int = 50
+    template_merge_config: TemplateMergeConfig | None = TemplateMergeConfig(
+        merge_distance_threshold=0.025
+    )
+
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
 class ThresholdingConfig:
@@ -235,6 +285,7 @@ class ThresholdingConfig:
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius: float = 150.0
+    relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     dedup_temporal_radius_samples: int = 7
     thinning: float = 0.0
@@ -267,50 +318,12 @@ class MotionEstimationConfig:
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
-class TemplateConfig:
-    spikes_per_unit: int = 500
-
-    # -- template construction parameters
-    # registered templates?
-    registered_templates: bool = True
-
-    # superresolved templates
-    superres_templates: bool = False
-    superres_bin_size_um: float = 10.0
-    superres_bin_min_spikes: int = 5
-    superres_strategy: str = "drift_pitch_loc_bin"
-    adaptive_bin_size: bool = False
-
-    # low rank denoising?
-    low_rank_denoising: bool = True
-    denoising_rank: int = 5
-    denoising_snr_threshold: float = 50.0
-    denoising_fit_radius: float = 75.0
-
-    # realignment
-    realign_peaks: bool = True
-    realign_shift_ms: float = 1.0
-
-    # track template over time
-    time_tracking: bool = False
-    chunk_size_s: int = 300
-
-
-@dataclass(frozen=True, kw_only=True, config=_strict_config)
-class SplitMergeConfig:
-    # -- split
+class SplitConfig:
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
     split_strategy_kwargs: dict | None = field(
         default_factory=lambda: dict(max_spikes=20_000)
     )
-
-    # -- merge
-    merge_template_config: TemplateConfig = TemplateConfig(superres_templates=False)
-    linkage: str = "complete"
-    merge_distance_threshold: float = 0.25
-    cross_merge_distance_threshold: float = 0.5
-    min_spatial_cosine: float = 0.0
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
@@ -328,11 +341,11 @@ class ClusteringConfig:
 
     # density peaks parameters
     sigma_local: float = 5.0
-    sigma_regional: float | None = argfield(default=25.0, arg_type=float)
+    sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
     workers: int = -1
     n_neighbors_search: int = 20
-    radius_search: float = 5.0
-    remove_clusters_smaller_than: int = 10
+    radius_search: float = 25.0
+    remove_clusters_smaller_than: int = 50
     noise_density: float = 0.0
     outlier_radius: float = 5.0
     outlier_neighbor_count: int = 5
@@ -370,7 +383,8 @@ class ClusteringConfig:
     # -- ensembling
     ensemble_strategy: str | None = argfield(default=None, arg_type=str)
     chunk_size_s: float = 300.0
-    split_merge_ensemble_config: SplitMergeConfig | None = None
+    ensemble_split_config: SplitConfig | None = None
+    ensemble_merge_config: TemplateMergeConfig | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
@@ -427,13 +441,15 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 25.0
-    prior_scales_mean: bool = True
+    prior_pseudocount: float = 10.0
+    prior_scales_mean: bool = False
     laplace_ard: bool = True
     kmeansk: int = 4
 
-    # if someone wants this
-    split_merge_config: SplitMergeConfig | None = None
+    # TODO... reintroduce this if wanted. or remove
+    split_config: SplitConfig | None = None
+    merge_config: TemplateMergeConfig | None = None
+    merge_template_config: TemplateConfig | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_strict_config)
@@ -555,19 +571,20 @@ def to_internal_config(cfg):
         subtraction_denoising_config=subtraction_denoising_config,
     )
     template_config = TemplateConfig(
-        denoising_fit_radius=cfg.fit_radius_um,
-        realign_shift_ms=cfg.alignment_ms,
+        denoising_fit_radius=cfg.fit_radius_um, realign_shift_ms=cfg.alignment_ms
     )
     clustering_config = ClusteringConfig(
         sigma_local=cfg.density_bandwidth,
         sigma_regional=5 * cfg.density_bandwidth,
         outlier_radius=cfg.density_bandwidth,
-        radius_search=cfg.density_bandwidth,
+        radius_search=5 * cfg.density_bandwidth,
         use_amplitude=cfg.initial_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
         pc_scale=cfg.initial_pc_scale,
+        remove_clusters_smaller_than=cfg.min_cluster_size,
     )
     refinement_config = RefinementConfig(
+        min_count=cfg.min_cluster_size,
         signal_rank=cfg.signal_rank,
         criterion=cfg.criterion,
         criterion_threshold=cfg.criterion_threshold,
@@ -644,7 +661,6 @@ default_subtraction_config = SubtractionConfig()
 default_thresholding_config = ThresholdingConfig()
 default_template_config = TemplateConfig()
 default_clustering_config = ClusteringConfig()
-default_split_merge_config = SplitMergeConfig()
 default_matching_config = MatchingConfig()
 default_motion_estimation_config = MotionEstimationConfig()
 default_computation_config = ComputationConfig()
