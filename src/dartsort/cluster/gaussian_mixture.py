@@ -1821,7 +1821,8 @@ class SpikeMixtureModel(torch.nn.Module):
             with self.labels_lock:
                 self.labels[all_indices_full] = -1
                 self.labels[sp.indices[kept]] = unit_id
-            result["clear_ids"] = [unit_id]
+            if kept.size < self.min_count:
+                result["clear_ids"] = [unit_id]
             return result
 
         # else, tack new units onto the end
