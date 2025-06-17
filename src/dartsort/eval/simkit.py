@@ -1,11 +1,12 @@
 from logging import getLogger
 
-import numpy as np
-import probeinterface
 from dredge import motion_util
 import h5py
+import numpy as np
+import probeinterface
 from scipy.spatial.distance import cdist
 from spikeinterface.core import NumpyRecording, NumpySorting
+import torch
 from tqdm.auto import tqdm
 
 from ..templates import TemplateData
@@ -509,7 +510,7 @@ class TemplateLibrarySimulator:
         if drift is not None:
             source_pos = source_pos + [0, drift]
             tpos = tpos + [0, 0, drift]
-        target_pos = np.broadcast_to(self.geom[None], (self.n_units, *self.geom.shape))
+        target_pos = torch.asarray(self.geom)[None].broadcast_to(self.n_units, *self.geom.shape)
 
         if not up:
             templates = kernel_interpolate(

@@ -1754,7 +1754,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # run kmeans with kmeans++ initialization
         k = min(self.kmeans_k, len(X) // (self.min_count / 2))
-        split_labels, responsibilities = kmeans(
+        kmeans_res = kmeans(
             X.view(len(X), -1),
             n_iter=kmeans_n_iter,
             n_components=self.kmeans_k,
@@ -1764,6 +1764,11 @@ class SpikeMixtureModel(torch.nn.Module):
             drop_prop=self.kmeans_drop_prop,
             drop_sum=self.channels_count_min,
         )
+        split_labels = kmeans_res["labels"]
+        responsibilities = kmeans_res["responsibilities"]
+        assert split_labels is not None
+        assert responsibilities is not None
+        del kmeans_res
         if debug:
             result["split_labels"] = split_labels
             result["responsibilities"] = responsibilities

@@ -236,7 +236,6 @@ class DensityPeaksClusterer(Clusterer):
             choices.sort()
             not_choices = np.setdiff1d(np.arange(len(X)), choices)
             X_fit = X[choices]
-        print(f"{X.shape=} {X_fit.shape=}")
 
         if not self.uhdversion:
             res = density.density_peaks(
@@ -274,7 +273,7 @@ class DensityPeaksClusterer(Clusterer):
             kdtree = res["kdtree"]
             other_labels = density.nearest_neighbor_assign(
                 kdtree,
-                dpc_labels,
+                labels,
                 X[not_choices],
                 radius_search=self.radius_search,
                 workers=self.workers,

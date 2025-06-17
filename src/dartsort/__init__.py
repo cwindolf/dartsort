@@ -3,7 +3,7 @@ import importlib.metadata
 from .util import logging_util
 from .eval import hybrid_util
 
-from . import detect, util, cluster
+from . import detect, util
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import GaussianUnit, SpikeMixtureModel
 from .cluster import get_clusterer, get_clustering_features, clustering_strategies, refinement_strategies
@@ -31,6 +31,7 @@ from .main import (
     grab,
     threshold,
     logger,
+    cluster,
 )
 from .util.internal_config import *
 from .peel.grab import GrabAndFeaturize

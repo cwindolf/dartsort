@@ -334,11 +334,11 @@ class ClusteringFeaturesConfig:
     use_x: bool = True
     use_z: bool = True
     register_z: bool = True
-    use_amplitude: bool = True
+    use_amplitude: bool = False
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
-    n_main_channel_pcs: int = 0
+    n_main_channel_pcs: int = 1
     pc_scale: float = 2.5
     adaptive_feature_scales: bool = False
 
@@ -361,7 +361,7 @@ class ClusteringConfig:
     radius_search: float = 25.0
     remove_clusters_smaller_than: int = 50
     noise_density: float = 0.0
-    outlier_radius: float = 5.0
+    outlier_radius: float = 10.0
     outlier_neighbor_count: int = 5
     kdtree_subsample_max_size: int = 2_000_000
 
@@ -577,7 +577,7 @@ def to_internal_config(cfg):
     clustering_cfg = ClusteringConfig(
         sigma_local=cfg.density_bandwidth,
         sigma_regional=5 * cfg.density_bandwidth,
-        outlier_radius=cfg.density_bandwidth,
+        outlier_radius=2 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
         remove_clusters_smaller_than=cfg.min_cluster_size,
     )

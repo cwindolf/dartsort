@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 
 from ..cluster import split
-from ..util.internal_config import raw_template_config
+from ..util.internal_config import raw_template_cfg
 from ..eval.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
@@ -850,7 +850,7 @@ class SplitStrategyPlot(UnitPlot):
             split_sorting,
             motion_est=self.motion_est,
             name=f"{self.split_name} {unit_id}",
-            template_config=raw_template_config,
+            template_cfg=raw_template_cfg,
             allow_template_reload=False,
             n_jobs_templates=0,
         )

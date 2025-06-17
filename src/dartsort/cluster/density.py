@@ -7,7 +7,7 @@ from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.stats import bernoulli
-import multiprocessing
+import torch
 
 
 def kdtree_inliers(
@@ -335,6 +335,39 @@ def nearest_neighbor_assign(
     return other_labels
 
 
+def gmm_density_peaks(
+    X,
+    outlier_neighbor_count=10,
+    outlier_radius=25.0,
+    max_centroid_distance=25.0,
+    remove_clusters_smaller_than=50,
+    workers=-1,
+    n_initializations=10,
+    n_iter=100,
+    n_components=3840,
+    random_state=0,
+):
+    from .kmeans import kdtree_kmeans
+
+    n = len(X)
+    inliers, _ = kdtree_inliers(
+        X,
+        n_neighbors=outlier_neighbor_count,
+        distance_upper_bound=outlier_radius,
+        workers=workers,
+    )
+    kmeans_res = kdtree_kmeans(
+        X[inliers],
+        max_distance=max_centroid_distance,
+        n_components=n_components,
+        n_initializations=n_initializations,
+        random_state=random_state,
+        n_iter=n_iter,
+        dirichlet_alpha=1 / n_components,
+    )
+    return kmeans_res
+
+
 # -- versions used in UHD project
 
 
@@ -448,8 +481,6 @@ def _density_peaks_clustering_uhd_implementation(
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
     # n = len(X)
-    if workers < 0:
-        workers = multiprocessing.cpu_count() + workers + 1
 
     if ramp_triage_before_clustering and geom is not None:
         assert scales is not None

@@ -4,8 +4,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..eval.analysis import (DARTsortAnalysis, basic_template_config,
-                                        no_realign_template_config)
+from ..eval.analysis import (DARTsortAnalysis, basic_template_cfg,
+                                        no_realign_template_cfg)
 from ..util.data_util import DARTsortSorting
 from ..eval.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit
@@ -84,7 +84,7 @@ def visualize_sorting(
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
 
-    template_cfg = no_realign_template_config if superres_templates else basic_template_config
+    template_cfg = no_realign_template_cfg if superres_templates else basic_template_cfg
     if make_sorting_summaries and sorting.n_units > 1:
         sorting_summary = output_directory / "sorting_summary.png"
         if overwrite or not sorting_summary.exists():
@@ -95,7 +95,7 @@ def visualize_sorting(
                     motion_est=motion_est,
                     name=output_directory.stem,
                     n_jobs_templates=n_jobs_templates,
-                    template_config=template_cfg,
+                    template_cfg=template_cfg,
                     allow_template_reload="match" in output_directory.stem,
                 )
 
@@ -139,7 +139,7 @@ def visualize_sorting(
                 motion_est=motion_est,
                 name=output_directory.stem,
                 n_jobs_templates=n_jobs_templates,
-                template_config=template_cfg,
+                template_cfg=template_cfg,
                 allow_template_reload="match" in output_directory.stem,
             )
 

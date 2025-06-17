@@ -57,14 +57,14 @@ def get_singlechan_centroids(
     embeds = u * eigs
 
     # kmeans++ (iter=0). seems better than kmeans for this application.
-    labels, _, centroids = kmeans.kmeans(
+    kmeans_res = kmeans.kmeans(
         embeds,
         n_components=n_centroids,
-        return_centroids=True,
         n_iter=0,
         kmeanspp_initial=kmeanspp_initial,
         random_state=random_seed,
     )
+    labels = kmeans_res["labels"]
 
     # get templates by averaging and realigning single chan wfs
     temps = []

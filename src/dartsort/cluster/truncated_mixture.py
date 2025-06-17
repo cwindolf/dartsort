@@ -1340,6 +1340,9 @@ class CandidateSet:
         We want, for each unit p, to propose others with small
         D(p||q)=E_p[log(p/q)]. Since self.kl_divergences[i,j]=d(i||j),
         that means we use dim=1 in the topk.
+
+        On the other hand, it's not as though reverse KL is entirely
+        unmotivated, and it seems to have slightly faster convergence?
         """
         assert distances.shape == (self.n_units, self.n_units)
         if n_search is None:
@@ -1356,7 +1359,7 @@ class CandidateSet:
         max_nneighbs = distances.isfinite().sum(0).max()
 
         k = min(n_search, distances.shape[0] - 1, max_nneighbs)
-        _, topkinds = torch.topk(distances, k=k, dim=1, largest=False)
+        _, topkinds = torch.topk(distances, k=k, dim=0, largest=False)
         assert topkinds.shape == (self.n_units, k)
         topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
         return topkinds
