@@ -11,7 +11,10 @@ from dartsort.util.data_util import (
     get_featurization_pipeline,
 )
 from dartsort.util.multiprocessing_util import get_pool
-from hdbscan import HDBSCAN
+try:
+    from hdbscan import HDBSCAN
+except ImportError:
+    from sklearn.cluster import HDBSCAN
 from scipy.spatial.distance import cdist, pdist
 from sklearn.decomposition import PCA
 
