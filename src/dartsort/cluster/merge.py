@@ -6,7 +6,7 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 
 
 from ..util.internal_config import TemplateConfig
@@ -16,7 +16,6 @@ from ..templates.pairwise_util import (
     iterate_compressed_pairwise_convolutions,
 )
 from ..util.data_util import DARTsortSorting, combine_sortings
-from . import cluster_util
 from ..util import job_util
 
 
@@ -27,7 +26,7 @@ def merge_templates(
     sorting: DARTsortSorting,
     recording,
     template_data: Optional[TemplateData] = None,
-    template_config: Optional[TemplateConfig] = None,
+    template_cfg: Optional[TemplateConfig] = None,
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
@@ -45,7 +44,7 @@ def merge_templates(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     template_save_folder=None,
     overwrite_templates=False,
     show_progress=True,
@@ -72,16 +71,16 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
 
     if template_data is None:
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
-            template_config,
+            template_cfg,
             motion_est=motion_est,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
             save_folder=template_save_folder,
             overwrite=overwrite_templates,
             save_npz_name=template_npz_filename,
@@ -106,8 +105,8 @@ def merge_templates(
     )
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
-        device=computation_config.actual_device(),
-        n_jobs=computation_config.actual_n_jobs(),
+        device=computation_cfg.actual_device(),
+        n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
         **dist_matrix_kwargs,
     )
@@ -131,7 +130,7 @@ def merge_templates(
 def merge_across_sortings(
     sortings,
     recording,
-    template_config: Optional[TemplateConfig] = None,
+    template_cfg: Optional[TemplateConfig] = None,
     motion_est=None,
     cross_merge_distance_threshold=0.5,
     within_merge_distance_threshold=0.5,
@@ -147,18 +146,18 @@ def merge_across_sortings(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     show_progress=True,
 ):
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
     # first, merge within chunks
     if within_merge_distance_threshold:
         sortings = [
             merge_templates(
                 sorting,
                 recording,
-                template_config=template_config,
+                template_cfg=template_cfg,
                 motion_est=motion_est,
                 max_shift_samples=max_shift_samples,
                 superres_linkage=superres_linkage,
@@ -174,7 +173,7 @@ def merge_across_sortings(
                 units_batch_size=units_batch_size,
                 denoising_tsvd=denoising_tsvd,
                 show_progress=False,
-                computation_config=computation_config,
+                computation_cfg=computation_cfg,
             )
             for sorting in tqdm(sortings, desc="Merge within chunks")
         ]
@@ -184,18 +183,18 @@ def merge_across_sortings(
         template_data_a = TemplateData.from_config(
             recording,
             sortings[i],
-            template_config,
+            template_cfg,
             motion_est=motion_est,
             tsvd=denoising_tsvd,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         template_data_b = TemplateData.from_config(
             recording,
             sortings[i + 1],
-            template_config,
+            template_cfg,
             motion_est=motion_est,
             tsvd=denoising_tsvd,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(
             template_data_a,
@@ -211,8 +210,8 @@ def merge_across_sortings(
             min_channel_amplitude=min_channel_amplitude,
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
-            device=computation_config.actual_device(),
-            n_jobs=computation_config.actual_n_jobs(),
+            device=computation_cfg.actual_device(),
+            n_jobs=computation_cfg.actual_n_jobs(),
             show_progress=show_progress,
         )
         sortings[i], sortings[i + 1] = cross_match(

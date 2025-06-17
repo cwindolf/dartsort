@@ -1,9 +1,8 @@
 import numpy as np
-from tqdm.auto import tqdm, trange
+from tqdm.auto import trange
 
 
 def forward_backward(
-    recording,
     chunk_time_ranges_s,
     chunk_sortings,
     log_c=5,
@@ -18,7 +17,7 @@ def forward_backward(
     triaging/subsampling/copying/splitting big clusters not implemented since we don't use it (so far)
     """
     if len(chunk_sortings) == 1:
-        return chunk_sortings[0]
+        return chunk_sortings[0].labels
 
     times_seconds = chunk_sortings[0].times_seconds
 

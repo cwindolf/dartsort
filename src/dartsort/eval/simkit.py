@@ -282,9 +282,7 @@ class PointSource3ExpSimulator:
         pos, alpha = self.simulate_location(size=n_units)
         self.template_pos = pos
         self.template_alpha = alpha
-        _, self.singlechan_templates = self.simulate_singlechan(
-            size=n_units
-        )
+        _, self.singlechan_templates = self.simulate_singlechan(size=n_units)
         # n, temporal_jitter, t
         self.singlechan_templates_up = upsample_singlechan(
             self.singlechan_templates,
@@ -570,7 +568,8 @@ class SimulatedRecording:
         dtype="float32",
     ):
         self.n_units = template_simulator.n_units
-        self.duration_samples = duration_samples
+        assert int(duration_samples) == duration_samples
+        self.duration_samples = int(duration_samples)
         self.template_simulator = template_simulator
         self.geom = template_simulator.geom
         self.noise = noise
@@ -726,11 +725,9 @@ class SimulatedRecording:
         u, c = np.unique(labels, return_counts=True)
         counts[u] = c
 
-        return pd.DataFrame(
-            dict(gt_unit_id=ids, x=x, y=y, z=z, gt_count=counts)
-        )
+        return pd.DataFrame(dict(gt_unit_id=ids, x=x, y=y, z=z, gt_count=counts))
 
-    def simulate(self, gt_h5_path, extract_radius=100.0):
+    def simulate(self, gt_h5_path, extract_radius=100.0, with_tpca_features=False):
         """
         If gt_h5_path is not None, will save datasets:
          - times_samples
@@ -875,5 +872,34 @@ class SimulatedRecording:
             from spikeinterface.preprocessing import highpass_spatial_filter
 
             recording = highpass_spatial_filter(recording)
+
+        if with_tpca_features:
+            with h5py.File(gt_h5_path, "r+", locking=False) as h5:
+                from dartsort.transform import WaveformPipeline
+                from dartsort.util.internal_config import (
+                    FeaturizationConfig,
+                    WaveformConfig,
+                )
+                import torch
+
+                gt_pipeline = WaveformPipeline.from_config(
+                    FeaturizationConfig(do_enforce_decrease=False, do_localization=False),
+                    WaveformConfig(),
+                    geom=self.geom,
+                    channel_index=ci,
+                )
+
+                waveforms = h5["collisioncleaned_waveforms"][:]
+                gt_pipeline.fit(waveforms, self.maxchans, recording)
+                models_dir = gt_h5_path.parent / f"{gt_h5_path.stem}_models"
+                models_dir.mkdir(exist_ok=True)
+                torch.save(
+                    gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt"
+                )
+                _, feats = gt_pipeline(waveforms, self.maxchans)
+                ccpcfeats = feats["collisioncleaned_tpca_features"]
+                h5.create_dataset(
+                    "collisioncleaned_tpca_features", data=ccpcfeats.numpy(force=True)
+                )
 
         return recording

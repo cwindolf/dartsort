@@ -226,11 +226,11 @@ class CompressedPairwiseConv:
         conv_batch_size=1024,
         units_batch_size=8,
         overwrite=False,
-        computation_config=None,
+        computation_cfg=None,
         show_progress=True,
     ):
-        if computation_config is None:
-            computation_config = job_util.get_global_computation_config()
+        if computation_cfg is None:
+            computation_cfg = job_util.get_global_computation_config()
 
         compressed_convolve_to_h5(
             hdf5_filename,
@@ -247,8 +247,8 @@ class CompressedPairwiseConv:
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
             overwrite=overwrite,
-            device=computation_config.actual_device(),
-            n_jobs=computation_config.actual_n_jobs(),
+            device=computation_cfg.actual_device(),
+            n_jobs=computation_cfg.actual_n_jobs(),
             show_progress=show_progress,
         )
         return cls.from_h5(hdf5_filename)

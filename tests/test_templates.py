@@ -22,7 +22,7 @@ def test_roundtrip(tmp_path):
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     template_data = templates.TemplateData.from_config(
         *no_overlap_recording_sorting(temps, pad=0),
-        template_config=dartsort.TemplateConfig(
+        template_cfg=dartsort.TemplateConfig(
             low_rank_denoising=False,
             superres_bin_min_spikes=0,
             realign_peaks=False,
@@ -176,7 +176,7 @@ def test_main_object():
             denoising_rank=2,
         ),
         motion_est=me,
-        waveform_config=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
+        waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
 
 
@@ -342,4 +342,3 @@ def test_pconv(tmp_path):
                             assert not ixa.numel()
                             assert not ixb.numel()
                             assert not pconv.numel()
-

@@ -1094,7 +1094,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
         kept_count = "n/a" if not keep.any() else countsf[keep].min()
         logger.dartsortdebug(
-            f"Retain {keep.sum()} of {keep.size} units, smallest kept count was {kept_count}. "
+            f"Retain {keep.sum()} of {n_units} units, smallest kept count was {kept_count}. "
             f"{big_enough.sum()} met yield."
         )
         if logger.isEnabledFor(DARTSORTVERBOSE):

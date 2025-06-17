@@ -1,0 +1,467 @@
+from dataclasses import replace
+
+import numpy as np
+import sklearn.cluster
+
+from ..util.data_util import chunk_time_ranges
+from ..util.main_util import ds_save_intermediate_labels
+from ..util import job_util
+from . import cluster_util, density, forward_backward, refine_util
+
+
+clustering_strategies = {}
+refinement_strategies = {}
+
+
+def get_clusterer(
+    clustering_cfg=None,
+    refinement_cfg=None,
+    computation_cfg=None,
+    save_cfg=None,
+    save_labels_dir=None,
+    initial_name=None,
+    refine_labels_fmt=None,
+):
+    clus_strategy = None
+    if clustering_cfg is not None:
+        if clustering_cfg.cluster_strategy not in clustering_strategies:
+            raise ValueError(
+                f"Unknown cluster_strategy={clustering_cfg.cluster_strategy}. "
+                f"Options are: {', '.join(clustering_strategies.keys())}."
+            )
+        clus_strategy = clustering_cfg.cluster_strategy
+
+    C = clustering_strategies.get(clus_strategy, Clusterer)
+    clusterer = C.from_config(
+        clustering_cfg,
+        save_cfg=save_cfg,
+        save_labels_dir=save_labels_dir,
+        labels_fmt=initial_name,
+        computation_cfg=computation_cfg,
+    )
+
+    if refinement_cfg is not None:
+        if refinement_cfg.refinement_strategy not in refinement_strategies:
+            raise ValueError(
+                f"Unknown refinement_strategy={refinement_cfg.refinement_strategy}. "
+                f"Options are: {', '.join(refinement_strategies.keys())}."
+            )
+        R = refinement_strategies[refinement_cfg.refinement_strategy]
+        clusterer = R(
+            clusterer,
+            refinement_cfg=refinement_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=refine_labels_fmt,
+            computation_cfg=computation_cfg,
+        )
+
+    return clusterer
+
+
+class Clusterer:
+    def __init__(
+        self,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        self.computation_cfg = computation_cfg
+        if computation_cfg is None:
+            self.computation_cfg = job_util.get_global_computation_config()
+        self.save_cfg = save_cfg
+        self.save_labels_dir = save_labels_dir
+        self.labels_fmt = labels_fmt
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        del clustering_cfg
+        return cls(
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def cluster(self, features, sorting, recording, motion_est=None):
+        labels = self._cluster(features, sorting, recording, motion_est)
+        sorting = replace(sorting, labels=labels)
+        if self.labels_fmt and self.save_labels_dir is not None:
+            assert "{" not in self.labels_fmt
+            assert "}" not in self.labels_fmt
+            ds_save_intermediate_labels(
+                self.labels_fmt, sorting, self.save_labels_dir, self.save_cfg
+            )
+        return sorting
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        del features, recording, motion_est
+        return sorting.labels
+
+
+clustering_strategies["none"] = Clusterer
+
+
+class ChannelSnapClusterer(Clusterer):
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        return cluster_util.closest_registered_channels(
+            times_seconds=sorting.times_seconds,
+            x=features.x,
+            z_abs=features.z,
+            z_reg=features.z_reg,
+            geom=recording.get_channel_locations(),
+            motion_est=motion_est,
+        )
+
+
+clustering_strategies["channel_snap"] = ChannelSnapClusterer
+
+
+class GridSnapClusterer(Clusterer):
+    def __init__(self, grid_dx=15.0, grid_dz=15.0, **kwargs):
+        super().__init__(**kwargs)
+        self.grid_dx = grid_dx
+        self.grid_dz = grid_dz
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        return cls(
+            grid_dx=clustering_cfg.grid_dx,
+            grid_dz=clustering_cfg.grid_dz,
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        return cluster_util.grid_snap(
+            times_seconds=sorting.times_seconds,
+            x=features.x,
+            z_abs=features.z,
+            z_reg=features.z_reg,
+            grid_dx=self.grid_dx,
+            grid_dz=self.grid_dz,
+            geom=recording.get_channel_locations(),
+            motion_est=motion_est,
+        )
+
+
+clustering_strategies["grid_snap"] = GridSnapClusterer
+
+
+class DensityPeaksClusterer(Clusterer):
+    def __init__(
+        self,
+        sigma_local=5.0,
+        sigma_regional: float | None = 25.0,
+        n_neighbors_search=20,
+        radius_search=25.0,
+        remove_clusters_smaller_than=50,
+        noise_density=0.0,
+        outlier_radius=5.0,
+        outlier_neighbor_count=5,
+        kdtree_subsample_max_size=2_000_000,
+        workers=-1,
+        uhdversion=False,
+        random_seed=0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.uhdversion = uhdversion
+        self.sigma_local = sigma_local
+        self.sigma_regional = sigma_regional
+        self.n_neighbors_search = n_neighbors_search
+        self.radius_search = radius_search
+        self.remove_clusters_smaller_than = remove_clusters_smaller_than
+        self.noise_density = noise_density
+        self.outlier_radius = outlier_radius
+        self.outlier_neighbor_count = outlier_neighbor_count
+        self.kdtree_subsample_max_size = kdtree_subsample_max_size
+        self.workers = workers
+        self.uhdversion = uhdversion
+        self.random_seed = random_seed
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        uhdversion = clustering_cfg.cluster_strategy == "density_peaks_uhdversion"
+        return cls(
+            sigma_local=clustering_cfg.sigma_local,
+            sigma_regional=clustering_cfg.sigma_regional,
+            n_neighbors_search=clustering_cfg.n_neighbors_search,
+            radius_search=clustering_cfg.radius_search,
+            remove_clusters_smaller_than=clustering_cfg.remove_clusters_smaller_than,
+            noise_density=clustering_cfg.noise_density,
+            outlier_radius=clustering_cfg.outlier_radius,
+            outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
+            kdtree_subsample_max_size=clustering_cfg.kdtree_subsample_max_size,
+            workers=clustering_cfg.workers,
+            uhdversion=uhdversion,
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        maxcount = self.kdtree_subsample_max_size
+        X = features.features
+        subsampling = maxcount and len(X) > maxcount
+        X_fit = X
+        if subsampling:
+            rg = np.random.default_rng(self.random_seed)
+            choices = rg.choice(len(X), size=maxcount, replace=False)
+            choices.sort()
+            not_choices = np.setdiff1d(np.arange(len(X)), choices)
+            X_fit = X[choices]
+        print(f"{X.shape=} {X_fit.shape=}")
+
+        if not self.uhdversion:
+            res = density.density_peaks(
+                X_fit,
+                sigma_local=self.sigma_local,
+                sigma_regional=self.sigma_regional,
+                n_neighbors_search=self.n_neighbors_search,
+                radius_search=self.radius_search,
+                remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+                noise_density=self.noise_density,
+                outlier_radius=self.outlier_radius,
+                outlier_neighbor_count=self.outlier_neighbor_count,
+                workers=self.workers,
+            )
+        else:
+            res = density.density_peaks_fancy(
+                features.xyza,
+                features.amplitudes,
+                sorting,
+                motion_est,
+                recording.get_channel_locations(),
+                sigma_local=self.sigma_local,
+                sigma_regional=self.sigma_regional,
+                n_neighbors_search=self.n_neighbors_search,
+                radius_search=self.radius_search,
+                remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+                noise_density=self.noise_density,
+                outlier_radius=self.outlier_radius,
+                outlier_neighbor_count=self.outlier_neighbor_count,
+                workers=self.workers,
+            )
+
+        labels = res["labels"]
+        if subsampling:
+            kdtree = res["kdtree"]
+            other_labels = density.nearest_neighbor_assign(
+                kdtree,
+                dpc_labels,
+                X[not_choices],
+                radius_search=self.radius_search,
+                workers=self.workers,
+            )
+            labels = cluster_util.combine_disjoint(
+                choices, labels, not_choices, other_labels
+            )
+
+        return labels
+
+
+clustering_strategies["dpc"] = DensityPeaksClusterer
+clustering_strategies["density_peaks_uhdversion"] = DensityPeaksClusterer
+
+
+class RecursiveHDBSCANClusterer(Clusterer):
+    def __init__(
+        self,
+        min_cluster_size=25,
+        min_samples=25,
+        cluster_selection_epsilon=1,
+        recursive=True,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.cluster_selection_epsilon = cluster_selection_epsilon
+        self.recursive = recursive
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        return cls(
+            min_cluster_size=clustering_cfg.min_cluster_size,
+            min_samples=clustering_cfg.min_samples,
+            cluster_selection_epsilon=clustering_cfg.cluster_selection_epsilon,
+            recursive=clustering_cfg.recursive,
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        return cluster_util.recursive_hdbscan_clustering(
+            features.features,
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            cluster_selection_epsilon=self.cluster_selection_epsilon,
+            recursive=self.recursive,
+        )
+
+
+class ScikitLearnClusterer(Clusterer):
+    def __init__(self, sklearn_class_name="DBSCAN", sklearn_kwargs=None, **kwargs):
+        super().__init__(**kwargs)
+        self.sklearn_class_name = sklearn_class_name
+        self.sklearn_kwargs = sklearn_kwargs or {}
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        return cls(
+            sklearn_class_name=clustering_cfg.sklearn_class_name,
+            sklearn_kwargs=clustering_cfg.sklearn_kwargs,
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        skcls = getattr(sklearn.cluster, self.sklearn_class_name)
+        clus = skcls(**self.sklearn_kwargs)
+        return clus.fit_predict(features.features)
+
+
+clustering_strategies["sklearn"] = ScikitLearnClusterer
+
+
+class Refinement(Clusterer):
+    def __init__(self, clusterer, refinement_cfg, **kwargs):
+        super().__init__(**kwargs)
+        self.clusterer = clusterer
+        self.refinement_cfg = refinement_cfg
+
+    def cluster(self, features, sorting, recording, motion_est=None):
+        sorting = self.clusterer.cluster(features, sorting, recording, motion_est)
+        sorting = self.refine(features, sorting, recording, motion_est)
+        return sorting
+
+    def _refine(self, features, sorting, recording, motion_est=None):
+        del features, recording, motion_est
+        return sorting
+
+    def refine(self, features, sorting, recording, motion_est=None):
+        sorting = self._refine(features, sorting, recording, motion_est)
+        if self.labels_fmt and self.save_labels_dir is not None:
+            labels_fmt = self.labels_fmt.format(stepname="")
+            ds_save_intermediate_labels(
+                labels_fmt, sorting, self.save_labels_dir, self.save_cfg
+            )
+        return sorting
+
+
+class GMMRefinement(Refinement):
+    def _refine(self, features, sorting, recording, motion_est=None):
+        sorting, _ = refine_util.gmm_refine(
+            recording,
+            sorting,
+            motion_est=motion_est,
+            refinement_cfg=self.refinement_cfg,
+            computation_cfg=self.computation_cfg,
+            save_step_labels_format=self.labels_fmt,
+            save_step_labels_dir=self.save_labels_dir,
+            save_cfg=self.save_cfg,
+        )
+        return sorting
+
+
+refinement_strategies["gmm"] = GMMRefinement
+
+
+class SplitMergeRefinement(Refinement):
+    def _refine(self, features, sorting, recording, motion_est=None):
+        return refine_util.split_merge(
+            recording,
+            sorting,
+            motion_est=motion_est,
+            split_config=self.refinement_cfg.split_cfg,
+            merge_config=self.refinement_cfg.merge_cfg,
+            merge_template_config=self.refinement_cfg.merge_template_cfg,
+            computation_cfg=self.computation_cfg,
+        )
+
+
+# code too old. todo.
+# refinement_strategies["splitmerge"] = SplitMergeRefinement
+
+
+class ForwardBackwardEnsembler(Refinement):
+    """If there are more time chunk ones, make a new ABC with this logic."""
+
+    def cluster(self, features, sorting, recording, motion_est=None):
+        chunk_length_samples = (
+            recording.sampling_frequency * self.refinement_cfg.chunk_size_s
+        )
+        chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
+
+        chunk_sortings = []
+        for lo, hi in chunk_time_ranges_s:
+            mask = np.flatnonzero(
+                sorting.times_seconds == sorting.times_seconds.clip(lo, hi)
+            )
+            s = sorting.mask(mask)
+            if features is None:
+                f = None
+            else:
+                f = features.mask(mask)
+            l = self.clusterer._cluster(f, s, recording, motion_est)
+            labels = np.full_like(sorting.labels, -1)
+            labels[mask] = l
+            chunk_sortings.append(replace(sorting, labels=labels))
+
+        labels = forward_backward.forward_backward(
+            chunk_time_ranges_s,
+            chunk_sortings,
+            log_c=self.refinement_cfg.log_c,
+            feature_scales=self.refinement_cfg.feature_scales,
+            adaptive_feature_scales=self.refinement_cfg.adaptive_feature_scales,
+            motion_est=motion_est,
+        )
+        sorting = replace(sorting, labels=labels)
+        return sorting
+
+
+refinement_strategies["forwardbackward"] = ForwardBackwardEnsembler

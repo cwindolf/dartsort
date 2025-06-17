@@ -6,13 +6,12 @@ from .eval import hybrid_util
 from . import detect, util, cluster
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import GaussianUnit, SpikeMixtureModel
-from .cluster.initial import initial_clustering
+from .cluster import get_clusterer, get_clustering_features, clustering_strategies, refinement_strategies
 from .cluster.stable_features import (
     SpikeFeatures,
     SpikeNeighborhoods,
     StableSpikeDataset,
 )
-from .cluster.refine import refine_clustering
 from .util.internal_config import *
 from .config import *
 from .localize.localize_util import (

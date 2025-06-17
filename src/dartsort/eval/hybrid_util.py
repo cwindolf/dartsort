@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import unshifted_raw_template_config, ComputationConfig
+from ..util.internal_config import unshifted_raw_template_cfg, ComputationConfig
 from . import simkit, comparison, analysis
 
 
@@ -206,7 +206,7 @@ def sorting_from_times_labels(
     motion_est=None,
     sampling_frequency=None,
     determine_channels=True,
-    template_config=unshifted_raw_template_config,
+    template_cfg=unshifted_raw_template_cfg,
     n_jobs=0,
     spikes_per_unit=50,
 ):
@@ -233,15 +233,13 @@ def sorting_from_times_labels(
         labels=labels_flat,
         sampling_frequency=sorting.sampling_frequency,
     )
-    template_config = dataclasses.replace(
-        template_config, spikes_per_unit=spikes_per_unit
-    )
+    template_cfg = dataclasses.replace(template_cfg, spikes_per_unit=spikes_per_unit)
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
     td = TemplateData.from_config(
         recording,
         sorting,
-        template_config,
-        computation_config=comp_cfg,
+        template_cfg,
+        computation_cfg=comp_cfg,
     )
 
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
@@ -274,7 +272,7 @@ def sorting_from_spikeinterface(
     sorting,
     recording=None,
     determine_channels=True,
-    template_config=unshifted_raw_template_config,
+    template_cfg=unshifted_raw_template_cfg,
     n_jobs=0,
 ):
     sv = sorting.to_spike_vector()
@@ -284,7 +282,7 @@ def sorting_from_spikeinterface(
         sampling_frequency=sorting.sampling_frequency,
         recording=recording,
         determine_channels=determine_channels,
-        template_config=template_config,
+        template_cfg=template_cfg,
         n_jobs=n_jobs,
     )
 
@@ -358,13 +356,11 @@ def load_dartsort_step_unit_info_dataframes(
     )
     for step_ix, (step_name, step_sorting) in enumerate(step_sortings):
         name = f"{sorting_name}: {step_name}" if sorting_name else step_name
-        step_analysis = analysis.DARTsortAnalysis(
-            step_sorting, recording, name=name
-        )
+        step_analysis = analysis.DARTsortAnalysis(step_sorting, recording, name=name)
         step_comparison = comparison.DARTsortGroundTruthComparison(
             gt_analysis, step_analysis
         )
         df = step_comparison.unit_info_dataframe()
-        df['stepix'] = step_ix
-        df['stepname'] = step_name
+        df["stepix"] = step_ix
+        df["stepname"] = step_name
         yield df

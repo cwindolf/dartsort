@@ -24,7 +24,11 @@ from ..cluster import merge, relocate
 from ..util.internal_config import TemplateConfig
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
-from ..util.data_util import DARTsortSorting, batched_h5_read, get_featurization_pipeline
+from ..util.data_util import (
+    DARTsortSorting,
+    batched_h5_read,
+    get_featurization_pipeline,
+)
 from ..util.drift_util import (
     get_spike_pitch_shifts,
     get_waveforms_on_static_channels,
@@ -34,8 +38,8 @@ from ..util.spikeio import read_waveforms_channel_index
 from ..util.waveform_util import make_channel_index
 from ..util import job_util
 
-no_realign_template_config = TemplateConfig(realign_peaks=False)
-basic_template_config = TemplateConfig(realign_peaks=False, superres_templates=False)
+no_realign_template_cfg = TemplateConfig(realign_peaks=False)
+basic_template_cfg = TemplateConfig(realign_peaks=False, superres_templates=False)
 
 
 @dataclass
@@ -88,10 +92,10 @@ class DARTsortAnalysis:
         sorting,
         motion_est=None,
         name=None,
-        template_config=no_realign_template_config,
+        template_cfg=no_realign_template_cfg,
         allow_template_reload=False,
         denoising_tsvd=None,
-        computation_config=None,
+        computation_cfg=None,
         skip_templates=False,
         **kwargs,
     ):
@@ -120,23 +124,23 @@ class DARTsortAnalysis:
                 template_data = TemplateData.from_npz(template_npz)
 
         template_data = None
-        if not have_templates and template_config is not None and not skip_templates:
+        if not have_templates and template_cfg is not None and not skip_templates:
             tkw = {}
             if "localizations_dataset" in kwargs:
                 tkw = dict(localizations_dataset_name=kwargs["localizations_dataset"])
             template_data = TemplateData.from_config(
                 recording,
                 sorting,
-                template_config,
+                template_cfg,
                 overwrite=False,
                 motion_est=motion_est,
-                computation_config=computation_config,
+                computation_cfg=computation_cfg,
                 tsvd=denoising_tsvd,
                 **tkw,
             )
 
-        if computation_config is None:
-            computation_config = job_util.get_global_computation_config()
+        if computation_cfg is None:
+            computation_cfg = job_util.get_global_computation_config()
 
         return cls(
             sorting=sorting,
@@ -146,7 +150,7 @@ class DARTsortAnalysis:
             featurization_pipeline=featurization_pipeline,
             motion_est=motion_est,
             name=name,
-            n_jobs=computation_config.actual_n_jobs(),
+            n_jobs=computation_cfg.actual_n_jobs(),
             **kwargs,
         )
 
@@ -161,7 +165,9 @@ class DARTsortAnalysis:
         **kwargs,
     ):
         return cls(
-            sorting=DARTsortSorting.from_peeling_hdf5(hdf5_path, load_simple_features=False),
+            sorting=DARTsortSorting.from_peeling_hdf5(
+                hdf5_path, load_simple_features=False
+            ),
             recording=recording,
             template_data=template_data,
             featurization_pipeline=featurization_pipeline,

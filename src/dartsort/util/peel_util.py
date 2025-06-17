@@ -15,8 +15,8 @@ def run_peeler(
     output_directory: str | Path,
     hdf5_filename: str,
     model_subdir: str,
-    featurization_config: FeaturizationConfig,
-    computation_config: ComputationConfig | None = None,
+    featurization_cfg: FeaturizationConfig,
+    computation_cfg: ComputationConfig | None = None,
     chunk_starts_samples=None,
     overwrite=False,
     residual_filename: str | Path | None = None,
@@ -32,12 +32,12 @@ def run_peeler(
         if not isinstance(residual_filename, Path):
             residual_filename = output_directory / residual_filename
     do_localization_later = (
-        not featurization_config.denoise_only
-        and featurization_config.do_localization
-        and not featurization_config.nn_localization
+        not featurization_cfg.denoise_only
+        and featurization_cfg.do_localization
+        and not featurization_cfg.nn_localization
     )
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
 
     if peeler_is_done(
         peeler,
@@ -51,14 +51,14 @@ def run_peeler(
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
-        model_dir, overwrite=overwrite, computation_config=computation_config
+        model_dir, overwrite=overwrite, computation_cfg=computation_cfg
     )
     if fit_only:
         return
 
     # run main
-    n_resid_now = featurization_config.n_residual_snips * int(
-        not featurization_config.residual_later
+    n_resid_now = featurization_cfg.n_residual_snips * int(
+        not featurization_cfg.residual_later
     )
     peeler.peel(
         output_hdf5_filename,
@@ -66,21 +66,21 @@ def run_peeler(
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
-        computation_config=computation_config,
+        computation_cfg=computation_cfg,
         total_residual_snips=n_resid_now,
-        stop_after_n_waveforms=featurization_config.stop_after_n,
-        shuffle=featurization_config.shuffle,
+        stop_after_n_waveforms=featurization_cfg.stop_after_n,
+        shuffle=featurization_cfg.shuffle,
     )
 
-    if featurization_config.residual_later:
+    if featurization_cfg.residual_later:
         peeler.run_subsampled_peeling(
             output_hdf5_filename,
             chunk_length_samples=peeler.spike_length_samples,
             residual_to_h5=True,
             skip_features=True,
             ignore_resuming=True,
-            computation_config=computation_config,
-            n_chunks=featurization_config.n_residual_snips,
+            computation_cfg=computation_cfg,
+            n_chunks=featurization_cfg.n_residual_snips,
             task_name="Residual snips",
             overwrite=False,
             ordered=True,
@@ -89,17 +89,17 @@ def run_peeler(
 
     # do localization
     if do_localization_later:
-        wf_name = featurization_config.output_waveforms_name
-        loc_amp_type = featurization_config.localization_amplitude_type
+        wf_name = featurization_cfg.output_waveforms_name
+        loc_amp_type = featurization_cfg.localization_amplitude_type
         localize_hdf5(
             output_hdf5_filename,
-            radius=featurization_config.localization_radius,
+            radius=featurization_cfg.localization_radius,
             amplitude_vectors_dataset_name=f"{wf_name}_{loc_amp_type}_amplitude_vectors",
             output_dataset_name=localization_dataset_name,
             show_progress=show_progress,
-            n_jobs=computation_config.actual_n_jobs(),
-            device=computation_config.actual_device(),
-            localization_model=featurization_config.localization_model,
+            n_jobs=computation_cfg.actual_n_jobs(),
+            device=computation_cfg.actual_device(),
+            localization_model=featurization_cfg.localization_model,
         )
 
     return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)

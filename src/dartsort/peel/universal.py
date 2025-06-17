@@ -124,33 +124,32 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         )
 
     @classmethod
-    def from_config(
-        cls, recording, waveform_config, subtraction_config, featurization_config
-    ):
+    def from_config(cls, recording, waveform_cfg, subtraction_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = waveform_util.make_channel_index(
-            geom, subtraction_config.extract_radius, to_torch=True
+            geom, subtraction_cfg.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
         alignment_padding = int(
-            subtraction_config.singlechan_alignment_padding_ms * (recording.sampling_frequency / 1000)
+            subtraction_cfg.singlechan_alignment_padding_ms
+            * (recording.sampling_frequency / 1000)
         )
         return cls(
             recording,
-            chunk_length_samples=subtraction_config.chunk_length_samples,
-            threshold=subtraction_config.universal_threshold,
+            chunk_length_samples=subtraction_cfg.chunk_length_samples,
+            threshold=subtraction_cfg.universal_threshold,
             channel_index=channel_index,
             alignment_padding=alignment_padding,
             featurization_pipeline=featurization_pipeline,

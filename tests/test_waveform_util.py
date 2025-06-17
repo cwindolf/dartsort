@@ -22,9 +22,7 @@ def test_channels_in_probe():
     max_channels = torch.concatenate(
         [torch.arange(len(geom)), torch.flip(torch.arange(len(geom)), (0,))]
     )
-    recording = F.pad(
-        torch.zeros((n_samples, len(geom))), (0, 1), value=torch.nan
-    )
+    recording = F.pad(torch.zeros((n_samples, len(geom))), (0, 1), value=torch.nan)
     assert recording.shape == (n_samples, len(geom) + 1)
     waveforms = recording[
         torch.arange(n_samples)[None, :, None],
@@ -43,9 +41,7 @@ def test_channels_in_probe():
     (
         channels_in_probe,
         waveforms_in_probe,
-    ) = waveform_util.get_channels_in_probe(
-        waveforms, max_channels, channel_index
-    )
+    ) = waveform_util.get_channels_in_probe(waveforms, max_channels, channel_index)
     assert not torch.isnan(waveforms_in_probe).any()
     assert 0 < len(waveforms_in_probe) < len(max_channels) * n_neighbors
     assert (waveforms_in_probe == 0).all()
@@ -73,9 +69,7 @@ def test_channels_in_probe():
     (
         channels_in_probe,
         waveforms_in_probe,
-    ) = waveform_util.get_channels_in_probe(
-        waveforms, max_channels, channel_index
-    )
+    ) = waveform_util.get_channels_in_probe(waveforms, max_channels, channel_index)
     assert not torch.isnan(waveforms_in_probe).any()
     assert 0 < len(waveforms_in_probe) < len(max_channels) * n_neighbors
     assert (waveforms_in_probe == 1).all()
@@ -90,9 +84,7 @@ def test_channel_subsetting():
     # test channel in probe get/set
     n_samples = 3
     max_channels = torch.arange(len(geom))
-    recording = F.pad(
-        torch.zeros((n_samples, len(geom))), (0, 1), value=torch.nan
-    )
+    recording = F.pad(torch.zeros((n_samples, len(geom))), (0, 1), value=torch.nan)
     waveforms = recording[
         torch.arange(n_samples)[None, :, None],
         channel_index[max_channels][:, None, :],

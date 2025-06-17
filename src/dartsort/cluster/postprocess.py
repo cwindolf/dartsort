@@ -5,9 +5,9 @@ from logging import getLogger
 import numpy as np
 
 from ..util.internal_config import (
-    default_matching_config,
-    default_waveform_config,
-    coarse_template_config,
+    default_matching_cfg,
+    default_waveform_cfg,
+    coarse_template_cfg,
 )
 from ..templates import TemplateData
 from ..templates.get_templates import fit_tsvd
@@ -23,10 +23,10 @@ def realign_and_chuck_noisy_template_units(
     motion_est=None,
     min_n_spikes=50,
     min_template_snr=15.0,
-    waveform_config=default_waveform_config,
-    template_config=coarse_template_config,
+    waveform_cfg=default_waveform_cfg,
+    template_cfg=coarse_template_cfg,
     tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     template_save_folder=None,
     template_npz_filename=None,
 ):
@@ -46,11 +46,11 @@ def realign_and_chuck_noisy_template_units(
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
-            template_config,
+            template_cfg,
             motion_est=motion_est,
             tsvd=tsvd,
-            waveform_config=waveform_config,
-            computation_config=computation_config,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
             save_folder=None,
             save_npz_name=None,
         )
@@ -100,25 +100,25 @@ def process_templates_for_matching(
     recording,
     sorting,
     motion_est=None,
-    matching_config=default_matching_config,
-    waveform_config=default_waveform_config,
-    template_config=coarse_template_config,
+    matching_cfg=default_matching_cfg,
+    waveform_cfg=default_waveform_cfg,
+    template_cfg=coarse_template_cfg,
     tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     template_save_folder=None,
     template_npz_filename=None,
 ):
     from .merge import merge_templates
 
     # get tsvd to share across steps
-    if tsvd is None and template_config.low_rank_denoising:
+    if tsvd is None and template_cfg.low_rank_denoising:
         tsvd = fit_tsvd(
             recording,
             sorting,
-            denoising_rank=template_config.denoising_rank,
-            denoising_fit_radius=template_config.denoising_fit_radius,
-            trough_offset_samples=waveform_config.trough_offset_samples(recording.sampling_frequency),
-            spike_length_samples=waveform_config.spike_length_samples(recording.sampling_frequency),
+            denoising_rank=template_cfg.denoising_rank,
+            denoising_fit_radius=template_cfg.denoising_fit_radius,
+            trough_offset_samples=waveform_cfg.trough_offset_samples(recording.sampling_frequency),
+            spike_length_samples=waveform_cfg.spike_length_samples(recording.sampling_frequency),
         )
     h5_path = sorting.parent_h5_path
 
@@ -126,20 +126,20 @@ def process_templates_for_matching(
         recording,
         sorting,
         motion_est=motion_est,
-        min_n_spikes=matching_config.min_template_count,
-        min_template_snr=matching_config.min_template_snr,
-        waveform_config=waveform_config,
-        template_config=template_config,
+        min_n_spikes=matching_cfg.min_template_count,
+        min_template_snr=matching_cfg.min_template_snr,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
         tsvd=tsvd,
-        computation_config=computation_config,
+        computation_cfg=computation_cfg,
     )
     assert sorting.parent_h5_path == h5_path == template_data.parent_sorting_hdf5_path
     fs_ms = recording.sampling_frequency / 1000
-    max_shift_samples = int(template_config.realign_shift_ms * fs_ms)
+    max_shift_samples = int(template_cfg.realign_shift_ms * fs_ms)
 
     # merge
-    merge_config = matching_config.template_merge_config
-    if merge_config is None or not merge_config.merge_distance_threshold:
+    merge_cfg = matching_cfg.template_merge_cfg
+    if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return template_data
 
     merge_res = merge_templates(
@@ -148,15 +148,15 @@ def process_templates_for_matching(
         template_data=template_data,
         motion_est=motion_est,
         max_shift_samples=max_shift_samples,
-        linkage=merge_config.linkage,
-        merge_distance_threshold=merge_config.merge_distance_threshold,
-        temporal_upsampling_factor=merge_config.temporal_upsampling_factor,
-        amplitude_scaling_variance=merge_config.amplitude_scaling_variance,
-        amplitude_scaling_boundary=merge_config.amplitude_scaling_boundary,
-        svd_compression_rank=merge_config.svd_compression_rank,
-        min_spatial_cosine=merge_config.min_spatial_cosine,
+        linkage=merge_cfg.linkage,
+        merge_distance_threshold=merge_cfg.merge_distance_threshold,
+        temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
+        amplitude_scaling_variance=merge_cfg.amplitude_scaling_variance,
+        amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
+        svd_compression_rank=merge_cfg.svd_compression_rank,
+        min_spatial_cosine=merge_cfg.min_spatial_cosine,
         denoising_tsvd=tsvd,
-        computation_config=computation_config,
+        computation_cfg=computation_cfg,
         show_progress=True,
     )
     sorting = merge_res["sorting"]
@@ -176,12 +176,12 @@ def process_templates_for_matching(
         recording,
         recompute_sorting,
         motion_est=motion_est,
-        min_n_spikes=matching_config.min_template_count,
-        min_template_snr=matching_config.min_template_snr,
-        waveform_config=waveform_config,
-        template_config=template_config,
+        min_n_spikes=matching_cfg.min_template_count,
+        min_template_snr=matching_cfg.min_template_snr,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
         tsvd=tsvd,
-        computation_config=computation_config,
+        computation_cfg=computation_cfg,
     )
     assert len(recompute_template_data.templates) == needs_recompute.size
     assert (

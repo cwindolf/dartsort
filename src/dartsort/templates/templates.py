@@ -5,14 +5,14 @@ import numpy as np
 
 from ..localize.localize_util import localize_waveforms
 from ..util import data_util, drift_util, job_util
-from ..util.internal_config import default_waveform_config
+from ..util.internal_config import default_waveform_cfg
 
 from .get_templates import get_templates
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, weighted_average
 
 _motion_error_prefix = (
-    "If template_config has registered_templates==True "
+    "If template_cfg has registered_templates==True "
     "or superres_templates=True, then "
 )
 _aware_error = "motion_est must be passed to TemplateData.from_config()"
@@ -169,8 +169,8 @@ class TemplateData:
         cls,
         recording,
         sorting,
-        template_config,
-        waveform_config=default_waveform_config,
+        template_cfg,
+        waveform_cfg=default_waveform_cfg,
         save_folder: Path | None=None,
         overwrite=False,
         motion_est=None,
@@ -178,13 +178,13 @@ class TemplateData:
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
-        computation_config=None,
+        computation_cfg=None,
     ):
         self, _ = cls.from_config_with_realigned_sorting(
             recording=recording,
             sorting=sorting,
-            template_config=template_config,
-            waveform_config=waveform_config,
+            template_cfg=template_cfg,
+            waveform_cfg=waveform_cfg,
             save_folder=save_folder,
             overwrite=overwrite,
             motion_est=motion_est,
@@ -192,7 +192,7 @@ class TemplateData:
             localizations_dataset_name=localizations_dataset_name,
             units_per_job=units_per_job,
             tsvd=tsvd,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         return self
 
@@ -201,8 +201,8 @@ class TemplateData:
         cls,
         recording,
         sorting,
-        template_config,
-        waveform_config=default_waveform_config,
+        template_cfg,
+        waveform_cfg=default_waveform_cfg,
         save_folder=None,
         overwrite=False,
         motion_est=None,
@@ -210,10 +210,10 @@ class TemplateData:
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
-        computation_config=None,
+        computation_cfg=None,
     ):
-        if computation_config is None:
-            computation_config = job_util.get_global_computation_config()
+        if computation_cfg is None:
+            computation_cfg = job_util.get_global_computation_config()
 
         npz_path = None
         if save_folder is not None:
@@ -232,12 +232,12 @@ class TemplateData:
         parent_sorting_hdf5_path = sorting.parent_h5_path
 
         fs = recording.sampling_frequency
-        trough_offset_samples = waveform_config.trough_offset_samples(fs)
-        spike_length_samples = waveform_config.spike_length_samples(fs)
-        realign_max_sample_shift = int(template_config.realign_shift_ms * (fs / 1000))
+        trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
+        spike_length_samples = waveform_cfg.spike_length_samples(fs)
+        realign_max_sample_shift = int(template_cfg.realign_shift_ms * (fs / 1000))
 
         motion_aware = (
-            (template_config.registered_templates or template_config.superres_templates)
+            (template_cfg.registered_templates or template_cfg.superres_templates)
             and motion_est is not None
         )
         has_localizations = hasattr(sorting, localizations_dataset_name)
@@ -262,18 +262,18 @@ class TemplateData:
         kwargs = dict(
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            spikes_per_unit=template_config.spikes_per_unit,
+            spikes_per_unit=template_cfg.spikes_per_unit,
             # realign handled in advance below, not needed in kwargs
             # realign_peaks=False,
             realign_max_sample_shift=realign_max_sample_shift,
-            denoising_rank=template_config.denoising_rank,
-            denoising_fit_radius=template_config.denoising_fit_radius,
-            denoising_snr_threshold=template_config.denoising_snr_threshold,
-            device=computation_config.actual_device(),
+            denoising_rank=template_cfg.denoising_rank,
+            denoising_fit_radius=template_cfg.denoising_fit_radius,
+            denoising_snr_threshold=template_cfg.denoising_snr_threshold,
+            device=computation_cfg.actual_device(),
             units_per_job=units_per_job,
         )
         rgeom = geom
-        if template_config.registered_templates and motion_est is not None:
+        if template_cfg.registered_templates and motion_est is not None:
             rgeom = drift_util.registered_geometry(
                 geom, motion_est=motion_est
             )
@@ -287,41 +287,41 @@ class TemplateData:
             )
 
         # realign before superres
-        if template_config.realign_peaks:
+        if template_cfg.realign_peaks:
             sorting = get_realigned_sorting(
                 recording,
                 sorting,
                 **kwargs,
                 realign_peaks=True,
                 low_rank_denoising=False,
-                n_jobs=computation_config.actual_n_jobs(),
+                n_jobs=computation_cfg.actual_n_jobs(),
             )
-        kwargs["low_rank_denoising"] = template_config.low_rank_denoising
+        kwargs["low_rank_denoising"] = template_cfg.low_rank_denoising
         kwargs["realign_peaks"] = False
         kwargs["denoising_tsvd"] = tsvd
 
         # handle superresolved templates
-        if template_config.superres_templates:
+        if template_cfg.superres_templates:
             unit_ids, sorting = superres_sorting(
                 sorting,
                 sorting.times_seconds,
                 spike_depths_um,
                 geom,
                 motion_est=motion_est,
-                strategy=template_config.superres_strategy,
-                superres_bin_size_um=template_config.superres_bin_size_um,
-                min_spikes_per_bin=template_config.superres_bin_min_spikes,
+                strategy=template_cfg.superres_strategy,
+                superres_bin_size_um=template_cfg.superres_bin_size_um,
+                min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
                 spike_x_um=spike_x_um,
-                adaptive_bin_size=template_config.adaptive_bin_size,
+                adaptive_bin_size=template_cfg.adaptive_bin_size,
             )
 
         # main!
         results = get_templates(
-            recording, sorting, n_jobs=computation_config.actual_n_jobs(), **kwargs
+            recording, sorting, n_jobs=computation_cfg.actual_n_jobs(), **kwargs
         )
 
         # handle registered templates
-        if template_config.registered_templates and motion_est is not None:
+        if template_cfg.registered_templates and motion_est is not None:
             obj = cls(
                 results["templates"],
                 unit_ids=results["unit_ids"],
@@ -351,7 +351,7 @@ class TemplateData:
 
 def get_chunked_templates(
     recording,
-    template_config,
+    template_cfg,
     global_sorting=None,
     chunk_sortings=None,
     chunk_time_ranges_s=None,
@@ -364,14 +364,14 @@ def get_chunked_templates(
     units_per_job=8,
     tsvd=None,
     random_seed=0,
-    computation_config=None,
-    waveform_config=default_waveform_config,
+    computation_cfg=None,
+    waveform_cfg=default_waveform_cfg,
 ):
     """Save the effort of recomputing several TPCAs"""
     rg = np.random.default_rng(random_seed)
 
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
 
     if global_sorting is None:
         assert chunk_sortings is not None
@@ -384,19 +384,19 @@ def get_chunked_templates(
         if (save_folder / save_npz_name).exists():
             done = not overwrite
 
-    if not done and template_config.realign_peaks and global_realign_peaks:
+    if not done and template_cfg.realign_peaks and global_realign_peaks:
         # realign globally, before chunking
         global_sorting = get_realigned_sorting(
             recording,
             global_sorting,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            spikes_per_unit=template_config.spikes_per_unit,
-            realign_max_sample_shift=template_config.realign_max_sample_shift,
-            n_jobs=computation_config.actual_n_jobs(),
+            spikes_per_unit=template_cfg.spikes_per_unit,
+            realign_max_sample_shift=template_cfg.realign_max_sample_shift,
+            n_jobs=computation_cfg.actual_n_jobs(),
             random_seed=rg,
         )
-        template_config = replace(template_config, realign_peaks=False)
+        template_cfg = replace(template_cfg, realign_peaks=False)
 
     # now, break each unit into pieces matching the chunks
     if chunk_sortings is None:
@@ -415,15 +415,15 @@ def get_chunked_templates(
     full_template_data = TemplateData.from_config(
         recording,
         combined_sorting,
-        template_config,
+        template_cfg,
         save_folder=save_folder,
         overwrite=overwrite,
         motion_est=motion_est,
         save_npz_name=save_npz_name,
         localizations_dataset_name=localizations_dataset_name,
         units_per_job=units_per_job,
-        computation_config=computation_config,
-        waveform_config=waveform_config,
+        computation_cfg=computation_cfg,
+        waveform_cfg=waveform_cfg,
         tsvd=tsvd,
     )
 

@@ -6,12 +6,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
-from .util.internal_config import _strict_config, default_pretrained_path
+from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
 from .util.py_util import int_or_float, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
-@dataclass(frozen=True, kw_only=True, config=_strict_config)
+@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DARTsortUserConfig:
     """User-facing configuration options"""
 
@@ -155,7 +155,7 @@ class DARTsortUserConfig:
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
-@dataclass(frozen=True, kw_only=True, config=_strict_config)
+@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 

@@ -83,22 +83,22 @@ class GrabAndFeaturize(BasePeeler):
         )
 
     @classmethod
-    def from_config(cls, sorting, recording, waveform_config, featurization_config):
+    def from_config(cls, sorting, recording, waveform_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
         return cls(

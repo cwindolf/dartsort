@@ -92,16 +92,32 @@ class DARTsortSorting:
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
 
-    def drop_missing(self):
-        valid = np.flatnonzero(self.labels >= 0)
+    def mask(self, mask):
+
+        if np.dtype(mask.dtype).kind == "b":
+            mask = mask.nonzero()
+
+        extra_features = dict(mask_indices=mask)
+        if self.extra_features:
+            n = self.n_spikes
+            for k, v in self.extra_features.items():
+                assert k != 'mask_indices'  # no recursion...
+                if v.shape[0] != n:
+                    continue
+                extra_features[k] = v[mask]
+
         return replace(
             self,
-            times_samples=self.times_samples[valid],
-            channels=self.channels[valid],
-            labels=self.labels[valid],
+            times_samples=self.times_samples[mask],
+            channels=self.channels[mask],
+            labels=self.labels[mask] if self.labels is not None else None,
             parent_h5_path=None,
-            extra_features=None,
+            extra_features=extra_features,
         )
+
+    def drop_missing(self):
+        valid = np.flatnonzero(self.labels >= 0)
+        return self.mask(valid)
 
     @classmethod
     def load(cls, sorting_npz):

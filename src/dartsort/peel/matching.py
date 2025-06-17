@@ -180,7 +180,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
     def precompute_peeling_data(
-        self, save_folder, overwrite=False, computation_config=None
+        self, save_folder, overwrite=False, computation_cfg=None
     ):
         self.build_template_data(
             save_folder,
@@ -190,7 +190,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
             overwrite=overwrite,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         self.pick_threshold()
         # couple more torch buffers
@@ -285,7 +285,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
         overwrite=False,
-        computation_config=None,
+        computation_cfg=None,
     ):
         dtype = template_data.templates.dtype
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
@@ -388,7 +388,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 overwrite=overwrite,
                 conv_ignore_threshold=self.conv_ignore_threshold,
                 coarse_approx_error_threshold=self.coarse_approx_error_threshold,
-                computation_config=computation_config,
+                computation_cfg=computation_cfg,
             )
 
         self.fixed_output_data += [
@@ -433,27 +433,27 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def from_config(
         cls,
         recording,
-        waveform_config,
-        matching_config,
-        featurization_config,
+        waveform_cfg,
+        matching_cfg,
+        featurization_cfg,
         template_data,
         motion_est=None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        threshold = matching_config.threshold
+        threshold = matching_cfg.threshold
         if threshold == "fp_control":
             pass
         else:
@@ -465,24 +465,24 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index,
             featurization_pipeline,
             motion_est=motion_est,
-            svd_compression_rank=matching_config.template_svd_compression_rank,
-            temporal_upsampling_factor=matching_config.template_temporal_upsampling_factor,
-            min_channel_amplitude=matching_config.template_min_channel_amplitude,
-            refractory_radius_frames=matching_config.refractory_radius_frames,
-            amplitude_scaling_variance=matching_config.amplitude_scaling_variance,
-            amplitude_scaling_boundary=matching_config.amplitude_scaling_boundary,
-            conv_ignore_threshold=matching_config.conv_ignore_threshold,
-            coarse_approx_error_threshold=matching_config.coarse_approx_error_threshold,
+            svd_compression_rank=matching_cfg.template_svd_compression_rank,
+            temporal_upsampling_factor=matching_cfg.template_temporal_upsampling_factor,
+            min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
+            refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            amplitude_scaling_variance=matching_cfg.amplitude_scaling_variance,
+            amplitude_scaling_boundary=matching_cfg.amplitude_scaling_boundary,
+            conv_ignore_threshold=matching_cfg.conv_ignore_threshold,
+            coarse_approx_error_threshold=matching_cfg.coarse_approx_error_threshold,
             trough_offset_samples=trough_offset_samples,
             threshold=threshold,
-            chunk_length_samples=matching_config.chunk_length_samples,
-            n_chunks_fit=matching_config.n_chunks_fit,
-            max_waveforms_fit=matching_config.max_waveforms_fit,
-            fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
-            n_waveforms_fit=matching_config.n_waveforms_fit,
-            fit_sampling=matching_config.fit_sampling,
-            fit_max_reweighting=matching_config.fit_max_reweighting,
-            max_iter=matching_config.max_iter,
+            chunk_length_samples=matching_cfg.chunk_length_samples,
+            n_chunks_fit=matching_cfg.n_chunks_fit,
+            max_waveforms_fit=matching_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=matching_cfg.fit_subsampling_random_state,
+            n_waveforms_fit=matching_cfg.n_waveforms_fit,
+            fit_sampling=matching_cfg.fit_sampling,
+            fit_max_reweighting=matching_cfg.fit_max_reweighting,
+            max_iter=matching_cfg.max_iter,
         )
 
     def peel_chunk(
@@ -1141,7 +1141,9 @@ class MatchingPeaks:
             device = times.device
         if times is None:
             self.cur_buf_size = self.BUFFER_INIT
-            self._times = torch.zeros(self.cur_buf_size, dtype=torch.long, device=device)
+            self._times = torch.zeros(
+                self.cur_buf_size, dtype=torch.long, device=device
+            )
         else:
             self.cur_buf_size = times.numel()
             assert self.cur_buf_size == n_spikes

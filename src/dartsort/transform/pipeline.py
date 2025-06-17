@@ -73,8 +73,8 @@ class WaveformPipeline(torch.nn.Module):
     @classmethod
     def from_config(
         cls,
-        featurization_config,
-        waveform_config,
+        featurization_cfg,
+        waveform_cfg,
         recording=None,
         geom=None,
         channel_index=None,
@@ -87,13 +87,13 @@ class WaveformPipeline(torch.nn.Module):
             sampling_frequency = recording.sampling_frequency
             geom = torch.tensor(recording.get_channel_locations())
             channel_index = make_channel_index(
-                geom, featurization_config.extract_radius, to_torch=True
+                geom, featurization_cfg.extract_radius, to_torch=True
             )
         else:
             assert recording is None
             assert channel_index is not None
         args = featurization_config_to_class_names_and_kwargs(
-            featurization_config, waveform_config, sampling_frequency=sampling_frequency
+            featurization_cfg, waveform_cfg, sampling_frequency=sampling_frequency
         )
         return cls.from_class_names_and_kwargs(geom, channel_index, args)
 
@@ -182,8 +182,8 @@ def check_unique_feature_names(transformers):
 
 
 def featurization_config_to_class_names_and_kwargs(
-    featurization_config,
-    waveform_config,
+    featurization_cfg,
+    waveform_cfg,
     sampling_frequency=30_000,
 ):
     """Convert this config into a list of waveform transformer classes and arguments
@@ -191,14 +191,14 @@ def featurization_config_to_class_names_and_kwargs(
     Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
     from FeaturizationConfig objects.
     """
-    fc = featurization_config
+    fc = featurization_cfg
     if fc.skip:
         return []
 
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
     sls_kw = dict(
-        spike_length_samples=waveform_config.spike_length_samples(sampling_frequency)
+        spike_length_samples=waveform_cfg.spike_length_samples(sampling_frequency)
     )
 
     if do_feats and fc.save_input_voltages:
@@ -214,7 +214,7 @@ def featurization_config_to_class_names_and_kwargs(
             ("BaseTemporalPCA", {"rank": fc.tpca_rank, "centered": False})
         )
     if do_feats and fc.save_input_tpca_projs:
-        tslice = fc.input_tpca_waveform_config.relative_slice(waveform_config)
+        tslice = fc.input_tpca_waveform_cfg.relative_slice(waveform_cfg)
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",

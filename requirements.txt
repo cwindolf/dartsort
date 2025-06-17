@@ -1,6 +1,5 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 h5py
-hdbscan
 matplotlib
 numpy >= 2.0
 pytest
