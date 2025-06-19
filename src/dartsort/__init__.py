@@ -1,7 +1,7 @@
 import importlib.metadata
 
 from .util import logging_util
-from .eval import hybrid_util
+from .evaluate import hybrid_util
 
 from . import detect, util
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
@@ -38,8 +38,8 @@ from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData, realign_sorting, realign_templates
 from .transform import WaveformPipeline
 from .util import data_util, noise_util, spiketorch, waveform_util
-from .eval.analysis import DARTsortAnalysis
-from .eval.comparison import DARTsortGroundTruthComparison
+from .evaluate.analysis import DARTsortAnalysis
+from .evaluate.comparison import DARTsortGroundTruthComparison
 from .util.data_util import DARTsortSorting, get_featurization_pipeline
 from .util.drift_util import registered_geometry
 from .util.noise_util import EmbeddedNoise

@@ -4,7 +4,7 @@ from itertools import product
 import pytest
 
 from dartsort.util import noise_util, data_util
-from dartsort.eval import simkit
+from dartsort.evaluate import simkit
 
 
 
