@@ -35,7 +35,14 @@ def sim_recordings(tmp_path_factory):
         )
         h5_path = tmp_path / "sim.h5"
         # add tpca features to the mini ones only
-        rec = rec_sim.simulate(h5_path, with_tpca_features=mini)
+
+        with pytest.warns(Warning) as warninfo:
+            rec = rec_sim.simulate(h5_path, with_tpca_features=mini)
+        # recording is too short to extract all residual snips so there's a warning
+        warnings = {(w.category, w.message.args[0][:10]) for w in warninfo}
+        expected = {(UserWarning, "Can't extr")}
+        assert warnings == expected
+
         info = dict(
             rec=rec,
             motion_est=rec_sim.motion_estimate(),

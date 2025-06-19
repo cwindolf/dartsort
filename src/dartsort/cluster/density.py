@@ -6,8 +6,8 @@ from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist, squareform
 from scipy.stats import bernoulli
-import torch
 
 
 def kdtree_inliers(
@@ -300,7 +300,6 @@ def density_peaks(
     data = np.ones(has_nhdn.size)
     graph = coo_array((data, (nhdn[has_nhdn], has_nhdn)), shape=(n, n))
     ncc, labels = connected_components(graph)
-    print(f"{ncc=}")
 
     if remove_borders:
         labels = remove_border_points(
@@ -335,37 +334,155 @@ def nearest_neighbor_assign(
     return other_labels
 
 
+def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25):
+    c = centroids * (1.0 / (sigma * np.sqrt(8.0)))
+    kdt = KDTree(c)
+    max_distance = -np.log(1 - hellinger_threshold)
+    dists = kdt.sparse_distance_matrix(
+        kdt, max_distance=max_distance, output_type="ndarray"
+    )
+    vals = dists["v"]
+    np.square(vals, out=vals)
+    vals *= -1
+    np.exp(vals, out=vals)  # now BC
+    np.subtract(1, vals, out=vals)  # and now hell.
+    dists = coo_array((vals, (dists["j"], dists["i"])), shape=(kdt.n, kdt.n))
+    return dists
+
+
+def coo_nhdn(coo, densities):
+    ii, jj = coo.coords
+    dists = coo.data.copy()
+    M = dists.max()
+    dens_ii = densities[ii]
+    dens_jj = densities[jj]
+    not_higher = dens_jj <= dens_ii
+
+    # only higher density
+    dists[not_higher] = np.inf
+    dists[ii == jj] = 2 * M + 1  # i am my last resort
+    coo2 = coo_array((dists, (ii, jj)), shape=coo.shape)
+    # argmin == nearest
+    nhdn: np.ndarray = coo2.tocsc().argmin(axis=1, explicit=True)
+    assert nhdn.shape == densities.shape[:1]
+    return nhdn
+
+
 def gmm_density_peaks(
     X,
+    channels,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
-    max_centroid_distance=25.0,
     remove_clusters_smaller_than=50,
     workers=-1,
-    n_initializations=10,
-    n_iter=100,
-    n_components=3840,
+    n_initializations=5,
+    n_iter=50,
+    max_components_per_channel=20,
+    min_spikes_per_component=10,
     random_state=0,
+    kmeanspp_min_dist=0.0,
+    hellinger_cutoff=0.8,
+    max_sigma=5.0,
+    max_samples=2_000_000,
+    show_progress=False,
 ):
+    """Density peaks clustering via an isotropic GMM density estimate
+
+    Idea: use an overfitted isotropic GMM (i.e. lots of components) to capture the
+    density in a point cloud. Then, each GMM component is grouped together with its
+    nearest higher density (i.e., higher mixing proportion, since isotropic) neighbor,
+    much like the usual density peaks clustering algorithm.
+
+    Neighbor-ness is determined by a Hellinger overlap criterion. Contrasted with the
+    smoothed histogram DPC algorithm elsewhere in this file, this algorithm is a bit
+    more adaptive, and that neighbor criterion is easier to tune than the k-d tree query
+    parameters which define the point-to-point neighbor criterion for the other algorithm.
+
+    TODO: parametrize as max_components_per_square_micron or something instead of per
+    channel so that this has more hope of transferring from probe to probe.
+
+    TODO: see parallelism todo in gmm_kmeans. This could be a lot faster.
+
+    Arguments
+    ---------
+    X : (N_spikes, n_features) array
+        For instance, the features property of a SimpleMatrix object as obtained
+        from get_clustering_features()
+    channels: (N_spikes,) array
+        The channels to which each spike belongs.
+        TODO: currently used in controlling the number of components, but it may
+        change when the TODO above is implemented.
+    """
     from .kmeans import kdtree_kmeans
 
     n = len(X)
+    if n > max_samples:
+        random_state = np.random.default_rng(random_state)
+        choices = random_state.choice(n, size=max_samples, replace=False)
+        choices.sort()
+    else:
+        choices = slice(None)
+
     inliers, _ = kdtree_inliers(
-        X,
+        X[choices],
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius,
         workers=workers,
     )
-    kmeans_res = kdtree_kmeans(
-        X[inliers],
-        max_distance=max_centroid_distance,
+    if not isinstance(choices, slice):
+        inliers = choices[inliers]
+
+    Xi = X[inliers]
+    ni = len(Xi)
+    _, cchans = np.unique(channels[inliers], return_counts=True)
+    comps_per_chan = np.minimum(
+        max_components_per_channel, np.ceil(cchans / min_spikes_per_component).astype(int)
+    )
+    n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
+    res = kdtree_kmeans(
+        Xi,
         n_components=n_components,
         n_initializations=n_initializations,
         random_state=random_state,
         n_iter=n_iter,
         dirichlet_alpha=1 / n_components,
+        kmeanspp_min_dist=kmeanspp_min_dist,
+        max_sigma=max_sigma,
+        show_progress=show_progress,
     )
-    return kmeans_res
+    res['n_components'] = n_components
+    n_components = len(res['centroids'])
+    res['n_components_kept'] = n_components
+    coo = sparse_iso_hellinger(
+        res["centroids"],
+        np.sqrt(res["sigmasq"]),
+        hellinger_threshold=hellinger_cutoff,
+    )
+    nhdn = coo_nhdn(coo, res["log_proportions"])
+    assert nhdn.shape == (len(res["centroids"]),) == (n_components,)
+    _1 = np.ones((1,), dtype="float32")
+    _1 = np.broadcast_to(_1, nhdn.shape)
+    nhdn_coo = coo_array(
+        (_1, (np.arange(len(nhdn)), nhdn)), shape=(n_components, n_components)
+    )
+    ncc, labels = connected_components(nhdn_coo)
+    assert labels.shape == (n_components,)
+    labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
+
+    ckdt = KDTree(res["centroids"])
+    maxdist = max_sigma * np.sqrt(res["sigmasq"]) * np.sqrt(X.shape[1])
+    labels = labels_padded[
+        ckdt.query(X, workers=workers, distance_upper_bound=maxdist)[1]
+    ]
+    if remove_clusters_smaller_than:
+        kept = np.flatnonzero(labels >= 0)
+        u, c = np.unique(labels[kept], return_counts=True)
+        u[c < remove_clusters_smaller_than] = -1
+        u[u >= 0] = np.arange((u >= 0).sum())
+        labels[kept] = u[labels[kept]]
+    res['labels'] = labels
+
+    return res
 
 
 # -- versions used in UHD project

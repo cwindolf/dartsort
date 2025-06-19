@@ -96,7 +96,45 @@ def realign_and_chuck_noisy_template_units(
     return new_sorting, new_template_data
 
 
-def process_templates_for_matching(
+def reorder_by_depth(sorting, template_data):
+    assert template_data.registered_geom is not None
+    w = np.ptp(template_data.templates, axis=1)
+    if template_data.spike_counts_by_channel is not None:
+        w *= np.sqrt(template_data.spike_counts_by_channel)
+    w /= w.sum(axis=1)
+    meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
+
+    new_to_old = np.argsort(meanz)
+    old_to_new = np.argsort(new_to_old)
+
+    valid = np.flatnonzero(sorting.labels >= 0)
+    labels = np.full_like(sorting.labels, -1)
+    labels[valid] = old_to_new[sorting.labels[valid]]
+    sorting = replace(sorting, labels=labels)
+
+    uids = np.arange(len(new_to_old))
+    assert np.array_equal(template_data.unit_ids[old_to_new], uids)
+    scbc = template_data.raw_std_dev
+    if scbc is not None:
+        scbc = scbc[old_to_new]
+    rsd = template_data.raw_std_dev
+    if rsd is not None:
+        rsd = rsd[old_to_new]
+    template_data = TemplateData(
+        templates=template_data.templates[old_to_new],
+        unit_ids=uids,
+        spike_counts=template_data.spike_counts[old_to_new],
+        spike_counts_by_channel=scbc,
+        raw_std_dev=rsd,
+        registered_geom=template_data.registered_geom,
+        trough_offset_samples=template_data.trough_offset_samples,
+        spike_length_samples=template_data.spike_length_samples,
+        parent_sorting_hdf5_path=template_data.parent_sorting_hdf5_path,
+    )
+    return sorting, template_data
+
+
+def postprocess(
     recording,
     sorting,
     motion_est=None,
@@ -105,8 +143,7 @@ def process_templates_for_matching(
     template_cfg=coarse_template_cfg,
     tsvd=None,
     computation_cfg=None,
-    template_save_folder=None,
-    template_npz_filename=None,
+    depth_order=True,
 ):
     from .merge import merge_templates
 
@@ -232,4 +269,8 @@ def process_templates_for_matching(
         spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
-    return template_data
+
+    if depth_order:
+        sorting, templates = reorder_by_depth(sorting, templates)
+
+    return sorting, template_data

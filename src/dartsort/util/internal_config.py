@@ -349,10 +349,11 @@ class ClusteringFeaturesConfig:
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class ClusteringConfig:
-    cluster_strategy: str = "dpc"
+    cluster_strategy: str = "gmmdpc"
 
     # global parameters
     workers: int = -1
+    random_seed: int = 0
 
     # density peaks parameters
     sigma_local: float = 5.0
@@ -361,9 +362,15 @@ class ClusteringConfig:
     radius_search: float = 25.0
     remove_clusters_smaller_than: int = 50
     noise_density: float = 0.0
-    outlier_radius: float = 10.0
-    outlier_neighbor_count: int = 5
+    outlier_radius: float = 25.0
+    outlier_neighbor_count: int = 10
     kdtree_subsample_max_size: int = 2_000_000
+
+    # gmm density peaks additional parameters
+    kmeanspp_initializations: int = 5
+    kmeans_iter: int = 50
+    components_per_channel: int = 20
+    component_overlap: float = 0.8
 
     # hdbscan parameters
     min_cluster_size: int = 25

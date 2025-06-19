@@ -9,7 +9,7 @@ from spikeinterface.core import BaseRecording
 from .cluster import (
     get_clusterer,
     get_clustering_features,
-    process_templates_for_matching,
+    postprocess,
 )
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
@@ -266,7 +266,7 @@ def match(
 
     # compute templates
     if template_data is None:
-        template_data = process_templates_for_matching(
+        template_data = postprocess(
             recording,
             sorting,
             motion_est=motion_est,

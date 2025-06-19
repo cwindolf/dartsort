@@ -214,6 +214,7 @@ class DensityPeaksClusterer(Clusterer):
             radius_search=clustering_cfg.radius_search,
             remove_clusters_smaller_than=clustering_cfg.remove_clusters_smaller_than,
             noise_density=clustering_cfg.noise_density,
+            random_seed=clustering_cfg.random_seed,
             outlier_radius=clustering_cfg.outlier_radius,
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             kdtree_subsample_max_size=clustering_cfg.kdtree_subsample_max_size,
@@ -287,6 +288,94 @@ class DensityPeaksClusterer(Clusterer):
 
 clustering_strategies["dpc"] = DensityPeaksClusterer
 clustering_strategies["density_peaks_uhdversion"] = DensityPeaksClusterer
+
+
+class GMMDensityPeaksClusterer(Clusterer):
+    def __init__(
+        self,
+        outlier_neighbor_count=10,
+        outlier_radius=25.0,
+        remove_clusters_smaller_than=50,
+        workers=-1,
+        n_initializations=5,
+        n_iter=50,
+        max_components_per_channel=20,
+        min_spikes_per_component=10,
+        random_state=0,
+        kmeanspp_min_dist=5.0,
+        hellinger_cutoff=0.8,
+        max_sigma=5.0,
+        max_samples=2_000_000,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.outlier_neighbor_count = outlier_neighbor_count
+        self.outlier_radius = outlier_radius
+        self.remove_clusters_smaller_than = remove_clusters_smaller_than
+        self.workers = workers
+        self.n_initializations = n_initializations
+        self.n_iter = n_iter
+        self.max_components_per_channel = max_components_per_channel
+        self.min_spikes_per_component = min_spikes_per_component
+        self.random_state = random_state
+        self.hellinger_cutoff = hellinger_cutoff
+        self.max_samples = max_samples
+
+        # unconfigured params
+        self.kmeanspp_min_dist = kmeanspp_min_dist
+        self.max_sigma = max_sigma
+
+
+    @classmethod
+    def from_config(
+        cls,
+        clustering_cfg,
+        computation_cfg=None,
+        save_cfg=None,
+        save_labels_dir=None,
+        labels_fmt=None,
+    ):
+        return cls(
+            outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
+            outlier_radius=clustering_cfg.outlier_radius,
+            remove_clusters_smaller_than=clustering_cfg.remove_clusters_smaller_than,
+            workers=clustering_cfg.workers,
+            n_initializations=clustering_cfg.kmeanspp_initializations,
+            n_iter=clustering_cfg.kmeans_iter,
+            max_components_per_channel=clustering_cfg.components_per_channel,
+            random_state=clustering_cfg.random_seed,
+            hellinger_cutoff=clustering_cfg.component_overlap,
+            max_samples=clustering_cfg.kdtree_subsample_max_size,
+            computation_cfg=computation_cfg,
+            save_cfg=save_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=labels_fmt,
+        )
+
+    def _cluster(self, features, sorting, recording, motion_est=None):
+        res = density.gmm_density_peaks(
+            X=features.features,
+            channels=sorting.channels,
+            outlier_neighbor_count=self.outlier_neighbor_count,
+            outlier_radius=self.outlier_radius,
+            remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+            workers=self.workers,
+            n_initializations=self.n_initializations,
+            n_iter=self.n_iter,
+            max_components_per_channel=self.max_components_per_channel,
+            min_spikes_per_component=self.min_spikes_per_component,
+            random_state=self.random_state,
+            kmeanspp_min_dist=self.kmeanspp_min_dist,
+            hellinger_cutoff=self.hellinger_cutoff,
+            max_sigma=self.max_sigma,
+            max_samples=self.max_samples,
+        )
+        return res['labels']
+
+
+
+clustering_strategies["gmmdpc"] = GMMDensityPeaksClusterer
+
 
 
 class RecursiveHDBSCANClusterer(Clusterer):
