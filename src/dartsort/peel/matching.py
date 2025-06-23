@@ -10,11 +10,11 @@ import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from dartsort.templates import template_util
+from dartsort.templates import template_util, TemplateData
 from dartsort.templates.pairwise import CompressedPairwiseConv
 from dartsort.transform import WaveformPipeline
 from dartsort.util import drift_util, spiketorch
-from dartsort.util.data_util import SpikeDataset, get_residual_snips, get_labels
+from dartsort.util.data_util import SpikeDataset, get_residual_snips
 from dartsort.util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
@@ -458,6 +458,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             pass
         else:
             threshold = threshold**2
+
+        if template_data is None:
+            assert matching_cfg.precomputed_templates_npz is not None
+            template_data = TemplateData.from_npz(
+                matching_cfg.precomputed_templates_npz
+            )
 
         return cls(
             recording,

@@ -159,6 +159,7 @@ class DARTsortUserConfig:
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
+    detection_type: str = "subtract"
     initial_split_only: bool = True
     resume_with_split: bool = False
 
@@ -213,3 +214,4 @@ class DeveloperConfig(DARTsortUserConfig):
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
+    precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)

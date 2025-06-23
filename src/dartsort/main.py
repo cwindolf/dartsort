@@ -30,6 +30,9 @@ from .util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
     RefinementConfig,
+    SubtractionConfig,
+    ThresholdingConfig,
+    MatchingConfig,
     to_internal_config,
     default_dartsort_cfg,
     default_waveform_cfg,
@@ -101,21 +104,18 @@ def _dartsort_impl(
 
     if next_step == 0:
         # first step: initial detection and motion estimation
-        sorting = subtract(
+        sorting = initial_detection(
             output_dir=store_dir,
             recording=recording,
-            waveform_cfg=cfg.waveform_cfg,
-            featurization_cfg=cfg.featurization_cfg,
-            subtraction_cfg=cfg.subtraction_cfg,
-            computation_cfg=cfg.computation_cfg,
+            cfg=cfg,
             overwrite=overwrite,
         )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
-        is_final = cfg.subtract_only or cfg.dredge_only or not cfg.matching_iterations
+        is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final=is_final)
 
-        if cfg.subtract_only:
+        if cfg.detect_only:
             ret["sorting"] = sorting
             return ret
 
@@ -202,6 +202,53 @@ def _dartsort_impl(
     ret["sorting"] = sorting
     return ret
 
+def initial_detection(
+    output_dir: str | Path,
+    recording,
+    cfg: DARTsortInternalConfig,
+    overwrite=False,
+    show_progress=True,
+):
+    if cfg.detection_type == "subtract":
+        assert isinstance(cfg.initial_detection_cfg, SubtractionConfig)
+        return subtract(
+            output_dir=output_dir,
+            recording=recording,
+            waveform_cfg=cfg.waveform_cfg,
+            featurization_cfg=cfg.featurization_cfg,
+            subtraction_cfg=cfg.initial_detection_cfg,
+            computation_cfg=cfg.computation_cfg,
+            overwrite=overwrite,
+            show_progress=show_progress,
+        )
+    elif cfg.detection_type == "threshold":
+        assert isinstance(cfg.initial_detection_cfg, ThresholdingConfig)
+        return threshold(
+            output_dir=output_dir,
+            recording=recording,
+            waveform_cfg=cfg.waveform_cfg,
+            thresholding_cfg=cfg.initial_detection_cfg,
+            featurization_cfg=cfg.featurization_cfg,
+            overwrite=overwrite,
+            show_progress=show_progress,
+            computation_cfg=cfg.computation_cfg,
+        )
+    elif cfg.detection_type == "match":
+        assert isinstance(cfg.initial_detection_cfg, MatchingConfig)
+        return match(
+            output_dir=output_dir,
+            recording=recording,
+            waveform_cfg=cfg.waveform_cfg,
+            template_cfg=cfg.template_cfg,
+            featurization_cfg=cfg.featurization_cfg,
+            matching_cfg=cfg.initial_detection_cfg,
+            overwrite=overwrite,
+            show_progress=show_progress,
+            computation_cfg=cfg.computation_cfg,
+        )
+    else:
+        raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
+
 
 def subtract(
     output_dir: str | Path,
@@ -265,7 +312,7 @@ def match(
     model_dir = output_dir / model_subdir
 
     # compute templates
-    if template_data is None:
+    if template_data is None and not matching_cfg.precomputed_templates_npz:
         sorting, template_data = postprocess(
             recording,
             sorting,

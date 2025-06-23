@@ -267,6 +267,7 @@ class MatchingConfig:
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
         merge_distance_threshold=0.025
     )
+    precomputed_templates_npz: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
@@ -500,7 +501,7 @@ class DARTsortInternalConfig:
 
     waveform_cfg: WaveformConfig = WaveformConfig()
     featurization_cfg: FeaturizationConfig = FeaturizationConfig()
-    subtraction_cfg: SubtractionConfig = SubtractionConfig()
+    initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig = SubtractionConfig()
     template_cfg: TemplateConfig = TemplateConfig()
     clustering_cfg: ClusteringConfig = ClusteringConfig()
     clustering_features_cfg: ClusteringFeaturesConfig = ClusteringFeaturesConfig()
@@ -511,8 +512,9 @@ class DARTsortInternalConfig:
     computation_cfg: ComputationConfig = ComputationConfig()
 
     # high level behavior
-    subtract_only: bool = False
+    detect_only: bool = False
     dredge_only: bool = False
+    detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     final_refinement: bool = True
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
@@ -551,33 +553,55 @@ def to_internal_config(cfg):
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
     )
-    subtraction_denoising_cfg = FeaturizationConfig(
-        denoise_only=True,
-        extract_radius=cfg.subtraction_radius_um,
-        do_nn_denoise=cfg.use_nn_in_subtraction,
-        do_tpca_denoise=cfg.do_tpca_denoise,
-        tpca_rank=cfg.temporal_pca_rank,
-        tpca_fit_radius=cfg.fit_radius_um,
-        input_waveforms_name="raw",
-        output_waveforms_name="subtracted",
-        save_input_waveforms=cfg.save_subtracted_waveforms,
-        nn_denoiser_class_name=cfg.nn_denoiser_class_name,
-        nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
-    )
-    subtraction_cfg = SubtractionConfig(
-        detection_threshold=cfg.initial_threshold,
-        spatial_dedup_radius=cfg.deduplication_radius_um,
-        subtract_radius=cfg.subtraction_radius_um,
-        singlechan_alignment_padding_ms=cfg.alignment_ms,
-        use_singlechan_templates=cfg.use_singlechan_templates,
-        use_universal_templates=cfg.use_universal_templates,
-        residnorm_decrease_threshold=cfg.denoiser_badness_factor
-        * (cfg.matching_threshold**2),
-        chunk_length_samples=cfg.chunk_length_samples,
-        first_denoiser_thinning=cfg.first_denoiser_thinning,
-        first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
-        subtraction_denoising_cfg=subtraction_denoising_cfg,
-    )
+
+    if cfg.detection_type == "subtract":
+        subtraction_denoising_cfg = FeaturizationConfig(
+            denoise_only=True,
+            extract_radius=cfg.subtraction_radius_um,
+            do_nn_denoise=cfg.use_nn_in_subtraction,
+            do_tpca_denoise=cfg.do_tpca_denoise,
+            tpca_rank=cfg.temporal_pca_rank,
+            tpca_fit_radius=cfg.fit_radius_um,
+            input_waveforms_name="raw",
+            output_waveforms_name="subtracted",
+            save_input_waveforms=cfg.save_subtracted_waveforms,
+            nn_denoiser_class_name=cfg.nn_denoiser_class_name,
+            nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
+        )
+        initial_detection_cfg = SubtractionConfig(
+            detection_threshold=cfg.initial_threshold,
+            spatial_dedup_radius=cfg.deduplication_radius_um,
+            subtract_radius=cfg.subtraction_radius_um,
+            singlechan_alignment_padding_ms=cfg.alignment_ms,
+            use_singlechan_templates=cfg.use_singlechan_templates,
+            use_universal_templates=cfg.use_universal_templates,
+            residnorm_decrease_threshold=cfg.denoiser_badness_factor
+            * (cfg.matching_threshold**2),
+            chunk_length_samples=cfg.chunk_length_samples,
+            first_denoiser_thinning=cfg.first_denoiser_thinning,
+            first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            subtraction_denoising_cfg=subtraction_denoising_cfg,
+        )
+    elif cfg.detection_type == "threshold":
+        initial_detection_cfg = ThresholdingConfig(
+            detection_threshold=cfg.initial_threshold,
+            spatial_dedup_radius=cfg.deduplication_radius_um,
+            chunk_length_samples=cfg.chunk_length_samples,
+        )
+    elif cfg.detection_type == "match":
+        assert cfg.precomputed_templates_npz is not None
+        initial_detection_cfg = MatchingConfig(
+            threshold=cfg.matching_threshold,
+            amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
+            amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
+            template_temporal_upsampling_factor=cfg.temporal_upsamples,
+            chunk_length_samples=cfg.chunk_length_samples,
+            precomputed_templates_npz=cfg.precomputed_templates_npz,
+        )
+    else:
+        raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
+
+
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um, realign_shift_ms=cfg.alignment_ms
     )
@@ -645,14 +669,16 @@ def to_internal_config(cfg):
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
-        subtraction_cfg=subtraction_cfg,
+        initial_detection_cfg=initial_detection_cfg,
         template_cfg=template_cfg,
         clustering_cfg=clustering_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
+        clustering_features_cfg=clustering_features_cfg,
         motion_estimation_cfg=motion_estimation_cfg,
         computation_cfg=computation_cfg,
+        detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
         overwrite_matching=cfg.overwrite_matching,

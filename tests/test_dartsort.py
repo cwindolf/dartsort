@@ -11,7 +11,7 @@ def test_fakedata_nonn(tmp_path, simulations, do_motion_estimation):
     sim_recording = simulations[sim_name]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
-        subtraction_cfg=dartsort.SubtractionConfig(
+        initial_detection_cfg=dartsort.SubtractionConfig(
             subtraction_denoising_cfg=dartsort.FeaturizationConfig(
                 denoise_only=True, do_nn_denoise=False
             )
@@ -69,7 +69,7 @@ def test_fakedata(tmp_path, simulations, sdcfg):
     sim_recording = simulations["driftn_szreg"]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
-        subtraction_cfg=dartsort.SubtractionConfig(
+        initial_detection_cfg=dartsort.SubtractionConfig(
             subtraction_denoising_cfg=sdcfg,
             first_denoiser_thinning=0.0,
         ),
@@ -102,3 +102,39 @@ def test_cli_help():
     # at least make sure the cli can do -h
     res = subprocess.run(["dartsort", "-h"], capture_output=True)
     assert not res.returncode
+
+
+@pytest.mark.parametrize('type', ['subtract', 'threshold', 'match'])
+def test_initial_detection_swap(tmp_path, simulations, type):
+    sim = simulations['driftn_szmini']
+    sim['templates'].to_npz(tmp_path / "temps.npz")
+    cfg = dartsort.DeveloperConfig(
+        dredge_only=True,
+        detection_type=type,
+        precomputed_templates_npz=str(tmp_path / "temps.npz"),
+        save_intermediate_features=True,
+    )
+    res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
+    assert res["sorting"].parent_h5_path.exists()
+    if type == "subtract":
+        h5_name = "subtraction"
+    elif type == "threshold":
+        h5_name = "threshold"
+    elif type == "match":
+        h5_name = "matching0"
+    else:
+        assert False
+    assert (tmp_path / f"{h5_name}.h5").exists()
+    assert not(tmp_path / "matching1.h5").exists()
+
+    if type == "match":
+        count_dif_tol = 0.05
+    elif type == "subtract":
+        count_dif_tol = 0.2
+    elif type == "threshold":
+        count_dif_tol = 0.4
+    else:
+        assert False
+    c0 = len(sim['sorting'])
+    c1 = len(res['sorting'])
+    assert abs(c0 - c1) < count_dif_tol * c0
