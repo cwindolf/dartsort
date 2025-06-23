@@ -266,7 +266,7 @@ def match(
 
     # compute templates
     if template_data is None:
-        template_data = postprocess(
+        sorting, template_data = postprocess(
             recording,
             sorting,
             motion_est=motion_est,
@@ -275,8 +275,7 @@ def match(
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,
             tsvd=template_denoising_tsvd,
-            template_save_folder=model_dir,
-            template_npz_filename=template_npz_filename,
+            template_npz_path=model_dir / template_npz_filename,
         )
 
     # instantiate peeler

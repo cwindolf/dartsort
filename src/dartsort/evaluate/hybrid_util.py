@@ -1,6 +1,6 @@
 import dataclasses
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Any
 import warnings
 
 import numpy as np
@@ -17,6 +17,7 @@ from tqdm.auto import tqdm
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import unshifted_raw_template_cfg, ComputationConfig
+from ..config import DeveloperConfig
 from . import simkit, comparison, analysis
 
 
@@ -364,3 +365,70 @@ def load_dartsort_step_unit_info_dataframes(
         df["stepix"] = step_ix
         df["stepname"] = step_name
         yield df
+
+
+def config_grid(
+    common_params: dict | None=None,
+    name_prefix="",
+    config_cls: Any=DeveloperConfig,
+    **grid_params,
+):
+    """Configuration grid search helper
+
+    Generate a set product of aptly named configuration dictionaries or objects.
+
+    Example usage:
+
+    ```python
+    dartsort_config_grid(
+        {'save_intermediate_labels': True, 'n_jobs_cpu': 2},
+        badness={".1":dict(denoiser_badness_factor=0.1),".25":dict(denoiser_badness_factor=0.25)},
+        crit={"hell":dict(merge_criterion="heldout_loglik"),"helb":dict(merge_criterion="heldout_elbo")},
+    )
+    => nice nested grid with names
+    ```
+
+    Arguments
+    ---------
+    common_params: dict
+        Arguments shared across all settings.
+    name_prefix: str
+        Will appear, with _, at the start of all keys in the returned dict.
+    config_cls: class or None
+    **grid_params
+        Each key-value pair here should be as follows. The key is like the
+        "tag" for this setting. The value is a dict whose keys are setting
+        nicknames and values are themselves dicts containing the actual
+        configurations. See the example above.
+
+    Returns
+    -------
+    grid: dict[str, config_cls]
+        My length is product(v for k, v in grid_params.items()).
+    """
+    if common_params is None:
+        common_params = {}
+
+    # base case (won't actually end up in the final grid)
+    grid = [(name_prefix, common_params)]
+
+    for param_nickname, param_settings in grid_params.items():
+        new_grid = []
+
+        for setting_nickname, kw in param_settings.items():
+            # induction
+            for cur_name, cur_params in grid:
+                prefix = f"{cur_name}_" if cur_name else ""
+                new_name = f"{prefix}{param_nickname}{setting_nickname}"
+                # new overrides old if overlapping
+                new_grid.append((new_name, cur_params | kw))
+
+        grid = new_grid
+
+    # convert to dict of configs
+    if config_cls is not None:
+        grid = {name: config_cls(**kw) for name, kw in grid}
+    else:
+        grid = dict(grid)
+
+    return grid

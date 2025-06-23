@@ -39,6 +39,8 @@ class TemplateData:
     parent_sorting_hdf5_path: str | None = None
 
     def __post_init__(self):
+        print(f"{self.templates.shape=}")
+        print(f"{self.spike_length_samples=}")
         assert self.templates.shape[1] == self.spike_length_samples
         assert self.trough_offset_samples < self.spike_length_samples
 
@@ -103,6 +105,8 @@ class TemplateData:
             templates=self.templates,
             unit_ids=self.unit_ids,
             spike_counts=self.spike_counts,
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
         )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom

@@ -46,10 +46,9 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
 
     def forward(self, waveforms, max_channels=None):
         odev = waveforms.device
-        (
-            channels_in_probe,
-            waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, max_channels, self.channel_index.to(odev))
+        channels_in_probe, waveforms_in_probe = get_channels_in_probe(
+            waveforms, max_channels, self.channel_index.to(odev)
+        )
 
         n_in_probe = len(waveforms_in_probe)
         dev = self.device
@@ -69,7 +68,12 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         return waveforms
 
     @classmethod
-    def load_from_pt(cls, pretrained_path=default_pretrained_path, clsname="SingleChannelDenoiser", **kwargs):
+    def load_from_pt(
+        cls,
+        pretrained_path=default_pretrained_path,
+        clsname="SingleChannelDenoiser",
+        **kwargs,
+    ):
         denoiser = dnclss[clsname]().load(pretrained_path)
         return cls(denoiser=denoiser, **kwargs)
 

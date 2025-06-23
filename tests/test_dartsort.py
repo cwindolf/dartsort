@@ -6,11 +6,9 @@ import dartsort
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(tmp_path, sim_recordings, do_motion_estimation):
-    sim_recording = (
-        sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
-    )
-    sim_recording = sim_recording["rec"]
+def test_fakedata_nonn(tmp_path, simulations, do_motion_estimation):
+    sim_name = "drifty_szreg" if do_motion_estimation else "driftn_szreg"
+    sim_recording = simulations[sim_name]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
         subtraction_cfg=dartsort.SubtractionConfig(
@@ -67,8 +65,8 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 
 
 @pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
-def test_fakedata(tmp_path, sim_recordings, sdcfg):
-    sim_recording = sim_recordings["static"]["rec"]
+def test_fakedata(tmp_path, simulations, sdcfg):
+    sim_recording = simulations["driftn_szreg"]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
         subtraction_cfg=dartsort.SubtractionConfig(

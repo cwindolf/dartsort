@@ -4,6 +4,8 @@ from logging import getLogger
 
 import numpy as np
 
+from ..util.spiketorch import ptp
+from ..util.py_util import resolve_path
 from ..util.internal_config import (
     default_matching_cfg,
     default_waveform_cfg,
@@ -98,10 +100,10 @@ def realign_and_chuck_noisy_template_units(
 
 def reorder_by_depth(sorting, template_data):
     assert template_data.registered_geom is not None
-    w = np.ptp(template_data.templates, axis=1)
+    w = ptp(template_data.templates, dim=1)
     if template_data.spike_counts_by_channel is not None:
         w *= np.sqrt(template_data.spike_counts_by_channel)
-    w /= w.sum(axis=1)
+    w /= w.sum(axis=1, keepdims=True)
     meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
 
     new_to_old = np.argsort(meanz)
@@ -113,17 +115,16 @@ def reorder_by_depth(sorting, template_data):
     sorting = replace(sorting, labels=labels)
 
     uids = np.arange(len(new_to_old))
-    assert np.array_equal(template_data.unit_ids[old_to_new], uids)
     scbc = template_data.raw_std_dev
     if scbc is not None:
-        scbc = scbc[old_to_new]
+        scbc = scbc[new_to_old]
     rsd = template_data.raw_std_dev
     if rsd is not None:
-        rsd = rsd[old_to_new]
+        rsd = rsd[new_to_old]
     template_data = TemplateData(
-        templates=template_data.templates[old_to_new],
+        templates=template_data.templates[new_to_old],
         unit_ids=uids,
-        spike_counts=template_data.spike_counts[old_to_new],
+        spike_counts=template_data.spike_counts[new_to_old],
         spike_counts_by_channel=scbc,
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
@@ -144,8 +145,14 @@ def postprocess(
     tsvd=None,
     computation_cfg=None,
     depth_order=True,
+    template_npz_path=None,
 ):
     from .merge import merge_templates
+
+    if template_npz_path is not None:
+        template_npz_path = resolve_path(template_npz_path)
+        if template_npz_path.exists():
+            return sorting, TemplateData.from_npz(template_npz_path)
 
     # get tsvd to share across steps
     if tsvd is None and template_cfg.low_rank_denoising:
@@ -177,7 +184,7 @@ def postprocess(
     # merge
     merge_cfg = matching_cfg.template_merge_cfg
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
-        return template_data
+        return sorting, template_data
 
     merge_res = merge_templates(
         sorting=sorting,
@@ -204,7 +211,7 @@ def postprocess(
     ul, uc = np.unique(new_unit_ids, return_counts=True)
     needs_recompute = ul[uc > 1]
     if not needs_recompute.size:
-        return template_data
+        return sorting, template_data
     recompute_labels = np.where(
         np.isin(sorting.labels, needs_recompute), sorting.labels, -1
     )
@@ -269,8 +276,11 @@ def postprocess(
         spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
+    if template_npz_path is not None:
+        template_npz_path.parent.mkdir(exist_ok=True)
+        template_data.to_npz(template_npz_path)
 
     if depth_order:
-        sorting, templates = reorder_by_depth(sorting, templates)
+        sorting, template_data = reorder_by_depth(sorting, template_data)
 
     return sorting, template_data

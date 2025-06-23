@@ -570,11 +570,11 @@ def test_fakedata_nonn(tmp_path):
     _test_fakedata_nonn(tmp_path, 7.0)
 
 
-@pytest.mark.parametrize("rec_type", ["static", "drifting"])
+@pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
 @pytest.mark.parametrize("threshold", ["check", "fp_control"])
-def test_with_simkit(sim_recordings, rec_type, threshold):
-    sim = sim_recordings[rec_type]
-    rec = sim["rec"]
+def test_with_simkit(simulations, sim_name, threshold):
+    sim = simulations[sim_name]
+    rec = sim["recording"]
     template_data = sim["template_data"]
     motion_est = sim["motion_est"]
     gt_st = sim["sorting"]

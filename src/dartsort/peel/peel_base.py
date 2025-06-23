@@ -12,7 +12,12 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from tqdm.auto import tqdm
 
 from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import subsample_waveforms, SpikeDataset, extract_random_snips
+from dartsort.util.data_util import (
+    subsample_waveforms,
+    SpikeDataset,
+    extract_random_snips,
+    divide_randomly,
+)
 from dartsort.util.multiprocessing_util import pool_from_cfg
 from dartsort.util.py_util import delay_keyboard_interrupt
 from dartsort.util import job_util
@@ -175,16 +180,8 @@ class BasePeeler(torch.nn.Module):
         if total_residual_snips is not None:
             assert residual_snips_per_chunk is None
             resids_remaining = total_residual_snips - resids_so_far
-            residual_snips_per_chunk = np.zeros(len(chunks_to_do), dtype=int)
-            n_even_split = resids_remaining // len(chunks_to_do)
-            residual_snips_per_chunk += n_even_split
-            resids_remaining -= len(chunks_to_do) * n_even_split
-            choices = self.fit_subsampling_random_state.choice(
-                len(chunks_to_do), size=resids_remaining
-            )
-            np.add.at(residual_snips_per_chunk, choices, 1)
-            assert (
-                residual_snips_per_chunk.sum() == total_residual_snips - resids_so_far
+            residual_snips_per_chunk = divide_randomly(
+                resids_remaining, len(chunks_to_do), self.fit_subsampling_random_state
             )
 
         if residual_snips_per_chunk is None:

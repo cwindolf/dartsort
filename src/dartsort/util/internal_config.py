@@ -584,7 +584,7 @@ def to_internal_config(cfg):
     clustering_cfg = ClusteringConfig(
         sigma_local=cfg.density_bandwidth,
         sigma_regional=5 * cfg.density_bandwidth,
-        outlier_radius=2 * cfg.density_bandwidth,
+        outlier_radius=5 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
         remove_clusters_smaller_than=cfg.min_cluster_size,
     )
