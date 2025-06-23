@@ -148,10 +148,15 @@ class FactorizedNoise(torch.nn.Module):
 class WhiteNoise(torch.nn.Module):
     """White noise to mimic the StationaryFactorizedNoise for use in sims."""
 
+    margin = 0
+
     def __init__(self, n_channels, scale=1.0):
         super().__init__()
         self.n_channels = n_channels
         self.scale = scale
+
+    def unwhiten(self, snippet):
+        return snippet
 
     def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         assert t is not None
@@ -164,11 +169,12 @@ class WhiteNoise(torch.nn.Module):
 class StationaryFactorizedNoise(torch.nn.Module):
     def __init__(self, spatial_std, vt_spatial, kernel_fft, block_size, t):
         super().__init__()
-        self.spatial_std = spatial_std
-        self.vt_spatial = vt_spatial
-        self.kernel_fft = kernel_fft
+        self.spatial_std = torch.asarray(spatial_std)
+        self.vt_spatial = torch.asarray(vt_spatial)
+        self.kernel_fft = torch.asarray(kernel_fft)
         self.block_size = block_size
         self.t = t
+        self.margin = (self.t - 1) // 2
 
     def spatial_cov(self):
         rt = self.spatial_std * self.vt_spatial.T
@@ -186,6 +192,30 @@ class StationaryFactorizedNoise(torch.nn.Module):
         # zca
         wsnip = wsnip.T @ self.vt_spatial.T
         return wsnip
+
+    def unwhiten(self, snippet):
+        snippet = torch.asarray(
+            snippet, device=self.spatial_std.device, dtype=self.spatial_std.dtype
+        )
+        flat = snippet.ndim == 2
+        if flat:
+            snippet = snippet[None]
+        size, t_padded, c = snippet.shape
+        t = t_padded - self.t + 1
+        out = snippet.new_empty(size, c, t)
+        for j in range(size):
+            out[j] = spiketorch.single_inv_oaconv1d(
+                snippet[j].T,
+                s2=self.t,
+                f2=self.kernel_fft,
+                block_size=self.block_size,
+                norm="ortho",
+            )
+        spatial_part = self.spatial_std[:, None] * self.vt_spatial
+        out = torch.einsum("nct,cd->ntd", out, spatial_part)
+        if flat:
+            out = out[0]
+        return out
 
     def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         """Simulate stationary factorized noise
@@ -214,17 +244,8 @@ class StationaryFactorizedNoise(torch.nn.Module):
 
         # need extra room at the edges to do valid convolution
         t_padded = t + self.t - 1
-        noise = torch.randn(size * c, t_padded, generator=generator, device=device)
-        noise = spiketorch.single_inv_oaconv1d(
-            noise,
-            s2=self.t,
-            f2=self.kernel_fft,
-            block_size=self.block_size,
-            norm="ortho",
-        )
-        noise = noise.view(size, c, t)
-        spatial_part = self.spatial_std[:, None] * self.vt_spatial
-        return torch.einsum("nct,cd->ntd", noise, spatial_part)
+        noise = torch.randn(size, t_padded, c, generator=generator, device=device)
+        return self.unwhiten(noise)
 
     @classmethod
     def estimate(cls, snippets):

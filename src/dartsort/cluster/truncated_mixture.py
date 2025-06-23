@@ -1359,7 +1359,7 @@ class CandidateSet:
         max_nneighbs = distances.isfinite().sum(0).max()
 
         k = min(n_search, distances.shape[0] - 1, max_nneighbs)
-        _, topkinds = torch.topk(distances, k=k, dim=0, largest=False)
+        _, topkinds = torch.topk(distances.T, k=k, dim=1, largest=False)
         assert topkinds.shape == (self.n_units, k)
         topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
         return topkinds

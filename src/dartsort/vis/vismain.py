@@ -4,10 +4,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..eval.analysis import (DARTsortAnalysis, basic_template_cfg,
+from ..evaluate.analysis import (DARTsortAnalysis, basic_template_cfg,
                                         no_realign_template_cfg)
 from ..util.data_util import DARTsortSorting
-from ..eval.hybrid_util import load_dartsort_step_sortings
+from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit
 from .sorting import make_sorting_summary
 

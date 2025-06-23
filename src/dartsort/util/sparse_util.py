@@ -1,9 +1,9 @@
-import numpy as np
-import torch
+import joblib
 import numba
+import numpy as np
 from scipy.sparse import coo_array, csc_array
-
 from scipy.special import logsumexp
+import torch
 
 
 def get_coo_storage(ns_total, storage, use_storage):
@@ -118,7 +118,6 @@ def csc_insert(row, write_offsets, inds, csc_indices, csc_data, liks):
         csc_indices[data_ix] = row
         csc_data[data_ix] = liks[j]
         write_offsets[ind] += 1
-
 
 def allocate_topk(n_columns, k):
     data = np.full((n_columns, k), -np.inf, dtype="float32")

@@ -150,6 +150,7 @@ class WaveformPipeline(torch.nn.Module):
                     weights=weights,
                 )
             transformer.eval()
+            transformer.requires_grad_(False)
 
             # if we're done already, stop before denoising
             if not self.needs_fit():
@@ -160,6 +161,7 @@ class WaveformPipeline(torch.nn.Module):
                 if transformer.is_featurizer:
                     # result is tuple wfs, feats
                     waveforms = waveforms[0]
+        assert not waveforms.requires_grad
 
     def precompute(self):
         for transformer in self.transformers:

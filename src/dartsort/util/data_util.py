@@ -93,7 +93,6 @@ class DARTsortSorting:
         np.savez(sorting_npz, **data)
 
     def mask(self, mask):
-
         if np.dtype(mask.dtype).kind == "b":
             mask = mask.nonzero()
 
@@ -101,7 +100,7 @@ class DARTsortSorting:
         if self.extra_features:
             n = self.n_spikes
             for k, v in self.extra_features.items():
-                assert k != 'mask_indices'  # no recursion...
+                assert k != "mask_indices"  # no recursion...
                 if v.shape[0] != n:
                     continue
                 extra_features[k] = v[mask]
@@ -585,6 +584,7 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
 
 
 def extract_random_snips(rg, chunk, n, sniplen):
+    rg = np.random.default_rng(rg)
     if sniplen * n > chunk.shape[0]:
         warnings.warn("Can't extract this many non-overlapping snips.")
         times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
@@ -685,3 +685,17 @@ def fit_reweighting(
     sample_p = sample_p.astype(float)  # ensure double before normalizing
     sample_p /= sample_p.sum()
     return sample_p
+
+
+def divide_randomly(n_things, n_bins, rg):
+    things_per_bin = np.zeros(n_bins, dtype=np.int64)
+    n_even_split = n_things // n_bins
+    things_per_bin += n_even_split
+    n_things_remaining = n_things - n_bins * n_even_split
+    assert n_things_remaining >= 0
+    if n_things_remaining:
+        rg = np.random.default_rng(rg)
+        choices = rg.choice(n_bins, size=n_things_remaining)
+        np.add.at(things_per_bin, choices, 1)
+    assert things_per_bin.sum() == n_things
+    return things_per_bin

@@ -9,7 +9,7 @@ from ..cluster import merge
 from ..templates import templates
 from ..templates.get_templates import fit_tsvd
 from ..util import data_util, internal_config
-from ..eval import analysis
+from ..evaluate import analysis
 from . import analysis_plots, scatterplots, layout, unit
 
 basic_template_config = internal_config.TemplateConfig(

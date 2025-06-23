@@ -3794,7 +3794,7 @@ class GaussianUnit(torch.nn.Module):
 
 
 def all_partitions(ids):
-    ids = np.array(ids).ravel()
+    ids = np.asarray(ids).ravel()
     group_ids = np.zeros(len(ids), dtype=np.int64)
     for m in range(1, len(ids) + 1):
         for partition in multiset_partitions(len(ids), m=m):

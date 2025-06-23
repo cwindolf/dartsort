@@ -46,9 +46,14 @@ def fast_nanmedian(x, axis=-1):
 
 def ptp(waveforms, dim=1):
     is_tensor = torch.is_tensor(waveforms)
-    if not is_tensor:
-        return np.ptp(waveforms, axis=dim)
-    return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
+    waveforms = torch.asarray(waveforms)
+    if waveforms.shape[dim] > 1:
+        v = waveforms.amax(dim=dim).sub_(waveforms.amin(dim=dim))
+    else:
+        v = waveforms.abs().amax(dim=dim)
+    if is_tensor:
+        return v
+    return v.numpy()
 
 
 def elbo(Q, log_liks, reduce_mean=True, dim=1):

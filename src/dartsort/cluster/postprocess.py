@@ -4,6 +4,8 @@ from logging import getLogger
 
 import numpy as np
 
+from ..util.spiketorch import ptp
+from ..util.py_util import resolve_path
 from ..util.internal_config import (
     default_matching_cfg,
     default_waveform_cfg,
@@ -96,7 +98,44 @@ def realign_and_chuck_noisy_template_units(
     return new_sorting, new_template_data
 
 
-def process_templates_for_matching(
+def reorder_by_depth(sorting, template_data):
+    assert template_data.registered_geom is not None
+    w = ptp(template_data.templates, dim=1)
+    if template_data.spike_counts_by_channel is not None:
+        w *= np.sqrt(template_data.spike_counts_by_channel)
+    w /= w.sum(axis=1, keepdims=True)
+    meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
+
+    new_to_old = np.argsort(meanz)
+    old_to_new = np.argsort(new_to_old)
+
+    valid = np.flatnonzero(sorting.labels >= 0)
+    labels = np.full_like(sorting.labels, -1)
+    labels[valid] = old_to_new[sorting.labels[valid]]
+    sorting = replace(sorting, labels=labels)
+
+    uids = np.arange(len(new_to_old))
+    scbc = template_data.raw_std_dev
+    if scbc is not None:
+        scbc = scbc[new_to_old]
+    rsd = template_data.raw_std_dev
+    if rsd is not None:
+        rsd = rsd[new_to_old]
+    template_data = TemplateData(
+        templates=template_data.templates[new_to_old],
+        unit_ids=uids,
+        spike_counts=template_data.spike_counts[new_to_old],
+        spike_counts_by_channel=scbc,
+        raw_std_dev=rsd,
+        registered_geom=template_data.registered_geom,
+        trough_offset_samples=template_data.trough_offset_samples,
+        spike_length_samples=template_data.spike_length_samples,
+        parent_sorting_hdf5_path=template_data.parent_sorting_hdf5_path,
+    )
+    return sorting, template_data
+
+
+def postprocess(
     recording,
     sorting,
     motion_est=None,
@@ -105,10 +144,15 @@ def process_templates_for_matching(
     template_cfg=coarse_template_cfg,
     tsvd=None,
     computation_cfg=None,
-    template_save_folder=None,
-    template_npz_filename=None,
+    depth_order=True,
+    template_npz_path=None,
 ):
     from .merge import merge_templates
+
+    if template_npz_path is not None:
+        template_npz_path = resolve_path(template_npz_path)
+        if template_npz_path.exists():
+            return sorting, TemplateData.from_npz(template_npz_path)
 
     # get tsvd to share across steps
     if tsvd is None and template_cfg.low_rank_denoising:
@@ -140,7 +184,7 @@ def process_templates_for_matching(
     # merge
     merge_cfg = matching_cfg.template_merge_cfg
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
-        return template_data
+        return sorting, template_data
 
     merge_res = merge_templates(
         sorting=sorting,
@@ -167,7 +211,7 @@ def process_templates_for_matching(
     ul, uc = np.unique(new_unit_ids, return_counts=True)
     needs_recompute = ul[uc > 1]
     if not needs_recompute.size:
-        return template_data
+        return sorting, template_data
     recompute_labels = np.where(
         np.isin(sorting.labels, needs_recompute), sorting.labels, -1
     )
@@ -232,4 +276,11 @@ def process_templates_for_matching(
         spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
-    return template_data
+    if template_npz_path is not None:
+        template_npz_path.parent.mkdir(exist_ok=True)
+        template_data.to_npz(template_npz_path)
+
+    if depth_order:
+        sorting, template_data = reorder_by_depth(sorting, template_data)
+
+    return sorting, template_data

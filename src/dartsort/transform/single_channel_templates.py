@@ -77,6 +77,8 @@ class SingleChannelTemplates(BaseWaveformModule):
         assert singlechan_waveforms.ndim == 3
         assert singlechan_waveforms.shape[2] == 1
         singlechan_waveforms = singlechan_waveforms[:, :, 0]
+        print(f"{waveforms.requires_grad=}")
+        print(f"{singlechan_waveforms.requires_grad=}")
         templates = get_singlechan_centroids(
             singlechan_waveforms=singlechan_waveforms,
             trough_offset_samples=self.template_trough,

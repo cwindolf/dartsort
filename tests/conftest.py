@@ -1,49 +1,33 @@
-from dataclasses import replace
-from itertools import product
-
 import pytest
-
-from dartsort.util import noise_util, data_util
-from dartsort.eval import simkit
-
+from dartsort.evaluate import simkit, config_grid
 
 
 @pytest.fixture(scope="session")
-def sim_recordings(tmp_path_factory):
-    geom = simkit.generate_geom()
-
-    recs = {}
-
-    for drifting, mini in product((True, False), (True, False)):
-        kind = "drifting" if drifting else "static"
-        suffix = "_mini" if mini else ""
-        t_s = 4 if mini else 9.9
-        n_units = 20 if mini else 40
-        fr_boost = 10 if mini else 0
-
-        # a static example
-        tmp_path = tmp_path_factory.mktemp(f"sim_recording_{kind}{suffix}")
-        rec_sim = simkit.SimulatedRecording(
-            duration_samples=t_s * 30_000,
-            template_simulator=simkit.PointSource3ExpSimulator(
-                geom, n_units=n_units, temporal_jitter=4
+def simulations(tmp_path_factory):
+    sim_settings = config_grid(
+        common_params=dict(
+            probe_kwargs=dict(
+                num_columns=2, num_contact_per_column=12, y_shift_per_column=None
             ),
-            noise=noise_util.WhiteNoise(len(geom)),
-            min_fr_hz=20.0 + fr_boost,
-            max_fr_hz=31.0 + fr_boost,
-            drift_speed=1.0 * drifting,
-        )
-        h5_path = tmp_path / "sim.h5"
-        # add tpca features to the mini ones only
-        rec = rec_sim.simulate(h5_path, with_tpca_features=mini)
-        info = dict(
-            rec=rec,
-            motion_est=rec_sim.motion_estimate(),
-            template_data=replace(
-                rec_sim.template_data(), parent_sorting_hdf5_path=h5_path
+            temporal_jitter=4,
+            noise_kind="white",
+        ),
+        config_cls=None,
+        drift={"y": dict(drift_speed=1.0), "n": dict(drift_speed=0.0)},
+        sz={
+            "reg": dict(
+                duration_seconds=9.9, n_units=40, min_fr_hz=20.0, max_fr_hz=31.0
             ),
-            sorting=data_util.DARTsortSorting.from_peeling_hdf5(h5_path),
-        )
-        recs[f"{kind}{suffix}"] = info
+            "mini": dict(
+                duration_seconds=3.0, n_units=20, min_fr_hz=30.0, max_fr_hz=41.0
+            ),
+        },
+    )
+    assert len(sim_settings) == 4
 
-    return recs
+    simulations = {}
+    for sim_name, kw in sim_settings.items():
+        p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
+        simulations[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
+
+    return simulations

@@ -114,6 +114,7 @@ def test_all_transformers():
 
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
+    print(f"{waveforms.requires_grad=}")
     print("-- Precompute")
     pipeline.precompute()
     print("-- Pre-fit check")
