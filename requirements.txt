@@ -4,7 +4,7 @@ matplotlib
 numpy >= 2.0
 pytest
 torch >= 2.0
-scipy >= 1.13
+scipy >= 1.15
 scikit-learn
 spikeinterface
 tqdm
