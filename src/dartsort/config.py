@@ -180,8 +180,8 @@ class DeveloperConfig(DARTsortUserConfig):
     channels_strategy: str = "count"
     hard_noise: bool = False
 
-    initial_amp_feat: bool = True
-    initial_pc_feats: int = 0
+    initial_amp_feat: bool = False
+    initial_pc_feats: int = 2
     initial_pc_scale: float = 2.5
 
     n_waveforms_fit: int = 20_000
