@@ -164,6 +164,7 @@ class Decollider(BaseMultichannelDenoiser):
         with torch.enable_grad():
             res = self._fit(train_data, val_data)
         self._needs_fit = False
+        self.requires_grad_(False)
         return res
 
     def forward_unbatched(self, waveforms, max_channels):

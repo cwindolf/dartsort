@@ -575,7 +575,7 @@ def test_fakedata_nonn(tmp_path):
 def test_with_simkit(simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]
-    template_data = sim["template_data"]
+    template_data = sim["templates"]
     motion_est = sim["motion_est"]
     gt_st = sim["sorting"]
 

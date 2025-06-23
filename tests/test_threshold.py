@@ -2,7 +2,7 @@ import dartsort
 
 
 def test_sim(tmp_path, simulations):
-    rec = simulations["driftn_szmini"]["rec"]
+    rec = simulations["driftn_szmini"]["recording"]
     gt_st = simulations["driftn_szmini"]["sorting"]
 
     st = dartsort.threshold(

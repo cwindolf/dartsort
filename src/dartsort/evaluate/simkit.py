@@ -202,7 +202,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         matches = np.square(geom[None] - rgeom[:, None]).sum(2).argmin(0)
         return rgeom, matches
 
-    def template_data(self):
+    def template_data(self, hdf5_path=None):
         if not self.segment.drift_speed:
             return TemplateData(
                 templates=self.templates()[1],
@@ -211,6 +211,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 registered_geom=self.get_channel_locations(),
                 trough_offset_samples=self.segment.trough_offset_samples,
                 spike_length_samples=self.segment.spike_length_samples,
+                parent_sorting_hdf5_path=hdf5_path,
             )
 
         rgeom, matches = self.registered_geom()
@@ -226,6 +227,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             registered_geom=rgeom,
             trough_offset_samples=self.segment.trough_offset_samples,
             spike_length_samples=self.segment.spike_length_samples,
+            parent_sorting_hdf5_path=hdf5_path,
         )
 
     def gt_unit_information(self):
@@ -383,7 +385,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         self.gt_unit_information().to_csv(unit_info_csv)
         with open(motion_est_pkl, "wb") as jar:
             pickle.dump(self.motion_estimate(), jar)
-        self.template_data().to_npz(templates_npz)
+        self.template_data(sorting_h5).to_npz(templates_npz)
 
 
 class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
