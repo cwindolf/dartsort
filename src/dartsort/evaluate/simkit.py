@@ -373,13 +373,21 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         motion_est_pkl = folder / "motion_est.pkl"
         unit_info_csv = folder / "unit_information.csv"
 
-        recording = self.save_to_folder(
-            folder=recording_dir,
-            overwrite=overwrite,
-            n_jobs=n_jobs,
-            pool_engine="thread",
-            chunk_duration=chunk_len_s,
-        )
+        with warnings.catch_warnings(record=True) as ws:
+            recording = self.save_to_folder(
+                folder=recording_dir,
+                overwrite=overwrite,
+                n_jobs=n_jobs,
+                pool_engine="thread",
+                chunk_duration=chunk_len_s,
+            )
+            for w in ws:
+                msg = str(w.message)
+                if msg.startswith("The extractor is not serializable "):
+                    continue
+                if msg.startswith("auto_cast_uint"):
+                    continue
+                raise w
         self.save_features_to_hdf5(
             sorting_h5,
             n_jobs=n_jobs,

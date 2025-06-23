@@ -719,6 +719,7 @@ def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
     if temporal_jitter == 1:
         return waveforms[:, None]
     n, t, c = waveforms.shape
+    dtype = waveforms.dtype
     waveforms = waveforms.transpose(0, 2, 1).reshape((n * c, t))
     invalid = np.flatnonzero(np.isnan(waveforms[:, 0]))
     waveforms = np.nan_to_num(waveforms, copy=False)
@@ -726,5 +727,5 @@ def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
     waveforms[invalid] = np.nan
     waveforms = waveforms.reshape(n, c, temporal_jitter, t)
     waveforms = waveforms.transpose(0, 2, 3, 1)
-    waveforms = np.ascontiguousarray(waveforms)
+    waveforms = np.ascontiguousarray(waveforms, dtype=dtype)
     return waveforms
