@@ -162,6 +162,7 @@ class DeveloperConfig(DARTsortUserConfig):
     detection_type: str = "subtract"
     initial_split_only: bool = True
     resume_with_split: bool = False
+    cluster_strategy: str = "gmmdpc"
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False

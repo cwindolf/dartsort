@@ -606,6 +606,7 @@ def to_internal_config(cfg):
         denoising_fit_radius=cfg.fit_radius_um, realign_shift_ms=cfg.alignment_ms
     )
     clustering_cfg = ClusteringConfig(
+        cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
         sigma_regional=5 * cfg.density_bandwidth,
         outlier_radius=5 * cfg.density_bandwidth,
