@@ -339,7 +339,7 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
-    n_main_channel_pcs: int = 1
+    n_main_channel_pcs: int = 2
     pc_scale: float = 2.5
     adaptive_feature_scales: bool = False
 
