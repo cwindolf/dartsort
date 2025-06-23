@@ -300,7 +300,6 @@ def density_peaks(
     data = np.ones(has_nhdn.size)
     graph = coo_array((data, (nhdn[has_nhdn], has_nhdn)), shape=(n, n))
     ncc, labels = connected_components(graph)
-    print(f"{ncc=}")
 
     if remove_borders:
         labels = remove_border_points(

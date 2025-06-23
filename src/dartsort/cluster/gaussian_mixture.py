@@ -1767,7 +1767,6 @@ class SpikeMixtureModel(torch.nn.Module):
         split_labels = kmeans_res["labels"]
         responsibilities = kmeans_res["responsibilities"]
         assert split_labels is not None
-        assert responsibilities is not None
         del kmeans_res
         if debug:
             result["split_labels"] = split_labels
@@ -1778,6 +1777,7 @@ class SpikeMixtureModel(torch.nn.Module):
         assert split_ids.min() >= 0
         if split_labels.unique().numel() <= 1:
             return result
+        assert responsibilities is not None
         responsibilities = responsibilities[:, split_ids]
 
         # avoid oversplitting by doing a mini merge here

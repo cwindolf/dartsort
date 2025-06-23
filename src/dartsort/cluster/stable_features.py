@@ -559,13 +559,9 @@ class SpikeNeighborhoods(torch.nn.Module):
         """
         super().__init__()
         self.n_channels = n_channels
+        self.neighborhood_ids = neighborhood_ids.cpu()
         self.register_buffer("chans_arange", torch.arange(n_channels))
-        if store_on_device:
-            self.register_buffer("neighborhood_ids", neighborhood_ids)
-        else:
-            self.neighborhood_ids = neighborhood_ids.cpu()
         self.register_buffer("neighborhoods", neighborhoods)
-        # self.neighborhoods = neighborhoods.cpu()
         self.n_neighborhoods = len(neighborhoods)
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index)
