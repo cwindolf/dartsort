@@ -1,6 +1,7 @@
 from logging import getLogger
 from pathlib import Path
 import pickle
+import warnings
 
 from dredge import motion_util
 import h5py
@@ -81,19 +82,28 @@ def generate_simulation(
     noise_recording_folder = resolve_path(noise_recording_folder)
 
     duration_samples = int(duration_seconds * sampling_frequency)
-    noise_recording = get_background_recording(
-        noise_recording_folder,
-        duration_samples=duration_samples,
-        probe_kwargs=probe_kwargs,
-        noise_kind=noise_kind,
-        noise_spatial_kernel_bandwidth=noise_spatial_kernel_bandwidth,
-        noise_temporal_kernel=noise_temporal_kernel,
-        random_seed=random_seed,
-        dtype=recording_dtype,
-        noise_fft_t=noise_fft_t,
-        white_noise_scale=white_noise_scale,
-        sampling_frequency=sampling_frequency,
-    )
+    with warnings.catch_warnings(record=True) as ws:
+        noise_recording = get_background_recording(
+            noise_recording_folder,
+            duration_samples=duration_samples,
+            probe_kwargs=probe_kwargs,
+            noise_kind=noise_kind,
+            noise_spatial_kernel_bandwidth=noise_spatial_kernel_bandwidth,
+            noise_temporal_kernel=noise_temporal_kernel,
+            random_seed=random_seed,
+            dtype=recording_dtype,
+            noise_fft_t=noise_fft_t,
+            white_noise_scale=white_noise_scale,
+            sampling_frequency=sampling_frequency,
+            n_jobs=n_jobs,
+        )
+        for w in ws:
+            msg = str(w.message)
+            if msg.startswith("The extractor is not serializable "):
+                continue
+            if msg.startswith("auto_cast_uint"):
+                continue
+            raise w
     assert noise_recording.dtype == np.dtype(recording_dtype)
     assert noise_recording.sampling_frequency == sampling_frequency
     assert noise_recording.get_num_frames() == duration_samples

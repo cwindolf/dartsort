@@ -71,7 +71,9 @@ def get_background_recording(
     with tempfile.TemporaryDirectory() as tdir:
         recording = recording.save_to_folder(Path(tdir) / "noiserecording", n_jobs=1)
         recording = UnwhitenPreprocessor(noise, recording)
-        recording = recording.save_to_folder(noise_recording_folder, n_jobs=n_jobs)
+        recording = recording.save_to_folder(
+            noise_recording_folder, n_jobs=n_jobs, pool_engine="thread"
+        )
 
     return recording
 
