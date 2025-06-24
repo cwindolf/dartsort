@@ -163,6 +163,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_split_only: bool = True
     resume_with_split: bool = False
     cluster_strategy: str = "gmmdpc"
+    refinement_strategy: str = "gmm"
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
@@ -183,6 +184,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_amp_feat: bool = False
     initial_pc_feats: int = 2
     initial_pc_scale: float = 2.5
+    motion_aware_clustering: bool = True
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000

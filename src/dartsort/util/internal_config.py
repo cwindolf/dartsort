@@ -645,8 +645,10 @@ def to_internal_config(cfg):
         use_amplitude=cfg.initial_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
         pc_scale=cfg.initial_pc_scale,
+        motion_aware=cfg.motion_aware_clustering,
     )
     refinement_cfg = RefinementConfig(
+        refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
         signal_rank=cfg.signal_rank,
         criterion=cfg.criterion,

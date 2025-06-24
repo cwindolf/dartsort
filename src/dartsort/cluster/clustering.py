@@ -553,3 +553,9 @@ class ForwardBackwardEnsembler(Refinement):
 
 
 refinement_strategies["forwardbackward"] = ForwardBackwardEnsembler
+
+
+def _id(clusterer, **kwargs):
+    return clusterer
+
+refinement_strategies["none"] = _id
