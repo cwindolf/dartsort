@@ -601,7 +601,7 @@ def extract_random_snips(rg, chunk, n, sniplen):
 
 
 def subsample_waveforms(
-    hdf5_filename,
+    hdf5_filename=None,
     fit_sampling="random",
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
@@ -611,36 +611,43 @@ def subsample_waveforms(
     log_voltages=True,
     subsample_by_weighting=False,
     replace=True,
+    h5=None,
 ):
     random_state = np.random.default_rng(random_state)
-    hdf5_filename = resolve_path(hdf5_filename, strict=True)
 
-    with h5py.File(hdf5_filename) as h5:
-        channels: np.ndarray = h5["channels"][:]
-        n_wf = channels.shape[0]
-        weights = fit_reweighting(
-            h5=h5,
-            log_voltages=log_voltages,
-            fit_sampling=fit_sampling,
-            fit_max_reweighting=fit_max_reweighting,
-            voltages_dataset_name=voltages_dataset_name,
+    need_open = h5 is None
+    if need_open:
+        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        h5 = h5py.File(hdf5_filename)
+    
+    channels: np.ndarray = h5["channels"][:]
+    n_wf = channels.shape[0]
+    weights = fit_reweighting(
+        h5=h5,
+        log_voltages=log_voltages,
+        fit_sampling=fit_sampling,
+        fit_max_reweighting=fit_max_reweighting,
+        voltages_dataset_name=voltages_dataset_name,
+    )
+    if n_wf > n_waveforms_fit and not subsample_by_weighting:
+        choices = random_state.choice(
+            n_wf, p=weights, size=n_waveforms_fit, replace=replace
         )
-        if n_wf > n_waveforms_fit and not subsample_by_weighting:
-            choices = random_state.choice(
-                n_wf, p=weights, size=n_waveforms_fit, replace=replace
-            )
-            if not replace:
-                choices.sort()
-                channels = channels[choices]
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-            else:
-                uchoices, ichoices = np.unique(choices, return_inverse=True)
-                channels = channels[uchoices][ichoices]
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
-                    ichoices
-                ]
+        if not replace:
+            choices.sort()
+            channels = channels[choices]
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            uchoices, ichoices = np.unique(choices, return_inverse=True)
+            channels = channels[uchoices][ichoices]
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
+                ichoices
+            ]
+    else:
+        waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+
+    if need_open:
+        h5.close()
 
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)

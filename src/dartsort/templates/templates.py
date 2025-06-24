@@ -39,8 +39,6 @@ class TemplateData:
     parent_sorting_hdf5_path: str | None = None
 
     def __post_init__(self):
-        print(f"{self.templates.shape=}")
-        print(f"{self.spike_length_samples=}")
         assert self.templates.shape[1] == self.spike_length_samples
         assert self.trough_offset_samples < self.spike_length_samples
 

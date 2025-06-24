@@ -315,22 +315,27 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
         )
         ns0 = len(st0)
+        print(ns0)
 
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
         sta = subtract(
-            recording=rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
+            recording=rec,
             output_dir=tempdir,
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
+            chunk_starts_samples=np.arange(3) * int(fs),
         )
+        with h5py.File(sta.parent_h5_path, locking=False) as h5:
+            assert h5["last_chunk_start"][()] == int(2 * fs)
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
         )
+        print(f"{len(sta)=} {len(stb)=}")
         assert len(sta) < ns0
         assert len(stb) == ns0
 

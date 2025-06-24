@@ -3,7 +3,6 @@ import torch
 from logging import getLogger
 from torch import nn
 import time
-import joblib
 from linear_operator import operators
 from linear_operator.utils.cholesky import psd_safe_cholesky
 import torch.nn.functional as F
@@ -32,6 +31,7 @@ from ._truncated_em_helpers import (
     _elbo_prior_correction,
 )
 from ..util import spiketorch
+from ..util.multiprocessing_util import get_pool
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
 
 logger = getLogger(__name__)
@@ -542,9 +542,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # thread pool
         self._rg = np.random.default_rng(random_seed)
-        self.pool = joblib.Parallel(
-            n_jobs=n_threads or 1, backend="threading", return_as="generator_unordered"
-        )
+        n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
+        self.pool = Executor(max_workers=n_jobs, mp_context=context)
 
     @property
     def device(self) -> torch.device:
@@ -600,13 +599,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            self._te_step_job(
-                candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs
-            )
+            (candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs)
             for batchix in self.batches(show_progress=show_progress)
         )
         count = 0
-        for result in self.pool(jobs):
+        for result in self.pool.map(self._te_step_job, jobs):
             assert result is not None  # why, pyright??
 
             noise_N += result.noise_N
@@ -674,16 +671,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             probs=probs,
         )
 
-    @joblib.delayed
-    def _te_step_job(
-        self,
-        candidates,
-        n_candidates,
-        batch_indices,
-        with_kl,
-        with_hard_labels,
-        with_probs,
-    ):
+    def _te_step_job(self, args):
+        (
+            candidates,
+            n_candidates,
+            batch_indices,
+            with_kl,
+            with_hard_labels,
+            with_probs,
+        ) = args
         return self.process_batch(
             candidates=candidates,
             n_candidates=n_candidates,

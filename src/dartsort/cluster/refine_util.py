@@ -169,6 +169,7 @@ def gmm_refine(
     else:
         gmm.em(final_split="full")
     sorting = gmm.to_sorting()
+    gmm.tmm.processor.pool.shutdown()
     return sorting, step_labels
 
 

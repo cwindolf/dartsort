@@ -113,7 +113,6 @@ def kdtree_kmeans(
             skip_assignment=True,
             min_distance=kmeanspp_min_dist,
         )
-        print(phi)
         if phi < best_phi:
             centroid_ixs = _centroid_ixs
             best_phi = phi
