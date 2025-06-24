@@ -120,12 +120,10 @@ class WaveformPipeline(torch.nn.Module):
                     waveforms, max_channels=max_channels
                 )
                 features.update(new_features)
-
             elif transformer.is_featurizer:
                 features.update(
                     transformer.transform(waveforms, max_channels=max_channels)
                 )
-
             elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 

@@ -5,7 +5,6 @@ import warnings
 
 from dredge import motion_util
 import h5py
-from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
 from spikeinterface.core import read_binary_folder
@@ -25,6 +24,7 @@ from ..util.data_util import (
     divide_randomly,
 )
 from ..util.py_util import resolve_path
+from ..util.multiprocessing_util import get_pool
 from ..util.drift_util import registered_geometry
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
@@ -274,21 +274,18 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         else:
             assert not hdf5_path.exists()
 
-        with Parallel(n_jobs, backend="threading", return_as="generator") as pool:
-            f = delayed(self.segment.get_traces_and_inject_spikes)
+        n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")
+        with Executor(max_workers=n_jobs, mp_context=context) as pool:
             nt = self.get_num_frames()
             bs = int(self.sampling_frequency * chunk_len_s)
             chunk_starts = range(0, nt, bs)
             residual_snips_per_chunk = divide_randomly(
                 n_residual_snips, len(chunk_starts), self.segment.random_seed
             )
-            results = pool(
-                f(t, min(t + bs, nt), extract=True, n_residual_snips=nrs)
+            jobs = (
+                ((t, min(t + bs, nt)), dict(extract=True, n_residual_snips=nrs))
                 for t, nrs in zip(chunk_starts, residual_snips_per_chunk)
             )
-            if show_progress:
-                results = tqdm(results, desc="Extract GT features")
-
             with h5py.File(hdf5_path, "w", locking=False) as h5:
                 n = self.segment.n_spikes
 
@@ -330,6 +327,12 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 residual_times = h5.create_dataset(
                     "residual_times_seconds", shape=(n_residual_snips,), dtype=f_dt
                 )
+
+                results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
+                if show_progress:
+                    results = tqdm(
+                        results, total=len(chunk_starts), desc="Extract GT features", smoothing=0.02
+                    )
 
                 i1_prev = 0
                 n_injected = 0
@@ -638,6 +641,10 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             traces = traces[:, channel_indices]
 
         return traces, spikes
+
+    def _get_traces_and_inject_spikes_job(self, args_kwargs):
+        args, kwargs = args_kwargs
+        return self.get_traces_and_inject_spikes(*args, **kwargs)
 
     def get_traces(self, start_frame, end_frame, channel_indices):
         traces, _ = self.get_traces_and_inject_spikes(

@@ -18,6 +18,7 @@ except ImportError:
 
 from ..transform import WaveformPipeline
 from ..util.internal_config import FeaturizationConfig, WaveformConfig
+from ..util.data_util import subsample_waveforms, yield_chunks
 
 
 default_temporal_kernel_npy = files("dartsort.pretrained")
@@ -205,24 +206,27 @@ def rbf_kernel_sqrt(geom, bandwidth=15.0, dtype="float32"):
 # -- sorting h5 helpers
 
 
-def add_tpca_feature(h5_path, recording):
+def add_tpca_feature(h5_path, recording, rank=8):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = h5["geom"][:]
         channel_index = h5["channel_index"][:]
-        channels = h5["channels"][:]
+        channels, waveforms, weights = subsample_waveforms(h5=h5)
         gt_pipeline = WaveformPipeline.from_config(
-            FeaturizationConfig(do_enforce_decrease=False, do_localization=False),
+            FeaturizationConfig(do_enforce_decrease=False, do_localization=False, tpca_rank=rank),
             WaveformConfig(),
             geom=geom,
             channel_index=channel_index,
         )
-        waveforms = h5["collisioncleaned_waveforms"][:]
         gt_pipeline.fit(waveforms, channels, recording)
         models_dir = h5_path.parent / f"{h5_path.stem}_models"
         models_dir.mkdir(exist_ok=True)
         torch.save(gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt")
-        _, feats = gt_pipeline(waveforms, channels)
-        ccpcfeats = feats["collisioncleaned_tpca_features"]
-        h5.create_dataset(
-            "collisioncleaned_tpca_features", data=ccpcfeats.numpy(force=True)
+
+        wf_dset = h5["collisioncleaned_waveforms"]
+        f_dset = h5.create_dataset(
+            "collisioncleaned_tpca_features",
+            shape=(wf_dset.shape[0], rank, wf_dset.shape[2]),
         )
+        for sli, chunk in yield_chunks(h5["collisioncleaned_waveforms"], desc_prefix="PCA"):
+            _, feats = gt_pipeline(chunk, h5["channels"][sli])
+            f_dset[sli] = feats["collisioncleaned_tpca_features"]
