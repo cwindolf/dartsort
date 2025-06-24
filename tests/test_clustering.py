@@ -26,7 +26,8 @@ global_feature_kwargs = dict(
 )
 feature_kwargs = [
     dict(use_amplitude=True, n_main_channel_pcs=0),
-    dict(use_amplitude=False, n_main_channel_pcs=1),
+    dict(use_amplitude=False, n_main_channel_pcs=1, motion_aware=False),
+    dict(use_amplitude=False, n_main_channel_pcs=1, motion_aware=True),
 ]
 feature_kwargs = [global_feature_kwargs | kw for kw in feature_kwargs]
 
