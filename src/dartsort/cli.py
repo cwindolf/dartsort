@@ -86,7 +86,7 @@ def dartsort_cli():
     # load the recording
     # TODO: preprocessing management
     try:
-        rec = sc.load_extractor(cli_util.ensurepath(args.recording))
+        rec = sc.load(cli_util.ensurepath(args.recording))
     except FileNotFoundError as e:
         ee = FileNotFoundError(
             f"The recording path passed to {ap.prog}, '{args.recording}', doesn't exist."

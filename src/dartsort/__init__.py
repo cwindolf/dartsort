@@ -53,6 +53,7 @@ from .main import (
     threshold,
     logger,
     cluster,
+    universal_match,
 )
 
 __version__ = importlib.metadata.version("dartsort")

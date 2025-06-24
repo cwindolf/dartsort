@@ -17,6 +17,7 @@ from .peel import (
     SubtractionPeeler,
     GrabAndFeaturize,
     ThresholdAndFeaturize,
+    UniversalTemplatesMatchingPeeler,
 )
 from .templates import TemplateData
 from .util.data_util import (
@@ -33,6 +34,7 @@ from .util.internal_config import (
     SubtractionConfig,
     ThresholdingConfig,
     MatchingConfig,
+    UniversalMatchingConfig,
     to_internal_config,
     default_dartsort_cfg,
     default_waveform_cfg,
@@ -43,6 +45,7 @@ from .util.internal_config import (
     default_subtraction_cfg,
     default_matching_cfg,
     default_thresholding_cfg,
+    default_universal_cfg,
 )
 from .util.logging_util import DARTsortLogger
 from .util.main_util import (
@@ -242,6 +245,17 @@ def initial_detection(
             template_cfg=cfg.template_cfg,
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.initial_detection_cfg,
+            overwrite=overwrite,
+            show_progress=show_progress,
+            computation_cfg=cfg.computation_cfg,
+        )
+    elif cfg.detection_type == "universal":
+        assert isinstance(cfg.initial_detection_cfg, UniversalMatchingConfig)
+        return universal_match(
+            output_dir=output_dir,
+            recording=recording,
+            universal_cfg=cfg.initial_detection_cfg,
+            featurization_cfg=featurization_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -446,6 +460,37 @@ def cluster(
     return clusterer.cluster(
         recording=recording, sorting=sorting, features=features, motion_est=motion_est
     )
+
+
+def universal_match(
+    output_dir: str | Path,
+    recording: BaseRecording,
+    universal_cfg=default_universal_cfg,
+    featurization_cfg=default_featurization_cfg,
+    chunk_starts_samples=None,
+    overwrite=False,
+    show_progress=True,
+    hdf5_filename="universal.h5",
+    model_subdir="universal_models",
+    computation_cfg: ComputationConfig | None = None,
+) -> DARTsortSorting:
+    output_dir = resolve_path(output_dir)
+    universal_matcher = UniversalTemplatesMatchingPeeler.from_config(
+        recording, universal_cfg, featurization_cfg
+    )
+    sorting = run_peeler(
+        universal_matcher,
+        output_dir,
+        hdf5_filename,
+        model_subdir,
+        featurization_cfg,
+        chunk_starts_samples=chunk_starts_samples,
+        overwrite=overwrite,
+        show_progress=show_progress,
+        computation_cfg=computation_cfg,
+    )
+    assert sorting is not None
+    return sorting
 
 
 def match_chunked(

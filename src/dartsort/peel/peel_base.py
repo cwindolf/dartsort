@@ -570,7 +570,13 @@ class BasePeeler(torch.nn.Module):
             self.channel_index,
             [
                 ("Voltage", {"name": "peeled_voltages_fit"}),
-                ("Waveform", {"name": "peeled_waveforms_fit"}),
+                (
+                    "Waveform",
+                    {
+                        "name": "peeled_waveforms_fit",
+                        "spike_length_samples": self.spike_length_samples,
+                    },
+                ),
             ],
         )
 

@@ -172,8 +172,6 @@ class SubtractionConfig:
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
-    use_universal_templates: bool = False
-    universal_threshold: float = 50.0
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -293,6 +291,26 @@ class ThresholdingConfig:
     time_jitter: int = 0
     spatial_jitter_radius: float = 0.0
     trough_priority: float | None = 2.0
+
+
+@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+class UniversalMatchingConfig:
+    # peeling common
+    chunk_length_samples: int = 1_000
+    n_chunks_fit: int = 100
+    max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
+    fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
+    fit_max_reweighting: float = 4.0
+
+    n_sigmas: int = 5
+    n_centroids: int = 6
+    threshold: float = 100.0
+    detection_threshold: float = 6.0
+    alignment_padding_ms: float = 1.5
+
+    waveform_cfg: WaveformConfig = WaveformConfig(ms_before=0.75, ms_after=1.25)
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
@@ -598,6 +616,10 @@ def to_internal_config(cfg):
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
         )
+    elif cfg.detection_type == "universal":
+        initial_detection_cfg = UniversalMatchingConfig(
+            waveform_cfg=tpca_waveform_cfg,
+        )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
@@ -704,6 +726,7 @@ default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_dartsort_cfg = DARTsortInternalConfig()
 default_refinement_cfg = RefinementConfig()
+default_universal_cfg = UniversalMatchingConfig()
 
 # configs which are commonly used for specific tasks
 coarse_template_cfg = TemplateConfig(superres_templates=False)

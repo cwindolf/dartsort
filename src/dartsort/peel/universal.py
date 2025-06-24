@@ -29,21 +29,21 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         recording,
         channel_index,
         featurization_pipeline,
-        threshold=50.0,
+        threshold=100.0,
         trough_offset_samples=42,
         spike_length_samples=121,
         amplitude_scaling_variance=100.0,
         amplitude_scaling_boundary=500.0,
         detection_threshold=6.0,
         alignment_padding=20,
-        n_centroids=10,
+        n_centroids=6,
         pca_rank=8,
         taper=True,
         n_sigmas=5,
         min_template_size=10.0,
         max_distance=32.0,
         dx=32.0,
-        chunk_length_samples=30_000,
+        chunk_length_samples=1000,
         n_chunks_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
@@ -124,11 +124,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         )
 
     @classmethod
-    def from_config(cls, recording, waveform_cfg, subtraction_cfg, featurization_cfg):
+    def from_config(cls, recording, universal_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = waveform_util.make_channel_index(
-            geom, subtraction_cfg.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
+        waveform_cfg = universal_cfg.waveform_cfg
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
@@ -142,14 +143,14 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
-        alignment_padding = int(
-            subtraction_cfg.singlechan_alignment_padding_ms
-            * (recording.sampling_frequency / 1000)
-        )
+        fs_ms = recording.sampling_frequency / 1000
+        alignment_padding = int(universal_cfg.alignment_padding_ms * fs_ms)
         return cls(
             recording,
-            chunk_length_samples=subtraction_cfg.chunk_length_samples,
-            threshold=subtraction_cfg.universal_threshold,
+            chunk_length_samples=universal_cfg.chunk_length_samples,
+            threshold=universal_cfg.threshold,
+            detection_threshold=universal_cfg.detection_threshold,
+            n_sigmas=universal_cfg.n_sigmas,
             channel_index=channel_index,
             alignment_padding=alignment_padding,
             featurization_pipeline=featurization_pipeline,

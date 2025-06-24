@@ -81,8 +81,9 @@ def get_singlechan_centroids(
     temps = torch.stack(temps, dim=0)
 
     # taper and normalize
-    temps = spiketorch.taper(temps, t_start=taper_start, t_end=taper_end)
-    temps /= torch.linalg.norm(temps, dim=1, keepdim=True)
+    if taper:
+        temps = spiketorch.taper(temps, t_start=taper_start, t_end=taper_end)
+        temps /= torch.linalg.norm(temps, dim=1, keepdim=True)
 
     return temps
 
@@ -135,19 +136,12 @@ def get_singlechan_waveforms(
 def spatial_footprint_bank(
     geom, n_sigmas=3, min_template_size=10.0, dsigma=2.0, max_distance=32.0, dx=32.0, eps=0.025
 ):
-    # this is just a single shank version, since I don't plan to use
-    # this in production. but it is copied from KS' code and can be
-    # modified as theirs is for multi shank.
-
-    # what KS calls dmin
     z_unique = np.unique(geom[:, 1])
     dz = 1.0 if z_unique.size == 1 else np.median(np.diff(z_unique))
 
-    # how they place z centers
     z_min, z_max = z_unique.min(), z_unique.max()
     z_centers = np.arange(z_min, z_max + 1e-2, dz / 2)
 
-    # how they place x centers
     x_min, x_max = geom[:, 0].min(), geom[:, 0].max()
     nx = np.round((x_max - x_min) / (dx / 2)) + 1
     x_centers = np.linspace(x_min, x_max, num=int(nx))
@@ -177,6 +171,7 @@ def spatial_footprint_bank(
 def singlechan_to_library(
     singlechan_templates,
     geom,
+    trough_offset_samples=42,
     n_sigmas=5,
     min_template_size=10.0,
     max_distance=32.0,
@@ -207,6 +202,8 @@ def singlechan_to_library(
         templates,
         unit_ids=np.arange(nsct * nf),
         spike_counts=np.ones(nsct * nf, dtype=int),
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=nt,
     )
     return footprints, template_data
 
@@ -252,6 +249,7 @@ def universal_templates_from_data(
     footprints, template_data = singlechan_to_library(
         singlechan_centroids,
         rec.get_channel_locations() if rec is not None else None,
+        trough_offset_samples=trough_offset_samples,
         n_sigmas=n_sigmas,
         min_template_size=min_template_size,
         max_distance=max_distance,
