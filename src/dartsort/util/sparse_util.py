@@ -49,7 +49,7 @@ def coo_to_torch(
         s0, s1 = s1, s0
     res = torch.sparse_coo_tensor(
         torch.row_stack(coo),
-        torch.asarray(coo_array.data, dtype=torch.float, copy=copy_data),
+        torch.asarray(coo_array.data, dtype=dtype, copy=copy_data),
         size=(s0, s1),
         is_coalesced=is_coalesced,
     )

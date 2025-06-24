@@ -427,7 +427,7 @@ def gmm_density_peaks(
         X[choices],
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius,
-        workers=workers,
+        workers=workers or 1,
     )
     if not isinstance(choices, slice):
         inliers = choices[inliers]
@@ -449,10 +449,15 @@ def gmm_density_peaks(
         kmeanspp_min_dist=kmeanspp_min_dist,
         max_sigma=max_sigma,
         show_progress=show_progress,
+        workers=workers,
     )
     res['n_components'] = n_components
     n_components = len(res['centroids'])
     res['n_components_kept'] = n_components
+    print(f"{res['centroids'].shape=}")
+    print(f"{res['log_proportions'].shape=}")
+    print(f"{res['sigmasq'].shape=}")
+    print(f"{n_components=}")
     coo = sparse_iso_hellinger(
         res["centroids"],
         np.sqrt(res["sigmasq"]),
@@ -465,7 +470,8 @@ def gmm_density_peaks(
     nhdn_coo = coo_array(
         (_1, (np.arange(len(nhdn)), nhdn)), shape=(n_components, n_components)
     )
-    ncc, labels = connected_components(nhdn_coo)
+    print(f"{nhdn_coo.shape=}")
+    _, labels = connected_components(nhdn_coo)
     assert labels.shape == (n_components,)
     labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
 

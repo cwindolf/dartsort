@@ -1,12 +1,16 @@
 from logging import getLogger
 
 import numpy as np
+from scipy.spatial import KDTree
+from scipy.sparse import coo_array
 import torch
 import torch.nn.functional as F
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 
 
 from .density import guess_mode
+from ..util.multiprocessing_util import get_pool
+from ..util.sparse_util import coo_to_torch
 
 
 logger = getLogger(__name__)
@@ -89,136 +93,147 @@ def kdtree_kmeans(
     n_initializations=10,
     random_state: int | np.random.Generator = 0,
     n_iter=100,
-    batch_size=128,
     min_log_prop=-25.0,
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
     show_progress=False,
     sigma_atol=1e-3,
+    batch_size=50_000,
+    workers=-1,
+    device=None,
 ):
-    from scipy.spatial import KDTree
-    from scipy.sparse import coo_array
     import torch.nn.functional as F
 
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     xrange = trange if show_progress else range
+    n = len(X)
+    batches = [slice(bs, min(n, bs + batch_size)) for bs in range(0, n, batch_size)]
+    workers = min(len(batches), workers)
+    X_torch = torch.asarray(X, device=device)
 
-    best_phi = torch.inf
-    centroid_ixs = None
-    random_state = np.random.default_rng(random_state)
-    for j in xrange(n_initializations):
-        _centroid_ixs, _labels, _, phi = kmeanspp(
-            torch.from_numpy(X),
-            n_components=n_components,
-            random_state=random_state,
-            skip_assignment=True,
-            min_distance=kmeanspp_min_dist,
-        )
-        if phi < best_phi:
-            centroid_ixs = _centroid_ixs
-            best_phi = phi
-    assert centroid_ixs is not None
+    n_jobs, Executor, context = get_pool(workers, cls="ThreadPoolExecutor")
+    with Executor(n_jobs, context) as pool:
+        random_state = np.random.default_rng(random_state)
+        kmeanspp_rgs = random_state.spawn(n_initializations)
+        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist)
+        kmeanspp_jobs = (((X_torch,), kmpkw | dict(random_state=rg)) for rg in kmeanspp_rgs)
 
-    # kmeanspp can stop after some criterion.
-    n_components = len(centroid_ixs)
+        best_phi = torch.inf
+        centroid_ixs = None
+        results = pool.map(_kmeanspp_job, kmeanspp_jobs)
+        if show_progress:
+            results = tqdm(results, total=n_initializations)
+        for _centroid_ixs, _labels, _, phi in results:
+            if phi < best_phi:
+                centroid_ixs = _centroid_ixs
+                best_phi = phi
+        assert centroid_ixs is not None
+        n_components = len(centroid_ixs)
 
-    # TODO parallelize: chunk up X into pieces, then the loop over batches below
-    # can make the distance calls using the batch KDtrees. can also do the softmaxs
-    # in parallel. should consider torch's sparse softmax. probably larger batch
-    # size in that case (like, big.) only the add.at gathers need to happen on main thread.
+        # state vars
+        centroids = X[centroid_ixs]
+        log_proportions = np.full(n_components, -np.log(n_components), dtype=X.dtype)
+        new_centroids = np.zeros_like(centroids)
+        sigmasq = float(best_phi)
+        prev_sigma = np.sqrt(sigmasq)
+        N = np.zeros(n_components)
 
-    # initialize
-    X_kdt = KDTree(X)
-    dtype = X.dtype
-    centroids = X[centroid_ixs]
-    assert centroids.shape == (n_components, X.shape[1])
-    log_proportions = np.full(n_components, -np.log(n_components), dtype=dtype)
-    lik_buf = np.empty((batch_size, n_components), dtype=dtype)
-    sigmasq = float(best_phi)
-    Xbuf = None
-    new_centroids = np.zeros_like(centroids)
-    batch_centroids = np.zeros_like(centroids)
-    N = np.zeros(n_components)
-    prev_sigma = np.sqrt(sigmasq)
+        # batched k-d trees
+        X_kdts = list(pool.map(KDTree, (X[sl] for sl in batches)))
 
-    # infer gmm with isotropic covs
-    for j in xrange(n_iter):
-        C_kdt = KDTree(centroids)
-        max_distance = max_sigma * np.sqrt(sigmasq) * np.sqrt(X.shape[1])
-        dists = X_kdt.sparse_distance_matrix(
-            C_kdt, max_distance=max_distance, output_type="ndarray"
-        )
-        # this is nxk csc
-        dists = coo_array(
-            (dists["v"], (dists["j"], dists["i"])), shape=(C_kdt.n, X_kdt.n)
-        ).tocsc()
+        # kmeans iters
+        for j in xrange(n_iter):
+            new_centroids.fill(0.0)
+            new_sigmasq = 0.0
+            N.fill(0.0)
+            n_so_far = 0
 
-        new_centroids.fill(0.0)
-        new_sigmasq = 0.0
-        N.fill(0.0)
-        n_so_far = 0
+            C_kdt = KDTree(centroids)
+            max_distance = max_sigma * np.sqrt(sigmasq) * np.sqrt(X.shape[1])
 
-        for bs in range(0, X_kdt.n, batch_size):
-            be = min(X_kdt.n, bs + batch_size)
-
-            ll = lik_buf[: be - bs]
-            ll.fill(-torch.inf)
-            dsl = dists[:, bs:be].tocoo()
-            cc, ii = dsl.coords
-            liks = dsl.data.ravel()
-            np.square(liks, out=liks)
-            dsq = liks.copy()
-            liks *= -0.5 / sigmasq
-            liks += log_proportions[cc]
-            ll[ii, cc] = liks
-
-            ll = torch.from_numpy(ll)
-            ll = F.softmax(ll, dim=1)
-            ll = ll.nan_to_num_(nan=0.0)
-            ll = ll.numpy()
-            N1 = ll.sum(0)
-            if Xbuf is None or len(ii) > len(Xbuf):
-                Xbuf = np.empty((len(ii), *X.shape[1:]), dtype=dtype)
-            Xbatch = np.take(X, ii + bs, axis=0, out=Xbuf[: len(ii)])
-            llnorm = ll / N1.clip(min=1e-5)
-            weights = llnorm[ii, cc]
-            Xbatch *= weights[:, None]
-            batch_centroids.fill(0.0)
-            np.add.at(
-                batch_centroids, (cc[:, None], np.arange(X.shape[1])[None]), Xbatch
+            fixed_args = C_kdt, max_distance, sigmasq, log_proportions, device, X.dtype
+            jobs = (
+                (X_kdt, X_torch[sl], *fixed_args) for X_kdt, sl in zip(X_kdts, batches)
             )
+            for res in pool.map(_kdtree_kmeans_job, jobs):
+                N1, batch_centroids, batch_sigmasq, wsum = res
 
-            N += N1
-            n1_n01 = N1 / N.clip(min=1e-5)
+                N += N1
+                n1_n01 = N1 / N.clip(min=1e-5)
 
-            batch_centroids -= new_centroids
-            batch_centroids *= n1_n01[:, None]
-            new_centroids += batch_centroids
+                batch_centroids -= new_centroids
+                batch_centroids *= n1_n01[:, None]
+                new_centroids += batch_centroids
 
-            weights = ll[ii, cc]
-            wsum = weights.sum()
-            n_so_far += wsum
-            weights /= wsum * X.shape[1]
-            batch_sigmasq = np.sum(weights * dsq)
-            batch_sigmasq -= new_sigmasq
-            batch_sigmasq *= wsum / n_so_far
-            new_sigmasq += batch_sigmasq
+                n_so_far += wsum
+                batch_sigmasq -= new_sigmasq
+                batch_sigmasq *= wsum / n_so_far
+                new_sigmasq += batch_sigmasq
 
-        centroids, new_centroids = new_centroids, centroids
-        sigmasq = new_sigmasq
-        log_proportions = F.log_softmax(
-            torch.log(torch.tensor(N, dtype=torch.double) + dirichlet_alpha), dim=0
-        ).numpy()
-        log_proportions = np.maximum(log_proportions, min_log_prop)
-        new_sigma = np.sqrt(sigmasq)
-        if np.isclose(new_sigma, prev_sigma, atol=sigma_atol):
-            break
-        prev_sigma = new_sigma
+            centroids, new_centroids = new_centroids, centroids
+            sigmasq = new_sigmasq
+            log_proportions = F.log_softmax(
+                torch.log(torch.tensor(N, dtype=torch.double) + dirichlet_alpha), dim=0
+            ).numpy()
+            log_proportions = np.maximum(log_proportions, min_log_prop)
 
-    return dict(
-        centroids=centroids,
-        sigmasq=sigmasq,
-        log_proportions=log_proportions,
-        X_kdt=X_kdt,
+            new_sigma = np.sqrt(sigmasq)
+            if np.isclose(new_sigma, prev_sigma, atol=sigma_atol):
+                break
+            prev_sigma = new_sigma
+
+    return dict(centroids=centroids, sigmasq=sigmasq, log_proportions=log_proportions)
+
+
+def _kmeanspp_job(args_kwargs):
+    a, k = args_kwargs
+    return kmeanspp(*a, **k)
+
+
+def _kdtree_kmeans_job(args):
+    X_kdt, X_torch, C_kdt, max_distance, sigmasq, log_proportions, device, dtype = args
+
+    dists = X_kdt.sparse_distance_matrix(
+        C_kdt, max_distance=max_distance, output_type="ndarray"
+    )
+    dists = coo_array(
+        (dists["v"].astype(dtype), (dists["i"], dists["j"])),
+        shape=(X_kdt.n, C_kdt.n),
+    )
+    dtype = torch.double if dists.data.dtype == np.float64 else torch.float
+    dists = coo_to_torch(dists, dtype).to(device)
+
+    # get explicit sq dists, then set entries of dists to log likelihoods
+    dists.values().square_()
+    dsq = torch.asarray(dists.values(), dtype=torch.double, copy=True)
+    log_proportions = torch.asarray(log_proportions).to(dsq)
+    dists.values().mul_(-0.5 / sigmasq).add_(log_proportions[dists.indices()[1]])
+    # --> dists is now sparse coo log likelihoods. dsq corresponds.
+
+    # softmax over centroids (dim=1)
+    dists = torch.sparse.softmax(dists, dim=1)
+
+    # these are the responsibility weights used for sigma update below
+    ww = torch.asarray(dists.values(), dtype=torch.double, copy=True)
+    wsum = ww.sum()
+    ww = ww.div_(wsum)
+
+    # now divide by the sum in each unit
+    N1 = dists.sum(dim=0).to_dense()
+    dists.values().div_(N1[dists.indices()[1]])
+
+    # take weighted mean of X
+    batch_centroids = dists.T @ X_torch
+
+    # take weighted mean of dsq
+    batch_sigmasq = (dsq * ww).sum() / X_torch.shape[1]
+    return (
+        N1.numpy(force=True),
+        batch_centroids.numpy(force=True),
+        batch_sigmasq.numpy(force=True),
+        wsum.numpy(force=True),
     )
 
 

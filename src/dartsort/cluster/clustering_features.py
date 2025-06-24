@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 
+import h5py
 import numpy as np
 
 from ..util.internal_config import ClusteringFeaturesConfig
+from ..util import drift_util, interpolation_util
+from ..util.waveform_util import single_channel_index
 from . import cluster_util
 
 default_clustering_features_config = ClusteringFeaturesConfig()
@@ -59,7 +62,7 @@ class SimpleMatrixFeatures:
             features.append(x[:, None])
 
         if clustering_features_cfg.use_z:
-            if clustering_features_cfg.register_z:
+            if clustering_features_cfg.motion_aware:
                 features.append(z_reg[:, None])
             else:
                 features.append(z[:, None])
@@ -72,12 +75,57 @@ class SimpleMatrixFeatures:
                 amp *= clustering_features_cfg.amp_scale
             features.append(amp[:, None])
 
-        if clustering_features_cfg.n_main_channel_pcs:
+        if clustering_features_cfg.n_main_channel_pcs and not clustering_features_cfg.motion_aware:
             pcs = cluster_util.get_main_channel_pcs(
-                sorting, rank=clustering_features_cfg.n_main_channel_pcs
+                sorting, rank=clustering_features_cfg.n_main_channel_pcs,
+                dataset_name=clustering_features_cfg.pca_dataset_name,
             )
             pcs *= clustering_features_cfg.pc_scale
             features.append(pcs)
+        elif clustering_features_cfg.n_main_channel_pcs and clustering_features_cfg.motion_aware:
+            geom = sorting.geom
+            if motion_est is None:
+                registered_geom = geom
+            else:
+                registered_geom = drift_util.registered_geometry(
+                    geom, motion_est=motion_est
+                )
+            res = drift_util.get_shift_info(
+                sorting, motion_est, geom
+            )
+            channels, shifts, n_pitches_shift = res
+            mainchan_ci = single_channel_index(len(geom))
+            schan, *_ = drift_util.get_stable_channels(
+                geom,
+                channels,
+                mainchan_ci,
+                registered_geom,
+                n_pitches_shift,
+                workers=clustering_features_cfg.workers,
+            )
+            mask = np.ones((1,), dtype=bool)
+            mask = np.broadcast_to(mask, len(schan))
+            with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+                pcs = interpolation_util.interpolate_by_chunk(
+                    mask,
+                    h5[clustering_features_cfg.pca_dataset_name],
+                    geom,
+                    h5["channel_index"][:],
+                    sorting.channels,
+                    shifts,
+                    registered_geom,
+                    schan,
+                    method=clustering_features_cfg.interpolation_method,
+                    extrap_method=None,
+                    kernel_name=clustering_features_cfg.kernel_name,
+                    sigma=clustering_features_cfg.interpolation_sigma,
+                    rq_alpha=clustering_features_cfg.rq_alpha,
+                    kriging_poly_degree=clustering_features_cfg.kriging_poly_degree,
+                )
+                pcs = pcs[:, :clustering_features_cfg.n_main_channel_pcs, 0]
+            pcs *= clustering_features_cfg.pc_scale
+            features.append(pcs)
+
 
         features = np.concatenate(features, axis=1)
         return cls(features=features, x=x, z=z, z_reg=z_reg, xyza=xyza, amplitudes=amp)

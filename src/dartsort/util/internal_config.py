@@ -352,7 +352,7 @@ class ClusteringFeaturesConfig:
     # simple matrix feature controls
     use_x: bool = True
     use_z: bool = True
-    register_z: bool = True
+    motion_aware: bool = True
     use_amplitude: bool = False
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
@@ -360,10 +360,17 @@ class ClusteringFeaturesConfig:
     n_main_channel_pcs: int = 2
     pc_scale: float = 2.5
     adaptive_feature_scales: bool = False
+    workers: int = -1
 
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
+    pca_dataset_name: str = "collisioncleaned_tpca_features"
 
+    interpolation_method: str = "kriging"
+    kernel_name: str = "thinplate"
+    interpolation_sigma: float = 10.0
+    rq_alpha: float = 0.5
+    kriging_poly_degree: int = 0
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
