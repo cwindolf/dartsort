@@ -483,9 +483,11 @@ def gmm_density_peaks(
     if remove_clusters_smaller_than:
         kept = np.flatnonzero(labels >= 0)
         u, c = np.unique(labels[kept], return_counts=True)
-        u[c < remove_clusters_smaller_than] = -1
-        u[u >= 0] = np.arange((u >= 0).sum())
-        labels[kept] = u[labels[kept]]
+        flat = np.full(u.max() + 1, -1)
+        mask = np.logical_and(u >= 0, c >= remove_clusters_smaller_than)
+        mask = np.flatnonzero(mask)
+        flat[u[mask]] = range(mask.size)
+        labels[kept] = flat[labels[kept]]
     res['labels'] = labels
 
     return res
