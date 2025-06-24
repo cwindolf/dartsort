@@ -166,7 +166,6 @@ class DeveloperConfig(DARTsortUserConfig):
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
-    use_universal_templates: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 0
     truncated: bool = True
     overwrite_matching: bool = False

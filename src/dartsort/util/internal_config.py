@@ -519,7 +519,7 @@ class DARTsortInternalConfig:
 
     waveform_cfg: WaveformConfig = WaveformConfig()
     featurization_cfg: FeaturizationConfig = FeaturizationConfig()
-    initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig = SubtractionConfig()
+    initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig | UniversalMatchingConfig = SubtractionConfig()
     template_cfg: TemplateConfig = TemplateConfig()
     clustering_cfg: ClusteringConfig = ClusteringConfig()
     clustering_features_cfg: ClusteringFeaturesConfig = ClusteringFeaturesConfig()
@@ -532,7 +532,7 @@ class DARTsortInternalConfig:
     # high level behavior
     detect_only: bool = False
     dredge_only: bool = False
-    detection_type: Literal["subtract", "match", "threshold"] = "subtract"
+    detection_type: Literal["subtract", "match", "threshold", "universal"] = "subtract"
     final_refinement: bool = True
     matching_iterations: int = 1
     intermediate_matching_subsampling: float = 1.0
@@ -592,7 +592,6 @@ def to_internal_config(cfg):
             subtract_radius=cfg.subtraction_radius_um,
             singlechan_alignment_padding_ms=cfg.alignment_ms,
             use_singlechan_templates=cfg.use_singlechan_templates,
-            use_universal_templates=cfg.use_universal_templates,
             residnorm_decrease_threshold=cfg.denoiser_badness_factor
             * (cfg.matching_threshold**2),
             chunk_length_samples=cfg.chunk_length_samples,

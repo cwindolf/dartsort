@@ -104,10 +104,10 @@ def test_cli_help():
     assert not res.returncode
 
 
-@pytest.mark.parametrize('type', ['subtract', 'threshold', 'match'])
+@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "universal"])
 def test_initial_detection_swap(tmp_path, simulations, type):
-    sim = simulations['driftn_szmini']
-    sim['templates'].to_npz(tmp_path / "temps.npz")
+    sim = simulations["driftn_szmini"]
+    sim["templates"].to_npz(tmp_path / "temps.npz")
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
         detection_type=type,
@@ -120,21 +120,25 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         h5_name = "subtraction"
     elif type == "threshold":
         h5_name = "threshold"
+    elif type == "universal":
+        h5_name = "universal"
     elif type == "match":
         h5_name = "matching0"
     else:
         assert False
     assert (tmp_path / f"{h5_name}.h5").exists()
-    assert not(tmp_path / "matching1.h5").exists()
+    assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
         count_dif_tol = 0.05
+    elif type == "universal":
+        count_dif_tol = 0.1
     elif type == "subtract":
         count_dif_tol = 0.2
     elif type == "threshold":
         count_dif_tol = 0.4
     else:
         assert False
-    c0 = len(sim['sorting'])
-    c1 = len(res['sorting'])
+    c0 = len(sim["sorting"])
+    c1 = len(res["sorting"])
     assert abs(c0 - c1) < count_dif_tol * c0

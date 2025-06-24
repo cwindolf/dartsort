@@ -255,7 +255,7 @@ def initial_detection(
             output_dir=output_dir,
             recording=recording,
             universal_cfg=cfg.initial_detection_cfg,
-            featurization_cfg=featurization_cfg,
+            featurization_cfg=cfg.featurization_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
