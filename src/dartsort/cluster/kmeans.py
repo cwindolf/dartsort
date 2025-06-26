@@ -98,7 +98,7 @@ def kdtree_kmeans(
     kmeanspp_min_dist=0.0,
     show_progress=False,
     sigma_atol=1e-3,
-    batch_size=50_000,
+    batch_size=20_000,
     workers=-1,
     device=None,
 ):

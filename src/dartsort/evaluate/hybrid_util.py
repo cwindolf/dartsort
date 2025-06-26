@@ -292,19 +292,33 @@ def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
     load_feature_names=("times_seconds",),
-    detection_h5_name="subtraction.h5",
+    detection_h5_names=("subtraction.h5", "threshold.h5", "universal.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered."""
     if detection_h5_path is None:
-        detection_h5_path = sorting_dir / detection_h5_name
-    h5s = [detection_h5_path]
+        for dh5n in detection_h5_names:
+            detection_h5_path = sorting_dir / dh5n
+            if detection_h5_path.exists():
+                h5s = [detection_h5_path]
+                break
+        else:
+            h5s = []
+    else:
+        h5s = [detection_h5_path]
+
     for j in range(1, 100):
         if (sorting_dir / f"matching{j}.h5").exists():
             h5s.append(sorting_dir / f"matching{j}.h5")
         else:
             break
+
+    # let's check that there is at least something to do...
+    labels_npys = sorting_dir.glob("*_labels.npy")
+    relevant_files = [sorting_dir / "dartsort_sorting.npz", *labels_npys, *h5s[1:]]
+    if not any(f.exists() for f in relevant_files):
+        h5s = []
 
     for step, h5 in enumerate(h5s):
         if not h5.exists():
@@ -315,8 +329,8 @@ def load_dartsort_step_sortings(
             load_feature_names=load_feature_names,
         )
 
-        # initial clust or matching res
-        if h5.stem == "subtraction":
+        # initial clust or later step res?
+        if h5 == h5s[0]:
             npy = sorting_dir / "initial_labels.npy"
             if npy.exists():
                 yield ("initial", dataclasses.replace(st0, labels=np.load(npy)))
@@ -345,13 +359,13 @@ def load_dartsort_step_unit_info_dataframes(
     gt_analysis,
     recording,
     sorting_name=None,
-    detection_h5_name="subtraction.h5",
+    detection_h5_names=("subtraction.h5", "threshold.h5", "universal.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
 ):
     step_sortings = load_dartsort_step_sortings(
         sorting_dir,
-        detection_h5_name=detection_h5_name,
+        detection_h5_names=detection_h5_names,
         detection_h5_path=detection_h5_path,
         step_format=step_format,
     )

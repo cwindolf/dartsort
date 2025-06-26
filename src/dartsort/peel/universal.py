@@ -44,11 +44,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         max_distance=32.0,
         dx=32.0,
         chunk_length_samples=1000,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
         fit_sampling="random",
+        fit_max_reweighting=4.0,
         dtype=torch.float,
     ):
         shapes, footprints, template_data = (
@@ -105,11 +106,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             # usual gizmos
             trough_offset_samples=trough_offset_samples,
             chunk_length_samples=chunk_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             n_waveforms_fit=n_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_sampling=fit_sampling,
+            fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
             # matching params which don't need setting
             svd_compression_rank=1,
@@ -148,6 +150,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         return cls(
             recording,
             chunk_length_samples=universal_cfg.chunk_length_samples,
+            n_seconds_fit=universal_cfg.n_seconds_fit,
+            n_waveforms_fit=universal_cfg.n_waveforms_fit,
+            max_waveforms_fit=universal_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=universal_cfg.fit_subsampling_random_state,
+            fit_sampling=universal_cfg.fit_sampling,
+            fit_max_reweighting=universal_cfg.fit_max_reweighting,
             threshold=universal_cfg.threshold,
             detection_threshold=universal_cfg.detection_threshold,
             n_sigmas=universal_cfg.n_sigmas,

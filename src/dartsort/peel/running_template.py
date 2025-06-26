@@ -24,7 +24,7 @@ class RunningTemplates(GrabAndFeaturize):
         trough_offset_samples=42,
         spike_length_samples=121,
         chunk_length_samples=30_000,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         fit_subsampling_random_state=0,
     ):
         n_channels = recording.get_num_channels()
@@ -37,6 +37,6 @@ class RunningTemplates(GrabAndFeaturize):
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             chunk_length_samples=chunk_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
         )

@@ -50,7 +50,7 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     logger.dartsortdebug(f"Recorded config to {json_path}.")
 
 
-def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False):
+def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False, symlinks=True):
     if work_dir is None:
         return
     if overwrite:
@@ -58,7 +58,7 @@ def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=
         return
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
     logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
-    shutil.copytree(output_dir, work_dir, symlinks=True, dirs_exist_ok=True)
+    shutil.copytree(output_dir, work_dir, symlinks=symlinks, dirs_exist_ok=True)
 
 
 def ds_save_motion_est(

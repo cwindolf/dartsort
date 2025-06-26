@@ -2,6 +2,8 @@ from dataclasses import asdict, replace
 from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import traceback
+import shutil
 
 import numpy as np
 from spikeinterface.core import BaseRecording
@@ -72,8 +74,8 @@ def dartsort(
     ) = default_dartsort_cfg,
     motion_est=None,
     overwrite=False,
+    allow_symlinks=True,
 ):
-    """TODO: fast forward."""
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
 
@@ -85,11 +87,38 @@ def dartsort(
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             work_dir = resolve_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
-            ds_all_to_workdir(output_dir, work_dir, overwrite)
-            return _dartsort_impl(
-                recording, output_dir, cfg, motion_est, work_dir, overwrite
-            )
-    return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
+            ds_all_to_workdir(output_dir, work_dir, overwrite, allow_symlinks)
+            try:
+                return _dartsort_impl(
+                    recording, output_dir, cfg, motion_est, work_dir, overwrite
+                )
+            except Exception as e:
+                traceback_path = output_dir / "traceback.txt"
+                error_data_path = output_dir / "error_state"
+                with open(traceback_path, "w") as f:
+                    traceback.print_exception(e, file=f)
+                if cfg.save_everything_on_error:
+                    logger.critical(
+                        f"Hit an error. Copying outputs to {error_data_path} "
+                        f"and writing traceback to {traceback_path}."
+                    )
+                    shutil.copytree(work_dir, error_data_path)
+                else:
+                    logger.critical(
+                        f"Hit an error. Writing traceback to {traceback_path}."
+                        " work_in_tmpdir was true, so the files won't be kept."
+                        " Set save_everything_on_error to keep them."
+                    )
+                raise
+
+    try:
+        return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
+    except Exception as e:
+        traceback_path = output_dir / "traceback.txt"
+        with open(traceback_path, "w") as f:
+            traceback.print_exception(e, file=f)
+        logger.critical(f"Hit an error. Wrote traceback to {traceback_path}.")
+        raise
 
 
 def _dartsort_impl(
@@ -112,6 +141,7 @@ def _dartsort_impl(
             recording=recording,
             cfg=cfg,
             overwrite=overwrite,
+            motion_est=motion_est,
         )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
@@ -205,10 +235,12 @@ def _dartsort_impl(
     ret["sorting"] = sorting
     return ret
 
+
 def initial_detection(
     output_dir: str | Path,
     recording,
     cfg: DARTsortInternalConfig,
+    motion_est=None,
     overwrite=False,
     show_progress=True,
 ):
@@ -245,6 +277,7 @@ def initial_detection(
             template_cfg=cfg.template_cfg,
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.initial_detection_cfg,
+            motion_est=motion_est,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,

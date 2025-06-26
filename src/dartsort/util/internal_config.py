@@ -149,7 +149,7 @@ class FeaturizationConfig:
 class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_chunks_fit: int = 100
+    n_seconds_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
@@ -239,7 +239,7 @@ class TemplateMergeConfig:
 class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_chunks_fit: int = 100
+    n_seconds_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
@@ -272,7 +272,7 @@ class MatchingConfig:
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_chunks_fit: int = 100
+    n_seconds_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
@@ -297,7 +297,7 @@ class ThresholdingConfig:
 class UniversalMatchingConfig:
     # peeling common
     chunk_length_samples: int = 1_000
-    n_chunks_fit: int = 100
+    n_seconds_fit: int = 100
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
@@ -551,6 +551,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = True
     save_final_features: bool = True
+    save_everything_on_error: bool = False
 
 
 def to_internal_config(cfg):
@@ -640,12 +641,14 @@ def to_internal_config(cfg):
         outlier_radius=5 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
         remove_clusters_smaller_than=cfg.min_cluster_size,
+        workers=cfg.clustering_workers,
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
         pc_scale=cfg.initial_pc_scale,
         motion_aware=cfg.motion_aware_clustering,
+        workers=cfg.clustering_workers,
     )
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
@@ -718,6 +721,7 @@ def to_internal_config(cfg):
         save_intermediate_labels=cfg.save_intermediate_labels,
         save_intermediate_features=cfg.save_intermediate_features,
         save_final_features=cfg.save_final_features,
+        save_everything_on_error=cfg.save_everything_on_error,
     )
 
 

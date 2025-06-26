@@ -45,7 +45,7 @@ class BasePeeler(torch.nn.Module):
         featurization_pipeline=None,
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
@@ -61,7 +61,7 @@ class BasePeeler(torch.nn.Module):
         self.recording = recording
         self.chunk_length_samples = chunk_length_samples
         self.chunk_margin_samples = chunk_margin_samples
-        self.n_chunks_fit = n_chunks_fit
+        self.n_seconds_fit = n_seconds_fit
         self.max_waveforms_fit = max_waveforms_fit
         self.trough_offset_samples = trough_offset_samples
         self.spike_length_samples = spike_length_samples
@@ -649,7 +649,8 @@ class BasePeeler(torch.nn.Module):
             return chunk_starts_samples
 
         if n_chunks is None:
-            n_chunks = self.n_chunks_fit
+            chunks_per_second = self.recording.sampling_frequency / chunk_length_samples
+            n_chunks = int(np.ceil(self.n_seconds_fit * chunks_per_second))
 
         # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)

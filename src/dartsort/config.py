@@ -185,6 +185,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_feats: int = 2
     initial_pc_scale: float = 2.5
     motion_aware_clustering: bool = True
+    clustering_workers: int = 4
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000
@@ -217,3 +218,4 @@ class DeveloperConfig(DARTsortUserConfig):
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
+    save_everything_on_error: bool = False
