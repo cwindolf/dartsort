@@ -6,6 +6,7 @@ from scipy.sparse import coo_array
 import torch
 import torch.nn.functional as F
 from tqdm.auto import trange, tqdm
+from sklearn.cluster import kmeans_plusplus
 
 
 from .density import guess_mode
@@ -18,6 +19,7 @@ logger = getLogger(__name__)
 
 def kmeanspp(
     X,
+    X_kdt=None,
     n_components=10,
     random_state: np.random.Generator | int = 0,
     kmeanspp_initial="random",
@@ -33,6 +35,12 @@ def kmeanspp(
     n, p = X.shape
 
     rg = np.random.default_rng(random_state)
+
+    # if skip_assignment and X_kdt is not None:
+    #     _, centroid_ixs = kmeans_plusplus(X, n_components, random_state=int.from_bytes(rg.bytes(8)))
+    #     C_kdt = 
+    #     dists, assignments = X_kdt.query(X[centroid_ixs])
+
     if kmeanspp_initial == "random":
         centroid_ixs = [rg.integers(n)]
     elif kmeanspp_initial == "mean":
@@ -68,15 +76,29 @@ def kmeanspp(
         assert torch.isfinite(psum) and psum > 0
         p /= psum
         centroid_ixs.append(rg.choice(n, p=p.cpu().numpy()))
-        newdists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_()
-        newdists = torch.sum(newdists, dim=1, out=p)
-        if not skip_assignment:
-            closer = newdists < dists
-            assert assignments is not None
-            assignments[closer] = j
-            dists[closer] = newdists[closer]
+
+        if X_kdt is None or j < 10:
+            newdists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_()
+            newdists = torch.sum(newdists, dim=1, out=p)
+            if not skip_assignment:
+                closer = newdists < dists
+                assert assignments is not None
+                assignments[closer] = j
+                dists[closer] = newdists[closer]
+            else:
+                torch.minimum(dists, newdists, out=dists)
         else:
-            torch.minimum(dists, newdists, out=dists)
+            min_neighb_cdist = (X[centroid_ixs[:-1]] - X[centroid_ixs[-1]]).square_().sum(dim=1).min()
+            max_relevant_dist = dists.max().sqrt() + min_neighb_cdist.sqrt() + 1e-3
+            relevant_ixs = X_kdt.query_ball_point(
+                X[centroid_ixs[-1]].numpy(force=True), max_relevant_dist.numpy(force=True), return_sorted=True
+            )
+            relevant_ixs = torch.tensor(relevant_ixs, dtype=torch.long)
+            assert relevant_ixs.ndim == 1
+            nrel = len(relevant_ixs)
+            newdists = torch.subtract(X[relevant_ixs], X[centroid_ixs[-1]], out=diff_buffer[:nrel]).square_()
+            newdists = newdists.sum(dim=1)
+            dists[relevant_ixs] = torch.minimum(newdists, dists[relevant_ixs])
 
     centroid_ixs = torch.tensor(centroid_ixs)
     if not skip_assignment:
@@ -86,8 +108,11 @@ def kmeanspp(
     return centroid_ixs, assignments, dists, phi
 
 
+
+
 def kdtree_kmeans(
     X,
+    X_kdt=None,
     max_sigma=5.0,
     n_components=10,
     n_initializations=10,
@@ -97,8 +122,8 @@ def kdtree_kmeans(
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
     show_progress=False,
-    sigma_atol=1e-3,
-    batch_size=20_000,
+    sigma_atol=1e-2,
+    batch_size=62_500,
     workers=-1,
     device=None,
 ):
@@ -117,7 +142,7 @@ def kdtree_kmeans(
     with Executor(n_jobs, context) as pool:
         random_state = np.random.default_rng(random_state)
         kmeanspp_rgs = random_state.spawn(n_initializations)
-        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist)
+        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist, X_kdt=X_kdt)
         kmeanspp_jobs = (((X_torch,), kmpkw | dict(random_state=rg)) for rg in kmeanspp_rgs)
 
         best_phi = torch.inf
@@ -144,7 +169,8 @@ def kdtree_kmeans(
         X_kdts = list(pool.map(KDTree, (X[sl] for sl in batches)))
 
         # kmeans iters
-        for j in xrange(n_iter):
+        iters = xrange(n_iter)
+        for j in iters:
             new_centroids.fill(0.0)
             new_sigmasq = 0.0
             N.fill(0.0)
@@ -183,6 +209,8 @@ def kdtree_kmeans(
             if np.isclose(new_sigma, prev_sigma, atol=sigma_atol):
                 break
             prev_sigma = new_sigma
+            if show_progress:
+                iters.set_description(f"sigma={new_sigma:0.4f}")
 
     return dict(centroids=centroids, sigmasq=sigmasq, log_proportions=log_proportions)
 
