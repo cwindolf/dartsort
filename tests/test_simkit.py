@@ -110,7 +110,7 @@ def test_reproducible_and_residual(
             n_jobs=n_jobs,
             sampling_frequency=10_000.0,
             duration_seconds=8.1,
-            templates_kind=templates_kind,
+            templates_kind=templates_kind.removesuffix("grid"),
             **kw,
         )
         sims.append(sim)

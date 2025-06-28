@@ -44,13 +44,15 @@ def fast_nanmedian(x, axis=-1):
         return x.numpy()
 
 
-def ptp(waveforms, dim=1):
+def ptp(waveforms, dim=1, keepdims=False):
     is_tensor = torch.is_tensor(waveforms)
     waveforms = torch.asarray(waveforms)
     if waveforms.shape[dim] > 1:
         v = waveforms.amax(dim=dim).sub_(waveforms.amin(dim=dim))
     else:
         v = waveforms.abs().amax(dim=dim)
+    if keepdims:
+        v = v.unsqueeze(dim)
     if is_tensor:
         return v
     return v.numpy()

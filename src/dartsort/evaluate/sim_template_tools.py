@@ -309,7 +309,9 @@ class TemplateLibrarySimulator:
 
         self.n_units = len(templates_local)
         self.templates_local = templates_local
-        self.low_rank_templates = svd_compress_templates(templates_local, allow_na=True)
+        self.low_rank_templates = svd_compress_templates(
+            templates_local, allow_na=True
+        )
         self.temporal_up = upsample_multichan(
             self.low_rank_templates.temporal_components,
             temporal_jitter=temporal_jitter,
@@ -407,7 +409,7 @@ class TemplateLibrarySimulator:
         spatial_singular = self.spatial_singular[unit_ids]
         if self.interp_method != "griddata":
             assert self.precomputed_data is not None
-            spatial_singular = kernel_interpolate(
+            out = kernel_interpolate(
                 spatial_singular,
                 source_pos,
                 target_pos,
@@ -430,9 +432,9 @@ class TemplateLibrarySimulator:
                 source_pos = source_pos.numpy(force=True)
             if torch.is_tensor(target_pos):
                 target_pos = target_pos.numpy(force=True)
-            spatial_singular = np.full((n, f, nct), np.nan, dtype=spatial_singular.dtype)
+            out = np.full((n, f, nct), np.nan, dtype=spatial_singular.dtype)
             griddata_interp(
-                spatial_singular, source_pos, target_pos, spatial_singular, method=self.interp_kernel_name
+                spatial_singular, source_pos, target_pos, out, method=self.interp_kernel_name
             )
 
         # temporal part...
@@ -442,7 +444,7 @@ class TemplateLibrarySimulator:
         else:
             temporal = self.low_rank_templates.temporal_components
 
-        return np.einsum("nrc,ntr->ntc", spatial_singular, temporal)
+        return np.einsum("nrc,ntr->ntc", out, temporal)
 
     def templates(
         self, drift=None, up=False, padded=False, pad_value=np.nan, unit_ids=None

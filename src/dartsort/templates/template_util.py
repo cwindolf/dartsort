@@ -5,10 +5,9 @@ import numpy as np
 from scipy.spatial import KDTree
 import torch
 
-from dartsort.localize.localize_util import localize_waveforms
 from dartsort.util import drift_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.spiketorch import fast_nanmedian
+from dartsort.util.spiketorch import fast_nanmedian, ptp
 from scipy.interpolate import interp1d
 
 from .get_templates import get_raw_templates, get_templates
@@ -257,7 +256,9 @@ def svd_compress_templates(
         templates = template_data
         counts = None
 
-    amp_vecs = np.ptp(templates, axis=1, keepdims=True)
+    rank = min(rank, *templates.shape[1:])
+
+    amp_vecs = ptp(templates, dim=1, keepdims=True)
     isna = np.isnan(amp_vecs)
     if not allow_na:
         assert not isna.any()
@@ -268,36 +269,37 @@ def svd_compress_templates(
     vis_templates = templates * vis_mask
     dtype = templates.dtype
 
+
     if not channel_sparse:
         U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
         # s is descending.
         temporal_components = U[:, :, :rank].astype(dtype)
         singular_values = s[:, :rank].astype(dtype)
         spatial_components = Vh[:, :rank, :].astype(dtype)
-        return LowRankTemplates(temporal_components, singular_values, spatial_components, counts)
-
-    # channel sparse: only SVD the nonzero channels
-    # this encodes the same exact subspace as above, and the reconstruction
-    # error is the same as above as a function of rank. it's just that
-    # we can zero out some spatial components, which is a useful property
-    # (used in pairwise convolutions for instance)
-    n, t, c = templates.shape
-    temporal_components = np.zeros((n, t, rank), dtype=dtype)
-    singular_values = np.zeros((n, rank), dtype=dtype)
-    spatial_components = np.zeros((n, rank, c), dtype=dtype)
-    for i in range(len(templates)):
-        template = templates[i]
-        mask = np.flatnonzero(vis_mask[i, 0])
-        k = min(rank, mask.size)
-        if not k:
-            continue
-        U, s, Vh = np.linalg.svd(template[:, mask], full_matrices=False)
-        temporal_components[i, :, :k] = U[:, :rank]
-        singular_values[i, :k] = s[:rank]
-        spatial_components[i, :k, mask] = Vh[:rank].T
+    else:
+        # channel sparse: only SVD the nonzero channels
+        # this encodes the same exact subspace as above, and the reconstruction
+        # error is the same as above as a function of rank. it's just that
+        # we can zero out some spatial components, which is a useful property
+        # (used in pairwise convolutions for instance)
+        n, t, c = templates.shape
+        temporal_components = np.zeros((n, t, rank), dtype=dtype)
+        singular_values = np.zeros((n, rank), dtype=dtype)
+        spatial_components = np.zeros((n, rank, c), dtype=dtype)
+        for i in range(len(templates)):
+            template = templates[i]
+            mask = np.flatnonzero(vis_mask[i, 0])
+            k = min(rank, mask.size)
+            if not k:
+                continue
+            U, s, Vh = np.linalg.svd(template[:, mask], full_matrices=False)
+            temporal_components[i, :, :k] = U[:, :rank]
+            singular_values[i, :k] = s[:rank]
+            spatial_components[i, :k, mask] = Vh[:rank].T
 
     if allow_na:
-        spatial_components[isna[:, None, :]] = np.nan
+        isna = np.broadcast_to(isna, spatial_components.shape)
+        spatial_components[isna] = np.nan
 
     return LowRankTemplates(
         temporal_components, singular_values, spatial_components, counts
