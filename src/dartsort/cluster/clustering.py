@@ -304,6 +304,7 @@ class GMMDensityPeaksClusterer(Clusterer):
         random_state=0,
         kmeanspp_min_dist=5.0,
         hellinger_cutoff=0.8,
+        hellinger_strong=0.0,
         max_sigma=5.0,
         max_samples=2_000_000,
         **kwargs,
@@ -319,6 +320,7 @@ class GMMDensityPeaksClusterer(Clusterer):
         self.min_spikes_per_component = min_spikes_per_component
         self.random_state = random_state
         self.hellinger_cutoff = hellinger_cutoff
+        self.hellinger_strong = hellinger_strong
         self.max_samples = max_samples
 
         # unconfigured params
@@ -345,6 +347,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             max_components_per_channel=clustering_cfg.components_per_channel,
             random_state=clustering_cfg.random_seed,
             hellinger_cutoff=clustering_cfg.component_overlap,
+            hellinger_strong=clustering_cfg.hellinger_strong,
             max_samples=clustering_cfg.kdtree_subsample_max_size,
             computation_cfg=computation_cfg,
             save_cfg=save_cfg,
@@ -367,15 +370,14 @@ class GMMDensityPeaksClusterer(Clusterer):
             random_state=self.random_state,
             kmeanspp_min_dist=self.kmeanspp_min_dist,
             hellinger_cutoff=self.hellinger_cutoff,
+            hellinger_strong=self.hellinger_strong,
             max_sigma=self.max_sigma,
             max_samples=self.max_samples,
         )
         return res['labels']
 
 
-
 clustering_strategies["gmmdpc"] = GMMDensityPeaksClusterer
-
 
 
 class RecursiveHDBSCANClusterer(Clusterer):

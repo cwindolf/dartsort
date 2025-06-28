@@ -164,6 +164,7 @@ class DeveloperConfig(DARTsortUserConfig):
     resume_with_split: bool = False
     cluster_strategy: str = "gmmdpc"
     refinement_strategy: str = "gmm"
+    recluster_after_first_matching: bool = False
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
@@ -214,6 +215,7 @@ class DeveloperConfig(DARTsortUserConfig):
     laplace_ard: bool = True
     core_radius: float = 35.0
     min_cluster_size: int = 50
+    hellinger_strong: float = 0.0
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False

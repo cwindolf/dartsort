@@ -397,6 +397,7 @@ class ClusteringConfig:
     kmeans_iter: int = 50
     components_per_channel: int = 20
     component_overlap: float = 0.8
+    hellinger_strong: float = 0.0
 
     # hdbscan parameters
     min_cluster_size: int = 25
@@ -542,6 +543,7 @@ class DARTsortInternalConfig:
     detection_type: Literal["subtract", "match", "threshold", "universal"] = "subtract"
     final_refinement: bool = True
     matching_iterations: int = 1
+    recluster_after_first_matching: bool = False
     intermediate_matching_subsampling: float = 1.0
     overwrite_matching: bool = False
 
@@ -642,6 +644,7 @@ def to_internal_config(cfg):
         radius_search=5 * cfg.density_bandwidth,
         remove_clusters_smaller_than=cfg.min_cluster_size,
         workers=cfg.clustering_workers,
+        hellinger_strong=cfg.hellinger_strong,
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
@@ -715,6 +718,7 @@ def to_internal_config(cfg):
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
+        recluster_after_first_matching=cfg.recluster_after_first_matching,
         overwrite_matching=cfg.overwrite_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,
         tmpdir_parent=cfg.tmpdir_parent,

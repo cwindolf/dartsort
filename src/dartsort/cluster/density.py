@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from logging import getLogger
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
@@ -6,8 +7,10 @@ from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist, squareform
 from scipy.stats import bernoulli
+
+
+logger = getLogger(__name__)
 
 
 def kdtree_inliers(
@@ -382,9 +385,10 @@ def gmm_density_peaks(
     random_state=0,
     kmeanspp_min_dist=0.0,
     hellinger_cutoff=0.8,
+    hellinger_strong=0.0,
     max_sigma=5.0,
     max_samples=2_000_000,
-    show_progress=False,
+    show_progress=True,
 ):
     """Density peaks clustering via an isotropic GMM density estimate
 
@@ -426,7 +430,7 @@ def gmm_density_peaks(
     inliers, _ = kdtree_inliers(
         X[choices],
         n_neighbors=outlier_neighbor_count,
-        distance_upper_bound=outlier_radius,
+        distance_upper_bound=outlier_radius * np.sqrt(X.shape[1]),
         workers=workers or 1,
     )
     if not isinstance(choices, slice):
@@ -441,6 +445,7 @@ def gmm_density_peaks(
     n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
     res = kdtree_kmeans(
         Xi,
+        X_kdt=KDTree(X[inliers]),
         n_components=n_components,
         n_initializations=n_initializations,
         random_state=random_state,
@@ -454,10 +459,8 @@ def gmm_density_peaks(
     res['n_components'] = n_components
     n_components = len(res['centroids'])
     res['n_components_kept'] = n_components
-    print(f"{res['centroids'].shape=}")
-    print(f"{res['log_proportions'].shape=}")
-    print(f"{res['sigmasq'].shape=}")
-    print(f"{n_components=}")
+    if show_progress:
+        logger.info("Hellinger...")
     coo = sparse_iso_hellinger(
         res["centroids"],
         np.sqrt(res["sigmasq"]),
@@ -465,22 +468,34 @@ def gmm_density_peaks(
     )
     nhdn = coo_nhdn(coo, res["log_proportions"])
     assert nhdn.shape == (len(res["centroids"]),) == (n_components,)
+    ii = np.arange(len(nhdn))
+    jj = nhdn
+    if hellinger_strong:
+        strong = np.flatnonzero(coo.data < hellinger_strong)
+        ii = np.concatenate([ii, coo.coords[0][strong]])
+        jj = np.concatenate([jj, coo.coords[1][strong]])
+        order = np.argsort(ii, stable=True)
+        ii = ii[order]
+        jj = jj[order]
     _1 = np.ones((1,), dtype="float32")
-    _1 = np.broadcast_to(_1, nhdn.shape)
-    nhdn_coo = coo_array(
-        (_1, (np.arange(len(nhdn)), nhdn)), shape=(n_components, n_components)
-    )
-    print(f"{nhdn_coo.shape=}")
+    _1 = np.broadcast_to(_1, jj.shape)
+    nhdn_coo = coo_array((_1, (ii, jj)), shape=(n_components, n_components))
+    if show_progress:
+        logger.info("Components...")
     _, labels = connected_components(nhdn_coo)
     assert labels.shape == (n_components,)
     labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
 
     ckdt = KDTree(res["centroids"])
     maxdist = max_sigma * np.sqrt(res["sigmasq"]) * np.sqrt(X.shape[1])
+    if show_progress:
+        logger.info("Last query...")
     labels = labels_padded[
-        ckdt.query(X, workers=workers, distance_upper_bound=maxdist)[1]
+        ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)[1]
     ]
     if remove_clusters_smaller_than:
+        if show_progress:
+            logger.info("Clean...")
         kept = np.flatnonzero(labels >= 0)
         u, c = np.unique(labels[kept], return_counts=True)
         flat = np.full(u.max() + 1, -1)
