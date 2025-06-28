@@ -70,6 +70,16 @@ class DARTsortSorting:
                 assert not hasattr(self, k)
                 self.__dict__[k] = v
 
+    def setattr(self, name, value):
+        if torch.is_tensor(value):
+            value = value.numpy(force=True)
+        if isinstance(value, np.ndarray):
+            assert len(value) == len(self)
+            self.extra_features[name] = value
+            self.__dict__[name] = value
+        else:
+            super().__setattr__(name, value)
+
     def to_numpy_sorting(self):
         return NumpySorting.from_samples_and_labels(
             samples_list=self.times_samples,
