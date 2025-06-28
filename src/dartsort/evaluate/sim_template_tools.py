@@ -1,7 +1,9 @@
+import numba
 import numpy as np
 from scipy.spatial.distance import cdist
+from scipy.spatial import KDTree
+from scipy.interpolate import griddata
 import torch
-
 
 from ..util.waveform_util import (
     upsample_singlechan,
@@ -279,6 +281,7 @@ class TemplateLibrarySimulator:
         geom,
         templates_local,
         pos_local,
+        radius=250.0,
         temporal_jitter=1,
         common_reference=False,
         interp_method="kriging",
@@ -289,8 +292,11 @@ class TemplateLibrarySimulator:
         trough_offset_samples=42,
     ):
         self.geom = geom
+        self.geom_kdt = KDTree(geom)
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
+        self.radius = radius
+        self.channel_index = make_channel_index(geom, radius)
         self._trough_offset_samples = trough_offset_samples
 
         self.interp_method = interp_method
@@ -308,6 +314,7 @@ class TemplateLibrarySimulator:
             np.arange(self.n_units),
             np.nan_to_num(np.abs(templates_local).max(1)).argmax(1),
         ]
+        print(f"{tpos=}")
         assert tpos.shape[1] == 2
         self.template_pos = np.c_[tpos[:, 0], 0 * tpos[:, 0], tpos[:, 1]]
         assert np.array_equal(
@@ -317,12 +324,16 @@ class TemplateLibrarySimulator:
         self.pos_local = pos_local
 
         # precompute interpolation data
-        self.precomputed_data = interp_precompute(
-            source_pos=pos_local,
-            method=interp_method,
-            kernel_name=interp_kernel_name,
-            kriging_poly_degree=kriging_poly_degree,
-        )
+        if interp_method != "griddata":
+            self.precomputed_data = interp_precompute(
+                source_pos=pos_local,
+                method=interp_method,
+                kernel_name=interp_kernel_name,
+                kriging_poly_degree=kriging_poly_degree,
+            )
+        else:
+            self.precomputed_data = None
+            assert interp_kernel_name in ("nearest", "linear", "cubic")
 
     def trough_offset_samples(self):
         return self._trough_offset_samples
@@ -339,11 +350,13 @@ class TemplateLibrarySimulator:
         randomize_position=True,
         common_reference=False,
         temporal_jitter=1,
-        radius=250,
+        extract_radius=250.0,
+        inject_radius=200.0,
         trough_offset_samples=42,
         pos_margin_um_z=25.0,
         seed=0,
-        dtype="float32"
+        dtype="float32",
+        **kwargs,
     ):
         rg = np.random.default_rng(seed)
         if templates.shape[0] > n_units:
@@ -352,7 +365,7 @@ class TemplateLibrarySimulator:
         templates = templates.astype(dtype)
 
         assert np.isfinite(templates).all()
-        channel_index = make_channel_index(geom, radius)
+        channel_index = make_channel_index(geom, extract_radius)
         main_channels = np.abs(templates).max(1).argmax(1)
         template_channels = channel_index[main_channels]
 
@@ -367,7 +380,9 @@ class TemplateLibrarySimulator:
             z_low = geom[:, 1].min() - pos_margin_um_z
             z_high = geom[:, 1].max() + pos_margin_um_z
             z = rg.uniform(z_low, z_high, size=n_units)
+            # z = rg.choice(np.unique(geom[:, 1]), size=n_units)
             pos_local[..., 1] += z[:, None] - geom[main_channels, 1][:, None]
+            print(f"{pos_local[..., 1]=}")
 
         return cls(
             geom=geom,
@@ -376,27 +391,22 @@ class TemplateLibrarySimulator:
             temporal_jitter=temporal_jitter,
             common_reference=common_reference,
             trough_offset_samples=trough_offset_samples,
+            radius=inject_radius,
+            **kwargs,
         )
 
-    def templates(self, drift=None, up=False, padded=False, pad_value=np.nan):
-        source_pos = self.pos_local
-        tpos = self.template_pos
-        if drift is not None:
-            drift = self.templates_local.dtype.type(drift)
-            zero = self.templates_local.dtype.type(0.0)
-            source_pos = source_pos + [zero, drift]
-            tpos = tpos + [zero, zero, drift]
+    def interpolate_templates(self, source_pos, target_pos, unit_ids, up=False):
+        if up:
+            templates = self.templates_local_up[unit_ids]
+            n, jit, t, c = templates.shape
+            templates = templates.reshape(n, jit * t, c)
+        else:
+            templates = self.templates_local[unit_ids]
 
-        tgeom = self.geom.astype(self.templates_local.dtype)
-        if padded:
-            tgeom = np.pad(tgeom, [(0, 1), (0, 0)], constant_values=np.nan)
-
-        target_pos = torch.asarray(tgeom)[None]
-        target_pos = target_pos.broadcast_to(self.n_units, *tgeom.shape)
-
-        if not up:
-            templates = kernel_interpolate(
-                self.templates_local,
+        if self.interp_method != "griddata":
+            assert self.precomputed_data is not None
+            return kernel_interpolate(
+                templates,
                 source_pos,
                 target_pos,
                 method=self.interp_method,
@@ -404,30 +414,80 @@ class TemplateLibrarySimulator:
                 extrap_method=self.extrap_method,
                 extrap_kernel_name=self.extrap_kernel_name,
                 kriging_poly_degree=self.kriging_poly_degree,
-                precomputed_data=self.precomputed_data,
+                precomputed_data=self.precomputed_data[unit_ids],
             ).numpy(force=True)
-        else:
-            templates = [
-                kernel_interpolate(
-                    self.templates_local_up[:, u],
-                    source_pos,
-                    target_pos,
-                    method=self.interp_method,
-                    kernel_name=self.interp_kernel_name,
-                    extrap_method=self.extrap_method,
-                    extrap_kernel_name=self.extrap_kernel_name,
-                    kriging_poly_degree=self.kriging_poly_degree,
-                    precomputed_data=self.precomputed_data,
-                ).numpy(force=True)
-                for u in range(self.temporal_jitter)
-            ]
-            templates = np.stack(templates, axis=1)
 
-        if self.common_reference:
-            tunpad = templates[..., :-1] if padded else templates
-            tunpad -= np.median(tunpad, axis=-1, keepdims=True)
+        n, nct, _2 = target_pos.shape
+        n_, f, nc_ = templates.shape
+        assert _2 == 2
+        assert n == n_
+        assert nc_ == source_pos.shape[1]
+        if torch.is_tensor(templates):
+            templates = templates.numpy(force=True)
+        if torch.is_tensor(source_pos):
+            source_pos = source_pos.numpy(force=True)
+        if torch.is_tensor(target_pos):
+            target_pos = target_pos.numpy(force=True)
+        out = np.full((n, f, nct), np.nan, dtype=templates.dtype)
+        return griddata_interp(templates, source_pos, target_pos, out, method=self.interp_kernel_name)
+
+    def templates(
+        self, drift=None, up=False, padded=False, pad_value=np.nan, unit_ids=None
+    ):
+        if unit_ids is None:
+            unit_ids = slice(None)
+
+        source_pos = self.pos_local[unit_ids]
+        true_template_pos = self.template_pos[unit_ids]
+        if drift is not None:
+            drift = self.templates_local.dtype.type(drift)
+            zero = self.templates_local.dtype.type(0.0)
+            source_pos = source_pos + [zero, drift]
+            true_template_pos = true_template_pos + [zero, zero, drift]
+
+        tgeom = self.geom.astype(self.templates_local.dtype)
+        _, target_chans = self.geom_kdt.query(true_template_pos[:, [0, 2]])
+        tgeom = np.pad(tgeom, [(0, 1), (0, 0)], constant_values=np.nan)
+        target_chans = self.channel_index[target_chans]
+        target_pos = torch.asarray(tgeom[target_chans])
+
+        templates = self.interpolate_templates(source_pos, target_pos, unit_ids, up=up)
+
+        nu = len(templates)
+        nc_out = len(self.geom) + 1
+        nt = self.templates_local.shape[1]
+        up_factor = self.temporal_jitter if up else 1
+        out = np.zeros(
+            (nu, up_factor * nt, nc_out), dtype=self.templates_local.dtype
+        )
+        np.put_along_axis(out, target_chans[:, None, :], templates, axis=2)
+
+        if up:
+            out = out.reshape(nu, up_factor, nt, nc_out)
 
         if padded:
-            templates[..., -1] = pad_value
+            out[..., -1] = pad_value
 
-        return tpos, templates
+        if self.common_reference:
+            tunpad = out[..., :-1]
+            tunpad -= np.median(tunpad, axis=-1, keepdims=True)
+
+        if not padded:
+            out = out[..., :-1]
+
+        return true_template_pos, out
+
+
+def griddata_interp(templates, source_pos, target_pos, out, method):
+    n = templates.shape[0]
+    for j in range(n):
+        valid_in = np.flatnonzero(np.isfinite(source_pos[j, :, 0]))
+        valid_out = np.flatnonzero(np.isfinite(target_pos[j, :, 0]))
+        out[j, :, valid_out] = griddata(
+            points=source_pos[j, valid_in],
+            values=templates[j, :, valid_in],
+            xi=target_pos[j, valid_out],
+            method=method,
+            fill_value=0.0,
+        )
+    return out

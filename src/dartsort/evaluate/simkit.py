@@ -77,6 +77,7 @@ def generate_simulation(
     random_seed=0,
     overwrite=False,
     n_jobs=1,
+    no_save=False,
 ):
     folder = resolve_path(folder)
     noise_recording_folder = resolve_path(noise_recording_folder)
@@ -135,6 +136,8 @@ def generate_simulation(
         extract_radius=extract_radius,
         features_dtype=features_dtype,
     )
+    if no_save:
+        return sim_recording, template_simulator
     sim_recording.save_simulation(
         folder,
         overwrite=overwrite,
