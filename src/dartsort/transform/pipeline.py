@@ -211,7 +211,16 @@ def featurization_config_to_class_names_and_kwargs(
         )
     if fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
-            ("BaseTemporalPCA", {"rank": fc.tpca_rank, "centered": False})
+            (
+                "BaseTemporalPCA",
+                {
+                    "rank": fc.tpca_rank,
+                    "name_prefix": fc.input_waveforms_name,
+                    "centered": False,
+                    "max_waveforms": fc.tpca_max_waveforms,
+                    "fit_radius": fc.tpca_fit_radius,
+                },
+            )
         )
     if do_feats and fc.save_input_tpca_projs:
         tslice = fc.input_tpca_waveform_cfg.relative_slice(waveform_cfg)
@@ -224,6 +233,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "centered": fc.tpca_centered,
                     "temporal_slice": tslice,
                     "max_waveforms": fc.tpca_max_waveforms,
+                    "fit_radius": fc.tpca_fit_radius,
                 },
             )
         )
@@ -247,6 +257,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "rank": fc.tpca_rank,
                     "fit_radius": fc.tpca_fit_radius,
                     "centered": fc.tpca_centered,
+                    "max_waveforms": fc.tpca_max_waveforms,
                 },
             )
         )

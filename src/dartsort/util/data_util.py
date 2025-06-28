@@ -287,6 +287,17 @@ def get_tpca(sorting):
     return tpca
 
 
+def load_stored_tsvd(sorting):
+    if sorting.parent_h5_path is None:
+        return None
+    pipeline = get_featurization_pipeline(sorting)
+    tsvd = [t for t in pipeline.transformers if t.name == "collisioncleaned_basis"]
+    if not len(tsvd):
+        return None
+    assert len(tsvd) == 1
+    return tsvd[0].to_sklearn()
+
+
 def get_labels(h5_path):
     with h5py.File(h5_path, "r") as h5:
         return h5["labels"][:]

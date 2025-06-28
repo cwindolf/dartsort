@@ -9,15 +9,17 @@ from dataclasses import replace
 import numpy as np
 import torch
 import threading
-from dartsort.util import spikeio
-from dartsort.util.drift_util import registered_template
-from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.spiketorch import fast_nanmedian, ptp
-from dartsort.util.waveform_util import make_channel_index
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
 from tqdm.auto import tqdm
+
+from ..util import spikeio
+from ..util.data_util import load_stored_tsvd
+from ..util.drift_util import registered_template
+from ..util.multiprocessing_util import get_pool
+from ..util.spiketorch import fast_nanmedian, ptp
+from ..util.waveform_util import make_channel_index
 
 
 def get_templates(
@@ -371,13 +373,19 @@ def fit_tsvd(
     dtype=np.float32,
     random_seed=0,
 ):
+    tsvd = load_stored_tsvd(sorting)
+    if tsvd is not None:
+        return tsvd
+
     # read spikes on channel neighborhood
     geom = recording.get_channel_locations()
     tsvd_channel_index = make_channel_index(geom, denoising_fit_radius)
 
     # subset spikes used to fit tsvd
     rg = np.random.default_rng(random_seed)
-    max_time = recording.get_num_samples() - (spike_length_samples - trough_offset_samples)
+    max_time = recording.get_num_samples() - (
+        spike_length_samples - trough_offset_samples
+    )
     t_clip = sorting.times_samples.clip(trough_offset_samples, max_time)
     valid = np.logical_and(
         sorting.labels >= 0,

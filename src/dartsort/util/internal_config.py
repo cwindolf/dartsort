@@ -360,7 +360,7 @@ class ClusteringFeaturesConfig:
     n_main_channel_pcs: int = 2
     pc_scale: float = 2.5
     adaptive_feature_scales: bool = False
-    workers: int = -1
+    workers: int = 4
 
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
@@ -378,7 +378,7 @@ class ClusteringConfig:
     cluster_strategy: str = "gmmdpc"
 
     # global parameters
-    workers: int = -1
+    workers: int = 4
     random_seed: int = 0
 
     # density peaks parameters
