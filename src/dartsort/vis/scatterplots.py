@@ -37,11 +37,12 @@ def scatter_spike_features(
     limits="probe_margin",
     label_axes=True,
     random_seed=0,
+    annotate_labels_over_xz=False,
     amplitudes_dataset_name=("denoised_ptp_amplitudes", "ptp_amplitudes", "amplitudes"),
     localizations_dataset_name=("point_source_localizations", "localizations"),
     extra_features=None,
     show_triaged=True,
-    remove_outliers=True,
+    remove_outliers=False,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -147,6 +148,7 @@ def scatter_spike_features(
         amplitudes_dataset_name=amplitudes_dataset_name,
         localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
+        annotate_labels=annotate_labels_over_xz,
         **scatter_kw,
     )
 
@@ -355,6 +357,7 @@ def scatter_x_vs_depth(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     localizations_dataset_name="point_source_localizations",
     show_triaged=True,
+    annotate_labels=False,
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
@@ -392,6 +395,7 @@ def scatter_x_vs_depth(
         random_seed=random_seed,
         to_show=to_show,
         show_triaged=show_triaged,
+        annotate_labels=annotate_labels,
         **scatter_kw,
     )
     if show_geom and geom is not None:
@@ -509,6 +513,7 @@ def scatter_feature_vs_depth(
     ellip=None,
     max_n_labels=None,
     pad_to_max=False,
+    annotate_labels=False,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -626,9 +631,39 @@ def scatter_feature_vs_depth(
     elif limits is not None and limits != "probe_margin":
         ax.set_ylim(limits)
 
+    if annotate_labels:
+        add_labels(ax, labels[to_show], feature, depths_um)
+
     if show_ellipses:
         return ax, scat, ellip
     return ax, scat
+
+
+def add_labels(ax, labels, feature, depths_um):
+    labels = labels
+    feature = feature
+    print(f"{depths_um.min()=} {depths_um.max()=}")
+    depths_um = depths_um
+    print(f"{depths_um.min()=} {depths_um.max()=}")
+    fs = []
+    ds = []
+    for u in np.unique(labels):
+        if u < 0:
+            continue
+        inu = np.flatnonzero(labels == u)
+        f = feature[inu].mean()
+        fs.append(f)
+        d = depths_um[inu].mean()
+        ds.append(d)
+        ax.annotate(
+            str(u),
+            (f, d),
+            annotation_clip=True,
+            color=glasbey1024[u % len(glasbey1024)],
+            bbox=dict(boxstyle='square', pad=0.0, facecolor='w',),
+        )
+    print(f"{np.min(fs)=} {np.max(fs)=}")
+    print(f"{np.min(ds)=} {np.max(ds)=}")
 
 
 def add_ellipses(
