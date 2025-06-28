@@ -1,6 +1,7 @@
 from dataclasses import replace
 from typing import Optional
 from logging import getLogger
+import warnings
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -306,6 +307,11 @@ def calculate_merge_distances(
         )
 
     dists = sym_function(dists, dists.T)
+    np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
+    min_dist = dists.min()
+    if min_dist < -1e-3:
+        warnings.warn(f"Alarmingly negative min distance {min_dist}.")
+    dists = np.maximum(dists, 0.0, out=dists)
 
     return units, dists, shifts, template_snrs
 
