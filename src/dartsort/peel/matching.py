@@ -82,7 +82,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.coarse_objective = coarse_objective
         self.temporal_upsampling_factor = temporal_upsampling_factor
         self.upsampling_peak_window_radius = upsampling_peak_window_radius
-        self.svd_compression_rank = svd_compression_rank
+        self.svd_compression_rank = min(
+            svd_compression_rank, *template_data.templates.shape[1:]
+        )
         self.min_channel_amplitude = min_channel_amplitude
         self.threshold = threshold
         self.max_fp_per_input_spike = max_fp_per_input_spike
