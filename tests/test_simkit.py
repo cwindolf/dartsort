@@ -83,16 +83,22 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
 
 
 @pytest.mark.parametrize("globally_refractory", [False, True])
-@pytest.mark.parametrize("templates_kind", ["3exp", "library"])
+@pytest.mark.parametrize("templates_kind", ["3exp", "library", "librarygrid"])
 @pytest.mark.parametrize("noise_kind", ["zero", "white", "stationary_factorized_rbf"])
 def test_reproducible_and_residual(
     tmp_path, globally_refractory, templates_kind, noise_kind
 ):
     sims = []
+
     kw = {}
-    if templates_kind == "library":
+    if templates_kind.startswith("library"):
         rg = np.random.default_rng(0)
         kw["template_library"] = 10 * rg.normal(size=(10, 121, 48))
+    if templates_kind == "librarygrid":
+        kw["template_simulator_kwargs"] = dict(
+            interp_method="griddata", interp_kernel_name="linear"
+        )
+
     for j, n_jobs in enumerate((1, 4)):
         sim = simkit.generate_simulation(
             tmp_path / f"sim{j}",
@@ -104,6 +110,8 @@ def test_reproducible_and_residual(
             n_jobs=n_jobs,
             sampling_frequency=10_000.0,
             duration_seconds=8.1,
+            templates_kind=templates_kind,
+            **kw,
         )
         sims.append(sim)
     sim0, sim1 = sims

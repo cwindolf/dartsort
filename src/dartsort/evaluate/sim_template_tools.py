@@ -11,6 +11,7 @@ from ..util.waveform_util import (
     make_channel_index,
 )
 from ..util.interpolation_util import interp_precompute, kernel_interpolate
+from ..templates.template_util import svd_compress_templates
 
 
 def get_template_simulator(
@@ -288,6 +289,7 @@ class TemplateLibrarySimulator:
         interp_kernel_name="thinplate",
         extrap_method="kernel",
         extrap_kernel_name="rbf",
+        rank=10,
         kriging_poly_degree=0,
         trough_offset_samples=42,
     ):
@@ -307,19 +309,25 @@ class TemplateLibrarySimulator:
 
         self.n_units = len(templates_local)
         self.templates_local = templates_local
-        self.templates_local_up = upsample_multichan(
-            templates_local, temporal_jitter=temporal_jitter
+        self.low_rank_templates = svd_compress_templates(templates_local, allow_na=True)
+        self.temporal_up = upsample_multichan(
+            self.low_rank_templates.temporal_components,
+            temporal_jitter=temporal_jitter,
         )
+        self.spatial_singular = (
+            self.low_rank_templates.spatial_components
+            * self.low_rank_templates.singular_values[..., None]
+        )
+
         tpos = pos_local[
             np.arange(self.n_units),
             np.nan_to_num(np.abs(templates_local).max(1)).argmax(1),
         ]
-        print(f"{tpos=}")
         assert tpos.shape[1] == 2
         self.template_pos = np.c_[tpos[:, 0], 0 * tpos[:, 0], tpos[:, 1]]
         assert np.array_equal(
             np.isfinite(self.templates_local[:, 0]),
-            np.isfinite(self.templates_local_up[:, 0, 0]),
+            np.isfinite(self.low_rank_templates.spatial_components[:, 0]),
         )
         self.pos_local = pos_local
 
@@ -382,7 +390,6 @@ class TemplateLibrarySimulator:
             z = rg.uniform(z_low, z_high, size=n_units)
             # z = rg.choice(np.unique(geom[:, 1]), size=n_units)
             pos_local[..., 1] += z[:, None] - geom[main_channels, 1][:, None]
-            print(f"{pos_local[..., 1]=}")
 
         return cls(
             geom=geom,
@@ -396,17 +403,12 @@ class TemplateLibrarySimulator:
         )
 
     def interpolate_templates(self, source_pos, target_pos, unit_ids, up=False):
-        if up:
-            templates = self.templates_local_up[unit_ids]
-            n, jit, t, c = templates.shape
-            templates = templates.reshape(n, jit * t, c)
-        else:
-            templates = self.templates_local[unit_ids]
-
+        # interpolate spatial components
+        spatial_singular = self.spatial_singular[unit_ids]
         if self.interp_method != "griddata":
             assert self.precomputed_data is not None
-            return kernel_interpolate(
-                templates,
+            spatial_singular = kernel_interpolate(
+                spatial_singular,
                 source_pos,
                 target_pos,
                 method=self.interp_method,
@@ -416,20 +418,31 @@ class TemplateLibrarySimulator:
                 kriging_poly_degree=self.kriging_poly_degree,
                 precomputed_data=self.precomputed_data[unit_ids],
             ).numpy(force=True)
+        else:
+            n, nct, _2 = target_pos.shape
+            n_, f, nc_ = spatial_singular.shape
+            assert _2 == 2
+            assert n == n_
+            assert nc_ == source_pos.shape[1]
+            if torch.is_tensor(spatial_singular):
+                spatial_singular = spatial_singular.numpy(force=True)
+            if torch.is_tensor(source_pos):
+                source_pos = source_pos.numpy(force=True)
+            if torch.is_tensor(target_pos):
+                target_pos = target_pos.numpy(force=True)
+            spatial_singular = np.full((n, f, nct), np.nan, dtype=spatial_singular.dtype)
+            griddata_interp(
+                spatial_singular, source_pos, target_pos, spatial_singular, method=self.interp_kernel_name
+            )
 
-        n, nct, _2 = target_pos.shape
-        n_, f, nc_ = templates.shape
-        assert _2 == 2
-        assert n == n_
-        assert nc_ == source_pos.shape[1]
-        if torch.is_tensor(templates):
-            templates = templates.numpy(force=True)
-        if torch.is_tensor(source_pos):
-            source_pos = source_pos.numpy(force=True)
-        if torch.is_tensor(target_pos):
-            target_pos = target_pos.numpy(force=True)
-        out = np.full((n, f, nct), np.nan, dtype=templates.dtype)
-        return griddata_interp(templates, source_pos, target_pos, out, method=self.interp_kernel_name)
+        # temporal part...
+        n, r, c = spatial_singular.shape
+        if up:
+            temporal = self.temporal_up.reshape(n, -1, r)
+        else:
+            temporal = self.low_rank_templates.temporal_components
+
+        return np.einsum("nrc,ntr->ntc", spatial_singular, temporal)
 
     def templates(
         self, drift=None, up=False, padded=False, pad_value=np.nan, unit_ids=None
@@ -457,9 +470,7 @@ class TemplateLibrarySimulator:
         nc_out = len(self.geom) + 1
         nt = self.templates_local.shape[1]
         up_factor = self.temporal_jitter if up else 1
-        out = np.zeros(
-            (nu, up_factor * nt, nc_out), dtype=self.templates_local.dtype
-        )
+        out = np.zeros((nu, up_factor * nt, nc_out), dtype=self.templates_local.dtype)
         np.put_along_axis(out, target_chans[:, None, :], templates, axis=2)
 
         if up:

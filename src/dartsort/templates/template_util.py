@@ -207,7 +207,7 @@ class LowRankTemplates:
     temporal_components: np.ndarray
     singular_values: np.ndarray
     spatial_components: np.ndarray
-    spike_counts_by_channel: np.ndarray
+    spike_counts_by_channel: np.ndarray | None
 
     def shift_to_best_channels(self, geom, registered_geom=None) -> "LowRankTemplates":
         if registered_geom is None or registered_geom.shape == geom.shape:
@@ -242,7 +242,7 @@ class LowRankTemplates:
 
 
 def svd_compress_templates(
-    template_data, min_channel_amplitude=1.0, rank=5, channel_sparse=True
+    template_data, min_channel_amplitude=0.0, rank=5, channel_sparse=True, allow_na=False
 ):
     """
     Returns:
@@ -257,7 +257,14 @@ def svd_compress_templates(
         templates = template_data
         counts = None
 
-    vis_mask = np.ptp(templates, axis=1, keepdims=True) > min_channel_amplitude
+    amp_vecs = np.ptp(templates, axis=1, keepdims=True)
+    isna = np.isnan(amp_vecs)
+    if not allow_na:
+        assert not isna.any()
+    else:
+        amp_vecs = np.nan_to_num(amp_vecs, copy=False)
+        templates = np.nan_to_num(templates)
+    vis_mask = amp_vecs > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
 
@@ -267,7 +274,7 @@ def svd_compress_templates(
         temporal_components = U[:, :, :rank].astype(dtype)
         singular_values = s[:, :rank].astype(dtype)
         spatial_components = Vh[:, :rank, :].astype(dtype)
-        return temporal_components, singular_values, spatial_components
+        return LowRankTemplates(temporal_components, singular_values, spatial_components, counts)
 
     # channel sparse: only SVD the nonzero channels
     # this encodes the same exact subspace as above, and the reconstruction
@@ -288,6 +295,9 @@ def svd_compress_templates(
         temporal_components[i, :, :k] = U[:, :rank]
         singular_values[i, :k] = s[:rank]
         spatial_components[i, :k, mask] = Vh[:rank].T
+
+    if allow_na:
+        spatial_components[isna[:, None, :]] = np.nan
 
     return LowRankTemplates(
         temporal_components, singular_values, spatial_components, counts
