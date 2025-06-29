@@ -161,9 +161,7 @@ class SubtractionPeeler(BasePeeler):
             datasets.append(SpikeDataset("iteration", (), "int32"))
 
         # we may be featurizing during subtraction, register the features
-        for transformer in self.subtraction_denoising_pipeline.transformers:
-            if transformer.is_featurizer:
-                datasets.extend(transformer.spike_datasets)
+        datasets.extend(self.subtraction_denoising_pipeline.spike_datasets())
 
         return datasets
 

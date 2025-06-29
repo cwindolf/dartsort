@@ -27,6 +27,13 @@ class WaveformPipeline(torch.nn.Module):
         # extra state in there.
         pass
 
+    def spike_datasets(self):
+        datasets = []
+        for transformer in self.transformers:
+                if transformer.is_featurizer:
+                    datasets.extend(transformer.spike_datasets)
+        return datasets
+
     @classmethod
     def from_state_dict_pt(cls, geom, channel_index, state_dict_pt):
         state_dict = torch.load(state_dict_pt)
