@@ -451,7 +451,6 @@ def gmm_density_peaks(
     n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
     res = kdtree_kmeans(
         Xi,
-        X_kdt=KDTree(X[inliers]),
         n_components=n_components,
         n_initializations=n_initializations,
         random_state=random_state,

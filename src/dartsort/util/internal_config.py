@@ -393,7 +393,7 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float = 25.0
     outlier_neighbor_count: int = 10
-    kdtree_subsample_max_size: int = 2_000_000
+    kdtree_subsample_max_size: int = 1_000_000
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 5
