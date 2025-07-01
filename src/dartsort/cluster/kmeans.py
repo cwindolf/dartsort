@@ -6,12 +6,22 @@ from scipy.sparse import coo_array
 import torch
 import torch.nn.functional as F
 from tqdm.auto import trange, tqdm
-from sklearn.cluster import kmeans_plusplus
+
+try:
+    import cupy
+    del cupy
+
+    HAVE_CUPY = True
+except ImportError:
+    HAVE_CUPY = False
 
 
 from .density import guess_mode
 from ..util.multiprocessing_util import get_pool
-from ..util.sparse_util import coo_to_torch
+from ..util.sparse_util import (
+    coo_to_scipy, coo_to_cupy, coo_to_torch, distsq_to_lik_coo, sparse_centroid_distsq
+)
+from ..util.spiketorch import spawn_torch_rg
 
 
 logger = getLogger(__name__)
@@ -32,33 +42,33 @@ def kmeanspp(
     Start at a random point (kmeanspp_initial=='random') or at the point
     farthest from the mean (kmeanspp_initial=='mean').
     """
+    X = torch.asarray(X)
     n, p = X.shape
+    n_components = min(n, n_components)
 
     rg = np.random.default_rng(random_state)
+    gen = spawn_torch_rg(rg, device=X.device)
 
-    # if skip_assignment and X_kdt is not None:
-    #     _, centroid_ixs = kmeans_plusplus(X, n_components, random_state=int.from_bytes(rg.bytes(8)))
-    #     C_kdt = 
-    #     dists, assignments = X_kdt.query(X[centroid_ixs])
+    centroid_ixs = torch.full((n_components,), n, dtype=torch.long, device=X.device)
 
     if kmeanspp_initial == "random":
-        centroid_ixs = [rg.integers(n)]
+        centroid_ixs[0] = rg.integers(n)
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
-        centroid_ixs = [closest.item()]
+        centroid_ixs[0] = closest.item()
     elif kmeanspp_initial == "mode":
         Xm = X
         if Xm.shape[1] > mode_dim:
             q = min(mode_dim + 10, *Xm.shape)
             u, s, v = torch.pca_lowrank(Xm, q=q, niter=7)
             Xm = u[:, :mode_dim].mul_(s[:mode_dim])
-        centroid_ixs = [guess_mode(Xm.numpy(force=True))]
+        centroid_ixs = guess_mode(Xm.numpy(force=True))
     else:
         assert False
 
     diff_buffer = X.clone()
 
-    dists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_().sum(1)
+    dists = torch.subtract(X, X[centroid_ixs[0]], out=diff_buffer).square_().sum(1)
     assignments = None
     if not skip_assignment:
         assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
@@ -73,12 +83,9 @@ def kmeanspp(
                 logger.dartsortdebug(f"kmeanspp: All close, stop at iteration {j}.")
                 break
             p[invalid] = 0.0
-        psum = p.sum()
-        assert torch.isfinite(psum) and psum > 0
-        p /= psum
-        centroid_ixs.append(rg.choice(n, p=p.cpu().numpy()))
+        centroid_ixs[j] = torch.multinomial(p, 1, generator=gen)
 
-        newdists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_()
+        newdists = torch.subtract(X, X[centroid_ixs[j]], out=diff_buffer).square_()
         newdists = torch.sum(newdists, dim=1, out=p)
         if not skip_assignment:
             closer = newdists < dists
@@ -87,16 +94,19 @@ def kmeanspp(
             dists[closer] = newdists[closer]
         else:
             torch.minimum(dists, newdists, out=dists)
+    else:
+        j += 1
 
-    centroid_ixs = torch.tensor(centroid_ixs)
+    centroid_ixs = centroid_ixs[:j]
     if not skip_assignment:
+        assignments = assignments
         centroid_ixs = centroid_ixs.to(assignments)
     phi = dists.mean()
 
     return centroid_ixs, assignments, dists, phi
 
 
-def kdtree_kmeans(
+def truncated_kmeans(
     X,
     max_sigma=5.0,
     n_components=10,
@@ -106,147 +116,150 @@ def kdtree_kmeans(
     min_log_prop=-25.0,
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
-    show_progress=False,
     sigma_atol=1e-2,
-    batch_size=62_500,
-    workers=-1,
+    batch_size=8192,
     device=None,
+    show_progress=False
 ):
-    import torch.nn.functional as F
+    rg = np.random.default_rng(random_state)
 
-    if device is None:
+    if torch.is_tensor(X):
+        device = X.device
+    elif device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    is_gpu = device.type == "cuda"
+    X = torch.asarray(X, device=device)
+    n, p = X.shape
 
-    xrange = trange if show_progress else range
-    n = len(X)
-    batches = [slice(bs, min(n, bs + batch_size)) for bs in range(0, n, batch_size)]
-    workers = min(len(batches), workers)
-    X_torch = torch.asarray(X, device=device)
+    # initialize...
+    sigmasq = torch.inf
+    nearest_distsq = centroid_ixs = labels = None
+    if show_progress:
+        it = trange(n_initializations, desc='kmeans++')
+    else:
+        it = range(n_initializations)
+    for _ in it:
+        _c, _l, _d, _p = kmeanspp(
+            X,
+            n_components=n_components,
+            random_state=rg,
+            kmeanspp_initial="random",
+            min_distance=kmeanspp_min_dist,
+        )
+        if _p < sigmasq:
+            sigmasq = _p
+            centroid_ixs = _c
+            labels = _l
+            nearest_distsq = _d
+    assert torch.isfinite(sigmasq)
+    assert centroid_ixs is not None
+    assert labels is not None
+    assert nearest_distsq is not None
 
-    n_jobs, Executor, context = get_pool(workers, cls="ThreadPoolExecutor")
-    with Executor(n_jobs, context) as pool:
-        random_state = np.random.default_rng(random_state)
-        kmeanspp_rgs = random_state.spawn(n_initializations)
-        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist)
-        kmeanspp_jobs = (((X_torch,), kmpkw | dict(random_state=rg)) for rg in kmeanspp_rgs)
+    # initialize parameters
+    n_components = len(centroid_ixs)
+    neg_nc_log = -torch.log(torch.tensor(float(n_components)))
+    log_proportions = X.new_full((n_components,), neg_nc_log)
+    sigmasq = sigmasq / p
+    centroids = X[centroid_ixs]
 
-        best_phi = torch.inf
-        centroid_ixs = None
-        results = pool.map(_kmeanspp_job, kmeanspp_jobs)
-        if show_progress:
-            results = tqdm(results, total=n_initializations)
-        for _centroid_ixs, _labels, _, phi in results:
-            if phi < best_phi:
-                centroid_ixs = _centroid_ixs
-                best_phi = phi
-        assert centroid_ixs is not None
-        n_components = len(centroid_ixs)
+    # scratch buffers
+    new_centroids = torch.zeros_like(centroids)
+    N = X.new_zeros(log_proportions.shape, dtype=torch.double)
+    prev_sigma = torch.inf
+    dcc = X.new_zeros((n_components, n_components))
+    dccbuf = X.new_zeros((n_components, n_components, p))
+    distsq_buf = torch.zeros_like(X[:20 * batch_size])
+    distsq_buf = (distsq_buf, distsq_buf.clone())
+    sigma = sigmasq.sqrt().numpy(force=True).item()
 
-        # state vars
-        centroids = X[centroid_ixs]
-        log_proportions = np.full(n_components, -np.log(n_components), dtype=X.dtype)
-        new_centroids = np.zeros_like(centroids)
-        sigmasq = float(best_phi)
-        prev_sigma = np.sqrt(sigmasq)
-        N = np.zeros(n_components)
+    if show_progress:
+        it = trange(n_iter, desc=f'kmeans σ={sigma:0.4f}')
+    else:
+        it = range(n_iter)
+    for j in it:
+        max_distance_sq = max_sigma * sigmasq * p
 
-        # batched k-d trees
-        X_kdts = list(pool.map(KDTree, (X[sl] for sl in batches)))
+        new_centroids.fill_(0.0)
+        N.fill_(0.0)
+        new_sigmasq = 0.0
+        weight = 0.0
 
-        # kmeans iters
-        iters = xrange(n_iter)
-        for j in iters:
-            new_centroids.fill(0.0)
-            new_sigmasq = 0.0
-            N.fill(0.0)
-            n_so_far = 0
+        # update centroid dists
+        torch.subtract(centroids[None], centroids[:, None], out=dccbuf).square_()
+        dcc = torch.sum(dccbuf, dim=2, out=dcc)
+        dccmask = dcc < max_distance_sq
 
-            C_kdt = KDTree(centroids)
-            max_distance = max_sigma * np.sqrt(sigmasq) * np.sqrt(X.shape[1])
-
-            fixed_args = C_kdt, max_distance, sigmasq, log_proportions, device, X.dtype
-            jobs = (
-                (X_kdt, X_torch[sl], *fixed_args) for X_kdt, sl in zip(X_kdts, batches)
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            distsq_coo, distsq_buf = sparse_centroid_distsq(
+                X[i0:i1],
+                centroids,
+                max_distance_sq=max_distance_sq,
+                labels=labels[i0:i1],
+                nearest_distsq=nearest_distsq[i0:i1],
+                centroid_mask=dccmask,
+                dbufs=distsq_buf,
             )
-            for res in pool.map(_kdtree_kmeans_job, jobs):
-                N1, batch_centroids, batch_sigmasq, wsum = res
+            assert distsq_coo.shape == (i1 - i0, n_components)
+            distsq_values = distsq_coo.values().clone()
+            liks = distsq_to_lik_coo(distsq_coo, sigmasq, log_proportions, in_place=True)
+            del distsq_coo
+            resps = torch.sparse.softmax(liks, dim=1)
 
-                N += N1
-                n1_n01 = N1 / N.clip(min=1e-5)
+            # update labels... torch sparse has no argmax(), so need scipy
+            # or cupy. scipy is a big slowdown here, so cupy if possible.
+            if is_gpu and HAVE_CUPY:
+                resps_cupy = coo_to_cupy(resps).tocsc()
+                batch_labels = resps_cupy.argmax(axis=1).squeeze()
+            else:
+                resps_scipy = coo_to_scipy(resps)
+                batch_labels = resps_scipy.argmax(axis=1, explicit=True)
+            labels[i0:i1] = torch.asarray(batch_labels).to(labels)
 
-                batch_centroids -= new_centroids
-                batch_centroids *= n1_n01[:, None]
-                new_centroids += batch_centroids
+            # get sigmasq
+            w = resps.values().clone()
+            batch_w = w.sum()
+            w /= batch_w
+            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / p
 
-                n_so_far += wsum
-                batch_sigmasq -= new_sigmasq
-                batch_sigmasq *= wsum / n_so_far
-                new_sigmasq += batch_sigmasq
+            # get N and centroids
+            batch_N = resps.sum(dim=0).to_dense()
+            resps.values().div_(batch_N[resps.indices()[1]])
+            batch_centroids = resps.T @ X[i0:i1]
 
-            centroids, new_centroids = new_centroids, centroids
-            sigmasq = new_sigmasq
-            log_proportions = F.log_softmax(
-                torch.log(torch.tensor(N, dtype=torch.double) + dirichlet_alpha), dim=0
-            ).numpy()
-            log_proportions = np.maximum(log_proportions, min_log_prop)
+            # update counts
+            N += batch_N
+            weight += batch_w
 
-            new_sigma = np.sqrt(sigmasq)
-            if np.isclose(new_sigma, prev_sigma, atol=sigma_atol):
-                break
-            prev_sigma = new_sigma
-            if show_progress:
-                iters.set_description(f"sigma={new_sigma:0.4f}")
+            # update Welford running means
+            n1_n01 = batch_N.div_(N.clip(min=1e-5))[:, None]
+            w1_w01 = batch_w / weight
+            new_centroids += batch_centroids.sub_(new_centroids).mul_(n1_n01)
+            new_sigmasq += batch_sigmasq.sub_(new_sigmasq).mul_(w1_w01)
 
-    return dict(centroids=centroids, sigmasq=sigmasq, log_proportions=log_proportions)
+        # update state
+        logN = N.log_() + dirichlet_alpha
+        log_proportions = F.log_softmax(logN, dim=0).to(X)
+        log_proportions = log_proportions.clamp_(min=min_log_prop)
+        centroids, new_centroids = new_centroids, centroids
+        sigmasq = new_sigmasq
 
+        # check convergence
+        sigma = torch.sqrt(sigmasq).numpy(force=True).item()
+        if abs(sigma - prev_sigma) < sigma_atol:
+            break
+        prev_sigma = sigma
+        if show_progress:
+            it.set_description(f"kmeans σ={sigma:0.4f}")
 
-def _kmeanspp_job(args_kwargs):
-    a, k = args_kwargs
-    return kmeanspp(*a, **k)
-
-
-def _kdtree_kmeans_job(args):
-    X_kdt, X_torch, C_kdt, max_distance, sigmasq, log_proportions, device, dtype = args
-
-    dists = X_kdt.sparse_distance_matrix(
-        C_kdt, max_distance=max_distance, output_type="ndarray"
-    )
-    dists = coo_array(
-        (dists["v"].astype(dtype), (dists["i"], dists["j"])),
-        shape=(X_kdt.n, C_kdt.n),
-    )
-    dtype = torch.double if dists.data.dtype == np.float64 else torch.float
-    dists = coo_to_torch(dists, dtype).to(device)
-
-    # get explicit sq dists, then set entries of dists to log likelihoods
-    dists.values().square_()
-    dsq = torch.asarray(dists.values(), dtype=torch.double, copy=True)
-    log_proportions = torch.asarray(log_proportions).to(dsq)
-    dists.values().mul_(-0.5 / sigmasq).add_(log_proportions[dists.indices()[1]])
-    # --> dists is now sparse coo log likelihoods. dsq corresponds.
-
-    # softmax over centroids (dim=1)
-    dists = torch.sparse.softmax(dists, dim=1)
-
-    # these are the responsibility weights used for sigma update below
-    ww = torch.asarray(dists.values(), dtype=torch.double, copy=True)
-    wsum = ww.sum()
-    ww = ww.div_(wsum)
-
-    # now divide by the sum in each unit
-    N1 = dists.sum(dim=0).to_dense()
-    dists.values().div_(N1[dists.indices()[1]])
-
-    # take weighted mean of X
-    batch_centroids = dists.T @ X_torch
-
-    # take weighted mean of dsq
-    batch_sigmasq = (dsq * ww).sum() / X_torch.shape[1]
-    return (
-        N1.numpy(force=True),
-        batch_centroids.numpy(force=True),
-        batch_sigmasq.numpy(force=True),
-        wsum.numpy(force=True),
+    return dict(
+        centroids=centroids,
+        sigmasq=sigmasq,
+        sigma=sigma,
+        log_proportions=log_proportions,
+        labels=labels,
     )
 
 

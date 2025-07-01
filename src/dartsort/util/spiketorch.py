@@ -16,11 +16,11 @@ _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0):
+def spawn_torch_rg(seed: int | np.random.Generator = 0, device='cpu'):
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
-    generator = torch.Generator()
+    generator = torch.Generator(device=device)
     generator.manual_seed(seed)
     return generator
 

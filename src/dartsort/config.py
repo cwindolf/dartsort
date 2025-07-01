@@ -78,7 +78,7 @@ class DARTsortUserConfig:
         "that match will be used.",
     )
     matching_fp_control: bool = False
-    denoiser_badness_factor: Annotated[float, Field(gt=0, lt=1)] = argfield(
+    denoiser_badness_factor: Annotated[float, Field(ge=0, le=1)] = argfield(
         default=0.1,
         doc="In initial detection, subtracting clean waveforms inferred "
         "by the NN denoiser need only decrease the residual norm squared "
@@ -186,7 +186,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_feats: int = 2
     initial_pc_scale: float = 2.5
     motion_aware_clustering: bool = True
-    clustering_workers: int = 4
+    clustering_workers: int = 5
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
 
     n_waveforms_fit: int = 20_000

@@ -379,7 +379,7 @@ def gmm_density_peaks(
     outlier_radius=25.0,
     remove_clusters_smaller_than=50,
     workers=-1,
-    n_initializations=5,
+    n_initializations=10,
     n_iter=50,
     max_components_per_channel=20,
     min_spikes_per_component=10,
@@ -419,7 +419,7 @@ def gmm_density_peaks(
         TODO: currently used in controlling the number of components, but it may
         change when the TODO above is implemented.
     """
-    from .kmeans import kdtree_kmeans
+    from .kmeans import truncated_kmeans
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -449,18 +449,17 @@ def gmm_density_peaks(
         max_components_per_channel, np.ceil(cchans / min_spikes_per_component).astype(int)
     )
     n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
-    res = kdtree_kmeans(
+    res = truncated_kmeans(
         Xi,
+        max_sigma=max_sigma,
         n_components=n_components,
         n_initializations=n_initializations,
         random_state=random_state,
         n_iter=n_iter,
-        dirichlet_alpha=1 / n_components,
+        dirichlet_alpha=1.0 / n_components,
         kmeanspp_min_dist=kmeanspp_min_dist,
-        max_sigma=max_sigma,
-        show_progress=show_progress,
-        workers=workers,
         device=device,
+        show_progress=show_progress,
     )
     res['n_components'] = n_components
     n_components = len(res['centroids'])
@@ -468,11 +467,11 @@ def gmm_density_peaks(
     if show_progress:
         logger.info("Hellinger...")
     coo = sparse_iso_hellinger(
-        res["centroids"],
-        np.sqrt(res["sigmasq"]),
+        res["centroids"].numpy(force=True),
+        res["sigma"],
         hellinger_threshold=hellinger_cutoff,
     )
-    nhdn = coo_nhdn(coo, res["log_proportions"])
+    nhdn = coo_nhdn(coo, res["log_proportions"].numpy(force=True))
     assert nhdn.shape == (len(res["centroids"]),) == (n_components,)
     ii = np.arange(len(nhdn))
     jj = nhdn
@@ -492,13 +491,13 @@ def gmm_density_peaks(
     assert labels.shape == (n_components,)
     labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
 
-    ckdt = KDTree(res["centroids"])
-    maxdist = max_sigma * np.sqrt(res["sigmasq"]) * np.sqrt(X.shape[1])
+    ckdt = KDTree(res["centroids"].numpy(force=True))
+    maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
     if show_progress:
         logger.info("Last query...")
-    labels = labels_padded[
-        ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)[1]
-    ]
+    _, q = ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)
+    labels = labels_padded[q]
+
     if remove_clusters_smaller_than:
         if show_progress:
             logger.info("Clean...")

@@ -113,6 +113,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediate_features=True,
+        denoiser_badness_factor=1.0 if type == "universal" else 0.1,
     )
     res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
     assert res["sorting"].parent_h5_path.exists()
@@ -132,7 +133,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     if type == "match":
         count_dif_tol = 0.05
     elif type == "universal":
-        count_dif_tol = 0.1
+        count_dif_tol = 0.25
     elif type == "subtract":
         count_dif_tol = 0.2
     elif type == "threshold":

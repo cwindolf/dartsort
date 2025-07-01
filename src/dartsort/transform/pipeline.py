@@ -216,7 +216,7 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
         )
-    if fc.learn_cleaned_tpca_basis:
+    if do_feats and fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
             (
                 "BaseTemporalPCA",

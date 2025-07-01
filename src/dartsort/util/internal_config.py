@@ -136,7 +136,7 @@ class FeaturizationConfig:
     tpca_fit_radius: float = 75.0
     tpca_rank: int = 8
     tpca_centered: bool = False
-    learn_cleaned_tpca_basis: bool = False
+    learn_cleaned_tpca_basis: bool = True
     input_tpca_waveform_cfg: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
@@ -583,7 +583,6 @@ def to_internal_config(cfg):
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
-        learn_cleaned_tpca_basis=True,
     )
 
     if cfg.detection_type == "subtract":
