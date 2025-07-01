@@ -295,6 +295,7 @@ def load_dartsort_step_sortings(
     detection_h5_names=("subtraction.h5", "threshold.h5", "universal.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
+    recluster_format="recluster{step}",
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered."""
     if detection_h5_path is None:
@@ -339,6 +340,12 @@ def load_dartsort_step_sortings(
                 yield None, None
         else:
             yield (h5.stem, st0)
+
+        # reclustering, if applicable
+        reclustr = recluster_format.format(step=step)
+        recluster_npy = sorting_dir / f"{reclustr}_labels.npy"
+        if recluster_npy.exists():
+            yield (reclustr, dataclasses.replace(st0, labels=np.load(recluster_npy)))
 
         # refinement steps
         stepstr = step_format.format(step=step)

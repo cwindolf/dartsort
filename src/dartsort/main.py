@@ -225,7 +225,7 @@ def _dartsort_impl(
                 clustering_features_cfg=step_features_cfg,
                 _save_cfg=cfg,
                 _save_dir=output_dir,
-                _save_initial_name=f"matching{step}",
+                _save_initial_name=f"recluster{step}",
                 _save_refined_name_fmt=f"refined{step}{{stepname}}",
             )
 
