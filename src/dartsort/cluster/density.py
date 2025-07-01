@@ -8,6 +8,7 @@ from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.stats import bernoulli
+import torch
 
 
 logger = getLogger(__name__)
@@ -389,6 +390,7 @@ def gmm_density_peaks(
     max_sigma=5.0,
     max_samples=2_000_000,
     show_progress=True,
+    device=None,
 ):
     """Density peaks clustering via an isotropic GMM density estimate
 
@@ -418,6 +420,10 @@ def gmm_density_peaks(
         change when the TODO above is implemented.
     """
     from .kmeans import kdtree_kmeans
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
 
     n = len(X)
     if n > max_samples:
@@ -455,6 +461,7 @@ def gmm_density_peaks(
         max_sigma=max_sigma,
         show_progress=show_progress,
         workers=workers,
+        device=device,
     )
     res['n_components'] = n_components
     n_components = len(res['centroids'])

@@ -19,13 +19,13 @@ logger = getLogger(__name__)
 
 def kmeanspp(
     X,
-    X_kdt=None,
     n_components=10,
     random_state: np.random.Generator | int = 0,
     kmeanspp_initial="random",
     mode_dim=2,
     skip_assignment=False,
     min_distance=None,
+    show_progress=False,
 ):
     """K-means++ initialization
 
@@ -64,7 +64,8 @@ def kmeanspp(
         assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
 
     p = dists.clone()
-    for j in range(1, n_components):
+    xrange = trange if show_progress else range
+    for j in xrange(1, n_components):
         p.copy_(dists)
         if min_distance:
             invalid = dists < min_distance
@@ -77,28 +78,15 @@ def kmeanspp(
         p /= psum
         centroid_ixs.append(rg.choice(n, p=p.cpu().numpy()))
 
-        if X_kdt is None or j < 10:
-            newdists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_()
-            newdists = torch.sum(newdists, dim=1, out=p)
-            if not skip_assignment:
-                closer = newdists < dists
-                assert assignments is not None
-                assignments[closer] = j
-                dists[closer] = newdists[closer]
-            else:
-                torch.minimum(dists, newdists, out=dists)
+        newdists = torch.subtract(X, X[centroid_ixs[-1]], out=diff_buffer).square_()
+        newdists = torch.sum(newdists, dim=1, out=p)
+        if not skip_assignment:
+            closer = newdists < dists
+            assert assignments is not None
+            assignments[closer] = j
+            dists[closer] = newdists[closer]
         else:
-            min_neighb_cdist = (X[centroid_ixs[:-1]] - X[centroid_ixs[-1]]).square_().sum(dim=1).min()
-            max_relevant_dist = dists.max().sqrt() + min_neighb_cdist.sqrt() + 1e-3
-            relevant_ixs = X_kdt.query_ball_point(
-                X[centroid_ixs[-1]].numpy(force=True), max_relevant_dist.numpy(force=True), return_sorted=True
-            )
-            relevant_ixs = torch.tensor(relevant_ixs, dtype=torch.long)
-            assert relevant_ixs.ndim == 1
-            nrel = len(relevant_ixs)
-            newdists = torch.subtract(X[relevant_ixs], X[centroid_ixs[-1]], out=diff_buffer[:nrel]).square_()
-            newdists = newdists.sum(dim=1)
-            dists[relevant_ixs] = torch.minimum(newdists, dists[relevant_ixs])
+            torch.minimum(dists, newdists, out=dists)
 
     centroid_ixs = torch.tensor(centroid_ixs)
     if not skip_assignment:
@@ -108,11 +96,8 @@ def kmeanspp(
     return centroid_ixs, assignments, dists, phi
 
 
-
-
 def kdtree_kmeans(
     X,
-    X_kdt=None,
     max_sigma=5.0,
     n_components=10,
     n_initializations=10,
@@ -142,7 +127,7 @@ def kdtree_kmeans(
     with Executor(n_jobs, context) as pool:
         random_state = np.random.default_rng(random_state)
         kmeanspp_rgs = random_state.spawn(n_initializations)
-        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist, X_kdt=X_kdt)
+        kmpkw = dict(n_components=n_components, skip_assignment=True, min_distance=kmeanspp_min_dist)
         kmeanspp_jobs = (((X_torch,), kmpkw | dict(random_state=rg)) for rg in kmeanspp_rgs)
 
         best_phi = torch.inf
