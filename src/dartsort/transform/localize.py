@@ -67,9 +67,15 @@ class Localization(BaseWaveformFeaturizer):
                     model=self.localization_model,
                 )
                 localizations[sl, 0] = loc_result["x"]
-                localizations[sl, 1] = loc_result["y"]
+                if "y" in loc_result:
+                    localizations[sl, 1] = loc_result["y"]
+                else:
+                    localizations[sl, 1] = 0.0
                 localizations[sl, 2] = loc_result["z_abs"]
-                localizations[sl, 3] = loc_result["alpha"]
+                if "alpha" in loc_result:
+                    localizations[sl, 3] = loc_result["alpha"]
+                else:
+                    localizations[sl, 3] = 0.0
 
         return {self.name: localizations}
 

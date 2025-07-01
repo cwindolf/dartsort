@@ -46,6 +46,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         min_epochs=10,
         scale_loss_by_mean=True,
         reference="main_channel",
+        softmax_noise_floor=False,
         channelwise_dropout_p=0.00,
         epoch_size=50_000,
         val_split_p=0.3,
@@ -62,7 +63,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.radius = radius
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
-        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim
+        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim + softmax_noise_floor
+        self.softmax_noise_floor = softmax_noise_floor
         self.n_epochs = n_epochs
         self.learning_rate = learning_rate
         self.batch_size = batch_size
@@ -177,6 +179,14 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         else:
             alphas = F.softplus(z[:, 3])
             pred_amps = alphas.unsqueeze(1) / dists
+
+        noise_floors = None
+        if self.softmax_noise_floor:
+            noise_floors = F.softplus(z[:, -1:]).broadcast_to(pred_amps.shape)
+            pred_amps_noise = torch.stack([pred_amps, noise_floors], dim=2)
+            weights = F.softmax(pred_amps_noise.log(), dim=2)
+            pred_amps = pred_amps_noise.mul(weights).sum(dim=2)
+
         return alphas, pred_amps
 
     def dipole_model(self, z, obs_amps, masks, channels):

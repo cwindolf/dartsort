@@ -23,12 +23,11 @@ from ..util.data_util import (
     resolve_path,
     divide_randomly,
 )
-from ..util.py_util import resolve_path
 from ..util.multiprocessing_util import get_pool
 from ..util.drift_util import registered_geometry
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
-from .simlib import simulate_sorting, add_tpca_feature
+from .simlib import simulate_sorting, add_features, default_sim_featurization_cfg
 from .simlib import default_temporal_kernel_npy
 from .noise_recording_tools import get_background_recording
 from .sim_template_tools import get_template_simulator
@@ -70,18 +69,17 @@ def generate_simulation(
     extract_radius=100.0,
     recording_dtype="float16",
     features_dtype="float32",
-    include_tpca_feature=True,
-    include_residual=True,
+    featurization_cfg=default_sim_featurization_cfg,
     # control
-    chunk_len_s=0.5,
+    max_drift_per_chunk=0.5,
+    max_chunk_len_s=1.0,
     random_seed=0,
     overwrite=False,
     n_jobs=1,
     no_save=False,
+    just_noise=False,
 ):
-    folder = resolve_path(folder)
     noise_recording_folder = resolve_path(noise_recording_folder)
-
     duration_samples = int(duration_seconds * sampling_frequency)
     with warnings.catch_warnings(record=True) as ws:
         noise_recording = get_background_recording(
@@ -97,6 +95,7 @@ def generate_simulation(
             white_noise_scale=white_noise_scale,
             sampling_frequency=sampling_frequency,
             n_jobs=n_jobs,
+            overwrite=overwrite,
         )
         for w in ws:
             msg = str(w.message)
@@ -108,6 +107,10 @@ def generate_simulation(
     assert noise_recording.dtype == np.dtype(recording_dtype)
     assert noise_recording.sampling_frequency == sampling_frequency
     assert noise_recording.get_num_frames() == duration_samples
+    if just_noise:
+        return
+
+    folder = resolve_path(folder)
 
     template_simulator = get_template_simulator(
         n_units=n_units,
@@ -138,12 +141,18 @@ def generate_simulation(
     )
     if no_save:
         return sim_recording, template_simulator
+
+    if drift_speed is None:
+        chunk_len_s = max_chunk_len_s
+    else:
+        drift_per_chunk = drift_speed * max_chunk_len_s
+        chunk_len_s = min(max_chunk_len_s, max_drift_per_chunk / max(drift_per_chunk, 1e-10))
+
     sim_recording.save_simulation(
         folder,
         overwrite=overwrite,
         n_jobs=n_jobs,
-        include_tpca_feature=include_tpca_feature,
-        include_residual=include_residual,
+        featurization_cfg=featurization_cfg,
         chunk_len_s=chunk_len_s,
     )
     return load_simulation(folder)
@@ -366,9 +375,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         folder,
         overwrite=False,
         n_jobs=1,
-        n_residual_snips=4096,
-        include_tpca_feature=True,
-        include_residual=True,
+        featurization_cfg=default_sim_featurization_cfg,
         chunk_len_s=0.5,
     ):
         folder = resolve_path(folder)
@@ -394,17 +401,18 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if msg.startswith("auto_cast_uint"):
                     continue
                 raise w
+        n_residual_snips = 0 if featurization_cfg is None else featurization_cfg.n_residual_snips
         self.save_features_to_hdf5(
             sorting_h5,
             n_jobs=n_jobs,
             overwrite=overwrite,
-            n_residual_snips=n_residual_snips * include_residual,
+            n_residual_snips=n_residual_snips,
             chunk_len_s=chunk_len_s,
         )
-        if include_tpca_feature:
+        if featurization_cfg is not None and not featurization_cfg.skip:
             # this is only for the TPCA feature.
             torch.manual_seed(self.segment.random_seed)
-            add_tpca_feature(sorting_h5, recording)
+            add_features(sorting_h5, recording, featurization_cfg)
 
         self.gt_unit_information().to_csv(unit_info_csv)
         with open(motion_est_pkl, "wb") as jar:

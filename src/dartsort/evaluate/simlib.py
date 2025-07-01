@@ -202,17 +202,21 @@ def rbf_kernel_sqrt(geom, bandwidth=15.0, dtype="float32"):
     return spatial_std, spatial_vt
 
 
-
 # -- sorting h5 helpers
 
 
-def add_tpca_feature(h5_path, recording, rank=8):
+default_sim_featurization_cfg = FeaturizationConfig(
+    do_enforce_decrease=False, additional_com_localization=True
+)
+
+
+def add_features(h5_path, recording, featurization_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = h5["geom"][:]
         channel_index = h5["channel_index"][:]
         channels, waveforms, weights = subsample_waveforms(h5=h5)
         gt_pipeline = WaveformPipeline.from_config(
-            FeaturizationConfig(do_enforce_decrease=False, do_localization=False, tpca_rank=rank),
+            featurization_cfg,
             WaveformConfig(),
             geom=geom,
             channel_index=channel_index,
@@ -223,10 +227,12 @@ def add_tpca_feature(h5_path, recording, rank=8):
         torch.save(gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt")
 
         wf_dset = h5["collisioncleaned_waveforms"]
-        f_dset = h5.create_dataset(
-            "collisioncleaned_tpca_features",
-            shape=(wf_dset.shape[0], rank, wf_dset.shape[2]),
-        )
-        for sli, chunk in yield_chunks(h5["collisioncleaned_waveforms"], desc_prefix="PCA"):
+        n = wf_dset.shape[0]
+        f_dsets = {
+            sd.name: h5.create_dataset(sd.name, shape=(n, *sd.shape_per_spike), dtype=sd.dtype)
+            for sd in gt_pipeline.spike_datasets()
+        }
+        for sli, chunk in yield_chunks(h5["collisioncleaned_waveforms"], desc_prefix="Featurize"):
             _, feats = gt_pipeline(chunk, h5["channels"][sli])
-            f_dset[sli] = feats["collisioncleaned_tpca_features"]
+            for k, v in feats.items():
+                f_dsets[k][sli] = v.numpy(force=True)

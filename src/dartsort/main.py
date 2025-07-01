@@ -102,7 +102,7 @@ def dartsort(
                         f"Hit an error. Copying outputs to {error_data_path} "
                         f"and writing traceback to {traceback_path}."
                     )
-                    shutil.copytree(work_dir, error_data_path)
+                    shutil.copytree(work_dir, error_data_path, dirs_exist_ok=True)
                 else:
                     logger.critical(
                         f"Hit an error. Writing traceback to {traceback_path}."
@@ -222,7 +222,7 @@ def _dartsort_impl(
                 motion_est=motion_est,
                 refinement_cfg=cfg.refinement_cfg,
                 clustering_cfg=step_clustering_cfg,
-                clustering_features_cfg=None,
+                clustering_features_cfg=step_features_cfg,
                 _save_cfg=cfg,
                 _save_dir=output_dir,
                 _save_initial_name=f"matching{step}",

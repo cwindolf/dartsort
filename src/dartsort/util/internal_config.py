@@ -121,6 +121,8 @@ class FeaturizationConfig:
     localization_amplitude_type: Literal["peak", "ptp"] = "peak"
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
+    additional_com_localization: bool = False
+    localization_noise_floor: bool = False
 
     # -- further info about denoising
     # in the future we may add multi-channel or other nns
@@ -258,6 +260,7 @@ class MatchingConfig:
     conv_ignore_threshold: float = 5.0
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
+    channel_selection_radius: float | None = 50.0
 
     # template postprocessing parameters
     min_template_snr: float = 15.0
@@ -580,6 +583,7 @@ def to_internal_config(cfg):
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
+        learn_cleaned_tpca_basis=True,
     )
 
     if cfg.detection_type == "subtract":
@@ -628,10 +632,11 @@ def to_internal_config(cfg):
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
             waveform_cfg=tpca_waveform_cfg,
+            threshold=cfg.denoiser_badness_factor
+            * (cfg.matching_threshold**2),
         )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
-
 
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um, realign_shift_ms=cfg.alignment_ms
@@ -645,6 +650,7 @@ def to_internal_config(cfg):
         remove_clusters_smaller_than=cfg.min_cluster_size,
         workers=cfg.clustering_workers,
         hellinger_strong=cfg.hellinger_strong,
+        kdtree_subsample_max_size=cfg.clustering_max_spikes,
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,

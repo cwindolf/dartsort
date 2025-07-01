@@ -1,4 +1,3 @@
-import numba
 import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
@@ -361,7 +360,7 @@ class TemplateLibrarySimulator:
         common_reference=False,
         temporal_jitter=1,
         extract_radius=250.0,
-        inject_radius=200.0,
+        inject_radius=500.0,
         trough_offset_samples=42,
         pos_margin_um_z=25.0,
         seed=0,
@@ -407,7 +406,7 @@ class TemplateLibrarySimulator:
     def interpolate_templates(self, source_pos, target_pos, unit_ids, up=False):
         # interpolate spatial components
         spatial_singular = self.spatial_singular[unit_ids]
-        if self.interp_method != "griddata":
+        if self.interp_method == "kriging":
             assert self.precomputed_data is not None
             out = kernel_interpolate(
                 spatial_singular,
@@ -420,7 +419,7 @@ class TemplateLibrarySimulator:
                 kriging_poly_degree=self.kriging_poly_degree,
                 precomputed_data=self.precomputed_data[unit_ids],
             ).numpy(force=True)
-        else:
+        elif self.interp_method == "griddata":
             n, nct, _2 = target_pos.shape
             n_, f, nc_ = spatial_singular.shape
             assert _2 == 2
@@ -436,13 +435,15 @@ class TemplateLibrarySimulator:
             griddata_interp(
                 spatial_singular, source_pos, target_pos, out, method=self.interp_kernel_name
             )
+        else:
+            assert False
 
         # temporal part...
         n, r, c = spatial_singular.shape
         if up:
-            temporal = self.temporal_up.reshape(n, -1, r)
+            temporal = self.temporal_up[unit_ids].reshape(n, -1, r)
         else:
-            temporal = self.low_rank_templates.temporal_components
+            temporal = self.low_rank_templates.temporal_components[unit_ids]
 
         return np.einsum("nrc,ntr->ntc", out, temporal)
 
@@ -464,7 +465,9 @@ class TemplateLibrarySimulator:
         _, target_chans = self.geom_kdt.query(true_template_pos[:, [0, 2]])
         tgeom = np.pad(tgeom, [(0, 1), (0, 0)], constant_values=np.nan)
         target_chans = self.channel_index[target_chans]
+        # target_chans = torch.arange(len(tgeom)).broadcast_to(len(source_pos), len(tgeom))
         target_pos = torch.asarray(tgeom[target_chans])
+        # target_chans = target_chans.numpy()
 
         templates = self.interpolate_templates(source_pos, target_pos, unit_ids, up=up)
 
@@ -474,6 +477,7 @@ class TemplateLibrarySimulator:
         up_factor = self.temporal_jitter if up else 1
         out = np.zeros((nu, up_factor * nt, nc_out), dtype=self.templates_local.dtype)
         np.put_along_axis(out, target_chans[:, None, :], templates, axis=2)
+        # out[np.arange(nu)[:, None, None], np.arange(up_factor * nt)[None, :, None], target_chans[:, None, :]] = templates
 
         if up:
             out = out.reshape(nu, up_factor, nt, nc_out)

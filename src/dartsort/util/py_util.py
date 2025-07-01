@@ -48,13 +48,18 @@ class NoKeyboardInterrupt:
         self.sig = sig
 
     def __enter__(self):
-        self.old_handler = signal.signal(signal.SIGINT, self.handler)
-        self.sig = None
+        # TODO: maybe should just handle this in the peeling code. would need to detect
+        # partially saved batches somehow... uhh... maybe based on the last sample saved,
+        # if we update that last and resume from there...
+        if threading.current_thread() is threading.main_thread() and os.name == "posix":
+            self.old_handler = signal.signal(signal.SIGINT, self.handler)
+            self.sig = None
 
     def __exit__(self, type, value, traceback):
-        signal.signal(signal.SIGINT, self.old_handler)
-        if self.sig:
-            self.old_handler(*self.sig)
+        if threading.current_thread() is threading.main_thread() and os.name == "posix":
+            signal.signal(signal.SIGINT, self.old_handler)
+            if self.sig:
+                self.old_handler(*self.sig)
 
 
 if threading.current_thread() is threading.main_thread() and os.name == "posix":

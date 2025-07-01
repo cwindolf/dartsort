@@ -10,12 +10,12 @@ import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from dartsort.templates import template_util, TemplateData
-from dartsort.templates.pairwise import CompressedPairwiseConv
-from dartsort.transform import WaveformPipeline
-from dartsort.util import drift_util, spiketorch
-from dartsort.util.data_util import SpikeDataset, get_residual_snips
-from dartsort.util.waveform_util import make_channel_index
+from ..templates import template_util, TemplateData
+from ..templates.pairwise import CompressedPairwiseConv
+from ..transform import WaveformPipeline
+from ..util import drift_util, spiketorch
+from ..util.data_util import SpikeDataset, get_residual_snips
+from ..util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
 
@@ -52,6 +52,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
+        channel_selection="template",
+        channel_selection_index=None,
         fit_subsampling_random_state=0,
         fit_sampling="random",
         max_iter=1000,
@@ -105,10 +107,15 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             if template_data.registered_geom is not None
             else self.n_channels
         )
+        assert channel_selection in ("template", "amplitude")
+        self.channel_selection = channel_selection
 
         # waveform extraction
-        self.channel_index = channel_index
         self.registered_template_ampvecs = np.ptp(template_data.templates, 1)
+        if channel_selection_index is None:
+            self.channel_selection_index = None
+        else:
+            self.register_buffer("channel_selection_index", channel_selection_index)
 
         # amplitude scaling properties
         self.is_scaling = bool(amplitude_scaling_variance)
@@ -446,6 +453,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
+        channel_selection = "template"
+        channel_selection_index = None
+        if matching_cfg.channel_selection_radius:
+            channel_selection = "amplitude"
+            channel_selection_index = make_channel_index(
+                geom, matching_cfg.channel_selection_radius, to_torch=True
+            )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
@@ -484,6 +498,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             coarse_approx_error_threshold=matching_cfg.coarse_approx_error_threshold,
             trough_offset_samples=trough_offset_samples,
             threshold=threshold,
+            channel_selection=channel_selection,
+            channel_selection_index=channel_selection_index,
             chunk_length_samples=matching_cfg.chunk_length_samples,
             n_seconds_fit=matching_cfg.n_seconds_fit,
             max_waveforms_fit=matching_cfg.max_waveforms_fit,
@@ -606,6 +622,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             pairwise_conv_db=pconvdb,
             shifts_a=pitch_shifts_a,
             shifts_b=pitch_shifts_b,
+            channel_selection=self.channel_selection,
+            channel_selection_index=self.channel_selection_index,
         )
 
     def match_chunk(
@@ -847,6 +865,8 @@ class MatchingTemplateData:
     pairwise_conv_db: CompressedPairwiseConv
     shifts_a: Optional[torch.Tensor]
     shifts_b: Optional[torch.Tensor]
+    channel_selection: str = "template"
+    channel_selection_index: torch.LongTensor | None = None
 
     def __post_init__(self):
         (
@@ -1096,14 +1116,20 @@ class MatchingTemplateData:
         )
 
     def get_collisioncleaned_waveforms(
-        self, residual_padded, peaks, channel_index, spike_length_samples=121
+        self, residual_padded, peaks, channel_index, spike_length_samples=121, channels=None
     ):
-        channels = self.max_channels[peaks.template_indices]
+        specified_chans = channels is not None
+        if channels is None and self.channel_selection == "amplitude":
+            ci = self.channel_selection_index 
+        else:
+            ci = channel_index
+        if channels is None:
+            channels = self.max_channels[peaks.template_indices]
         waveforms = spiketorch.grab_spikes(
             residual_padded,
             peaks.times,
             channels,
-            channel_index,
+            ci,
             trough_offset=0,
             spike_length_samples=spike_length_samples,
             buffer=0,
@@ -1113,14 +1139,25 @@ class MatchingTemplateData:
         spatial = padded_spatial[
             peaks.template_indices[:, None, None],
             self.rank_ix[None, :, None],
-            channel_index[channels][:, None, :],
+            ci[channels][:, None, :],
         ]
         comp_up_ix = self.compressed_upsampling_map[
             peaks.template_indices, peaks.upsampling_indices
         ]
         temporal = self.compressed_upsampled_temporal[comp_up_ix]
         torch.baddbmm(waveforms, temporal, spatial, out=waveforms)
-        return channels, waveforms
+
+        if self.channel_selection == "template" or specified_chans:
+            return channels, waveforms
+        else:
+            channels0 = channels
+            chan_ixs = spiketorch.ptp(waveforms, dim=1).nan_to_num_(nan=-torch.inf).argmax(1)
+            channels = ci[channels0].take_along_dim(chan_ixs[:, None], dim=1)
+            assert channels.shape[1] == 1
+            channels = channels[:, 0]
+            return self.get_collisioncleaned_waveforms(
+                residual_padded, peaks, channel_index, spike_length_samples=spike_length_samples, channels=channels
+            )
 
 
 class MatchingPeaks:

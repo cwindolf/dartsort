@@ -26,8 +26,9 @@ def get_background_recording(
     sampling_frequency=30_000.0,
     white_noise_scale=1.0,
     n_jobs=1,
+    overwrite=False,
 ):
-    if noise_recording_folder.exists():
+    if (noise_recording_folder / "binary.json").exists():
         return read_binary_folder(noise_recording_folder)
 
     geom = generate_geom(**probe_kwargs or {})
@@ -72,7 +73,7 @@ def get_background_recording(
         recording = recording.save_to_folder(Path(tdir) / "noiserecording", n_jobs=1)
         recording = UnwhitenPreprocessor(noise, recording)
         recording = recording.save_to_folder(
-            noise_recording_folder, n_jobs=n_jobs, pool_engine="thread"
+            noise_recording_folder, n_jobs=n_jobs, pool_engine="thread", overwrite=overwrite
         )
 
     return recording

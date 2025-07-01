@@ -632,22 +632,20 @@ def scatter_feature_vs_depth(
         ax.set_ylim(limits)
 
     if annotate_labels:
-        add_labels(ax, labels[to_show], feature, depths_um)
+        add_labels(ax, labels[to_show], feature, depths_um, rev=annotate_labels < 0)
 
     if show_ellipses:
         return ax, scat, ellip
     return ax, scat
 
 
-def add_labels(ax, labels, feature, depths_um):
-    labels = labels
-    feature = feature
-    print(f"{depths_um.min()=} {depths_um.max()=}")
-    depths_um = depths_um
-    print(f"{depths_um.min()=} {depths_um.max()=}")
+def add_labels(ax, labels, feature, depths_um, rev=False):
     fs = []
     ds = []
-    for u in np.unique(labels):
+    us = np.unique(labels)
+    if rev:
+        us = reversed(us)
+    for u in us:
         if u < 0:
             continue
         inu = np.flatnonzero(labels == u)
@@ -662,8 +660,6 @@ def add_labels(ax, labels, feature, depths_um):
             color=glasbey1024[u % len(glasbey1024)],
             bbox=dict(boxstyle='square', pad=0.0, facecolor='w',),
         )
-    print(f"{np.min(fs)=} {np.max(fs)=}")
-    print(f"{np.min(ds)=} {np.max(ds)=}")
 
 
 def add_ellipses(

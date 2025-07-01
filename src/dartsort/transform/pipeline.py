@@ -283,6 +283,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "rank": fc.tpca_rank,
                     "name_prefix": fc.output_waveforms_name,
                     "centered": fc.tpca_centered,
+                    "fit_radius": fc.tpca_fit_radius,
                 },
             )
         )
@@ -293,6 +294,20 @@ def featurization_config_to_class_names_and_kwargs(
                 {
                     "amplitude_kind": fc.localization_amplitude_type,
                     "localization_model": fc.localization_model,
+                    "radius": fc.localization_radius,
+                    "softmax_noise_floor": fc.localization_noise_floor,
+                },
+            )
+        )
+    if do_feats and fc.additional_com_localization:
+        class_names_and_kwargs.append(
+            (
+                "Localization",
+                {
+                    "amplitude_kind": fc.localization_amplitude_type,
+                    "localization_model": "com",
+                    "radius": fc.localization_radius,
+                    "name": "com_localizations",
                 },
             )
         )
@@ -306,7 +321,7 @@ def featurization_config_to_class_names_and_kwargs(
     do_ptp_vec = do_feats and fc.save_amplitudes
     do_logptt = do_feats and fc.save_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
-    if do_any_amp:
+    if do_any_amp or (do_feats and fc.save_all_amplitudes):
         class_names_and_kwargs.append(
             (
                 "AmplitudeFeatures",
