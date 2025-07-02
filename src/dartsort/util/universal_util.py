@@ -16,6 +16,8 @@ def get_singlechan_centroids(
     deduplication_radius=150.0,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dedup_temporal_radius_samples=11,
+    n_kmeanspp_tries=10,
     alignment_padding=20,
     n_centroids=10,
     pca_rank=8,
@@ -27,7 +29,7 @@ def get_singlechan_centroids(
     random_seed=0,
 ):
     """Kmeanspp in pca space"""
-    from dartsort import kmeans
+    from dartsort.cluster import kmeans
 
     full_length = spike_length_samples + 2 * alignment_padding
     full_trough = trough_offset_samples + alignment_padding
@@ -40,6 +42,7 @@ def get_singlechan_centroids(
             rec,
             detection_threshold=detection_threshold,
             deduplication_radius=deduplication_radius,
+            dedup_temporal_radius_samples=dedup_temporal_radius_samples,
             n_waveforms_fit=n_waveforms_fit,
             trough_offset_samples=full_trough,
             spike_length_samples=full_length,
@@ -49,6 +52,7 @@ def get_singlechan_centroids(
 
     # PCA embed
     trim_waveforms = singlechan_waveforms[:, alignment_padding:trim_end]
+    q = min(pca_rank + 10, *trim_waveforms.shape)
     u, s, v = torch.pca_lowrank(trim_waveforms, q=pca_rank + 10, center=False, niter=7)
     u = u[:, :pca_rank]
     s = s[:pca_rank]
@@ -61,6 +65,7 @@ def get_singlechan_centroids(
         embeds,
         n_components=n_centroids,
         n_iter=0,
+        n_kmeanspp_tries=n_kmeanspp_tries,
         kmeanspp_initial=kmeanspp_initial,
         random_state=random_seed,
     )
@@ -95,6 +100,7 @@ def get_singlechan_waveforms(
     n_waveforms_fit=20_000,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dedup_temporal_radius_samples=11,
     show_progress=False,
 ):
     from dartsort.peel.threshold import ThresholdAndFeaturize
@@ -118,6 +124,7 @@ def get_singlechan_waveforms(
         featurization_pipeline=WaveformPipeline([wfeat]),
         spatial_dedup_channel_index=deduplication_index,
         detection_threshold=detection_threshold,
+        dedup_temporal_radius_samples=dedup_temporal_radius_samples,
         n_waveforms_fit=n_waveforms_fit,
     )
 

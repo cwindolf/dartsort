@@ -529,7 +529,7 @@ class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
     waveform_cfg: WaveformConfig = WaveformConfig()
-    featurization_cfg: FeaturizationConfig = FeaturizationConfig()
+    featurization_cfg: FeaturizationConfig = FeaturizationConfig(learn_cleaned_tpca_basis=True)
     initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig | UniversalMatchingConfig = SubtractionConfig()
     template_cfg: TemplateConfig = TemplateConfig()
     clustering_cfg: ClusteringConfig = ClusteringConfig()
@@ -583,6 +583,7 @@ def to_internal_config(cfg):
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
+        learn_cleaned_tpca_basis=True,
     )
 
     if cfg.detection_type == "subtract":
@@ -736,7 +737,7 @@ def to_internal_config(cfg):
 
 # default configs, used as defaults for kwargs in main.py etc
 default_waveform_cfg = WaveformConfig()
-default_featurization_cfg = FeaturizationConfig()
+default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
 default_template_cfg = TemplateConfig()

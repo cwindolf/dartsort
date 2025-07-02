@@ -16,7 +16,7 @@ _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0, device='cpu'):
+def spawn_torch_rg(seed: int | np.random.Generator = 0, device="cpu"):
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
@@ -318,9 +318,7 @@ def convolve_lowrank(
     out_len = traces.shape[1] + 2 * padding - spike_length_samples + 1
     if out is None:
         out = torch.empty(
-            (n_templates, out_len),
-            dtype=traces.dtype,
-            device=traces.device,
+            (n_templates, out_len), dtype=traces.dtype, device=traces.device
         )
     else:
         assert out.shape == (n_templates, out_len)
@@ -334,10 +332,7 @@ def convolve_lowrank(
 
         # conv1d with groups! only convolve each unit with its own temporal filter
         conv = F.conv1d(
-            rec_spatial[None],
-            temporal[:, None, :],
-            groups=n_templates,
-            padding=padding,
+            rec_spatial[None], temporal[:, None, :], groups=n_templates, padding=padding
         )[0]
 
         # o-a turns out not to be helpful, sadly

@@ -31,7 +31,7 @@ class ThresholdAndFeaturize(BasePeeler):
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
         dedup_temporal_radius_samples=7,
-        n_seconds_fit=40,
+        n_seconds_fit=100,
         n_waveforms_fit=20_000,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,

@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from dartsort.evaluate import simkit, simlib
+from dartsort.util.internal_config import FeaturizationConfig
 from dartsort.util.noise_util import StationaryFactorizedNoise
 from dartsort.util.registration_util import estimate_motion
 
@@ -52,8 +53,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
         template_simulator_kwargs=dict(
             trough_offset_samples=0, randomize_position=False
         ),
-        include_tpca_feature=False,
-        include_residual=False,
+        featurization_cfg=FeaturizationConfig(skip=True),
         common_reference=False,
     )
     ns = int(fs)
@@ -181,8 +181,7 @@ def test_motion(tmp_path, drift_speed):
         drift_speed=drift_speed,
         min_fr_hz=25.0,
         max_fr_hz=25.0,
-        include_tpca_feature=False,
-        include_residual=False,
+        featurization_cfg=FeaturizationConfig(skip=True),
     )
     if not drift_speed:
         assert sim["motion_est"] is None

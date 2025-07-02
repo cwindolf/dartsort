@@ -44,6 +44,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         amplitude_scaling_boundary=0.5,
         conv_ignore_threshold=5.0,
         coarse_approx_error_threshold=0.0,
+        margin_factor=2,
         trough_offset_samples=42,
         threshold=100.0,
         max_fp_per_input_spike=2.5,
@@ -65,7 +66,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=2 * template_data.templates.shape[1],
+            chunk_margin_samples=margin_factor * template_data.templates.shape[1],
             n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
@@ -694,7 +695,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
 
             # subtract them
-            # old_norm = torch.linalg.norm(residual) ** 2
+            # TODO: made these nice peak objects and then just ignored them.
             compressed_template_data.subtract(
                 residual_padded,
                 new_peaks.times,
