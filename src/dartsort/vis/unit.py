@@ -19,6 +19,7 @@ from matplotlib.legend_handler import HandlerTuple
 
 from ..cluster import split
 from ..util.internal_config import raw_template_cfg
+from ..util.job_util import get_global_computation_config
 from ..evaluate.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
@@ -1019,7 +1020,7 @@ def make_all_summaries(
     hspace=0.1,
     dpi=200,
     image_ext="png",
-    n_jobs=0,
+    n_jobs=None,
     show_progress=True,
     overwrite=False,
     unit_ids=None,
@@ -1058,9 +1059,12 @@ def make_all_summaries(
         global_params,
         gizmo_name,
     )
+    if n_jobs is None:
+        n_jobs = get_global_computation_config().n_jobs_cpu
     if n_jobs:
         initargs = (cloudpickle.dumps(initargs),)
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
+    print(f"{n_jobs=}")
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
