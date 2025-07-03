@@ -10,6 +10,16 @@ import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
+HAVE_CUPY = False
+cp = None
+try:
+    import cupy as cp
+
+    HAVE_CUPY = True
+except ImportError:
+    cupy = None
+    HAVE_CUPY = False
+
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
@@ -125,7 +135,7 @@ def ravel_multi_index(multi_index, dims):
     # return raveled_indices.view(-1)
 
 
-def add_at_(dest, ix, src, sign=1):
+def torch_add_at_(dest, ix, src, sign=1):
     """Pytorch version of np.{add,subtract}.at
 
     Adds src into dest in place at indices (in dest) specified
@@ -147,6 +157,26 @@ def add_at_(dest, ix, src, sign=1):
     else:
         src = src.reshape(-1)
     dest.view(-1).scatter_add_(0, flat_ix.to(dest.device), src)
+
+
+def cupy_add_at_(dest, ix, src, sign=1):
+    dest = cp.asarray(dest)
+    if isinstance(ix, (list, tuple)):
+        ix = [cp.asarray(ii) for ii in ix]
+    if not isinstance(src, (float, int)):
+        src = cp.asarray(src)
+    if sign == 1:
+        cp.add.at(dest, ix, src)
+    elif sign == -1:
+        cp.subtract.at(dest, ix, src)
+    else:
+        raise NotImplementedError(f"Need to implement {sign=} in cupy_add_at_.")
+
+
+if HAVE_CUPY:
+    add_at_ = cupy_add_at_
+else:
+    add_at_ = torch_add_at_
 
 
 def grab_spikes(

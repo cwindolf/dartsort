@@ -36,7 +36,7 @@ def get_clusterer(
         clustering_cfg,
         save_cfg=save_cfg,
         save_labels_dir=save_labels_dir,
-        labels_fmt=initial_name,
+        labels_fmt=initial_name if clustering_cfg is not None else None,
         computation_cfg=computation_cfg,
     )
 
