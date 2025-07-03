@@ -1066,12 +1066,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         assert W is not None
 
         # load basis
-        Wobs = W[self.lut_units[:, None], :, :, obs_ix].permute(0, 2, 3, 1)
+        # doing it in this complicated way so that we can .view() below
+        M_ix = torch.arange(self.M)[None, :, None, None]
+        r_ix = torch.arange(r)[None, None, :, None]
+        u_ix = self.lut_units[:, None, None, None]
+        o_ix = obs_ix[:, None, None, :]
+        m_ix = miss_ix_full[:, None, None, :]
+        Wobs = W[u_ix, M_ix, r_ix, o_ix]
         assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
-        Wobs = Wobs.reshape(nlut, self.M, -1)
-        Wmiss = W[self.lut_units[:, None], :, :, miss_ix_full].permute(0, 2, 3, 1)
+        Wobs = Wobs.view(nlut, self.M, -1)
+
+        Wmiss = W[u_ix, M_ix, r_ix, m_ix]
         assert Wmiss.shape == (nlut, self.M, r, self.nc_miss_full)
-        Wmiss = Wmiss.reshape(nlut, self.M, -1)
+        Wmiss = Wmiss.view(nlut, self.M, -1)
         # self.register_buffer("Wmiss", Wmiss)
         self.register_buffer("Wobs", Wobs)
 
