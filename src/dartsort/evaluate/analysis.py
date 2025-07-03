@@ -123,7 +123,6 @@ class DARTsortAnalysis:
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
 
-        template_data = None
         if not have_templates and template_cfg is not None and not skip_templates:
             tkw = {}
             if "localizations_dataset" in kwargs:
