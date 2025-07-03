@@ -404,7 +404,7 @@ def nancov(
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.
