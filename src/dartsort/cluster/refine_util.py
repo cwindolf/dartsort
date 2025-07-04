@@ -32,19 +32,6 @@ def gmm_refine(
 
     logger.dartsortdebug(f"Refine clustering from {sorting.parent_h5_path}")
 
-    noise = noise_util.EmbeddedNoise.estimate_from_hdf5(
-        sorting.parent_h5_path,
-        cov_kind=refinement_cfg.cov_kind,
-        motion_est=motion_est,
-        device=computation_cfg.actual_device(),
-        glasso_alpha=refinement_cfg.glasso_alpha,
-        interpolation_method=refinement_cfg.interpolation_method,
-        kernel_name=refinement_cfg.kernel_name,
-        sigma=refinement_cfg.interpolation_sigma,
-        rq_alpha=refinement_cfg.rq_alpha,
-        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
-        zero_radius=refinement_cfg.cov_radius,
-    )
     data = StableSpikeDataset.from_sorting(
         sorting,
         motion_est=motion_est,
@@ -62,6 +49,20 @@ def gmm_refine(
             refinement_cfg.val_proportion,
         ),
         device=computation_cfg.actual_device(),
+    )
+    noise = noise_util.EmbeddedNoise.estimate_from_hdf5(
+        sorting.parent_h5_path,
+        cov_kind=refinement_cfg.cov_kind,
+        motion_est=motion_est,
+        device=computation_cfg.actual_device(),
+        glasso_alpha=refinement_cfg.glasso_alpha,
+        interpolation_method=refinement_cfg.interpolation_method,
+        kernel_name=refinement_cfg.kernel_name,
+        sigma=refinement_cfg.interpolation_sigma,
+        rq_alpha=refinement_cfg.rq_alpha,
+        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+        zero_radius=refinement_cfg.cov_radius,
+        rgeom=data.prgeom[:-1],
     )
     gmm = SpikeMixtureModel(
         data,

@@ -60,6 +60,23 @@ def get_pitch(geom, direction=1, allow_horizontal=False):
     return np.diff(all_unique_y).min()
 
 
+def get_orders(geom):
+    orders = np.ones(geom.shape[1])
+    for dim in range(geom.shape[1]):
+        other_dims = [i for i in range(geom.shape[1]) if i != dim]
+        other_dims_uniq = np.unique(geom[:, other_dims], axis=0)
+
+        sgns = set()
+        for pos in other_dims_uniq:
+            at_x = np.all(geom[:, other_dims] == pos, axis=1)
+            sgns.update(np.unique(np.sign(np.diff(geom[at_x, dim]))))
+
+        if len(sgns) == 1:
+            sign = list(sgns)[0]
+            orders[dim] = sign
+    return orders
+
+
 def fill_geom_holes(geom):
     pitch = get_pitch(geom)
     pitches_pad = int(np.ceil(np.ptp(geom[:, 1]) / pitch))

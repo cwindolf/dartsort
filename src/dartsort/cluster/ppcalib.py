@@ -477,48 +477,53 @@ def get_neighborhood_data(
     all_kept = True
     keep = slice(None)
 
+    # active channels always sorted, but neighborhood channels may not be sorted
+    assert torch.all(torch.diff(active_channels) > 0)
+
     # two passes: first is deduplication
     dedup_data = {}
     for nid, neighb_chans, neighb_members, _ in neighborhood_info:
-
         # -- neighborhood channels
-        neighb_valid = neighborhoods.valid_mask(nid)
-        # subset of neighborhood's chans which are active
-        # needs to be subset of full neighborhood channel set, not just the ones <NC
-        # neighb_subset = spiketorch.isin_sorted(neighb_chans, active_channels)
-        neighb_subset = torch.isin(neighb_chans, active_channels)
-        can_cache_by_neighborhood = torch.equal(neighb_subset, neighb_valid)
-        del neighb_valid
-        # neighb_subset = neighb_valid  # assume those are the same. tested by assert blo.
-        # ok to restrict to valid below
-        neighb_chans = neighb_chans[neighb_subset]
-        if not neighb_chans.numel() and all_kept:
+        valid_ix = neighborhoods.valid_mask(nid)
+
+        # get subset of active channels which appear in the neighborhood,
+        # and figure out the ordering of the neighborhood within that subset
+        neighb_valid_chans = neighb_chans[valid_ix]
+        neighb_subset = torch.isin(neighb_valid_chans, active_channels)
+        neighb_valid_chans = neighb_valid_chans[neighb_subset]
+        active_mask = torch.isin(active_channels, neighb_valid_chans)
+        (active_subset,) = active_mask.nonzero(as_tuple=True)
+        active_valid_chans = active_channels[active_subset]
+        neighbvalid2active = torch.searchsorted(active_valid_chans, neighb_valid_chans)
+        neighb2active = valid_ix[neighb_subset][neighbvalid2active]
+        assert torch.equal(neighb_chans[neighb2active], active_channels[active_subset])
+
+        if not neighb2active.numel() and all_kept:
             all_kept = False
             discard = torch.zeros(len(sp), dtype=bool)
-        if not neighb_chans.numel():
+        if not neighb2active.numel():
             discard[neighb_members] = True
             continue
-        # assert spiketorch.isin_sorted(neighb_chans, active_channels).all()
-        # subset of active chans which are in the neighborhood
-        # active_subset = spiketorch.isin_sorted(active_channels, neighb_chans)
-        active_subset = torch.isin(active_channels, neighb_chans)
 
-        x = sp.features[neighb_members][:, :, neighb_subset]
+        x = sp.features[neighb_members][:, :, neighb2active]
         assert x.isfinite().all()
 
         chans_tuple = tuple(active_channels[active_subset].tolist())
         if chans_tuple in dedup_data:
-            *info, xs, mems = dedup_data[chans_tuple]
+            *_, xs, mems = dedup_data[chans_tuple]
             xs.append(x)
             mems.append(neighb_members)
         else:
-            have_missing = not active_subset.all()
+            have_missing = active_subset.numel() < active_channels.numel()
+            missing_subset = None
+            if have_missing:
+                (missing_subset,) = active_mask.logical_not_().nonzero(as_tuple=True)
             dedup_data[chans_tuple] = (
                 nid,
-                neighb_chans,
+                neighb_chans[neighb2active],
                 active_subset,
-                can_cache_by_neighborhood,
                 have_missing,
+                missing_subset,
                 [x],
                 [neighb_members],
             )
@@ -529,13 +534,10 @@ def get_neighborhood_data(
     ess = weights[keep].sum()
     n_start = 0
     for chans_tuple, chans_data in dedup_data.items():
-        *info, xs, mems = chans_data
-        nid, neighb_chans, active_subset, can_cache_by_neighborhood, have_missing = info
+        nid, neighb_chans, active_subset, have_missing, missing_subset, xs, mems = chans_data
         if len(mems) > 1:
             x = torch.concatenate(xs)
             neighb_members = torch.concatenate(mems)
-            # neighb_members, order = neighb_members.sort()
-            # x = x[order]
             nid = None
         else:
             x = xs[0]
@@ -543,24 +545,12 @@ def get_neighborhood_data(
         assert x.isfinite().all()
 
         n_neighb = neighb_members.numel()
-        cache_kw = {}
-        if cache_direct:
-            cache_kw = dict(
-                cache_prefix="direct",
-                cache_key=tuple(active_channels[active_subset].tolist()),
-            )
-        elif can_cache_by_neighborhood:
-            cache_kw = dict(
-                cache_prefix=cache_prefix,
-                cache_key=nid,
-            )
+        cache_kw = dict(
+            cache_prefix="direct",
+            cache_key=tuple(active_channels[active_subset].tolist()),
+        )
 
         # -- missing channels
-        missing_subset = missing_chans = None
-        if have_missing:
-            (missing_subset,) = torch.logical_not(active_subset).nonzero(as_tuple=True)
-            missing_chans = active_channels[missing_subset]
-        (active_subset,) = active_subset.nonzero(as_tuple=True)
         neighb_nc = active_subset.numel()
         D_neighb = rank * neighb_nc
 
@@ -577,9 +567,9 @@ def get_neighborhood_data(
         w = weights[neighb_members]
         C_mo = None
         if have_missing:
+            missing_chans = active_channels[missing_subset]
             C_mo = noise.offdiag_covariance(
-                channels_left=missing_chans,
-                channels_right=neighb_chans,
+                channels_left=missing_chans, channels_right=neighb_chans
             )
             C_mo = C_mo.to_dense().to(device)
         x = x.view(n_neighb, D_neighb)
