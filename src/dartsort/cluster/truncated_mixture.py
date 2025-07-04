@@ -44,7 +44,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         noise: EmbeddedNoise,
         M: int = 0,
         n_candidates: int = 3,
-        n_search: int | None = 5,
+        n_search: int | None = 3,
         n_explore: int | None = None,
         n_units: int | None = None,
         noise_trunc_factors: torch.Tensor | None = None,
@@ -1029,7 +1029,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 W = F.pad(W, (0, 1))
 
         obs_ix = self.obs_ix[self.lut_neighbs]
-        miss_ix = self.miss_ix[self.lut_neighbs]
+        # miss_ix = self.miss_ix[self.lut_neighbs]
         miss_ix_full = self.miss_ix_full[self.lut_neighbs]
 
         # proportions stuff
@@ -1122,8 +1122,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             be = min(nlut, bs + batch_size)
             lut_neighbs_batch = self.lut_neighbs[bs:be]
             nbatch = be - bs
-
-            Cooinv = self.Coo_inv[lut_neighbs_batch]
             Cooinvsqrt = self.Coo_invsqrt[lut_neighbs_batch]
             coeft = Wobs[bs:be].mT.bmm(cap_invsqrt[bs:be].mT)
             torch.bmm(Cooinvsqrt, coeft, out=wburyroot[bs:be])

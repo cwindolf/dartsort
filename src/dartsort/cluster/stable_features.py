@@ -841,7 +841,7 @@ def occupied_chans(
     counts = torch.zeros(chans.shape, device=chans.device)
     spiketorch.add_at_(
         counts,
-        inverse.view(-1),
+        inverse.view(-1).to(counts.device),
         id_counts[:, None].broadcast_to(chans0.shape).reshape(-1).to(counts.device),
     )
 

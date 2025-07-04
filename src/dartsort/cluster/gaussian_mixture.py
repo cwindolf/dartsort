@@ -100,6 +100,9 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = False,
         kmeans_kmeanspp_initial: str = "random",
+        tvi_n_candidates: int = 3,
+        tvi_n_search: int | None = 5,
+        tvi_n_explore: int | None = None,
         split_em_iter: int = 0,
         split_whiten: bool = True,
         ppca_in_split: bool = True,
@@ -194,6 +197,9 @@ class SpikeMixtureModel(torch.nn.Module):
         self.laplace_ard = laplace_ard
         self.prior_corrected_criterion = prior_corrected_criterion
         self.prior_scales_mean = prior_scales_mean
+        self.tvi_n_candidates = tvi_n_candidates
+        self.tvi_n_explore = tvi_n_explore
+        self.tvi_n_search = tvi_n_search
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -440,13 +446,16 @@ class SpikeMixtureModel(torch.nn.Module):
                 alpha0=self.prior_pseudocount,
                 laplace_ard=self.laplace_ard,
                 prior_scales_mean=self.prior_scales_mean,
+                n_candidates=self.tvi_n_candidates,
+                n_search=self.tvi_n_search,
+                n_explore=self.tvi_n_explore,
             )
         self.tmm.set_sizes(n_units)
 
         if initialization == "topk":
             nz_lines, nz_init = sparse_topk(
                 lls_keep,
-                log_proportions=self.log_proportions[ids].numpy(force=True),
+                # log_proportions=self.log_proportions[ids].numpy(force=True),
                 k=self.tmm.n_candidates,
             )
             init = np.empty((n_spikes, self.tmm.n_candidates), dtype=np.int64)
@@ -1250,10 +1259,13 @@ class SpikeMixtureModel(torch.nn.Module):
         if kind == "cosine":
             means = means.view(n, -1)
             dot = means @ means.T
-            norm = means.square_().sum(1).sqrt_()
+            norm = means.square().sum(1).sqrt_()
             norm[norm == 0] = 1
             dot /= norm[:, None]
             dot /= norm[None, :]
+            dot = torch.subtract(1.0, dot, out=dot)
+            dot.diagonal().fill_(0.0)
+            dot = dot.numpy(force=True)
             return ids, dot
 
         if kind in ("kl", "reverse_kl", "symkl"):

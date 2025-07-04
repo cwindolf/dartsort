@@ -352,6 +352,7 @@ def _te_batch_m_ppca(
     R = Q.new_zeros((n_units, M, rank, nc + 1))
     QRo = QRo.view(n, C, *R.shape[1:-1], nc_obs)
     QRm = QRm.view(n, C, *R.shape[1:-1], nc_miss)
+    QRmf = QRmf.view(n, C, *R.shape[1:-1], nc_miss_full)
     spiketorch.add_at_(
         R,
         (
@@ -386,6 +387,7 @@ def _te_batch_m_ppca(
     m = Qn.new_zeros((n_units, rank, nc + 1))
     Qmo = Qmo.view(n, C, *m.shape[1:-1], nc_obs)
     Qmm = Qmm.view(n, C, *m.shape[1:-1], nc_miss)
+    Qmmf = Qmmf.view(n, C, *m.shape[1:-1], nc_miss_full)
     spiketorch.add_at_(
         m,
         (

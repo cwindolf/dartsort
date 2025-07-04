@@ -119,6 +119,7 @@ def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=T
     assert mean.shape == (2,)
     cov = unit.marginal_covariance(channels=channels).to_dense()
     cov = wv.T @ cov @ wv
+    cov = cov.numpy(force=True)
     rho = cov[0, 1] / np.sqrt(np.diagonal(cov).prod())
 
     # draw ellipses

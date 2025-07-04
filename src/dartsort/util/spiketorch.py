@@ -162,7 +162,9 @@ def torch_add_at_(dest, ix, src, sign=1):
 def cupy_add_at_(dest, ix, src, sign=1):
     dest = cp.asarray(dest)
     if isinstance(ix, (list, tuple)):
-        ix = [cp.asarray(ii) for ii in ix]
+        ix = tuple(cp.asarray(ii) for ii in ix)
+    else:
+        ix = cp.asarray(ix)
     if not isinstance(src, (float, int)):
         src = cp.asarray(src)
     if sign == 1:
@@ -173,10 +175,13 @@ def cupy_add_at_(dest, ix, src, sign=1):
         raise NotImplementedError(f"Need to implement {sign=} in cupy_add_at_.")
 
 
-if HAVE_CUPY:
-    add_at_ = cupy_add_at_
-else:
-    add_at_ = torch_add_at_
+add_at_ = torch_add_at_
+
+# def add_at_(dest, ix, src, sign=1):
+#     if True or not HAVE_CUPY or dest.device.type == "cpu":
+#         return torch_add_at_(dest, ix, src, sign)
+#     else:
+#         return cupy_add_at_(dest, ix, src, sign)
 
 
 def grab_spikes(

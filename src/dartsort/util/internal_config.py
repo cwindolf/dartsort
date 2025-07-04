@@ -659,6 +659,12 @@ def to_internal_config(cfg):
         motion_aware=cfg.motion_aware_clustering,
         workers=cfg.clustering_workers,
     )
+
+    skip_first_split = (
+        cfg.initial_split_only
+        and not cfg.resume_with_split
+        # and not cfg.recluster_after_first_matching
+    )
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
