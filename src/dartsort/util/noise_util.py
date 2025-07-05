@@ -780,7 +780,8 @@ class EmbeddedNoise(torch.nn.Module):
         if zero_radius:
             assert rgeom is not None
             assert rgeom.shape[0] == n_channels
-            spatial_mask = squareform(pdist(rgeom)) < zero_radius
+            rg_np = rgeom.numpy(force=True) if torch.is_tensor(rgeom) else rgeom
+            spatial_mask = squareform(pdist(rg_np)) < zero_radius
 
         # spatial part could be "by rank" or same for all ranks
         # either way, there are nans afoot

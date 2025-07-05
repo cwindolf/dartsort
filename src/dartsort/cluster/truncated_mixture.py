@@ -503,7 +503,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
-        batch_size: int = 2**14,
+        batch_size: int = 2**8,
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,
@@ -533,6 +533,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.Cinv_in_grad = Cinv_in_grad
+        self.W_WCC = None
         if precompute_invx:
             self.precompute_invx()
         self.batch_size = batch_size
@@ -997,7 +998,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise_log_prop,
         bases=None,
         unit_neighborhood_counts=None,
-        batch_size=128,
+        batch_size=32,
     ):
         Nu, r, Nc = means.shape
         assert Nc in (self.nc, self.nc + 1)
@@ -1076,8 +1077,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         assert Wobs.shape == (nlut, self.M, r, self.nc_obs)
         Wobs = Wobs.view(nlut, self.M, -1)
 
-        Wmiss = W[u_ix, M_ix, r_ix, m_ix]
-        assert Wmiss.shape == (nlut, self.M, r, self.nc_miss_full)
+        if self.W_WCC is None:
+            Wmiss = W[u_ix, M_ix, r_ix, m_ix]
+            assert Wmiss.shape == (nlut, self.M, r, self.nc_miss_full)
+        else:
+            Wmiss = self.W_WCC
+            Wmiss.resize_(len(u_ix), *Wmiss.shape[1:])
+            for bs in range(0, len(u_ix), batch_size):
+                be = min(bs + batch_size, len(u_ix))
+                sl = slice(bs, be)
+                nb = be - bs
+                Wmiss[sl] = W[u_ix[sl], M_ix, r_ix, m_ix[sl]].reshape(nb, self.M, -1)
         Wmiss = Wmiss.view(nlut, self.M, -1)
         # self.register_buffer("Wmiss", Wmiss)
         self.register_buffer("Wobs", Wobs)

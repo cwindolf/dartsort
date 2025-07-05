@@ -165,6 +165,7 @@ class DeveloperConfig(DARTsortUserConfig):
     cluster_strategy: str = "gmmdpc"
     refinement_strategy: str = "gmm"
     recluster_after_first_matching: bool = False
+    initial_rank: int | None = None
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False

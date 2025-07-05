@@ -660,11 +660,7 @@ def to_internal_config(cfg):
         workers=cfg.clustering_workers,
     )
 
-    skip_first_split = (
-        cfg.initial_split_only
-        and not cfg.resume_with_split
-        # and not cfg.recluster_after_first_matching
-    )
+    skip_step1_first_split = cfg.initial_split_only and not cfg.resume_with_split
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
@@ -691,12 +687,19 @@ def to_internal_config(cfg):
         interpolation_sigma=cfg.interpolation_bandwidth,
         rq_alpha=cfg.interpolation_rq_alpha,
         kriging_poly_degree=cfg.interpolation_degree,
-        skip_first_split=cfg.initial_split_only and not cfg.resume_with_split,
+        skip_first_split=skip_step1_first_split,
         kmeansk=cfg.kmeansk,
         prior_scales_mean=cfg.prior_scales_mean,
     )
+    if cfg.initial_rank is None:
+        irank = refinement_cfg.signal_rank
+    else:
+        irank = cfg.initial_rank
     initial_refinement_cfg = dataclasses.replace(
-        refinement_cfg, one_split_only=cfg.initial_split_only, skip_first_split=False
+        refinement_cfg,
+        one_split_only=cfg.initial_split_only,
+        skip_first_split=False,
+        signal_rank=irank,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

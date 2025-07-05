@@ -62,7 +62,7 @@ def gmm_refine(
         rq_alpha=refinement_cfg.rq_alpha,
         kriging_poly_degree=refinement_cfg.kriging_poly_degree,
         zero_radius=refinement_cfg.cov_radius,
-        rgeom=data.prgeom[:-1],
+        rgeom=data.prgeom[:-1].numpy(force=True),
     )
     gmm = SpikeMixtureModel(
         data,
