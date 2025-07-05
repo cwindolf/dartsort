@@ -161,7 +161,7 @@ def torch_add_at_(dest, ix, src, sign=1):
 
 def cupy_add_at_(dest, ix, src, sign=1):
     dest = cp.asarray(dest)
-    if isinstance(ix, (list, tuple)):
+    if isinstance(ix, tuple):
         ix = tuple(cp.asarray(ii) for ii in ix)
     else:
         ix = cp.asarray(ix)

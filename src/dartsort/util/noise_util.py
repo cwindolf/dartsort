@@ -908,6 +908,7 @@ class EmbeddedNoise(torch.nn.Module):
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
+        rgeom=None,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -917,9 +918,10 @@ class EmbeddedNoise(torch.nn.Module):
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
-        rgeom = geom
-        if motion_est is not None:
-            rgeom = registered_geometry(geom, motion_est=motion_est)
+        if rgeom is None:
+            rgeom = geom
+            if motion_est is not None:
+                rgeom = registered_geometry(geom, motion_est=motion_est)
         snippets = interpolate_residual_snippets(
             motion_est,
             hdf5_path,
@@ -1076,7 +1078,10 @@ def interpolate_residual_snippets(
     source_pos_shifted = source_pos.numpy(force=True) + source_shifts_xy
 
     # query the target geom for the closest source pos, within reason
-    kdtree = drift_util.KDTree(registered_geom)
+    rg_np = registered_geom
+    if torch.is_tensor(rg_np):
+        rg_np = rg_np.numpy(force=True)
+    kdtree = drift_util.KDTree(rg_np)
     match_distance = drift_util.pdist(geom).min()
     _, targ_inds = kdtree.query(
         source_pos_shifted.reshape(-1, geom.shape[1]),
