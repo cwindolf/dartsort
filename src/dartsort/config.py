@@ -182,6 +182,10 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 50
     channels_strategy: str = "count"
     hard_noise: bool = False
+    gmm_metric: Literal["kl", "cosine"] = "kl"
+    gmm_search: Literal["topk", "random"] = "topk"
+    gmm_n_candidates: int = 3
+    gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
     initial_amp_feat: bool = False
     initial_pc_feats: int = 2

@@ -26,7 +26,9 @@ _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0, device="cpu"):
+def spawn_torch_rg(seed: int | np.random.Generator = 0, device: str | torch.device | None="cpu"):
+    if device is None:
+        device = "cpu"
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
@@ -437,6 +439,18 @@ def nancov(
     if return_nobs:
         return cov, nobs
     return cov
+
+
+def cosine_distance(means):
+    means = means.reshape(means.shape[0], -1)
+    dot = means @ means.T
+    norm = means.square().sum(1).sqrt_()
+    norm[norm == 0] = 1
+    dot /= norm[:, None]
+    dot /= norm[None, :]
+    dist = torch.subtract(_1, dot, out=dot)
+    dist.diagonal().fill_(0.0)
+    return dist
 
 
 def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):

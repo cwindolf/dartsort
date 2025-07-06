@@ -101,15 +101,16 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_with_proportions: bool = False,
         kmeans_kmeanspp_initial: str = "random",
         tvi_n_candidates: int = 3,
-        tvi_n_search: int | None = 5,
+        tvi_n_search: int | None = None,
         tvi_n_explore: int | None = None,
         split_em_iter: int = 0,
         split_whiten: bool = True,
         ppca_in_split: bool = True,
         truncated_noise: bool = False,
         distance_metric: Literal[
-            "noise_metric", "kl", "reverse_kl", "symkl"
+            "noise_metric", "kl", "reverse_kl", "symkl", "cosine"
         ] = "noise_metric",
+        search_type: Literal["topk", "random"] = "topk",
         distance_normalization_kind: Literal["none", "noise", "channels"] = "noise",
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
         merge_linkage: str = "single",
@@ -200,6 +201,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.tvi_n_candidates = tvi_n_candidates
         self.tvi_n_explore = tvi_n_explore
         self.tvi_n_search = tvi_n_search
+        self.search_type = search_type
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -414,8 +416,6 @@ class SpikeMixtureModel(torch.nn.Module):
         ids, means, covs, logdets, alpha = self.stack_units(
             mean_only=False, with_alpha=True
         )
-        ids_, dkl = self.distances(kind="kl", normalization_kind="none")
-        assert torch.equal(torch.asarray(ids), torch.asarray(ids_))
 
         # try reassigning without noise unit...
         lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
@@ -449,6 +449,9 @@ class SpikeMixtureModel(torch.nn.Module):
                 n_candidates=self.tvi_n_candidates,
                 n_search=self.tvi_n_search,
                 n_explore=self.tvi_n_explore,
+                search_type=self.search_type,
+                metric=self.distance_metric,
+                random_search_max_distance=self.merge_distance_threshold,
             )
         self.tmm.set_sizes(n_units)
 
@@ -492,7 +495,6 @@ class SpikeMixtureModel(torch.nn.Module):
             alpha=alpha[ids] if alpha is not None else None,
             log_proportions=self.log_proportions[ids],
             noise_log_prop=self.log_proportions[-1],
-            kl_divergences=dkl[keep_ids[:, None], keep_ids[None, :]],
         )
 
         if show_progress:
@@ -1257,16 +1259,9 @@ class SpikeMixtureModel(torch.nn.Module):
         n = len(ids)
 
         if kind == "cosine":
-            means = means.view(n, -1)
-            dot = means @ means.T
-            norm = means.square().sum(1).sqrt_()
-            norm[norm == 0] = 1
-            dot /= norm[:, None]
-            dot /= norm[None, :]
-            dot = torch.subtract(1.0, dot, out=dot)
-            dot.diagonal().fill_(0.0)
-            dot = dot.numpy(force=True)
-            return ids, dot
+            dist = spiketorch.cosine_distance(means)
+            dist = dist.numpy(force=True)
+            return ids, dist
 
         if kind in ("kl", "reverse_kl", "symkl"):
             W = None

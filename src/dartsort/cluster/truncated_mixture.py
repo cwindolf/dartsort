@@ -55,7 +55,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         random_seed=0,
         n_threads: int = 0,
         batch_size=2**8,
+        metric="kl",
         exact_kl=True,
+        search_type="topk",
+        random_search_max_distance=0.5,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
@@ -87,6 +90,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.exact_kl = exact_kl
         self.sgd_batch_size = sgd_batch_size
         self.min_log_prop = min_log_prop
+        self.metric = metric
+        self.search_type = search_type
+        if search_type == "random":
+            assert metric == "cosine"
 
         self.n_spikes = train_indices.numel()
         self.M = M
@@ -99,6 +106,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
             search_neighborhood_steps=search_neighborhood_steps,
             explore_neighborhood_steps=explore_neighborhood_steps,
+            search_type=search_type,
+            random_search_max_distance=random_search_max_distance,
         )
 
         self.initial_n_candidates = n_candidates
@@ -126,7 +135,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if n_search is None:
             n_search = n_candidates
         if n_explore is None:
-            n_explore = n_search
+            if self.search_type == "topk":
+                n_explore = n_search
+            elif self.search_type == "random":
+                n_explore = 0
         if n_units is not None:
             remainder = n_units - n_candidates
             n_search = max(0, min(remainder // n_candidates, n_search))
@@ -147,16 +159,15 @@ class SpikeTruncatedMixtureModel(nn.Module):
         means,
         log_proportions,
         noise_log_prop,
-        kl_divergences,
         bases=None,
         alpha=None,
+        divergences=None,
     ):
         """Parameters are stored padded with an extra channel."""
         self.n_units = means.shape[0]
         self.set_sizes(self.n_units)
         assert means.shape == (self.n_units, self.noise.rank, self.noise.n_channels)
         assert log_proportions.shape == (self.n_units,)
-        assert kl_divergences.shape == (self.n_units, self.n_units)
         assert means.isfinite().all()
         assert log_proportions.isfinite().all()
         assert noise_log_prop.isfinite()
@@ -183,13 +194,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 noise_log_prop.clone(), requires_grad=False
             )
             assert self.log_proportions.isfinite().all()
-
-        self.register_buffer(
-            "kl_divergences",
-            torch.asarray(kl_divergences, dtype=self.means.dtype, copy=True),
-        )
-
-        self.candidates.initialize_candidates(labels, self.kl_divergences)
 
         if self.M:
             assert bases is not None
@@ -218,12 +222,19 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert self.alpha.isfinite().all()
         else:
             self.alpha = self.alpha0
+            
+        self.register_buffer("divergences", means.new_empty((self.n_units, self.n_units)))
+        if divergences is None:
+            self.update_divergences()
+        else:
+            self.divergences[:] = divergences.to(self.divergences)
+        self.candidates.initialize_candidates(labels, self.divergences)
 
         self.to(means.device)
 
     def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
         candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
-            self.kl_divergences
+            self.divergences
         )
         assert (
             candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
@@ -239,7 +250,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             candidates=candidates,
             n_candidates=self.n_candidates,
             show_progress=show_progress,
-            with_kl=not self.exact_kl,
+            with_kl=self.metric == "kl" and not self.exact_kl,
             with_hard_labels=hard_label,
             with_probs=with_probs,
         )
@@ -311,11 +322,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.noise_log_prop.fill_(lp[0])
             self.log_proportions[:] = lp[1:]
 
-        if self.exact_kl:
-            self.update_dkl()
-        else:
+        if self.metric == "kl" and not self.exact_kl:
             assert result.kl is not None
-            self.kl_divergences[:] = result.kl
+            self.distances[:] = result.kl
+        else:
+            self.update_divergences()
 
         obs_elbo = result.obs_elbo
         if self.has_prior:
@@ -347,7 +358,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         tic=None,
     ):
         # things that don't change...
-        search_neighbors = self.candidates.search_sets(self.kl_divergences)
+        search_neighbors = self.candidates.search_sets(self.distances)
 
         # metrics
         count = 0
@@ -389,7 +400,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 )
 
         # per-epoch updates
-        self.update_dkl()
+        self.update_divergences()
 
         result = dict(
             obs_elbo=obs_elbo.numpy(force=True).item(),
@@ -403,7 +414,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
     def sgd_batch(self, batch_indices, search_neighbors):
         # mini-update of search sets and local parameters
         batch_candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
-            self.kl_divergences, indices=batch_indices, constrain_searches=False
+            self.distances, indices=batch_indices, constrain_searches=False
         )
         self.processor.update(
             log_proportions=self.log_proportions.clone().detach(),
@@ -449,16 +460,21 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.noise_log_prop.fill_(lp[0])
             self.log_proportions[:] = lp[1:]
 
-    def update_dkl(self):
-        W = self.bases
-        if W is not None:
-            W = W[..., :-1].reshape(len(W), self.M, -1).mT
-        spiketorch.woodbury_kl_divergence(
-            C=self.noise._full_cov,
-            mu=self.means[..., :-1].reshape(len(self.means), -1),
-            W=W,
-            out=self.kl_divergences,
-        )
+    def update_divergences(self):
+        if self.metric == "kl":
+            W = self.bases
+            if W is not None:
+                W = W[..., :-1].reshape(len(W), self.M, -1).mT
+            spiketorch.woodbury_kl_divergence(
+                C=self.noise._full_cov,
+                mu=self.means[..., :-1].reshape(len(self.means), -1),
+                W=W,
+                out=self.divergences,
+            )
+        elif self.metric == "cosine":
+            self.divergences[:] = spiketorch.cosine_distance(self.means[..., :-1])
+        else:
+            assert False
 
     def channel_occupancy(
         self,
@@ -1120,6 +1136,9 @@ class CandidateSet:
         explore_neighborhood_steps=1,
         neighborhood_adjacency_overlap=0.75,
         random_seed=0,
+        search_type="topk",
+        random_search_distance_upper_bound=2.0,
+        random_search_max_distance=0.5,
         device=None,
     ):
         """
@@ -1140,8 +1159,12 @@ class CandidateSet:
         self.n_spikes = self.neighborhood_ids.numel()
         self.device = device
         self.rg = np.random.default_rng(random_seed)
+        self.gen = spiketorch.spawn_torch_rg(self.rg, device)
         self.search_neighborhood_steps = search_neighborhood_steps
         self.explore_neighborhood_steps = explore_neighborhood_steps
+        self.search_type = search_type
+        self.random_search_distance_upper_bound = random_search_distance_upper_bound
+        self.random_search_max_distance = random_search_max_distance
         self.neighb_adjacency = None
         if search_neighborhood_steps or explore_neighborhood_steps:
             self.neighb_adjacency = neighborhoods.adjacency(
@@ -1229,7 +1252,7 @@ class CandidateSet:
 
         The choice of dim in topk sets the direction of KL.
         We want, for each unit p, to propose others with small
-        D(p||q)=E_p[log(p/q)]. Since self.kl_divergences[i,j]=d(i||j),
+        D(p||q)=E_p[log(p/q)]. Since self.divergences[i,j]=d(i||j),
         that means we use dim=1 in the topk.
 
         On the other hand, it's not as though reverse KL is entirely
@@ -1239,21 +1262,40 @@ class CandidateSet:
         if n_search is None:
             n_search = self.n_search
 
-        if not allow_overwrite:
-            distances = distances.clone()
+        if self.search_type == "topk":
+            if not allow_overwrite:
+                distances = distances.clone()
 
-        distances.diagonal().fill_(torch.inf)
+            distances.diagonal().fill_(torch.inf)
 
-        if allow_mask is not None:
-            allow_mask = torch.asarray(allow_mask, device=distances.device)
-            distances[torch.logical_not(allow_mask)] = torch.inf
-        max_nneighbs = distances.isfinite().sum(0).max()
+            if allow_mask is not None:
+                allow_mask = torch.asarray(allow_mask, device=distances.device)
+                distances[torch.logical_not(allow_mask)] = torch.inf
+            max_nneighbs = distances.isfinite().sum(0).max()
 
-        k = min(n_search, distances.shape[0] - 1, max_nneighbs)
-        _, topkinds = torch.topk(distances.T, k=k, dim=1, largest=False)
-        assert topkinds.shape == (self.n_units, k)
-        topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
-        return topkinds
+            k = min(n_search, distances.shape[0] - 1, max_nneighbs)
+            _, topkinds = torch.topk(distances.T, k=k, dim=1, largest=False)
+            assert topkinds.shape == (self.n_units, k)
+            topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
+            return topkinds
+        elif self.search_type == "random":
+            probs = self.random_search_distance_upper_bound - distances
+            eps = 2.0 ** -30
+            probs[distances > self.random_search_max_distance] = eps
+            probs.diagonal().fill_(0.0)
+            max_nneighbs = (probs > 2 * eps).sum(1).max()
+            k = min(n_search, distances.shape[0] - 1, max_nneighbs)
+            if k > 0:
+                inds = torch.multinomial(probs, num_samples=k, replacement=False, generator=self.gen)
+                assert inds.shape == (self.n_units, k)
+                inds = inds.sort().values
+                inds[distances.take_along_dim(inds, dim=1) > self.random_search_max_distance] = -1
+                inds[inds == torch.arange(self.n_units, device=inds.device)[:, None]] = -1
+            else:
+                inds = torch.zeros((self.n_units, 0), dtype=torch.long)
+            return inds
+        else:
+            assert False
 
     def reinit_neighborhoods(self, labels, neighb_ids, constrain_searches=True):
         # count to determine which units are relevant to each neighborhood
@@ -1362,7 +1404,8 @@ class CandidateSet:
                 f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
             )
         assert (candidates[:, : self.n_candidates] >= 0).all()
-        assert candidates[:, self.n_candidates :].min() >= -1
+        if candidates[:, self.n_candidates:].numel():
+            assert candidates[:, self.n_candidates :].min() >= -1
 
         # update counts for the rest of units
         if candidates.shape[1] > 1:

@@ -1190,8 +1190,7 @@ default_gmm_plots = (
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
-    NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="symkl"),
+    NeighborDistances(),
     NeighborTreeMerge(metric=None, criterion=None),
 )
 
@@ -1210,7 +1209,7 @@ def criterion_comparison_plots(*criteria):
         Amplitudes(),
         *splits,
         NeighborMeans(),
-        NeighborDistances(metric="noise_metric"),
+        NeighborDistances(),
         NeighborDistances(metric="symkl"),
         *merges,
     )
