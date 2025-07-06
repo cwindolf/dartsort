@@ -198,6 +198,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.5
+    postprocessing_merge_threshold: float = 0.025
 
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25

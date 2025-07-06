@@ -701,6 +701,9 @@ def to_internal_config(cfg):
         amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,
         chunk_length_samples=cfg.chunk_length_samples,
+        template_merge_cfg=TemplateMergeConfig(
+            merge_distance_threshold=cfg.postprocessing_merge_threshold,
+        ),
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
