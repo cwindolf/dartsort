@@ -5,7 +5,7 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, cdist
 
 from dartsort.util import drift_util, waveform_util
-from dartsort.evaluate import simkit, simlib
+from dartsort.evaluate import simlib
 import dredge.motion_util as mu
 
 
@@ -127,7 +127,8 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
             if cdist(unique_shifted_positions, site[None]).min() > min_distance:
                 unique_shifted_positions.append(site)
     unique_shifted_positions = np.array(unique_shifted_positions)
-    registered_geom0 = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
+    sortpos = unique_shifted_positions * waveform_util.get_orders(geom)
+    registered_geom0 = unique_shifted_positions[np.lexsort(sortpos.T)]
     assert len(np.unique(registered_geom0, axis=0)) == len(registered_geom0)
 
     registered_geom1 = drift_util.registered_geometry(geom, motion_est=motion_est)
