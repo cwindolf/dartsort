@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
-from .util.py_util import int_or_float, str_or_none, int_or_float_or_none
+from .util.py_util import int_or_none, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
@@ -165,6 +165,7 @@ class DeveloperConfig(DARTsortUserConfig):
     cluster_strategy: str = "gmmdpc"
     refinement_strategy: str = "gmm"
     recluster_after_first_matching: bool = False
+    initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
@@ -181,6 +182,10 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 50
     channels_strategy: str = "count"
     hard_noise: bool = False
+    gmm_metric: Literal["kl", "cosine"] = "kl"
+    gmm_search: Literal["topk", "random"] = "topk"
+    gmm_n_candidates: int = 3
+    gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
     initial_amp_feat: bool = False
     initial_pc_feats: int = 2

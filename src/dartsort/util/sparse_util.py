@@ -344,9 +344,7 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
 )
 def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
     write_ix = 0
-
     column = 0
-    column_kept_count = 0
     column_end = indptr[1]
 
     for read_ix in range(len(indices)):

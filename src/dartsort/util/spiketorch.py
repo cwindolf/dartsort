@@ -10,13 +10,25 @@ import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
+HAVE_CUPY = False
+cp = None
+try:
+    import cupy as cp
+
+    HAVE_CUPY = True
+except ImportError:
+    cupy = None
+    HAVE_CUPY = False
+
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0, device="cpu"):
+def spawn_torch_rg(seed: int | np.random.Generator = 0, device: str | torch.device | None="cpu"):
+    if device is None:
+        device = "cpu"
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
@@ -125,7 +137,7 @@ def ravel_multi_index(multi_index, dims):
     # return raveled_indices.view(-1)
 
 
-def add_at_(dest, ix, src, sign=1):
+def torch_add_at_(dest, ix, src, sign=1):
     """Pytorch version of np.{add,subtract}.at
 
     Adds src into dest in place at indices (in dest) specified
@@ -147,6 +159,31 @@ def add_at_(dest, ix, src, sign=1):
     else:
         src = src.reshape(-1)
     dest.view(-1).scatter_add_(0, flat_ix.to(dest.device), src)
+
+
+def cupy_add_at_(dest, ix, src, sign=1):
+    dest = cp.asarray(dest)
+    if isinstance(ix, tuple):
+        ix = tuple(cp.asarray(ii) for ii in ix)
+    else:
+        ix = cp.asarray(ix)
+    if not isinstance(src, (float, int)):
+        src = cp.asarray(src)
+    if sign == 1:
+        cp.add.at(dest, ix, src)
+    elif sign == -1:
+        cp.subtract.at(dest, ix, src)
+    else:
+        raise NotImplementedError(f"Need to implement {sign=} in cupy_add_at_.")
+
+
+add_at_ = torch_add_at_
+
+# def add_at_(dest, ix, src, sign=1):
+#     if True or not HAVE_CUPY or dest.device.type == "cpu":
+#         return torch_add_at_(dest, ix, src, sign)
+#     else:
+#         return cupy_add_at_(dest, ix, src, sign)
 
 
 def grab_spikes(
@@ -404,7 +441,19 @@ def nancov(
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
+def cosine_distance(means):
+    means = means.reshape(means.shape[0], -1)
+    dot = means @ means.T
+    norm = means.square().sum(1).sqrt_()
+    norm[norm == 0] = 1
+    dot /= norm[:, None]
+    dot /= norm[None, :]
+    dist = torch.subtract(_1, dot, out=dot)
+    dist.diagonal().fill_(0.0)
+    return dist
+
+
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.

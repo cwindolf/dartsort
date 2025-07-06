@@ -579,7 +579,7 @@ class KMeansSplit(GMMPlot):
             ax.axis("off")
             return
 
-        split_labels = split_info["split_labels"]
+        split_labels = split_info["split_labels"].numpy(force=True)
         split_ids = np.unique(split_labels)
         if self.with_means:
             kw = dict(nrows=4, height_ratios=[1, 1, 2, 2])
@@ -762,7 +762,7 @@ class KMeansSplit(GMMPlot):
             tv = v[:, :2]
             center = split_info["X"].mean(0)
 
-            ax_pca.scatter(*Xp.T, c=glasbey1024[split_labels], s=2, lw=0)
+            ax_pca.scatter(*Xp.numpy(force=True).T, c=glasbey1024[split_labels], s=2, lw=0)
             ax_pca.axhline(0, lw=0.8, color="k")
             ax_pca.axvline(0, lw=0.8, color="k")
             if "units" in split_info:
@@ -1190,8 +1190,7 @@ default_gmm_plots = (
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
-    NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="symkl"),
+    NeighborDistances(),
     NeighborTreeMerge(metric=None, criterion=None),
 )
 
@@ -1210,7 +1209,7 @@ def criterion_comparison_plots(*criteria):
         Amplitudes(),
         *splits,
         NeighborMeans(),
-        NeighborDistances(metric="noise_metric"),
+        NeighborDistances(),
         NeighborDistances(metric="symkl"),
         *merges,
     )
@@ -1261,7 +1260,6 @@ def make_all_gmm_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
-    use_threads=False,
     n_units=None,
     seed=0,
     **other_global_params,
@@ -1283,11 +1281,7 @@ def make_all_gmm_summaries(
         **other_global_params,
     )
 
-    ispar = n_jobs > 0
-    cls = CloudpicklePoolExecutor
-    if use_threads:
-        cls = ThreadPoolExecutor
-    n_jobs, Executor, context = get_pool(n_jobs, cls=cls)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
 
     initargs = (
         gmm,

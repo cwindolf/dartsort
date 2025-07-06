@@ -43,7 +43,11 @@ def moppca_simulations():
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
 @pytest.mark.parametrize("t_w", test_t_w)
 @pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize("pcount_ard_psm", [(0, False, False), (0, False, True), (5, False, True), (5, True, False)])
+@pytest.mark.parametrize(
+    "pcount_ard_psm",
+    [(0, False, False), (0, False, True), (5, False, True), (5, True, False)],
+)
+@pytest.mark.parametrize("dist_and_search_type", ["kl", "cos"])
 def test_mixture(
     moppca_simulations,
     inference_algorithm,
@@ -53,9 +57,23 @@ def test_mixture(
     t_w,
     t_missing,
     pcount_ard_psm,
+    dist_and_search_type,
 ):
     t_cov, zrad = t_cov_zrad
     prior_pseudocount, laplace_ard, prior_scales_mean = pcount_ard_psm
+
+    if dist_and_search_type == "kl":
+        dist_search_kw = dict(distance_metric="kl", search_type="topk")
+    elif dist_and_search_type == "cos":
+        dist_search_kw = dict(
+            distance_metric="cosine",
+            search_type="random",
+            merge_distance_threshold=0.5,
+            distance_normalization_kind="none",
+        )
+    else:
+        assert False
+
     kw = dict(
         t_mu=t_mu,
         t_cov=t_cov,
@@ -67,6 +85,7 @@ def test_mixture(
             laplace_ard=laplace_ard,
             prior_pseudocount=prior_pseudocount,
             prior_scales_mean=prior_scales_mean,
+            **dist_search_kw,
         ),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
         zero_radius=zrad,
@@ -167,6 +186,14 @@ def test_mixture(
                 search_neighborhood_steps=1,
             )
             tmm.set_sizes(res["sim_res"]["K"])
+
+            div = None
+            if dist_and_search_type == "kl":
+                # artificial kl for testing
+                div = torch.arange(res["sim_res"]["K"])
+                div = div[:, None] - div[None, :]
+                div = div.abs_()
+
             tmm.set_parameters(
                 labels=initializer,
                 means=res["sim_res"]["mu"],
@@ -175,10 +202,7 @@ def test_mixture(
                     torch.ones(res["sim_res"]["K"]) * res["sim_res"]["K"]
                 ),
                 noise_log_prop=torch.tensor(-50.0),
-                kl_divergences=torch.abs(
-                    torch.arange(res["sim_res"]["K"])[:, None]
-                    - torch.arange(res["sim_res"]["K"]).to(torch.float)
-                ),
+                divergences=div,
             )
 
             assert tmm.candidates._initialized
@@ -189,10 +213,12 @@ def test_mixture(
             assert torch.equal(
                 tmm.candidates.candidates[:, 0], torch.asarray(train_labels)
             )
-            assert torch.equal(
-                tmm.candidates.candidates[:, 1 : tmm.candidates.n_candidates].unique(),
-                torch.arange(res["sim_res"]["K"]),
-            )
+
+            if dist_and_search_type == "kl":
+                assert torch.equal(
+                    tmm.candidates.candidates[:, 1 : tmm.candidates.n_candidates].unique(),
+                    torch.arange(res["sim_res"]["K"]),
+                )
             assert (
                 tmm.candidates.candidates[:, : tmm.candidates.n_candidates]
                 .sort(dim=1)
@@ -200,19 +226,20 @@ def test_mixture(
                 > 0
             ).all()
 
-            search_neighbors = tmm.candidates.search_sets(tmm.kl_divergences)
+            search_neighbors = tmm.candidates.search_sets(tmm.divergences)
             candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
-                tmm.kl_divergences
+                tmm.divergences
             )
             assert unit_neighborhood_counts.shape == (
                 res["sim_res"]["K"],
-                len(neighbs.neighborhoods)
+                len(neighbs.neighborhoods),
             )
             assert torch.equal(candidates[:, 0], torch.asarray(train_labels))
-            assert torch.equal(
-                candidates[:, 1 : tmm.candidates.n_candidates].unique(),
-                torch.arange(res["sim_res"]["K"]),
-            )
+            if dist_and_search_type == "kl":
+                assert torch.equal(
+                    candidates[:, 1 : tmm.candidates.n_candidates].unique(),
+                    torch.arange(res["sim_res"]["K"]),
+                )
             assert (
                 candidates[:, : tmm.candidates.n_candidates]
                 .sort(dim=1)

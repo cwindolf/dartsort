@@ -3,6 +3,7 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 import torch
+from linear_operator.operators import DenseLinearOperator
 
 from ..util import spiketorch
 from ..util.logging_util import DARTSORTVERBOSE, DARTSORTDEBUG
@@ -105,7 +106,6 @@ def _te_batch_e(
     Coo_logdet,
     log_proportions,
     noise_lls=None,
-    noise_trunc_factors=None,
     wburyroot=None,
     with_kl=False,
     with_probs=False,
@@ -118,8 +118,6 @@ def _te_batch_e(
     if noise_lls is None:
         inv_quad = whitenedx.square().sum(dim=1)
         nlls = inv_quad.add_(Coo_logdet).add_(pinobs).mul_(-0.5)
-        if noise_trunc_factors is not None:
-            nlls += noise_trunc_factors
     # noise_log_prop changes, so can't be baked in
     noise_lls = nlls + (noise_log_prop + noise_eps)
 
@@ -325,7 +323,9 @@ def _te_batch_m_ppca(
 
     m_missing_full = tnu
     del tnu
-    m_missing = torch.sub(Cmo_Cooinv_xc, Cmo_Cooinv_WobsT_ubar, out=Cmo_Cooinv_WobsT_ubar)
+    m_missing = torch.sub(
+        Cmo_Cooinv_xc, Cmo_Cooinv_WobsT_ubar, out=Cmo_Cooinv_WobsT_ubar
+    )
     del Cmo_Cooinv_WobsT_ubar
     m_observed = torch.sub(x[:, None], WobsT_ubar, out=WobsT_ubar)
     del WobsT_ubar
@@ -352,6 +352,7 @@ def _te_batch_m_ppca(
     R = Q.new_zeros((n_units, M, rank, nc + 1))
     QRo = QRo.view(n, C, *R.shape[1:-1], nc_obs)
     QRm = QRm.view(n, C, *R.shape[1:-1], nc_miss)
+    QRmf = QRmf.view(n, C, *R.shape[1:-1], nc_miss_full)
     spiketorch.add_at_(
         R,
         (
@@ -386,6 +387,7 @@ def _te_batch_m_ppca(
     m = Qn.new_zeros((n_units, rank, nc + 1))
     Qmo = Qmo.view(n, C, *m.shape[1:-1], nc_obs)
     Qmm = Qmm.view(n, C, *m.shape[1:-1], nc_miss)
+    Qmmf = Qmmf.view(n, C, *m.shape[1:-1], nc_miss_full)
     spiketorch.add_at_(
         m,
         (
@@ -553,3 +555,166 @@ def units_overlapping_neighborhoods(unit_neighborhood_counts):
         neighb_units[j, : inj.size] = unit_ids[inj]
 
     return neighb_units
+
+
+def observed_and_missing_marginals(
+    noise, neighborhoods, missing_chans
+):
+    # Get Coos
+    # Have to do everything as a list. That's what the
+    # noise object supports, but also, we don't want to
+    # pad with 0s since that would make logdets 0, Chols
+    # confusing etc.
+    # We will use the neighborhood valid ixs to pad later.
+    # Since we cache everything we need, update can avoid
+    # having to do lists stuff.
+    Coo = []
+    Com = []
+    for ni in range(neighborhoods.n_neighborhoods):
+        nci = neighborhoods.neighborhood_channels(ni)
+        mci = missing_chans[ni]
+        mci = mci[mci < noise.n_channels]
+        Cooi = noise.marginal_covariance(
+            channels=nci,
+            cache_prefix=neighborhoods.name,
+            cache_key=ni,
+        )
+        Comi = noise.offdiag_covariance(
+            channels_left=nci,
+            channels_right=mci,
+        ).to_dense()
+        Coo.append(Cooi)
+        Com.append(Comi)
+
+    return Coo, Com
+
+
+def missing_indices(
+    neighborhoods,
+    zero_radius: float | None = None,
+    pgeom=None,
+    device: str | torch.device = "cpu",
+):
+    # determine missing channels
+    missing_chans = []
+    full_missing_chans = []
+    truncate = zero_radius and np.isfinite(zero_radius)
+    missing_to_full = [] if truncate else None
+    for ni in range(neighborhoods.n_neighborhoods):
+        mix = neighborhoods.missing_channels(ni)
+        full_missing_chans.append(mix)
+
+        if truncate:
+            assert pgeom is not None
+            assert missing_to_full is not None
+            assert zero_radius is not None
+            oix = neighborhoods.neighborhood_channels(ni)
+            d = torch.cdist(pgeom[mix], pgeom[oix]).min(dim=1).values
+            (kept,) = (d < zero_radius).cpu().nonzero(as_tuple=True)
+            mix = mix[kept]
+            missing_to_full.append(kept)
+        missing_chans.append(mix)
+
+    nc_miss = max(map(len, missing_chans))
+    nc_miss_full = max(map(len, full_missing_chans))
+
+    # pack the lists into more usable buffers
+    miss_ix = torch.full(
+        (neighborhoods.n_neighborhoods, nc_miss),
+        fill_value=neighborhoods.n_channels,
+        dtype=torch.long,
+        device=device,
+    )
+    miss_ix_full = torch.full(
+        (neighborhoods.n_neighborhoods, nc_miss_full),
+        fill_value=neighborhoods.n_channels,
+        dtype=torch.long,
+        device=device,
+    )
+    miss_to_full = torch.zeros_like(miss_ix) if truncate else None
+
+    for ni in range(neighborhoods.n_neighborhoods):
+        miss_ix[ni, : missing_chans[ni].numel()] = missing_chans[ni]
+        neighb_fmc = full_missing_chans[ni]
+        miss_ix_full[ni, : neighb_fmc.numel()] = neighb_fmc
+        if truncate:
+            assert miss_to_full is not None
+            assert missing_to_full is not None
+            neighb_m2f = missing_to_full[ni]
+            miss_to_full[ni, : neighb_m2f.numel()] = neighb_m2f
+
+    return miss_ix, miss_ix_full, miss_to_full
+
+
+def _processor_update_mean_batch(proc, sl):
+    n = sl.stop - sl.start
+    neighb_ix = proc.lut_neighbs[sl]
+
+    Coo_invsqrt = proc.Coo_invsqrt[neighb_ix]
+    Cooinv_Com = proc.Cooinv_Com[neighb_ix]
+    nu_ = proc.nu[sl].reshape(n, proc.rank * proc.nc_obs, 1)
+
+    torch.bmm(Coo_invsqrt, nu_, out=proc.whitenednu[sl].view(nu_.shape))
+    torch.bmm(
+        Cooinv_Com.mT, nu_, out=proc.Cmo_Cooinv_nu[sl].view(n, proc.rank * proc.nc_miss, 1)
+    )
+
+
+def _processor_update_pca_batch(proc, sl_W):
+    sl, W = sl_W
+    n = sl.stop - sl.start
+    neighb_ix = proc.lut_neighbs[sl]
+    unit_ix = proc.lut_units[sl]
+    unit_ix_ = unit_ix[:, None, None, None]
+    nobs_ix = proc.nobs_ix[neighb_ix]
+    nobs_ix_ = nobs_ix[:, None, None, :]
+    nmissfull_ix = proc.miss_ix_full[neighb_ix]
+    nmissfull_ix_ = nmissfull_ix[:, None, None, :]
+
+    Coo_inv = proc.Coo_inv[neighb_ix]
+    Coo_invsqrt = proc.Coo_invsqrt[neighb_ix]
+    Cooinv_Com = proc.Cooinv_Com[neighb_ix]
+    Coo_logdet = proc.Coo_logdet[neighb_ix]
+
+    Wobs = W[unit_ix_, proc.M_ix, proc.r_ix, nobs_ix_]
+    assert Wobs.shape == (n, proc.M, proc.rank, proc.nc_obs)
+    Wobs = Wobs.view(n, proc.M, -1)
+    proc.Wobs[sl] = Wobs
+
+
+    Wmiss = W[unit_ix_, proc.M_ix, proc.r_ix, nmissfull_ix_]
+    assert Wmiss.shape == (n, proc.M, proc.rank, proc.nc_miss_full)
+    Wmiss = Wmiss.view(n, proc.M, -1)
+
+    Cmo_Cooinv_WobsT = torch.bmm(Cooinv_Com.mT, Wobs.mT, out=proc.Cmo_Cooinv_WobsT[sl])
+
+    Cooinv_WobsT = Coo_inv.bmm(Wobs.mT)
+    cap = Wobs.bmm(Cooinv_WobsT)
+    cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+    # 
+    cap_chol = DenseLinearOperator(cap).cholesky()
+    # cap^{-1} = L^-T L^-1, this is L-1
+    cap_invsqrt = cap_chol.inverse().to_dense()
+    cap_logdets = cap_chol.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
+    inv_cap = torch.bmm(cap_invsqrt.mT, cap_invsqrt, out=proc.inv_cap[sl])
+    proc.obs_logdets[sl] = cap_logdets
+    proc.obs_logdets[sl].add_(Coo_logdet)
+
+    root_left = Wobs.mT.bmm(cap_invsqrt.mT)
+    torch.bmm(Coo_invsqrt, root_left, out=proc.wburyroot[sl])
+    torch.bmm(inv_cap, Cooinv_WobsT.mT, out=proc.inv_cap_Wobs_Cooinv[sl])
+
+    if proc.miss_to_full is None:
+        W_WCC = torch.subtract(Wmiss, Cmo_Cooinv_WobsT.mT, out=Wmiss)
+    else:
+        to_sub = Cmo_Cooinv_WobsT.mT.reshape(n, proc.M, proc.rank, proc.nc_miss)
+        miss_to_full = proc.miss_to_full[neighb_ix]
+        miss_to_full = miss_to_full[:, None, None].broadcast_to(to_sub.shape)
+        W_WCC = Wmiss.view(n, proc.M, proc.rank, proc.nc_miss_full)
+        W_WCC.scatter_add_(index=miss_to_full, dim=3, src=to_sub.neg_())
+        W_WCC = W_WCC.view(n, proc.M, -1)
+
+    inv_cap_W_WCC = inv_cap.bmm(W_WCC)
+    proc.W_WCC[sl] = W_WCC.to(proc.W_WCC)
+    proc.inv_cap_W_WCC[sl] = inv_cap_W_WCC.to(proc.inv_cap_W_WCC)
+

@@ -92,6 +92,7 @@ class DARTsortAnalysis:
         sorting,
         motion_est=None,
         name=None,
+        template_data=None,
         template_cfg=no_realign_template_cfg,
         allow_template_reload=False,
         denoising_tsvd=None,
@@ -110,9 +111,7 @@ class DARTsortAnalysis:
         if hdf5_path:
             featurization_pipeline = get_featurization_pipeline(sorting)
 
-        have_templates = False
-        template_data = None
-        if allow_template_reload:
+        if template_data is None and allow_template_reload:
             model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
@@ -123,7 +122,7 @@ class DARTsortAnalysis:
                 have_templates = have_templates and same_labels
                 template_data = TemplateData.from_npz(template_npz)
 
-        if not have_templates and template_cfg is not None and not skip_templates:
+        if template_data is None and template_cfg is not None and not skip_templates:
             tkw = {}
             if "localizations_dataset" in kwargs:
                 tkw = dict(localizations_dataset_name=kwargs["localizations_dataset"])
@@ -260,7 +259,8 @@ class DARTsortAnalysis:
     @property
     def h5(self):
         if self._h5 is None:
-            self._h5 = h5py.File(self.hdf5_path, "r", libver="latest", locking=False)
+            p = self.hdf5_path or self.sorting.parent_h5_path
+            self._h5 = h5py.File(p, "r", libver="latest", locking=False)
         return self._h5
 
     @property

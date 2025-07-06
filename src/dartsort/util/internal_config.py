@@ -430,14 +430,17 @@ class RefinementConfig:
     max_avg_units: int = 3
 
     # model params
-    channels_strategy: str = "count"
+    channels_strategy: Literal["count", "all"] = "count"
     min_count: int = 50
     signal_rank: int = 0
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
-    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl"] = (
-        "noise_metric"
+    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl", "cosine"] = (
+        "kl"
     )
+    search_type: Literal["topk", "random"] = "topk"
+    n_candidates: int = 3
+    n_search: int | None = None
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 2.0
     # if None, switches to bimodality
@@ -488,7 +491,6 @@ class RefinementConfig:
     kriging_poly_degree: int = 0
 
 
-
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class ComputationConfig:
     n_jobs_cpu: int = 0
@@ -529,8 +531,15 @@ class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
     waveform_cfg: WaveformConfig = WaveformConfig()
-    featurization_cfg: FeaturizationConfig = FeaturizationConfig(learn_cleaned_tpca_basis=True)
-    initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig | UniversalMatchingConfig = SubtractionConfig()
+    featurization_cfg: FeaturizationConfig = FeaturizationConfig(
+        learn_cleaned_tpca_basis=True
+    )
+    initial_detection_cfg: (
+        SubtractionConfig
+        | MatchingConfig
+        | ThresholdingConfig
+        | UniversalMatchingConfig
+    ) = SubtractionConfig()
     template_cfg: TemplateConfig = TemplateConfig()
     clustering_cfg: ClusteringConfig = ClusteringConfig()
     clustering_features_cfg: ClusteringFeaturesConfig = ClusteringFeaturesConfig()
@@ -632,8 +641,7 @@ def to_internal_config(cfg):
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
             waveform_cfg=tpca_waveform_cfg,
-            threshold=cfg.denoiser_badness_factor
-            * (cfg.matching_threshold**2),
+            threshold=cfg.denoiser_badness_factor * (cfg.matching_threshold**2),
         )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
@@ -659,6 +667,9 @@ def to_internal_config(cfg):
         motion_aware=cfg.motion_aware_clustering,
         workers=cfg.clustering_workers,
     )
+
+    skip_step1_first_split = cfg.initial_split_only and not cfg.resume_with_split
+    dist_thresh = 0.5 if cfg.gmm_metric == "cosine" else 2.0
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
@@ -672,6 +683,11 @@ def to_internal_config(cfg):
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
         truncated=cfg.truncated,
+        distance_metric=cfg.gmm_metric,
+        search_type=cfg.gmm_search,
+        n_candidates=cfg.gmm_n_candidates,
+        n_search=cfg.gmm_n_search,
+        merge_distance_threshold=dist_thresh,
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
@@ -685,12 +701,19 @@ def to_internal_config(cfg):
         interpolation_sigma=cfg.interpolation_bandwidth,
         rq_alpha=cfg.interpolation_rq_alpha,
         kriging_poly_degree=cfg.interpolation_degree,
-        skip_first_split=cfg.initial_split_only and not cfg.resume_with_split,
+        skip_first_split=skip_step1_first_split,
         kmeansk=cfg.kmeansk,
         prior_scales_mean=cfg.prior_scales_mean,
     )
+    if cfg.initial_rank is None:
+        irank = refinement_cfg.signal_rank
+    else:
+        irank = cfg.initial_rank
     initial_refinement_cfg = dataclasses.replace(
-        refinement_cfg, one_split_only=cfg.initial_split_only, skip_first_split=False
+        refinement_cfg,
+        one_split_only=cfg.initial_split_only,
+        skip_first_split=False,
+        signal_rank=irank,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
