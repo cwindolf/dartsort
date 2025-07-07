@@ -162,6 +162,8 @@ def torch_add_at_(dest, ix, src, sign=1):
 
 
 def cupy_add_at_(dest, ix, src, sign=1):
+    if torch.is_tensor(dest):
+        assert dest.device.type == "cuda"
     dest = cp.asarray(dest)
     if isinstance(ix, tuple):
         ix = tuple(cp.asarray(ii) for ii in ix)
@@ -179,11 +181,13 @@ def cupy_add_at_(dest, ix, src, sign=1):
 
 add_at_ = torch_add_at_
 
-# def add_at_(dest, ix, src, sign=1):
-#     if True or not HAVE_CUPY or dest.device.type == "cpu":
-#         return torch_add_at_(dest, ix, src, sign)
-#     else:
-#         return cupy_add_at_(dest, ix, src, sign)
+def try_cupy_add_at_(dest, ix, src, sign=1):
+    if not HAVE_CUPY or dest.device.type != "cuda":
+        if dest.device.type == "cuda":
+            warnings.warn("No cupy.")
+        return torch_add_at_(dest, ix, src, sign)
+    else:
+        return cupy_add_at_(dest, ix, src, sign)
 
 
 def grab_spikes(

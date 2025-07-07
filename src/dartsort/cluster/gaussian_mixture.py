@@ -389,13 +389,14 @@ class SpikeMixtureModel(torch.nn.Module):
         liks_from_tmm="if_train",
         final_e_step=True,
         final_split="kept",
-        n_threads=None,
+        n_threads=0,
         batch_size=1024,
         algorithm="em",
         scheduler=None,
         sgd_lr=0.1,
         initialization="topk",
         atol=None,
+        lls=None,
     ):
         if n_threads is None:
             n_threads = self.n_threads
@@ -418,7 +419,8 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         # try reassigning without noise unit...
-        lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+        if lls is None:
+            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
         self.update_proportions(lls)
         lls = lls[:, self.data.split_indices["train"].numpy()]
         assert self.with_noise_unit
@@ -450,7 +452,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 n_search=self.tvi_n_search,
                 n_explore=self.tvi_n_explore,
                 search_type=self.search_type,
-                metric=self.distance_metric,
+                metric="cosine" if self.distance_metric == "cosine" else "kl",
                 random_search_max_distance=self.merge_distance_threshold,
             )
         self.tmm.set_sizes(n_units)
@@ -532,6 +534,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 )
                 tmm_labels = res.pop("labels", None)
                 records.append(res)
+                logger.dartsortverbose(f"{j=} ELBO={res['obs_elbo']}")
                 done = np.isclose(prev_elbo, res["obs_elbo"], atol=atol, rtol=0)
                 if done:
                     logger.dartsortdebug(
@@ -559,12 +562,15 @@ class SpikeMixtureModel(torch.nn.Module):
                 break
 
         assert tmm_labels is not None
+        if torch.is_tensor(tmm_labels):
+            tmm_labels = tmm_labels.cpu()
         if logger.isEnabledFor(DARTSORTDEBUG):
             es = np.array([r["obs_elbo"] for r in records])
-            logger.dartsortdebug(
-                f"Any ELBO decrease? {(np.diff(es) < 0).any()}. "
-                f"The most negative change was {np.diff(es).min()}."
-            )
+            if len(es) > 1:
+                logger.dartsortdebug(
+                    f"Any ELBO decrease? {(np.diff(es) < 0).any()}. "
+                    f"The most negative change was {np.diff(es).min()}."
+                )
             logger.dartsortdebug(f"ELBOs: {es.tolist()}")
             logger.dartsortdebug(f"After TVI, {np.unique(tmm_labels).shape=}")
 
@@ -2109,24 +2115,18 @@ class SpikeMixtureModel(torch.nn.Module):
                 results = tqdm(
                     results, desc=desc, unit="branch", total=len(brute_jobs), **tqdm_kw
                 )
-            for (
-                i,
-                leaves,
-                cluster_ids,
-                brute_group_ids,
-                brute_improvement,
-                brute_overlap,
-            ) in results:
-                improvements[i] = brute_improvement
-                if brute_improvement > 0:
+            for res in results:
+                i, leaves, cluids, brute_group_ids, bimp, bolap = res
+                improvements[i] = bimp
+                if bimp > 0:
                     result_group_ids = []
                     for bgid in brute_group_ids:
                         if bgid == 0:
                             result_group_ids.append(n_units + i)
                         else:
-                            result_group_ids.append(cluster_ids[bgid])
+                            result_group_ids.append(cluids[bgid])
                     group_ids[leaves] = result_group_ids
-                    overlaps[i] = brute_overlap
+                    overlaps[i] = bolap
                     leaf_scores[leaves] = brute_improvement
 
         return Z, group_ids, improvements, overlaps, brute_indicator
@@ -2196,15 +2196,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     ip = np.array(ip)
                     conn = cos_connectivity(cosines[ip][:, ip])
                     min_conn = min(conn, min_conn)
-            # for i in level_current_ids:
-            #     if (i,) not in units_memo:
-            #         logger.dartsortverbose(f"brute_merge: Fit %s.", i)
-            #         try:
-            #             units_memo[(i,)] = self.fit_unit(
-            #                 unit_ids=torch.tensor((i,)), likelihoods=log_likelihoods
-            #             )
-            #         except ValueError as e:
-            #             raise ValueError(f"Couldn't fit {i=} in merge.") from e
             if min_conn < min_cosine:
                 logger.dartsortverbose(
                     f"brute_merge: Bail on %s (%s) because conn was %s.",
@@ -2327,6 +2318,7 @@ class SpikeMixtureModel(torch.nn.Module):
             show_progress=False,
             kind="cosine",
         )
+        cosines = 1.0 - cosines
 
         full_conn = cos_connectivity(cosines)
 
@@ -2553,6 +2545,7 @@ class SpikeMixtureModel(torch.nn.Module):
         irrix = torch.tensor(list(irrix))
 
         # -- check cosine connectivity
+        conn = None
         if cosines is not None:
             assert cosines.shape == (n_cur, n_cur)
             conn = cos_connectivity(cosines)
@@ -2609,7 +2602,8 @@ class SpikeMixtureModel(torch.nn.Module):
 
         assert hyp_units is not None
         n_hyp = len(hyp_units)
-        logger.dartsortverbose(f"vc: {current_unit_ids=} {n_cur=} {n_hyp=}")
+        if logger.isEnabledFor(DARTSORTVERBOSE):
+            logger.dartsortverbose(f"vc: {current_unit_ids=} {n_cur=} {n_hyp=} {cosines=} {conn=}")
 
         # what are the log props?
         cur_log_prop = self.log_proportions[current_unit_ids].logsumexp(
@@ -3133,6 +3127,7 @@ class SpikeMixtureModel(torch.nn.Module):
             )
         elif merge_kind == "tree":
             _ids, cosines = self.distances(units=units, kind="cosine")
+            cosines = 1.0 - cosines
             assert torch.equal(torch.asarray(unit_ids), torch.asarray(_ids))
             Z, group_ids, improvements, overlaps, brute_indicator = self.tree_merge(
                 distances,
@@ -3204,41 +3199,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
 
 # -- modeling class
-
-# our model per class k and spike n is that
-#  x_n | l_n=k, mu_k, C_k, G ~ N(mu_k, J_n (C_k + G) J_n^T)
-# where:
-#  - x_n is the feature being clustered, living on chans N_n
-#  - l_n is its label
-#  - C_k is the unit (signal) covariance
-#  - G is the noise covariance
-#  - J = [e_{N_{n,1}}, ..., e_{N_{n,|N_n|}}] is the channel
-#    neighborhood extractor matrix
-
-# the prior on the mean and covariance is based on the noise model.
-# that model is used in Normal-Wishart calculations and applied with
-# a pseudocount (the N-W pseudocount parameters combined):
-#  mu_k, Sigma_k ~ NW(m, k0, G, k0)
-# where
-#  - m is the noise mean (0?)
-#  - k0 is the pseudocount
-#  - G is the noise cov
-
-# we can have different kinds of unit covariances C_k as well as
-# different noise covariances G. in each case, we need to compute the
-# inverse (or at least the square root and log determinant) of the sum
-# of the signal and noise covariances for subsets of channels. in some
-# cases that is very easy (eg both diagonal), in some cases it is
-# Woodbury (signal = low rank, noise info cached). we also need
-# appropriate M step formulas.
-
-# approach to handling the likelihoods: use linear_operator by G. Pleiss
-# et al. The noise object has a marginal_covariance which returns the
-# best representation available. These might need to be cached somehow.
-# Then the GM class gets the linear operator it needs on the channel subsets
-# (which also need to be cached) of relevant spikes. and then we use
-# linear_operator.inv_quad_logdet.
-
 
 class GaussianUnit(torch.nn.Module):
     # store reusable buffers to avoid lots of large allocations

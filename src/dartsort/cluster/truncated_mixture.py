@@ -6,7 +6,7 @@ import time
 from linear_operator import operators
 from linear_operator.utils.cholesky import psd_safe_cholesky
 import torch.nn.functional as F
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 from itertools import repeat
 
 
@@ -55,6 +55,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         random_seed=0,
         n_threads: int = 0,
         batch_size=2**8,
+        update_batch_size=2**8,
         metric="kl",
         exact_kl=True,
         search_type="topk",
@@ -76,6 +77,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         self.data = data
         self.noise = noise
+        self.device = self.data.device
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
 
         if laplace_ard:
@@ -123,8 +125,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
             batch_size=batch_size,
             pgeom=data.prgeom,
             Cinv_in_grad=Cinv_in_grad,
+            update_batch_size=update_batch_size,
+            device=self.device,
         )
-        self.to(device=self.data.device)
+        self.to(device=self.device)
 
     def set_sizes(self, n_units: int | None = None):
         n_candidates = self.initial_n_candidates
@@ -166,6 +170,14 @@ class SpikeTruncatedMixtureModel(nn.Module):
         """Parameters are stored padded with an extra channel."""
         self.n_units = means.shape[0]
         self.set_sizes(self.n_units)
+        means = torch.asarray(means, device=self.device)
+        log_proportions = torch.asarray(log_proportions, device=self.device)
+        if bases is not None:
+            bases = torch.asarray(bases, device=self.device)
+        if alpha is not None:
+            alpha = torch.asarray(alpha, device=self.device)
+        if divergences is not None:
+            divergences = torch.asarray(divergences, device=self.device)
         assert means.shape == (self.n_units, self.noise.rank, self.noise.n_channels)
         assert log_proportions.shape == (self.n_units,)
         assert means.isfinite().all()
@@ -239,6 +251,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert (
             candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
         )
+        candidates = candidates.to(self.device)
+        candidates_needs_update = candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
         self.processor.update(
             log_proportions=self.log_proportions,
             noise_log_prop=self.noise_log_prop,
@@ -257,6 +271,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert result.obs_elbo is not None
         assert result.N is not None
         assert result.m is not None
+
+        if candidates_needs_update:
+            _c = candidates[:, :self.n_candidates].to(self.candidates.candidates)
+            self.candidates.candidates[:, :self.n_candidates] = _c
 
         if self.has_prior and self.prior_scales_mean:
             mean_scale = result.N / (result.N + self.alpha0)
@@ -304,6 +322,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             if logger.isEnabledFor(DARTSORTDEBUG):
                 assert self.alpha.isfinite().all()
 
+        assert result.N.min() >= 0
         if self.fixed_noise_proportion:
             noise_log_prop = torch.log(torch.tensor(self.fixed_noise_proportion))
             inv_noise_log_prop = torch.log(
@@ -523,13 +542,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
         batch_size: int = 2**8,
+        update_batch_size: int = 2**8,
         n_threads: int = 0,
         random_seed: int = 0,
         precompute_invx=True,
         Cinv_in_grad=True,
         pgeom=None,
+        device=None,
     ):
         super().__init__()
+
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
 
         # initialize fixed noise-related arrays
         self.noise = noise
@@ -538,14 +563,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.M = 0
         self.rank = noise.rank
         self.n_channels = noise.n_channels
+        self.update_batch_size = update_batch_size
 
         assert self.nc_obs == neighborhoods.neighborhoods.shape[1]
         assert (self.n_spikes,) == neighborhoods.neighborhood_ids.shape
-        if features.isnan().any():
-            # TODO: something about this...?
-            self.features = features.nan_to_num()
-        else:
-            self.features = features.clone()
+        # can_pin = device.type == "cuda"
+        can_pin = False
+        self.features = torch.empty(features.shape, dtype=features.dtype, pin_memory=can_pin)
+        self.features.copy_(features)
+        self.features.nan_to_num_()
         self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
@@ -556,7 +582,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # all buffers are initialized here or when update() is called
         # update calls initialize_changing(), which initializes things that
         # depend on the number of units or the LUT size
-        device = features.device
         self.register_buffer("nobs", self.rank * neighborhoods.channel_counts.long())
         self.register_buffer("obs_ix", neighborhoods.neighborhoods.to(device))
         miss_ix, miss_ix_full, miss_to_full = missing_indices(
@@ -564,8 +589,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         )
         self.nc_miss = miss_ix.shape[1]
         self.nc_miss_full = miss_ix_full.shape[1]
-        self.register_buffer("miss_ix", miss_ix)
-        self.register_buffer("miss_ix_full", miss_ix_full)
+        self.register_buffer("miss_ix", miss_ix.to(device))
+        self.register_buffer("miss_ix_full", miss_ix_full.to(device))
         if miss_to_full is None:
             self.miss_to_full = None
         else:
@@ -580,6 +605,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self._rg = np.random.default_rng(random_seed)
         n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
         self.pool = Executor(max_workers=n_jobs, mp_context=context)
+        self.to(device)
 
     @property
     def device(self) -> torch.device:
@@ -601,6 +627,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         """
         # sufficient statistics
         dev = self.device
+        nc = self.n_channels
         mean_shp = (self.n_units, self.rank, self.n_channels)
         m = torch.zeros(mean_shp, device=dev, dtype=torch.double)
         N = torch.zeros((self.n_units,), device=dev, dtype=torch.double)
@@ -636,10 +663,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # run loop
         jobs = (
             (candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs)
-            for batchix in self.batches(show_progress=show_progress)
+            for batchix in self.batches()
         )
         count = 0
-        for result in self.pool.map(self._te_step_job, jobs):
+        results = self.pool.map(self._te_step_job, jobs)
+        if show_progress:
+            results = tqdm(
+                results,
+                total=int(np.ceil(self.n_spikes / self.batch_size)),
+                desc="Batches",
+            )
+        for result in results:
             assert result is not None  # why, pyright??
 
             noise_N += result.noise_N
@@ -649,20 +683,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             n1_n01 = result.N.div(N.clamp(min=1e-5))[:, None, None]
 
             # welford for the mean
-            m += result.m[:, :, :-1].sub_(m).mul_(n1_n01)
+            m += result.m[:, :, :nc].sub_(m).mul_(n1_n01)
 
             # running avg for elbo/n
             count += len(result.candidates)
-            if not result.obs_elbo.isfinite():
-                raise ValueError(
-                    f"batch elbo diverged! {result.obs_elbo=} {len(result.candidates)=}"
-                )
             obs_elbo += (result.obs_elbo - obs_elbo) * (len(result.candidates) / count)
-            if not obs_elbo.isfinite():
-                raise ValueError(
-                    f"running elbo diverged! {obs_elbo=} {result.obs_elbo=}"
-                    f"{count=} {len(result.candidates)=}"
-                )
 
             if with_kl:
                 ncc += result.ncc
@@ -671,7 +696,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             if self.M:
                 assert R is not None
                 assert U is not None
-                R += result.R[..., :-1].sub_(R).mul_(n1_n01[..., None])
+                R += result.R[..., :nc].sub_(R).mul_(n1_n01[..., None])
                 U += result.U.sub_(U).mul_(n1_n01)
 
             # could do these in the threads? unless shuffled.
@@ -1001,13 +1026,16 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             bufs["inv_cap_Wobs_Cooinv"] = (self.M, self.rank * self.nc_obs)
             bufs["Cmo_Cooinv_WobsT"] = (self.rank * self.nc_miss, self.M)
 
-            # we can get large -- its the cpu for us.
-            self.W_WCC = torch.empty((nlut_big, self.M, self.rank * self.nc_miss_full))
-            self.W_WCC.resize_(nlut, *self.W_WCC.shape[1:])
-            self.inv_cap_W_WCC = torch.empty(
-                (nlut_big, self.M, self.rank * self.nc_miss_full)
-            )
-            self.inv_cap_W_WCC.resize_(nlut, *self.inv_cap_W_WCC.shape[1:])
+            bufs["W_WCC"] = (self.M, self.rank * self.nc_miss_full)
+            bufs["inv_cap_W_WCC"] = (self.M, self.rank * self.nc_miss_full)
+
+            # # we can get large -- possibly keep on CPU?
+            # self.W_WCC = torch.empty((nlut_big, self.M, self.rank * self.nc_miss_full))
+            # self.W_WCC.resize_(nlut, *self.W_WCC.shape[1:])
+            # self.inv_cap_W_WCC = torch.empty(
+            #     (nlut_big, self.M, self.rank * self.nc_miss_full)
+            # )
+            # self.inv_cap_W_WCC.resize_(nlut, *self.inv_cap_W_WCC.shape[1:])
         for k, v in bufs.items():
             self.register_buffer(k, nu.new_empty((nlut_big, *v)))
             getattr(self, k).resize_(nlut, *v)
@@ -1016,13 +1044,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # precomputed Cooinv_x and whitenedx
         n = len(self.features)
         X = self.features.view(n, -1)
-        self.whitenedx = X.clone()
-        self.Cmo_Cooinv_x = self.whitenedx.new_empty(n, self.rank * self.nc_miss)
+        # can_pin = self.device.type == "cuda"
+        can_pin = False
+        self.whitenedx = torch.empty(X.shape, dtype=X.dtype, pin_memory=can_pin)
+        shp = (n, self.rank * self.nc_miss)
+        self.Cmo_Cooinv_x = torch.empty(shp, dtype=X.dtype, pin_memory=can_pin)
         for ni in trange(self.n_neighborhoods, desc="invx"):
             mask = self.neighborhoods.neighborhood_members(ni)
             # !note the transpose! x @=y is x = x@y, not y@x
-            self.whitenedx[mask] @= self.Coo_invsqrt[ni].T.to(X)
-            self.Cmo_Cooinv_x[mask] = X[mask] @ self.Cooinv_Com[ni].to(X)
+            Xmask = X[mask]
+            self.whitenedx[mask] = Xmask @ self.Coo_invsqrt[ni].T.to(X)
+            self.Cmo_Cooinv_x[mask] = Xmask @ self.Cooinv_Com[ni].to(X)
 
     _update_mean_batch = _processor_update_mean_batch
     _update_pca_batch = _processor_update_pca_batch
@@ -1046,7 +1078,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.initialize_changing(log_proportions, means, noise_log_prop, bases)
 
         nlut = len(self.lut_units)
-        bs = self.batch_size
+        bs = self.update_batch_size
         batches = [slice(i0, min(i0 + bs, nlut)) for i0 in range(0, nlut, bs)]
 
         # update mean parameters
@@ -1087,7 +1119,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             wburyroot = None
 
         return neighborhood_ids, dict(
-            whitenedx=self.whitenedx[batch_indices].to(self.device),
+            whitenedx=self.whitenedx[batch_indices].to(self.device, non_blocking=True),
             whitenednu=self.whitenednu[lut_ixs].view(n, C, -1),
             nobs=self.nobs[neighborhood_ids],
             obs_logdets=obs_logdets,
@@ -1101,16 +1133,18 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         n, C = candidates.shape
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
         lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
+        # lut_ixs_cpu = lut_ixs.cpu()
 
         # common args
         data = dict(
             obs_ix=self.obs_ix[neighborhood_ids],
             miss_ix=self.miss_ix[neighborhood_ids],
             miss_ix_full=self.miss_ix_full[neighborhood_ids],
-            x=self.features[batch_indices].view(n, -1).to(self.device),
+            miss_to_full=self.miss_to_full[neighborhood_ids] if self.miss_to_full is not None else None,
+            x=self.features[batch_indices].view(n, -1).to(self.device, non_blocking=True),
             nu=self.nu[lut_ixs].reshape(n, C, -1),
             tnu=self.tnu[lut_ixs].reshape(n, C, -1),
-            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices].to(self.device),
+            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices].to(self.device, non_blocking=True),
             Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
         )
         if not self.M:
@@ -1120,10 +1154,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         data.update(
             inv_cap=self.inv_cap[lut_ixs],
             inv_cap_Wobs_Cooinv=self.inv_cap_Wobs_Cooinv[lut_ixs],
-            W_WCC=self.W_WCC[lut_ixs].to(self.device),
             Wobs=self.Wobs[lut_ixs],
             Cmo_Cooinv_WobsT=self.Cmo_Cooinv_WobsT[lut_ixs],
-            inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs].to(self.device),
+            W_WCC=self.W_WCC[lut_ixs],
+            inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs],
+            # W_WCC=self.W_WCC[lut_ixs_cpu].to(self.device),
+            # inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs_cpu].to(self.device),
         )
         return data
 
@@ -1212,12 +1248,13 @@ class CandidateSet:
         allow_mask = self.reinit_neighborhoods(
             cinit[cmask, 0], self.neighborhood_ids[cmask]
         )
-        closest_neighbors = self.search_sets(
-            distances, n_search=self.n_candidates, allow_mask=allow_mask
-        )
-        assert closest_neighbors.shape[1] <= self.n_candidates
 
         if labels.ndim == 1:
+            closest_neighbors = self.search_sets(
+                distances, n_search=self.n_candidates, allow_mask=allow_mask
+            )
+            assert closest_neighbors.shape[1] <= self.n_candidates
+            closest_neighbors = closest_neighbors.to(self.candidates)
             self.candidates[:, 0] = labels
             torch.index_select(
                 closest_neighbors[:, : self.n_candidates - 1],
@@ -1232,13 +1269,10 @@ class CandidateSet:
             labels[:, 1:][dup] = -1
             labels, ixs2 = labels.sort(dim=1, descending=True)
             ixs = ixs.take_along_dim(ixs2, dim=1)
-            fisher_yates_replace(self.rg, len(closest_neighbors), labels.numpy())
+            fisher_yates_replace(self.rg, self.n_units, labels.numpy())
             labels = labels.take_along_dim(ixs.argsort(dim=1), dim=1)
             self.candidates[:, : self.n_candidates] = labels
             if logger.isEnabledFor(DARTSORTVERBOSE):
-                logger.dartsortverbose(
-                    f"Candiate init had {invalid.sum()=} {invalid.shape=}"
-                )
                 logger.dartsortverbose(
                     f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
                     f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
@@ -1344,6 +1378,7 @@ class CandidateSet:
 
         # update search sets
         unit_search_neighbors = self.search_sets(distances, allow_mask=allow_mask)
+        unit_search_neighbors = unit_search_neighbors.to(self.candidates)
         assert unit_search_neighbors.shape[1] <= self.n_search
         n_search = unit_search_neighbors.shape[1]
 

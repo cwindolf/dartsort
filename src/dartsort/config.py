@@ -166,10 +166,10 @@ class DeveloperConfig(DARTsortUserConfig):
     refinement_strategy: str = "gmm"
     recluster_after_first_matching: bool = False
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
+    signal_rank: Annotated[int, Field(ge=0)] = 0
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
-    signal_rank: Annotated[int, Field(ge=0)] = 0
     truncated: bool = True
     overwrite_matching: bool = False
 
@@ -205,7 +205,7 @@ class DeveloperConfig(DARTsortUserConfig):
     first_denoiser_thinning: float = 0.5
     postprocessing_merge_threshold: float = 0.025
 
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
@@ -219,7 +219,7 @@ class DeveloperConfig(DARTsortUserConfig):
     interpolation_rq_alpha: float = 0.5
     interpolation_degree: int = 0
     glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
-    laplace_ard: bool = True
+    laplace_ard: bool = False
     core_radius: float = 35.0
     min_cluster_size: int = 50
     hellinger_strong: float = 0.0

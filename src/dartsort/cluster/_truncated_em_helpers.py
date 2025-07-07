@@ -13,8 +13,14 @@ logger = getLogger(__name__)
 noise_eps = torch.tensor(1e-3)
 
 
+tem_add_at_ = spiketorch.torch_add_at_
+# tem_add_at_ = spiketorch.cupy_add_at_
+# tem_add_at_ = spiketorch.try_cupy_add_at_
+
+
 ds_verbose = logger.isEnabledFor(DARTSORTVERBOSE)
 FRZ = not DARTSORTDEBUG
+_debug = logger.isEnabledFor(DARTSORTVERBOSE)
 
 
 def __debug_init__(self):
@@ -127,35 +133,45 @@ def _te_batch_e(
     inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot)
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
-    lls = lls_unnorm + log_proportions
+    if with_kl:
+        lls = lls_unnorm + log_proportions
+    else:
+        lls = lls_unnorm.add_(log_proportions)
 
-    llsfinite = lls.isfinite()
-    if not torch.logical_or(candidates < 0, llsfinite).all():
-        bad = torch.logical_and(candidates >= 0, torch.logical_not(llsfinite))
-        infspk = bad.any(1)
-        infcands = candidates[bad].unique()
-        msg = (
-            f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[bad]=} {inv_quad[bad]=}"
-            f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
-            f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
-        )
-        if wburyroot is not None:
-            msg += f" {wburyroot[infcands]=}"
-        raise ValueError(f"{bad.sum()=} {msg}")
+    if _debug:
+        llsfinite = lls.isfinite()
+        if not torch.logical_or(candidates < 0, llsfinite).all():
+            bad = torch.logical_and(candidates >= 0, torch.logical_not(llsfinite))
+            infspk = bad.any(1)
+            infcands = candidates[bad].unique()
+            msg = (
+                f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[bad]=} {inv_quad[bad]=}"
+                f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
+                f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
+            )
+            if wburyroot is not None:
+                msg += f" {wburyroot[infcands]=}"
+            raise ValueError(f"{bad.sum()=} {msg}")
 
-    cvalid = candidates >= 0
-    lls = torch.where(cvalid, lls, -torch.inf)
+    # cvalid = candidates >= 0
+    # lls = torch.where(cvalid, lls, -torch.inf)
+    lls[candidates < 0] = -torch.inf
 
     # -- update K_ns
-    toplls, topinds = lls.sort(dim=1, descending=True)
-    toplls = toplls[:, :n_candidates]
-    topinds = topinds[:, :n_candidates]
+    # toplls, topinds = lls.sort(dim=1, descending=True)
+    # toplls = toplls[:, :n_candidates]
+    # topinds = topinds[:, :n_candidates]
+    all_lls = lls.new_empty((lls.shape[0], n_candidates + 1))
+    all_inds = torch.empty((lls.shape[0], n_candidates), dtype=torch.long, device=lls.device)
+    topk_out = (all_lls[:, :n_candidates], all_inds)
+    toplls, topinds = torch.topk(lls, n_candidates, dim=1, sorted=False, out=topk_out)
 
     # -- compute Q
-    all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
+    # all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
+    all_lls[:, -1] = noise_lls
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
-    if not (new_candidates >= 0).all():
+    if _debug and not (new_candidates >= 0).all():
         (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
         raise ValueError(
             f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=} {cvalid[bad_ix]=} {cvalid[topinds][bad_ix]=}"
@@ -167,14 +183,14 @@ def _te_batch_e(
         # implemented. leaving it for now because unused.
         cvalid = cvalid.to(torch.float)
         ncc = Q.new_zeros((n_units, n_units))
-        spiketorch.add_at_(
+        tem_add_at_(
             ncc,
             (new_candidates[:, None, :1], candidates[:, :, None]),
             cvalid[:, :, None],
         )
         dkl = Q.new_zeros((n_units, n_units))
         top_lls_unnorm = lls_unnorm.take_along_dim(topinds[:, :1], dim=1)
-        spiketorch.add_at_(
+        tem_add_at_(
             dkl,
             (new_candidates[:, :1], candidates),
             (top_lls_unnorm - lls_unnorm) * cvalid,
@@ -196,7 +212,7 @@ def _te_batch_m_counts(n_units, candidates, Q):
     Q_ = Q[:, :-1]
     assert Q_.shape == candidates.shape
     N = Q.new_zeros(n_units)
-    spiketorch.add_at_(N, candidates.view(-1), Q_.reshape(-1))
+    tem_add_at_(N, candidates.view(-1), Q_.reshape(-1))
     noise_N = Q[:, -1].sum()
     return noise_N, N
 
@@ -208,6 +224,7 @@ def _te_batch_m_rank0(
     nc_obs,
     nc_miss,
     nc_miss_full,
+    miss_to_full,
     # common args
     candidates,
     obs_ix,
@@ -237,7 +254,7 @@ def _te_batch_m_rank0(
     mo = Qn[:, :, None, None] * x.view(n, 1, rank, nc_obs)
 
     m = Qn.new_zeros((n_units, rank, nc + 1))
-    spiketorch.add_at_(
+    tem_add_at_(
         m,
         (
             candidates[:, :, None, None],
@@ -246,7 +263,7 @@ def _te_batch_m_rank0(
         ),
         mo,
     )
-    spiketorch.add_at_(
+    tem_add_at_(
         m,
         (
             candidates[:, :, None, None],
@@ -255,7 +272,7 @@ def _te_batch_m_rank0(
         ),
         mm.view(n, C, rank, nc_miss),
     )
-    spiketorch.add_at_(
+    tem_add_at_(
         m,
         (
             candidates[:, :, None, None],
@@ -280,6 +297,7 @@ def _te_batch_m_ppca(
     obs_ix,
     miss_ix,
     miss_ix_full,
+    miss_to_full,
     Q,
     N,
     x,
@@ -302,6 +320,13 @@ def _te_batch_m_ppca(
     M = inv_cap.shape[-1]
     arange_M = torch.arange(M, device=Q.device)
 
+    U = Q.new_zeros((n_units, M, M))
+    R = Q.new_zeros((n_units, M, rank, nc))
+    m = Qn.new_zeros((n_units, rank, nc))
+
+    R_full = Q.new_zeros((n, C, M, rank, nc + 1))
+    m_full = Q.new_zeros((n, C, rank, nc + 1))
+
     xc = torch.sub(x[:, None], nu, out=nu)
     del nu
     Cmo_Cooinv_xc = torch.sub(Cmo_Cooinv_x[:, None], Cmo_Cooinv_nu, out=Cmo_Cooinv_nu)
@@ -321,6 +346,16 @@ def _te_batch_m_ppca(
     R_missing_full += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
     R_missing = ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
 
+    src = R_observed.view(n, C, M, rank, nc_obs)
+    ix = obs_ix[:, None, None, None, :].broadcast_to(src.shape)
+    R_full.scatter_add_(dim=4, index=ix, src=src)
+    src = R_missing.view(n, C, M, rank, nc_miss)
+    ix = miss_ix[:, None, None, None, :].broadcast_to(src.shape)
+    R_full.scatter_add_(dim=4, index=ix, src=src)
+    src = R_missing_full.view(n, C, M, rank, nc_miss_full)
+    ix = miss_ix_full[:, None, None, None, :].broadcast_to(src.shape)
+    R_full.scatter_add_(dim=4, index=ix, src=src)
+
     m_missing_full = tnu
     del tnu
     m_missing = torch.sub(
@@ -330,92 +365,28 @@ def _te_batch_m_ppca(
     m_observed = torch.sub(x[:, None], WobsT_ubar, out=WobsT_ubar)
     del WobsT_ubar
 
-    QU = EuuT.mul_(Qn[:, :, None, None])
-    QRo = R_observed.mul_(Qn[:, :, None, None])
-    QRm = R_missing.mul_(Qn[:, :, None, None])
-    QRmf = R_missing_full.mul_(Qn[:, :, None, None])
-    Qmo = m_observed.mul_(Qn[:, :, None])
-    Qmm = m_missing.mul_(Qn[:, :, None])
-    Qmmf = m_missing_full.mul_(Qn[:, :, None])
+    src = m_observed.view(n, C, rank, nc_obs)
+    ix = obs_ix[:, None, None, :].broadcast_to(src.shape)
+    m_full.scatter_add_(dim=3, index=ix, src=src)
+    src = m_missing.view(n, C, rank, nc_miss)
+    ix = miss_ix[:, None, None, :].broadcast_to(src.shape)
+    m_full.scatter_add_(dim=3, index=ix, src=src)
+    src = m_missing_full.view(n, C, rank, nc_miss_full)
+    ix = miss_ix_full[:, None, None, :].broadcast_to(src.shape)
+    m_full.scatter_add_(dim=3, index=ix, src=src)
 
-    U = Q.new_zeros((n_units, M, M))
-    spiketorch.add_at_(
-        U,
-        (
-            candidates[:, :, None, None],
-            arange_M[None, None, :, None],
-            arange_M[None, None, None, :],
-        ),
-        QU,
-    )
+    QU = EuuT.mul_(Qn[:, :, None, None]).view(-1, *U.shape[1:])
+    QRf = R_full[..., :nc].mul_(Qn[:, :, None, None, None]).view(-1, *R.shape[1:])
+    Qmf = m_full[..., :nc].mul_(Qn[:, :, None, None]).view(-1, *m.shape[1:])
 
-    R = Q.new_zeros((n_units, M, rank, nc + 1))
-    QRo = QRo.view(n, C, *R.shape[1:-1], nc_obs)
-    QRm = QRm.view(n, C, *R.shape[1:-1], nc_miss)
-    QRmf = QRmf.view(n, C, *R.shape[1:-1], nc_miss_full)
-    spiketorch.add_at_(
-        R,
-        (
-            candidates[:, :, None, None, None],
-            arange_M[None, None, :, None, None],
-            arange_rank[None, None, None, :, None],
-            obs_ix[:, None, None, None, :],
-        ),
-        QRo,
-    )
-    spiketorch.add_at_(
-        R,
-        (
-            candidates[:, :, None, None, None],
-            arange_M[None, None, :, None, None],
-            arange_rank[None, None, None, :, None],
-            miss_ix[:, None, None, None, :],
-        ),
-        QRm,
-    )
-    spiketorch.add_at_(
-        R,
-        (
-            candidates[:, :, None, None, None],
-            arange_M[None, None, :, None, None],
-            arange_rank[None, None, None, :, None],
-            miss_ix_full[:, None, None, None, :],
-        ),
-        QRmf,
-    )
+    ix = candidates.view(-1)[:, None, None].broadcast_to(QU.shape)
+    U.scatter_add_(dim=0, index=ix, src=QU)
 
-    m = Qn.new_zeros((n_units, rank, nc + 1))
-    Qmo = Qmo.view(n, C, *m.shape[1:-1], nc_obs)
-    Qmm = Qmm.view(n, C, *m.shape[1:-1], nc_miss)
-    Qmmf = Qmmf.view(n, C, *m.shape[1:-1], nc_miss_full)
-    spiketorch.add_at_(
-        m,
-        (
-            candidates[:, :, None, None],
-            arange_rank[None, None, :, None],
-            obs_ix[:, None, None, :],
-        ),
-        Qmo,
-    )
-    spiketorch.add_at_(
-        m,
-        (
-            candidates[:, :, None, None],
-            arange_rank[None, None, :, None],
-            miss_ix[:, None, None, :],
-        ),
-        Qmm,
-    )
-    spiketorch.add_at_(
-        m,
-        (
-            candidates[:, :, None, None],
-            arange_rank[None, None, :, None],
-            miss_ix_full[:, None, None, :],
-        ),
-        Qmmf,
-    )
-    m = m.view(n_units, rank, nc + 1)
+    ix = candidates.view(-1)[:, None, None, None].broadcast_to(QRf.shape)
+    R.scatter_add_(dim=0, index=ix, src=QRf)
+    
+    ix = candidates.view(-1)[:, None, None].broadcast_to(Qmf.shape)
+    m.scatter_add_(dim=0, index=ix, src=Qmf)
 
     return dict(m=m, R=R, U=U)
 
@@ -582,7 +553,8 @@ def observed_and_missing_marginals(
         Comi = noise.offdiag_covariance(
             channels_left=nci,
             channels_right=mci,
-        ).to_dense()
+            device=Cooi.device,
+        ).to_dense().to(Cooi.device)
         Coo.append(Cooi)
         Com.append(Comi)
 

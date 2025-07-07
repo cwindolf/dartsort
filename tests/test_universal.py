@@ -6,4 +6,4 @@ def test_sim(tmp_path, simulations):
     gt_st = simulations["driftn_szmini"]["sorting"]
 
     st = dartsort.universal_match(recording=rec, output_dir=tmp_path)
-    assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.25
+    assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.3

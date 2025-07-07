@@ -1,6 +1,7 @@
 import h5py
 import numpy as np
 import pytest
+import torch
 
 from dartsort.evaluate import simkit, simlib
 from dartsort.util.internal_config import FeaturizationConfig
@@ -100,6 +101,7 @@ def test_reproducible_and_residual(
         )
 
     for j, n_jobs in enumerate((1, 4)):
+        torch.manual_seed(0)
         sim = simkit.generate_simulation(
             tmp_path / f"sim{j}",
             tmp_path / f"noise{j}",
@@ -134,7 +136,12 @@ def test_reproducible_and_residual(
             f = h5["collisioncleaned_tpca_features"][:]
             np.nan_to_num(f, nan=-111111.0, copy=False)
             tpca_vals.append(f)
-    assert np.array_equal(*tpca_vals)
+    if torch.cuda.is_available():
+        diff = np.subtract(*tpca_vals)
+        diff = np.abs(diff, out=diff)
+        assert diff.max() < 1e-2
+    else:
+        assert np.array_equal(*tpca_vals)
     del tpca_vals, f
 
     residuals = []

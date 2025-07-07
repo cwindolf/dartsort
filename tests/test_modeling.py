@@ -118,10 +118,8 @@ def test_mixture(
         full_core_neighbs.neighborhood_ids[train_ixs],
         train_core_neighbs.neighborhood_ids,
     )
-    assert torch.equal(
-        data.core_channels,
-        train_core_neighbs.neighborhoods[full_core_neighbs.neighborhood_ids],
-    )
+    cchans_ = train_core_neighbs.neighborhoods[full_core_neighbs.neighborhood_ids]
+    assert torch.equal(data.core_channels, cchans_.cpu())
     # external
     assert torch.equal(data.core_channels, res["sim_res"]["channels"])
 
@@ -129,23 +127,23 @@ def test_mixture(
         # test that channel neighborhoods are handled correctly in TMM
         proc = res["gmm"].tmm.processor
         neighbs = train_extract_neighbs
-        nhoods: torch.LongTensor = neighbs.neighborhoods
-        assert isinstance(nhoods, torch.LongTensor)
+        nhoods = neighbs.neighborhoods
+        assert nhoods.dtype == torch.long
         assert torch.equal(proc.obs_ix, nhoods)
         assert proc.n_neighborhoods == len(nhoods)
         nc = data.n_channels
         neighb_nc = nhoods.shape[1]
         rank = data.rank
         for j in range(proc.n_neighborhoods):
-            vmask = neighbs.valid_mask(j)
+            vmask = neighbs.valid_mask(j).numpy(force=True)
             imask = np.setdiff1d(np.arange(neighb_nc), vmask)
             assert (nhoods[j][vmask] < nc).all()
             assert (nhoods[j][imask] == nc).all()
-            obs_row = proc.obs_ix[j]
-            miss_row = proc.miss_ix[j]
+            obs_row = proc.obs_ix[j].numpy(force=True)
+            miss_row = proc.miss_ix[j].numpy(force=True)
             (miss_nc,) = miss_row.shape
             miss_vmask = miss_row < nc
-            miss_imask = torch.logical_not(miss_vmask)
+            miss_imask = np.logical_not(miss_vmask)
             assert np.intersect1d(miss_row[miss_vmask], obs_row[vmask]).size == 0
 
             for joobuf in (proc.Coo_inv, proc.Coo_invsqrt):
@@ -175,6 +173,7 @@ def test_mixture(
         dense_init[:, 0] = train_labels.numpy(force=True)
         for initializer in (train_labels, dense_init):
             initializer = torch.asarray(initializer)
+            print(f"{res['gmm'].data.device=}")
             tmm = truncated_mixture.SpikeTruncatedMixtureModel(
                 data=res["gmm"].data,
                 noise=res["gmm"].noise,
@@ -192,7 +191,7 @@ def test_mixture(
                 # artificial kl for testing
                 div = torch.arange(res["sim_res"]["K"])
                 div = div[:, None] - div[None, :]
-                div = div.abs_()
+                div = div.abs_().to(res["gmm"].data.device)
 
             tmm.set_parameters(
                 labels=initializer,
@@ -300,7 +299,7 @@ def test_mixture(
             # run the tmm and check that it doesn't do something terrible
             tmm_res = tmm.step(hard_label=True)
             u, c = tmm_res["labels"].unique(return_counts=True)
-            assert torch.equal(u, torch.arange(res["sim_res"]["K"]))
+            assert torch.equal(u.cpu(), torch.arange(res["sim_res"]["K"]))
             assert ((c / c.sum()) >= 0.5 / res["sim_res"]["K"]).all()
             assert (tmm.log_proportions.exp() >= 0.5 / res["sim_res"]["K"]).all()
 
@@ -311,7 +310,7 @@ def test_mixture(
             tmm_res = tmm.step(hard_label=True)
             tmm_elbos.append(tmm_res["obs_elbo"])
             u, c = tmm_res["labels"].unique(return_counts=True)
-            assert torch.equal(u, torch.arange(res["sim_res"]["K"]))
+            assert torch.equal(u.cpu(), torch.arange(res["sim_res"]["K"]))
             assert ((c / c.sum()) >= 0.5 / res["sim_res"]["K"]).all()
             assert (tmm.log_proportions.exp() >= 0.5 / res["sim_res"]["K"]).all()
             assert np.diff(tmm_elbos).min() >= -elbo_atol
@@ -337,7 +336,7 @@ def test_mixture(
     assert (corechans1[:, :, None] == tecnc[:, None, :]).any(2).all()
     _, coretrainneighb = sf.neighborhoods()
     corechans2 = coretrainneighb.neighborhoods[coretrainneighb.neighborhood_ids]
-    assert torch.equal(corechans1, corechans2)
+    assert torch.equal(corechans1, corechans2.cpu())
 
     assert res["sim_res"]["mu"].shape == res["mm_means"].shape
 

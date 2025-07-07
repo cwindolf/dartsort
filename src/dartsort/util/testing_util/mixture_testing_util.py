@@ -22,6 +22,7 @@ def simulate_moppca(
     init_label_corruption: float = 0.0,
     snr: float = 10.0,
     rg=0,
+    device=None,
 ):
     import dartsort
 
@@ -29,6 +30,10 @@ def simulate_moppca(
 
     rg = np.random.default_rng(rg)
     D = rank * nc
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
 
     clus_neighbs = None
     clus_mask = None
@@ -56,12 +61,12 @@ def simulate_moppca(
     if t_cov == "eye":
         cov = np.eye(D)
         noise = dartsort.EmbeddedNoise(
-            rank, nc, cov_kind="scalar", global_std=torch.tensor(1.0, dtype=torch.float)
+            rank, nc, cov_kind="scalar", global_std=torch.tensor(1.0, dtype=torch.float, device=device)
         )
     elif t_cov == "random":
         _c = rg.normal(size=(D, 10 * D))
         cov = _c @ _c.T / (10 * D)
-        full_cov = torch.asarray(cov, dtype=torch.float).view(rank, nc, rank, nc)
+        full_cov = torch.asarray(cov, dtype=torch.float, device=device).view(rank, nc, rank, nc)
         noise = dartsort.EmbeddedNoise(rank, nc, cov_kind="full", full_cov=full_cov)
     else:
         assert False
@@ -138,7 +143,9 @@ def simulate_moppca(
         x = torch.take_along_dim(y, channels.unsqueeze(1), dim=2)
     assert x is not None
 
-    neighbs = dartsort.SpikeNeighborhoods.from_channels(channels, nc)
+    neighbs = dartsort.SpikeNeighborhoods.from_channels(
+        channels, nc, device=device
+    )
 
     init_labels = labels.clone()
     if init_label_corruption:
@@ -159,7 +166,9 @@ def simulate_moppca(
         channel_index=torch.zeros(nc, nc - n_missing, dtype=torch.long),
         rank=rank,
     )
+    _tpca = _tpca.to(device)
     splits = rg.binomial(1, p=0.3, size=N)
+
     data = dartsort.StableSpikeDataset(
         original_sorting=init_sorting,
         kept_indices=np.arange(N),
@@ -171,7 +180,13 @@ def simulate_moppca(
         train_extract_features=x[splits == 0],
         split_names=["train", "val"],
         split_mask=torch.from_numpy(splits),
+        device=device,
     )
+
+    data = data.to(device)
+    noise = noise.to(device)
+    neighbs = neighbs.to(device)
+
     return dict(
         data=data,
         init_sorting=init_sorting,
@@ -201,6 +216,7 @@ def fit_moppcas(
     channels_strategy="count",
     inference_algorithm="em",
     n_refinement_iters=0,
+    device=None,
     gmm_kw={},
 ):
     import dartsort
@@ -297,7 +313,7 @@ def fit_ppca(
         ),
         noise,
         neighborhoods,
-        active_channels=torch.arange(nc),
+        active_channels=torch.arange(nc).to(data.device),
         M=M,
         n_iter=n_iter,
         show_progress=show_progress,
@@ -331,8 +347,8 @@ def compare_subspaces(
             mu = mu[0]
             W = W[0]
     if torch.is_tensor(mu):
-        mu = mu.numpy()
-        W = W.numpy()
+        mu = mu.numpy(force=True)
+        W = W.numpy(force=True)
 
     if umu is None:
         unit = {}
@@ -343,7 +359,7 @@ def compare_subspaces(
     M = 0
     werr = None
     if torch.is_tensor(uW):
-        uW = uW.numpy()
+        uW = uW.numpy(force=True)
         assert uW.shape == W.shape, f"{uW.shape=} {W.shape=}"
         rank, nc, M = W.shape
         WTW = W.reshape(rank * nc, M)
@@ -352,7 +368,7 @@ def compare_subspaces(
         uWTW = uWTW @ uWTW.T
         werr = WTW - uWTW
     if torch.is_tensor(umu):
-        umu = umu.numpy()
+        umu = umu.numpy(force=True)
         assert umu.shape == mu.shape, f"{umu.shape=} {mu.shape=}"
 
     muerr = mu - umu
@@ -549,9 +565,8 @@ def test_moppcas(
     N = K * Nper
     assert mm.labels.shape == sim_res["labels"].shape == (N,)
     acc = (mm.labels == sim_res["labels"]).sum() / N
-    print(f"accuracy: {acc}")
     ari = adjusted_rand_score(sim_res["labels"], mm.labels)
-    print(f"ari: {ari}")
+    print(f"accuracy: {acc}, ari: {ari}")
     ids, means, covs, logdets = mm.stack_units()
 
     muerrs = []

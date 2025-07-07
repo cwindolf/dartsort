@@ -453,7 +453,7 @@ class RefinementConfig:
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-4
+    em_converged_atol: float = 1e-3
     n_total_iters: int = 3
     one_split_only: bool = False
     skip_first_split: bool = False
@@ -463,7 +463,7 @@ class RefinementConfig:
     merge_decision_algorithm: str = "brute"
     prior_pseudocount: float = 10.0
     prior_scales_mean: bool = False
-    laplace_ard: bool = True
+    laplace_ard: bool = False
     kmeansk: int = 4
 
     # TODO... reintroduce this if wanted. or remove
@@ -481,7 +481,7 @@ class RefinementConfig:
     cov_radius: float = 500.0
     core_radius: float = 35.0
     val_proportion: float = 0.25
-    max_n_spikes: float | int = argfield(default=4_000_000, arg_type=int_or_inf)
+    max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
     interpolation_method: str = "kriging"
     extrapolation_method: str | None = "kernel"
     kernel_name: str = "thinplate"

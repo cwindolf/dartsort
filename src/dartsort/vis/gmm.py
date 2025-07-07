@@ -405,8 +405,6 @@ class WaveformCheck(GMMPlot):
             c = c[ixs]
             if torch.is_tensor(c):
                 c = c.numpy(force=True)
-        print(f"{c.shape=}")
-        print(f"{(c>0).sum()=}")
 
         ax = panel.subplots()
         s = geomplot(
@@ -1110,6 +1108,7 @@ class NeighborTreeMerge(GMMPlot):
             normalization_kind=distance_normalization_kind,
         )
         _, cosines = gmm.distances(show_progress=False, kind="cosine")
+        cosines = 1.0 - cosines
 
         if criterion.startswith("old"):
             Z, group_ids, improvements, overlaps = gmm.old_tree_merge(

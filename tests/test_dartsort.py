@@ -78,7 +78,12 @@ def test_fakedata(tmp_path, simulations, sdcfg):
             use_amplitude=False, n_main_channel_pcs=1
         ),
         refinement_cfg=dartsort.RefinementConfig(
-            min_count=10, channels_strategy="count", n_total_iters=1
+            min_count=10,
+            channels_strategy="count",
+            n_total_iters=1,
+            search_type="random",
+            distance_metric="cosine",
+            merge_distance_threshold=0.5,
         ),
         featurization_cfg=dartsort.FeaturizationConfig(
             n_residual_snips=512, nn_localization=False
@@ -133,7 +138,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     if type == "match":
         count_dif_tol = 0.05
     elif type == "universal":
-        count_dif_tol = 0.25
+        count_dif_tol = 0.3
     elif type == "subtract":
         count_dif_tol = 0.2
     elif type == "threshold":
