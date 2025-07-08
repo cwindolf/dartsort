@@ -188,7 +188,6 @@ class SpikeMixtureModel(torch.nn.Module):
         self.use_proportions = use_proportions
         self.hard_noise = hard_noise
         self.proportions_sample_size = proportions_sample_size
-        self.merge_kind = merge_kind
         self.merge_decision_algorithm = merge_decision_algorithm
         self.split_decision_algorithm = split_decision_algorithm
         self.min_overlap = min_overlap

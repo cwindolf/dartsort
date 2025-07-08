@@ -58,6 +58,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         fit_sampling="random",
         max_iter=1000,
+        max_spikes_per_second=16384,
         dtype=torch.float,
     ):
         n_templates, spike_length_samples = template_data.templates.shape[:2]
@@ -108,6 +109,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             if template_data.registered_geom is not None
             else self.n_channels
         )
+        self.max_spikes_per_second = max_spikes_per_second
         assert channel_selection in ("template", "amplitude")
         self.channel_selection = channel_selection
 
@@ -509,6 +511,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_sampling=matching_cfg.fit_sampling,
             fit_max_reweighting=matching_cfg.fit_max_reweighting,
             max_iter=matching_cfg.max_iter,
+            max_spikes_per_second=matching_cfg.max_spikes_per_second,
         )
 
     def peel_chunk(
@@ -540,6 +543,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # process spike times and create return result
         match_results["times_samples"] += chunk_start_samples - left_margin
+        if match_results["n_spikes"] > self.max_spikes_per_second:
+            raise ValueError(f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}".)
 
         return match_results
 

@@ -576,6 +576,7 @@ def get_all_shifted_raw_and_low_rank_templates(
         if show_progress:
             pbar.close()
 
+    raw_std_dev = None
     if with_raw_std_dev:
         raw_std_dev = raw_square_templates
         raw_std_dev -= raw_templates ** 2

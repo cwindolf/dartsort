@@ -342,9 +342,9 @@ def _te_batch_m_ppca(
     R_missing_full = inv_cap_W_WCC
     del inv_cap_W_WCC
     W_WCC_ubar = torch.einsum("ncpk,ncp->nck", W_WCC, ubar)
-    R_missing_full.view(n * C, M, nc_miss_full).baddbmm_(
+    R_missing_full.view(n * C, M, rank * nc_miss_full).baddbmm_(
         ubar.view(n * C, M, 1),
-        W_WCC_ubar.view(n * C, 1, nc_miss_full),
+        W_WCC_ubar.view(n * C, 1,  rank * nc_miss_full),
     )
     # R_missing_full += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
     R_missing = ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)

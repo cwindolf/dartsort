@@ -249,6 +249,7 @@ class MatchingConfig:
     fit_subsampling_random_state: int = 0
     fit_sampling: str = "random"
     fit_max_reweighting: float = 4.0
+    max_spikes_per_second: int = 16384
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
@@ -718,11 +719,17 @@ def to_internal_config(cfg):
         split_decision_algorithm = "complete"
         merge_decision_algorithm = "complete"
         distance_metric = "euclidean"
+    elif cfg.initial_cosine_complete_only:
+        assert cfg.initial_rank == 0
+        merge_distance_threshold = cfg.gmm_cosine_threshold
+        split_decision_algorithm = "complete"
+        merge_decision_algorithm = "complete"
+        distance_metric = "cosine"
     else:
         merge_distance_threshold = dist_thresh
         split_decision_algorithm = cfg.gmm_split_decision_algorithm
         merge_decision_algorithm = cfg.gmm_merge_decision_algorithm
-        distance_metric = (cfg.gmm_metric,)
+        distance_metric = cfg.gmm_metric
     initial_refinement_cfg = dataclasses.replace(
         refinement_cfg,
         one_split_only=cfg.initial_split_only,

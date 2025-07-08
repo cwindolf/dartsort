@@ -277,6 +277,7 @@ def postprocess(
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
     if template_npz_path is not None:
+        template_npz_path.parent.parent.mkdir(exist_ok=True)
         template_npz_path.parent.mkdir(exist_ok=True)
         template_data.to_npz(template_npz_path)
 
