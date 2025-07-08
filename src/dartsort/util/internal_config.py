@@ -198,6 +198,8 @@ class SubtractionConfig:
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class TemplateConfig:
     spikes_per_unit: int = 500
+    with_raw_std_dev: bool = False
+    reduction: Literal["median", "mean"] = "median"
 
     # -- template construction parameters
     # registered templates?

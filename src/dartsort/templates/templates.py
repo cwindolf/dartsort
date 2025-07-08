@@ -10,6 +10,7 @@ from ..util.internal_config import default_waveform_cfg
 from .get_templates import get_templates
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, weighted_average
+from ..util.spiketorch import fast_nanmedian, nanmean
 
 _motion_error_prefix = (
     "If template_cfg has registered_templates==True "
@@ -49,18 +50,14 @@ class TemplateData:
             assert self.spike_counts_by_channel.ndim == 2
             assert self.spike_counts_by_channel.shape[0] == ntemp
         if self.raw_std_dev is not None:
-            assert self.raw_std_dev.ndim == 2
-            assert self.raw_std_dev.shape[0] == ntemp
+            assert self.raw_std_dev.shape == self.templates.shape
 
         nc = self.templates.shape[2]
         if self.spike_counts_by_channel is not None:
             assert self.spike_counts_by_channel.shape[1] == nc
-        if self.raw_std_dev is not None:
-            assert self.raw_std_dev.shape[1] == nc
         if self.registered_geom is not None:
             assert self.registered_geom.ndim == 2
             assert self.registered_geom.shape[0] == nc
-
 
     def main_channels(self):
         amp_vecs = np.nan_to_num(np.ptp(self.templates, axis=1), nan=-np.inf)
@@ -273,6 +270,8 @@ class TemplateData:
             denoising_snr_threshold=template_cfg.denoising_snr_threshold,
             device=computation_cfg.actual_device(),
             units_per_job=units_per_job,
+            with_raw_std_dev=template_cfg.with_raw_std_dev,
+            reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
         )
         rgeom = geom
         if template_cfg.registered_templates and motion_est is not None:
@@ -329,6 +328,7 @@ class TemplateData:
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
                 spike_counts_by_channel=results["spike_counts_by_channel"],
+                raw_std_dev=results["raw_std_devs"],
                 registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,
@@ -340,6 +340,7 @@ class TemplateData:
                 unit_ids=results["unit_ids"],
                 spike_counts=results["spike_counts"],
                 spike_counts_by_channel=results["spike_counts_by_channel"],
+                raw_std_dev=results["raw_std_devs"],
                 registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
                 spike_length_samples=spike_length_samples,

@@ -43,6 +43,7 @@ def scatter_spike_features(
     extra_features=None,
     show_triaged=True,
     remove_outliers=False,
+    label_colors=glasbey1024,
     **scatter_kw,
 ):
     """3-axis scatter plot of spike depths vs. horizontal pos, amplitude, and time
@@ -149,6 +150,7 @@ def scatter_spike_features(
         localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
         annotate_labels=annotate_labels_over_xz,
+        label_colors=label_colors,
         **scatter_kw,
     )
 
@@ -175,6 +177,7 @@ def scatter_spike_features(
         amplitudes_dataset_name=amplitudes_dataset_name,
         localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
+        label_colors=label_colors,
         **scatter_kw,
     )
 
@@ -201,6 +204,7 @@ def scatter_spike_features(
             random_seed=random_seed,
             to_show=to_show,
             show_triaged=show_triaged,
+            label_colors=label_colors,
             **scatter_kw,
         )
         extra_scatters.append(scatter)
@@ -229,6 +233,7 @@ def scatter_spike_features(
         amplitudes_dataset_name=amplitudes_dataset_name,
         localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
+        label_colors=label_colors,
         **scatter_kw,
     )
 
@@ -265,6 +270,7 @@ def scatter_time_vs_depth(
     localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     time_range=None,
+    label_colors=glasbey1024,
     **scatter_kw,
 ):
     """Scatter plot of spike time vs spike depth (vertical position on probe)
@@ -322,6 +328,7 @@ def scatter_time_vs_depth(
         to_show=to_show,
         show_triaged=show_triaged,
         time_range=time_range,
+        label_colors=label_colors,
         **scatter_kw,
     )
 
@@ -358,6 +365,7 @@ def scatter_x_vs_depth(
     localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     annotate_labels=False,
+    label_colors=glasbey1024,
     **scatter_kw,
 ):
     """Scatter plot of spike horizontal pos vs spike depth (vertical position on probe)"""
@@ -396,6 +404,7 @@ def scatter_x_vs_depth(
         to_show=to_show,
         show_triaged=show_triaged,
         annotate_labels=annotate_labels,
+        label_colors=label_colors,
         **scatter_kw,
     )
     if show_geom and geom is not None:
@@ -434,6 +443,7 @@ def scatter_amplitudes_vs_depth(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     localizations_dataset_name="point_source_localizations",
     show_triaged=True,
+    label_colors=glasbey1024,
     **scatter_kw,
 ):
     """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
@@ -478,6 +488,7 @@ def scatter_amplitudes_vs_depth(
         random_seed=random_seed,
         to_show=to_show,
         show_triaged=show_triaged,
+        label_colors=label_colors,
         **scatter_kw,
     )
     if semilog_amplitudes:
@@ -514,6 +525,7 @@ def scatter_feature_vs_depth(
     max_n_labels=None,
     pad_to_max=False,
     annotate_labels=False,
+    label_colors=glasbey1024,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -577,12 +589,12 @@ def scatter_feature_vs_depth(
             )
         )
         to_show = to_show[order]
-        c = glasbey1024[labels[to_show] % len(glasbey1024)]
+        c = label_colors[labels[to_show] % len(label_colors)]
         if show_triaged:
             triaged = labels[to_show] < 0
             tc = np.clip(amplitudes[to_show[triaged]], 0, amplitude_color_cutoff)
             tc = plt.cm.binary(tc / amplitude_color_cutoff)
-            c[triaged] = tc[..., :3]
+            c[triaged, :3] = tc[..., :3]
         else:
             c = c[labels[to_show] >= 0]
             to_show = to_show[labels[to_show] >= 0]

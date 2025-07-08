@@ -56,6 +56,15 @@ def fast_nanmedian(x, axis=-1):
         return x.numpy()
 
 
+def nanmean(x, axis=-1):
+    is_tensor = torch.is_tensor(x)
+    x = torch.nanmean(torch.as_tensor(x), dim=axis)
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()
+
+
 def ptp(waveforms, dim=1, keepdims=False):
     is_tensor = torch.is_tensor(waveforms)
     waveforms = torch.asarray(waveforms)

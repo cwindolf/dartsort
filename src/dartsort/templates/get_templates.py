@@ -41,6 +41,7 @@ def get_templates(
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
+    with_raw_std_dev=False,
     reducer=fast_nanmedian,
     random_seed=0,
     units_per_job=8,
@@ -123,6 +124,7 @@ def get_templates(
             spikes_per_unit=spikes_per_unit,
             min_fraction_at_shift=min_fraction_at_shift,
             min_count_at_shift=min_count_at_shift,
+            with_raw_std_dev=with_raw_std_dev,
             reducer=reducer,
             random_seed=random_seed,
             n_jobs=n_jobs,
@@ -180,12 +182,14 @@ def get_templates(
         spike_length_samples=spike_length_samples,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
+        with_raw_std_dev=with_raw_std_dev,
         device=device,
     )
     (
         unit_ids,
         spike_counts,
         raw_templates,
+        raw_std_devs,
         low_rank_templates,
         snrs_by_channel,
         spike_counts_by_channel,
@@ -198,6 +202,7 @@ def get_templates(
             spike_counts=spike_counts,
             templates=raw_templates,
             raw_templates=raw_templates,
+            raw_std_devs=raw_std_devs,
             snrs_by_channel=snrs_by_channel,
             spike_counts_by_channel=spike_counts_by_channel,
         )
@@ -216,6 +221,7 @@ def get_templates(
         unit_ids=unit_ids,
         spike_counts=spike_counts,
         templates=templates,
+        raw_std_devs=raw_std_devs,
         raw_templates=raw_templates,
         low_rank_templates=low_rank_templates,
         snrs_by_channel=snrs_by_channel,
@@ -236,6 +242,7 @@ def get_raw_templates(
     realign_max_sample_shift=20,
     min_fraction_at_shift=0.1,
     min_count_at_shift=5,
+    with_raw_std_dev=False,
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
@@ -255,6 +262,7 @@ def get_raw_templates(
         realign_max_sample_shift=realign_max_sample_shift,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
+        with_raw_std_dev=with_raw_std_dev,
         low_rank_denoising=False,
         reducer=reducer,
         random_seed=random_seed,
@@ -461,6 +469,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     registered_geom=None,
     denoising_tsvd=None,
     pitch_shifts=None,
+    with_raw_std_dev=False,
     spikes_per_unit=500,
     reducer=fast_nanmedian,
     n_jobs=0,
@@ -492,6 +501,11 @@ def get_all_shifted_raw_and_low_rank_templates(
         (n_units, spike_length_samples, n_template_channels),
         dtype=dtype,
     )
+    if with_raw_std_dev:
+        raw_square_templates = np.zeros(
+            (n_units, spike_length_samples, n_template_channels),
+            dtype=dtype,
+        )
     low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
@@ -520,6 +534,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             spikes_per_unit,
             min_fraction_at_shift,
             min_count_at_shift,
+            with_raw_std_dev,
             reducer,
             trough_offset_samples,
             spike_length_samples,
@@ -543,12 +558,15 @@ def get_all_shifted_raw_and_low_rank_templates(
             (
                 units_chunk,
                 raw_temps_chunk,
+                raw_square_temps_chunk,
                 low_rank_temps_chunk,
                 snrs_chunk,
                 chancounts_chunk,
             ) = res
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
+            if with_raw_std_dev:
+                raw_square_templates[ix_chunk] = raw_square_temps_chunk
             if not raw:
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk
             snrs_by_channel[ix_chunk] = snrs_chunk
@@ -558,10 +576,16 @@ def get_all_shifted_raw_and_low_rank_templates(
         if show_progress:
             pbar.close()
 
+    if with_raw_std_dev:
+        raw_std_dev = raw_square_templates
+        raw_std_dev -= raw_templates ** 2
+        raw_std_dev **= 0.5
+
     return (
         unit_ids,
         spike_counts,
         raw_templates,
+        raw_std_dev,
         low_rank_templates,
         snrs_by_channel,
         spike_counts_by_channel,
@@ -580,6 +604,7 @@ class TemplateProcessContext:
         spikes_per_unit,
         min_fraction_at_shift,
         min_count_at_shift,
+        with_raw_std_dev,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -610,6 +635,7 @@ class TemplateProcessContext:
         )
         self.min_fraction_at_shift = min_fraction_at_shift
         self.min_count_at_shift = min_count_at_shift
+        self.with_raw_std_dev = with_raw_std_dev
 
         self.spike_buffer = torch.zeros(
             (
@@ -645,6 +671,7 @@ def _template_process_init(
     spikes_per_unit,
     min_fraction_at_shift,
     min_count_at_shift,
+    with_raw_std_dev,
     reducer,
     trough_offset_samples,
     spike_length_samples,
@@ -674,6 +701,7 @@ def _template_process_init(
         spikes_per_unit,
         min_fraction_at_shift,
         min_count_at_shift,
+        with_raw_std_dev,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -736,6 +764,7 @@ def _template_job(unit_ids):
 
     # compute raw templates and spike counts per channel
     raw_templates = []
+    raw_square_templates = []
     counts = []
     units_chunk = []
     for u in uids:
@@ -744,10 +773,11 @@ def _template_job(unit_ids):
             continue
         units_chunk.append(u)
         in_unit_orig = in_units[labels == u]
+        unit_waveforms = waveforms[in_unit]
         if p.registered:
             raw_templates.append(
                 registered_template(
-                    waveforms[in_unit],
+                    unit_waveforms,
                     p.pitch_shifts[in_unit_orig],
                     p.geom,
                     p.registered_geom,
@@ -758,6 +788,20 @@ def _template_job(unit_ids):
                     reducer=p.reducer,
                 )
             )
+            if p.with_raw_std_dev:
+                raw_square_templates.append(
+                    registered_template(
+                        unit_waveforms.square_(),
+                        p.pitch_shifts[in_unit_orig],
+                        p.geom,
+                        p.registered_geom,
+                        min_fraction_at_shift=p.min_fraction_at_shift,
+                        min_count_at_shift=p.min_count_at_shift,
+                        registered_kdtree=p.registered_kdtree,
+                        match_distance=p.match_distance,
+                        reducer=p.reducer,
+                    )
+                )
             counts.append(
                 registered_template(
                     np.ones((in_unit.size, p.n_channels)),
@@ -775,15 +819,23 @@ def _template_job(unit_ids):
             raw_templates.append(
                 p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
             )
+            if p.with_raw_std_dev:
+                raw_square_templates.append(
+                    p.reducer(unit_waveforms.square_(), axis=0).numpy(force=True)
+                )
             counts.append(in_unit.size)
     snrs_by_chan = np.array([ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)])
     counts_by_chan = np.array(counts)
     if counts_by_chan.ndim == 1:
         counts_by_chan = np.broadcast_to(counts_by_chan[:, None], snrs_by_chan.shape)
     raw_templates = np.array(raw_templates)
+    if p.with_raw_std_dev:
+        raw_square_templates = np.array(raw_square_templates)
+    else:
+        raw_square_templates = None
 
     if p.denoising_tsvd is None:
-        return units_chunk, raw_templates, None, snrs_by_chan, counts_by_chan
+        return units_chunk, raw_templates, raw_square_templates, None, snrs_by_chan, counts_by_chan
 
     # nt, t, ct = raw_templates.shape
     # low_rank_templates = torch.tensor(raw_templates.transpose(0, 2, 1), device=p.device)
@@ -822,7 +874,7 @@ def _template_job(unit_ids):
             )
     low_rank_templates = np.array(low_rank_templates)
 
-    return units_chunk, raw_templates, low_rank_templates, snrs_by_chan, counts_by_chan
+    return units_chunk, raw_templates, raw_square_templates, low_rank_templates, snrs_by_chan, counts_by_chan
 
 
 class TorchSVDProjector(torch.nn.Module):
