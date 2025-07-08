@@ -316,9 +316,7 @@ def _te_batch_m_ppca(
     """Rank (M) >0 case of part 2/2 of the M step within the E step"""
     Qn = Q[:, :-1] / N.clamp(min=1e-5)[candidates]
     n, C = Qn.shape
-    arange_rank = torch.arange(rank, device=Q.device)
     M = inv_cap.shape[-1]
-    arange_M = torch.arange(M, device=Q.device)
 
     U = Q.new_zeros((n_units, M, M))
     R = Q.new_zeros((n_units, M, rank, nc))
@@ -335,7 +333,7 @@ def _te_batch_m_ppca(
     ubar = torch.einsum("ncpj,ncj->ncp", inv_cap_Wobs_Cooinv, xc)
     EuuT = inv_cap
     del inv_cap
-    EuuT += ubar.unsqueeze(2) * ubar.unsqueeze(3)
+    EuuT.view(n * C, M, M).baddbmm_(ubar.view(n * C, M, 1), ubar.view(n * C, 1, M))
 
     WobsT_ubar = torch.einsum("ncpk,ncp->nck", Wobs, ubar)
     Cmo_Cooinv_WobsT_ubar = torch.einsum("nckp,ncp->nck", Cmo_Cooinv_WobsT, ubar)
@@ -343,7 +341,12 @@ def _te_batch_m_ppca(
     R_observed = ubar[:, :, :, None] * xc[:, :, None, :]
     R_missing_full = inv_cap_W_WCC
     del inv_cap_W_WCC
-    R_missing_full += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
+    W_WCC_ubar = torch.einsum("ncpk,ncp->nck", W_WCC, ubar)
+    R_missing_full.view(n * C, M, nc_miss_full).baddbmm_(
+        ubar.view(n * C, M, 1),
+        W_WCC_ubar.view(n * C, 1, nc_miss_full),
+    )
+    # R_missing_full += torch.einsum("ncpk,ncp,ncq->ncqk", W_WCC, ubar, ubar)
     R_missing = ubar.unsqueeze(3) * Cmo_Cooinv_xc.unsqueeze(2)
 
     src = R_observed.view(n, C, M, rank, nc_obs)
