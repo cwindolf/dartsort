@@ -1013,7 +1013,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("log_proportions", log_proportions)
         self.register_buffer("nu", nu)
         self.register_buffer("tnu", tnu)
-        nlut_big = int(1.5 * nlut)
+        # nlut_big = int(1.5 * nlut)
+        nlut_big = nlut
         bufs = {
             "whitenednu": (self.rank * self.nc_obs,),
             "Cmo_Cooinv_nu": (self.rank * self.nc_miss,),
@@ -1028,6 +1029,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             bufs["W_WCC"] = (self.M, self.rank * self.nc_miss_full)
             bufs["inv_cap_W_WCC"] = (self.M, self.rank * self.nc_miss_full)
+
+            # TODO: W_WCC and inv_cap_W_WCC don't actually need to be stored like this
+            # they can be computed on the full channel set and zerod out as necessary? I think?
+            # this may be true of other things here as well.
 
             # # we can get large -- possibly keep on CPU?
             # self.W_WCC = torch.empty((nlut_big, self.M, self.rank * self.nc_miss_full))
@@ -1158,8 +1163,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             Cmo_Cooinv_WobsT=self.Cmo_Cooinv_WobsT[lut_ixs],
             W_WCC=self.W_WCC[lut_ixs],
             inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs],
-            # W_WCC=self.W_WCC[lut_ixs_cpu].to(self.device),
-            # inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs_cpu].to(self.device),
+            # W_WCC=self.W_WCC[lut_ixs_cpu].to(self.device, non_blocking=True),
+            # inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs_cpu].to(self.device, non_blocking=True),
         )
         return data
 
