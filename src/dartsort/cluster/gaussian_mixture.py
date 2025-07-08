@@ -2116,6 +2116,8 @@ class SpikeMixtureModel(torch.nn.Module):
                     results, desc=desc, unit="branch", total=len(brute_jobs), **tqdm_kw
                 )
             for res in results:
+                if res is None:
+                    continue
                 i, leaves, cluids, brute_group_ids, bimp, bolap = res
                 improvements[i] = bimp
                 if bimp > 0:
@@ -2127,7 +2129,7 @@ class SpikeMixtureModel(torch.nn.Module):
                             result_group_ids.append(cluids[bgid])
                     group_ids[leaves] = result_group_ids
                     overlaps[i] = bolap
-                    leaf_scores[leaves] = brute_improvement
+                    leaf_scores[leaves] = bimp
 
         return Z, group_ids, improvements, overlaps, brute_indicator
 

@@ -107,6 +107,9 @@ def ds_save_features(
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
+        pconv_h5 = targ_models / "pconv.h5"
+        if cfg.matching_cfg.delete_pconv and pconv_h5.exists():
+            pconv_h5.unlink()
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
         shutil.copytree(models_path, targ_models, symlinks=True, dirs_exist_ok=True)
 

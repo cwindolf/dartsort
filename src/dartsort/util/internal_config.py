@@ -269,6 +269,7 @@ class MatchingConfig:
         merge_distance_threshold=0.025
     )
     precomputed_templates_npz: str | None = None
+    delete_pconv: bool = True
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
