@@ -167,6 +167,8 @@ class DeveloperConfig(DARTsortUserConfig):
     recluster_after_first_matching: bool = False
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     signal_rank: Annotated[int, Field(ge=0)] = 0
+    gmm_euclidean_threshold: float = 2.0
+    initial_euclidean_complete_only: bool = False
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False

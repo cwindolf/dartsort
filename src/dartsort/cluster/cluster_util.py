@@ -32,9 +32,12 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     # offset by 1, I think always, but I don't want to be wrong?
     new_ids -= new_ids.min()
 
-    kept = labels >= 0
-    new_labels = np.full_like(labels, -1)
-    new_labels[kept] = new_ids[labels[kept]]
+    if labels is None:
+        new_labels = None
+    else:
+        kept = labels >= 0
+        new_labels = np.full_like(labels, -1)
+        new_labels[kept] = new_ids[labels[kept]]
 
     return new_labels, new_ids
 

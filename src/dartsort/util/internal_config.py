@@ -438,9 +438,9 @@ class RefinementConfig:
     signal_rank: int = 0
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
-    distance_metric: Literal["noise_metric", "kl", "reverse_kl", "symkl", "cosine"] = (
-        "kl"
-    )
+    distance_metric: Literal[
+        "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean"
+    ] = "kl"
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 3
     n_search: int | None = None
@@ -712,11 +712,26 @@ def to_internal_config(cfg):
         irank = refinement_cfg.signal_rank
     else:
         irank = cfg.initial_rank
+    if cfg.initial_euclidean_complete_only:
+        assert cfg.initial_rank == 0
+        merge_distance_threshold = cfg.gmm_euclidean_threshold
+        split_decision_algorithm = "complete"
+        merge_decision_algorithm = "complete"
+        distance_metric = "euclidean"
+    else:
+        merge_distance_threshold = dist_thresh
+        split_decision_algorithm = cfg.gmm_split_decision_algorithm
+        merge_decision_algorithm = cfg.gmm_merge_decision_algorithm
+        distance_metric = (cfg.gmm_metric,)
     initial_refinement_cfg = dataclasses.replace(
         refinement_cfg,
         one_split_only=cfg.initial_split_only,
         skip_first_split=False,
         signal_rank=irank,
+        merge_distance_threshold=merge_distance_threshold,
+        split_decision_algorithm=split_decision_algorithm,
+        merge_decision_algorithm=merge_decision_algorithm,
+        distance_metric=distance_metric,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}

@@ -108,12 +108,12 @@ class SpikeMixtureModel(torch.nn.Module):
         ppca_in_split: bool = True,
         truncated_noise: bool = False,
         distance_metric: Literal[
-            "noise_metric", "kl", "reverse_kl", "symkl", "cosine"
+            "euclidean", "noise_metric", "kl", "reverse_kl", "symkl", "cosine"
         ] = "noise_metric",
         search_type: Literal["topk", "random"] = "topk",
-        distance_normalization_kind: Literal["none", "noise", "channels"] = "noise",
+        distance_normalization_kind: Literal["none", "noise", "channels"] = "none",
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
-        merge_linkage: str = "single",
+        merge_linkage: str = "complete",
         merge_distance_threshold: float = 3.0,
         merge_bimodality_threshold: float = 0.1,
         criterion_threshold: float | None = 0.0,
@@ -123,15 +123,16 @@ class SpikeMixtureModel(torch.nn.Module):
             "loglik",
             "elbo",
         ] = "heldout_elbo",
-        merge_decision_algorithm="brute",
-        split_decision_algorithm="tree",
+        merge_decision_algorithm: Literal[
+            "brute", "tree", "complete", "bimodality"
+        ] = "brute",
+        split_decision_algorithm: Literal["brute", "tree", "complete"] = "tree",
         split_bimodality_threshold: float = 0.1,
         merge_bimodality_cut: float = 0.0,
         merge_bimodality_overlap: float = 0.80,
         merge_bimodality_weighted: bool = True,
         merge_bimodality_score_kind: str = "tv",
         merge_bimodality_masked: bool = False,
-        well_connected_distance: float = 0.1,
         merge_sym_function: np.ufunc = np.minimum,
         em_converged_prop: float = 0.001,
         em_converged_churn: float = 0.01,
@@ -187,13 +188,13 @@ class SpikeMixtureModel(torch.nn.Module):
         self.use_proportions = use_proportions
         self.hard_noise = hard_noise
         self.proportions_sample_size = proportions_sample_size
+        self.merge_kind = merge_kind
         self.merge_decision_algorithm = merge_decision_algorithm
         self.split_decision_algorithm = split_decision_algorithm
         self.min_overlap = min_overlap
         self.min_log_prop = min_log_prop
         self.prior_pseudocount = prior_pseudocount
         self.truncated_noise = truncated_noise
-        self.well_connected_distance = well_connected_distance
         self.lls_keep_k = lls_keep_k
         self.laplace_ard = laplace_ard
         self.prior_corrected_criterion = prior_corrected_criterion
@@ -1268,6 +1269,10 @@ class SpikeMixtureModel(torch.nn.Module):
             dist = spiketorch.cosine_distance(means)
             dist = dist.numpy(force=True)
             return ids, dist
+
+        if kind == "euclidean":
+            dist = torch.cdist(means.view(n, -1), means.view(n, -1))
+            return ids, dist.numpy(force=True)
 
         if kind in ("kl", "reverse_kl", "symkl"):
             W = None
@@ -2459,6 +2464,12 @@ class SpikeMixtureModel(torch.nn.Module):
                         debug_info["improvements"] = [improvement]
                         debug_info["ids_part"] = ids_part
                         debug_info["overlap"] = olap
+        elif decision_algorithm == "complete":
+            _, dists = self.distances(units=units, show_progress=False)
+            _, group_ids = agglomerate(
+                distances=dists, labels=None, threshold=self.merge_distance_threshold
+            )
+            best_improvement = 0
         else:
             assert False
 
@@ -2605,7 +2616,9 @@ class SpikeMixtureModel(torch.nn.Module):
         assert hyp_units is not None
         n_hyp = len(hyp_units)
         if logger.isEnabledFor(DARTSORTVERBOSE):
-            logger.dartsortverbose(f"vc: {current_unit_ids=} {n_cur=} {n_hyp=} {cosines=} {conn=}")
+            logger.dartsortverbose(
+                f"vc: {current_unit_ids=} {n_cur=} {n_hyp=} {cosines=} {conn=}"
+            )
 
         # what are the log props?
         cur_log_prop = self.log_proportions[current_unit_ids].logsumexp(
@@ -3074,11 +3087,7 @@ class SpikeMixtureModel(torch.nn.Module):
     def merge_units(
         self,
         units=None,
-        override_unit_id=None,
-        hyp_fit_resps=None,
         likelihoods=None,
-        log_proportions=None,
-        spike_data=None,
         labels=None,
         show_progress=False,
         merge_kind=None,
@@ -3104,10 +3113,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if merge_criterion is None:
             merge_criterion = self.criterion
         if merge_kind is None:
-            if merge_criterion == "bimodality":
-                merge_kind = "hierarchical"
-            else:
-                merge_kind = "tree"
+            merge_kind = self.merge_decision_algorithm
 
         # distances are needed by both methods
         unit_ids, distances = self.distances(units=units, show_progress=show_progress)
@@ -3119,7 +3125,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if not (pdist <= self.merge_distance_threshold).any():
             return None, None
 
-        if merge_kind == "hierarchical":
+        if merge_kind == "bimodality":
             return self.hierarchical_bimodality_merge(
                 distances,
                 labels,
@@ -3127,7 +3133,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 show_progress=show_progress,
                 debug_info=debug_info,
             )
-        elif merge_kind == "tree":
+        elif merge_kind in ("brute", "tree"):
             _ids, cosines = self.distances(units=units, kind="cosine")
             cosines = 1.0 - cosines
             assert torch.equal(torch.asarray(unit_ids), torch.asarray(_ids))
@@ -3150,6 +3156,13 @@ class SpikeMixtureModel(torch.nn.Module):
             new_labels = torch.asarray(labels).clone()
             (kept,) = (new_labels >= 0).nonzero(as_tuple=True)
             new_labels[kept] = new_ids[new_labels[kept]]
+        elif merge_kind == "complete":
+            new_labels, new_ids = agglomerate(
+                labels=self.labels.numpy(),
+                distances=distances,
+                threshold=self.merge_distance_threshold,
+            )
+            self.labels.fill_(torch.from_numpy(new_labels))
         else:
             assert False
 
@@ -3201,6 +3214,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
 
 # -- modeling class
+
 
 class GaussianUnit(torch.nn.Module):
     # store reusable buffers to avoid lots of large allocations
@@ -3478,7 +3492,9 @@ class GaussianUnit(torch.nn.Module):
                     alpha=active_alpha,
                 )
             except ValueError as e:
-                warnings.warn(f"ppca_em {e} {active_mean=} {active_alpha=} {active_W=} {weights=}")
+                warnings.warn(
+                    f"ppca_em {e} {active_mean=} {active_alpha=} {active_W=} {weights=}"
+                )
                 self.pick_channels(None, None)
                 return
 
