@@ -171,6 +171,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cosine_threshold: float = 0.1
     initial_euclidean_complete_only: bool = False
     initial_cosine_complete_only: bool = False
+    gmm_noise_fp_correction: bool = False
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False

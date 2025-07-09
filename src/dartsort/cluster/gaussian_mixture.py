@@ -85,6 +85,7 @@ class SpikeMixtureModel(torch.nn.Module):
         channels_count_min: float = 25.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
+        noise_log_priors: torch.Tensor | np.ndarray | None = None,
         prior_pseudocount: float = 25.0,
         prior_scales_mean=True,
         ppca_rank: int = 0,
@@ -202,6 +203,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.tvi_n_explore = tvi_n_explore
         self.tvi_n_search = tvi_n_search
         self.search_type = search_type
+        self.noise_log_priors = noise_log_priors
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -454,6 +456,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 search_type=self.search_type,
                 metric="cosine" if self.distance_metric == "cosine" else "kl",
                 random_search_max_distance=self.merge_distance_threshold,
+                noise_log_priors=self.noise_log_priors,
             )
         self.tmm.set_sizes(n_units)
 
@@ -1705,19 +1708,10 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             del _noise_six  # noise overlaps with all, ignore.
             self._noise_log_likelihoods = _noise_log_likelihoods.numpy(force=True)
-        self.core_noise_truncation_factors = None
-        self.train_extract_noise_truncation_factors = None
-        if self.truncated_noise:
-            self.core_noise_truncation_factors = self.noise_mahal_chi_survival(
-                split="full", neighborhood="core"
-            )
-            self.train_extract_noise_truncation_factors = self.noise_mahal_chi_survival(
-                split="train", neighborhood="extract"
-            )
-            nb_core_full = self.data.neighborhoods(split="full", neighborhood="core")[1]
-            self._noise_log_likelihoods += self.core_noise_truncation_factors[
-                nb_core_full.neighborhood_ids
-            ].numpy(force=True)
+            if self.noise_log_priors is not None:
+                if torch.is_tensor(self.noise_log_priors):
+                    self.noise_log_priors = self.noise_log_priors.numpy(force=True)
+                self._noise_log_likelihoods -= self.noise_log_priors
         if indices is not None:
             return self._noise_log_likelihoods[indices]
         return self._noise_log_likelihoods
@@ -2872,57 +2866,6 @@ class SpikeMixtureModel(torch.nn.Module):
         else:
             weights = weights[unit_id].to_dense()
         return weights
-
-    def noise_mahal_chi_survival(self, split="full", neighborhood="core"):
-        split_indices, spike_neighborhoods = self.data.neighborhoods(split=split)
-        cn, neighborhood_info, ns = spike_neighborhoods.subset_neighborhoods(
-            torch.arange(self.data.n_channels), batch_size=self.likelihood_batch_size
-        )
-        mahals = torch.full((len(neighborhood_info),), torch.inf)
-        dfs = torch.zeros((len(neighborhood_info),), dtype=torch.long)
-
-        for (
-            neighb_id,
-            neighb_chans,
-            neighb_member_ixs,
-            batch_start,
-        ) in neighborhood_info:
-            chans_valid = spike_neighborhoods.valid_mask(neighb_id)
-            neighb_chans = neighb_chans[chans_valid]
-
-            if spike_neighborhoods.has_feature_cache():
-                features = spike_neighborhoods.neighborhood_features(
-                    neighb_id,
-                    batch_start=batch_start,
-                    batch_size=self.likelihood_batch_size,
-                )
-                features = features.to(self.data.device)
-            else:
-                # full split case
-                assert split_indices == slice(None)
-
-                sp = self.data.spike_data(
-                    neighb_member_ixs, with_channels=False, neighborhood="core"
-                )
-                features = sp.features
-                features = features[..., chans_valid]
-
-            my_mahals = self.noise_unit.log_likelihood(
-                features, neighb_chans, neighborhood_id=neighb_id, inv_quad_only=True
-            )
-            my_min_mahal = my_mahals.min().cpu()
-            mahals[neighb_id] = min(mahals[neighb_id], my_min_mahal)
-            dfs[neighb_id] = np.prod(features.shape[1:])
-
-        # what is p(mahal<=min obs)?
-        chi2 = torch.distributions.chi2.Chi2(df=dfs)
-        chi2_cdfs = chi2.cdf(mahals)
-
-        # how would we renormalize our noise ll to the volume with the
-        # ball cut out? that's log(1/(1-cdf)).
-        log_factor = -torch.log1p(-chi2_cdfs)
-
-        return log_factor
 
     # -- gizmos
 

@@ -1,7 +1,10 @@
 from logging import getLogger
 
+import torch
+import h5py
+
 from ..util.internal_config import default_refinement_cfg
-from ..util import job_util, noise_util
+from ..util import job_util, noise_util, data_util
 from ..util.main_util import ds_save_intermediate_labels
 from .split import split_clusters
 from .merge import merge_templates
@@ -64,6 +67,7 @@ def gmm_refine(
         zero_radius=refinement_cfg.cov_radius,
         rgeom=data.prgeom[:-1].numpy(force=True),
     )
+    noise_log_priors = get_noise_log_priors(noise, sorting, refinement_cfg)
     gmm = SpikeMixtureModel(
         data,
         noise,
@@ -93,6 +97,7 @@ def gmm_refine(
         prior_scales_mean=refinement_cfg.prior_scales_mean,
         laplace_ard=refinement_cfg.laplace_ard,
         kmeans_k=refinement_cfg.kmeansk,
+        noise_log_priors=noise_log_priors,
     )
 
     step_labels = {}
@@ -209,3 +214,39 @@ def split_merge(
     )
 
     return merge_sorting
+
+
+def get_noise_log_priors(noise, sorting, refinement_cfg):
+    from dartsort.templates import TemplateData
+
+    if not refinement_cfg.noise_fp_correction:
+        return None
+
+    h5_name = sorting.parent_h5_path
+    if h5_name is None:
+        return None
+    stem = h5_name.stem
+    if not stem.startswith("matching"):
+        return None
+    model_dir = h5_name.parent / f"{stem}_models"
+    templates_npz = model_dir / "template_data.npz"
+    if not templates_npz.exists():
+        raise ValueError(f"{templates_npz} is not there?")
+
+    with h5py.File(h5_name, "r", locking=False) as h5:
+        matching_labels = h5["labels"][:]
+
+    template_data = TemplateData.from_npz(templates_npz)
+    tpca = data_util.get_tpca(sorting)
+    temps_tpca = torch.asarray(template_data.templates[:, tpca.temporal_slice])
+
+    n, t, c = temps_tpca.shape
+    temps_tpca = temps_tpca.permute(0, 2, 1).reshape(n * c, t)
+    temps_tpca = tpca._transform_in_probe(temps_tpca)
+    temps_tpca = temps_tpca.reshape(n, c, -1).permute(0, 2, 1)
+
+    noise_log_priors = noise.detection_prior_log_prob(temps_tpca)
+    logger.dartsortdebug(f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}.")
+    noise_log_priors = noise_log_priors[matching_labels]
+
+    return noise_log_priors

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import pdist, squareform
+from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
 
@@ -944,6 +945,35 @@ class EmbeddedNoise(torch.nn.Module):
             zero_radius=zero_radius,
             rgeom=rgeom,
         )
+
+    def detection_prior_log_prob(self, templates_pca_projected, threshold=10.0):
+        """
+        Computes:
+            z(T) = log[1 - p(noise det | T)] 
+                 = log[1 - P(|N - T|^2 > threshold^2)]
+                 = log[1 - log P(2N.T > threshold^2 + |T|^2)]
+
+        Then, later, in mixture modeling one can compute
+            p(l = noise | x, T) = log pi_noise + log N(x | noise) - log z(T)
+
+        For small, noisy templates, p(noise det | T) is large (close to 1).
+        1 - p is close to 0, and log(1-p) is very small. So, subtracting log z(T)
+        boosts the posterior probability that the spike was noise.
+
+        Note that since N ~ N(0, C), N.T ~ N( 0, tr TCT'). Or, whatever version of
+        that makes the dimensions work out. Thus we need to compute
+            log normal_sf(0.5 * (thresh^2 + |T|^2) ; mean=0, scale=sqrt(tr TCT))
+        """
+        C = self.full_dense_cov()
+        templates_pca_projected = torch.asarray(templates_pca_projected, device=C.device)
+        T = templates_pca_projected.reshape(len(templates_pca_projected), -1)
+        assert C.shape == (T.shape[1], T.shape[1])
+        tr = torch.einsum("nc,cd,nd->n", T, C, T)
+        scale = tr.sqrt_()
+        print(f"{scale=}")
+        crit = T.square().sum(dim=1).add_(threshold**2).mul_(0.5)
+        print(f"{crit=}")
+        return norm.logsf(crit.numpy(force=True), scale=scale.numpy(force=True))
 
 
 def interpolate_residual_snippets(

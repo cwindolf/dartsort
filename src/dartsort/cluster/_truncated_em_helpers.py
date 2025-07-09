@@ -112,6 +112,7 @@ def _te_batch_e(
     Coo_logdet,
     log_proportions,
     noise_lls=None,
+    noise_log_priors=None,
     wburyroot=None,
     with_kl=False,
     with_probs=False,
@@ -124,6 +125,8 @@ def _te_batch_e(
     if noise_lls is None:
         inv_quad = whitenedx.square().sum(dim=1)
         nlls = inv_quad.add_(Coo_logdet).add_(pinobs).mul_(-0.5)
+        if noise_log_priors is not None:
+            nlls -= noise_log_priors
     # noise_log_prop changes, so can't be baked in
     noise_lls = nlls + (noise_log_prop + noise_eps)
 

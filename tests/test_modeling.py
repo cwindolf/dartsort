@@ -37,7 +37,7 @@ def moppca_simulations():
     return simulations
 
 
-@pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])
+@pytest.mark.parametrize("inference_algorithm", ["em", "tvi", "tvi_nlp"])
 @pytest.mark.parametrize("n_refinement_iters", [0])
 @pytest.mark.parametrize("t_mu", test_t_mu)
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -74,6 +74,9 @@ def test_mixture(
     else:
         assert False
 
+    use_nlp = inference_algorithm.endswith("_nlp")
+    inference_algorithm = inference_algorithm.removesuffix("_nlp")
+
     kw = dict(
         t_mu=t_mu,
         t_cov=t_cov,
@@ -89,6 +92,7 @@ def test_mixture(
         ),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
         zero_radius=zrad,
+        use_nlp=use_nlp,
     )
     # res_no_fit = mixture_testing_util.test_moppcas(**kw, return_before_fit=True)
     res = mixture_testing_util.test_moppcas(**kw, return_before_fit=False)

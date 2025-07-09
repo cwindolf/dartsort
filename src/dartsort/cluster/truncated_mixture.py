@@ -71,6 +71,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         neighborhood_adjacency_overlap=0.75,
         search_neighborhood_steps=0,
         explore_neighborhood_steps=1,
+        noise_log_priors=None,
         min_log_prop=-50.0,
     ):
         super().__init__()
@@ -118,6 +119,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.set_sizes(n_units)
         self.processor = TruncatedExpectationProcessor(
             noise=noise,
+            noise_log_priors=noise_log_priors,
             neighborhoods=self.train_neighborhoods,
             features=self.data._train_extract_features,
             random_seed=random_seed,
@@ -541,6 +543,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         noise: EmbeddedNoise,
         neighborhoods: SpikeNeighborhoods,
         features: torch.Tensor,
+        noise_log_priors=None,
         batch_size: int = 2**8,
         update_batch_size: int = 2**8,
         n_threads: int = 0,
@@ -577,6 +580,11 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         self.Cinv_in_grad = Cinv_in_grad
         self.batch_size = batch_size
+        if noise_log_priors is None:
+            self.noise_log_priors = None
+        else:
+            noise_log_priors = torch.asarray(noise_log_priors, dtype=features.dtype)
+            self.register_buffer("noise_log_priors", noise_log_priors)
 
         # M is updated by self.update() when a basis is assigned here.
         # all buffers are initialized here or when update() is called
@@ -1107,10 +1115,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # some things are only needed in the first pass when computing noise lls
         Coo_logdet = None
+        noise_log_priors = None
         if hasattr(self, "noise_logliks"):
             noise_lls = self.noise_logliks[batch_indices]
         else:
             noise_lls = None
+            if self.noise_log_priors is not None:
+                noise_log_priors = self.noise_log_priors[batch_indices]
         if not hasattr(self, "noise_logliks") or not self.M:
             Coo_logdet = self.Coo_logdet[neighborhood_ids]
 
@@ -1132,6 +1143,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             log_proportions=self.log_proportions[candidates],
             noise_lls=noise_lls,
             wburyroot=wburyroot,
+            noise_log_priors=noise_log_priors,
         )
 
     def load_batch_m(self, batch_indices, candidates, neighborhood_ids):

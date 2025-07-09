@@ -84,6 +84,7 @@ def test_fakedata(tmp_path, simulations, sdcfg):
             search_type="random",
             distance_metric="cosine",
             merge_distance_threshold=0.5,
+            noise_fp_correction=True,
         ),
         featurization_cfg=dartsort.FeaturizationConfig(
             n_residual_snips=512, nn_localization=False

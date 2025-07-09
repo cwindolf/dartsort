@@ -469,6 +469,7 @@ class RefinementConfig:
     prior_scales_mean: bool = False
     laplace_ard: bool = False
     kmeansk: int = 4
+    noise_fp_correction: bool = False
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
@@ -708,6 +709,7 @@ def to_internal_config(cfg):
         skip_first_split=skip_step1_first_split,
         kmeansk=cfg.kmeansk,
         prior_scales_mean=cfg.prior_scales_mean,
+        noise_fp_correction=cfg.gmm_noise_fp_correction,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank

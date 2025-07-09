@@ -186,6 +186,8 @@ def simulate_moppca(
     data = data.to(device)
     noise = noise.to(device)
     neighbs = neighbs.to(device)
+    noise_log_priors = noise.detection_prior_log_prob(mu)
+    noise_log_priors = noise_log_priors[labels]
 
     return dict(
         data=data,
@@ -200,6 +202,7 @@ def simulate_moppca(
         K=K,
         cov=cov,
         x=x,
+        noise_log_priors=noise_log_priors,
     )
 
 
@@ -217,6 +220,7 @@ def fit_moppcas(
     inference_algorithm="em",
     n_refinement_iters=0,
     device=None,
+    noise_log_priors=None,
     gmm_kw={},
 ):
     import dartsort
@@ -524,6 +528,7 @@ def test_moppcas(
     do_comparison=True,
     sim_res=None,
     zero_radius=None,
+    use_nlp=False,
     gmm_kw={},
 ):
     rg = np.random.default_rng(rg)
@@ -543,6 +548,9 @@ def test_moppcas(
             snr=snr,
             rg=rg,
         )
+    noise_log_priors = None
+    if use_nlp:
+        noise_log_priors = sim_res['noise_log_priors']
     sim_res["noise"].zero_radius = zero_radius
     mm, fit_info = fit_moppcas(
         sim_res["data"],
@@ -557,6 +565,7 @@ def test_moppcas(
         channels_strategy=channels_strategy,
         inference_algorithm=inference_algorithm,
         n_refinement_iters=n_refinement_iters,
+        noise_log_priors=noise_log_priors,
         gmm_kw=gmm_kw,
     )
     if return_before_fit:
