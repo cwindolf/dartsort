@@ -298,9 +298,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert result.U is not None
 
             # just to avoid numerical issues when a unit dies
-            blank = torch.all(result.U.diagonal(dim1=-2, dim2=-1) == 0, dim=1)
-            blank = blank.to(result.U)
-            result.U.diagonal(dim1=-2, dim2=-1).add_(blank[:, None])
+            blank = (result.U.diagonal(dim1=-2, dim2=-1) == 0).all(dim=1)
+            result.U.diagonal(dim1=-2, dim2=-1).add_(blank[:, None].to(result.U))
 
             if self.has_prior:
                 N_denom = result.N.clamp(min=1e-5)
