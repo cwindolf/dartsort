@@ -949,16 +949,17 @@ class EmbeddedNoise(torch.nn.Module):
     def detection_prior_log_prob(self, templates_pca_projected, threshold=10.0):
         """
         Computes:
-            z(T) = log[1 - p(noise det | T)] 
-                 = log[1 - P(|N - T|^2 > threshold^2)]
-                 = log[1 - log P(2N.T > threshold^2 + |T|^2)]
+            z(T) = log[p(noise det | T)] 
+                 = log[P(|N - T|^2 > threshold^2)]
+                 = log[log P(2N.T > threshold^2 + |T|^2)]
 
         Then, later, in mixture modeling one can compute
-            p(l = noise | x, T) = log pi_noise + log N(x | noise) - log z(T)
+            p(l = noise | x, T) = log pi_noise + log N(x | noise) - z(T)
 
         For small, noisy templates, p(noise det | T) is large (close to 1).
-        1 - p is close to 0, and log(1-p) is very small. So, subtracting log z(T)
-        boosts the posterior probability that the spike was noise.
+        z(T), the log, is large (close to 0). Subtracting z(T) to re-normalize
+        the noise distribution to the proper support will then boost the noise
+        likelihood.
 
         Note that since N ~ N(0, C), N.T ~ N( 0, tr TCT'). Or, whatever version of
         that makes the dimensions work out. Thus we need to compute
@@ -970,9 +971,7 @@ class EmbeddedNoise(torch.nn.Module):
         assert C.shape == (T.shape[1], T.shape[1])
         tr = torch.einsum("nc,cd,nd->n", T, C, T)
         scale = tr.sqrt_()
-        print(f"{scale=}")
         crit = T.square().sum(dim=1).add_(threshold**2).mul_(0.5)
-        print(f"{crit=}")
         return norm.logsf(crit.numpy(force=True), scale=scale.numpy(force=True))
 
 

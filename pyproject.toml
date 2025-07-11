@@ -33,4 +33,4 @@ omit = ["*/vis/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--log-level=15"
+addopts = "--log-level=14"

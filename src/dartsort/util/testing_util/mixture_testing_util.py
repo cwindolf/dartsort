@@ -137,6 +137,8 @@ def simulate_moppca(
     elif t_missing == "by_cluster":
         assert clus_neighbs is not None
         channels = clus_neighbs[labels]
+    else:
+        assert False
     channels = torch.asarray(channels, dtype=torch.long)
 
     if t_missing:
