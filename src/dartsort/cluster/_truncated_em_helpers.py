@@ -346,7 +346,6 @@ def _te_batch_m_ppca(
     Ulut.scatter_add_(dim=0, index=ix, src=QUlut)
     Ulut = Ulut[:nlut]
 
-
     return dict(m=m, R=R, Ulut=Ulut)
 
 
@@ -461,7 +460,7 @@ def neighb_lut(unit_neighborhood_counts):
     # this has n_units + 1 because sometimes unit ix is -1, and we want
     # to hit an outside index there
     lut = np.full(
-        (n_units + 1, n_neighborhoods), n_units * n_neighborhoods, dtype=np.int64
+        (n_units + 1, n_neighborhoods), (n_units + 1) * n_neighborhoods, dtype=np.int64
     )
     lut[unit_ids, neighborhood_ids] = np.arange(len(unit_ids))
 
@@ -573,7 +572,9 @@ def missing_indices(
         neighb_fmc = full_missing_chans[ni]
         miss_ix_full[ni, : neighb_fmc.numel()] = neighb_fmc
 
-    miss_full_masks = torch.zeros((neighborhoods.n_neighborhoods, neighborhoods.n_channels + 1))
+    miss_full_masks = torch.zeros(
+        (neighborhoods.n_neighborhoods, neighborhoods.n_channels + 1)
+    )
     src = _1[None, None].broadcast_to(miss_ix_full.shape)
     miss_full_masks.scatter_(dim=1, index=miss_ix_full, src=src)
     miss_full_masks[:, -1] = 0.0
@@ -641,7 +642,7 @@ def _finalize_missing_full_m(proc, Nlut_N, m):
     means = proc.means[lut_units]
     masks = proc.miss_full_masks[lut_neighbs]
 
-    tnu = means.mul_(masks[:, None])[..., :proc.n_channels]
+    tnu = means.mul_(masks[:, None])[..., : proc.n_channels]
     tnu = tnu.mul_(Nlut_N[:, None, None])
     ix = lut_units[:, None, None].broadcast_to(tnu.shape)
     m.scatter_add_(dim=0, index=ix, src=tnu)
@@ -683,7 +684,7 @@ def _finalize_missing_full_R_batch(args):
     Euu = Ulut[sl]
     Euu_W_WCC = Euu.bmm(W_WCC.view(n, proc.M, -1))
     Euu_W_WCC = Euu_W_WCC.view(W_WCC.shape)
-    Euu_W_WCC = Euu_W_WCC[..., :proc.n_channels]
+    Euu_W_WCC = Euu_W_WCC[..., : proc.n_channels]
 
     R_missing_full = Euu_W_WCC.mul_(Nlut_N[:, None, None, None])
     ix = unit_ix[:, None, None, None].broadcast_to(R_missing_full.shape)

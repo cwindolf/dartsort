@@ -283,6 +283,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         if candidates_needs_update:
             _c = candidates[:, : self.n_candidates].to(self.candidates.candidates)
             self.candidates.candidates[:, : self.n_candidates] = _c
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                assert (_c >= 0).all()
 
         if self.has_prior and self.prior_scales_mean:
             mean_scale = result.N / (result.N + self.alpha0)
@@ -739,7 +741,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # some things are more efficiently computed in LUT bins and
         # then reweighted and used later. well, here they are.
-        Nlut_N = Nlut / N[self.lut_units]
+        N_denom = N[self.lut_units]
+        Nlut_N = Nlut.div_(N_denom)
+        del Nlut
+        Nlut_N.masked_fill_(N_denom == 0.0, 0.0)
         self._finalize_missing_full_m(Nlut_N, m)
         if self.M:
             self._finalize_missing_full_R(Nlut_N, R, Ulut)
