@@ -11,7 +11,7 @@ def simulate_moppca(
     Nper=2**12,
     rank=4,
     nc=8,
-    M=3,
+    M=2,
     n_missing=2,
     K=5,
     t_mu: Literal["zero", "random"] = "random",
@@ -137,6 +137,8 @@ def simulate_moppca(
     elif t_missing == "by_cluster":
         assert clus_neighbs is not None
         channels = clus_neighbs[labels]
+    else:
+        assert False
     channels = torch.asarray(channels, dtype=torch.long)
 
     if t_missing:
@@ -209,7 +211,7 @@ def simulate_moppca(
 def fit_moppcas(
     data,
     noise,
-    M=3,
+    M=2,
     cov_kind="zero",
     inner_em_iter=100,
     n_em_iters=50,
@@ -428,7 +430,7 @@ def test_ppca(
     Nper=2**12,
     rank=4,
     nc=8,
-    M=3,
+    M=2,
     t_mu: Literal["zero", "random"] = "random",
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
@@ -504,12 +506,11 @@ def test_moppcas(
     Nper=2**12,
     rank=4,
     nc=8,
-    M=3,
+    M=2,
     n_missing=2,
     K=5,
     t_mu: Literal["zero", "random"] = "random",
     t_cov: Literal["eye", "random"] = "eye",
-    # zero, hot, random,
     t_w: Literal["zero", "hot", "random"] = "zero",
     t_missing: Literal[None, "random", "by_cluster"] = None,
     init_label_corruption: float = 0.0,

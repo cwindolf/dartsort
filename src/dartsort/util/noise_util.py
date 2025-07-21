@@ -954,7 +954,7 @@ class EmbeddedNoise(torch.nn.Module):
                  = log[log P(2N.T > threshold^2 + |T|^2)]
 
         Then, later, in mixture modeling one can compute
-            p(l = noise | x, T) = log pi_noise + log N(x | noise) - log z(T)
+            p(l = noise | x, T) = log pi_noise + log N(x | noise) - z(T)
 
         It's a little bit counterintuitive: this boosts the noise probability more
         for units with higher signal templates, since their FP probability is lower.

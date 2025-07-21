@@ -9,7 +9,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.01
-elbo_atol = 5e-2
+elbo_atol = 1e-2
 
 
 test_t_mu = ("random",)
@@ -20,7 +20,9 @@ test_t_missing = (None, "random", "by_cluster")
 # test_t_mu = ("random",)
 # test_t_cov = ("eye",)
 # test_t_w = ("zero",)
+# test_t_w = ("random",)
 # test_t_missing = ("random",)
+# test_t_missing = ("by_cluster",)
 
 
 @pytest.fixture(scope="module")

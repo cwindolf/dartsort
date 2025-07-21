@@ -34,6 +34,8 @@ from ._truncated_em_helpers import (
     missing_indices,
     _processor_update_mean_batch,
     _processor_update_pca_batch,
+    _finalize_missing_full_m,
+    _finalize_missing_full_R,
 )
 from ..util import spiketorch
 from ..util.multiprocessing_util import get_pool
@@ -236,8 +238,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert self.alpha.isfinite().all()
         else:
             self.alpha = self.alpha0
-            
-        self.register_buffer("divergences", means.new_empty((self.n_units, self.n_units)))
+
+        self.register_buffer(
+            "divergences", means.new_empty((self.n_units, self.n_units))
+        )
         if divergences is None:
             self.update_divergences()
         else:
@@ -254,7 +258,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
         )
         candidates = candidates.to(self.device)
-        candidates_needs_update = candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
+        candidates_needs_update = (
+            candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
+        )
         self.processor.update(
             log_proportions=self.log_proportions,
             noise_log_prop=self.noise_log_prop,
@@ -275,15 +281,17 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert result.m is not None
 
         if candidates_needs_update:
-            _c = candidates[:, :self.n_candidates].to(self.candidates.candidates)
-            self.candidates.candidates[:, :self.n_candidates] = _c
+            _c = candidates[:, : self.n_candidates].to(self.candidates.candidates)
+            self.candidates.candidates[:, : self.n_candidates] = _c
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                assert (_c >= 0).all()
 
         if self.has_prior and self.prior_scales_mean:
             mean_scale = result.N / (result.N + self.alpha0)
             self.means[..., :-1] = result.m * mean_scale[:, None, None]
         else:
             self.means[..., :-1] = result.m
-        if logger.isEnabledFor(DARTSORTDEBUG):
+        if logger.isEnabledFor(DARTSORTVERBOSE):
             assert self.means[..., :-1].isfinite().all()
 
         W = None
@@ -291,10 +299,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             assert result.R is not None
             assert result.U is not None
 
-            blank = torch.all(result.U.diagonal(dim1=-2, dim2=-1) == 0, dim=1)
-            if blank.any():
-                # just to avoid numerical issues when a unit dies
-                result.U[blank] += torch.eye(self.M, device=result.U.device)
+            # just to avoid numerical issues when a unit dies
+            blank = (result.U.diagonal(dim1=-2, dim2=-1) == 0).all(dim=1)
+            result.U.diagonal(dim1=-2, dim2=-1).add_(blank[:, None].to(result.U))
 
             if self.has_prior:
                 N_denom = result.N.clamp(min=1e-5)
@@ -306,7 +313,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             W = torch.linalg.solve(result.U, result.R.view(*result.U.shape[:-1], -1))
             assert W.shape == (self.n_units, self.M, self.data_dim)
             self.bases[..., :-1] = W.view(self.bases[..., :-1].shape)
-            if logger.isEnabledFor(DARTSORTDEBUG):
+            if logger.isEnabledFor(DARTSORTVERBOSE):
                 assert self.bases[..., :-1].isfinite().all()
 
         nc = None
@@ -321,7 +328,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             amin = self.alpha_min * result.N.clamp(min=1.0).unsqueeze(1)
             amax = self.alpha_max * result.N.clamp(min=1.0).unsqueeze(1)
             self.alpha[:] = (1.0 / denom).clamp_(amin, amax)
-            if logger.isEnabledFor(DARTSORTDEBUG):
+            if logger.isEnabledFor(DARTSORTVERBOSE):
                 assert self.alpha.isfinite().all()
 
         assert result.N.min() >= 0
@@ -572,7 +579,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         assert (self.n_spikes,) == neighborhoods.neighborhood_ids.shape
         # can_pin = device.type == "cuda"
         can_pin = False
-        self.features = torch.empty(features.shape, dtype=features.dtype, pin_memory=can_pin)
+        self.features = torch.empty(
+            features.shape, dtype=features.dtype, pin_memory=can_pin
+        )
         self.features.copy_(features)
         self.features.nan_to_num_()
         self.neighborhoods = neighborhoods
@@ -592,17 +601,14 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         # depend on the number of units or the LUT size
         self.register_buffer("nobs", self.rank * neighborhoods.channel_counts.long())
         self.register_buffer("obs_ix", neighborhoods.neighborhoods.to(device))
-        miss_ix, miss_ix_full, miss_to_full = missing_indices(
+        miss_ix, miss_ix_full, miss_full_masks = missing_indices(
             neighborhoods, zero_radius=noise.zero_radius, pgeom=pgeom, device=device
         )
         self.nc_miss = miss_ix.shape[1]
         self.nc_miss_full = miss_ix_full.shape[1]
         self.register_buffer("miss_ix", miss_ix.to(device))
         self.register_buffer("miss_ix_full", miss_ix_full.to(device))
-        if miss_to_full is None:
-            self.miss_to_full = None
-        else:
-            self.register_buffer("miss_to_full", miss_to_full)
+        self.register_buffer("miss_full_masks", miss_full_masks.to(device))
         self.initialize_fixed(noise, neighborhoods, pgeom=pgeom, device=device)
         self._changing_initialized = False
 
@@ -637,21 +643,28 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         dev = self.device
         nc = self.n_channels
         mean_shp = (self.n_units, self.rank, self.n_channels)
-        m = torch.zeros(mean_shp, device=dev, dtype=torch.double)
+
+        obs_elbo = torch.tensor(0.0, device=dev, dtype=torch.double)
+
         N = torch.zeros((self.n_units,), device=dev, dtype=torch.double)
+        Nlut = torch.zeros((self.nlut,), device=dev, dtype=torch.double)
+        noise_N = torch.tensor(0.0, device=dev, dtype=torch.double)
+
+        m = torch.zeros(mean_shp, device=dev)
+        R = U = Ulut = None
+        if self.M:
+            r_shp = (self.n_units, self.M, self.rank, self.n_channels)
+            R = torch.zeros(r_shp, device=dev)
+            u_shp = (self.n_units, self.M, self.M)
+            U = torch.zeros(u_shp, device=dev)
+            Ulut_shp = (self.nlut, self.M, self.M)
+            Ulut = torch.zeros(Ulut_shp, device=dev)
+
         dkl = None
         if with_kl:
             nu2 = (self.n_units, self.n_units)
-            dkl = torch.zeros(nu2, device=dev, dtype=torch.double)
+            dkl = torch.zeros(nu2, device=dev)
             ncc = dkl.clone()
-        noise_N = torch.tensor(0.0, device=dev, dtype=torch.double)
-        obs_elbo = torch.tensor(0.0, device=dev, dtype=torch.double)
-        R = U = None
-        if self.M:
-            r_shp = (self.n_units, self.M, self.rank, self.n_channels)
-            R = torch.zeros(r_shp, device=dev, dtype=torch.double)
-            u_shp = (self.n_units, self.M, self.M)
-            U = torch.zeros(u_shp, device=dev, dtype=torch.double)
 
         # will be updated...
         top_candidates = candidates[:, :n_candidates]
@@ -686,9 +699,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             noise_N += result.noise_N
             N += result.N
+            Nlut += result.Nlut
 
             # weight for the welford running averages below
-            n1_n01 = result.N.div(N.clamp(min=1e-5))[:, None, None]
+            n1_n01 = result.N.div(N.clamp(min=1e-10))[:, None, None]
 
             # welford for the mean
             m += result.m[:, :, :nc].sub_(m).mul_(n1_n01)
@@ -703,9 +717,13 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
             if self.M:
                 assert R is not None
-                assert U is not None
+                assert result.R is not None
+                assert Ulut is not None
+                assert result.Ulut is not None
                 R += result.R[..., :nc].sub_(R).mul_(n1_n01[..., None])
-                U += result.U.sub_(U).mul_(n1_n01)
+
+                n1_n01_lut = result.Nlut.div(Nlut.clamp(min=1e-10))
+                Ulut += result.Ulut.sub_(Ulut).mul_(n1_n01_lut[:, None, None])
 
             # could do these in the threads? unless shuffled.
             top_candidates[result.indices] = result.candidates
@@ -713,11 +731,28 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 noise_logliks[result.indices] = result.noise_lls
 
             if with_hard_labels:
+                assert hard_labels is not None
                 assert result.hard_labels is not None
                 hard_labels[result.indices] = result.hard_labels
 
             if with_probs:
+                assert result.indices is not None
                 probs[result.indices] = result.probs
+
+        # some things are more efficiently computed in LUT bins and
+        # then reweighted and used later. well, here they are.
+        N_denom = N[self.lut_units]
+        Nlut_N = Nlut.div_(N_denom)
+        del Nlut
+        Nlut_N.masked_fill_(N_denom == 0.0, 0.0)
+        self._finalize_missing_full_m(Nlut_N, m)
+        if self.M:
+            self._finalize_missing_full_R(Nlut_N, R, Ulut)
+
+            assert U is not None
+            assert Ulut is not None
+            ix = self.lut_units[:, None, None].broadcast_to(Ulut.shape)
+            U.scatter_add_(dim=0, index=ix, src=Ulut.mul_(Nlut_N[:, None, None]))
 
         if first_run:
             self.register_buffer("noise_logliks", noise_logliks)
@@ -727,7 +762,6 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             dkl[ncc < 1] = torch.inf
 
         return TEStepResult(
-            elbo=None,
             obs_elbo=obs_elbo,
             noise_N=noise_N,
             N=N,
@@ -846,18 +880,22 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         mres = {}
         if with_grads or with_stats:
             mdata = self.load_batch_m(batch_indices, candidates, neighb_ids)
-            noise_N, N = _te_batch_m_counts(self.n_units, candidates, Q)
+            noise_N, N, Nlut = _te_batch_m_counts(
+                self.n_units, self.nlut, candidates, mdata["lut_ixs"], Q
+            )
             shapekw = dict(
                 rank=self.rank,
                 n_units=self.n_units,
+                nlut=self.nlut,
                 nc=self.n_channels,
                 nc_obs=self.nc_obs,
                 nc_miss=self.nc_miss,
-                nc_miss_full=self.nc_miss_full,
             )
             ekw = dict(candidates=candidates, Q=Q, N=N)
             if self.M:
-                mres = _te_batch_m_ppca(**shapekw, **ekw, **mdata)
+                mres = _te_batch_m_ppca(
+                    **shapekw, **ekw, Nlut=Nlut, **mdata
+                )
             else:
                 mres = _te_batch_m_rank0(**shapekw, **ekw, **mdata)
 
@@ -891,9 +929,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             obs_elbo=oelbo,
             noise_N=noise_N,
             N=N,
+            Nlut=Nlut,
             m=mres.get("m"),
             R=mres.get("R"),
-            U=mres.get("U"),
+            Ulut=mres.get("Ulut"),
             ddlogpi=ddlogpi,
             ddlognoisep=ddlognoisep,
             ddm=ddm,
@@ -984,31 +1023,35 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         else:
             self.M = 0
 
+        self.means = means
+        self.bases = bases
+
+        # for -1 invalid unit index, make sure likelihood is always -inf.
+        log_proportions = F.pad(log_proportions, (0, 1), value=-torch.inf)
+
         nlut = len(self.nobs_ix)
+        nup1 = self.n_units + 1
+        nlutp1 = nlut + 1
         nu = means[self.lut_units[:, None], :, self.nobs_ix].permute(0, 2, 1)
-        tnu = means[self.lut_units[:, None], :, self.nmiss_ix_full].permute(0, 2, 1)
 
         if self._changing_initialized:
-            self.log_proportions.resize_(self.n_units, *self.log_proportions.shape[1:])
+            self.log_proportions.resize_(nup1, *self.log_proportions.shape[1:])
             self.log_proportions.copy_(log_proportions)
             self.noise_log_prop.copy_(noise_log_prop)
 
-            self.nu.resize_(nlut, *self.nu.shape[1:])
-            self.tnu.resize_(nlut, *self.nu.shape[1:])
-            self.whitenednu.resize_(nlut, *self.whitenednu.shape[1:])
-            self.Cmo_Cooinv_nu.resize_(nlut, *self.Cmo_Cooinv_nu.shape[1:])
+            self.nu.resize_(nlutp1, *self.nu.shape[1:])
+            self.whitenednu.resize_(nlutp1, *self.whitenednu.shape[1:])
+            self.Cmo_Cooinv_nu.resize_(nlutp1, *self.Cmo_Cooinv_nu.shape[1:])
 
             self.nu.copy_(nu)
-            self.tnu.copy_(tnu)
 
             if self.M:
-                self.Wobs.resize_(nlut, *self.Wobs.shape[1:])
-                self.Cmo_Cooinv_WobsT.resize_(nlut, *self.Cmo_Cooinv_WobsT.shape[1:])
-                self.inv_cap.resize_(nlut, *self.inv_cap.shape[1:])
-                self.obs_logdets.resize_(nlut)
-                self.wburyroot.resize_(nlut, *self.wburyroot.shape[1:])
-                self.W_WCC.resize_(nlut, *self.W_WCC.shape[1:])
-                self.inv_cap_W_WCC.resize_(nlut, *self.inv_cap_W_WCC.shape[1:])
+                self.Wobs.resize_(nlutp1, *self.Wobs.shape[1:])
+                self.Cmo_Cooinv_WobsT.resize_(nlutp1, *self.Cmo_Cooinv_WobsT.shape[1:])
+                self.inv_cap.resize_(nlutp1, *self.inv_cap.shape[1:])
+                self.obs_logdets.resize_(nlutp1)
+                self.wburyroot.resize_(nlutp1, *self.wburyroot.shape[1:])
+            self.zero_lut_final()
 
             return
 
@@ -1020,9 +1063,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         self.register_buffer("noise_log_prop", noise_log_prop)
         self.register_buffer("log_proportions", log_proportions)
         self.register_buffer("nu", nu)
-        self.register_buffer("tnu", tnu)
-        # nlut_big = int(1.5 * nlut)
-        nlut_big = nlut
+        nlut_big = int(1.25 * nlutp1)
         bufs = {
             "whitenednu": (self.rank * self.nc_obs,),
             "Cmo_Cooinv_nu": (self.rank * self.nc_miss,),
@@ -1034,24 +1075,27 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             bufs["wburyroot"] = (self.rank * self.nc_obs, self.M)
             bufs["inv_cap_Wobs_Cooinv"] = (self.M, self.rank * self.nc_obs)
             bufs["Cmo_Cooinv_WobsT"] = (self.rank * self.nc_miss, self.M)
-
-            bufs["W_WCC"] = (self.M, self.rank * self.nc_miss_full)
-            bufs["inv_cap_W_WCC"] = (self.M, self.rank * self.nc_miss_full)
-
-            # TODO: W_WCC and inv_cap_W_WCC don't actually need to be stored like this
-            # they can be computed on the full channel set and zerod out as necessary? I think?
-            # this may be true of other things here as well.
-
-            # # we can get large -- possibly keep on CPU?
-            # self.W_WCC = torch.empty((nlut_big, self.M, self.rank * self.nc_miss_full))
-            # self.W_WCC.resize_(nlut, *self.W_WCC.shape[1:])
-            # self.inv_cap_W_WCC = torch.empty(
-            #     (nlut_big, self.M, self.rank * self.nc_miss_full)
-            # )
-            # self.inv_cap_W_WCC.resize_(nlut, *self.inv_cap_W_WCC.shape[1:])
         for k, v in bufs.items():
             self.register_buffer(k, nu.new_empty((nlut_big, *v)))
-            getattr(self, k).resize_(nlut, *v)
+            getattr(self, k).resize_(nlutp1, *v)
+        self.zero_lut_final()
+
+    def zero_lut_final(self):
+        if self.M:
+            lut_buf_names = [
+                "whitenednu",
+                "Cmo_Cooinv_nu",
+                "Wobs",
+                "inv_cap",
+                "obs_logdets",
+                "wburyroot",
+                "inv_cap_Wobs_Cooinv",
+                "Cmo_Cooinv_WobsT",
+            ]
+        else:
+            lut_buf_names = ["nu", "whitenednu", "Cmo_Cooinv_nu"]
+        for k in lut_buf_names:
+            getattr(self, k)[-1] = 0.0
 
     def precompute_invx(self):
         # precomputed Cooinv_x and whitenedx
@@ -1071,6 +1115,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
     _update_mean_batch = _processor_update_mean_batch
     _update_pca_batch = _processor_update_pca_batch
+    _finalize_missing_full_m = _finalize_missing_full_m
+    _finalize_missing_full_R = _finalize_missing_full_R
 
     def update(
         self,
@@ -1083,25 +1129,25 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         if unit_neighborhood_counts is not None:
             # update lookup table and re-initialize storage
             res = neighb_lut(unit_neighborhood_counts)
-            lut, self.lut_units, self.lut_neighbs = res
+            lut, lut_units, lut_neighbs = res
+            self.lut_units = torch.asarray(lut_units, device=self.device)
+            self.lut_neighbs = torch.asarray(lut_neighbs, device=self.device)
             self.lut = torch.asarray(lut, device=self.device)
 
         self.nobs_ix = self.obs_ix[self.lut_neighbs]
         self.nmiss_ix_full = self.miss_ix_full[self.lut_neighbs]
         self.initialize_changing(log_proportions, means, noise_log_prop, bases)
 
-        nlut = len(self.lut_units)
+        self.nlut = len(self.lut_units)
         bs = self.update_batch_size
-        batches = [slice(i0, min(i0 + bs, nlut)) for i0 in range(0, nlut, bs)]
+        batches = [slice(i0, min(i0 + bs, self.nlut)) for i0 in range(0, self.nlut, bs)]
 
         # update mean parameters
-        for res in self.pool.map(self._update_mean_batch, batches):
+        for _ in self.pool.map(self._update_mean_batch, batches):
             pass
         if self.M:
             assert bases is not None
-            for res in self.pool.map(
-                self._update_pca_batch, zip(batches, repeat(bases))
-            ):
+            for _ in self.pool.map(self._update_pca_batch, zip(batches, repeat(bases))):
                 pass
 
     def load_batch_e(
@@ -1149,19 +1195,20 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def load_batch_m(self, batch_indices, candidates, neighborhood_ids):
         n, C = candidates.shape
         lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
-        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
-        # lut_ixs_cpu = lut_ixs.cpu()
+        lut_ixs[lut_ixs == np.prod(self.lut.shape)] = self.nlut
+
+        x = self.features[batch_indices].view(n, -1)
+        x = x.to(self.device, non_blocking=True)
+        Cmo_Cooinv_x = self.Cmo_Cooinv_x[batch_indices]
+        Cmo_Cooinv_x = Cmo_Cooinv_x.to(self.device, non_blocking=True)
 
         # common args
         data = dict(
             obs_ix=self.obs_ix[neighborhood_ids],
             miss_ix=self.miss_ix[neighborhood_ids],
-            miss_ix_full=self.miss_ix_full[neighborhood_ids],
-            miss_to_full=self.miss_to_full[neighborhood_ids] if self.miss_to_full is not None else None,
-            x=self.features[batch_indices].view(n, -1).to(self.device, non_blocking=True),
-            nu=self.nu[lut_ixs].reshape(n, C, -1),
-            tnu=self.tnu[lut_ixs].reshape(n, C, -1),
-            Cmo_Cooinv_x=self.Cmo_Cooinv_x[batch_indices].to(self.device, non_blocking=True),
+            lut_ixs=lut_ixs,
+            x=x,
+            Cmo_Cooinv_x=Cmo_Cooinv_x,
             Cmo_Cooinv_nu=self.Cmo_Cooinv_nu[lut_ixs],
         )
         if not self.M:
@@ -1173,10 +1220,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             inv_cap_Wobs_Cooinv=self.inv_cap_Wobs_Cooinv[lut_ixs],
             Wobs=self.Wobs[lut_ixs],
             Cmo_Cooinv_WobsT=self.Cmo_Cooinv_WobsT[lut_ixs],
-            W_WCC=self.W_WCC[lut_ixs],
-            inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs],
-            # W_WCC=self.W_WCC[lut_ixs_cpu].to(self.device, non_blocking=True),
-            # inv_cap_W_WCC=self.inv_cap_W_WCC[lut_ixs_cpu].to(self.device, non_blocking=True),
+            nu=self.nu[lut_ixs].reshape(n, C, -1),
         )
         return data
 
@@ -1290,9 +1334,12 @@ class CandidateSet:
             labels = labels.take_along_dim(ixs.argsort(dim=1), dim=1)
             self.candidates[:, : self.n_candidates] = labels
             if logger.isEnabledFor(DARTSORTVERBOSE):
-                logger.dartsortverbose(
-                    f"Still I assure you that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and "
-                    f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+                assert torch.all(self.candidates[:, : self.n_candidates] >= 0)
+                assert torch.all(
+                    self.candidates[:, : self.n_candidates]
+                    .sort(dim=1)
+                    .values.diff(dim=1)
+                    > 0
                 )
         self._initialized = True
 
@@ -1331,17 +1378,24 @@ class CandidateSet:
             return topkinds
         elif self.search_type == "random":
             probs = self.random_search_distance_upper_bound - distances
-            eps = 2.0 ** -30
+            eps = 2.0**-30
             probs[distances > self.random_search_max_distance] = eps
             probs.diagonal().fill_(0.0)
             max_nneighbs = (probs > 2 * eps).sum(1).max()
             k = min(n_search, distances.shape[0] - 1, max_nneighbs)
             if k > 0:
-                inds = torch.multinomial(probs, num_samples=k, replacement=False, generator=self.gen)
+                inds = torch.multinomial(
+                    probs, num_samples=k, replacement=False, generator=self.gen
+                )
                 assert inds.shape == (self.n_units, k)
                 inds = inds.sort().values
-                inds[distances.take_along_dim(inds, dim=1) > self.random_search_max_distance] = -1
-                inds[inds == torch.arange(self.n_units, device=inds.device)[:, None]] = -1
+                inds[
+                    distances.take_along_dim(inds, dim=1)
+                    > self.random_search_max_distance
+                ] = -1
+                inds[
+                    inds == torch.arange(self.n_units, device=inds.device)[:, None]
+                ] = -1
             else:
                 inds = torch.zeros((self.n_units, 0), dtype=torch.long)
             return inds
@@ -1439,10 +1493,6 @@ class CandidateSet:
             targs = integers_without_inner_replacement(
                 self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
             )
-            if logger.isEnabledFor(DARTSORTVERBOSE):
-                logger.dartsortverbose(
-                    f"{n_explore.min()=} {n_explore.max()=} {targs.min()=} {targs.max()=}"
-                )
             targs = torch.from_numpy(targs)
             explore = neighborhood_explore_units[neighb_ids[:, None], targs]
             explore[targs < 0] = -1
@@ -1451,12 +1501,13 @@ class CandidateSet:
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
         if logger.isEnabledFor(DARTSORTVERBOSE):
-            logger.dartsortverbose(
-                f"I have maintained that {torch.all(self.candidates[:, :self.n_candidates]>=0)=} and"
-                f"{torch.all(self.candidates[:, :self.n_candidates].sort(dim=1).values.diff(dim=1)>0)=}"
+            assert torch.all(self.candidates[:, : self.n_candidates] >= 0)
+            assert torch.all(
+                self.candidates[:, : self.n_candidates].sort(dim=1).values.diff(dim=1)
+                > 0
             )
         assert (candidates[:, : self.n_candidates] >= 0).all()
-        if candidates[:, self.n_candidates:].numel():
+        if candidates[:, self.n_candidates :].numel():
             assert candidates[:, self.n_candidates :].min() >= -1
 
         # update counts for the rest of units

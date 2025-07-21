@@ -173,7 +173,8 @@ def test_reproducible_and_residual(
 
 
 @pytest.mark.parametrize("drift_speed", [0.0, -1.0, 5.0])
-def test_motion(tmp_path, drift_speed):
+@pytest.mark.parametrize("drift_type", ["line", "triangle"])
+def test_motion(tmp_path, drift_speed, drift_type):
     sim = simkit.generate_simulation(
         tmp_path / f"sim",
         tmp_path / f"noise",
@@ -185,6 +186,7 @@ def test_motion(tmp_path, drift_speed):
         noise_kind="zero",
         sampling_frequency=5_000.0,
         duration_seconds=8,
+        drift_type=drift_type,
         drift_speed=drift_speed,
         min_fr_hz=25.0,
         max_fr_hz=25.0,
@@ -196,7 +198,12 @@ def test_motion(tmp_path, drift_speed):
 
     me0 = sim["motion_est"]
     d0 = me0.displacement.ravel()
-    assert np.allclose(np.diff(d0), drift_speed)
+    if drift_type == "line":
+        assert np.allclose(np.diff(d0), drift_speed)
+    elif drift_type == "triangle":
+        assert np.allclose(np.abs(np.diff(d0)), abs(drift_speed))
+    else:
+        assert False
     me1 = estimate_motion(
         sim["recording"],
         sim["sorting"],
