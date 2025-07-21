@@ -110,16 +110,21 @@ def test_cli_help():
     assert not res.returncode
 
 
-@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "universal"])
+@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "universal", "subtract_cumulant"])
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
+    cumulant_order = 0
+    if type.endswith("_cumulant"):
+        cumulant_order = 2
+        type = type.removesuffix("_cumulant")
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediate_features=True,
         denoiser_badness_factor=1.0 if type == "universal" else 0.1,
+        cumulant_order=cumulant_order,
     )
     res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
     assert res["sorting"].parent_h5_path.exists()

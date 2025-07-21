@@ -174,6 +174,7 @@ class SubtractionConfig:
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
+    cumulant_order: int = 0
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -626,6 +627,7 @@ def to_internal_config(cfg):
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
+            cumulant_order=cfg.cumulant_order,
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(

@@ -246,6 +246,7 @@ def threshold_chunk(
     time_jitter=0,
     trough_priority=None,
     spatial_jitter_channel_index=None,
+    cumulant_order=0,
     return_waveforms=True,
     rg=None,
     quiet=False,
@@ -261,6 +262,7 @@ def threshold_chunk(
         relative_peak_radius=relative_peak_radius,
         return_energies=True,
         trough_priority=trough_priority,
+        cumulant_order=cumulant_order,
     )
     if not times_rel.numel():
         return dict(
