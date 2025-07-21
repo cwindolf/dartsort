@@ -36,6 +36,7 @@ def kmeanspp(
     skip_assignment=False,
     min_distance=None,
     show_progress=False,
+    initial_distances=None,
 ):
     """K-means++ initialization
 
@@ -49,10 +50,18 @@ def kmeanspp(
     rg = np.random.default_rng(random_state)
     gen = spawn_torch_rg(rg, device=X.device)
 
+    has_initial_dists = initial_distances is not None
+
     centroid_ixs = torch.full((n_components,), n, dtype=torch.long, device=X.device)
+    dists = None
+    if has_initial_dists:
+        dists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
 
     if kmeanspp_initial == "random":
-        centroid_ixs[0] = rg.integers(n)
+        if dists is None:
+            centroid_ixs[0] = rg.integers(n)
+        else:
+            centroid_ixs[0] = torch.multinomial(dists, 1, generator=gen)
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
@@ -68,10 +77,18 @@ def kmeanspp(
 
     diff_buffer = X.clone()
 
-    dists = torch.subtract(X, X[centroid_ixs[0]], out=diff_buffer).square_().sum(1)
+    newdists = torch.subtract(X, X[centroid_ixs[0]], out=diff_buffer).square_().sum(1)
     assignments = None
     if not skip_assignment:
-        assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
+        if not has_initial_dists:
+            assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
+            dists = newdists
+        else:
+            assignments = torch.full((n,), -1, dtype=torch.long, device=X.device)
+            closer = newdists < dists
+            assert assignments is not None
+            assignments[closer] = 0
+            dists[closer] = newdists[closer]
 
     p = dists.clone()
     xrange = trange if show_progress else range
