@@ -7,6 +7,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.01
 wtw_rtol = 0.01
+wtw_norm_rtol = 0.1
 
 t_mu_test = ("zero", "random")
 t_cov_test = ("eye", "random")
@@ -64,8 +65,14 @@ def test_ppca(
         W = res["ppca_res"]["W"]
         rank, nc, M = W.shape
         W = W.reshape(-1, M)
+        W0 = W0.reshape(-1, M)
+        WTW0 = W0 @ W0.T
         WTW = W @ W.T
-        mss = np.square(WTW.numpy(force=True)).mean()
+        mss0 = np.square(WTW0.numpy(force=True)).mean()
+        mss1 = np.square(WTW.numpy(force=True)).mean()
         mse = np.square(res["Werr"]).mean()
-        w_rel_err = mse / mss
+        w_rel_err = mse / mss0
         assert w_rel_err < wtw_rtol
+        w_rel_err = mse / mss1
+        assert w_rel_err < wtw_rtol
+        assert np.allclose(mss1, mss0, rtol=wtw_norm_rtol)

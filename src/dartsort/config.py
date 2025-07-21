@@ -178,6 +178,8 @@ class DeveloperConfig(DARTsortUserConfig):
     truncated: bool = True
     overwrite_matching: bool = False
 
+    cumulant_order: int = 0
+
     criterion_threshold: float = 0.0
     criterion: Literal[
         "heldout_loglik", "heldout_elbo", "loglik", "elbo"

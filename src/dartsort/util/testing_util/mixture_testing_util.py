@@ -601,6 +601,9 @@ def test_moppcas(
                 plt.close(panel)
         muerrs = np.stack(muerrs, axis=0)
         Werrs = np.stack(Werrs, axis=0)
+
+    ids, means, covs, logdets = mm.stack_units(mean_only=False)
+
     results = dict(
         sim_res=sim_res,
         gmm=mm,
@@ -614,5 +617,7 @@ def test_moppcas(
         M=M,
         ari=ari,
         fit_info=fit_info,
+        mu=means.numpy(force=True),
+        W=covs.numpy(force=True) if covs is not None else None,
     )
     return results

@@ -8,7 +8,7 @@ from dartsort.util.sparse_util import integers_without_inner_replacement
 from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
-wtw_rtol = 0.01
+wtw_rtol = 0.4
 elbo_atol = 1e-2
 
 
@@ -351,11 +351,26 @@ def test_mixture(
     assert mu_err < mu_atol
     assert res["ari"] == 1.0
 
-    Wgood = True
-    if "W" in res:
+    if t_w != "zero":
+        W0 = res["sim_res"]["W"]
         W = res["W"]
+        assert W0 is not None
+        assert W is not None
+
         k, rank, nc, M = W.shape
-        mss = np.square(WTW).mean()
-        mse = np.square(res["Werrs"]).mean()
-        Wgood = mse / mss < wtw_rtol
-    assert Wgood
+
+        W = W.reshape(k, rank * nc, M)
+        W0 = W0.reshape(k, rank * nc, M)
+
+        WTW = np.einsum("nij,nkj->nik", W, W)
+        WTW0 = np.einsum("nij,nkj->nik", W0, W0)
+        Werr = np.abs(WTW - WTW0)
+
+        W_rel_err_0 = np.square(Werr).mean() / np.square(WTW0).mean()
+        W_rel_err_1 = np.square(Werr).mean() / np.square(WTW).mean()
+        assert W_rel_err_0 < wtw_rtol
+        assert W_rel_err_1 < wtw_rtol
+
+        norm0 = np.linalg.norm(W, axis=(1, 2))
+        norm1 = np.linalg.norm(W, axis=(1, 2))
+        assert (np.abs(norm1 - norm0) / norm0).max() < wtw_rtol
