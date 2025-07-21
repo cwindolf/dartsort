@@ -16,6 +16,8 @@ from .transform_base import (
 
 
 class BaseTemporalPCA(BaseWaveformModule):
+    default_name = "basis"
+
     def __init__(
         self,
         channel_index,

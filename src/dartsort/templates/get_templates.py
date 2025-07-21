@@ -9,15 +9,17 @@ from dataclasses import replace
 import numpy as np
 import torch
 import threading
-from dartsort.util import spikeio
-from dartsort.util.drift_util import registered_template
-from dartsort.util.multiprocessing_util import get_pool
-from dartsort.util.spiketorch import fast_nanmedian, ptp
-from dartsort.util.waveform_util import make_channel_index
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
 from tqdm.auto import tqdm
+
+from ..util import spikeio
+from ..util.data_util import load_stored_tsvd
+from ..util.drift_util import registered_template
+from ..util.multiprocessing_util import get_pool
+from ..util.spiketorch import fast_nanmedian, ptp
+from ..util.waveform_util import make_channel_index
 
 
 def get_templates(
@@ -39,6 +41,7 @@ def get_templates(
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
+    with_raw_std_dev=False,
     reducer=fast_nanmedian,
     random_seed=0,
     units_per_job=8,
@@ -121,6 +124,7 @@ def get_templates(
             spikes_per_unit=spikes_per_unit,
             min_fraction_at_shift=min_fraction_at_shift,
             min_count_at_shift=min_count_at_shift,
+            with_raw_std_dev=with_raw_std_dev,
             reducer=reducer,
             random_seed=random_seed,
             n_jobs=n_jobs,
@@ -178,12 +182,14 @@ def get_templates(
         spike_length_samples=spike_length_samples,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
+        with_raw_std_dev=with_raw_std_dev,
         device=device,
     )
     (
         unit_ids,
         spike_counts,
         raw_templates,
+        raw_std_devs,
         low_rank_templates,
         snrs_by_channel,
         spike_counts_by_channel,
@@ -196,6 +202,7 @@ def get_templates(
             spike_counts=spike_counts,
             templates=raw_templates,
             raw_templates=raw_templates,
+            raw_std_devs=raw_std_devs,
             snrs_by_channel=snrs_by_channel,
             spike_counts_by_channel=spike_counts_by_channel,
         )
@@ -214,6 +221,7 @@ def get_templates(
         unit_ids=unit_ids,
         spike_counts=spike_counts,
         templates=templates,
+        raw_std_devs=raw_std_devs,
         raw_templates=raw_templates,
         low_rank_templates=low_rank_templates,
         snrs_by_channel=snrs_by_channel,
@@ -234,6 +242,7 @@ def get_raw_templates(
     realign_max_sample_shift=20,
     min_fraction_at_shift=0.1,
     min_count_at_shift=5,
+    with_raw_std_dev=False,
     reducer=fast_nanmedian,
     random_seed=0,
     n_jobs=0,
@@ -253,6 +262,7 @@ def get_raw_templates(
         realign_max_sample_shift=realign_max_sample_shift,
         min_fraction_at_shift=min_fraction_at_shift,
         min_count_at_shift=min_count_at_shift,
+        with_raw_std_dev=with_raw_std_dev,
         low_rank_denoising=False,
         reducer=reducer,
         random_seed=random_seed,
@@ -271,32 +281,26 @@ def realign_sorting(
     templates,
     snrs_by_channel,
     unit_ids,
-    realign_to="trough",
+    realign_to="trough_factor",
+    trough_factor=3.0,
     max_shift=20,
     trough_offset_samples=42,
     recording_length_samples=None,
 ):
     n, t, c = templates.shape
-
     if max_shift == 0:
         return sorting, templates
 
-    # find template peak time
     template_maxchans = snrs_by_channel.argmax(1)
-    template_maxchan_traces = templates[np.arange(n), :, template_maxchans]
-    if realign_to == "max":
-        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
-    elif realign_to == "trough":
-        # find the peak...
-        template_peak_times = template_maxchan_traces.argmin(1)
-    else:
-        assert False
-
-    # find unit sample time shifts
-    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
-    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
-    template_shifts = np.zeros(sorting.labels.max() + 1, dtype=np.int64)
-    template_shifts[unit_ids] = template_shifts_
+    template_shifts, aligned_templates = realign_templates(
+        templates,
+        unit_ids=unit_ids,
+        main_channels=template_maxchans,
+        trough_offset_samples=trough_offset_samples,
+        max_shift=max_shift,
+        realign_to=realign_to,
+        trough_factor=trough_factor,
+    )
 
     # create aligned spike train
     new_times = sorting.times_samples + template_shifts[sorting.labels]
@@ -306,6 +310,55 @@ def realign_sorting(
         labels[(new_times < trough_offset_samples) & (new_times > highlim)] = -1
     aligned_sorting = replace(sorting, labels=labels, times_samples=new_times)
 
+    return aligned_sorting, aligned_templates
+
+
+def realign_templates(
+    templates,
+    unit_ids=None,
+    main_channels=None,
+    trough_offset_samples=42,
+    max_shift=20,
+    realign_to="trough_factor",
+    trough_factor=2.0,
+):
+    n, t, c = templates.shape
+    if main_channels is None:
+        if realign_to == "max":
+            main_channels = np.abs(templates).max(1).argmax(1)
+        elif realign_to == "trough":
+            main_channels = templates.min(1).argmin(1)
+        elif realign_to == "trough_factor":
+            align = np.abs(templates)
+            align[templates < 0] *= trough_factor
+            main_channels = align.max(1).argmax(1)
+        else:
+            assert False
+    assert main_channels is not None
+
+    # find template peak time
+    template_maxchan_traces = templates[np.arange(n), :, main_channels]
+    if realign_to == "max":
+        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
+    elif realign_to == "trough":
+        template_peak_times = template_maxchan_traces.argmin(1)
+    elif realign_to == "trough_factor":
+        neg = template_maxchan_traces < 0
+        template_maxchan_traces = np.abs(template_maxchan_traces)
+        template_maxchan_traces[neg] *= trough_factor
+        template_peak_times = template_maxchan_traces.argmax(1)
+    else:
+        assert False
+
+    # find unit sample time shifts
+    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
+    if unit_ids is None:
+        template_shifts = template_shifts_
+    else:
+        template_shifts = np.zeros(unit_ids.max() + 1, dtype=np.int64)
+        template_shifts[unit_ids] = template_shifts_
+
     # trim templates
     aligned_spike_len = t - 2 * max_shift
     aligned_templates = np.empty((n, aligned_spike_len, c))
@@ -314,27 +367,33 @@ def realign_sorting(
             i, max_shift + dt : max_shift + dt + aligned_spike_len
         ]
 
-    return aligned_sorting, aligned_templates
+    return template_shifts, aligned_templates
 
 
 def fit_tsvd(
     recording,
     sorting,
     denoising_rank=5,
-    denoising_fit_radius=75,
+    denoising_fit_radius=75.0,
     denoising_spikes_fit=25_000,
     trough_offset_samples=42,
     spike_length_samples=121,
     dtype=np.float32,
     random_seed=0,
 ):
+    tsvd = load_stored_tsvd(sorting)
+    if tsvd is not None:
+        return tsvd
+
     # read spikes on channel neighborhood
     geom = recording.get_channel_locations()
     tsvd_channel_index = make_channel_index(geom, denoising_fit_radius)
 
     # subset spikes used to fit tsvd
     rg = np.random.default_rng(random_seed)
-    max_time = recording.get_num_samples() - (spike_length_samples - trough_offset_samples)
+    max_time = recording.get_num_samples() - (
+        spike_length_samples - trough_offset_samples
+    )
     t_clip = sorting.times_samples.clip(trough_offset_samples, max_time)
     valid = np.logical_and(
         sorting.labels >= 0,
@@ -410,6 +469,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     registered_geom=None,
     denoising_tsvd=None,
     pitch_shifts=None,
+    with_raw_std_dev=False,
     spikes_per_unit=500,
     reducer=fast_nanmedian,
     n_jobs=0,
@@ -441,6 +501,11 @@ def get_all_shifted_raw_and_low_rank_templates(
         (n_units, spike_length_samples, n_template_channels),
         dtype=dtype,
     )
+    if with_raw_std_dev:
+        raw_square_templates = np.zeros(
+            (n_units, spike_length_samples, n_template_channels),
+            dtype=dtype,
+        )
     low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
@@ -469,6 +534,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             spikes_per_unit,
             min_fraction_at_shift,
             min_count_at_shift,
+            with_raw_std_dev,
             reducer,
             trough_offset_samples,
             spike_length_samples,
@@ -492,12 +558,15 @@ def get_all_shifted_raw_and_low_rank_templates(
             (
                 units_chunk,
                 raw_temps_chunk,
+                raw_square_temps_chunk,
                 low_rank_temps_chunk,
                 snrs_chunk,
                 chancounts_chunk,
             ) = res
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
+            if with_raw_std_dev:
+                raw_square_templates[ix_chunk] = raw_square_temps_chunk
             if not raw:
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk
             snrs_by_channel[ix_chunk] = snrs_chunk
@@ -507,10 +576,17 @@ def get_all_shifted_raw_and_low_rank_templates(
         if show_progress:
             pbar.close()
 
+    raw_std_dev = None
+    if with_raw_std_dev:
+        raw_std_dev = raw_square_templates
+        raw_std_dev -= raw_templates ** 2
+        raw_std_dev **= 0.5
+
     return (
         unit_ids,
         spike_counts,
         raw_templates,
+        raw_std_dev,
         low_rank_templates,
         snrs_by_channel,
         spike_counts_by_channel,
@@ -529,6 +605,7 @@ class TemplateProcessContext:
         spikes_per_unit,
         min_fraction_at_shift,
         min_count_at_shift,
+        with_raw_std_dev,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -559,6 +636,7 @@ class TemplateProcessContext:
         )
         self.min_fraction_at_shift = min_fraction_at_shift
         self.min_count_at_shift = min_count_at_shift
+        self.with_raw_std_dev = with_raw_std_dev
 
         self.spike_buffer = torch.zeros(
             (
@@ -594,6 +672,7 @@ def _template_process_init(
     spikes_per_unit,
     min_fraction_at_shift,
     min_count_at_shift,
+    with_raw_std_dev,
     reducer,
     trough_offset_samples,
     spike_length_samples,
@@ -623,6 +702,7 @@ def _template_process_init(
         spikes_per_unit,
         min_fraction_at_shift,
         min_count_at_shift,
+        with_raw_std_dev,
         reducer,
         trough_offset_samples,
         spike_length_samples,
@@ -685,6 +765,7 @@ def _template_job(unit_ids):
 
     # compute raw templates and spike counts per channel
     raw_templates = []
+    raw_square_templates = []
     counts = []
     units_chunk = []
     for u in uids:
@@ -693,10 +774,11 @@ def _template_job(unit_ids):
             continue
         units_chunk.append(u)
         in_unit_orig = in_units[labels == u]
+        unit_waveforms = waveforms[in_unit]
         if p.registered:
             raw_templates.append(
                 registered_template(
-                    waveforms[in_unit],
+                    unit_waveforms,
                     p.pitch_shifts[in_unit_orig],
                     p.geom,
                     p.registered_geom,
@@ -707,6 +789,20 @@ def _template_job(unit_ids):
                     reducer=p.reducer,
                 )
             )
+            if p.with_raw_std_dev:
+                raw_square_templates.append(
+                    registered_template(
+                        unit_waveforms.square_(),
+                        p.pitch_shifts[in_unit_orig],
+                        p.geom,
+                        p.registered_geom,
+                        min_fraction_at_shift=p.min_fraction_at_shift,
+                        min_count_at_shift=p.min_count_at_shift,
+                        registered_kdtree=p.registered_kdtree,
+                        match_distance=p.match_distance,
+                        reducer=p.reducer,
+                    )
+                )
             counts.append(
                 registered_template(
                     np.ones((in_unit.size, p.n_channels)),
@@ -724,15 +820,23 @@ def _template_job(unit_ids):
             raw_templates.append(
                 p.reducer(waveforms[in_unit], axis=0).numpy(force=True)
             )
+            if p.with_raw_std_dev:
+                raw_square_templates.append(
+                    p.reducer(unit_waveforms.square_(), axis=0).numpy(force=True)
+                )
             counts.append(in_unit.size)
     snrs_by_chan = np.array([ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)])
     counts_by_chan = np.array(counts)
     if counts_by_chan.ndim == 1:
         counts_by_chan = np.broadcast_to(counts_by_chan[:, None], snrs_by_chan.shape)
     raw_templates = np.array(raw_templates)
+    if p.with_raw_std_dev:
+        raw_square_templates = np.array(raw_square_templates)
+    else:
+        raw_square_templates = None
 
     if p.denoising_tsvd is None:
-        return units_chunk, raw_templates, None, snrs_by_chan, counts_by_chan
+        return units_chunk, raw_templates, raw_square_templates, None, snrs_by_chan, counts_by_chan
 
     # nt, t, ct = raw_templates.shape
     # low_rank_templates = torch.tensor(raw_templates.transpose(0, 2, 1), device=p.device)
@@ -771,7 +875,7 @@ def _template_job(unit_ids):
             )
     low_rank_templates = np.array(low_rank_templates)
 
-    return units_chunk, raw_templates, low_rank_templates, snrs_by_chan, counts_by_chan
+    return units_chunk, raw_templates, raw_square_templates, low_rank_templates, snrs_by_chan, counts_by_chan
 
 
 class TorchSVDProjector(torch.nn.Module):

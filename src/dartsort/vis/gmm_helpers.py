@@ -13,6 +13,7 @@ def get_neighbors(gmm, unit_id, n_neighbors=5):
     dists = gmm[unit_id].divergence(means, covs, logdets, kind="reverse_kl")
     dists = dists.view(-1)
     order = ids[torch.argsort(dists).numpy(force=True)]
+    order = order.squeeze()
     assert order[0] == unit_id
     return order[: n_neighbors + 1]
 
@@ -118,6 +119,7 @@ def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=T
     assert mean.shape == (2,)
     cov = unit.marginal_covariance(channels=channels).to_dense()
     cov = wv.T @ cov @ wv
+    cov = cov.numpy(force=True)
     rho = cov[0, 1] / np.sqrt(np.diagonal(cov).prod())
 
     # draw ellipses

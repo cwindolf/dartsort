@@ -27,10 +27,11 @@ class ThresholdAndFeaturize(BasePeeler):
         peak_sign="both",
         fit_sampling="random",
         fit_max_reweighting=4.0,
+        relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
         dedup_temporal_radius_samples=7,
-        n_chunks_fit=40,
+        n_seconds_fit=100,
         n_waveforms_fit=20_000,
         max_waveforms_fit=50_000,
         fit_subsampling_random_state=0,
@@ -46,7 +47,7 @@ class ThresholdAndFeaturize(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=spike_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             n_waveforms_fit=n_waveforms_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_sampling=fit_sampling,
@@ -67,6 +68,12 @@ class ThresholdAndFeaturize(BasePeeler):
             )
         else:
             self.spatial_dedup_channel_index = None
+        if relative_peak_channel_index is not None:
+            self.register_buffer(
+                "relative_peak_channel_index", relative_peak_channel_index
+            )
+        else:
+            self.relative_peak_channel_index = None
         self.detection_threshold = detection_threshold
         self.max_spikes_per_chunk = max_spikes_per_chunk
         self.peel_kind = f"Threshold {detection_threshold}"
@@ -89,39 +96,43 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
     @classmethod
-    def from_config(
-        cls, recording, waveform_config, thresholding_config, featurization_config
-    ):
+    def from_config(cls, recording, waveform_cfg, thresholding_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
 
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
 
+        relative_peak_channel_index = None
+        if thresholding_cfg.relative_peak_radius_um:
+            relative_peak_channel_index = make_channel_index(
+                geom, thresholding_cfg.relative_peak_radius_um, to_torch=True
+            )
+
         spatial_dedup_channel_index = None
-        if thresholding_config.spatial_dedup_radius:
+        if thresholding_cfg.spatial_dedup_radius:
             spatial_dedup_channel_index = make_channel_index(
-                geom, thresholding_config.spatial_dedup_radius, to_torch=True
+                geom, thresholding_cfg.spatial_dedup_radius, to_torch=True
             )
 
         spatial_jitter_channel_index = None
-        if thresholding_config.spatial_jitter_radius:
+        if thresholding_cfg.spatial_jitter_radius:
             spatial_jitter_channel_index = make_channel_index(
-                geom, thresholding_config.spatial_jitter_radius, to_torch=True
+                geom, thresholding_cfg.spatial_jitter_radius, to_torch=True
             )
 
         # waveform logic
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
 
@@ -131,23 +142,24 @@ class ThresholdAndFeaturize(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            detection_threshold=thresholding_config.detection_threshold,
-            chunk_length_samples=thresholding_config.chunk_length_samples,
-            max_spikes_per_chunk=thresholding_config.max_spikes_per_chunk,
-            peak_sign=thresholding_config.peak_sign,
-            fit_sampling=thresholding_config.fit_sampling,
-            fit_max_reweighting=thresholding_config.fit_max_reweighting,
+            detection_threshold=thresholding_cfg.detection_threshold,
+            chunk_length_samples=thresholding_cfg.chunk_length_samples,
+            max_spikes_per_chunk=thresholding_cfg.max_spikes_per_chunk,
+            peak_sign=thresholding_cfg.peak_sign,
+            fit_sampling=thresholding_cfg.fit_sampling,
+            fit_max_reweighting=thresholding_cfg.fit_max_reweighting,
+            relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
-            relative_peak_radius_samples=thresholding_config.relative_peak_radius_samples,
-            dedup_temporal_radius_samples=thresholding_config.dedup_temporal_radius_samples,
-            n_chunks_fit=thresholding_config.n_chunks_fit,
-            n_waveforms_fit=thresholding_config.n_waveforms_fit,
-            max_waveforms_fit=thresholding_config.max_waveforms_fit,
-            fit_subsampling_random_state=thresholding_config.fit_subsampling_random_state,
-            thinning=thresholding_config.thinning,
-            time_jitter=thresholding_config.time_jitter,
+            relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
+            dedup_temporal_radius_samples=thresholding_cfg.dedup_temporal_radius_samples,
+            n_seconds_fit=thresholding_cfg.n_seconds_fit,
+            n_waveforms_fit=thresholding_cfg.n_waveforms_fit,
+            max_waveforms_fit=thresholding_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=thresholding_cfg.fit_subsampling_random_state,
+            thinning=thresholding_cfg.thinning,
+            time_jitter=thresholding_cfg.time_jitter,
             spatial_jitter_channel_index=spatial_jitter_channel_index,
-            trough_priority=thresholding_config.trough_priority,
+            trough_priority=thresholding_cfg.trough_priority,
         )
 
     def out_datasets(self):
@@ -181,6 +193,7 @@ class ThresholdAndFeaturize(BasePeeler):
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
+            relative_peak_channel_index=self.relative_peak_channel_index,
             dedup_temporal_radius=self.dedup_temporal_radius_samples,
             thinning=self.thinning,
             time_jitter=self.time_jitter,
@@ -220,6 +233,7 @@ def threshold_chunk(
     channel_index,
     detection_threshold=4,
     peak_sign="both",
+    relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
     trough_offset_samples=42,
     spike_length_samples=121,
@@ -240,6 +254,7 @@ def threshold_chunk(
     times_rel, channels, energies = detect_and_deduplicate(
         traces,
         detection_threshold,
+        relative_peak_channel_index=relative_peak_channel_index,
         dedup_channel_index=spatial_dedup_channel_index,
         peak_sign=peak_sign,
         dedup_temporal_radius=dedup_temporal_radius,

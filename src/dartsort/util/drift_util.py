@@ -1,5 +1,21 @@
 """Utility functions for dealing with drifting channels
 
+A brief note on the sign of the drift.
+
+    - Words like "displacement" or "drift" always refer to the
+      displacement of the tissue relative to the probe.
+
+      Thus if a neuron's position at time 0 is z0, it's position
+      at time t is z0 + drift(t, z0).
+
+      The observed position z(t) is the reg pos zr(t) + drift(t, z(t)).
+
+      Alternatively, estimate reg poses by zr(t) = z(t) - drift(t, z(t)).
+
+    - Alternatively, one could imagine a reference frame where the brain
+      is fixed and the probe moves. In that case, the positions of the probe
+      contacts at time t are "registered geom" + [0, drift(t, geom[:, 1])].
+
 The main concept here is the "registered geometry" made by the
 function `registered_geometry`. The idea is to extend the
 probe geometry to cover the range of drift experienced in the
@@ -19,7 +35,7 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
 from .spiketorch import fast_nanmedian
-from .waveform_util import get_pitch, make_channel_index
+from .waveform_util import get_orders, get_pitch, make_channel_index
 
 # -- registered geometry and templates helpers
 
@@ -124,8 +140,10 @@ def registered_geometry(
     chan_ix = np.arange(len(geom))
     kdt = KDTree(geom)
     n_shifts = pitches_pad_up + pitches_pad_down + 1
-    unique_shifted_positions_toobig = np.zeros((n_shifts * len(geom), geom.shape[1]), dtype=geom.dtype)
-    unique_shifted_positions_toobig[:len(geom)] = geom
+    unique_shifted_positions_toobig = np.zeros(
+        (n_shifts * len(geom), geom.shape[1]), dtype=geom.dtype
+    )
+    unique_shifted_positions_toobig[: len(geom)] = geom
     cur_ix = len(geom)
     for shift in range(-pitches_pad_down, pitches_pad_up + 1):
         cur_pos = unique_shifted_positions_toobig[:cur_ix]
@@ -141,14 +159,21 @@ def registered_geometry(
         n_new = len(i_unobs)
         if not n_new:
             continue
-        unique_shifted_positions_toobig[cur_ix:cur_ix + n_new] = geom[i_unobs] + [0, pitch * shift]
+        sh = [0, pitch * shift]
+        unique_shifted_positions_toobig[cur_ix : cur_ix + n_new] = geom[i_unobs] + sh
         cur_ix += n_new
         assert cur_ix <= len(unique_shifted_positions_toobig)
 
     unique_shifted_positions = unique_shifted_positions_toobig[:cur_ix]
 
+    # if axes are decreasing, maintain that -- it leads to less mashing.
+    sorter_positions = unique_shifted_positions
+    flips = get_orders(geom)
+    if (flips < 0).any():
+        sorter_positions = sorter_positions * flips
+
     # order by depth first, then horizontal position (unique goes the other way)
-    registered_geom = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
+    registered_geom = unique_shifted_positions[np.lexsort(sorter_positions.T)]
     assert np.isclose(get_pitch(registered_geom), pitch)
 
     return registered_geom
@@ -200,6 +225,7 @@ def registered_average(
         out=work_buffer,
         fill_value=np.nan,
     )
+    print(f"{static_waveforms[0].mean(0)}")
 
     if return_n_samples:
         # remove time dim if any
@@ -471,7 +497,9 @@ def get_waveforms_on_static_channels(
 
     # the case where each waveform lives on its own channels
     # nans will never be matched in k-d query below
-    padded_geom = np.pad(geom.astype(np.float64), [(0, 1), (0, 0)], constant_values=np.nan)
+    padded_geom = np.pad(
+        geom.astype(np.float64), [(0, 1), (0, 0)], constant_values=np.nan
+    )
 
     # ok, the kdtree query can get expensive when we have lots of these shifting
     # positions. it turns out to be worth it to go through the effort of figuring
@@ -500,6 +528,7 @@ def get_waveforms_on_static_channels(
 
     # ok, now we can return to non-unique world
     shifted_channels = uniq_shifted_channels[uniq_inv]
+    print(f"get_waveforms_on_static_channels {shifted_channels[0]=}")
 
     #     # shape is n_spikes, c, spatial dim
     #     moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]
@@ -627,7 +656,7 @@ def static_channel_neighborhoods(
     if n_pitches_shift is not None:
         assert n_pitches_shift.shape == (n_spikes,)
     if match_distance is None:
-        match_distance = pdist(geom).min() / 2
+        match_distance = pdist(geom).min() / 1.5
 
     # grab the positions of the channels that we are targeting
     target_geom = geom
@@ -858,7 +887,9 @@ def get_shift_and_unit_pairs(
     return template_shift_index_a, template_shift_index_b, cooccurrence
 
 
-def get_shift_info(sorting, motion_est, geom, motion_depth_mode="channel", channels_mode="round"):
+def get_shift_info(
+    sorting, motion_est, geom, motion_depth_mode="channel", channels_mode="round"
+):
     """
     shifts = reg_depths - depths
     reg_depths = depths + shifts
@@ -927,7 +958,7 @@ def get_stable_channels(
     # precompute these, shared across next two calls
     pitch = get_pitch(geom)
     registered_kdtree = KDTree(registered_geom)
-    match_distance = pdist(geom).min() / 2
+    match_distance = pdist(geom).min() / 1.5
 
     extract_channels, extract_neighborhoods, extract_neighborhood_ids = (
         static_channel_neighborhoods(

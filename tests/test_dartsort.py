@@ -6,24 +6,22 @@ import dartsort
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(tmp_path, sim_recordings, do_motion_estimation):
-    sim_recording = (
-        sim_recordings["drifting"] if do_motion_estimation else sim_recordings["static"]
-    )
-    sim_recording = sim_recording["rec"]
+def test_fakedata_nonn(tmp_path, simulations, do_motion_estimation):
+    sim_name = "drifty_szreg" if do_motion_estimation else "driftn_szreg"
+    sim_recording = simulations[sim_name]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
-        subtraction_config=dartsort.SubtractionConfig(
-            subtraction_denoising_config=dartsort.FeaturizationConfig(
+        initial_detection_cfg=dartsort.SubtractionConfig(
+            subtraction_denoising_cfg=dartsort.FeaturizationConfig(
                 denoise_only=True, do_nn_denoise=False
             )
         ),
-        initial_refinement_config=dartsort.RefinementConfig(
+        initial_refinement_cfg=dartsort.RefinementConfig(
             min_count=10, n_total_iters=1, one_split_only=True
         ),
-        refinement_config=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
-        featurization_config=dartsort.FeaturizationConfig(n_residual_snips=512),
-        motion_estimation_config=dartsort.MotionEstimationConfig(
+        refinement_cfg=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
+        featurization_cfg=dartsort.FeaturizationConfig(n_residual_snips=512),
+        motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=do_motion_estimation, rigid=True
         ),
         work_in_tmpdir=True,
@@ -67,28 +65,34 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 
 
 @pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
-def test_fakedata(tmp_path, sim_recordings, sdcfg):
-    sim_recording = sim_recordings["static"]["rec"]
+def test_fakedata(tmp_path, simulations, sdcfg):
+    sim_recording = simulations["driftn_szreg"]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
-        subtraction_config=dartsort.SubtractionConfig(
-            subtraction_denoising_config=sdcfg,
+        initial_detection_cfg=dartsort.SubtractionConfig(
+            subtraction_denoising_cfg=sdcfg,
             first_denoiser_thinning=0.0,
         ),
         # test pc based clust
-        clustering_config=dartsort.ClusteringConfig(
+        clustering_features_cfg=dartsort.ClusteringFeaturesConfig(
             use_amplitude=False, n_main_channel_pcs=1
         ),
-        refinement_config=dartsort.RefinementConfig(
-            min_count=10, channels_strategy="count", n_total_iters=1
+        refinement_cfg=dartsort.RefinementConfig(
+            min_count=10,
+            channels_strategy="count",
+            n_total_iters=1,
+            search_type="random",
+            distance_metric="cosine",
+            merge_distance_threshold=0.5,
+            noise_fp_correction=True,
         ),
-        featurization_config=dartsort.FeaturizationConfig(
+        featurization_cfg=dartsort.FeaturizationConfig(
             n_residual_snips=512, nn_localization=False
         ),
-        motion_estimation_config=dartsort.MotionEstimationConfig(
+        motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=False
         ),
-        matching_config=dartsort.MatchingConfig(threshold="fp_control"),
+        matching_cfg=dartsort.MatchingConfig(threshold="fp_control"),
         # test the dev tasks pipeline
         save_intermediate_labels=True,
         save_intermediate_features=False,
@@ -106,5 +110,42 @@ def test_cli_help():
     assert not res.returncode
 
 
-if __name__ == "__main__":
-    test_fakedata(sim_recording())
+@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "universal"])
+def test_initial_detection_swap(tmp_path, simulations, type):
+    sim = simulations["driftn_szmini"]
+    sim["templates"].to_npz(tmp_path / "temps.npz")
+    cfg = dartsort.DeveloperConfig(
+        dredge_only=True,
+        detection_type=type,
+        precomputed_templates_npz=str(tmp_path / "temps.npz"),
+        save_intermediate_features=True,
+        denoiser_badness_factor=1.0 if type == "universal" else 0.1,
+    )
+    res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
+    assert res["sorting"].parent_h5_path.exists()
+    if type == "subtract":
+        h5_name = "subtraction"
+    elif type == "threshold":
+        h5_name = "threshold"
+    elif type == "universal":
+        h5_name = "universal"
+    elif type == "match":
+        h5_name = "matching0"
+    else:
+        assert False
+    assert (tmp_path / f"{h5_name}.h5").exists()
+    assert not (tmp_path / "matching1.h5").exists()
+
+    if type == "match":
+        count_dif_tol = 0.05
+    elif type == "universal":
+        count_dif_tol = 0.3
+    elif type == "subtract":
+        count_dif_tol = 0.2
+    elif type == "threshold":
+        count_dif_tol = 0.4
+    else:
+        assert False
+    c0 = len(sim["sorting"])
+    c1 = len(res["sorting"])
+    assert abs(c0 - c1) < count_dif_tol * c0

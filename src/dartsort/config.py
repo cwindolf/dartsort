@@ -6,12 +6,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
-from .util.internal_config import _strict_config, default_pretrained_path
-from .util.py_util import int_or_float, str_or_none, int_or_float_or_none
+from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
+from .util.py_util import int_or_none, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
-@dataclass(frozen=True, kw_only=True, config=_strict_config)
+@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DARTsortUserConfig:
     """User-facing configuration options"""
 
@@ -61,7 +61,7 @@ class DARTsortUserConfig:
         "Default value corresponds to 79 samples at 30kHz.",
     )
     alignment_ms: Annotated[float, Field(gt=0)] = argfield(
-        default=1.0,
+        default=1.5,
         doc="Time shift allowed when aligning events.",
     )
 
@@ -78,7 +78,7 @@ class DARTsortUserConfig:
         "that match will be used.",
     )
     matching_fp_control: bool = False
-    denoiser_badness_factor: Annotated[float, Field(gt=0, lt=1)] = argfield(
+    denoiser_badness_factor: Annotated[float, Field(ge=0, le=1)] = argfield(
         default=0.1,
         doc="In initial detection, subtracting clean waveforms inferred "
         "by the NN denoiser need only decrease the residual norm squared "
@@ -155,16 +155,26 @@ class DARTsortUserConfig:
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
-@dataclass(frozen=True, kw_only=True, config=_strict_config)
+@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
+    detection_type: str = "subtract"
     initial_split_only: bool = True
+    resume_with_split: bool = False
+    cluster_strategy: str = "gmmdpc"
+    refinement_strategy: str = "gmm"
+    recluster_after_first_matching: bool = False
+    initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
+    signal_rank: Annotated[int, Field(ge=0)] = 0
+    gmm_euclidean_threshold: float = 5.0
+    gmm_cosine_threshold: float = 0.1
+    initial_euclidean_complete_only: bool = False
+    initial_cosine_complete_only: bool = False
+    gmm_noise_fp_correction: bool = False
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
-    use_universal_templates: bool = False
-    signal_rank: Annotated[int, Field(ge=0)] = 0
     truncated: bool = True
     overwrite_matching: bool = False
 
@@ -177,10 +187,17 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 50
     channels_strategy: str = "count"
     hard_noise: bool = False
+    gmm_metric: Literal["kl", "cosine"] = "kl"
+    gmm_search: Literal["topk", "random"] = "topk"
+    gmm_n_candidates: int = 3
+    gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
-    initial_amp_feat: bool = True
-    initial_pc_feats: int = 0
+    initial_amp_feat: bool = False
+    initial_pc_feats: int = 2
     initial_pc_scale: float = 2.5
+    motion_aware_clustering: bool = True
+    clustering_workers: int = 5
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000
@@ -191,18 +208,28 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.5
+    postprocessing_merge_threshold: float = 0.025
 
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 4_000_000
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 5.0
+    kmeansk: int = 4
+    prior_pseudocount: float = 10.0
+    prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
     interpolation_method: str = "kriging"
     extrapolation_method: str | None = argfield(default="kernel", arg_type=str_or_none)
     interpolation_kernel: str = "thinplate"
     interpolation_rq_alpha: float = 0.5
-    interpolation_degree: int = 1
+    interpolation_degree: int = 0
     glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
-    laplace_ard: bool = True
+    laplace_ard: bool = False
     core_radius: float = 35.0
+    min_cluster_size: int = 50
+    hellinger_strong: float = 0.0
+
+    save_subtracted_waveforms: bool = False
+    save_collisioncleaned_waveforms: bool = False
+    precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
+    save_everything_on_error: bool = False

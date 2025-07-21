@@ -109,7 +109,7 @@ def test_fakedata_nonn(tmp_path):
     subconf = SubtractionConfig(
         detection_threshold=20.0,
         peak_sign="both",
-        subtraction_denoising_config=FeaturizationConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
         first_denoiser_thinning=0.0,
@@ -130,8 +130,8 @@ def test_fakedata_nonn(tmp_path):
         st = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
             overwrite=True,
         )
         out_h5 = st.parent_h5_path
@@ -156,8 +156,8 @@ def test_fakedata_nonn(tmp_path):
         st = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
             overwrite=False,
         )
         ns1 = len(st)
@@ -183,8 +183,8 @@ def test_fakedata_nonn(tmp_path):
         st = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
             overwrite=True,
         )
         out_h5 = st.parent_h5_path
@@ -214,10 +214,10 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_config=featconf,
-                subtraction_config=subconf,
+                featurization_cfg=featconf,
+                subtraction_cfg=subconf,
                 overwrite=True,
-                computation_config=ccfg,
+                computation_cfg=ccfg,
             )
             out_h5 = st.parent_h5_path
             ns0 = len(st)
@@ -242,10 +242,10 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_config=featconf,
-                subtraction_config=subconf,
+                featurization_cfg=featconf,
+                subtraction_cfg=subconf,
                 overwrite=False,
-                computation_config=ccfg,
+                computation_cfg=ccfg,
             )
             out_h5 = st.parent_h5_path
             ns1 = len(st)
@@ -270,10 +270,10 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_config=featconf,
-                subtraction_config=subconf,
+                featurization_cfg=featconf,
+                subtraction_cfg=subconf,
                 overwrite=True,
-                computation_config=ccfg,
+                computation_cfg=ccfg,
             )
             out_h5 = st.parent_h5_path
             ns2 = len(st)
@@ -296,8 +296,8 @@ def test_fakedata_nonn(tmp_path):
     print("test resume1")
     subconf = dataclasses.replace(
         subconf,
-        subtraction_denoising_config=dataclasses.replace(
-            subconf.subtraction_denoising_config,
+        subtraction_denoising_cfg=dataclasses.replace(
+            subconf.subtraction_denoising_cfg,
             do_nn_denoise=True,
             do_tpca_denoise=False,
         ),
@@ -311,26 +311,31 @@ def test_fakedata_nonn(tmp_path):
         st0 = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
+            featurization_cfg=nolocfeatconf,
+            subtraction_cfg=subconf,
         )
         ns0 = len(st0)
+        print(ns0)
 
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
         sta = subtract(
-            recording=rec.frame_slice(start_frame=0, end_frame=int((T_s // 3) * fs)),
+            recording=rec,
             output_dir=tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
+            featurization_cfg=nolocfeatconf,
+            subtraction_cfg=subconf,
+            chunk_starts_samples=np.arange(3) * int(fs),
         )
+        with h5py.File(sta.parent_h5_path, locking=False) as h5:
+            assert h5["last_chunk_start"][()] == int(2 * fs)
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=nolocfeatconf,
-            subtraction_config=subconf,
+            featurization_cfg=nolocfeatconf,
+            subtraction_cfg=subconf,
         )
+        print(f"{len(sta)=} {len(stb)=}")
         assert len(sta) < ns0
         assert len(stb) == ns0
 
@@ -358,7 +363,7 @@ def test_small_nonn(tmp_path, nn_localization):
     subconf = SubtractionConfig(
         detection_threshold=40.0,
         peak_sign="both",
-        subtraction_denoising_config=FeaturizationConfig(
+        subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
     )
@@ -373,8 +378,8 @@ def test_small_nonn(tmp_path, nn_localization):
         st = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_config=featconf,
-            subtraction_config=subconf,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
             overwrite=True,
         )
         with h5py.File(st.parent_h5_path, locking=False) as h5:
@@ -393,9 +398,9 @@ def test_small_nonn(tmp_path, nn_localization):
             recording=rec,
             output_dir=tempdir,
             overwrite=True,
-            featurization_config=featconf,
-            subtraction_config=subconf,
-            computation_config=two_jobs_cfg_cpu,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            computation_cfg=two_jobs_cfg_cpu,
         )
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
@@ -413,9 +418,9 @@ def test_small_nonn(tmp_path, nn_localization):
             recording=rec,
             output_dir=tempdir,
             overwrite=True,
-            featurization_config=featconf,
-            subtraction_config=subconf,
-            computation_config=two_jobs_cfg,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            computation_cfg=two_jobs_cfg,
         )
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
@@ -463,8 +468,8 @@ def test_small_default_config(tmp_path, extract_radius=100):
             recording=rec,
             output_dir=tempdir,
             overwrite=True,
-            subtraction_config=cfg,
-            featurization_config=fcfg,
+            subtraction_cfg=cfg,
+            featurization_cfg=fcfg,
         )
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
@@ -483,9 +488,9 @@ def test_small_default_config(tmp_path, extract_radius=100):
             recording=rec,
             output_dir=tempdir,
             overwrite=True,
-            computation_config=two_jobs_cfg,
-            subtraction_config=cfg,
-            featurization_config=fcfg,
+            computation_cfg=two_jobs_cfg,
+            subtraction_cfg=cfg,
+            featurization_cfg=fcfg,
         )
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:

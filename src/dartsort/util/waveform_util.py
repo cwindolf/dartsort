@@ -60,6 +60,23 @@ def get_pitch(geom, direction=1, allow_horizontal=False):
     return np.diff(all_unique_y).min()
 
 
+def get_orders(geom):
+    orders = np.ones(geom.shape[1])
+    for dim in range(geom.shape[1]):
+        other_dims = [i for i in range(geom.shape[1]) if i != dim]
+        other_dims_uniq = np.unique(geom[:, other_dims], axis=0)
+
+        sgns = set()
+        for pos in other_dims_uniq:
+            at_x = np.all(geom[:, other_dims] == pos, axis=1)
+            sgns.update(np.unique(np.sign(np.diff(geom[at_x, dim]))))
+
+        if len(sgns) == 1:
+            sign = list(sgns)[0]
+            orders[dim] = sign
+    return orders
+
+
 def fill_geom_holes(geom):
     pitch = get_pitch(geom)
     pitches_pad = int(np.ceil(np.ptp(geom[:, 1]) / pitch))
@@ -713,3 +730,19 @@ def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=
     erp_y_up = erp_y_up.reshape(n, t, temporal_jitter)
     singlechan_waveforms_up = erp_y_up.transpose(0, 2, 1)
     return singlechan_waveforms_up
+
+def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
+    """ntc -> nutc"""
+    if temporal_jitter == 1:
+        return waveforms[:, None]
+    n, t, c = waveforms.shape
+    dtype = waveforms.dtype
+    waveforms = waveforms.transpose(0, 2, 1).reshape((n * c, t))
+    invalid = np.flatnonzero(np.isnan(waveforms[:, 0]))
+    waveforms = np.nan_to_num(waveforms, copy=False)
+    waveforms = upsample_singlechan(waveforms, time_domain=time_domain, temporal_jitter=temporal_jitter)
+    waveforms[invalid] = np.nan
+    waveforms = waveforms.reshape(n, c, temporal_jitter, t)
+    waveforms = waveforms.transpose(0, 2, 3, 1)
+    waveforms = np.ascontiguousarray(waveforms, dtype=dtype)
+    return waveforms

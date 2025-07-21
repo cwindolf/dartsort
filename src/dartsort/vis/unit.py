@@ -18,8 +18,9 @@ import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 
 from ..cluster import split
-from ..util.internal_config import raw_template_config
-from ..util.analysis import DARTsortAnalysis
+from ..util.internal_config import raw_template_cfg
+from ..util.job_util import get_global_computation_config
+from ..evaluate.analysis import DARTsortAnalysis
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
 from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
@@ -850,7 +851,7 @@ class SplitStrategyPlot(UnitPlot):
             split_sorting,
             motion_est=self.motion_est,
             name=f"{self.split_name} {unit_id}",
-            template_config=raw_template_config,
+            template_cfg=raw_template_cfg,
             allow_template_reload=False,
             n_jobs_templates=0,
         )
@@ -1019,7 +1020,7 @@ def make_all_summaries(
     hspace=0.1,
     dpi=200,
     image_ext="png",
-    n_jobs=0,
+    n_jobs=None,
     show_progress=True,
     overwrite=False,
     unit_ids=None,
@@ -1058,9 +1059,12 @@ def make_all_summaries(
         global_params,
         gizmo_name,
     )
+    if n_jobs is None:
+        n_jobs = get_global_computation_config().n_jobs_cpu
     if n_jobs:
         initargs = (cloudpickle.dumps(initargs),)
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
+    print(f"{n_jobs=}")
     with Executor(
         max_workers=n_jobs,
         mp_context=context,

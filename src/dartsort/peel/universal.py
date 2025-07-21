@@ -29,26 +29,27 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         recording,
         channel_index,
         featurization_pipeline,
-        threshold=50.0,
+        threshold=100.0,
         trough_offset_samples=42,
         spike_length_samples=121,
         amplitude_scaling_variance=100.0,
         amplitude_scaling_boundary=500.0,
         detection_threshold=6.0,
         alignment_padding=20,
-        n_centroids=10,
+        n_centroids=6,
         pca_rank=8,
         taper=True,
         n_sigmas=5,
         min_template_size=10.0,
         max_distance=32.0,
         dx=32.0,
-        chunk_length_samples=30_000,
-        n_chunks_fit=40,
+        chunk_length_samples=1000,
+        n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
         fit_sampling="random",
+        fit_max_reweighting=4.0,
         dtype=torch.float,
     ):
         shapes, footprints, template_data = (
@@ -105,11 +106,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             # usual gizmos
             trough_offset_samples=trough_offset_samples,
             chunk_length_samples=chunk_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             n_waveforms_fit=n_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_sampling=fit_sampling,
+            fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
             # matching params which don't need setting
             svd_compression_rank=1,
@@ -124,33 +126,39 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         )
 
     @classmethod
-    def from_config(
-        cls, recording, waveform_config, subtraction_config, featurization_config
-    ):
+    def from_config(cls, recording, universal_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = waveform_util.make_channel_index(
-            geom, subtraction_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
+        waveform_cfg = universal_cfg.waveform_cfg
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
-        alignment_padding = int(
-            subtraction_config.singlechan_alignment_padding_ms * (recording.sampling_frequency / 1000)
-        )
+        fs_ms = recording.sampling_frequency / 1000
+        alignment_padding = int(universal_cfg.alignment_padding_ms * fs_ms)
         return cls(
             recording,
-            chunk_length_samples=subtraction_config.chunk_length_samples,
-            threshold=subtraction_config.universal_threshold,
+            chunk_length_samples=universal_cfg.chunk_length_samples,
+            n_seconds_fit=universal_cfg.n_seconds_fit,
+            n_waveforms_fit=universal_cfg.n_waveforms_fit,
+            max_waveforms_fit=universal_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=universal_cfg.fit_subsampling_random_state,
+            fit_sampling=universal_cfg.fit_sampling,
+            fit_max_reweighting=universal_cfg.fit_max_reweighting,
+            threshold=universal_cfg.threshold,
+            detection_threshold=universal_cfg.detection_threshold,
+            n_sigmas=universal_cfg.n_sigmas,
             channel_index=channel_index,
             alignment_padding=alignment_padding,
             featurization_pipeline=featurization_pipeline,

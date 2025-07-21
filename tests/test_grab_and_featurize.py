@@ -1,5 +1,4 @@
-"""A good integration test of a few pieces
-"""
+"""A good integration test of a few pieces"""
 
 import tempfile
 from pathlib import Path
@@ -15,7 +14,7 @@ from dartsort.util.waveform_util import make_channel_index
 from dartsort.util.internal_config import ComputationConfig
 
 
-two_jobs_config = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
+two_jobs_cfg = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
 
 
 def test_grab_and_featurize():
@@ -116,8 +115,8 @@ def test_grab_and_featurize():
             assert h5["last_chunk_start"][()] == 30_000
 
     with tempfile.TemporaryDirectory() as tempdir:
-        grab.fit_models(tempdir, computation_config=two_jobs_config)
-        grab.peel(Path(tempdir) / "grab.h5", computation_config=two_jobs_config)
+        grab.fit_models(tempdir, computation_cfg=two_jobs_cfg)
+        grab.peel(Path(tempdir) / "grab.h5", computation_cfg=two_jobs_cfg)
 
         with h5py.File(Path(tempdir) / "grab.h5", locking=False) as h5:
             assert h5["times_samples"].shape == (n_spikes,)
@@ -157,7 +156,9 @@ def test_grab_locations():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index),
-            transform.SingleChannelWaveformDenoiser.load_from_pt(channel_index=channel_index),
+            transform.SingleChannelWaveformDenoiser.load_from_pt(
+                channel_index=channel_index
+            ),
             transform.TemporalPCADenoiser(
                 channel_index=torch.tensor(channel_index),
                 geom=torch.tensor(geom),
@@ -209,7 +210,9 @@ def test_grab_locations():
                 fit_radius=10,
             ),
             transform.Waveform(channel_index),
-            transform.SingleChannelWaveformDenoiser.load_from_pt(channel_index=channel_index),
+            transform.SingleChannelWaveformDenoiser.load_from_pt(
+                channel_index=channel_index
+            ),
             transform.TemporalPCADenoiser(
                 channel_index=torch.tensor(channel_index),
                 geom=torch.tensor(geom),

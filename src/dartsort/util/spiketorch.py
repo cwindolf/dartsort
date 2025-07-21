@@ -10,17 +10,29 @@ import torch.nn.functional as F
 from scipy.fftpack import next_fast_len
 from torch.fft import irfft, rfft
 
+HAVE_CUPY = False
+cp = None
+try:
+    import cupy as cp
+
+    HAVE_CUPY = True
+except ImportError:
+    cupy = None
+    HAVE_CUPY = False
+
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
-_0 = torch.tensor(100)
+_0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0):
+def spawn_torch_rg(seed: int | np.random.Generator = 0, device: str | torch.device | None="cpu"):
+    if device is None:
+        device = "cpu"
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
-    generator = torch.Generator()
+    generator = torch.Generator(device=device)
     generator.manual_seed(seed)
     return generator
 
@@ -44,18 +56,34 @@ def fast_nanmedian(x, axis=-1):
         return x.numpy()
 
 
-def ptp(waveforms, dim=1):
+def nanmean(x, axis=-1):
+    is_tensor = torch.is_tensor(x)
+    x = torch.nanmean(torch.as_tensor(x), dim=axis)
+    if is_tensor:
+        return x
+    else:
+        return x.numpy()
+
+
+def ptp(waveforms, dim=1, keepdims=False):
     is_tensor = torch.is_tensor(waveforms)
-    if not is_tensor:
-        return np.ptp(waveforms, axis=dim)
-    return waveforms.max(dim=dim).values - waveforms.min(dim=dim).values
+    waveforms = torch.asarray(waveforms)
+    if waveforms.shape[dim] > 1:
+        v = waveforms.amax(dim=dim).sub_(waveforms.amin(dim=dim))
+    else:
+        v = waveforms.abs().amax(dim=dim)
+    if keepdims:
+        v = v.unsqueeze(dim)
+    if is_tensor:
+        return v
+    return v.numpy()
 
 
 def elbo(Q, log_liks, reduce_mean=True, dim=1):
-    logQ = torch.where(Q > 0, Q, _1).log_()
-    log_liks = torch.where(Q > 0, log_liks, _0)
+    Qpos = Q > 0
+    logQ = torch.where(Qpos, Q, _1).log_()
+    log_liks = torch.where(Qpos, log_liks, _0)
     oelbo = log_liks.add_(logQ).mul_(Q).sum(dim=dim)
-    # oelbo = torch.sum(Q * (log_liks + logQ), dim=dim)
     if reduce_mean:
         oelbo = oelbo.mean()
     return oelbo
@@ -118,7 +146,7 @@ def ravel_multi_index(multi_index, dims):
     # return raveled_indices.view(-1)
 
 
-def add_at_(dest, ix, src, sign=1):
+def torch_add_at_(dest, ix, src, sign=1):
     """Pytorch version of np.{add,subtract}.at
 
     Adds src into dest in place at indices (in dest) specified
@@ -135,16 +163,40 @@ def add_at_(dest, ix, src, sign=1):
         src = sign * src
     flat_ix = ravel_multi_index(ix, dest.shape)
     if isinstance(src, (float, int)):
-        src = torch.tensor(src, dtype=dest.dtype, device=dest.device).broadcast_to(
-            flat_ix.numel()
-        )
+        src = torch.tensor(src, dtype=dest.dtype, device=dest.device)
+        src = src.broadcast_to(flat_ix.numel())
     else:
         src = src.reshape(-1)
-    dest.view(-1).scatter_add_(
-        0,
-        flat_ix,
-        src,
-    )
+    dest.view(-1).scatter_add_(0, flat_ix.to(dest.device), src)
+
+
+def cupy_add_at_(dest, ix, src, sign=1):
+    if torch.is_tensor(dest):
+        assert dest.device.type == "cuda"
+    dest = cp.asarray(dest)
+    if isinstance(ix, tuple):
+        ix = tuple(cp.asarray(ii) for ii in ix)
+    else:
+        ix = cp.asarray(ix)
+    if not isinstance(src, (float, int)):
+        src = cp.asarray(src)
+    if sign == 1:
+        cp.add.at(dest, ix, src)
+    elif sign == -1:
+        cp.subtract.at(dest, ix, src)
+    else:
+        raise NotImplementedError(f"Need to implement {sign=} in cupy_add_at_.")
+
+
+add_at_ = torch_add_at_
+
+def try_cupy_add_at_(dest, ix, src, sign=1):
+    if not HAVE_CUPY or dest.device.type != "cuda":
+        if dest.device.type == "cuda":
+            warnings.warn("No cupy.")
+        return torch_add_at_(dest, ix, src, sign)
+    else:
+        return cupy_add_at_(dest, ix, src, sign)
 
 
 def grab_spikes(
@@ -316,9 +368,7 @@ def convolve_lowrank(
     out_len = traces.shape[1] + 2 * padding - spike_length_samples + 1
     if out is None:
         out = torch.empty(
-            (n_templates, out_len),
-            dtype=traces.dtype,
-            device=traces.device,
+            (n_templates, out_len), dtype=traces.dtype, device=traces.device
         )
     else:
         assert out.shape == (n_templates, out_len)
@@ -332,10 +382,7 @@ def convolve_lowrank(
 
         # conv1d with groups! only convolve each unit with its own temporal filter
         conv = F.conv1d(
-            rec_spatial[None],
-            temporal[:, None, :],
-            groups=n_templates,
-            padding=padding,
+            rec_spatial[None], temporal[:, None, :], groups=n_templates, padding=padding
         )[0]
 
         # o-a turns out not to be helpful, sadly
@@ -407,7 +454,19 @@ def nancov(
     return cov
 
 
-def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=32):
+def cosine_distance(means):
+    means = means.reshape(means.shape[0], -1)
+    dot = means @ means.T
+    norm = means.square().sum(1).sqrt_()
+    norm[norm == 0] = 1
+    dot /= norm[:, None]
+    dot /= norm[None, :]
+    dist = torch.subtract(_1, dot, out=dot)
+    dist.diagonal().fill_(0.0)
+    return dist
+
+
+def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):
     """KL divergence with the lemmas, up to affine constant with respect to mu and W
 
     Here's the logic between the lines below. Variable names follow this notation.

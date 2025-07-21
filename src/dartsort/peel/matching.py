@@ -10,12 +10,12 @@ import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 
-from dartsort.templates import template_util
-from dartsort.templates.pairwise import CompressedPairwiseConv
-from dartsort.transform import WaveformPipeline
-from dartsort.util import drift_util, spiketorch, simkit
-from dartsort.util.data_util import SpikeDataset, get_residual_snips, get_labels
-from dartsort.util.waveform_util import make_channel_index
+from ..templates import template_util, TemplateData
+from ..templates.pairwise import CompressedPairwiseConv
+from ..transform import WaveformPipeline
+from ..util import drift_util, spiketorch
+from ..util.data_util import SpikeDataset, get_residual_snips
+from ..util.waveform_util import make_channel_index
 
 from .peel_base import BasePeeler
 
@@ -44,17 +44,21 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         amplitude_scaling_boundary=0.5,
         conv_ignore_threshold=5.0,
         coarse_approx_error_threshold=0.0,
+        margin_factor=2,
         trough_offset_samples=42,
         threshold=100.0,
         max_fp_per_input_spike=2.5,
         chunk_length_samples=30_000,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
+        channel_selection="template",
+        channel_selection_index=None,
         fit_subsampling_random_state=0,
         fit_sampling="random",
         max_iter=1000,
+        max_spikes_per_second=16384,
         dtype=torch.float,
     ):
         n_templates, spike_length_samples = template_data.templates.shape[:2]
@@ -63,8 +67,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=2 * template_data.templates.shape[1],
-            n_chunks_fit=n_chunks_fit,
+            chunk_margin_samples=margin_factor * template_data.templates.shape[1],
+            n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             fit_sampling=fit_sampling,
@@ -82,7 +86,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.coarse_objective = coarse_objective
         self.temporal_upsampling_factor = temporal_upsampling_factor
         self.upsampling_peak_window_radius = upsampling_peak_window_radius
-        self.svd_compression_rank = svd_compression_rank
+        self.svd_compression_rank = min(
+            svd_compression_rank, *template_data.templates.shape[1:]
+        )
         self.min_channel_amplitude = min_channel_amplitude
         self.threshold = threshold
         self.max_fp_per_input_spike = max_fp_per_input_spike
@@ -103,10 +109,16 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             if template_data.registered_geom is not None
             else self.n_channels
         )
+        self.max_spikes_per_second = max_spikes_per_second
+        assert channel_selection in ("template", "amplitude")
+        self.channel_selection = channel_selection
 
         # waveform extraction
-        self.channel_index = channel_index
         self.registered_template_ampvecs = np.ptp(template_data.templates, 1)
+        if channel_selection_index is None:
+            self.channel_selection_index = None
+        else:
+            self.register_buffer("channel_selection_index", channel_selection_index)
 
         # amplitude scaling properties
         self.is_scaling = bool(amplitude_scaling_variance)
@@ -118,8 +130,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.is_drifting = motion_est is not None
         self.motion_est = motion_est
         self.registered_geom = template_data.registered_geom
-        self.registered_template_depths_um = template_data.registered_depths_um()
+        self.registered_template_depths_um = None
         if self.is_drifting:
+            self.registered_template_depths_um = template_data.registered_depths_um()
             self.fixed_output_data.append(
                 ("registered_geom", template_data.registered_geom)
             )
@@ -149,7 +162,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # be reproducible
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         self.fit_subsampling_random_state = rg
-        generator = simkit.spawn_torch_rg(rg)
+        generator = spiketorch.spawn_torch_rg(rg)
 
         # restrict my low rank templates to usual geom...
         # TODO: this is not a very logical way to handle drift here...
@@ -180,7 +193,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
     def precompute_peeling_data(
-        self, save_folder, overwrite=False, computation_config=None
+        self, save_folder, overwrite=False, computation_cfg=None
     ):
         self.build_template_data(
             save_folder,
@@ -190,7 +203,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             svd_compression_rank=self.svd_compression_rank,
             min_channel_amplitude=self.min_channel_amplitude,
             overwrite=overwrite,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         self.pick_threshold()
         # couple more torch buffers
@@ -285,7 +298,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         svd_compression_rank=10,
         min_channel_amplitude=1.0,
         overwrite=False,
-        computation_config=None,
+        computation_cfg=None,
     ):
         dtype = template_data.templates.dtype
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
@@ -388,7 +401,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 overwrite=overwrite,
                 conv_ignore_threshold=self.conv_ignore_threshold,
                 coarse_approx_error_threshold=self.coarse_approx_error_threshold,
-                computation_config=computation_config,
+                computation_cfg=computation_cfg,
             )
 
         self.fixed_output_data += [
@@ -433,31 +446,44 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def from_config(
         cls,
         recording,
-        waveform_config,
-        matching_config,
-        featurization_config,
+        waveform_cfg,
+        matching_cfg,
+        featurization_cfg,
         template_data,
         motion_est=None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
+        channel_selection = "template"
+        channel_selection_index = None
+        if matching_cfg.channel_selection_radius:
+            channel_selection = "amplitude"
+            channel_selection_index = make_channel_index(
+                geom, matching_cfg.channel_selection_radius, to_torch=True
+            )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        threshold = matching_config.threshold
+        threshold = matching_cfg.threshold
         if threshold == "fp_control":
             pass
         else:
             threshold = threshold**2
+
+        if template_data is None:
+            assert matching_cfg.precomputed_templates_npz is not None
+            template_data = TemplateData.from_npz(
+                matching_cfg.precomputed_templates_npz
+            )
 
         return cls(
             recording,
@@ -465,24 +491,27 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index,
             featurization_pipeline,
             motion_est=motion_est,
-            svd_compression_rank=matching_config.template_svd_compression_rank,
-            temporal_upsampling_factor=matching_config.template_temporal_upsampling_factor,
-            min_channel_amplitude=matching_config.template_min_channel_amplitude,
-            refractory_radius_frames=matching_config.refractory_radius_frames,
-            amplitude_scaling_variance=matching_config.amplitude_scaling_variance,
-            amplitude_scaling_boundary=matching_config.amplitude_scaling_boundary,
-            conv_ignore_threshold=matching_config.conv_ignore_threshold,
-            coarse_approx_error_threshold=matching_config.coarse_approx_error_threshold,
+            svd_compression_rank=matching_cfg.template_svd_compression_rank,
+            temporal_upsampling_factor=matching_cfg.template_temporal_upsampling_factor,
+            min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
+            refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            amplitude_scaling_variance=matching_cfg.amplitude_scaling_variance,
+            amplitude_scaling_boundary=matching_cfg.amplitude_scaling_boundary,
+            conv_ignore_threshold=matching_cfg.conv_ignore_threshold,
+            coarse_approx_error_threshold=matching_cfg.coarse_approx_error_threshold,
             trough_offset_samples=trough_offset_samples,
             threshold=threshold,
-            chunk_length_samples=matching_config.chunk_length_samples,
-            n_chunks_fit=matching_config.n_chunks_fit,
-            max_waveforms_fit=matching_config.max_waveforms_fit,
-            fit_subsampling_random_state=matching_config.fit_subsampling_random_state,
-            n_waveforms_fit=matching_config.n_waveforms_fit,
-            fit_sampling=matching_config.fit_sampling,
-            fit_max_reweighting=matching_config.fit_max_reweighting,
-            max_iter=matching_config.max_iter,
+            channel_selection=channel_selection,
+            channel_selection_index=channel_selection_index,
+            chunk_length_samples=matching_cfg.chunk_length_samples,
+            n_seconds_fit=matching_cfg.n_seconds_fit,
+            max_waveforms_fit=matching_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=matching_cfg.fit_subsampling_random_state,
+            n_waveforms_fit=matching_cfg.n_waveforms_fit,
+            fit_sampling=matching_cfg.fit_sampling,
+            fit_max_reweighting=matching_cfg.fit_max_reweighting,
+            max_iter=matching_cfg.max_iter,
+            max_spikes_per_second=matching_cfg.max_spikes_per_second,
         )
 
     def peel_chunk(
@@ -514,6 +543,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # process spike times and create return result
         match_results["times_samples"] += chunk_start_samples - left_margin
+        if match_results["n_spikes"] > self.max_spikes_per_second:
+            raise ValueError(f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}.")
 
         return match_results
 
@@ -523,9 +554,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         pitch_shifts_a = pitch_shifts_b = None
         if (
             self.objective_spatial_components.device.type == "cuda"
-            and not pconvdb.device.type == "cuda"
+            and pconvdb.device.type != "cuda"
         ):
             pconvdb.to(self.objective_spatial_components.device)
+
         if self.is_drifting:
             assert spatial_mask is None
             pitch_shifts_b, cur_spatial = template_util.templates_at_time(
@@ -564,15 +596,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 fill_value=0.0,
             )
             max_channels = cur_ampvecs[:, 0, :].argmax(1)
-            # pitch_shifts_a = torch.as_tensor(pitch_shifts_a)
-            # pitch_shifts_b = torch.as_tensor(pitch_shifts_b)
             pitch_shifts_a = torch.as_tensor(
                 pitch_shifts_a, device=cur_obj_spatial.device
             )
             pitch_shifts_b = torch.as_tensor(
                 pitch_shifts_b, device=cur_obj_spatial.device
             )
-            # pconvdb = pconvdb.at_shifts(pitch_shifts_a, pitch_shifts_b)
         else:
             cur_spatial = self.spatial_components
             cur_obj_spatial = self.objective_spatial_components
@@ -580,11 +609,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 cur_spatial = cur_spatial[:, :, spatial_mask]
                 cur_obj_spatial = cur_obj_spatial[:, :, spatial_mask]
             max_channels = self.registered_template_ampvecs.argmax(1)
-
-        # if not pconvdb._is_torch:
-        # pconvdb.to("cpu")
-        # if cur_obj_spatial.device.type == "cuda" and not pconvdb.device.type == "cuda":
-        #     pconvdb.to(cur_obj_spatial.device, pin=True)
 
         return MatchingTemplateData(
             objective_spatial_components=cur_obj_spatial,
@@ -602,10 +626,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             compressed_upsampled_temporal=self.compressed_upsampled_temporal,
             max_channels=torch.as_tensor(max_channels, device=cur_obj_spatial.device),
             pairwise_conv_db=pconvdb,
-            # shifts_a=None,
-            # shifts_b=None,
             shifts_a=pitch_shifts_a,
             shifts_b=pitch_shifts_b,
+            channel_selection=self.channel_selection,
+            channel_selection_index=self.channel_selection_index,
         )
 
     def match_chunk(
@@ -676,7 +700,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
 
             # subtract them
-            # old_norm = torch.linalg.norm(residual) ** 2
+            # TODO: made these nice peak objects and then just ignored them.
             compressed_template_data.subtract(
                 residual_padded,
                 new_peaks.times,
@@ -847,6 +871,8 @@ class MatchingTemplateData:
     pairwise_conv_db: CompressedPairwiseConv
     shifts_a: Optional[torch.Tensor]
     shifts_b: Optional[torch.Tensor]
+    channel_selection: str = "template"
+    channel_selection_index: torch.LongTensor | None = None
 
     def __post_init__(self):
         (
@@ -1096,14 +1122,20 @@ class MatchingTemplateData:
         )
 
     def get_collisioncleaned_waveforms(
-        self, residual_padded, peaks, channel_index, spike_length_samples=121
+        self, residual_padded, peaks, channel_index, spike_length_samples=121, channels=None
     ):
-        channels = self.max_channels[peaks.template_indices]
+        specified_chans = channels is not None
+        if channels is None and self.channel_selection == "amplitude":
+            ci = self.channel_selection_index 
+        else:
+            ci = channel_index
+        if channels is None:
+            channels = self.max_channels[peaks.template_indices]
         waveforms = spiketorch.grab_spikes(
             residual_padded,
             peaks.times,
             channels,
-            channel_index,
+            ci,
             trough_offset=0,
             spike_length_samples=spike_length_samples,
             buffer=0,
@@ -1113,14 +1145,25 @@ class MatchingTemplateData:
         spatial = padded_spatial[
             peaks.template_indices[:, None, None],
             self.rank_ix[None, :, None],
-            channel_index[channels][:, None, :],
+            ci[channels][:, None, :],
         ]
         comp_up_ix = self.compressed_upsampling_map[
             peaks.template_indices, peaks.upsampling_indices
         ]
         temporal = self.compressed_upsampled_temporal[comp_up_ix]
         torch.baddbmm(waveforms, temporal, spatial, out=waveforms)
-        return channels, waveforms
+
+        if self.channel_selection == "template" or specified_chans:
+            return channels, waveforms
+        else:
+            channels0 = channels
+            chan_ixs = spiketorch.ptp(waveforms, dim=1).nan_to_num_(nan=-torch.inf).argmax(1)
+            channels = ci[channels0].take_along_dim(chan_ixs[:, None], dim=1)
+            assert channels.shape[1] == 1
+            channels = channels[:, 0]
+            return self.get_collisioncleaned_waveforms(
+                residual_padded, peaks, channel_index, spike_length_samples=spike_length_samples, channels=channels
+            )
 
 
 class MatchingPeaks:
@@ -1150,7 +1193,9 @@ class MatchingPeaks:
             device = times.device
         if times is None:
             self.cur_buf_size = self.BUFFER_INIT
-            self._times = torch.zeros(self.cur_buf_size, dtype=torch.long, device=device)
+            self._times = torch.zeros(
+                self.cur_buf_size, dtype=torch.long, device=device
+            )
         else:
             self.cur_buf_size = times.numel()
             assert self.cur_buf_size == n_spikes

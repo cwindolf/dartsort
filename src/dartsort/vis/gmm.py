@@ -7,8 +7,8 @@ import seaborn as sns
 import torch
 from tqdm.auto import tqdm
 
-from dartsort.util.drift_util import get_shift_info, get_spike_pitch_shifts
-from dartsort.util.waveform_util import get_pitch
+from ..util.drift_util import get_shift_info, get_spike_pitch_shifts
+from ..util.waveform_util import get_pitch
 
 from ..cluster import gaussian_mixture, stable_features
 from ..util import spiketorch
@@ -171,8 +171,11 @@ class MStep(GMMPlot):
         emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(
             force=True
         )
-        model_mean = gmm[unit_id].mean[:, chans]
-        model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
+        if hasattr(gmm[unit_id], 'mean'):
+            model_mean = gmm[unit_id].mean[:, chans]
+            model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
+        else:
+            model_mean = np.zeros_like(emp_mean)
 
         geomplot(
             np.stack([emp_mean, model_mean], axis=0),
@@ -198,8 +201,8 @@ class CovarianceResidual(GMMPlot):
             unit_id, sp.indices, getattr(gmm, "log_liks", None)
         )
 
-        # achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
-        achans = gmm[unit_id].channels
+        achans = gaussian_mixture.occupied_chans(sp, gmm.noise.n_channels)
+        # achans = gmm[unit_id].channels
         if weights is None:
             weights = sp.features.new_ones(len(sp))
         afeats, aweights = stable_features.pad_to_chans(
@@ -336,14 +339,14 @@ class WaveformCheck(GMMPlot):
         localizations_name="localizations",
         randomize=True,
     ):
-        assert colorvar in (
-            "time",
-            "depth",
-            "chandepth",
-            "displacement",
-            "npitches",
-            "subpitch",
-        )
+        # assert colorvar in (
+        #     "time",
+        #     "depth",
+        #     "chandepth",
+        #     "displacement",
+        #     "npitches",
+        #     "subpitch",
+        # )
         self.neighborhood = neighborhood
         self.split = split
         self.colorvar = colorvar
@@ -368,15 +371,16 @@ class WaveformCheck(GMMPlot):
             neighborhood=self.neighborhood,
         )
 
-        if self.colorvar == "time":
+        c_is_str = isinstance(self.colorvar, str) 
+        if c_is_str and self.colorvar == "time":
             c = gmm.data.times_seconds[ixs].numpy(force=True)
-        elif self.colorvar == "chandepth":
+        elif c_is_str and self.colorvar == "chandepth":
             chans = gmm.data.original_sorting.channels[ixs]
             c = gmm.data.original_sorting.geom[chans, 1]
-        elif self.colorvar == "depth":
+        elif c_is_str and self.colorvar == "depth":
             pos = getattr(self.data.original_sorting, self.localizations_name)
             c = pos[ixs, 2]
-        else:
+        elif c_is_str and self.colorvar in ("displacement", "npitches", "subpitch"):
             channels, shifts, n_pitches_shift = get_shift_info(
                 gmm.data.original_sorting,
                 motion_est=me,
@@ -393,6 +397,14 @@ class WaveformCheck(GMMPlot):
                 c = shifts - pitch * n_pitches_shift
             else:
                 assert False
+        else:
+            if isinstance(self.colorvar, np.ndarray) or torch.is_tensor(self.colorvar):
+                c = self.colorvar
+            else:
+                c = getattr(gmm.to_sorting(), self.colorvar)
+            c = c[ixs]
+            if torch.is_tensor(c):
+                c = c.numpy(force=True)
 
         ax = panel.subplots()
         s = geomplot(
@@ -433,6 +445,7 @@ class Likelihoods(GMMPlot):
         if hasattr(gmm, "log_liks"):
             liks_ = gmm.log_liks[:, in_unit.numpy(force=True)][[unit_id]].tocoo()
             inds_ = None
+            liks = None
             if liks_.nnz:
                 inds_ = in_unit
                 liks = np.full(in_unit.shape, -np.inf, dtype=np.float32)
@@ -442,6 +455,7 @@ class Likelihoods(GMMPlot):
             inds_, liks = gmm.unit_log_likelihoods(unit_id, spike_indices=in_unit)
         if inds_ is None:
             return
+        assert liks is not None
         assert torch.equal(inds_, in_unit)
         nliks = gmm.noise_log_likelihoods()[in_unit]
         t = gmm.data.times_seconds[in_unit]
@@ -456,7 +470,12 @@ class Likelihoods(GMMPlot):
                 np.pad(small, (0, 1), constant_values=False),
             )
             ax_time.scatter(t[small], liks[small], s=3, lw=0, color="k")
-        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c)
+        ax_noise.scatter(nliks, liks, s=3, lw=0, color=c, zorder=1)
+        nliksf = nliks[np.isfinite(nliks)]
+        liksf = liks[liks.isfinite()].numpy(force=True)
+        mn = max(nliksf.min(), liksf.min())
+        mx = min(nliksf.max(), liksf.max())
+        ax_noise.plot([mn, mx], [mn, mx], color='k', lw=0.8, zorder=11)
         histk = dict(histtype="step", orientation="horizontal")
         n, bins, _ = ax_dist.hist(
             liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk
@@ -558,7 +577,7 @@ class KMeansSplit(GMMPlot):
             ax.axis("off")
             return
 
-        split_labels = split_info["split_labels"]
+        split_labels = split_info["split_labels"].numpy(force=True)
         split_ids = np.unique(split_labels)
         if self.with_means:
             kw = dict(nrows=4, height_ratios=[1, 1, 2, 2])
@@ -741,7 +760,7 @@ class KMeansSplit(GMMPlot):
             tv = v[:, :2]
             center = split_info["X"].mean(0)
 
-            ax_pca.scatter(*Xp.T, c=glasbey1024[split_labels], s=2, lw=0)
+            ax_pca.scatter(*Xp.numpy(force=True).T, c=glasbey1024[split_labels], s=2, lw=0)
             ax_pca.axhline(0, lw=0.8, color="k")
             ax_pca.axvline(0, lw=0.8, color="k")
             if "units" in split_info:
@@ -784,6 +803,11 @@ class NeighborMeans(GMMPlot):
         self.n_neighbors = n_neighbors
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         units = [gmm[u] for u in reversed(neighbors)]
         labels = neighbors[::-1]
@@ -813,6 +837,11 @@ class NeighborDistances(GMMPlot):
         self.normalization_kind = normalization_kind
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         metric = self.metric
         if metric is None:
@@ -960,6 +989,11 @@ class NeighborInfoCriteria(GMMPlot):
         self.in_bag = in_bag
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
         others = neighbors[1:]
@@ -1035,6 +1069,11 @@ class NeighborTreeMerge(GMMPlot):
         self.min_overlap = min_overlap
 
     def draw(self, panel, gmm, unit_id):
+        if not hasattr(gmm[unit_id], "mean"):
+            ax = panel.subplots()
+            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
+            ax.axis("off")
+            return
         neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
         assert neighbors[0] == unit_id
 
@@ -1069,6 +1108,7 @@ class NeighborTreeMerge(GMMPlot):
             normalization_kind=distance_normalization_kind,
         )
         _, cosines = gmm.distances(show_progress=False, kind="cosine")
+        cosines = 1.0 - cosines
 
         if criterion.startswith("old"):
             Z, group_ids, improvements, overlaps = gmm.old_tree_merge(
@@ -1111,7 +1151,7 @@ class NeighborTreeMerge(GMMPlot):
                     group_ids=group_ids,
                     brute_indicator=brute_indicator,
                     threshold=self.max_distance,
-                    leaf_labels=neighbors,
+                    leaf_labels=neighbors.tolist(),
                     annotations_offset_by_n=False,
                 )
                 nstr = ""
@@ -1149,8 +1189,7 @@ default_gmm_plots = (
     Amplitudes(),
     KMeansSplit(),
     NeighborMeans(),
-    NeighborDistances(metric="noise_metric"),
-    NeighborDistances(metric="symkl"),
+    NeighborDistances(),
     NeighborTreeMerge(metric=None, criterion=None),
 )
 
@@ -1169,7 +1208,7 @@ def criterion_comparison_plots(*criteria):
         Amplitudes(),
         *splits,
         NeighborMeans(),
-        NeighborDistances(metric="noise_metric"),
+        NeighborDistances(),
         NeighborDistances(metric="symkl"),
         *merges,
     )
@@ -1220,7 +1259,6 @@ def make_all_gmm_summaries(
     show_progress=True,
     overwrite=False,
     unit_ids=None,
-    use_threads=False,
     n_units=None,
     seed=0,
     **other_global_params,
@@ -1242,11 +1280,7 @@ def make_all_gmm_summaries(
         **other_global_params,
     )
 
-    ispar = n_jobs > 0
-    cls = CloudpicklePoolExecutor
-    if use_threads:
-        cls = ThreadPoolExecutor
-    n_jobs, Executor, context = get_pool(n_jobs, cls=cls)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
 
     initargs = (
         gmm,

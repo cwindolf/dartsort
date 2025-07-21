@@ -27,6 +27,13 @@ class WaveformPipeline(torch.nn.Module):
         # extra state in there.
         pass
 
+    def spike_datasets(self):
+        datasets = []
+        for transformer in self.transformers:
+                if transformer.is_featurizer:
+                    datasets.extend(transformer.spike_datasets)
+        return datasets
+
     @classmethod
     def from_state_dict_pt(cls, geom, channel_index, state_dict_pt):
         state_dict = torch.load(state_dict_pt)
@@ -73,8 +80,8 @@ class WaveformPipeline(torch.nn.Module):
     @classmethod
     def from_config(
         cls,
-        featurization_config,
-        waveform_config,
+        featurization_cfg,
+        waveform_cfg,
         recording=None,
         geom=None,
         channel_index=None,
@@ -87,13 +94,13 @@ class WaveformPipeline(torch.nn.Module):
             sampling_frequency = recording.sampling_frequency
             geom = torch.tensor(recording.get_channel_locations())
             channel_index = make_channel_index(
-                geom, featurization_config.extract_radius, to_torch=True
+                geom, featurization_cfg.extract_radius, to_torch=True
             )
         else:
             assert recording is None
             assert channel_index is not None
         args = featurization_config_to_class_names_and_kwargs(
-            featurization_config, waveform_config, sampling_frequency=sampling_frequency
+            featurization_cfg, waveform_cfg, sampling_frequency=sampling_frequency
         )
         return cls.from_class_names_and_kwargs(geom, channel_index, args)
 
@@ -120,12 +127,10 @@ class WaveformPipeline(torch.nn.Module):
                     waveforms, max_channels=max_channels
                 )
                 features.update(new_features)
-
             elif transformer.is_featurizer:
                 features.update(
                     transformer.transform(waveforms, max_channels=max_channels)
                 )
-
             elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, max_channels=max_channels)
 
@@ -150,6 +155,7 @@ class WaveformPipeline(torch.nn.Module):
                     weights=weights,
                 )
             transformer.eval()
+            transformer.requires_grad_(False)
 
             # if we're done already, stop before denoising
             if not self.needs_fit():
@@ -160,6 +166,7 @@ class WaveformPipeline(torch.nn.Module):
                 if transformer.is_featurizer:
                     # result is tuple wfs, feats
                     waveforms = waveforms[0]
+        assert not waveforms.requires_grad
 
     def precompute(self):
         for transformer in self.transformers:
@@ -182,8 +189,8 @@ def check_unique_feature_names(transformers):
 
 
 def featurization_config_to_class_names_and_kwargs(
-    featurization_config,
-    waveform_config,
+    featurization_cfg,
+    waveform_cfg,
     sampling_frequency=30_000,
 ):
     """Convert this config into a list of waveform transformer classes and arguments
@@ -191,14 +198,14 @@ def featurization_config_to_class_names_and_kwargs(
     Used by WaveformPipeline.from_config(...) to construct WaveformPipelines
     from FeaturizationConfig objects.
     """
-    fc = featurization_config
+    fc = featurization_cfg
     if fc.skip:
         return []
 
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
     sls_kw = dict(
-        spike_length_samples=waveform_config.spike_length_samples(sampling_frequency)
+        spike_length_samples=waveform_cfg.spike_length_samples(sampling_frequency)
     )
 
     if do_feats and fc.save_input_voltages:
@@ -209,12 +216,21 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
         )
-    if fc.learn_cleaned_tpca_basis:
+    if do_feats and fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
-            ("BaseTemporalPCA", {"rank": fc.tpca_rank, "centered": False})
+            (
+                "BaseTemporalPCA",
+                {
+                    "rank": fc.tpca_rank,
+                    "name_prefix": fc.input_waveforms_name,
+                    "centered": False,
+                    "max_waveforms": fc.tpca_max_waveforms,
+                    "fit_radius": fc.tpca_fit_radius,
+                },
+            )
         )
     if do_feats and fc.save_input_tpca_projs:
-        tslice = fc.input_tpca_waveform_config.relative_slice(waveform_config)
+        tslice = fc.input_tpca_waveform_cfg.relative_slice(waveform_cfg)
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
@@ -224,6 +240,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "centered": fc.tpca_centered,
                     "temporal_slice": tslice,
                     "max_waveforms": fc.tpca_max_waveforms,
+                    "fit_radius": fc.tpca_fit_radius,
                 },
             )
         )
@@ -247,6 +264,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "rank": fc.tpca_rank,
                     "fit_radius": fc.tpca_fit_radius,
                     "centered": fc.tpca_centered,
+                    "max_waveforms": fc.tpca_max_waveforms,
                 },
             )
         )
@@ -265,6 +283,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "rank": fc.tpca_rank,
                     "name_prefix": fc.output_waveforms_name,
                     "centered": fc.tpca_centered,
+                    "fit_radius": fc.tpca_fit_radius,
                 },
             )
         )
@@ -275,6 +294,20 @@ def featurization_config_to_class_names_and_kwargs(
                 {
                     "amplitude_kind": fc.localization_amplitude_type,
                     "localization_model": fc.localization_model,
+                    "radius": fc.localization_radius,
+                    "softmax_noise_floor": fc.localization_noise_floor,
+                },
+            )
+        )
+    if do_feats and fc.additional_com_localization:
+        class_names_and_kwargs.append(
+            (
+                "Localization",
+                {
+                    "amplitude_kind": fc.localization_amplitude_type,
+                    "localization_model": "com",
+                    "radius": fc.localization_radius,
+                    "name": "com_localizations",
                 },
             )
         )
@@ -288,7 +321,7 @@ def featurization_config_to_class_names_and_kwargs(
     do_ptp_vec = do_feats and fc.save_amplitudes
     do_logptt = do_feats and fc.save_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
-    if do_any_amp:
+    if do_any_amp or (do_feats and fc.save_all_amplitudes):
         class_names_and_kwargs.append(
             (
                 "AmplitudeFeatures",

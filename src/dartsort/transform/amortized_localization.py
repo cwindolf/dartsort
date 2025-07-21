@@ -46,12 +46,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         min_epochs=10,
         scale_loss_by_mean=True,
         reference="main_channel",
+        softmax_noise_floor=False,
         channelwise_dropout_p=0.00,
         epoch_size=50_000,
         val_split_p=0.3,
         random_seed=0,
     ):
-        assert localization_model in ("pointsource", "dipole")
+        assert localization_model in ("pointsource", "dipole", "gaussian")
         assert amplitude_kind in ("peak", "ptp")
         assert reference in ("main_channel", "com")
         super().__init__(
@@ -62,7 +63,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.radius = radius
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
-        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim
+        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim + softmax_noise_floor
+        self.softmax_noise_floor = softmax_noise_floor
         self.n_epochs = n_epochs
         self.learning_rate = learning_rate
         self.batch_size = batch_size
@@ -155,8 +157,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         dists = torch.sqrt(dx**2 + dz**2 + y**2)
         return dists
 
-    def get_alphas(self, obs_amps, dists, masks, return_pred=False):
-        pred_amps_alpha1 = 1.0 / dists
+    def get_alphas(self, obs_amps, pred_amps_alpha1, masks, return_pred=False):
         # least squares with no intercept
         alphas = (masks * obs_amps * pred_amps_alpha1).sum(1) / (
             masks * pred_amps_alpha1
@@ -168,12 +169,24 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def point_source_model(self, z, obs_amps, masks, channels):
         dists = self.local_distances(z, channels, obs_amps=obs_amps)
         if self.alpha_closed_form:
+            if self.localization_model == "gaussian":
+                pred_amps_alpha1 = dists.square().mul(-2).exp()
+            else:
+                pred_amps_alpha1 = 1.0 / dists
             alphas, pred_amps = self.get_alphas(
-                obs_amps, dists, masks, return_pred=True
+                obs_amps, pred_amps_alpha1, masks, return_pred=True
             )
         else:
             alphas = F.softplus(z[:, 3])
             pred_amps = alphas.unsqueeze(1) / dists
+
+        noise_floors = None
+        if self.softmax_noise_floor:
+            noise_floors = F.softplus(z[:, -1:]).broadcast_to(pred_amps.shape)
+            pred_amps_noise = torch.stack([pred_amps, noise_floors], dim=2)
+            weights = F.softmax(pred_amps_noise.log(), dim=2)
+            pred_amps = pred_amps_noise.mul(weights).sum(dim=2)
+
         return alphas, pred_amps
 
     def dipole_model(self, z, obs_amps, masks, channels):
@@ -204,7 +217,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         return beta, pred_amps
 
     def decode(self, z, channels, obs_amps, masks):
-        if self.localization_model in ("pointsource", "monopole"):
+        if self.localization_model in ("pointsource", "monopole", "gaussian"):
             alphas, pred_amps = self.point_source_model(z, obs_amps, masks, channels)
         elif self.localization_model == "dipole":
             alphas, pred_amps = self.dipole_model(z, obs_amps, masks, channels)
@@ -236,15 +249,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
         kld = 0.0
         if self.variational:
-            kld = (
-                0.5
-                * (
-                    +torch.log(self.prior_variance / var)
-                    + mu.pow(2) / self.prior_variance
-                    - 1
-                ).sum()
-                / self.batch_size
-            )
+            muterm = mu.pow(2) / self.prior_variance - 1
+            kld = torch.log(self.prior_variance / var).add(muterm).sum()
+            kld = kld.mul(0.5 / self.batch_size)
         return mse, kld
 
     def _fit(self, waveforms, channels, weights=None):

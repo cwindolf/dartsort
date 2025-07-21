@@ -559,13 +559,10 @@ class SpikeNeighborhoods(torch.nn.Module):
         """
         super().__init__()
         self.n_channels = n_channels
+        self.neighborhood_ids = neighborhood_ids.cpu()
         self.register_buffer("chans_arange", torch.arange(n_channels))
-        if store_on_device:
-            self.register_buffer("neighborhood_ids", neighborhood_ids)
-        else:
-            self.neighborhood_ids = neighborhood_ids.cpu()
         self.register_buffer("neighborhoods", neighborhoods)
-        # self.neighborhoods = neighborhoods.cpu()
+        assert self.neighborhoods.dtype == torch.long
         self.n_neighborhoods = len(neighborhoods)
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index)
@@ -809,6 +806,13 @@ class SpikeNeighborhoods(torch.nn.Module):
         n_spikes = self.popcounts[covered_ids].sum()
         return neighborhood_info, n_spikes
 
+    def adjacency(self, overlap=0.5):
+        overlaps = self.indicators.T @ self.indicators
+        denom = self.indicators.sum(0)
+        overlaps /= torch.minimum(denom[:, None], denom)
+        return (overlaps >= overlap - 1e-5).to(torch.float)
+
+
 
 # -- helpers
 
@@ -838,7 +842,7 @@ def occupied_chans(
     counts = torch.zeros(chans.shape, device=chans.device)
     spiketorch.add_at_(
         counts,
-        inverse.view(-1),
+        inverse.view(-1).to(counts.device),
         id_counts[:, None].broadcast_to(chans0.shape).reshape(-1).to(counts.device),
     )
 

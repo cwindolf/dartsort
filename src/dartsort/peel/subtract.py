@@ -18,7 +18,7 @@ from ..transform import (
     WaveformPipeline,
 )
 from ..util.data_util import subsample_waveforms, SpikeDataset
-from ..util import peel_util, spiketorch, job_util
+from ..util import spiketorch, job_util
 from ..util.waveform_util import (
     get_relative_subset,
     make_channel_index,
@@ -44,11 +44,12 @@ class SubtractionPeeler(BasePeeler):
         detection_threshold=4,
         chunk_length_samples=30_000,
         peak_sign="both",
+        relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         temporal_dedup_radius_samples=7,
         positive_temporal_dedup_radius_samples=41,
         trough_priority=2.0,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
@@ -73,7 +74,7 @@ class SubtractionPeeler(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=2 * spike_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             n_waveforms_fit=n_waveforms_fit,
@@ -120,6 +121,12 @@ class SubtractionPeeler(BasePeeler):
             )
         else:
             self.spatial_dedup_channel_index = None
+        if relative_peak_channel_index is not None:
+            self.register_buffer(
+                "relative_peak_channel_index", relative_peak_channel_index
+            )
+        else:
+            self.relative_peak_channel_index = None
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
@@ -154,9 +161,7 @@ class SubtractionPeeler(BasePeeler):
             datasets.append(SpikeDataset("iteration", (), "int32"))
 
         # we may be featurizing during subtraction, register the features
-        for transformer in self.subtraction_denoising_pipeline.transformers:
-            if transformer.is_featurizer:
-                datasets.extend(transformer.spike_datasets)
+        datasets.extend(self.subtraction_denoising_pipeline.spike_datasets())
 
         return datasets
 
@@ -184,65 +189,61 @@ class SubtractionPeeler(BasePeeler):
     def from_config(
         cls,
         recording,
-        waveform_config,
-        subtraction_config,
-        featurization_config,
+        waveform_cfg,
+        subtraction_cfg,
+        featurization_cfg,
     ):
-        if subtraction_config.use_universal_templates:
-            from . import UniversalTemplatesMatchingPeeler
-
-            return UniversalTemplatesMatchingPeeler.from_config(
-                recording,
-                waveform_config=waveform_config,
-                subtraction_config=subtraction_config,
-                featurization_config=featurization_config,
-            )
-
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
         subtract_channel_index = make_channel_index(
-            geom, subtraction_config.subtract_radius, to_torch=True
+            geom, subtraction_cfg.subtract_radius, to_torch=True
         )
         # per-threshold spike event deduplication channel neighborhoods
         spatial_dedup_channel_index = make_channel_index(
-            geom, subtraction_config.spatial_dedup_radius, to_torch=True
+            geom, subtraction_cfg.spatial_dedup_radius, to_torch=True
         )
+
+        relative_peak_channel_index = None
+        if subtraction_cfg.relative_peak_radius_um:
+            relative_peak_channel_index = make_channel_index(
+                geom, subtraction_cfg.relative_peak_radius_um, to_torch=True
+            )
 
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=subtract_channel_index,
-            featurization_config=subtraction_config.subtraction_denoising_config,
-            waveform_config=waveform_config,
+            featurization_cfg=subtraction_cfg.subtraction_denoising_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
 
         # waveform logic
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
 
         if trough_offset_samples != 42 or spike_length_samples != 121:
             # temporary warning just so I can see if this happens
             warnings.warn(
-                f"waveform_config {trough_offset_samples=} {spike_length_samples=} "
+                f"waveform_cfg {trough_offset_samples=} {spike_length_samples=} "
                 f"since {recording.sampling_frequency=}"
             )
         singlechan_alignment_padding = int(
-            subtraction_config.singlechan_alignment_padding_ms
+            subtraction_cfg.singlechan_alignment_padding_ms
             * (recording.sampling_frequency / 1000)
         )
 
@@ -254,30 +255,31 @@ class SubtractionPeeler(BasePeeler):
             subtract_channel_index=subtract_channel_index,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            detection_threshold=subtraction_config.detection_threshold,
-            chunk_length_samples=subtraction_config.chunk_length_samples,
-            peak_sign=subtraction_config.peak_sign,
+            detection_threshold=subtraction_cfg.detection_threshold,
+            chunk_length_samples=subtraction_cfg.chunk_length_samples,
+            peak_sign=subtraction_cfg.peak_sign,
+            relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
-            temporal_dedup_radius_samples=subtraction_config.temporal_dedup_radius_samples,
-            positive_temporal_dedup_radius_samples=subtraction_config.positive_temporal_dedup_radius_samples,
-            n_chunks_fit=subtraction_config.n_chunks_fit,
-            max_waveforms_fit=subtraction_config.max_waveforms_fit,
-            fit_sampling=subtraction_config.fit_sampling,
-            fit_max_reweighting=subtraction_config.fit_max_reweighting,
-            n_waveforms_fit=subtraction_config.n_waveforms_fit,
-            fit_subsampling_random_state=subtraction_config.fit_subsampling_random_state,
-            residnorm_decrease_threshold=subtraction_config.residnorm_decrease_threshold,
-            use_singlechan_templates=subtraction_config.use_singlechan_templates,
-            n_singlechan_templates=subtraction_config.n_singlechan_templates,
-            singlechan_threshold=subtraction_config.singlechan_threshold,
+            temporal_dedup_radius_samples=subtraction_cfg.temporal_dedup_radius_samples,
+            positive_temporal_dedup_radius_samples=subtraction_cfg.positive_temporal_dedup_radius_samples,
+            n_seconds_fit=subtraction_cfg.n_seconds_fit,
+            max_waveforms_fit=subtraction_cfg.max_waveforms_fit,
+            fit_sampling=subtraction_cfg.fit_sampling,
+            fit_max_reweighting=subtraction_cfg.fit_max_reweighting,
+            n_waveforms_fit=subtraction_cfg.n_waveforms_fit,
+            fit_subsampling_random_state=subtraction_cfg.fit_subsampling_random_state,
+            residnorm_decrease_threshold=subtraction_cfg.residnorm_decrease_threshold,
+            use_singlechan_templates=subtraction_cfg.use_singlechan_templates,
+            n_singlechan_templates=subtraction_cfg.n_singlechan_templates,
+            singlechan_threshold=subtraction_cfg.singlechan_threshold,
             singlechan_alignment_padding=singlechan_alignment_padding,
-            first_denoiser_max_waveforms_fit=subtraction_config.first_denoiser_max_waveforms_fit,
-            first_denoiser_thinning=subtraction_config.first_denoiser_thinning,
-            first_denoiser_temporal_jitter=subtraction_config.first_denoiser_temporal_jitter,
-            first_denoiser_spatial_jitter=subtraction_config.first_denoiser_spatial_jitter,
-            growth_tolerance=subtraction_config.growth_tolerance,
-            trough_priority=subtraction_config.trough_priority,
-            save_iteration=subtraction_config.save_iteration,
+            first_denoiser_max_waveforms_fit=subtraction_cfg.first_denoiser_max_waveforms_fit,
+            first_denoiser_thinning=subtraction_cfg.first_denoiser_thinning,
+            first_denoiser_temporal_jitter=subtraction_cfg.first_denoiser_temporal_jitter,
+            first_denoiser_spatial_jitter=subtraction_cfg.first_denoiser_spatial_jitter,
+            growth_tolerance=subtraction_cfg.growth_tolerance,
+            trough_priority=subtraction_cfg.trough_priority,
+            save_iteration=subtraction_cfg.save_iteration,
         )
 
     def peel_chunk(
@@ -314,6 +316,7 @@ class SubtractionPeeler(BasePeeler):
             right_margin=right_margin,
             detection_threshold=self.detection_threshold,
             peak_sign=self.peak_sign,
+            relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             dedup_temporal_radius=self.temporal_dedup_radius_samples,
             pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
@@ -343,15 +346,15 @@ class SubtractionPeeler(BasePeeler):
         self.subtraction_denoising_pipeline.precompute()
 
     def fit_featurization_pipeline(
-        self, save_folder, tmp_dir=None, computation_config=None
+        self, save_folder, tmp_dir=None, computation_cfg=None
     ):
         super().fit_featurization_pipeline(
-            save_folder, tmp_dir=tmp_dir, computation_config=computation_config
+            save_folder, tmp_dir=tmp_dir, computation_cfg=computation_cfg
         )
         if self.use_singlechan_templates:
             self.have_singlechan_templates = True
 
-    def fit_peeler_models(self, save_folder, tmp_dir=None, computation_config=None):
+    def fit_peeler_models(self, save_folder, tmp_dir=None, computation_cfg=None):
         # when fitting peelers for subtraction, there are basically
         # two cases. fitting featurizers is easy -- they don't modify
         # the waveforms. fitting denoisers is hard -- they do. each
@@ -367,19 +370,19 @@ class SubtractionPeeler(BasePeeler):
         while self._fit_subtraction_transformers(
             save_folder,
             tmp_dir=tmp_dir,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
             which="denoisers",
         ):
             pass
         self._fit_subtraction_transformers(
             save_folder,
             tmp_dir=tmp_dir,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
             which="featurizers",
         )
 
     def _fit_subtraction_transformers(
-        self, save_folder, tmp_dir=None, computation_config=None, which="denoisers"
+        self, save_folder, tmp_dir=None, computation_cfg=None, which="denoisers"
     ):
         """Fit models which are run during the subtraction step
 
@@ -408,9 +411,9 @@ class SubtractionPeeler(BasePeeler):
         if not needs_fit:
             return False
 
-        if computation_config is None:
-            computation_config = job_util.get_global_computation_config()
-        device = computation_config.actual_device()
+        if computation_cfg is None:
+            computation_cfg = job_util.get_global_computation_config()
+        device = computation_cfg.actual_device()
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_voltage_feature = Voltage(
@@ -442,7 +445,7 @@ class SubtractionPeeler(BasePeeler):
         if which == "denoisers" and not already_fitted:
             fit_pipeline = WaveformPipeline(fit_feats)
             self._threshold_to_fit(
-                tmp_dir, fit_pipeline, computation_config=computation_config
+                tmp_dir, fit_pipeline, computation_cfg=computation_cfg
             )
             return True
 
@@ -458,7 +461,7 @@ class SubtractionPeeler(BasePeeler):
             try:
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
-                    computation_config=computation_config,
+                    computation_cfg=computation_cfg,
                     task_name=f"Load examples for {which[:-1]} fitting",
                 )
 
@@ -494,7 +497,7 @@ class SubtractionPeeler(BasePeeler):
                     temp_hdf5_filename.unlink()
         return True
 
-    def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_config):
+    def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         geom = self.recording.get_channel_locations()
         spatial_jitter_index = None
         if self.first_denoiser_spatial_jitter:
@@ -506,6 +509,7 @@ class SubtractionPeeler(BasePeeler):
             self.recording,
             detection_threshold=self.detection_threshold,
             channel_index=self.subtract_channel_index,
+            relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.subtract_channel_index,
             featurization_pipeline=waveform_pipeline,
             dedup_temporal_radius_samples=self.spike_length_samples,
@@ -515,7 +519,7 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=self.peak_sign,
             trough_priority=self.trough_priority,
         )
-        device = computation_config.actual_device()
+        device = computation_cfg.actual_device()
         trainer.to(device)
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
@@ -526,7 +530,7 @@ class SubtractionPeeler(BasePeeler):
                     shuffle=True,
                     stop_after_n_waveforms=self.first_denoiser_max_waveforms_fit,
                     task_name=f"Load examples for initial denoiser fitting",
-                    computation_config=computation_config,
+                    computation_cfg=computation_cfg,
                 )
 
                 # get fit weights
@@ -577,6 +581,7 @@ def subtract_chunk(
     right_margin=0,
     detection_threshold=4,
     peak_sign="both",
+    relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
     residnorm_decrease_threshold=3.162,  # sqrt(10)
     relative_peak_radius=5,
@@ -598,6 +603,7 @@ def subtract_chunk(
             channel_index,
             detection_threshold=detection_threshold,
             peak_sign=peak_sign,
+            relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
@@ -671,6 +677,7 @@ def subtract_chunk(
             times_samples, channels = detect_and_deduplicate(
                 residual_det,
                 detection_threshold,
+                relative_peak_channel_index=relative_peak_channel_index,
                 dedup_channel_index=channel_index,
                 peak_sign=peak_sign,
                 relative_peak_radius=relative_peak_radius,
@@ -684,6 +691,7 @@ def subtract_chunk(
                 singlechan_templates,
                 threshold=singlechan_threshold,
                 trough_offset_samples=singlechan_trough_offset,
+                relative_peak_channel_index=relative_peak_channel_index,
                 dedup_channel_index=channel_index,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,

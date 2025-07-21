@@ -1,9 +1,18 @@
-import numpy as np
-import torch
+import joblib
 import numba
+import numpy as np
 from scipy.sparse import coo_array, csc_array
-
 from scipy.special import logsumexp
+import torch
+
+
+try:
+    import cupy as cp
+    from cupyx.scipy.sparse import coo_matrix as cupy_coo_matrix
+
+    HAVE_CUPY = True
+except ImportError:
+    HAVE_CUPY = False
 
 
 def get_coo_storage(ns_total, storage, use_storage):
@@ -49,7 +58,7 @@ def coo_to_torch(
         s0, s1 = s1, s0
     res = torch.sparse_coo_tensor(
         torch.row_stack(coo),
-        torch.asarray(coo_array.data, dtype=torch.float, copy=copy_data),
+        torch.asarray(coo_array.data, dtype=dtype, copy=copy_data),
         size=(s0, s1),
         is_coalesced=is_coalesced,
     )
@@ -62,6 +71,13 @@ def coo_to_scipy(coo_tensor):
     data = coo_tensor.values().numpy(force=True)
     coords = coo_tensor.indices().numpy(force=True)
     return coo_array((data, coords), shape=coo_tensor.shape)
+
+
+def coo_to_cupy(coo_tensor):
+    assert HAVE_CUPY
+    data = cp.asarray(coo_tensor.values())
+    iijj = cp.asarray(coo_tensor.indices())
+    return cupy_coo_matrix((data, iijj), shape=coo_tensor.shape)
 
 
 def get_csc_storage(ns_total, storage, use_storage):
@@ -328,9 +344,7 @@ def csc_sparse_mask_rows(csc, keep_mask, in_place=False):
 )
 def _csc_sparse_mask_rows(indices, indptr, data, oldrow_to_newrow, keep_mask):
     write_ix = 0
-
     column = 0
-    column_kept_count = 0
     column_end = indptr[1]
 
     for read_ix in range(len(indices)):
@@ -668,3 +682,37 @@ def erase_dups(arr):
             for k in range(j + 1, x.shape[0]):
                 if x[k] == xx:
                     x[k] = -1
+
+
+# sparse kmeans helpers
+
+
+def sparse_centroid_distsq(
+    X, centroids, max_distance_sq, labels, nearest_distsq, centroid_mask, dbufs
+):
+    neighbors = centroid_mask[labels]
+    coo = neighbors.nonzero()
+    ii, cc = coo.T
+    nn = len(ii)
+
+    dbufx, dbufc = dbufs
+    dbufx = dbufx.resize_(nn, *dbufx.shape[1:])
+    dbufc = dbufc.resize_(nn, *dbufc.shape[1:])
+
+    torch.index_select(X, dim=0, index=ii, out=dbufx)
+    torch.index_select(centroids, dim=0, index=cc, out=dbufc)
+    dsq = dbufx.sub_(dbufc).square_().sum(dim=1)
+
+    distsq_coo = torch.sparse_coo_tensor(
+        coo.T, dsq, size=(len(X), len(centroids)), is_coalesced=True
+    )
+
+    return distsq_coo, (dbufx, dbufc)
+
+
+def distsq_to_lik_coo(distsq_coo, sigmasq, log_proportions, in_place=False):
+    liks = distsq_coo
+    if not in_place:
+        liks = liks.clone()
+    liks.values().mul_(-0.5 / sigmasq).add_(log_proportions[liks.indices()[1]])
+    return liks

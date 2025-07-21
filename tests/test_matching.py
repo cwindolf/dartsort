@@ -61,13 +61,13 @@ def _test_tiny(tmp_path, scaling=0.0):
 
     rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
     for rec in [rec0, rec1]:
-        template_config = dartsort.TemplateConfig(
+        template_cfg = dartsort.TemplateConfig(
             low_rank_denoising=False,
             superres_bin_min_spikes=0,
         )
         template_data = TemplateData.from_config(
             *no_overlap_recording_sorting(templates),
-            template_config,
+            template_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
             save_folder=tmp_path,
             overwrite=True,
@@ -75,7 +75,7 @@ def _test_tiny(tmp_path, scaling=0.0):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_config,
+            dartsort.default_waveform_cfg,
             dartsort.MatchingConfig(
                 amplitude_scaling_variance=scaling,
                 threshold=0.01,
@@ -106,7 +106,7 @@ def _test_tiny(tmp_path, scaling=0.0):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_config,
+            dartsort.default_waveform_cfg,
             dartsort.MatchingConfig(
                 threshold=0.01,
                 amplitude_scaling_variance=0.0,
@@ -180,13 +180,13 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
-        template_config = dartsort.TemplateConfig(
+        template_cfg = dartsort.TemplateConfig(
             low_rank_denoising=False,
             superres_bin_min_spikes=0,
         )
         template_data = TemplateData.from_config(
             *no_overlap_recording_sorting(templates),
-            template_config,
+            template_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
             save_folder=tmp_path,
             overwrite=True,
@@ -194,7 +194,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_config,
+            dartsort.default_waveform_cfg,
             dartsort.MatchingConfig(
                 threshold=0.01,
                 amplitude_scaling_variance=scaling,
@@ -337,12 +337,12 @@ def static_tester(tmp_path, up_factor=1):
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
-        template_config = dartsort.TemplateConfig(
+        template_cfg = dartsort.TemplateConfig(
             low_rank_denoising=False, superres_bin_min_spikes=0
         )
         template_data = TemplateData.from_config(
             *no_overlap_recording_sorting(templates),
-            template_config,
+            template_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
             save_folder=tmp_path,
             overwrite=True,
@@ -350,7 +350,7 @@ def static_tester(tmp_path, up_factor=1):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_config,
+            dartsort.default_waveform_cfg,
             dartsort.MatchingConfig(
                 threshold=0.01,
                 template_temporal_upsampling_factor=up_factor,
@@ -541,9 +541,9 @@ def _test_fakedata_nonn(tmp_path, threshold):
             sorting=gts,
             output_dir=tmp_path / "match",
             motion_est=None,
-            template_config=tempconf,
-            featurization_config=featconf,
-            matching_config=matchconf,
+            template_cfg=tempconf,
+            featurization_cfg=featconf,
+            matching_cfg=matchconf,
         )
         assert np.all(st.scores > 0)
 
@@ -553,9 +553,9 @@ def _test_fakedata_nonn(tmp_path, threshold):
             sorting=st,
             output_dir=tmp_path / "match2",
             motion_est=None,
-            template_config=tempconf,
-            featurization_config=featconf,
-            matching_config=matchconf_fp,
+            template_cfg=tempconf,
+            featurization_cfg=featconf,
+            matching_cfg=matchconf_fp,
         )
         assert np.all(st.scores > 0)
 
@@ -570,19 +570,19 @@ def test_fakedata_nonn(tmp_path):
     _test_fakedata_nonn(tmp_path, 7.0)
 
 
-@pytest.mark.parametrize("rec_type", ["static", "drifting"])
+@pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
 @pytest.mark.parametrize("threshold", ["check", "fp_control"])
-def test_with_simkit(sim_recordings, rec_type, threshold):
-    sim = sim_recordings[rec_type]
-    rec = sim["rec"]
-    template_data = sim["template_data"]
+def test_with_simkit(simulations, sim_name, threshold):
+    sim = simulations[sim_name]
+    rec = sim["recording"]
+    template_data = sim["templates"]
     motion_est = sim["motion_est"]
     gt_st = sim["sorting"]
 
     with tempfile.TemporaryDirectory() as tdir:
         if threshold == "check":
-            threshold = 0.5 * np.sqrt(
-                np.square(template_data.templates).sum((1, 2)).min()
+            threshold = np.sqrt(
+                0.5 * np.square(template_data.templates).sum((1, 2)).min()
             )
         st = dartsort.match(
             recording=rec,
@@ -590,8 +590,9 @@ def test_with_simkit(sim_recordings, rec_type, threshold):
             output_dir=tdir,
             motion_est=motion_est,
             template_data=template_data,
-            featurization_config=dartsort.FeaturizationConfig(skip=True),
-            matching_config=dartsort.MatchingConfig(threshold=threshold),
+            featurization_cfg=dartsort.FeaturizationConfig(skip=True),
+            matching_cfg=dartsort.MatchingConfig(threshold=threshold),
         )
         print(f"{threshold=} {st=}")
-        assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.2
+        assert len(st) > 0.9 * len(gt_st)
+        # assert abs(len(st) - len(gt_st)) / len(gt_st) < 0.3

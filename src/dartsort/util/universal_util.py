@@ -16,6 +16,8 @@ def get_singlechan_centroids(
     deduplication_radius=150.0,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dedup_temporal_radius_samples=11,
+    n_kmeanspp_tries=10,
     alignment_padding=20,
     n_centroids=10,
     pca_rank=8,
@@ -27,7 +29,7 @@ def get_singlechan_centroids(
     random_seed=0,
 ):
     """Kmeanspp in pca space"""
-    from dartsort import kmeans
+    from dartsort.cluster import kmeans
 
     full_length = spike_length_samples + 2 * alignment_padding
     full_trough = trough_offset_samples + alignment_padding
@@ -40,6 +42,7 @@ def get_singlechan_centroids(
             rec,
             detection_threshold=detection_threshold,
             deduplication_radius=deduplication_radius,
+            dedup_temporal_radius_samples=dedup_temporal_radius_samples,
             n_waveforms_fit=n_waveforms_fit,
             trough_offset_samples=full_trough,
             spike_length_samples=full_length,
@@ -49,6 +52,7 @@ def get_singlechan_centroids(
 
     # PCA embed
     trim_waveforms = singlechan_waveforms[:, alignment_padding:trim_end]
+    q = min(pca_rank + 10, *trim_waveforms.shape)
     u, s, v = torch.pca_lowrank(trim_waveforms, q=pca_rank + 10, center=False, niter=7)
     u = u[:, :pca_rank]
     s = s[:pca_rank]
@@ -57,14 +61,15 @@ def get_singlechan_centroids(
     embeds = u * eigs
 
     # kmeans++ (iter=0). seems better than kmeans for this application.
-    labels, _, centroids = kmeans.kmeans(
+    kmeans_res = kmeans.kmeans(
         embeds,
         n_components=n_centroids,
-        return_centroids=True,
         n_iter=0,
+        n_kmeanspp_tries=n_kmeanspp_tries,
         kmeanspp_initial=kmeanspp_initial,
         random_state=random_seed,
     )
+    labels = kmeans_res["labels"]
 
     # get templates by averaging and realigning single chan wfs
     temps = []
@@ -81,8 +86,9 @@ def get_singlechan_centroids(
     temps = torch.stack(temps, dim=0)
 
     # taper and normalize
-    temps = spiketorch.taper(temps, t_start=taper_start, t_end=taper_end)
-    temps /= torch.linalg.norm(temps, dim=1, keepdim=True)
+    if taper:
+        temps = spiketorch.taper(temps, t_start=taper_start, t_end=taper_end)
+        temps /= torch.linalg.norm(temps, dim=1, keepdim=True)
 
     return temps
 
@@ -94,6 +100,7 @@ def get_singlechan_waveforms(
     n_waveforms_fit=20_000,
     trough_offset_samples=42,
     spike_length_samples=121,
+    dedup_temporal_radius_samples=11,
     show_progress=False,
 ):
     from dartsort.peel.threshold import ThresholdAndFeaturize
@@ -117,6 +124,7 @@ def get_singlechan_waveforms(
         featurization_pipeline=WaveformPipeline([wfeat]),
         spatial_dedup_channel_index=deduplication_index,
         detection_threshold=detection_threshold,
+        dedup_temporal_radius_samples=dedup_temporal_radius_samples,
         n_waveforms_fit=n_waveforms_fit,
     )
 
@@ -135,19 +143,12 @@ def get_singlechan_waveforms(
 def spatial_footprint_bank(
     geom, n_sigmas=3, min_template_size=10.0, dsigma=2.0, max_distance=32.0, dx=32.0, eps=0.025
 ):
-    # this is just a single shank version, since I don't plan to use
-    # this in production. but it is copied from KS' code and can be
-    # modified as theirs is for multi shank.
-
-    # what KS calls dmin
     z_unique = np.unique(geom[:, 1])
     dz = 1.0 if z_unique.size == 1 else np.median(np.diff(z_unique))
 
-    # how they place z centers
     z_min, z_max = z_unique.min(), z_unique.max()
     z_centers = np.arange(z_min, z_max + 1e-2, dz / 2)
 
-    # how they place x centers
     x_min, x_max = geom[:, 0].min(), geom[:, 0].max()
     nx = np.round((x_max - x_min) / (dx / 2)) + 1
     x_centers = np.linspace(x_min, x_max, num=int(nx))
@@ -177,6 +178,7 @@ def spatial_footprint_bank(
 def singlechan_to_library(
     singlechan_templates,
     geom,
+    trough_offset_samples=42,
     n_sigmas=5,
     min_template_size=10.0,
     max_distance=32.0,
@@ -207,6 +209,8 @@ def singlechan_to_library(
         templates,
         unit_ids=np.arange(nsct * nf),
         spike_counts=np.ones(nsct * nf, dtype=int),
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=nt,
     )
     return footprints, template_data
 
@@ -252,6 +256,7 @@ def universal_templates_from_data(
     footprints, template_data = singlechan_to_library(
         singlechan_centroids,
         rec.get_channel_locations() if rec is not None else None,
+        trough_offset_samples=trough_offset_samples,
         n_sigmas=n_sigmas,
         min_template_size=min_template_size,
         max_distance=max_distance,

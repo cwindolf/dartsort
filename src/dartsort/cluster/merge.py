@@ -1,11 +1,13 @@
 from dataclasses import replace
 from typing import Optional
+from logging import getLogger
+import warnings
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import maximum_bipartite_matching
-from tqdm.auto import tqdm, trange
+from tqdm.auto import tqdm
 
 
 from ..util.internal_config import TemplateConfig
@@ -15,15 +17,17 @@ from ..templates.pairwise_util import (
     iterate_compressed_pairwise_convolutions,
 )
 from ..util.data_util import DARTsortSorting, combine_sortings
-from . import cluster_util
 from ..util import job_util
+
+
+logger = getLogger(__name__)
 
 
 def merge_templates(
     sorting: DARTsortSorting,
     recording,
     template_data: Optional[TemplateData] = None,
-    template_config: Optional[TemplateConfig] = None,
+    template_cfg: Optional[TemplateConfig] = None,
     motion_est=None,
     max_shift_samples=20,
     superres_linkage=np.max,
@@ -41,13 +45,12 @@ def merge_templates(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     template_save_folder=None,
     overwrite_templates=False,
     show_progress=True,
     template_npz_filename="template_data.npz",
-    reorder_by_depth=True,
-) -> DARTsortSorting:
+):
     """Template distance based merge
 
     Pass in a sorting, recording and template config to make templates,
@@ -69,16 +72,16 @@ def merge_templates(
     -------
     A new DARTsortSorting
     """
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
 
     if template_data is None:
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
-            template_config,
+            template_cfg,
             motion_est=motion_est,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
             save_folder=template_save_folder,
             overwrite=overwrite_templates,
             save_npz_name=template_npz_filename,
@@ -103,14 +106,14 @@ def merge_templates(
     )
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
-        device=computation_config.actual_device(),
-        n_jobs=computation_config.actual_n_jobs(),
+        device=computation_cfg.actual_device(),
+        n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
         **dist_matrix_kwargs,
     )
 
     # now run hierarchical clustering
-    merged_sorting = recluster(
+    merged_sorting, new_unit_ids = recluster(
         sorting,
         units,
         dists,
@@ -122,18 +125,13 @@ def merge_templates(
         dist_matrix_kwargs=dist_matrix_kwargs,
     )
 
-    if reorder_by_depth:
-        merged_sorting = cluster_util.reorder_by_depth(
-            merged_sorting, motion_est=motion_est
-        )
-
-    return merged_sorting
+    return dict(sorting=merged_sorting, new_unit_ids=new_unit_ids)
 
 
 def merge_across_sortings(
     sortings,
     recording,
-    template_config: Optional[TemplateConfig] = None,
+    template_cfg: Optional[TemplateConfig] = None,
     motion_est=None,
     cross_merge_distance_threshold=0.5,
     within_merge_distance_threshold=0.5,
@@ -149,18 +147,18 @@ def merge_across_sortings(
     conv_batch_size=128,
     units_batch_size=8,
     denoising_tsvd=None,
-    computation_config=None,
+    computation_cfg=None,
     show_progress=True,
 ):
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
     # first, merge within chunks
     if within_merge_distance_threshold:
         sortings = [
             merge_templates(
                 sorting,
                 recording,
-                template_config=template_config,
+                template_cfg=template_cfg,
                 motion_est=motion_est,
                 max_shift_samples=max_shift_samples,
                 superres_linkage=superres_linkage,
@@ -176,7 +174,7 @@ def merge_across_sortings(
                 units_batch_size=units_batch_size,
                 denoising_tsvd=denoising_tsvd,
                 show_progress=False,
-                computation_config=computation_config,
+                computation_cfg=computation_cfg,
             )
             for sorting in tqdm(sortings, desc="Merge within chunks")
         ]
@@ -186,18 +184,18 @@ def merge_across_sortings(
         template_data_a = TemplateData.from_config(
             recording,
             sortings[i],
-            template_config,
+            template_cfg,
             motion_est=motion_est,
             tsvd=denoising_tsvd,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         template_data_b = TemplateData.from_config(
             recording,
             sortings[i + 1],
-            template_config,
+            template_cfg,
             motion_est=motion_est,
             tsvd=denoising_tsvd,
-            computation_config=computation_config,
+            computation_cfg=computation_cfg,
         )
         dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(
             template_data_a,
@@ -213,8 +211,8 @@ def merge_across_sortings(
             min_channel_amplitude=min_channel_amplitude,
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
-            device=computation_config.actual_device(),
-            n_jobs=computation_config.actual_n_jobs(),
+            device=computation_cfg.actual_device(),
+            n_jobs=computation_cfg.actual_n_jobs(),
             show_progress=show_progress,
         )
         sortings[i], sortings[i + 1] = cross_match(
@@ -309,6 +307,11 @@ def calculate_merge_distances(
         )
 
     dists = sym_function(dists, dists.T)
+    np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
+    min_dist = dists.min()
+    if min_dist < -1e-3:
+        warnings.warn(f"Alarmingly negative min distance {min_dist}.")
+    dists = np.maximum(dists, 0.0, out=dists)
 
     return units, dists, shifts, template_snrs
 
@@ -336,7 +339,6 @@ def cross_match_distance_matrix(
     template_data, cross_mask, ids_a, ids_b = combine_templates(
         template_data_a, template_data_b
     )
-    print(f"{ids_a.shape=} {ids_b.shape=} {template_data.templates.shape=}")
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
         superres_linkage=superres_linkage,
@@ -419,8 +421,7 @@ def recluster(
     # drop in a huge value here
     finite = np.isfinite(pdist)
     if not finite.any():
-        print("no merges")
-        return sorting
+        return sorting, np.arange(dists.shape[0])
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
     # complete linkage: max dist between all pairs across clusters.
@@ -432,6 +433,8 @@ def recluster(
         Z = linkage(pdist, method=link)
     # extract flat clustering using our max dist threshold
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
+    assert new_labels.min() == 1  # start at 1 for some reason
+    new_labels -= 1
 
     # update labels
     labels_updated = np.full_like(sorting.labels, -1)
@@ -446,7 +449,8 @@ def recluster(
     clust_inverse = {i: [] for i in new_labels}
     for orig_label, new_label in enumerate(new_labels):
         clust_inverse[new_label].append(orig_label)
-    print(sum(len(v) - 1 for v in clust_inverse.values()), "merges")
+    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
+    logger.dartsortdebug(f"Merged {n_merges} templates.")
 
     # align to best snr unit
     for new_label, orig_labels in clust_inverse.items():
@@ -464,7 +468,8 @@ def recluster(
             # subtracting will move trough of og to the right.
             times_updated[in_orig_unit] -= shift_og_best
 
-    return replace(sorting, times_samples=times_updated, labels=labels_updated)
+    new_sorting = replace(sorting, times_samples=times_updated, labels=labels_updated)
+    return new_sorting, new_labels
 
 
 def cross_match(

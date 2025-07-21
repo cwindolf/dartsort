@@ -2,9 +2,10 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import pdist, cdist
 
-from dartsort.util import drift_util, waveform_util, simkit
+from dartsort.util import drift_util, waveform_util
+from dartsort.evaluate import simlib
 import dredge.motion_util as mu
 
 
@@ -73,7 +74,7 @@ def test_shifted_waveforms():
 
 @pytest.fixture
 def example_geoms():
-    geom = simkit.generate_geom(num_contact_per_column=48)
+    geom = simlib.generate_geom(num_contact_per_column=48, sort_x_down=False)
     geom0 = geom
 
     # make some holes
@@ -91,10 +92,13 @@ def example_geoms():
     # oddball column with one friend, and it's not even sorted
     geom5 = np.concatenate([geom4, [[1, 5.2]]], axis=0)
 
-    return [geom0, geom1, geom2, geom3, geom4, geom5]
+    # here x axis is sorted down but z is as usual
+    geom6 = simlib.generate_geom(num_contact_per_column=48)
+
+    return [geom0, geom1, geom2, geom3, geom4, geom5, geom6]
 
 
-@pytest.mark.parametrize("geom_ix", range(6))
+@pytest.mark.parametrize("geom_ix", range(7))
 @pytest.mark.parametrize("drift_speed", [0, 10, 100, -10, -132])
 def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     geom = example_geoms[geom_ix]
@@ -106,6 +110,8 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     motion_est = mu.get_motion_estimate(drift, time_bin_centers_s=time_bin_centers)
 
     # this is the old impl of registered_geometry
+    # actually, it is updated. the min_distance was too large and failed in some
+    # cases with sparse probes.
     pitch = drift_util.get_pitch(geom)
     downward_drift = max(0, motion_est.displacement.max())
     upward_drift = max(0, -motion_est.displacement.min())
@@ -113,15 +119,16 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     assert downward_drift >= 0
     pitches_pad_up = int(np.ceil(upward_drift / pitch))
     pitches_pad_down = int(np.ceil(downward_drift / pitch))
-    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+    min_distance = min(pitch / 2, pdist(geom).min() / 2)
     unique_shifted_positions = list(geom)
     for shift in range(-pitches_pad_down, pitches_pad_up + 1):
         shifted_geom = geom + [0, pitch * shift]
         for site in shifted_geom:
-            if np.square(unique_shifted_positions - site).sum(1).min() > min_distance:
+            if cdist(unique_shifted_positions, site[None]).min() > min_distance:
                 unique_shifted_positions.append(site)
     unique_shifted_positions = np.array(unique_shifted_positions)
-    registered_geom0 = unique_shifted_positions[np.lexsort(unique_shifted_positions.T)]
+    sortpos = unique_shifted_positions * waveform_util.get_orders(geom)
+    registered_geom0 = unique_shifted_positions[np.lexsort(sortpos.T)]
     assert len(np.unique(registered_geom0, axis=0)) == len(registered_geom0)
 
     registered_geom1 = drift_util.registered_geometry(geom, motion_est=motion_est)

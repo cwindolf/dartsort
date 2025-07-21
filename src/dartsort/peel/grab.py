@@ -19,10 +19,11 @@ class GrabAndFeaturize(BasePeeler):
         featurization_pipeline,
         times_samples,
         channels,
+        labels=None,
         trough_offset_samples=42,
         spike_length_samples=121,
         chunk_length_samples=30_000,
-        n_chunks_fit=40,
+        n_seconds_fit=40,
         fit_subsampling_random_state=0,
         dtype=torch.float,
     ):
@@ -36,18 +37,21 @@ class GrabAndFeaturize(BasePeeler):
             ),
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            n_chunks_fit=n_chunks_fit,
+            n_seconds_fit=n_seconds_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             dtype=dtype,
         )
         self.register_buffer("times_samples", torch.asarray(times_samples))
         self.register_buffer("channels", torch.asarray(channels))
+        self.labels = labels
         assert self.times_samples.ndim == 1
         assert self.times_samples.shape == self.channels.shape
 
     def out_datasets(self):
         datasets = super().out_datasets()
         datasets.append(SpikeDataset(name="indices", shape_per_spike=(), dtype=np.int64))
+        if self.labels is not None:
+            datasets.append(SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64))
         return datasets
 
     def process_chunk(
@@ -79,22 +83,22 @@ class GrabAndFeaturize(BasePeeler):
         )
 
     @classmethod
-    def from_config(cls, sorting, recording, waveform_config, featurization_config):
+    def from_config(cls, sorting, recording, waveform_cfg, featurization_cfg):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
-            geom, featurization_config.extract_radius, to_torch=True
+            geom, featurization_cfg.extract_radius, to_torch=True
         )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
-            featurization_config=featurization_config,
-            waveform_config=waveform_config,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_config.trough_offset_samples(
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-        spike_length_samples = waveform_config.spike_length_samples(
+        spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
         return cls(
@@ -103,10 +107,11 @@ class GrabAndFeaturize(BasePeeler):
             featurization_pipeline,
             sorting.times_samples,
             sorting.channels,
+            labels=sorting.labels,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             chunk_length_samples=30_000,
-            n_chunks_fit=100,
+            n_seconds_fit=100,
             dtype=torch.float,
         )
 
@@ -148,10 +153,13 @@ class GrabAndFeaturize(BasePeeler):
                 pad_value=torch.nan,
             )
 
-        return dict(
+        res = dict(
             n_spikes=in_chunk.numel(),
             indices=in_chunk,
             times_samples=self.times_samples[in_chunk],
             channels=channels,
             collisioncleaned_waveforms=waveforms,
         )
+        if self.labels is not None:
+            res['labels'] = self.labels[in_chunk]
+        return res

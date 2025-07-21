@@ -70,6 +70,16 @@ class DARTsortSorting:
                 assert not hasattr(self, k)
                 self.__dict__[k] = v
 
+    def setattr(self, name, value):
+        if torch.is_tensor(value):
+            value = value.numpy(force=True)
+        if isinstance(value, np.ndarray):
+            assert len(value) == len(self)
+            self.extra_features[name] = value
+            self.__dict__[name] = value
+        else:
+            super().__setattr__(name, value)
+
     def to_numpy_sorting(self):
         return NumpySorting.from_samples_and_labels(
             samples_list=self.times_samples,
@@ -92,16 +102,31 @@ class DARTsortSorting:
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
 
-    def drop_missing(self):
-        valid = np.flatnonzero(self.labels >= 0)
+    def mask(self, mask):
+        if np.dtype(mask.dtype).kind == "b":
+            mask = mask.nonzero()
+
+        extra_features = dict(mask_indices=mask)
+        if self.extra_features:
+            n = self.n_spikes
+            for k, v in self.extra_features.items():
+                assert k != "mask_indices"  # no recursion...
+                if v.shape[0] != n:
+                    continue
+                extra_features[k] = v[mask]
+
         return replace(
             self,
-            times_samples=self.times_samples[valid],
-            channels=self.channels[valid],
-            labels=self.labels[valid],
+            times_samples=self.times_samples[mask],
+            channels=self.channels[mask],
+            labels=self.labels[mask] if self.labels is not None else None,
             parent_h5_path=None,
-            extra_features=None,
+            extra_features=extra_features,
         )
+
+    def drop_missing(self):
+        valid = np.flatnonzero(self.labels >= 0)
+        return self.mask(valid)
 
     @classmethod
     def load(cls, sorting_npz):
@@ -260,6 +285,17 @@ def get_tpca(sorting):
     tpcas = [t for t in pipeline.transformers if isinstance(t, TemporalPCAFeaturizer)]
     tpca = tpcas[0]
     return tpca
+
+
+def load_stored_tsvd(sorting):
+    if sorting.parent_h5_path is None:
+        return None
+    pipeline = get_featurization_pipeline(sorting)
+    tsvd = [t for t in pipeline.transformers if t.name == "collisioncleaned_basis"]
+    if not len(tsvd):
+        return None
+    assert len(tsvd) == 1
+    return tsvd[0].to_sklearn()
 
 
 def get_labels(h5_path):
@@ -569,6 +605,7 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
 
 
 def extract_random_snips(rg, chunk, n, sniplen):
+    rg = np.random.default_rng(rg)
     if sniplen * n > chunk.shape[0]:
         warnings.warn("Can't extract this many non-overlapping snips.")
         times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
@@ -585,7 +622,7 @@ def extract_random_snips(rg, chunk, n, sniplen):
 
 
 def subsample_waveforms(
-    hdf5_filename,
+    hdf5_filename=None,
     fit_sampling="random",
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
@@ -595,36 +632,43 @@ def subsample_waveforms(
     log_voltages=True,
     subsample_by_weighting=False,
     replace=True,
+    h5=None,
 ):
     random_state = np.random.default_rng(random_state)
-    hdf5_filename = resolve_path(hdf5_filename, strict=True)
 
-    with h5py.File(hdf5_filename) as h5:
-        channels: np.ndarray = h5["channels"][:]
-        n_wf = channels.shape[0]
-        weights = fit_reweighting(
-            h5=h5,
-            log_voltages=log_voltages,
-            fit_sampling=fit_sampling,
-            fit_max_reweighting=fit_max_reweighting,
-            voltages_dataset_name=voltages_dataset_name,
+    need_open = h5 is None
+    if need_open:
+        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        h5 = h5py.File(hdf5_filename)
+    
+    channels: np.ndarray = h5["channels"][:]
+    n_wf = channels.shape[0]
+    weights = fit_reweighting(
+        h5=h5,
+        log_voltages=log_voltages,
+        fit_sampling=fit_sampling,
+        fit_max_reweighting=fit_max_reweighting,
+        voltages_dataset_name=voltages_dataset_name,
+    )
+    if n_wf > n_waveforms_fit and not subsample_by_weighting:
+        choices = random_state.choice(
+            n_wf, p=weights, size=n_waveforms_fit, replace=replace
         )
-        if n_wf > n_waveforms_fit and not subsample_by_weighting:
-            choices = random_state.choice(
-                n_wf, p=weights, size=n_waveforms_fit, replace=replace
-            )
-            if not replace:
-                choices.sort()
-                channels = channels[choices]
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-            else:
-                uchoices, ichoices = np.unique(choices, return_inverse=True)
-                channels = channels[uchoices][ichoices]
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
-                    ichoices
-                ]
+        if not replace:
+            choices.sort()
+            channels = channels[choices]
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            uchoices, ichoices = np.unique(choices, return_inverse=True)
+            channels = channels[uchoices][ichoices]
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
+                ichoices
+            ]
+    else:
+        waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+
+    if need_open:
+        h5.close()
 
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
@@ -669,3 +713,17 @@ def fit_reweighting(
     sample_p = sample_p.astype(float)  # ensure double before normalizing
     sample_p /= sample_p.sum()
     return sample_p
+
+
+def divide_randomly(n_things, n_bins, rg):
+    things_per_bin = np.zeros(n_bins, dtype=np.int64)
+    n_even_split = n_things // n_bins
+    things_per_bin += n_even_split
+    n_things_remaining = n_things - n_bins * n_even_split
+    assert n_things_remaining >= 0
+    if n_things_remaining:
+        rg = np.random.default_rng(rg)
+        choices = rg.choice(n_bins, size=n_things_remaining)
+        np.add.at(things_per_bin, choices, 1)
+    assert things_per_bin.sum() == n_things
+    return things_per_bin

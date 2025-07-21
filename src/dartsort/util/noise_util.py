@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import pdist, squareform
+from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
 
@@ -148,10 +149,15 @@ class FactorizedNoise(torch.nn.Module):
 class WhiteNoise(torch.nn.Module):
     """White noise to mimic the StationaryFactorizedNoise for use in sims."""
 
+    margin = 0
+
     def __init__(self, n_channels, scale=1.0):
         super().__init__()
         self.n_channels = n_channels
         self.scale = scale
+
+    def unwhiten(self, snippet):
+        return snippet
 
     def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         assert t is not None
@@ -164,11 +170,12 @@ class WhiteNoise(torch.nn.Module):
 class StationaryFactorizedNoise(torch.nn.Module):
     def __init__(self, spatial_std, vt_spatial, kernel_fft, block_size, t):
         super().__init__()
-        self.spatial_std = spatial_std
-        self.vt_spatial = vt_spatial
-        self.kernel_fft = kernel_fft
+        self.spatial_std = torch.asarray(spatial_std)
+        self.vt_spatial = torch.asarray(vt_spatial)
+        self.kernel_fft = torch.asarray(kernel_fft)
         self.block_size = block_size
         self.t = t
+        self.margin = (self.t - 1) // 2
 
     def spatial_cov(self):
         rt = self.spatial_std * self.vt_spatial.T
@@ -186,6 +193,30 @@ class StationaryFactorizedNoise(torch.nn.Module):
         # zca
         wsnip = wsnip.T @ self.vt_spatial.T
         return wsnip
+
+    def unwhiten(self, snippet):
+        snippet = torch.asarray(
+            snippet, device=self.spatial_std.device, dtype=self.spatial_std.dtype
+        )
+        flat = snippet.ndim == 2
+        if flat:
+            snippet = snippet[None]
+        size, t_padded, c = snippet.shape
+        t = t_padded - self.t + 1
+        out = snippet.new_empty(size, c, t)
+        for j in range(size):
+            out[j] = spiketorch.single_inv_oaconv1d(
+                snippet[j].T,
+                s2=self.t,
+                f2=self.kernel_fft,
+                block_size=self.block_size,
+                norm="ortho",
+            )
+        spatial_part = self.spatial_std[:, None] * self.vt_spatial
+        out = torch.einsum("nct,cd->ntd", out, spatial_part)
+        if flat:
+            out = out[0]
+        return out
 
     def simulate(self, size=1, t=None, generator=None, chunk_t=None):
         """Simulate stationary factorized noise
@@ -214,17 +245,8 @@ class StationaryFactorizedNoise(torch.nn.Module):
 
         # need extra room at the edges to do valid convolution
         t_padded = t + self.t - 1
-        noise = torch.randn(size * c, t_padded, generator=generator, device=device)
-        noise = spiketorch.single_inv_oaconv1d(
-            noise,
-            s2=self.t,
-            f2=self.kernel_fft,
-            block_size=self.block_size,
-            norm="ortho",
-        )
-        noise = noise.view(size, c, t)
-        spatial_part = self.spatial_std[:, None] * self.vt_spatial
-        return torch.einsum("nct,cd->ntd", noise, spatial_part)
+        noise = torch.randn(size, t_padded, c, generator=generator, device=device)
+        return self.unwhiten(noise)
 
     @classmethod
     def estimate(cls, snippets):
@@ -351,6 +373,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
+                relative_peak_radius=1,
                 dedup_temporal_radius=radius,
                 return_energies=True,
             )
@@ -758,7 +781,8 @@ class EmbeddedNoise(torch.nn.Module):
         if zero_radius:
             assert rgeom is not None
             assert rgeom.shape[0] == n_channels
-            spatial_mask = squareform(pdist(rgeom)) < zero_radius
+            rg_np = rgeom.numpy(force=True) if torch.is_tensor(rgeom) else rgeom
+            spatial_mask = squareform(pdist(rg_np)) < zero_radius
 
         # spatial part could be "by rank" or same for all ranks
         # either way, there are nans afoot
@@ -877,15 +901,16 @@ class EmbeddedNoise(torch.nn.Module):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion_est=None,
-        interpolation_method="normalized",
-        kernel_name="rbf",
-        sigma=20.0,
-        rq_alpha=1.0,
-        kriging_poly_degree=-1,
+        interpolation_method="kriging",
+        kernel_name="thinplate",
+        sigma=10.0,
+        rq_alpha=0.5,
+        kriging_poly_degree=0,
         device=None,
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
+        rgeom=None,
     ):
         from dartsort.util.drift_util import registered_geometry
 
@@ -895,9 +920,10 @@ class EmbeddedNoise(torch.nn.Module):
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
-        rgeom = geom
-        if motion_est is not None:
-            rgeom = registered_geometry(geom, motion_est=motion_est)
+        if rgeom is None:
+            rgeom = geom
+            if motion_est is not None:
+                rgeom = registered_geometry(geom, motion_est=motion_est)
         snippets = interpolate_residual_snippets(
             motion_est,
             hdf5_path,
@@ -920,6 +946,34 @@ class EmbeddedNoise(torch.nn.Module):
             rgeom=rgeom,
         )
 
+    def detection_prior_log_prob(self, templates_pca_projected, threshold=10.0):
+        """
+        Computes:
+            z(T) = log[p(noise det | T)] 
+                 = log[P(|N - T|^2 > threshold^2)]
+                 = log[log P(2N.T > threshold^2 + |T|^2)]
+
+        Then, later, in mixture modeling one can compute
+            p(l = noise | x, T) = log pi_noise + log N(x | noise) - z(T)
+
+        For small, noisy templates, p(noise det | T) is large (close to 1).
+        z(T), the log, is large (close to 0). Subtracting z(T) to re-normalize
+        the noise distribution to the proper support will then boost the noise
+        likelihood.
+
+        Note that since N ~ N(0, C), N.T ~ N( 0, tr TCT'). Or, whatever version of
+        that makes the dimensions work out. Thus we need to compute
+            log normal_sf(0.5 * (thresh^2 + |T|^2) ; mean=0, scale=sqrt(tr TCT))
+        """
+        C = self.full_dense_cov()
+        templates_pca_projected = torch.asarray(templates_pca_projected, device=C.device)
+        T = templates_pca_projected.reshape(len(templates_pca_projected), -1)
+        assert C.shape == (T.shape[1], T.shape[1])
+        tr = torch.einsum("nc,cd,nd->n", T, C, T)
+        scale = tr.sqrt_()
+        crit = T.square().sum(dim=1).add_(threshold**2).mul_(0.5)
+        return norm.logsf(crit.numpy(force=True), scale=scale.numpy(force=True))
+
 
 def interpolate_residual_snippets(
     motion_est,
@@ -928,13 +982,14 @@ def interpolate_residual_snippets(
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    method="normalized",
-    kernel_name="rbf",
-    sigma=20.0,
-    rq_alpha=1.0,
-    kriging_poly_degree=-1,
+    method="kriging",
+    kernel_name="thinplate",
+    sigma=10.0,
+    rq_alpha=0.5,
+    kriging_poly_degree=0,
     workers=None,
     device=None,
+    batch_size=16,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from dartsort.util import data_util, drift_util, interpolation_util
@@ -1017,18 +1072,20 @@ def interpolate_residual_snippets(
         assert torch.equal(source_geom, target_geom)
         target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
-        snippets = interpolation_util.kernel_interpolate(
-            snippets,
-            source_pos,
-            target_pos,
-            method=method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            precomputed_data=precomputed_data,
-            allow_destroy=True,
-        )
+        for bs in range(0, n, batch_size):
+            sl = slice(bs, min(n, bs + batch_size))
+            snippets[sl] = interpolation_util.kernel_interpolate(
+                snippets[sl],
+                source_pos[sl],
+                target_pos[sl],
+                method=method,
+                kernel_name=kernel_name,
+                sigma=sigma,
+                rq_alpha=rq_alpha,
+                kriging_poly_degree=kriging_poly_degree,
+                precomputed_data=precomputed_data,
+                allow_destroy=True,
+            )
         return snippets
 
     # goal
@@ -1051,7 +1108,10 @@ def interpolate_residual_snippets(
     source_pos_shifted = source_pos.numpy(force=True) + source_shifts_xy
 
     # query the target geom for the closest source pos, within reason
-    kdtree = drift_util.KDTree(registered_geom)
+    rg_np = registered_geom
+    if torch.is_tensor(rg_np):
+        rg_np = rg_np.numpy(force=True)
+    kdtree = drift_util.KDTree(rg_np)
     match_distance = drift_util.pdist(geom).min()
     _, targ_inds = kdtree.query(
         source_pos_shifted.reshape(-1, geom.shape[1]),
@@ -1065,18 +1125,20 @@ def interpolate_residual_snippets(
     target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
     # allocate output storage with an extra channel of NaN needed later
-    snippets = interpolation_util.kernel_interpolate(
-        snippets,
-        source_pos,
-        target_pos_shifted,
-        method=method,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        kriging_poly_degree=kriging_poly_degree,
-        precomputed_data=precomputed_data,
-        allow_destroy=True,
-    )
+    for bs in range(0, n, batch_size):
+        sl = slice(bs, min(n, bs + batch_size))
+        snippets[sl] = interpolation_util.kernel_interpolate(
+            snippets[sl],
+            source_pos[sl],
+            target_pos_shifted[sl],
+            method=method,
+            kernel_name=kernel_name,
+            sigma=sigma,
+            rq_alpha=rq_alpha,
+            kriging_poly_degree=kriging_poly_degree,
+            precomputed_data=precomputed_data,
+            allow_destroy=True,
+        )
     assert snippets.isfinite().all()
 
     # now, let's embed these into the full registered probe

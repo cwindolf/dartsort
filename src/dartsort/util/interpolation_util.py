@@ -20,7 +20,7 @@ def interpolate_by_chunk(
     method="normalized",
     extrap_method=None,
     kernel_name="rbf",
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     sigma=10.0,
     rq_alpha=1.0,
     device=None,
@@ -172,7 +172,7 @@ def interp_precompute(
     kernel_name="rbf",
     sigma=20.0,
     rq_alpha=1.0,
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     source_geom_is_padded=True,
 ):
     if method in ("nearest", "kernel", "normalized", "zero"):
@@ -181,6 +181,7 @@ def interp_precompute(
 
     if source_pos is None:
         assert source_geom is not None
+        source_geom = torch.asarray(source_geom)
         n_source_chans = len(source_geom) - source_geom_is_padded
         if channel_index is None:
             channel_index = torch.arange(n_source_chans)[None]
@@ -192,6 +193,7 @@ def interp_precompute(
     else:
         assert source_geom is None
         assert channel_index is None
+        source_pos = torch.asarray(source_pos)
         valid = source_pos[..., 0].isfinite()
     assert source_pos.ndim == 3
     valid = valid.to(source_pos.device)
@@ -348,9 +350,10 @@ def kernel_interpolate(
     method="normalized",
     extrap_method=None,
     kernel_name="rbf",
+    extrap_kernel_name=None,
     sigma=20.0,
     rq_alpha=1.0,
-    kriging_poly_degree=-1,
+    kriging_poly_degree=0,
     precomputed_data=None,
     allow_destroy=False,
     out=None,
@@ -382,13 +385,18 @@ def kernel_interpolate(
     features : torch.Tensor
         n_spikes, feature_dim, n_target_channels
     """
+    features = torch.asarray(features)
+    source_pos = torch.asarray(source_pos)
+    target_pos = torch.asarray(target_pos)
+
     if method == "nearest":
         method = "kernel"
         kernel_name = "nearest"
     elif method == "zero":
         method = "kernel"
         kernel_name = "zero"
-    extrap_kernel_name = kernel_name
+    if extrap_kernel_name is None:
+        extrap_kernel_name = kernel_name
     if extrap_method == "nearest":
         extrap_method = "kernel"
         extrap_kernel_name = "nearest"

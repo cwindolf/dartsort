@@ -126,9 +126,7 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
 
 
 def rank_init(queue):
-    print(f"rank init waiting")
     rank_init.rank = queue.get()
-    print(f"rank init got {rank_init.rank=}")
 
 
 def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=False):
