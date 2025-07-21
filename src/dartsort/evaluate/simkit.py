@@ -7,6 +7,7 @@ from dredge import motion_util
 import h5py
 import numpy as np
 import pandas as pd
+from scipy.signal import sawtooth
 from spikeinterface.core import read_binary_folder
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
@@ -58,7 +59,9 @@ def generate_simulation(
     template_library=None,
     template_simulator_kwargs=None,
     # general parameters
+    drift_type="triangle",
     drift_speed=0.0,
+    drift_period=30.0,
     temporal_jitter=16,
     amplitude_jitter=0.05,
     amp_jitter_family="uniform",
@@ -132,7 +135,9 @@ def generate_simulation(
         min_fr_hz=min_fr_hz,
         max_fr_hz=max_fr_hz,
         template_simulator=template_simulator,
+        drift_type=drift_type,
         drift_speed=drift_speed,
+        drift_period=drift_period,
         amplitude_jitter=amplitude_jitter,
         temporal_jitter=temporal_jitter,
         random_seed=random_seed,
@@ -149,7 +154,9 @@ def generate_simulation(
         chunk_len_s = max_chunk_len_s
     else:
         drift_per_chunk = drift_speed * max_chunk_len_s
-        chunk_len_s = min(max_chunk_len_s, max_drift_per_chunk / max(drift_per_chunk, 1e-10))
+        chunk_len_s = min(
+            max_chunk_len_s, max_drift_per_chunk / max(drift_per_chunk, 1e-10)
+        )
 
     sim_recording.save_simulation(
         folder,
@@ -211,9 +218,10 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def motion_estimate(self):
         if not self.segment.drift_speed:
             return None
+
         duration_s = np.ceil(self.get_duration())
         t = np.arange(duration_s)
-        time_bin_centers = t + 0.5
+        time_bin_centers = t + 0.5 * np.diff(t).mean()
         tbc_samples = time_bin_centers * self.sampling_frequency
         displacement = self.drift(tbc_samples)
         return motion_util.get_motion_estimate(
@@ -346,7 +354,10 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
                     results = tqdm(
-                        results, total=len(chunk_starts), desc="Extract GT features", smoothing=0.02
+                        results,
+                        total=len(chunk_starts),
+                        desc="Extract GT features",
+                        smoothing=0.02,
                     )
 
                 i1_prev = 0
@@ -404,7 +415,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if msg.startswith("auto_cast_uint"):
                     continue
                 raise w
-        n_residual_snips = 0 if featurization_cfg is None else featurization_cfg.n_residual_snips
+        n_residual_snips = (
+            0 if featurization_cfg is None else featurization_cfg.n_residual_snips
+        )
         self.save_features_to_hdf5(
             sorting_h5,
             n_jobs=n_jobs,
@@ -433,7 +446,9 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         min_fr_hz,
         max_fr_hz,
         template_simulator,
+        drift_type,
         drift_speed,
+        drift_period,
         amplitude_jitter,
         amp_jitter_family,
         temporal_jitter,
@@ -445,8 +460,11 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
     ):
         super().__init__(parent_recording_segment)
         assert self.sampling_frequency is not None
+        assert drift_type in ("line", "triangle")
 
+        self.drift_type = drift_type
         self.drift_speed = drift_speed
+        self.drift_period = drift_period
         self.temporal_jitter = temporal_jitter
         self.features_dtype = features_dtype
         self.template_simulator = template_simulator
@@ -524,9 +542,20 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
     def drift(self, t_samples):
         if not self.drift_speed:
             return np.zeros_like(t_samples)
-        t_center = self.get_num_samples() / 2
-        dt = (t_samples - t_center) / self.sampling_frequency
-        return dt * self.drift_speed
+
+        if self.drift_type == "line":
+            t_center = self.get_num_samples() / 2
+            dt = (t_samples - t_center) / self.sampling_frequency
+            return dt * self.drift_speed
+
+        if self.drift_type == "triangle":
+            t_seconds = self.sample_index_to_time(t_samples)
+            phase = t_seconds * (2 * np.pi / self.drift_period)
+            wave = sawtooth(phase, width=0.5)
+            # -1 to 1 and back to -1, so divide by 4 to have 2*ptp=drift_speed*drift_period.
+            return wave * (self.drift_speed * self.drift_period / 4.0)
+
+        assert False
 
     def templates(self, t_samples=None, up=False, padded=False, pad_value=np.nan):
         drift = 0 if t_samples is None else self.drift(t_samples)
