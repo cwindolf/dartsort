@@ -61,6 +61,7 @@ class SubtractionPeeler(BasePeeler):
         n_singlechan_templates=10,
         singlechan_threshold=40.0,
         singlechan_alignment_padding=20,
+        cumulant_order=0,
         first_denoiser_max_waveforms_fit=250_000,
         first_denoiser_thinning=0.5,
         first_denoiser_temporal_jitter=3,
@@ -136,6 +137,9 @@ class SubtractionPeeler(BasePeeler):
         self.first_denoiser_thinning = first_denoiser_thinning
         self.first_denoiser_temporal_jitter = first_denoiser_temporal_jitter
         self.first_denoiser_spatial_jitter = first_denoiser_spatial_jitter
+
+        # cumulant detection
+        self.cumulant_order = cumulant_order
 
         # singlechan template based detection
         self.use_singlechan_templates = use_singlechan_templates
@@ -273,6 +277,7 @@ class SubtractionPeeler(BasePeeler):
             n_singlechan_templates=subtraction_cfg.n_singlechan_templates,
             singlechan_threshold=subtraction_cfg.singlechan_threshold,
             singlechan_alignment_padding=singlechan_alignment_padding,
+            cumulant_order=subtraction_cfg.cumulant_order,
             first_denoiser_max_waveforms_fit=subtraction_cfg.first_denoiser_max_waveforms_fit,
             first_denoiser_thinning=subtraction_cfg.first_denoiser_thinning,
             first_denoiser_temporal_jitter=subtraction_cfg.first_denoiser_temporal_jitter,
@@ -323,6 +328,7 @@ class SubtractionPeeler(BasePeeler):
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
             trough_priority=self.trough_priority,
             growth_tolerance=self.growth_tolerance,
+            cumulant_order=self.cumulant_order,
             save_iteration=self.save_iteration,
             **singlechan_kw,
         )
@@ -594,6 +600,7 @@ def subtract_chunk(
     max_iter=100,
     trough_priority=None,
     growth_tolerance=None,
+    cumulant_order=0,
     save_iteration=False,
 ):
     """Core peeling routine for subtraction"""
@@ -611,6 +618,7 @@ def subtract_chunk(
             right_margin=right_margin,
             relative_peak_radius=relative_peak_radius,
             dedup_temporal_radius=dedup_temporal_radius,
+            cumulant_order=cumulant_order,
             max_spikes_per_chunk=None,
             quiet=False,
         )
@@ -682,8 +690,9 @@ def subtract_chunk(
                 peak_sign=peak_sign,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,
-                detection_mask=detection_mask[:, :-1].T if it else None,
+                detection_mask=detection_mask[:, :-1] if it else None,
                 trough_priority=trough_priority,
+                cumulant_order=cumulant_order,
             )
         else:
             times_samples, channels = singlechan_template_detect_and_deduplicate(
@@ -695,7 +704,7 @@ def subtract_chunk(
                 dedup_channel_index=channel_index,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,
-                detection_mask=detection_mask[:, :-1].T if it else None,
+                detection_mask=detection_mask[:, :-1] if it else None,
             )
         if not times_samples.numel():
             break
