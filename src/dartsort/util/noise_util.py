@@ -949,18 +949,17 @@ class EmbeddedNoise(torch.nn.Module):
     def detection_prior_log_prob(self, templates_pca_projected, threshold=10.0):
         """
         Computes:
-            z(T) = log[1 - p(noise det | T)] 
-                 = log[1 - P(|N - T|^2 > threshold^2)]
-                 = log[1 - log P(2N.T > threshold^2 + |T|^2)]
+            z(T) = log[p(noise det | T)] 
+                 = log[P(|N|^2 - |N - T|^2 > threshold^2)]
+                 = log[log P(2N.T > threshold^2 + |T|^2)]
 
         Then, later, in mixture modeling one can compute
             p(l = noise | x, T) = log pi_noise + log N(x | noise) - log z(T)
 
-        For small, noisy templates, p(noise det | T) is large (close to 1).
-        1 - p is close to 0, and log(1-p) is very small. So, subtracting log z(T)
-        boosts the posterior probability that the spike was noise.
+        It's a little bit counterintuitive: this boosts the noise probability more
+        for units with higher signal templates, since their FP probability is lower.
 
-        Note that since N ~ N(0, C), N.T ~ N( 0, tr TCT'). Or, whatever version of
+        Note that since N ~ N(0, C), N.T ~ N(0, tr TCT'). Or, whatever version of
         that makes the dimensions work out. Thus we need to compute
             log normal_sf(0.5 * (thresh^2 + |T|^2) ; mean=0, scale=sqrt(tr TCT))
         """
@@ -970,10 +969,27 @@ class EmbeddedNoise(torch.nn.Module):
         assert C.shape == (T.shape[1], T.shape[1])
         tr = torch.einsum("nc,cd,nd->n", T, C, T)
         scale = tr.sqrt_()
-        print(f"{scale=}")
         crit = T.square().sum(dim=1).add_(threshold**2).mul_(0.5)
-        print(f"{crit=}")
         return norm.logsf(crit.numpy(force=True), scale=scale.numpy(force=True))
+
+    def channelwise_detection_prior_log_prob(self, threshold=4.0, n_samples=8192, seed=0):
+        """Compute the marginal probability that the norm is larger than threshold on each channel.
+
+        TPCA is isometry, so no need to know the basis when working with the norm. Further, we can
+        sample independent normals using the eigs.
+        """
+        probs = np.zeros(self.n_channels)
+        rg = np.random.default_rng(seed)
+        samples = rg.normal(size=(n_samples, self.rank))
+        tmp = samples.copy()
+        for channel in range(self.n_channels):
+            marginal_cov = self.marginal_covariance(channels=[channel]).to_dense()
+            marginal_cov = marginal_cov.numpy(force=True).astype(np.float64)
+            eigs = np.linalg.eigvalsh(marginal_cov)
+            stds = np.sqrt(eigs)
+            norms = np.linalg.norm(np.multiply(samples, stds, out=tmp), axis=1)
+            probs[channel] = np.mean(norms > threshold)
+        return np.log(probs)
 
 
 def interpolate_residual_snippets(
