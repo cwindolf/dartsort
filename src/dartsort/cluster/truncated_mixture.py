@@ -701,8 +701,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             N += result.N
             Nlut += result.Nlut
 
+            N_denom = torch.where(N == 0, 1.0, N)
+
             # weight for the welford running averages below
-            n1_n01 = result.N.div(N.clamp(min=1e-10))[:, None, None]
+            n1_n01 = result.N.div(N_denom)[:, None, None]
 
             # welford for the mean
             m += result.m[:, :, :nc].sub_(m).mul_(n1_n01)
@@ -722,7 +724,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 assert result.Ulut is not None
                 R += result.R[..., :nc].sub_(R).mul_(n1_n01[..., None])
 
-                n1_n01_lut = result.Nlut.div(Nlut.clamp(min=1e-10))
+                Nlut_denom = torch.where(Nlut == 0, 1.0, Nlut)
+                n1_n01_lut = result.Nlut.div_(Nlut_denom)
                 Ulut += result.Ulut.sub_(Ulut).mul_(n1_n01_lut[:, None, None])
 
             # could do these in the threads? unless shuffled.
@@ -741,10 +744,10 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # some things are more efficiently computed in LUT bins and
         # then reweighted and used later. well, here they are.
-        N_denom = N[self.lut_units]
-        Nlut_N = Nlut.div_(N_denom)
+        N_denom_lut = N_denom[self.lut_units]
+        Nlut_N = Nlut.div_(N_denom_lut)
         del Nlut
-        Nlut_N.masked_fill_(N_denom == 0.0, 0.0)
+
         self._finalize_missing_full_m(Nlut_N, m)
         if self.M:
             self._finalize_missing_full_R(Nlut_N, R, Ulut)
@@ -883,21 +886,21 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_N, N, Nlut = _te_batch_m_counts(
                 self.n_units, self.nlut, candidates, mdata["lut_ixs"], Q
             )
-            shapekw = dict(
+            ekw = dict(
                 rank=self.rank,
                 n_units=self.n_units,
                 nlut=self.nlut,
                 nc=self.n_channels,
                 nc_obs=self.nc_obs,
                 nc_miss=self.nc_miss,
+                candidates=candidates,
+                Q=Q,
+                N=N,
             )
-            ekw = dict(candidates=candidates, Q=Q, N=N)
             if self.M:
-                mres = _te_batch_m_ppca(
-                    **shapekw, **ekw, Nlut=Nlut, **mdata
-                )
+                mres = _te_batch_m_ppca(**ekw, Nlut=Nlut, **mdata)
             else:
-                mres = _te_batch_m_rank0(**shapekw, **ekw, **mdata)
+                mres = _te_batch_m_rank0(**ekw, **mdata)
 
         ddlogpi = ddlognoisep = ddm = ddW = None
         if with_grads:
@@ -1500,15 +1503,14 @@ class CandidateSet:
 
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
-        if logger.isEnabledFor(DARTSORTVERBOSE):
-            assert torch.all(self.candidates[:, : self.n_candidates] >= 0)
-            assert torch.all(
-                self.candidates[:, : self.n_candidates].sort(dim=1).values.diff(dim=1)
-                > 0
-            )
-        assert (candidates[:, : self.n_candidates] >= 0).all()
-        if candidates[:, self.n_candidates :].numel():
-            assert candidates[:, self.n_candidates :].min() >= -1
+        # if logger.isEnabledFor(DARTSORTVERBOSE):
+        #     assert torch.all(self.candidates[:, : self.n_candidates] >= 0)
+        #     assert torch.all(
+        #         self.candidates[:, : self.n_candidates].sort(dim=1).values.diff(dim=1)
+        #         > 0
+        #     )
+        #     if candidates[:, self.n_candidates :].numel():
+        #         assert candidates[:, self.n_candidates :].min() >= -1
 
         # update counts for the rest of units
         if candidates.shape[1] > 1:

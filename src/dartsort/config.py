@@ -216,7 +216,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
-    kmeansk: int = 4
+    kmeansk: int = 3
     prior_pseudocount: float = 10.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"

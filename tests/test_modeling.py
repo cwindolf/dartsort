@@ -273,8 +273,8 @@ def test_mixture(
                 counts2, (candidates[candidates >= 0], neighbs_bc[candidates >= 0]), 1
             )
 
-            lut_units = tmm.processor.lut_units
-            lut_neighbs = tmm.processor.lut_neighbs
+            lut_units = tmm.processor.lut_units.numpy(force=True)
+            lut_neighbs = tmm.processor.lut_neighbs.numpy(force=True)
             uuu, nnn = unit_neighborhood_counts.nonzero()
             assert np.array_equal(lut_units, uuu)
             assert np.array_equal(lut_neighbs, nnn)

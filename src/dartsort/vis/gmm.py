@@ -653,6 +653,9 @@ class KMeansSplit(GMMPlot):
             ax_bimod = fig_bimods.subplots()
             ax_bimod.axis("off")
             imp = split_info["improvements"][0]
+            nimsg = ""
+            if "null_improvement" in split_info:
+                nimsg = f"null imp: {split_info['null_improvement']:0.3f}"
             ax_bimod.text(
                 0.5,
                 0.5,
@@ -660,7 +663,8 @@ class KMeansSplit(GMMPlot):
                 f"{split_info['ids_part']}\n"
                 f"imp:{imp:0.3f}\n"
                 f"olap:{split_info['overlap']:0.3f}\n"
-                f"full imp: {split_info['full_improvement']:0.3f}\n",
+                f"full imp: {split_info['full_improvement']:0.3f}\n"
+                f"{nimsg}",
                 ha="center",
                 va="center",
                 fontsize=6,

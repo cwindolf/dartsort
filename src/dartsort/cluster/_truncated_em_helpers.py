@@ -156,7 +156,7 @@ def _te_batch_e(
         (lls.shape[0], n_candidates), dtype=torch.long, device=lls.device
     )
     topk_out = (all_lls[:, :n_candidates], all_inds)
-    toplls, topinds = torch.topk(lls, n_candidates, dim=1, sorted=False, out=topk_out)
+    toplls, topinds = torch.topk(lls, n_candidates, dim=1, out=topk_out)
 
     # -- compute Q
     # all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)
@@ -204,12 +204,16 @@ def _te_batch_m_counts(n_units, nlut, candidates, lut_ixs, Q):
     Q_ = Q[:, :-1]
     assert Q_.shape == candidates.shape
     Q_ = Q_.reshape(-1)
+
     N = Q.new_zeros(n_units)
-    Nlut = Q.new_zeros(nlut + 1)
     N.scatter_add_(dim=0, index=candidates.view(-1), src=Q_)
+
+    Nlut = Q.new_zeros(nlut)
     Nlut.scatter_add_(dim=0, index=lut_ixs.view(-1), src=Q_)
+
     noise_N = Q[:, -1].sum()
-    return noise_N, N, Nlut[:-1]
+
+    return noise_N, N, Nlut
 
 
 def _te_batch_m_rank0(
@@ -281,8 +285,10 @@ def _te_batch_m_ppca(
     Wobs,
 ):
     """Rank (M) >0 case of part 2/2 of the M step within the E step"""
-    Qn = Q[:, :-1] / N.clamp(min=1e-5)[candidates]
-    Qnlut = Q[:, :-1] / Nlut.clamp(min=1e-5)[lut_ixs]
+    N_denom = torch.where(N == 0, 1.0, N)
+    Nlut_denom = torch.where(Nlut == 0, 1.0, Nlut)
+    Qn = Q[:, :-1] / N_denom[candidates]
+    Qnlut = Q[:, :-1] / Nlut_denom[lut_ixs]
     n, C = Qn.shape
     M = inv_cap.shape[-1]
 
@@ -573,9 +579,10 @@ def missing_indices(
         miss_ix_full[ni, : neighb_fmc.numel()] = neighb_fmc
 
     miss_full_masks = torch.zeros(
-        (neighborhoods.n_neighborhoods, neighborhoods.n_channels + 1)
+        (neighborhoods.n_neighborhoods, neighborhoods.n_channels + 1),
+        device=miss_ix_full.device,
     )
-    src = _1[None, None].broadcast_to(miss_ix_full.shape)
+    src = _1[None, None].broadcast_to(miss_ix_full.shape).to(miss_ix_full.device)
     miss_full_masks.scatter_(dim=1, index=miss_ix_full, src=src)
     miss_full_masks[:, -1] = 0.0
 
@@ -604,7 +611,7 @@ def _processor_update_pca_batch(proc, sl_W):
     neighb_ix = proc.lut_neighbs[sl]
     unit_ix = proc.lut_units[sl]
     unit_ix_ = unit_ix[:, None, None, None]
-    nobs_ix = proc.nobs_ix[neighb_ix]
+    nobs_ix = proc.nobs_ix[sl]
     nobs_ix_ = nobs_ix[:, None, None, :]
 
     Coo_inv = proc.Coo_inv[neighb_ix]
@@ -681,11 +688,9 @@ def _finalize_missing_full_R_batch(args):
     W_WCC = Wmiss.scatter_add_(dim=3, index=ix, src=src.neg_())
     del Wmiss
 
-    Euu = Ulut[sl]
-    Euu_W_WCC = Euu.bmm(W_WCC.view(n, proc.M, -1))
-    Euu_W_WCC = Euu_W_WCC.view(W_WCC.shape)
-    Euu_W_WCC = Euu_W_WCC[..., : proc.n_channels]
+    Euu_W_WCC = Ulut[sl].bmm(W_WCC.view(n, proc.M, -1))
+    Euu_W_WCC = Euu_W_WCC.view(W_WCC.shape)[..., : proc.n_channels]
 
-    R_missing_full = Euu_W_WCC.mul_(Nlut_N[:, None, None, None])
-    ix = unit_ix[:, None, None, None].broadcast_to(R_missing_full.shape)
-    R.scatter_add_(dim=0, index=ix, src=R_missing_full)
+    src = Euu_W_WCC.mul_(Nlut_N[:, None, None, None])
+    ix = unit_ix[:, None, None, None].broadcast_to(src.shape)
+    R.scatter_add_(dim=0, index=ix, src=src)

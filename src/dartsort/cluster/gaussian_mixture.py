@@ -96,7 +96,7 @@ class SpikeMixtureModel(torch.nn.Module):
         n_threads: int = 4,
         min_count: int = 50,
         n_em_iters: int = 25,
-        kmeans_k: int = 4,
+        kmeans_k: int = 3,
         kmeans_n_iter: int = 100,
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = False,
@@ -1117,11 +1117,6 @@ class SpikeMixtureModel(torch.nn.Module):
             f"Retain {keep.sum()} of {n_units} units, smallest kept count was {kept_count}. "
             f"{big_enough.sum()} met yield."
         )
-        if logger.isEnabledFor(DARTSORTVERBOSE):
-            logger.dartsortverbose(
-                f"Cleanup: {counts=} {big_enough=} {blank=} {keep=} "
-                f"{label_ids=} {keep[label_ids]=} {keep.sum()=}."
-            )
 
         if keep.all():
             return log_liks, clean_props
@@ -2457,6 +2452,9 @@ class SpikeMixtureModel(torch.nn.Module):
                         debug_info["improvements"] = [improvement]
                         debug_info["ids_part"] = ids_part
                         debug_info["overlap"] = olap
+                if debug and len(part) == 1:
+                    assert "null_improvement" not in debug_info
+                    debug_info["null_improvement"] = improvement
         elif decision_algorithm == "complete":
             _, dists = self.distances(units=units, show_progress=False)
             _, group_ids = agglomerate(
@@ -2469,8 +2467,8 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- organize labels...
         best_improvement = best_improvement
         assert np.isfinite(best_improvement)
-        # if best_improvement < 0:
-        #     return None
+        if best_improvement < 0:
+            return None
         best_group_ids = torch.asarray(best_group_ids)
         labels = best_group_ids[full_labels.cpu()]
         _, labels = labels.unique(return_inverse=True)

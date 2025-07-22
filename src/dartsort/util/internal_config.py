@@ -469,7 +469,7 @@ class RefinementConfig:
     prior_pseudocount: float = 10.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
-    kmeansk: int = 4
+    kmeansk: int = 3
     noise_fp_correction: bool = False
 
     # TODO... reintroduce this if wanted. or remove
