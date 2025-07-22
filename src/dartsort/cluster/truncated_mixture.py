@@ -883,7 +883,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         mres = {}
         if with_grads or with_stats:
             mdata = self.load_batch_m(batch_indices, candidates, neighb_ids)
-            noise_N, N, Nlut = _te_batch_m_counts(
+            noise_N, N, Nlut, cpos = _te_batch_m_counts(
                 self.n_units, self.nlut, candidates, mdata["lut_ixs"], Q
             )
             ekw = dict(
@@ -894,6 +894,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
                 nc_obs=self.nc_obs,
                 nc_miss=self.nc_miss,
                 candidates=candidates,
+                candidates_pos=cpos,
                 Q=Q,
                 N=N,
             )
@@ -931,8 +932,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             candidates=candidates,
             obs_elbo=oelbo,
             noise_N=noise_N,
-            N=N,
-            Nlut=Nlut,
+            N=N[: self.n_units],
+            Nlut=Nlut[: self.nlut],
             m=mres.get("m"),
             R=mres.get("R"),
             Ulut=mres.get("Ulut"),
@@ -1013,6 +1014,12 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             ] = Coo_invsqrt[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device)
 
     def initialize_changing(self, log_proportions, means, noise_log_prop, bases):
+        """Initialize or resize all parameter-dependent arrays
+
+        Some of these are "LUT" indexed. Those are padded with an extra entry
+        to be zeroed out, which is just to handle -1 candidates which map to
+        nlut via the LUT.
+        """
         #  check and set shapes
         self.n_units, r, Nc = means.shape
         assert Nc == self.n_channels + 1
@@ -1035,7 +1042,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         nlut = len(self.nobs_ix)
         nup1 = self.n_units + 1
         nlutp1 = nlut + 1
-        nu = means[self.lut_units[:, None], :, self.nobs_ix].permute(0, 2, 1)
+        lut_units_pad = torch.cat([self.lut_units, 0 * self.lut_units[:1]])
+        nobs_ix_pad = torch.cat([self.nobs_ix, 0 * self.nobs_ix[:1]])
+        nu = means[lut_units_pad[:, None], :, nobs_ix_pad].permute(0, 2, 1)
 
         if self._changing_initialized:
             self.log_proportions.resize_(nup1, *self.log_proportions.shape[1:])
@@ -1086,6 +1095,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     def zero_lut_final(self):
         if self.M:
             lut_buf_names = [
+                "nu",
                 "whitenednu",
                 "Cmo_Cooinv_nu",
                 "Wobs",
@@ -1503,14 +1513,13 @@ class CandidateSet:
 
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
-        # if logger.isEnabledFor(DARTSORTVERBOSE):
-        #     assert torch.all(self.candidates[:, : self.n_candidates] >= 0)
-        #     assert torch.all(
-        #         self.candidates[:, : self.n_candidates].sort(dim=1).values.diff(dim=1)
-        #         > 0
-        #     )
-        #     if candidates[:, self.n_candidates :].numel():
-        #         assert candidates[:, self.n_candidates :].min() >= -1
+        if logger.isEnabledFor(DARTSORTVERBOSE):
+            c_sorted = self.candidates[:, : self.n_candidates].sort(dim=1).values
+            diff = c_sorted.diff(dim=1)
+            valid = torch.logical_or(c_sorted[:, 1:] == -1, diff > 0)
+            assert valid.all()
+            if candidates[:, self.n_candidates :].numel():
+                assert candidates[:, self.n_candidates :].min() >= -1
 
         # update counts for the rest of units
         if candidates.shape[1] > 1:

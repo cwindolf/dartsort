@@ -204,16 +204,17 @@ def _te_batch_m_counts(n_units, nlut, candidates, lut_ixs, Q):
     Q_ = Q[:, :-1]
     assert Q_.shape == candidates.shape
     Q_ = Q_.reshape(-1)
+    candidates_pos = torch.where(candidates < 0, n_units, candidates)
 
-    N = Q.new_zeros(n_units)
-    N.scatter_add_(dim=0, index=candidates.view(-1), src=Q_)
+    N = Q.new_zeros(n_units + 1)
+    N.scatter_add_(dim=0, index=candidates_pos.view(-1), src=Q_)
 
-    Nlut = Q.new_zeros(nlut)
+    Nlut = Q.new_zeros(nlut + 1)
     Nlut.scatter_add_(dim=0, index=lut_ixs.view(-1), src=Q_)
 
     noise_N = Q[:, -1].sum()
 
-    return noise_N, N, Nlut
+    return noise_N, N, Nlut, candidates_pos
 
 
 def _te_batch_m_rank0(
@@ -226,6 +227,7 @@ def _te_batch_m_rank0(
     # common args
     lut_ixs,
     candidates,
+    candidates_pos,
     obs_ix,
     miss_ix,
     Q,
@@ -236,12 +238,13 @@ def _te_batch_m_rank0(
 ):
     """Rank (M) 0 case of part 2/2 of the M step within the E step"""
     del nlut, lut_ixs
+    N_denom = torch.where(N == 0, 1.0, N)
 
-    Qn = Q[:, :-1] / N.clamp(min=1e-5)[candidates]
+    Qn = Q[:, :-1] / N_denom[candidates_pos]
     n, C = Qn.shape
 
     m_full = Q.new_zeros((n, C, rank, nc + 1))
-    m = Qn.new_zeros((n_units, rank, nc))
+    m = Qn.new_zeros((n_units + 1, rank, nc))
 
     mm = torch.subtract(Cmo_Cooinv_nu, Cmo_Cooinv_x[:, None], out=Cmo_Cooinv_nu)
 
@@ -253,8 +256,9 @@ def _te_batch_m_rank0(
     m_full.scatter_add_(dim=3, index=ix, src=src)
 
     Qmf = m_full[..., :nc].mul_(Qn[:, :, None, None]).view(-1, *m.shape[1:])
-    ix = candidates.view(-1)[:, None, None].broadcast_to(Qmf.shape)
+    ix = candidates_pos.view(-1)[:, None, None].broadcast_to(Qmf.shape)
     m.scatter_add_(dim=0, index=ix, src=Qmf)
+    m = m[:n_units]
 
     return dict(m=m)
 
@@ -269,6 +273,7 @@ def _te_batch_m_ppca(
     # common args
     lut_ixs,
     candidates,
+    candidates_pos,
     obs_ix,
     miss_ix,
     Q,
@@ -287,14 +292,15 @@ def _te_batch_m_ppca(
     """Rank (M) >0 case of part 2/2 of the M step within the E step"""
     N_denom = torch.where(N == 0, 1.0, N)
     Nlut_denom = torch.where(Nlut == 0, 1.0, Nlut)
-    Qn = Q[:, :-1] / N_denom[candidates]
+
+    Qn = Q[:, :-1] / N_denom[candidates_pos]
     Qnlut = Q[:, :-1] / Nlut_denom[lut_ixs]
     n, C = Qn.shape
     M = inv_cap.shape[-1]
 
     # U = Q.new_zeros((n_units, M, M))
-    R = Q.new_zeros((n_units, M, rank, nc))
-    m = Q.new_zeros((n_units, rank, nc))
+    R = Q.new_zeros((n_units + 1, M, rank, nc))
+    m = Q.new_zeros((n_units + 1, rank, nc))
     Ulut = Q.new_zeros((nlut + 1, M, M))
 
     R_full = Q.new_zeros((n, C, M, rank, nc + 1))
@@ -340,11 +346,13 @@ def _te_batch_m_ppca(
     Qmf = m_full[..., :nc].mul_(Qn[:, :, None, None]).view(-1, *m.shape[1:])
     del m_full
 
-    ix = candidates.view(-1)[:, None, None, None].broadcast_to(QRf.shape)
+    ix = candidates_pos.view(-1)[:, None, None, None].broadcast_to(QRf.shape)
     R.scatter_add_(dim=0, index=ix, src=QRf)
+    R = R[:n_units]
 
-    ix = candidates.view(-1)[:, None, None].broadcast_to(Qmf.shape)
+    ix = candidates_pos.view(-1)[:, None, None].broadcast_to(Qmf.shape)
     m.scatter_add_(dim=0, index=ix, src=Qmf)
+    m = m[:n_units]
 
     assert lut_ixs.shape == (n, C)
     QUlut = Euu.mul_(Qnlut[:, :, None, None]).view(n * C, M, M)
@@ -463,12 +471,14 @@ def neighb_lut(unit_neighborhood_counts):
     n_units, n_neighborhoods = unit_neighborhood_counts.shape
     unit_ids, neighborhood_ids = np.nonzero(unit_neighborhood_counts)
 
-    # this has n_units + 1 because sometimes unit ix is -1, and we want
-    # to hit an outside index there
+    # this has n_units + 1 because sometimes unit ix is -1
+    # when unit ix is -1, we use nlut as the fill value. this works together
+    # with the lut buffers in the model: those at index nlut are 0.
     lut = np.full(
         (n_units + 1, n_neighborhoods), (n_units + 1) * n_neighborhoods, dtype=np.int64
     )
     lut[unit_ids, neighborhood_ids] = np.arange(len(unit_ids))
+    lut[-1] = len(unit_ids)
 
     return lut, unit_ids, neighborhood_ids
 
