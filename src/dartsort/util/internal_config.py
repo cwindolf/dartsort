@@ -194,6 +194,7 @@ class SubtractionConfig:
 
     # for debugging / vis
     save_iteration: bool = False
+    save_residnorm_decrease: bool = False
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
