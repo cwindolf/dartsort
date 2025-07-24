@@ -114,7 +114,7 @@ def unit_pca_ellipse(ax, channels, unit, v, center, noise, color, lw=1, whiten=T
         wv = whitener.T @ wv
 
     # center and project mean and cov into whitened pca basis
-    mean = (unit.mean[:, channels] - center).view(-1) @ wv
+    mean = (unit.mean[:, channels].view(-1) - center).view(-1) @ wv
     mean = mean.view(-1).numpy(force=True)
     assert mean.shape == (2,)
     cov = unit.marginal_covariance(channels=channels).to_dense()

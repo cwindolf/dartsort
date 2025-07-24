@@ -10,7 +10,6 @@ import numba
 import numpy as np
 import torch
 import torch.nn.functional as F
-from joblib import Parallel, delayed
 from linear_operator import operators
 from scipy.cluster.hierarchy import linkage
 from scipy.sparse import coo_array, csc_array
@@ -20,6 +19,7 @@ from tqdm.auto import tqdm, trange
 from sympy.utilities.iterables import multiset_partitions
 
 from ..util import more_operators, noise_util, spiketorch
+from ..util.multiprocessing_util import get_pool
 from ..util.sparse_util import (
     csc_insert,
     get_csc_storage,
@@ -99,7 +99,7 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_k: int = 3,
         kmeans_n_iter: int = 100,
         kmeans_drop_prop: float = 0.025,
-        kmeans_with_proportions: bool = False,
+        kmeans_with_proportions: bool = True,
         kmeans_kmeanspp_initial: str = "random",
         tvi_n_candidates: int = 3,
         tvi_n_search: int | None = None,
@@ -156,7 +156,6 @@ class SpikeMixtureModel(torch.nn.Module):
         # parameters
         self.n_spikes_fit = n_spikes_fit
         self.likelihood_batch_size = likelihood_batch_size
-        self.n_threads = n_threads if n_threads != 0 else 1
         self.min_count = min_count
         self.channels_count_min = channels_count_min
         self.n_em_iters = n_em_iters
@@ -251,7 +250,7 @@ class SpikeMixtureModel(torch.nn.Module):
             logger.dartsortdebug("Fitting noise unit...")
             self.noise_unit.fit(None, None)
             # these only need computing once, but not in init so that
-            # there is time for the user to .cuda() me before then
+            # there is time for the user to .cuda() me before pthen
             self._noise_log_likelihoods = None
         self._stack = None
 
@@ -262,6 +261,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.storage = threading.local()
         self.next_round_annotations = {}
         self.tmm = None
+        self.n_threads, Executor, context = get_pool(n_threads, cls="ThreadPoolExecutor")
+        self.thread_pool = Executor(max_workers=n_threads, mp_context=context)
 
         self.to(self.data.device)
 
@@ -800,18 +801,11 @@ class SpikeMixtureModel(torch.nn.Module):
 
         logger.dartsortdebug(f"M step for {len(fit_ids)} units.")
 
-        pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        results = pool(
-            delayed(self.fit_unit)(
-                j,
-                likelihoods=likelihoods,
-                warm_start=warm_start,
-                indices=fit_full_indices[j.item()],
-                split_indices=torch.from_numpy(fit_split_indices[j.item()]),
-                **self.next_round_annotations.get(j, {}),
-            )
+        fit_jobs = (
+            (j, likelihoods, warm_start, fit_full_indices, fit_split_indices)
             for j in fit_ids
         )
+        results = self.thread_pool.map(self.fit_unit_job, fit_jobs)
         if show_progress:
             results = tqdm(
                 results, desc="M step", unit="unit", total=len(fit_ids), **tqdm_kw
@@ -831,6 +825,17 @@ class SpikeMixtureModel(torch.nn.Module):
             adif[ids] = adif_.to(adif)
 
         return dict(max_adif=max_adif, adif=adif)
+
+    def fit_unit_job(self, args):
+        j, likelihoods, warm_start, fit_full_indices, fit_split_indices = args
+        return self.fit_unit(
+            j,
+            likelihoods=likelihoods,
+            warm_start=warm_start,
+            indices=fit_full_indices[j.item()],
+            split_indices=torch.from_numpy(fit_split_indices[j.item()]),
+            **self.next_round_annotations.get(j, {}),
+        )
 
     def log_likelihoods(
         self,
@@ -908,7 +913,6 @@ class SpikeMixtureModel(torch.nn.Module):
         if with_noise_unit:
             nnz = nnz + n_spikes
 
-        @delayed
         def _ll_job(args):
             if len(args) == 2:
                 j, ns = args
@@ -952,8 +956,7 @@ class SpikeMixtureModel(torch.nn.Module):
             )
             topk_arr = allocate_topk(ncols, min(max(unit_ids) + 1, self.lls_keep_k))
 
-        pool = Parallel(self.n_threads, backend="threading", return_as="generator")
-        results = pool(_ll_job(ninfo) for ninfo in unit_neighb_info)
+        results = self.thread_pool.map(_ll_job, unit_neighb_info)
         if show_progress:
             results = tqdm(
                 results,
@@ -1214,11 +1217,8 @@ class SpikeMixtureModel(torch.nn.Module):
         self.log_liks = None
 
     def split(self, show_progress=True):
-        pool = Parallel(
-            self.n_threads, backend="threading", return_as="generator_unordered"
-        )
         unit_ids = self.unit_ids()
-        results = pool(delayed(self.kmeans_split_unit)(j) for j in unit_ids)
+        results = self.thread_pool.map(self.kmeans_split_unit, unit_ids)
         if show_progress:
             results = tqdm(
                 results, total=len(unit_ids), desc="Split", unit="unit", **tqdm_kw
@@ -1338,7 +1338,8 @@ class SpikeMixtureModel(torch.nn.Module):
         np.fill_diagonal(scores, 0.0)
 
         @delayed
-        def bimod_job(i, j):
+        def bimod_job(i_j):
+            i, j = i_j
             scores[i, j] = scores[j, i] = self.unit_pair_bimodality(
                 id_a=i,
                 id_b=j,
@@ -1358,10 +1359,7 @@ class SpikeMixtureModel(torch.nn.Module):
         compute_mask[np.tril_indices(nu)] = False
         ii, jj = np.nonzero(compute_mask)
 
-        pool = Parallel(
-            self.n_threads, backend="threading", return_as="generator_unordered"
-        )
-        results = pool(bimod_job(i, j) for i, j in zip(ii, jj))
+        results = self.thread_pool.map(bimod_job, zip(ii, jj))
         if show_progress:
             results = tqdm(
                 results, desc="Bimodality", total=ii.size, unit="pair", **tqdm_kw
@@ -1662,27 +1660,30 @@ class SpikeMixtureModel(torch.nn.Module):
         units=None,
         log_proportions=None,
         ignore_channels=True,
+        liks_nolp=None,
     ):
-        full = False
         if unit_ids is not None:
             units = [self[u] for u in unit_ids]
             log_proportions = self.log_proportions[unit_ids]
 
-        if units is None:
+        full = units is None
+        if full:
             ids = self.unit_ids()
             assert np.array_equal(ids, np.arange(len(ids)))
             units = self._units.values()
             log_proportions = self.log_proportions
             nu = len(units) + 1
-            full = True
         else:
             nu = len(units)
 
         liks = spikes.features.new_full((nu, len(spikes)), -torch.inf)
         for j, (u, lp) in enumerate(zip(units, log_proportions)):
-            ull = self.unit_log_likelihoods(
-                unit=u, spikes=spikes, ignore_channels=ignore_channels
-            )
+            if liks_nolp is None or liks_nolp[j] is None:
+                ull = self.unit_log_likelihoods(
+                    unit=u, spikes=spikes, ignore_channels=ignore_channels
+                )
+            else:
+                ull = liks_nolp[j]
             if ull is not None:
                 liks[j] = ull.add_(lp)
 
@@ -1764,7 +1765,7 @@ class SpikeMixtureModel(torch.nn.Module):
             X.view(len(X), -1),
             n_iter=kmeans_n_iter,
             n_components=self.kmeans_k,
-            random_state=self.rg,
+            random_state=self.generator,
             kmeanspp_initial=self.kmeans_kmeanspp_initial,
             with_proportions=self.kmeans_with_proportions,
             drop_prop=self.kmeans_drop_prop,
@@ -2093,16 +2094,10 @@ class SpikeMixtureModel(torch.nn.Module):
 
             elif brute_indicator[i]:
                 # the brute force thing is slow, so let's do it in parallel.
-                brute_jobs.append(
-                    delayed(self._brute_merge_job)(i, leaves, cluster_ids, *shared_args)
-                )
+                brute_jobs.append((i, leaves, cluster_ids, *shared_args))
 
         if decision_algorithm == "brute":
-            n_jobs = min(self.n_threads, len(brute_jobs))
-            pool = Parallel(
-                n_jobs, backend="threading", return_as="generator_unordered"
-            )
-            results = pool(brute_jobs)
+            results = self.thread_pool.map(self._brute_merge_job, brute_jobs)
             if show_progress:
                 desc = "Merge: brute step 2/2"
                 results = tqdm(
@@ -2126,17 +2121,17 @@ class SpikeMixtureModel(torch.nn.Module):
 
         return Z, group_ids, improvements, overlaps, brute_indicator
 
-    def _brute_merge_job(
-        self,
-        i,
-        leaves,
-        cluster_ids,
-        current_log_liks,
-        cosines,
-        min_overlap,
-        criterion,
-        reevaluate_cur_liks,
-    ):
+    def _brute_merge_job(self, args):
+        (
+            i,
+            leaves,
+            cluster_ids,
+            current_log_liks,
+            cosines,
+            min_overlap,
+            criterion,
+            reevaluate_cur_liks,
+        ) = args
         brute_group_ids, brute_improvement, brute_overlap = self.brute_merge(
             current_log_liks,
             cluster_ids,
@@ -2275,14 +2270,23 @@ class SpikeMixtureModel(torch.nn.Module):
         if n_fit < self.min_count:
             return None
         assert len(hyp_fit_spikes) == n_fit
+        in_bag = not criterion.startswith("heldout_")
+        eval_spikes = self.random_spike_data(
+            unit_id,
+            neighborhood="core",
+            split_name="train" if in_bag else "val",
+            with_neighborhood_ids=True,
+        )
         full_info = self.validation_criterion(
             self.log_liks,
+            spikes=eval_spikes,
             current_unit_ids=current_unit_ids,
             hyp_fit_resps=hyp_fit_resps,
             hyp_fit_spikes=hyp_fit_spikes,
             hyp_fit_channels=fit_channels,
             ignore_channels=ignore_channels,
-            in_bag=not criterion.startswith("heldout_"),
+            in_bag=in_bag,
+            return_hyp_liks_nolp=True,
         )
         best_improvement = full_info["improvements"][criterion.removeprefix("heldout_")]
         units = full_info["hyp_units"]
@@ -2299,6 +2303,7 @@ class SpikeMixtureModel(torch.nn.Module):
             return None
 
         cur_fit_liks = self.get_log_likelihoods(hyp_fit_spikes.indices, self.log_liks)
+        cur_eval_liks = self.get_log_likelihoods(eval_spikes.indices, self.log_liks, dense=True)
         cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
         cur_resp = cur_resp.index_select(
             dim=0,
@@ -2382,6 +2387,8 @@ class SpikeMixtureModel(torch.nn.Module):
                 # evaluate the corresponding model
                 crit = self.validation_criterion(
                     self.log_liks,
+                    cur_liks_full=cur_eval_liks,
+                    spikes=eval_spikes,
                     current_unit_ids=current_unit_ids,
                     hyp_fit_spikes=hyp_fit_spikes,
                     hyp_fit_resps=level_resps,
@@ -2406,18 +2413,19 @@ class SpikeMixtureModel(torch.nn.Module):
         elif decision_algorithm == "brute":
             merged_unit_memo = {}
             for jj, subunit in enumerate(units):
-                merged_unit_memo[(jj,)] = subunit
-            for group_ids, part, ids_part in all_partitions(np.arange(len(units))):
+                merged_unit_memo[(jj,)] = subunit, full_info["hyp_liks_nolp"][jj]
+            for group_ids, part, ids_part in all_partitions(np.arange(len(units)), skip_full=True):
                 # responsibilities and memoized units at this level
                 level_resps = hyp_fit_resps.new_empty((len(part), n_fit))
                 level_units = [None] * len(part)
+                level_liks = [None] * len(part)
                 olap = 1.0
                 min_conn = np.inf
                 for j, p in enumerate(part):
                     lresps = hyp_fit_resps[p]
                     level_resps[j] = lresps.sum(0)
                     if tuple(ids_part[j]) in merged_unit_memo:
-                        level_units[j] = merged_unit_memo[tuple(ids_part[j])]
+                        level_units[j], level_liks[j] = merged_unit_memo[tuple(ids_part[j])]
                     if len(ids_part[j]) > 1:
                         ipj = np.array(ids_part[j])
                         conn = cos_connectivity(cosines[ipj][:, ipj])
@@ -2427,13 +2435,18 @@ class SpikeMixtureModel(torch.nn.Module):
 
                 crit = self.validation_criterion(
                     self.log_liks,
+                    cur_liks_full=cur_eval_liks,
+                    spikes=eval_spikes,
                     current_unit_ids=current_unit_ids,
+                    hyp_units=level_units,
+                    known_hyp_liks_nolp=level_liks,
                     hyp_fit_spikes=hyp_fit_spikes,
                     hyp_fit_resps=level_resps,
                     hyp_fit_channels=fit_channels,
                     cur_resp=cur_resp,
                     ignore_channels=ignore_channels,
                     in_bag=not criterion.startswith("heldout_"),
+                    return_hyp_liks_nolp=True,
                 )
                 improvement = crit["improvements"][criterion.removeprefix("heldout_")]
                 logger.dartsortverbose(f"Split {unit_id}: {ids_part=} {improvement=}.")
@@ -2441,7 +2454,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 # memoize
                 for j, hu in enumerate(crit["hyp_units"]):
                     if tuple(ids_part[j]) not in merged_unit_memo:
-                        merged_unit_memo[tuple(ids_part[j])] = hu
+                        merged_unit_memo[tuple(ids_part[j])] = hu, crit["hyp_liks_nolp"][j]
 
                 # store it as best if it was
                 if improvement > best_improvement:
@@ -2467,7 +2480,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # -- organize labels...
         best_improvement = best_improvement
         assert np.isfinite(best_improvement)
-        if best_improvement < 0:
+        if best_improvement <= 0:
             return None
         best_group_ids = torch.asarray(best_group_ids)
         labels = best_group_ids[full_labels.cpu()]
@@ -2478,23 +2491,26 @@ class SpikeMixtureModel(torch.nn.Module):
         self,
         current_log_liks,
         current_unit_ids,
+        spikes=None,
+        cur_liks_full=None,
         hyp_units=None,
+        known_hyp_liks_nolp=None,
         hyp_fit_spikes=None,
         hyp_fit_resps=None,
         hyp_log_props=None,
         cur_resp=None,
         hyp_fit_channels=None,
-        label_fit_spikes=False,
         fit_max_factor=2,
         ignore_channels=True,
-        reevaluate_cur_liks=True,
+        reevaluate_cur_liks=False,
         refit_cur_units=False,
         cur_units=None,
         cosines=None,
         min_cosine=0.5,
         in_bag=False,
+        return_hyp_liks_nolp=False,
     ) -> dict[
-        Literal["improvements", "overlap", "hyp_units", "eval_labels", "fit_labels"],
+        Literal["improvements", "overlap", "hyp_units", "eval_labels", "hyp_liks_nolp"],
         Any,
     ]:
         """Validation criteria to choose between current or hypothetical model
@@ -2560,7 +2576,7 @@ class SpikeMixtureModel(torch.nn.Module):
                     "overlap": conn,
                     "hyp_units": None,
                     "eval_labels": None,
-                    "fit_labels": None,
+                    "hyp_liks_nolp": None,
                 }
 
         # -- fit hypothetical units
@@ -2622,45 +2638,37 @@ class SpikeMixtureModel(torch.nn.Module):
         elif hyp_log_props is None:
             hyp_log_props = cur_log_prop.broadcast_to(n_hyp)
 
-        # -- in the split step, we want hyp labels for the fit spikes
-        fit_labels = fit_liks = None
-        if label_fit_spikes:
-            fit_liks = self.dense_log_likelihoods(
-                hyp_fit_spikes,
-                units=hyp_units,
-                log_proportions=hyp_log_props,
-                ignore_channels=ignore_channels,
-            )
-            vals, fit_labels = fit_liks.max(dim=0)
-            fit_labels = torch.where(vals.isfinite(), fit_labels, -1)
-
         # -- grab eval spikes from within current units
-        eval_split_name = "train" if in_bag else "val"
-        split_indices = []
-        eval_cur_labels = []
-        for uid in current_unit_ids:
-            ixs_full, ixs, split_ixs = self.random_indices(
-                uid, split_name=eval_split_name
+        if spikes is None:
+            eval_split_name = "train" if in_bag else "val"
+            split_indices = []
+            eval_cur_labels = []
+            for uid in current_unit_ids:
+                ixs_full, ixs, split_ixs = self.random_indices(
+                    uid, split_name=eval_split_name
+                )
+                eval_cur_labels.append(ixs.new_full(ixs.shape, uid))
+                # coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
+                split_indices.append(split_ixs)
+            split_indices = torch.concatenate(split_indices)
+            assert len(split_indices), f"No labels on split {eval_split_name}"
+            split_indices, order = split_indices.sort()
+            eval_cur_labels = torch.concatenate(eval_cur_labels)[order]
+            spikes = self.random_spike_data(
+                split_indices=split_indices,
+                split_name=eval_split_name,
+                neighborhood="core",
+                with_neighborhood_ids=True,
             )
-            eval_cur_labels.append(ixs.new_full(ixs.shape, uid))
-            # coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
-            split_indices.append(split_ixs)
-        split_indices = torch.concatenate(split_indices)
-        assert len(split_indices), f"No labels on split {eval_split_name}"
-        split_indices, order = split_indices.sort()
-        eval_cur_labels = torch.concatenate(eval_cur_labels)[order]
-        spikes = self.random_spike_data(
-            split_indices=split_indices,
-            split_name=eval_split_name,
-            neighborhood="core",
-            with_neighborhood_ids=True,
-        )
+        else:
+            eval_cur_labels = self.labels[spikes.indices]
 
         # -- evaluate eval log likelihoods
         # never ignore current non-irrelevant units
-        cur_liks_full = self.get_log_likelihoods(
-            spikes.indices, current_log_liks, dense=True
-        )
+        if cur_liks_full is None:
+            cur_liks_full = self.get_log_likelihoods(
+                spikes.indices, current_log_liks, dense=True
+            )
         irr_liks = cur_liks_full[irrix]
         if reevaluate_cur_liks:
             if refit_cur_units:
@@ -2697,12 +2705,23 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_logliks = cur_liks_full.logsumexp(dim=0)
 
         # hypothetical units
-        hyp_liks = self.dense_log_likelihoods(
-            spikes=spikes,
-            units=hyp_units,
-            log_proportions=hyp_log_props,
-            ignore_channels=ignore_channels,
-        )
+        if return_hyp_liks_nolp:
+            hyp_liks_nolp = self.dense_log_likelihoods(
+                spikes=spikes,
+                units=hyp_units,
+                log_proportions=torch.zeros_like(hyp_log_props),
+                ignore_channels=ignore_channels,
+                liks_nolp=known_hyp_liks_nolp,
+            )
+            hyp_liks = hyp_liks_nolp + hyp_log_props[:, None]
+        else:
+            hyp_liks = self.dense_log_likelihoods(
+                spikes=spikes,
+                units=hyp_units,
+                log_proportions=hyp_log_props,
+                ignore_channels=ignore_channels,
+            )
+            hyp_liks_nolp = None
         hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
         hyp_logliks = hyp_liks_full.logsumexp(dim=0)
 
@@ -2810,10 +2829,9 @@ class SpikeMixtureModel(torch.nn.Module):
             merged_criteria=merged_criteria,
             full_criteria=full_criteria,
             overlap=overlap,
-            fit_labels=fit_labels,
-            fit_liks=fit_liks,
             eval_labels=eval_labels,
             hyp_units=hyp_units,
+            hyp_liks_nolp=hyp_liks_nolp,
         )
         return res
 
@@ -2896,6 +2914,14 @@ class SpikeMixtureModel(torch.nn.Module):
             with self.lock:
                 self.storage.rg = self._rg.spawn(1)[0]
         return self.storage.rg
+
+    @property
+    def generator(self):
+        # see above
+        if not hasattr(self.storage, "torch_rg"):
+            # no need for lock since we spawn from thread-local rg
+            self.storage.torch_rg = spiketorch.spawn_torch_rg(self.rg, device=self.data.device)
+        return self.storage.torch_rg
 
     def train_extract_buffer(self):
         if not hasattr(self.storage, "_train_extract_buffer"):
@@ -3718,10 +3744,10 @@ class GaussianUnit(torch.nn.Module):
 # -- utilities
 
 
-def all_partitions(ids):
+def all_partitions(ids, skip_full=False):
     ids = np.asarray(ids).ravel()
     group_ids = np.zeros(len(ids), dtype=np.int64)
-    for m in range(1, len(ids) + 1):
+    for m in range(1, len(ids) + 1 - skip_full):
         for partition in multiset_partitions(len(ids), m=m):
             ids_partition = []
             for j, p in enumerate(partition):
