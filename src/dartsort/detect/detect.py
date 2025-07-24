@@ -216,7 +216,7 @@ def singlechan_template_detect_and_deduplicate(
     return times, chans
 
 
-def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=1_000):
+def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=256):
     """
     Compute sliding cumulant statistics (mean, variance, skewness, kurtosis) over spatial 2D windows,
     processing the W-axis in manageable chunks.

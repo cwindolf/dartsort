@@ -101,7 +101,7 @@ class SpikeMixtureModel(torch.nn.Module):
         kmeans_drop_prop: float = 0.025,
         kmeans_with_proportions: bool = True,
         kmeans_kmeanspp_initial: str = "random",
-        tvi_n_candidates: int = 3,
+        tvi_n_candidates: int = 5,
         tvi_n_search: int | None = None,
         tvi_n_explore: int | None = None,
         split_em_iter: int = 0,
