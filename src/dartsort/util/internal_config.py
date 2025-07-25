@@ -167,7 +167,7 @@ class SubtractionConfig:
     temporal_dedup_radius_samples: int = 11
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 0.1 * 10**2
+    residnorm_decrease_threshold: float = 0.15 * 10**2
     growth_tolerance: float | None = 0.5
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -194,6 +194,7 @@ class SubtractionConfig:
 
     # for debugging / vis
     save_iteration: bool = False
+    save_residnorm_decrease: bool = False
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
@@ -442,12 +443,12 @@ class RefinementConfig:
     ppca_inner_em_iter: int = 5
     distance_metric: Literal[
         "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean"
-    ] = "kl"
+    ] = "cosine"
     search_type: Literal["topk", "random"] = "topk"
-    n_candidates: int = 3
+    n_candidates: int = 5
     n_search: int | None = None
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
-    merge_distance_threshold: float = 2.0
+    merge_distance_threshold: float = 0.75
     # if None, switches to bimodality
     criterion_threshold: float | None = 0.0
     criterion: Literal["heldout_loglik", "heldout_elbo", "loglik", "elbo"] = (
@@ -676,7 +677,14 @@ def to_internal_config(cfg):
     )
 
     skip_step1_first_split = cfg.initial_split_only and not cfg.resume_with_split
-    dist_thresh = 0.5 if cfg.gmm_metric == "cosine" else 2.0
+    if cfg.gmm_metric == "cosine":
+        dist_thresh = cfg.gmm_cosine_threshold
+    elif cfg.gmm_metric == "kl":
+        dist_thresh = cfg.gmm_kl_threshold
+    elif cfg.gmm_metric == "euclidean":
+        dist_thresh = cfg.gmm_euclidean_threshold
+    else:
+        assert False
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,

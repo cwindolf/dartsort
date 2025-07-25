@@ -67,6 +67,7 @@ class SubtractionPeeler(BasePeeler):
         first_denoiser_temporal_jitter=3,
         first_denoiser_spatial_jitter=35.0,
         save_iteration=False,
+        save_residnorm_decrease=False,
         dtype=torch.float,
     ):
         super().__init__(
@@ -96,6 +97,7 @@ class SubtractionPeeler(BasePeeler):
         self.trough_priority = trough_priority
         self.growth_tolerance = growth_tolerance
         self.save_iteration = save_iteration
+        self.save_residnorm_decrease = save_residnorm_decrease
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -163,6 +165,8 @@ class SubtractionPeeler(BasePeeler):
 
         if self.save_iteration:
             datasets.append(SpikeDataset("iteration", (), "int32"))
+        if self.save_residnorm_decrease:
+            datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
 
         # we may be featurizing during subtraction, register the features
         datasets.extend(self.subtraction_denoising_pipeline.spike_datasets())
@@ -285,6 +289,7 @@ class SubtractionPeeler(BasePeeler):
             growth_tolerance=subtraction_cfg.growth_tolerance,
             trough_priority=subtraction_cfg.trough_priority,
             save_iteration=subtraction_cfg.save_iteration,
+            save_residnorm_decrease=subtraction_cfg.save_residnorm_decrease,
         )
 
     def peel_chunk(
@@ -330,6 +335,7 @@ class SubtractionPeeler(BasePeeler):
             growth_tolerance=self.growth_tolerance,
             cumulant_order=self.cumulant_order,
             save_iteration=self.save_iteration,
+            save_residnorm_decrease=self.save_residnorm_decrease,
             **singlechan_kw,
         )
 
@@ -602,6 +608,7 @@ def subtract_chunk(
     growth_tolerance=None,
     cumulant_order=0,
     save_iteration=False,
+    save_residnorm_decrease=False,
 ):
     """Core peeling routine for subtraction"""
     if no_subtraction:
@@ -786,6 +793,8 @@ def subtract_chunk(
                 channels = channels[keep]
                 for k in features:
                     features[k] = features[k][keep]
+            if save_residnorm_decrease:
+                features['residnorm_decreases'] = reduction[keep]
 
         # store this iter's outputs
         spike_times.append(times_samples)

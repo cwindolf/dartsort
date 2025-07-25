@@ -758,11 +758,11 @@ class KMeansSplit(GMMPlot):
         if "X" in split_info:
             show_whiten = False and gmm.split_whiten
             key = "X" + "w" * show_whiten
+            center = split_info["X"].mean(0).view(-1)
 
             u, s, v = torch.pca_lowrank(split_info[key].view(len(split_labels), -1))
             Xp = u[:, :2] * s[:2]
             tv = v[:, :2]
-            center = split_info["X"].mean(0)
 
             ax_pca.scatter(*Xp.numpy(force=True).T, c=glasbey1024[split_labels], s=2, lw=0)
             ax_pca.axhline(0, lw=0.8, color="k")

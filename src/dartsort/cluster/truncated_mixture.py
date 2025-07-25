@@ -50,7 +50,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         data: StableSpikeDataset,
         noise: EmbeddedNoise,
         M: int = 0,
-        n_candidates: int = 3,
+        n_candidates: int = 5,
         n_search: int | None = 3,
         n_explore: int | None = None,
         n_units: int | None = None,

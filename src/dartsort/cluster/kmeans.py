@@ -30,7 +30,7 @@ logger = getLogger(__name__)
 def kmeanspp(
     X,
     n_components=10,
-    random_state: np.random.Generator | int = 0,
+    random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
     mode_dim=2,
     skip_assignment=False,
@@ -47,8 +47,11 @@ def kmeanspp(
     n, p = X.shape
     n_components = min(n, n_components)
 
-    rg = np.random.default_rng(random_state)
-    gen = spawn_torch_rg(rg, device=X.device)
+    if isinstance(random_state, torch.Generator):
+        gen = random_state
+    else:
+        rg = np.random.default_rng(random_state)
+        gen = spawn_torch_rg(rg, device=X.device)
 
     has_initial_dists = initial_distances is not None
 
@@ -59,7 +62,7 @@ def kmeanspp(
 
     if kmeanspp_initial == "random":
         if dists is None:
-            centroid_ixs[0] = rg.integers(n)
+            centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
         else:
             centroid_ixs[0] = torch.multinomial(dists, 1, generator=gen)
     elif kmeanspp_initial == "mean":
@@ -290,6 +293,8 @@ def kmeans_inner(
     with_proportions=False,
     drop_prop=0.025,
     drop_sum=5.0,
+    test_convergence=True,
+    atol=1e-5,
 ):
     """A bit more than K-means
 
@@ -297,7 +302,8 @@ def kmeans_inner(
     """
     best_phi = torch.inf
     centroid_ixs = labels = None
-    random_state = np.random.default_rng(random_state)
+    if isinstance(random_state, int):
+        random_state = np.random.default_rng(random_state)
     for _ in range(n_kmeanspp_tries):
         _centroid_ixs, _labels, _, phi = kmeanspp(
             X,
@@ -319,6 +325,7 @@ def kmeans_inner(
         return labels, e, centroids, dists
 
     proportions = e.mean(0)
+    phi = None
 
     for j in range(n_iter):
         keep = None
@@ -346,6 +353,12 @@ def kmeans_inner(
             e = F.softmax(-0.5 * dists, dim=1)
         proportions = e.mean(0)
 
+        if test_convergence:
+            phi_ = (e @ dists.T).mean()
+            if phi is not None and torch.isclose(phi, phi_, atol=atol):
+                break
+            phi = phi_
+
     assignments = torch.argmin(dists, 1)
     return assignments, e, centroids, dists
 
@@ -356,14 +369,16 @@ def kmeans(
     n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
-    random_state: np.random.Generator | int = 0,
+    random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,
     drop_sum=5.0,
+    test_convergence=True
 ):
     best_phi = np.inf
-    random_state = np.random.default_rng(random_state)
+    if isinstance(random_state, int):
+        random_state = np.random.default_rng(random_state)
     assignments = torch.zeros(len(X), dtype=torch.long)
     e = centroids = dists = None
     for j in range(n_kmeans_tries):
@@ -377,6 +392,7 @@ def kmeans(
             with_proportions=with_proportions,
             drop_prop=drop_prop,
             drop_sum=drop_sum,
+            test_convergence=test_convergence,
         )
         if dists is None:
             continue

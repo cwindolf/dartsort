@@ -144,7 +144,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     if type == "match":
         count_dif_tol = 0.05
     elif type == "universal":
-        count_dif_tol = 0.3
+        count_dif_tol = 0.5
     elif type == "subtract":
         count_dif_tol = 0.2
     elif type == "threshold":

@@ -79,7 +79,7 @@ class DARTsortUserConfig:
     )
     matching_fp_control: bool = False
     denoiser_badness_factor: Annotated[float, Field(ge=0, le=1)] = argfield(
-        default=0.1,
+        default=0.15,
         doc="In initial detection, subtracting clean waveforms inferred "
         "by the NN denoiser need only decrease the residual norm squared "
         "by this multiple of the squared matching threshold to be accepted.",
@@ -168,7 +168,8 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     signal_rank: Annotated[int, Field(ge=0)] = 0
     gmm_euclidean_threshold: float = 5.0
-    gmm_cosine_threshold: float = 0.1
+    gmm_kl_threshold: float = 2.0
+    gmm_cosine_threshold: float = 0.75
     initial_euclidean_complete_only: bool = False
     initial_cosine_complete_only: bool = False
     gmm_noise_fp_correction: bool = False
@@ -189,9 +190,9 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 50
     channels_strategy: str = "count"
     hard_noise: bool = False
-    gmm_metric: Literal["kl", "cosine"] = "kl"
+    gmm_metric: Literal["kl", "cosine"] = "cosine"
     gmm_search: Literal["topk", "random"] = "topk"
-    gmm_n_candidates: int = 3
+    gmm_n_candidates: int = 5
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
     initial_amp_feat: bool = False
