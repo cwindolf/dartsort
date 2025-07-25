@@ -143,7 +143,7 @@ class SpikeMixtureModel(torch.nn.Module):
         hard_noise=False,
         min_log_prop=-50.0,
         random_seed: int = 0,
-        lls_keep_k: int | None = 3,
+        lls_keep_k: int | None = 5,
         laplace_ard=False,
         prior_corrected_criterion=False,
     ):

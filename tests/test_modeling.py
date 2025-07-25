@@ -173,7 +173,7 @@ def test_mixture(
         dense_init = integers_without_inner_replacement(
             np.random.default_rng(0),
             high=res["sim_res"]["K"],
-            size=(*train_labels.shape, 3),
+            size=(*train_labels.shape, res["gmm"].tmm.n_candidates),
         )
         assert np.array_equal(np.unique(dense_init), np.arange(res["sim_res"]["K"]))
         dense_init[:, 0] = train_labels.numpy(force=True)
