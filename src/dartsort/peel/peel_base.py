@@ -151,6 +151,14 @@ class BasePeeler(torch.nn.Module):
         if self.needs_fit():
             raise ValueError("Peeler needs to be fitted before peeling.")
 
+        if output_hdf5_filename is None:
+            # all of these features would require the h5 file.
+            assert skip_features
+            assert ignore_resuming
+            assert not residual_to_h5
+            assert residual_snips_per_chunk is None
+            assert total_residual_snips is None
+
         if task_name is None:
             task_name = self.peel_kind
 
@@ -158,10 +166,9 @@ class BasePeeler(torch.nn.Module):
         if ignore_resuming:
             last_chunk_start = -1
             resids_so_far = 0
-        else:
+        elif output_hdf5_filename is not None:
             last_chunk_start, resids_so_far = self.check_resuming(
-                output_hdf5_filename,
-                overwrite=overwrite,
+                output_hdf5_filename, overwrite=overwrite
             )
 
         # figure out which chunks to process, and exit early if already done
@@ -750,6 +757,14 @@ class BasePeeler(torch.nn.Module):
         skip_features=False,
     ):
         """Create, overwrite, or re-open output files"""
+        if output_hdf5_filename is None:
+            assert residual_filename is None
+            assert skip_features
+            assert not residual_to_h5
+            # this is not usually the case, but it is used by the
+            # RunningTemplates peeler.
+            return
+
         output_hdf5_filename = Path(output_hdf5_filename)
         exists = output_hdf5_filename.exists()
         n_spikes = 0

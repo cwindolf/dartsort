@@ -1,8 +1,7 @@
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Sequence
 
 import h5py
-from numba.core.options import Option
 import numpy as np
 import torch
 
@@ -79,8 +78,8 @@ class StableSpikeDataset(torch.nn.Module):
         core_features: torch.Tensor,
         train_extract_features: torch.Tensor,
         features_on_device: bool = False,
-        split_names: Optional[Sequence[str]] = None,
-        split_mask: Optional[torch.Tensor] = None,
+        split_names: Sequence[str] | None = None,
+        split_mask: torch.Tensor | None = None,
         core_radius: float = 35.0,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
@@ -381,13 +380,13 @@ class StableSpikeDataset(torch.nn.Module):
     def spike_data(
         self,
         indices: torch.Tensor,
-        split_indices: Optional[torch.Tensor] = None,
+        split_indices: torch.Tensor | None = None,
         neighborhood: str = "extract",
         with_channels=True,
         with_reconstructions: bool = False,
         with_neighborhood_ids: bool = False,
-        split: Optional[str] = "train",
-        feature_buffer: Optional[torch.Tensor] = None,
+        split: str | None = "train",
+        feature_buffer: torch.Tensor | None = None,
     ) -> "SpikeFeatures":
         withbuf = feature_buffer is not None
         non_blocking = False
@@ -486,12 +485,12 @@ class SpikeFeatures:
     # n, r, c
     features: torch.Tensor
     # n, c
-    channels: Optional[torch.Tensor] = None
+    channels: torch.Tensor | None = None
     # n, t, c
-    waveforms: Optional[torch.Tensor] = None
+    waveforms: torch.Tensor | None = None
     # n
-    neighborhood_ids: Optional[torch.Tensor] = None
-    split_indices: Optional[torch.Tensor] = None
+    neighborhood_ids: torch.Tensor | None = None
+    split_indices: torch.Tensor | None = None
 
     def __len__(self):
         return len(self.features)

@@ -210,7 +210,7 @@ class TemplateConfig:
     superres_templates: bool = False
     superres_bin_size_um: float = 10.0
     superres_bin_min_spikes: int = 5
-    superres_strategy: str = "drift_pitch_loc_bin"
+    superres_strategy: str = "motion_estimate"
     adaptive_bin_size: bool = False
 
     # low rank denoising?

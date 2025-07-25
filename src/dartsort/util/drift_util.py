@@ -225,7 +225,6 @@ def registered_average(
         out=work_buffer,
         fill_value=np.nan,
     )
-    print(f"{static_waveforms[0].mean(0)}")
 
     if return_n_samples:
         # remove time dim if any
