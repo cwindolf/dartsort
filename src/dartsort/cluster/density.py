@@ -338,19 +338,24 @@ def nearest_neighbor_assign(
     return other_labels
 
 
-def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25):
+def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25, centroids_b=None):
     c = centroids * (1.0 / (sigma * np.sqrt(8.0)))
     kdt = KDTree(c)
-    max_distance = -np.log(1 - hellinger_threshold)
+    if centroids_b is None:
+        kdt_b = kdt
+    else:
+        c_b = centroids_b * (1.0 / (sigma * np.sqrt(8.0)))
+        kdt_b = KDTree(c_b)
+    max_distance = np.sqrt(-np.log(1 - hellinger_threshold))
     dists = kdt.sparse_distance_matrix(
-        kdt, max_distance=max_distance, output_type="ndarray"
+        kdt_b, max_distance=max_distance, output_type="ndarray"
     )
     vals = dists["v"]
     np.square(vals, out=vals)
     vals *= -1
     np.exp(vals, out=vals)  # now BC
-    np.subtract(1, vals, out=vals)  # and now hell.
-    dists = coo_array((vals, (dists["j"], dists["i"])), shape=(kdt.n, kdt.n))
+    np.subtract(1, vals, out=vals)  # and now hell^2.
+    dists = coo_array((vals, (dists["j"], dists["i"])), shape=(kdt_b.n, kdt.n))
     return dists
 
 
@@ -385,10 +390,12 @@ def gmm_density_peaks(
     min_spikes_per_component=10,
     random_state=0,
     kmeanspp_min_dist=0.0,
-    hellinger_cutoff=0.8,
+    hellinger_cutoff=0.95,
     hellinger_strong=0.0,
-    max_sigma=5.0,
+    hellinger_weak=0.999,
+    max_sigma=6.0,
     max_samples=2_000_000,
+    noise_const_dims=None,
     show_progress=True,
     device=None,
 ):
@@ -449,6 +456,7 @@ def gmm_density_peaks(
         max_components_per_channel, np.ceil(cchans / min_spikes_per_component).astype(int)
     )
     n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
+    logger.dartsortdebug(f"gmmdpc: {n_components} components for {cchans.size} channels")
     res = truncated_kmeans(
         Xi,
         max_sigma=max_sigma,
@@ -460,19 +468,23 @@ def gmm_density_peaks(
         kmeanspp_min_dist=kmeanspp_min_dist,
         device=device,
         show_progress=show_progress,
+        noise_const_dims=noise_const_dims,
     )
     res['n_components'] = n_components
     n_components = len(res['centroids'])
     res['n_components_kept'] = n_components
     if show_progress:
         logger.info("Hellinger...")
+    centroids = res["centroids"].numpy(force=True)
     coo = sparse_iso_hellinger(
-        res["centroids"].numpy(force=True),
+        centroids,
         res["sigma"],
         hellinger_threshold=hellinger_cutoff,
     )
-    nhdn = coo_nhdn(coo, res["log_proportions"].numpy(force=True))
-    assert nhdn.shape == (len(res["centroids"]),) == (n_components,)
+    res['hellinger'] = coo
+    proportions = res["log_proportions"].numpy(force=True)
+    nhdn = coo_nhdn(coo, proportions)
+    assert nhdn.shape == (len(centroids),) == (n_components,)
     ii = np.arange(len(nhdn))
     jj = nhdn
     if hellinger_strong:
@@ -482,6 +494,23 @@ def gmm_density_peaks(
         order = np.argsort(ii, stable=True)
         ii = ii[order]
         jj = jj[order]
+    if hellinger_weak:
+        disconnected = nhdn == ii
+        disconnected = np.logical_and(
+            disconnected, np.logical_not(np.isin(ii, nhdn[np.logical_not(disconnected)]))
+        )
+        disconnected = np.flatnonzero(disconnected)
+    if hellinger_weak and disconnected.size:
+        coo_weak = sparse_iso_hellinger(
+            centroids[disconnected], res["sigma"], hellinger_threshold=hellinger_weak, centroids_b=centroids
+        )
+        coo_weak = coo_array(
+            (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
+            shape=(n_components, n_components),
+        )
+        weak_nhdn = coo_nhdn(coo_weak, proportions)
+        jj[disconnected] = weak_nhdn[disconnected]
+        
     _1 = np.ones((1,), dtype="float32")
     _1 = np.broadcast_to(_1, jj.shape)
     nhdn_coo = coo_array((_1, (ii, jj)), shape=(n_components, n_components))
@@ -497,6 +526,7 @@ def gmm_density_peaks(
         logger.info("Last query...")
     _, q = ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)
     labels = labels_padded[q]
+    # labels = q
 
     if remove_clusters_smaller_than:
         if show_progress:

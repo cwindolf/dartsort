@@ -22,6 +22,7 @@ from ..util.sparse_util import (
     coo_to_scipy, coo_to_cupy, coo_to_torch, distsq_to_lik_coo, sparse_centroid_distsq
 )
 from ..util.spiketorch import spawn_torch_rg
+from ..util.logging_util import DARTSORTDEBUG
 
 
 logger = getLogger(__name__)
@@ -58,13 +59,13 @@ def kmeanspp(
     centroid_ixs = torch.full((n_components,), n, dtype=torch.long, device=X.device)
     dists = None
     if has_initial_dists:
-        dists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
+        idists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
 
     if kmeanspp_initial == "random":
         if dists is None:
             centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
         else:
-            centroid_ixs[0] = torch.multinomial(dists, 1, generator=gen)
+            centroid_ixs[0] = torch.multinomial(idists, 1, generator=gen)
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
@@ -80,23 +81,18 @@ def kmeanspp(
 
     diff_buffer = X.clone()
 
-    newdists = torch.subtract(X, X[centroid_ixs[0]], out=diff_buffer).square_().sum(1)
+    dists = torch.subtract(X, X[centroid_ixs[0]], out=diff_buffer).square_().sum(1)
     assignments = None
     if not skip_assignment:
-        if not has_initial_dists:
-            assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
-            dists = newdists
-        else:
-            assignments = torch.full((n,), -1, dtype=torch.long, device=X.device)
-            closer = newdists < dists
-            assert assignments is not None
-            assignments[closer] = 0
-            dists[closer] = newdists[closer]
+        assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
 
     p = dists.clone()
     xrange = trange if show_progress else range
     for j in xrange(1, n_components):
-        p.copy_(dists)
+        if has_initial_dists:
+            torch.minimum(dists, idists, out=p)
+        else:
+            p.copy_(dists)
         if min_distance:
             invalid = dists < min_distance
             if invalid.all():
@@ -128,7 +124,7 @@ def kmeanspp(
 
 def truncated_kmeans(
     X,
-    max_sigma=5.0,
+    max_sigma=6.0,
     n_components=10,
     n_initializations=10,
     random_state: int | np.random.Generator = 0,
@@ -136,10 +132,11 @@ def truncated_kmeans(
     min_log_prop=-25.0,
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
-    sigma_atol=1e-2,
+    sigma_atol=1e-3,
     batch_size=8192,
+    noise_const_dims=None,
     device=None,
-    show_progress=False
+    show_progress=False,
 ):
     rg = np.random.default_rng(random_state)
 
@@ -159,6 +156,10 @@ def truncated_kmeans(
         it = trange(n_initializations, desc='kmeans++')
     else:
         it = range(n_initializations)
+    initial_distances = None
+    if noise_const_dims is not None:
+        noise_dims = np.setdiff1d(np.arange(X.shape[1]), noise_const_dims)
+        initial_distances = X[:, noise_dims].square().sum(1)
     for _ in it:
         _c, _l, _d, _p = kmeanspp(
             X,
@@ -166,6 +167,7 @@ def truncated_kmeans(
             random_state=rg,
             kmeanspp_initial="random",
             min_distance=kmeanspp_min_dist,
+            initial_distances=initial_distances,
         )
         if _p < sigmasq:
             sigmasq = _p
@@ -176,6 +178,12 @@ def truncated_kmeans(
     assert centroid_ixs is not None
     assert labels is not None
     assert nearest_distsq is not None
+    
+    if logger.isEnabledFor(DARTSORTDEBUG):
+        logger.dartsortdebug(
+            f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
+            f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
+        )
 
     # initialize parameters
     n_components = len(centroid_ixs)
@@ -275,6 +283,7 @@ def truncated_kmeans(
             it.set_description(f"kmeans σ={sigma:0.4f}")
 
     return dict(
+        centroid_ixs=centroid_ixs,
         centroids=centroids,
         sigmasq=sigmasq,
         sigma=sigma,

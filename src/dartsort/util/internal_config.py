@@ -366,8 +366,10 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
-    n_main_channel_pcs: int = 2
-    pc_scale: float = 2.5
+    n_main_channel_pcs: int = 5
+    pc_scale: float = 10.0
+    pc_transform: Literal["log", "sqrt"] | None = "sqrt"
+    pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
     workers: int = 5
 
@@ -672,6 +674,8 @@ def to_internal_config(cfg):
         use_amplitude=cfg.initial_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
         pc_scale=cfg.initial_pc_scale,
+        pc_transform=cfg.initial_pc_transform,
+        pc_pre_transform_scale=cfg.initial_pc_pre_scale,
         motion_aware=cfg.motion_aware_clustering,
         workers=cfg.clustering_workers,
     )

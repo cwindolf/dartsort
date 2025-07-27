@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import h5py
 import numpy as np
+import torch
 
 from ..util.internal_config import ClusteringFeaturesConfig
 from ..util import drift_util, interpolation_util
@@ -75,14 +76,14 @@ class SimpleMatrixFeatures:
                 amp *= clustering_features_cfg.amp_scale
             features.append(amp[:, None])
 
-        if clustering_features_cfg.n_main_channel_pcs and not clustering_features_cfg.motion_aware:
+        do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
+        pcs = None
+        if do_pcs and not clustering_features_cfg.motion_aware:
             pcs = cluster_util.get_main_channel_pcs(
                 sorting, rank=clustering_features_cfg.n_main_channel_pcs,
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
-            pcs *= clustering_features_cfg.pc_scale
-            features.append(pcs)
-        elif clustering_features_cfg.n_main_channel_pcs and clustering_features_cfg.motion_aware:
+        elif do_pcs and clustering_features_cfg.motion_aware:
             geom = sorting.geom
             if motion_est is None:
                 registered_geom = geom
@@ -123,9 +124,43 @@ class SimpleMatrixFeatures:
                     kriging_poly_degree=clustering_features_cfg.kriging_poly_degree,
                 )
                 pcs = pcs[:, :clustering_features_cfg.n_main_channel_pcs, 0]
+
+        if do_pcs:
+            assert pcs is not None
+            if clustering_features_cfg.pc_transform == "log":
+                pcs = signed_log1p(pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale)
+            elif clustering_features_cfg.pc_transform == "sqrt":
+                pcs = signed_sqrt_transform(pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale)
+            else:
+                assert clustering_features_cfg.pc_transform is None
             pcs *= clustering_features_cfg.pc_scale
+            if torch.is_tensor(pcs):
+                pcs = pcs.numpy(force=True)
             features.append(pcs)
 
 
         features = np.concatenate(features, axis=1)
         return cls(features=features, x=x, z=z, z_reg=z_reg, xyza=xyza, amplitudes=amp)
+
+
+def signed_log1p(x, pre_scale=1.0):
+    """sgn(x) * log(1+|x|*pre_scale)"""
+    x = torch.asarray(x)
+    xx = x.abs()
+    if pre_scale != 1.0:
+        xx.mul_(pre_scale)
+    torch.log1p(xx, out=xx)
+    xx.mul_(torch.sign(x))
+    return xx
+
+def signed_sqrt_transform(x, pre_scale=1.0):
+    """sgn(x) * (sqrt(1 + |x|*pre_scale) - 1)"""
+    x = torch.asarray(x)
+    xx = x.abs()
+    if pre_scale != 1.0:
+        xx.mul_(pre_scale)
+    xx.add_(1.0)
+    xx.sqrt_()
+    xx.sub_(1.0)
+    xx.mul_(torch.sign(x))
+    return xx
