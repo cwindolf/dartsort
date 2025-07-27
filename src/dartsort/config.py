@@ -196,8 +196,10 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
     initial_amp_feat: bool = False
-    initial_pc_feats: int = 2
-    initial_pc_scale: float = 2.5
+    initial_pc_feats: int = 5
+    initial_pc_transform: str = "sqrt"
+    initial_pc_scale: float = 10.0
+    initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
