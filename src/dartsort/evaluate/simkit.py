@@ -82,8 +82,11 @@ def generate_simulation(
     no_save=False,
     just_noise=False,
 ):
-    if folder.exists() and not (overwrite or just_noise or no_save):
-        return load_simulation(folder)
+    if folder is not None and not (overwrite or just_noise or no_save):
+        try:
+            return load_simulation(folder)
+        except Exception:
+            pass
 
     noise_recording_folder = resolve_path(noise_recording_folder)
     duration_samples = int(duration_seconds * sampling_frequency)

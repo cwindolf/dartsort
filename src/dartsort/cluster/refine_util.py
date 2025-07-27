@@ -79,6 +79,7 @@ def gmm_refine(
         n_em_iters=refinement_cfg.n_em_iters,
         distance_metric=refinement_cfg.distance_metric,
         search_type=refinement_cfg.search_type,
+        lls_keep_k=refinement_cfg.n_candidates,
         tvi_n_candidates=refinement_cfg.n_candidates,
         tvi_n_search=refinement_cfg.n_search,
         distance_normalization_kind=refinement_cfg.distance_normalization_kind,

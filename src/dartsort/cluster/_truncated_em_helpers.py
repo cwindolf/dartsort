@@ -652,13 +652,26 @@ def _processor_update_pca_batch(proc, sl_W):
 
 def _finalize_missing_full_m(proc, Nlut_N, m):
     """missing part aka tnu needs to be added with the right weights to m."""
-    lut_units = proc.lut_units
-    lut_neighbs = proc.lut_neighbs
+    nlut = len(proc.lut_units)
+    bs = proc.update_batch_size
+    bargs = [
+        (slice(i0, min(i0 + bs, nlut)), proc, Nlut_N, m)
+        for i0 in range(0, nlut, bs)
+    ]
+    for _ in map(_finalize_missing_full_m_batch, bargs):
+        pass
+
+
+def _finalize_missing_full_m_batch(args):
+    sl, proc, Nlut_N, m = args
+
+    lut_units = proc.lut_units[sl]
+    lut_neighbs = proc.lut_neighbs[sl]
     means = proc.means[lut_units]
     masks = proc.miss_full_masks[lut_neighbs]
 
     tnu = means.mul_(masks[:, None])[..., : proc.n_channels]
-    tnu = tnu.mul_(Nlut_N[:, None, None])
+    tnu = tnu.mul_(Nlut_N[sl, None, None])
     ix = lut_units[:, None, None].broadcast_to(tnu.shape)
     m.scatter_add_(dim=0, index=ix, src=tnu)
 
@@ -670,7 +683,7 @@ def _finalize_missing_full_R(proc, Nlut_N, R, Ulut):
         (slice(i0, min(i0 + bs, nlut)), proc, Nlut_N, R, Ulut)
         for i0 in range(0, nlut, bs)
     ]
-    for _ in proc.pool.map(_finalize_missing_full_R_batch, bargs):
+    for _ in map(_finalize_missing_full_R_batch, bargs):
         pass
 
 
