@@ -73,14 +73,14 @@ class StableSpikeDataset(torch.nn.Module):
         prgeom: torch.Tensor,
         tpca: TemporalPCAFeaturizer,
         extract_channels: torch.Tensor,
-        core_channels: torch.Tensor,
+        core_channels: torch.Tensor | None,
         original_sorting: DARTsortSorting,
-        core_features: torch.Tensor,
+        core_features: torch.Tensor | None,
         train_extract_features: torch.Tensor,
         features_on_device: bool = False,
         split_names: Sequence[str] | None = None,
         split_mask: torch.Tensor | None = None,
-        core_radius: float = 35.0,
+        core_radius: float | None = 35.0,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
         core_neighborhoods=None,
@@ -106,7 +106,9 @@ class StableSpikeDataset(torch.nn.Module):
         self.rank = tpca.rank
         self.n_channels = prgeom.shape[0] - 1
         self.n_channels_extract = extract_channels.shape[1]
-        self.n_channels_core = core_channels.shape[1]
+        if core_radius is not None:
+            assert core_channels is not None
+            self.n_channels_core = core_channels.shape[1]
         self.n_spikes = len(original_sorting)
         # train is modified below if there is a train split.
         self.n_spikes_train = self.n_spikes_kept = len(kept_indices)
@@ -154,26 +156,28 @@ class StableSpikeDataset(torch.nn.Module):
             self.not_train_indices = torch.asarray(
                 np.setdiff1d(np.arange(self.n_spikes), train_ixs), dtype=torch.long
             )
-        core_channel_index = waveform_util.make_channel_index(
-            prgeom, core_radius, to_torch=True
-        )
-        _core_neighborhoods = {
-            f"key_{k}": SpikeNeighborhoods.from_channels(
-                core_channels[ix],
-                n_channels=self.n_channels,
-                neighborhood_ids=(
-                    None if core_neighborhood_ids is None else core_neighborhood_ids[ix]
-                ),
-                neighborhoods=core_neighborhoods,
-                features=core_features[ix] if k in _core_feature_splits else None,
-                device=device,
-                channel_index=core_channel_index,
-                name=k,
+
+        if core_radius is not None:
+            core_channel_index = waveform_util.make_channel_index(
+                prgeom, core_radius, to_torch=True
             )
-            for k, ix in self.split_indices.items()
-        }
-        self._core_neighborhoods = torch.nn.ModuleDict(_core_neighborhoods)
-        self.core_channels = core_channels.cpu()
+            _core_neighborhoods = {
+                f"key_{k}": SpikeNeighborhoods.from_channels(
+                    core_channels[ix],
+                    n_channels=self.n_channels,
+                    neighborhood_ids=(
+                        None if core_neighborhood_ids is None else core_neighborhood_ids[ix]
+                    ),
+                    neighborhoods=core_neighborhoods,
+                    features=core_features[ix] if k in _core_feature_splits else None,
+                    device=device,
+                    channel_index=core_channel_index,
+                    name=k,
+                )
+                for k, ix in self.split_indices.items()
+            }
+            self._core_neighborhoods = torch.nn.ModuleDict(_core_neighborhoods)
+            self.core_channels = core_channels.cpu()
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
@@ -195,14 +199,14 @@ class StableSpikeDataset(torch.nn.Module):
 
     @property
     def dtype(self):
-        return self.core_features.dtype
+        return self._train_extract_features.dtype
 
     @classmethod
     def from_sorting(
         cls,
         sorting,
         motion_est=None,
-        core_radius=35.0,
+        core_radius: float | None=35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
         interpolation_method="kriging",
@@ -290,9 +294,10 @@ class StableSpikeDataset(torch.nn.Module):
 
             extract_channels, extract_neighborhoods, extract_neighborhood_ids = res[:3]
             core_channels, core_neighborhoods, core_neighborhood_ids = res[3:]
-            assert core_channels is not None
-            assert core_neighborhoods is not None
-            assert core_neighborhood_ids is not None
+            if core_radius is not None:
+                assert core_channels is not None
+                assert core_neighborhoods is not None
+                assert core_neighborhood_ids is not None
 
             # for all spikes (not just kept), the ID of its shift/chan combo.
             # this determines its channel neighborhood under any registered index.
@@ -300,10 +305,14 @@ class StableSpikeDataset(torch.nn.Module):
             # the first spikes in each combo, allowing neighbs to be reconstructed
             # as needed
             extract_channels = torch.from_numpy(extract_channels)
-            core_channels = torch.from_numpy(core_channels)
             if store_on_device:
                 extract_channels = extract_channels.to(device)
-                core_channels = core_channels.to(device)
+
+            core_channels = None
+            if core_radius is not None:
+                core_channels = torch.from_numpy(core_channels)
+                if store_on_device:
+                    core_channels = core_channels.to(device)
 
             # stabilize features with interpolation
             # only load kept extract spikes
@@ -327,25 +336,27 @@ class StableSpikeDataset(torch.nn.Module):
                 show_progress=show_progress,
             )
             # always load all core spikes
-            core_features = interpolation_util.interpolate_by_chunk(
-                np.ones_like(keep),
-                h5[features_dataset_name],
-                geom,
-                extract_channel_index,
-                sorting.channels,
-                shifts,
-                registered_geom,
-                core_channels,
-                method=interpolation_method,
-                extrap_method=None,
-                kernel_name=kernel_name,
-                sigma=sigma,
-                rq_alpha=rq_alpha,
-                kriging_poly_degree=kriging_poly_degree,
-                device=device,
-                store_on_device=store_on_device,
-                show_progress=show_progress,
-            )
+            core_features = None
+            if core_radius is not None:
+                core_features = interpolation_util.interpolate_by_chunk(
+                    np.ones_like(keep),
+                    h5[features_dataset_name],
+                    geom,
+                    extract_channel_index,
+                    sorting.channels,
+                    shifts,
+                    registered_geom,
+                    core_channels,
+                    method=interpolation_method,
+                    extrap_method=None,
+                    kernel_name=kernel_name,
+                    sigma=sigma,
+                    rq_alpha=rq_alpha,
+                    kriging_poly_degree=kriging_poly_degree,
+                    device=device,
+                    store_on_device=store_on_device,
+                    show_progress=show_progress,
+                )
 
         # load temporal PCA
         tpca = get_tpca(sorting)

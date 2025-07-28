@@ -327,7 +327,6 @@ class GMMDensityPeaksClusterer(Clusterer):
         self.kmeanspp_min_dist = kmeanspp_min_dist
         self.max_sigma = max_sigma
 
-
     @classmethod
     def from_config(
         cls,
@@ -374,7 +373,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             max_sigma=self.max_sigma,
             max_samples=self.max_samples,
         )
-        return res['labels']
+        return res["labels"]
 
 
 clustering_strategies["gmmdpc"] = GMMDensityPeaksClusterer
@@ -518,6 +517,19 @@ class SplitMergeRefinement(Refinement):
 # refinement_strategies["splitmerge"] = SplitMergeRefinement
 
 
+class PCMergeRefinement(Refinement):
+    def _refine(self, features, sorting, recording, motion_est=None):
+        return refine_util.pc_merge(
+            sorting,
+            refinement_cfg=self.refinement_cfg,
+            motion_est=motion_est,
+            computation_cfg=self.computation_cfg,
+        )
+
+
+refinement_strategies["pcmerge"] = PCMergeRefinement
+
+
 class ForwardBackwardEnsembler(Refinement):
     """If there are more time chunk ones, make a new ABC with this logic."""
 
@@ -559,5 +571,6 @@ refinement_strategies["forwardbackward"] = ForwardBackwardEnsembler
 
 def _id(clusterer, **kwargs):
     return clusterer
+
 
 refinement_strategies["none"] = _id

@@ -1,11 +1,13 @@
+from dataclasses import replace
 from logging import getLogger
 
 import torch
 import h5py
 
 from ..util.internal_config import default_refinement_cfg
-from ..util import job_util, noise_util, data_util
+from ..util import job_util, noise_util, data_util, spiketorch
 from ..util.main_util import ds_save_intermediate_labels
+from .cluster_util import agglomerate
 from .split import split_clusters
 from .merge import merge_templates
 from .stable_features import StableSpikeDataset
@@ -136,7 +138,9 @@ def gmm_refine(
                 break
         else:
             if refinement_cfg.refit_before_criteria:
-                gmm.log_liks = gmm.em(n_iter=1, force_refit=True, final_split=intermediate_split)
+                gmm.log_liks = gmm.em(
+                    n_iter=1, force_refit=True, final_split=intermediate_split
+                )
             gmm.split()
             gmm.log_liks = None
 
@@ -160,7 +164,9 @@ def gmm_refine(
 
         assert gmm.log_liks is not None
         if refinement_cfg.refit_before_criteria:
-            gmm.log_liks = gmm.em(n_iter=1, force_refit=True, final_split=intermediate_split)
+            gmm.log_liks = gmm.em(
+                n_iter=1, force_refit=True, final_split=intermediate_split
+            )
         gmm.merge(gmm.log_liks)
         gmm.log_liks = None
 
@@ -247,14 +253,81 @@ def get_noise_log_priors(noise, sorting, refinement_cfg):
         temps_tpca = temps_tpca.reshape(n, c, -1).permute(0, 2, 1)
 
         noise_log_priors = noise.detection_prior_log_prob(temps_tpca)
-        logger.dartsortdebug(f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}.")
+        logger.dartsortdebug(
+            f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}."
+        )
         noise_log_priors = noise_log_priors[matching_labels]
 
         return noise_log_priors
     elif stem.startswith("subtract"):
         noise_log_priors = noise.channelwise_detection_prior_log_prob()
-        logger.dartsortdebug(f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}.")
+        logger.dartsortdebug(
+            f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}."
+        )
         noise_log_priors = noise_log_priors[sorting.channels]
         return noise_log_priors
     else:
         return None
+
+
+def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
+    assert refinement_cfg.refinement_strategy == "pcmerge"
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
+
+    # remove blank labels just in case
+    sorting = data_util.subset_sorting_by_spike_count(sorting)
+    nu0 = sorting.labels.max() + 1
+    if not nu0:
+        return sorting
+
+    # subset the sorting to count per unit
+    subset_sorting = data_util.subsample_to_max_count(
+        sorting, max_spikes=refinement_cfg.pc_merge_spikes_per_unit
+    )
+
+    # make stable features, no need for core features though.
+    data = StableSpikeDataset.from_sorting(
+        subset_sorting,
+        motion_est=motion_est,
+        core_radius=None,
+        discard_triaged=True,
+        interpolation_method=refinement_cfg.interpolation_method,
+        extrap_method=refinement_cfg.extrapolation_method,
+        extrap_kernel=refinement_cfg.extrapolation_kernel,
+        kernel_name=refinement_cfg.kernel_name,
+        sigma=refinement_cfg.interpolation_sigma,
+        rq_alpha=refinement_cfg.rq_alpha,
+        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+        split_proportions=None,
+        split_names=("train",),
+        device=computation_cfg.actual_device(),
+    )
+
+    # average by unit
+    kept = data.kept_indices
+    n = len(kept)
+    x = data._train_extract_features.view(n, -1, data.n_channels_extract)
+    labels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
+    means = spiketorch.average_by_label(
+        x, labels, data._train_extract_channels, data.n_channels
+    )
+
+    # compute distances
+    if refinement_cfg.pc_merge_metric == "cosine":
+        dists = spiketorch.cosine_distance(means)
+    else:
+        raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
+    dists = dists.numpy(force=True)
+    print(f"{nu0=} {dists=}")
+
+    # linkage
+    labels, ids = agglomerate(
+        sorting.labels,
+        dists,
+        linkage_method=refinement_cfg.pc_merge_linkage,
+        threshold=refinement_cfg.pc_merge_threshold,
+    )
+    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.size}.")
+
+    return replace(sorting, labels=labels)

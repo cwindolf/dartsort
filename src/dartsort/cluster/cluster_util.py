@@ -11,7 +11,7 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
 
-from dartsort.util import data_util, drift_util, spikeio, waveform_util
+from dartsort.util import data_util, drift_util, waveform_util
 from dredge.motion_util import IdentityMotionEstimate
 
 

@@ -427,7 +427,13 @@ class ClusteringConfig:
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class RefinementConfig:
-    refinement_strategy: str = "gmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
+
+    # pcmerge
+    pc_merge_threshold: float = 0.05
+    pc_merge_metric: str = "cosine"
+    pc_merge_spikes_per_unit: int = 1024
+    pc_merge_linkage: str = "complete"
 
     # -- gmm parameters
     # noise params
@@ -480,7 +486,7 @@ class RefinementConfig:
     merge_cfg: TemplateMergeConfig | None = None
     merge_template_cfg: TemplateConfig | None = None
 
-    # forward_backward
+    # forward_backward parameters
     chunk_size_s: float = 300.0
     log_c: float = 5.0
     feature_scales: tuple[float, float, float] = (1.0, 1.0, 50.0)

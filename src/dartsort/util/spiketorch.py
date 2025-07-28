@@ -26,7 +26,9 @@ _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
 
 
-def spawn_torch_rg(seed: int | np.random.Generator = 0, device: str | torch.device | None="cpu"):
+def spawn_torch_rg(
+    seed: int | np.random.Generator = 0, device: str | torch.device | None = "cpu"
+):
     if device is None:
         device = "cpu"
     nprg = np.random.default_rng(seed)
@@ -189,6 +191,7 @@ def cupy_add_at_(dest, ix, src, sign=1):
 
 
 add_at_ = torch_add_at_
+
 
 def try_cupy_add_at_(dest, ix, src, sign=1):
     if not HAVE_CUPY or dest.device.type != "cuda":
@@ -841,6 +844,45 @@ def isin_sorted(x, y):
         return torch.zeros(x.shape, dtype=bool, device=x.device)
     ix = torch.searchsorted(y, x, side="right") - 1
     return x == y[ix]
+
+
+def average_by_label(x, labels, channels, n_channels, weights=None):
+    """weights should sum to 1 already in each group."""
+    n = x.shape[0]
+    assert x.ndim == 3
+    assert labels.shape == (n,)
+    if weights is None:
+        unique_labels, counts = labels.unique(return_counts=True)
+        k = unique_labels.amax() + 1
+        weights = x.new_zeros(k + 1)
+        weights[:k] = counts.to(weights).reciprocal()
+        weights = weights[labels]
+    else:
+        unique_labels = labels.unique()
+        k = unique_labels.amax() + 1
+    assert labels.shape == weights.shape
+
+    out = x.new_zeros((k + 1, x.shape[1], n_channels + 1))
+    wsum = x.new_empty((n_channels + 1))
+    f_arange = torch.arange(x.shape[1]).to(x.device)
+    for u in unique_labels:
+        wsum.fill_(0.0)
+
+        (in_u,) = (labels == u).nonzero(as_tuple=True)
+        wu = weights[in_u]
+        cu = channels[in_u]
+        wu = wu[:, None].broadcast_to(cu.shape).contiguous()
+        wsum.scatter_add_(dim=0, index=cu.view(-1), src=wu.view(-1))
+        wu.div_(wsum[cu])
+
+        wxu = x[in_u].mul_(wu[:, None])
+        torch_add_at_(
+            out[u, None],
+            (torch.zeros_like(in_u)[:, None, None], f_arange[None, :, None], cu[:, None]),
+            wxu,
+        )
+
+    return out[:k, :, :n_channels]
 
 
 # -- channel reindexing
