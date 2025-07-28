@@ -164,7 +164,7 @@ def nearest_higher_density_neighbor(
     batch_size=2**16,
 ):
     nhdn = np.full(kdtree.n, kdtree.n, dtype=np.intp)
-    density_padded = np.empty(min(kdtree.n, batch_size) + 1, dtype=density.dtype)
+    density_padded = np.pad(density, (0, 1), constant_values=np.inf)
 
     for i0 in range(0, kdtree.n, batch_size):
         i1 = min(kdtree.n, i0 + batch_size)
@@ -180,19 +180,18 @@ def nearest_higher_density_neighbor(
         indices = indices[:, 1:]
         missing = indices == kdtree.n
         distances[missing] = np.inf
-        indices[missing] = i1 - i0
 
         # find lowest distance higher density neighbor
-        density_padded[: i1 - i0] = density
-        density_padded[i1 - i0] = np.inf
-        is_lower_density = density_padded[indices] <= density[:, None]
-        is_lower_density = np.logical_or(is_lower_density, missing)
+        bdens = density[i0:i1]
+        bneighb_dens = density_padded[indices]
+        is_lower_density = np.logical_or(
+            bneighb_dens <= bdens[:, None], np.isneginf(bneighb_dens)
+        )
         distances[is_lower_density] = np.inf
         indices[is_lower_density] = kdtree.n
 
         nearest = distances.argmin(1, keepdims=True)
         nhdn[i0:i1] = np.take_along_axis(indices, nearest, axis=1)[:, 0]
-        nhdn[i0:i1] += i0
 
     return nhdn
 

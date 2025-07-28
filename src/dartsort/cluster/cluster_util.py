@@ -1,4 +1,5 @@
 import dataclasses
+from logging import getLogger
 
 import h5py
 try:
@@ -15,6 +16,9 @@ from dartsort.util import data_util, drift_util, waveform_util
 from dredge.motion_util import IdentityMotionEstimate
 
 
+logger = getLogger(__name__)
+
+
 def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     """"""
     n = distances.shape[0]
@@ -25,6 +29,7 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
         else:
             ids = np.unique(labels)
             return labels, ids[ids >= 0]
+
     finite = np.isfinite(pdist)
     if not finite.all():
         inf = max(0, pdist[finite].max()) + threshold + 1.0
@@ -38,7 +43,7 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     if labels is None:
         new_labels = None
     else:
-        kept = labels >= 0
+        kept = np.flatnonzero(labels >= 0)
         new_labels = np.full_like(labels, -1)
         new_labels[kept] = new_ids[labels[kept]]
 
@@ -267,13 +272,14 @@ def get_main_channel_pcs(
 
 
 def decrumb(labels, min_size=5, in_place=False, flatten=True):
-    kept = np.flatnonzero(labels)
+    kept = np.flatnonzero(labels >= 0)
     labels_kept = labels[kept]
     labels = labels if in_place else labels.copy()
 
     units_sparse, counts_sparse = np.unique(labels_kept, return_counts=True)
     if not units_sparse.size:
         return labels
+    print(f"decrumb hi {units_sparse.min()=} {units_sparse.max()=}")
 
     k = units_sparse.max() + 1
     counts = np.zeros(k, dtype=counts_sparse.dtype)
@@ -281,9 +287,12 @@ def decrumb(labels, min_size=5, in_place=False, flatten=True):
     units = np.arange(k)
 
     big_enough = counts >= min_size
+    k1 = big_enough.sum()
     units[np.logical_not(big_enough)] = -1
     if flatten:
-        units[big_enough] = np.arange(big_enough.sum())
+        units[big_enough] = np.arange(k1)
+
+    logger.dartsortdebug(f"decrumb: {k}->{k1}.")
 
     labels[kept] = units[labels_kept]
 

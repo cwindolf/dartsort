@@ -176,7 +176,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     pre_refinement_merge: bool = False
     pre_refinement_merge_metric: str = "cosine"
-    pre_refinement_merge_threshold: float = 0.05
+    pre_refinement_merge_threshold: float = 0.025
 
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
@@ -238,10 +238,11 @@ class DeveloperConfig(DARTsortUserConfig):
     min_cluster_size: int = 50
 
     use_hellinger: bool = True
-    hellinger_strong: float = 0.95
+    component_overlap: float = 0.95
+    hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
     dpc_mop: bool = False
-    n_neighbors_search: int | None = 20
+    n_neighbors_search: int | None = argfield(default=20, arg_type=int_or_none)
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False

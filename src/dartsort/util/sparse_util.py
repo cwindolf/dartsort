@@ -727,8 +727,8 @@ def logsumexp_coo(coo):
     i = coo.indices()[0]
 
     # first, put the max values into out
-    max_values = torch.full((coo.shape[0],), -torch.inf, dtype=v.dtype)
-    logsumexps = max_values.clone()
+    max_values = v.new_full((coo.shape[0],), -torch.inf)
+    logsumexps = v.new_zeros((coo.shape[0],))
     max_values.scatter_reduce_(dim=0, index=i, src=v, reduce='amax')
 
     # now stable exponential

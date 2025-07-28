@@ -43,7 +43,10 @@ class GrabAndFeaturize(BasePeeler):
         )
         self.register_buffer("times_samples", torch.asarray(times_samples))
         self.register_buffer("channels", torch.asarray(channels))
-        self.register_buffer("labels", torch.asarray(labels))
+        if labels is not None:
+            self.register_buffer("labels", torch.asarray(labels))
+        else:
+            self.labels = None
         assert self.times_samples.ndim == 1
         assert self.times_samples.shape == self.channels.shape
 

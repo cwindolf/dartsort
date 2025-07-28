@@ -473,6 +473,7 @@ def cluster(
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
     ) = default_clustering_features_cfg,
+    pre_refinement_cfg: RefinementConfig | None = None,
     refinement_cfg: RefinementConfig | None = None,
     computation_cfg: ComputationConfig | None = None,
     *,
@@ -489,6 +490,7 @@ def cluster(
     )
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
+        pre_refinement_cfg=pre_refinement_cfg,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
         save_cfg=_save_cfg,

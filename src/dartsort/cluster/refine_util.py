@@ -274,6 +274,8 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     assert refinement_cfg.refinement_strategy == "pcmerge"
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
+    if not refinement_cfg.pc_merge_threshold:
+        return sortings
 
     # remove blank labels just in case
     sorting = data_util.subset_sorting_by_spike_count(sorting)
@@ -319,7 +321,6 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     else:
         raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
     dists = dists.numpy(force=True)
-    print(f"{nu0=} {dists=}")
 
     # linkage
     labels, ids = agglomerate(
@@ -328,6 +329,6 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
         linkage_method=refinement_cfg.pc_merge_linkage,
         threshold=refinement_cfg.pc_merge_threshold,
     )
-    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.size}.")
+    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
 
     return replace(sorting, labels=labels)

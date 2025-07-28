@@ -401,7 +401,7 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float = 25.0
     outlier_neighbor_count: int = 10
-    kdtree_subsample_max_size: int = 1_000_000
+    kdtree_subsample_max_size: int = 2_000_000
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 5
@@ -433,7 +433,7 @@ class RefinementConfig:
     refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
 
     # pcmerge
-    pc_merge_threshold: float = 0.05
+    pc_merge_threshold: float = 0.025
     pc_merge_metric: str = "cosine"
     pc_merge_spikes_per_unit: int = 1024
     pc_merge_linkage: str = "complete"
@@ -679,6 +679,7 @@ def to_internal_config(cfg):
         remove_clusters_smaller_than=cfg.min_cluster_size,
         workers=cfg.clustering_workers,
         use_hellinger=cfg.use_hellinger,
+        component_overlap=cfg.component_overlap,
         hellinger_strong=cfg.hellinger_strong,
         hellinger_weak=cfg.hellinger_weak,
         mop=cfg.dpc_mop,
