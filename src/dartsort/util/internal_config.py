@@ -562,6 +562,7 @@ class DARTsortInternalConfig:
     clustering_cfg: ClusteringConfig = ClusteringConfig()
     clustering_features_cfg: ClusteringFeaturesConfig = ClusteringFeaturesConfig()
     initial_refinement_cfg: RefinementConfig = RefinementConfig(one_split_only=True)
+    pre_refinement_cfg: RefinementConfig | None = None
     refinement_cfg: RefinementConfig = RefinementConfig(skip_first_split=True)
     matching_cfg: MatchingConfig = MatchingConfig()
     motion_estimation_cfg: MotionEstimationConfig = MotionEstimationConfig()
@@ -672,11 +673,15 @@ def to_internal_config(cfg):
         cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
         sigma_regional=5 * cfg.density_bandwidth,
+        n_neighbors_search=cfg.n_neighbors_search or cfg.min_cluster_size,
         outlier_radius=5 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
         remove_clusters_smaller_than=cfg.min_cluster_size,
         workers=cfg.clustering_workers,
+        use_hellinger=cfg.use_hellinger,
         hellinger_strong=cfg.hellinger_strong,
+        hellinger_weak=cfg.hellinger_weak,
+        mop=cfg.dpc_mop,
         kdtree_subsample_max_size=cfg.clustering_max_spikes,
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
@@ -765,6 +770,13 @@ def to_internal_config(cfg):
         merge_decision_algorithm=merge_decision_algorithm,
         distance_metric=distance_metric,
     )
+    pre_refinement_cfg = None
+    if cfg.pre_refinement_merge:
+        pre_refinement_cfg = RefinementConfig(
+            refinement_strategy="pcmerge",
+            pc_merge_metric=cfg.pre_refinement_merge_metric,
+            pc_merge_threshold=cfg.pre_refinement_merge_threshold,
+        )
     motion_estimation_cfg = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
     )
@@ -791,6 +803,7 @@ def to_internal_config(cfg):
         initial_detection_cfg=initial_detection_cfg,
         template_cfg=template_cfg,
         clustering_cfg=clustering_cfg,
+        pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,

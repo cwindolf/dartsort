@@ -17,7 +17,7 @@ logger = getLogger(__name__)
 
 
 def kdtree_inliers(
-    X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1
+    X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1, batch_size=2**16
 ):
     """Mark outlying points by a neighbors distance criterion
 
@@ -31,13 +31,17 @@ def kdtree_inliers(
     if kdtree is None:
         kdtree = KDTree(X)
 
-    distances, indices = kdtree.query(
-        X,
-        k=1 + n_neighbors,
-        distance_upper_bound=distance_upper_bound,
-        workers=workers,
-    )
-    inliers = (indices[:, 1:] < len(X)).sum(1) >= n_neighbors
+    inliers = np.zeros(kdtree.n, dtype=bool)
+    for i0 in range(0, kdtree.n, batch_size):
+        i1 = min(kdtree.n, i0 + batch_size)
+
+        _, indices = kdtree.query(
+            X[i0:i1],
+            k=1 + n_neighbors,
+            distance_upper_bound=distance_upper_bound,
+            workers=workers,
+        )
+        inliers[i0:i1] = indices[:, -1] < kdtree.n
 
     return inliers, kdtree
 
@@ -458,7 +462,7 @@ def gmm_density_peaks(
     else:
         choices = slice(None)
 
-    inliers, inlier_kdtree = kdtree_inliers(
+    inliers, kdtree = kdtree_inliers(
         X[choices],
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius * np.sqrt(X.shape[1]),
@@ -499,10 +503,13 @@ def gmm_density_peaks(
     res["n_components_kept"] = n_components
     maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
     if not use_hellinger:
+        log_likelihoods = res["log_likelihoods"].numpy(force=True)
+        density = np.full(len(X), -np.inf, dtype=log_likelihoods.dtype)
+        density[inliers] = log_likelihoods
         kdtree_res = density_peaks(
-            Xi,
-            kdtree=inlier_kdtree,
-            density=res["log_likelihoods"].numpy(force=True),
+            X,
+            kdtree=kdtree,
+            density=density,
             outlier_radius=outlier_radius,
             outlier_neighbor_count=outlier_neighbor_count,
             radius_search=maxdist,

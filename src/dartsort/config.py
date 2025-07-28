@@ -174,6 +174,10 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_cosine_complete_only: bool = False
     gmm_noise_fp_correction: bool = False
 
+    pre_refinement_merge: bool = False
+    pre_refinement_merge_metric: str = "cosine"
+    pre_refinement_merge_threshold: float = 0.05
+
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
     truncated: bool = True
@@ -202,7 +206,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000
@@ -232,7 +236,12 @@ class DeveloperConfig(DARTsortUserConfig):
     laplace_ard: bool = False
     core_radius: float = 35.0
     min_cluster_size: int = 50
-    hellinger_strong: float = 0.0
+
+    use_hellinger: bool = True
+    hellinger_strong: float = 0.95
+    hellinger_weak: float = 0.0
+    dpc_mop: bool = False
+    n_neighbors_search: int | None = 20
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False

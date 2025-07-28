@@ -16,6 +16,7 @@ refinement_strategies = {}
 def get_clusterer(
     clustering_cfg=None,
     refinement_cfg=None,
+    pre_refinement_cfg=None,
     computation_cfg=None,
     save_cfg=None,
     save_labels_dir=None,
@@ -39,6 +40,26 @@ def get_clusterer(
         labels_fmt=initial_name if clustering_cfg is not None else None,
         computation_cfg=computation_cfg,
     )
+
+    if pre_refinement_cfg is not None:
+        pr_strategy = pre_refinement_cfg.refinement_strategy
+        if pr_strategy not in refinement_strategies:
+            raise ValueError(
+                f"Unknown refinement_strategy={pre_refinement_cfg.refinement_strategy}. "
+                f"Options are: {', '.join(refinement_strategies.keys())}."
+            )
+        R = refinement_strategies[pre_refinement_cfg.refinement_strategy]
+        clusterer = R(
+            clusterer,
+            refinement_cfg=pre_refinement_cfg,
+            save_labels_dir=save_labels_dir,
+            labels_fmt=(
+                f"{initial_name}{pr_strategy}"
+                if initial_name and clustering_cfg is not None
+                else None
+            ),
+            computation_cfg=computation_cfg,
+        )
 
     if refinement_cfg is not None:
         if refinement_cfg.refinement_strategy not in refinement_strategies:
