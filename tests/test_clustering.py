@@ -32,6 +32,10 @@ feature_kwargs = [
 feature_kwargs = [global_feature_kwargs | kw for kw in feature_kwargs]
 
 clustering_kwargs = [dict(cluster_strategy=k) for k in clustering_strategies]
+clustering_kwargs += [
+    dict(cluster_strategy='gmmdpc', hellinger_weak=0.99, mop=True),
+    dict(cluster_strategy='gmmdpc', use_hellinger=False),
+]
 refinement_kwargs = [dict(refinement_strategy=k) for k in refinement_strategies]
 
 

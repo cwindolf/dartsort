@@ -302,9 +302,13 @@ class GMMDensityPeaksClusterer(Clusterer):
         max_components_per_channel=20,
         min_spikes_per_component=10,
         random_state=0,
+        use_hellinger=True,
         kmeanspp_min_dist=5.0,
         hellinger_cutoff=0.8,
         hellinger_strong=0.0,
+        hellinger_weak=0.0,
+        mop=False,
+        n_neighbors_search=20,
         max_sigma=5.0,
         max_samples=2_000_000,
         **kwargs,
@@ -319,9 +323,13 @@ class GMMDensityPeaksClusterer(Clusterer):
         self.max_components_per_channel = max_components_per_channel
         self.min_spikes_per_component = min_spikes_per_component
         self.random_state = random_state
+        self.use_hellinger = use_hellinger
         self.hellinger_cutoff = hellinger_cutoff
         self.hellinger_strong = hellinger_strong
+        self.hellinger_weak = hellinger_weak
+        self.mop = mop
         self.max_samples = max_samples
+        self.n_neighbors_search = n_neighbors_search
 
         # unconfigured params
         self.kmeanspp_min_dist = kmeanspp_min_dist
@@ -345,9 +353,13 @@ class GMMDensityPeaksClusterer(Clusterer):
             n_iter=clustering_cfg.kmeans_iter,
             max_components_per_channel=clustering_cfg.components_per_channel,
             random_state=clustering_cfg.random_seed,
+            use_hellinger=clustering_cfg.use_hellinger,
             hellinger_cutoff=clustering_cfg.component_overlap,
             hellinger_strong=clustering_cfg.hellinger_strong,
+            hellinger_weak=clustering_cfg.hellinger_weak,
+            mop=clustering_cfg.mop,
             max_samples=clustering_cfg.kdtree_subsample_max_size,
+            n_neighbors_search=clustering_cfg.n_neighbors_search,
             computation_cfg=computation_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
@@ -368,8 +380,12 @@ class GMMDensityPeaksClusterer(Clusterer):
             min_spikes_per_component=self.min_spikes_per_component,
             random_state=self.random_state,
             kmeanspp_min_dist=self.kmeanspp_min_dist,
+            use_hellinger=self.use_hellinger,
             hellinger_cutoff=self.hellinger_cutoff,
             hellinger_strong=self.hellinger_strong,
+            hellinger_weak=self.hellinger_weak,
+            n_neighbors_search=self.n_neighbors_search,
+            mop=self.mop,
             max_sigma=self.max_sigma,
             max_samples=self.max_samples,
         )

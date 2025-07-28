@@ -264,3 +264,27 @@ def get_main_channel_pcs(
             )
             features[ixs] = feats
     return features
+
+
+def decrumb(labels, min_size=5, in_place=False, flatten=True):
+    kept = np.flatnonzero(labels)
+    labels_kept = labels[kept]
+    labels = labels if in_place else labels.copy()
+
+    units_sparse, counts_sparse = np.unique(labels_kept, return_counts=True)
+    if not units_sparse.size:
+        return labels
+
+    k = units_sparse.max() + 1
+    counts = np.zeros(k, dtype=counts_sparse.dtype)
+    counts[units_sparse] = counts_sparse
+    units = np.arange(k)
+
+    big_enough = counts >= min_size
+    units[np.logical_not(big_enough)] = -1
+    if flatten:
+        units[big_enough] = np.arange(big_enough.sum())
+
+    labels[kept] = units[labels_kept]
+
+    return labels

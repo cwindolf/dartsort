@@ -688,7 +688,7 @@ def erase_dups(arr):
 
 
 def sparse_centroid_distsq(
-    X, centroids, max_distance_sq, labels, nearest_distsq, centroid_mask, dbufs
+    X, centroids, labels, centroid_mask, dbufs
 ):
     neighbors = centroid_mask[labels]
     coo = neighbors.nonzero()
@@ -716,3 +716,29 @@ def distsq_to_lik_coo(distsq_coo, sigmasq, log_proportions, in_place=False):
         liks = liks.clone()
     liks.values().mul_(-0.5 / sigmasq).add_(log_proportions[liks.indices()[1]])
     return liks
+
+
+def logsumexp_coo(coo):
+    """Like torch.sparse.softmax, assumes non-explicit 0s are -inf
+
+    out should be initialized to -inf. Uses stable logsumexp trick.
+    """
+    v = coo.values()
+    i = coo.indices()[0]
+
+    # first, put the max values into out
+    max_values = torch.full((coo.shape[0],), -torch.inf, dtype=v.dtype)
+    logsumexps = max_values.clone()
+    max_values.scatter_reduce_(dim=0, index=i, src=v, reduce='amax')
+
+    # now stable exponential
+    sv = max_values[i]
+    torch.subtract(v, sv, out=sv)
+    sv.exp_()
+
+    # add stable exps, take log, add back max vals
+    logsumexps.scatter_add_(dim=0, index=i, src=sv)
+    logsumexps.log_()
+    logsumexps += max_values
+
+    return logsumexps

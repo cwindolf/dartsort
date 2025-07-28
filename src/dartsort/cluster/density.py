@@ -10,6 +10,8 @@ from scipy.spatial import KDTree
 from scipy.stats import bernoulli
 import torch
 
+from .cluster_util import decrumb
+
 
 logger = getLogger(__name__)
 
@@ -150,25 +152,45 @@ def get_smoothed_densities(
 
 
 def nearest_higher_density_neighbor(
-    kdtree, density, n_neighbors_search=10, distance_upper_bound=5.0, workers=1
+    kdtree,
+    density,
+    n_neighbors_search=20,
+    distance_upper_bound=5.0,
+    workers=1,
+    batch_size=2**16,
 ):
-    distances, indices = kdtree.query(
-        kdtree.data,
-        k=1 + n_neighbors_search,
-        distance_upper_bound=distance_upper_bound,
-        workers=workers,
-    )
-    # exclude self
-    distances, indices = distances[:, 1:].copy(), indices[:, 1:].copy()
+    nhdn = np.full(kdtree.n, kdtree.n, dtype=np.intp)
+    density_padded = np.empty(min(kdtree.n, batch_size) + 1, dtype=density.dtype)
 
-    # find lowest distance higher density neighbor
-    density_padded = np.pad(density, (0, 1), constant_values=np.inf)
-    is_lower_density = density_padded[indices] <= density[:, None]
-    distances[is_lower_density] = np.inf
-    indices[is_lower_density] = kdtree.n
-    nhdn = indices[np.arange(kdtree.n), distances.argmin(1)]
+    for i0 in range(0, kdtree.n, batch_size):
+        i1 = min(kdtree.n, i0 + batch_size)
 
-    return nhdn, distances, indices
+        distances, indices = kdtree.query(
+            kdtree.data[i0:i1],
+            k=1 + n_neighbors_search,
+            distance_upper_bound=distance_upper_bound,
+            workers=workers,
+        )
+        # exclude self
+        distances = distances[:, 1:]
+        indices = indices[:, 1:]
+        missing = indices == kdtree.n
+        distances[missing] = np.inf
+        indices[missing] = i1 - i0
+
+        # find lowest distance higher density neighbor
+        density_padded[: i1 - i0] = density
+        density_padded[i1 - i0] = np.inf
+        is_lower_density = density_padded[indices] <= density[:, None]
+        is_lower_density = np.logical_or(is_lower_density, missing)
+        distances[is_lower_density] = np.inf
+        indices[is_lower_density] = kdtree.n
+
+        nearest = distances.argmin(1, keepdims=True)
+        nhdn[i0:i1] = np.take_along_axis(indices, nearest, axis=1)[:, 0]
+        nhdn[i0:i1] += i0
+
+    return nhdn
 
 
 def remove_border_points(
@@ -200,14 +222,6 @@ def remove_border_points(
         new_labels[in_unit[to_remove]] = -1
 
     return new_labels
-
-
-def decrumb(labels, min_size=5):
-    units, counts = np.unique(labels, return_counts=True)
-    big_enough = counts >= min_size
-    units[np.logical_not(big_enough)] = -1
-    units[big_enough] = np.arange(big_enough.sum())
-    return units[labels]
 
 
 def guess_mode(
@@ -245,11 +259,12 @@ def guess_mode(
 def density_peaks(
     X,
     kdtree=None,
+    density=None,
     sigma_local=5.0,
     sigma_regional=None,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
-    n_neighbors_search=10,
+    n_neighbors_search=20,
     radius_search=5.0,
     noise_density=0.0,
     remove_clusters_smaller_than=10,
@@ -257,7 +272,6 @@ def density_peaks(
     border_search_radius=10.0,
     border_search_neighbors=3,
     workers=-1,
-    return_extra=False,
 ):
     """Density peaks clustering as described by Rodriguez and Laio, but...
 
@@ -275,21 +289,22 @@ def density_peaks(
         workers=workers,
     )
 
-    sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
-    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
-    if sigma_regional is not None:
-        d0, d1 = density
-        assert isinstance(d0, np.ndarray)
-        assert isinstance(d1, np.ndarray)
-        d1_0 = np.flatnonzero(d1 == 0)
-        assert np.all(d0[d1_0] == 0.0)
-        d1[d1_0] = 1.0
-        density = d0
-        density /= d1
-    else:
-        density = density[0]
+    if density is None:
+        sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
+        density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
+        if sigma_regional is not None:
+            d0, d1 = density
+            assert isinstance(d0, np.ndarray)
+            assert isinstance(d1, np.ndarray)
+            d1_0 = np.flatnonzero(d1 == 0)
+            assert np.all(d0[d1_0] == 0.0)
+            d1[d1_0] = 1.0
+            density = d0
+            density /= d1
+        else:
+            density = density[0]
 
-    nhdn, distances, indices = nearest_higher_density_neighbor(
+    nhdn = nearest_higher_density_neighbor(
         kdtree,
         density,
         n_neighbors_search=n_neighbors_search,
@@ -297,7 +312,7 @@ def density_peaks(
         workers=workers,
     )
     if noise_density:
-        nhdn[density <= noise_density] = n
+        nhdn[density < noise_density] = n
 
     nhdn = nhdn.astype(np.intc)
     has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
@@ -316,7 +331,7 @@ def density_peaks(
         )
 
     if remove_clusters_smaller_than:
-        labels = decrumb(labels, min_size=remove_clusters_smaller_than)
+        labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
 
     return dict(
         density=density,
@@ -397,6 +412,9 @@ def gmm_density_peaks(
     max_samples=2_000_000,
     noise_const_dims=None,
     show_progress=True,
+    use_hellinger=True,
+    mop=True,
+    n_neighbors_search=20,
     device=None,
 ):
     """Density peaks clustering via an isotropic GMM density estimate
@@ -440,7 +458,7 @@ def gmm_density_peaks(
     else:
         choices = slice(None)
 
-    inliers, _ = kdtree_inliers(
+    inliers, inlier_kdtree = kdtree_inliers(
         X[choices],
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius * np.sqrt(X.shape[1]),
@@ -453,10 +471,15 @@ def gmm_density_peaks(
     ni = len(Xi)
     _, cchans = np.unique(channels[inliers], return_counts=True)
     comps_per_chan = np.minimum(
-        max_components_per_channel, np.ceil(cchans / min_spikes_per_component).astype(int)
+        max_components_per_channel,
+        np.ceil(cchans / min_spikes_per_component).astype(int),
     )
-    n_components = min(comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component)))
-    logger.dartsortdebug(f"gmmdpc: {n_components} components for {cchans.size} channels")
+    n_components = min(
+        comps_per_chan.sum(), int(np.ceil(ni / min_spikes_per_component))
+    )
+    logger.dartsortdebug(
+        f"gmmdpc: {n_components} components for {cchans.size} channels"
+    )
     res = truncated_kmeans(
         Xi,
         max_sigma=max_sigma,
@@ -469,10 +492,27 @@ def gmm_density_peaks(
         device=device,
         show_progress=show_progress,
         noise_const_dims=noise_const_dims,
+        with_log_likelihoods=mop or not use_hellinger,
     )
-    res['n_components'] = n_components
-    n_components = len(res['centroids'])
-    res['n_components_kept'] = n_components
+    res["n_components"] = n_components
+    n_components = len(res["centroids"])
+    res["n_components_kept"] = n_components
+    maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
+    if not use_hellinger:
+        kdtree_res = density_peaks(
+            Xi,
+            kdtree=inlier_kdtree,
+            density=res["log_likelihoods"].numpy(force=True),
+            outlier_radius=outlier_radius,
+            outlier_neighbor_count=outlier_neighbor_count,
+            radius_search=maxdist,
+            workers=workers,
+            remove_clusters_smaller_than=remove_clusters_smaller_than,
+            n_neighbors_search=n_neighbors_search,
+        )
+        res.update(kdtree_res)
+        return res
+
     if show_progress:
         logger.info("Hellinger...")
     centroids = res["centroids"].numpy(force=True)
@@ -481,7 +521,7 @@ def gmm_density_peaks(
         res["sigma"],
         hellinger_threshold=hellinger_cutoff,
     )
-    res['hellinger'] = coo
+    res["hellinger"] = coo
     proportions = res["log_proportions"].numpy(force=True)
     nhdn = coo_nhdn(coo, proportions)
     assert nhdn.shape == (len(centroids),) == (n_components,)
@@ -497,12 +537,16 @@ def gmm_density_peaks(
     if hellinger_weak:
         disconnected = nhdn == ii
         disconnected = np.logical_and(
-            disconnected, np.logical_not(np.isin(ii, nhdn[np.logical_not(disconnected)]))
+            disconnected,
+            np.logical_not(np.isin(ii, nhdn[np.logical_not(disconnected)])),
         )
         disconnected = np.flatnonzero(disconnected)
     if hellinger_weak and disconnected.size:
         coo_weak = sparse_iso_hellinger(
-            centroids[disconnected], res["sigma"], hellinger_threshold=hellinger_weak, centroids_b=centroids
+            centroids[disconnected],
+            res["sigma"],
+            hellinger_threshold=hellinger_weak,
+            centroids_b=centroids,
         )
         coo_weak = coo_array(
             (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
@@ -510,7 +554,7 @@ def gmm_density_peaks(
         )
         weak_nhdn = coo_nhdn(coo_weak, proportions)
         jj[disconnected] = weak_nhdn[disconnected]
-        
+
     _1 = np.ones((1,), dtype="float32")
     _1 = np.broadcast_to(_1, jj.shape)
     nhdn_coo = coo_array((_1, (ii, jj)), shape=(n_components, n_components))
@@ -521,24 +565,34 @@ def gmm_density_peaks(
     labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
 
     ckdt = KDTree(res["centroids"].numpy(force=True))
-    maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
     if show_progress:
         logger.info("Last query...")
     _, q = ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)
     labels = labels_padded[q]
-    # labels = q
 
     if remove_clusters_smaller_than:
         if show_progress:
             logger.info("Clean...")
-        kept = np.flatnonzero(labels >= 0)
-        u, c = np.unique(labels[kept], return_counts=True)
-        flat = np.full(u.max() + 1, -1)
-        mask = np.logical_and(u >= 0, c >= remove_clusters_smaller_than)
-        mask = np.flatnonzero(mask)
-        flat[u[mask]] = range(mask.size)
-        labels[kept] = flat[labels[kept]]
-    res['labels'] = labels
+        labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
+    res["labels"] = labels
+
+    if mop:
+        # use k-dtree dpc to mop up any remaining clusters...
+        discarded = np.flatnonzero(labels < 0)
+        mop_res = density_peaks(
+            X[discarded],
+            density=res["log_likelihoods"].numpy(force=True)[discarded],
+            outlier_radius=outlier_radius,
+            outlier_neighbor_count=outlier_neighbor_count,
+            radius_search=maxdist,
+            workers=workers,
+            remove_clusters_smaller_than=remove_clusters_smaller_than,
+            n_neighbors_search=n_neighbors_search,
+        )
+        mopped = np.flatnonzero(mop_res["labels"] >= 0)
+        mopped_labels = mop_res["labels"][mopped]
+        mopped_labels += labels.max() + 1
+        labels[discarded[mopped]] = mopped_labels
 
     return res
 
@@ -556,7 +610,7 @@ def density_peaks_fancy(
     sigma_regional=None,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
-    n_neighbors_search=10,
+    n_neighbors_search=20,
     radius_search=5.0,
     noise_density=0.0,
     remove_clusters_smaller_than=10,
@@ -626,7 +680,7 @@ def _density_peaks_clustering_uhd_implementation(
     min_bin_size=1.0,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
-    n_neighbors_search=10,
+    n_neighbors_search=20,
     radius_search=5.0,
     noise_density=0.0,
     remove_clusters_smaller_than=10,
@@ -758,7 +812,7 @@ def _density_peaks_clustering_uhd_implementation(
             density = density / reg_density
         density = np.nan_to_num(density)
 
-        nhdn, distances, indices = nearest_higher_density_neighbor(
+        nhdn = nearest_higher_density_neighbor(
             kdtree,
             density,
             n_neighbors_search=n_neighbors_search,
@@ -780,6 +834,7 @@ def _density_peaks_clustering_uhd_implementation(
         distances[is_higher_density] = np.inf
         indices[is_higher_density] = n
         nhdn = indices[np.arange(n), distances.argmin(1)]
+        del distances, indices
 
     if noise_density and l2_norm is None:
         nhdn[density <= noise_density] = n

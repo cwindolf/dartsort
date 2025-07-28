@@ -1,14 +1,13 @@
 from logging import getLogger
 
 import numpy as np
-from scipy.spatial import KDTree
-from scipy.sparse import coo_array
 import torch
 import torch.nn.functional as F
-from tqdm.auto import trange, tqdm
+from tqdm.auto import trange
 
 try:
     import cupy
+
     del cupy
 
     HAVE_CUPY = True
@@ -17,9 +16,12 @@ except ImportError:
 
 
 from .density import guess_mode
-from ..util.multiprocessing_util import get_pool
 from ..util.sparse_util import (
-    coo_to_scipy, coo_to_cupy, coo_to_torch, distsq_to_lik_coo, sparse_centroid_distsq
+    coo_to_scipy,
+    coo_to_cupy,
+    distsq_to_lik_coo,
+    logsumexp_coo,
+    sparse_centroid_distsq,
 )
 from ..util.spiketorch import spawn_torch_rg
 from ..util.logging_util import DARTSORTDEBUG
@@ -135,6 +137,7 @@ def truncated_kmeans(
     sigma_atol=1e-3,
     batch_size=8192,
     noise_const_dims=None,
+    with_log_likelihoods=False,
     device=None,
     show_progress=False,
 ):
@@ -153,7 +156,7 @@ def truncated_kmeans(
     sigmasq = torch.inf
     nearest_distsq = centroid_ixs = labels = None
     if show_progress:
-        it = trange(n_initializations, desc='kmeans++')
+        it = trange(n_initializations, desc="kmeans++")
     else:
         it = range(n_initializations)
     initial_distances = None
@@ -178,7 +181,7 @@ def truncated_kmeans(
     assert centroid_ixs is not None
     assert labels is not None
     assert nearest_distsq is not None
-    
+
     if logger.isEnabledFor(DARTSORTDEBUG):
         logger.dartsortdebug(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
@@ -198,15 +201,22 @@ def truncated_kmeans(
     prev_sigma = torch.inf
     dcc = X.new_zeros((n_components, n_components))
     dccbuf = X.new_zeros((n_components, n_components, p))
-    distsq_buf = torch.zeros_like(X[:20 * batch_size])
+    distsq_buf = torch.zeros_like(X[: 20 * batch_size])
     distsq_buf = (distsq_buf, distsq_buf.clone())
     sigma = sigmasq.sqrt().numpy(force=True).item()
+    if with_log_likelihoods:
+        log_likelihoods = X.new_full((n,), -torch.inf)
+    else:
+        log_likelihoods = None
 
     if show_progress:
-        it = trange(n_iter, desc=f'kmeans σ={sigma:0.4f}')
+        it = trange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
     else:
         it = range(n_iter)
+
+    done = False
     for j in it:
+        done = done or j == n_iter - 1
         max_distance_sq = max_sigma * sigmasq * p
 
         new_centroids.fill_(0.0)
@@ -224,16 +234,21 @@ def truncated_kmeans(
             distsq_coo, distsq_buf = sparse_centroid_distsq(
                 X[i0:i1],
                 centroids,
-                max_distance_sq=max_distance_sq,
                 labels=labels[i0:i1],
-                nearest_distsq=nearest_distsq[i0:i1],
                 centroid_mask=dccmask,
                 dbufs=distsq_buf,
             )
             assert distsq_coo.shape == (i1 - i0, n_components)
             distsq_values = distsq_coo.values().clone()
-            liks = distsq_to_lik_coo(distsq_coo, sigmasq, log_proportions, in_place=True)
+            liks = distsq_to_lik_coo(
+                distsq_coo, sigmasq, log_proportions, in_place=True
+            )
             del distsq_coo
+            if done and with_log_likelihoods:
+                assert log_likelihoods is not None
+                log_likelihoods[i0:i1] = logsumexp_coo(liks)
+                continue
+
             resps = torch.sparse.softmax(liks, dim=1)
 
             # update labels... torch sparse has no argmax(), so need scipy
@@ -267,6 +282,9 @@ def truncated_kmeans(
             new_centroids += batch_centroids.sub_(new_centroids).mul_(n1_n01)
             new_sigmasq += batch_sigmasq.sub_(new_sigmasq).mul_(w1_w01)
 
+        if done:
+            break
+
         # update state
         logN = N.log_() + dirichlet_alpha
         log_proportions = F.log_softmax(logN, dim=0).to(X)
@@ -277,7 +295,9 @@ def truncated_kmeans(
         # check convergence
         sigma = torch.sqrt(sigmasq).numpy(force=True).item()
         if abs(sigma - prev_sigma) < sigma_atol:
-            break
+            done = True
+            if not with_log_likelihoods:
+                break
         prev_sigma = sigma
         if show_progress:
             it.set_description(f"kmeans σ={sigma:0.4f}")
@@ -289,6 +309,7 @@ def truncated_kmeans(
         sigma=sigma,
         log_proportions=log_proportions,
         labels=labels,
+        log_likelihoods=log_likelihoods,
     )
 
 
@@ -383,7 +404,7 @@ def kmeans(
     with_proportions=False,
     drop_prop=0.025,
     drop_sum=5.0,
-    test_convergence=True
+    test_convergence=True,
 ):
     best_phi = np.inf
     if isinstance(random_state, int):

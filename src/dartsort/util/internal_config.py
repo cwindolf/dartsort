@@ -407,8 +407,11 @@ class ClusteringConfig:
     kmeanspp_initializations: int = 5
     kmeans_iter: int = 50
     components_per_channel: int = 20
-    component_overlap: float = 0.8
+    component_overlap: float = 0.95
     hellinger_strong: float = 0.0
+    hellinger_weak: float = 0.0
+    use_hellinger: bool = True
+    mop: bool = False
 
     # hdbscan parameters
     min_cluster_size: int = 25

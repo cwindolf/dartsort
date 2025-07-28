@@ -265,7 +265,7 @@ class StableSpikeDataset(torch.nn.Module):
         # load information not stored directly on the sorting
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = h5["geom"][:]
-            extract_channel_index = h5["channel_index"][:]
+            extract_channel_index: np.ndarray = h5["channel_index"][:]
             assert np.all(np.diff(extract_channel_index) >= 0)
             if motion_est is None:
                 registered_geom = geom
@@ -308,7 +308,6 @@ class StableSpikeDataset(torch.nn.Module):
             if store_on_device:
                 extract_channels = extract_channels.to(device)
 
-            core_channels = None
             if core_radius is not None:
                 core_channels = torch.from_numpy(core_channels)
                 if store_on_device:
