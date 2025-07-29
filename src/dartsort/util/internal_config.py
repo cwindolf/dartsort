@@ -368,7 +368,7 @@ class ClusteringFeaturesConfig:
     amp_scale: float = 50.0
     n_main_channel_pcs: int = 5
     pc_scale: float = 10.0
-    pc_transform: Literal["log", "sqrt"] | None = "sqrt"
+    pc_transform: Literal["log", "sqrt", "none"] | None = "sqrt"
     pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
     workers: int = 5

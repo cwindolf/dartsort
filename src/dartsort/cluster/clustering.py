@@ -52,9 +52,10 @@ def get_clusterer(
         clusterer = R(
             clusterer,
             refinement_cfg=pre_refinement_cfg,
+            save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=(
-                f"{initial_name}{pr_strategy}"
+                f"{initial_name}_preref{pr_strategy}"
                 if initial_name and clustering_cfg is not None
                 else None
             ),
