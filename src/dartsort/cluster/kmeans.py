@@ -229,8 +229,8 @@ def truncated_kmeans(
         # update centroid dists
         for i0 in range(0, n_components, dcc_batch_size):
             i1 = min(n_components, i0 + dcc_batch_size)
-            torch.subtract(centroids[None], centroids[i0:i1, None], out=dccbuf[i0:i1]).square_()
-            torch.sum(dccbuf[i0:i1], dim=2, out=dcc[i0:i1])
+            torch.subtract(centroids[None], centroids[i0:i1, None], out=dccbuf[: i1 - i0]).square_()
+            torch.sum(dccbuf[: i1 - i0], dim=2, out=dcc[i0:i1])
         dccmask = dcc < max_distance_sq
 
         for i0 in range(0, n, batch_size):
