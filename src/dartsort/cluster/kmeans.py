@@ -135,7 +135,8 @@ def truncated_kmeans(
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
     sigma_atol=1e-3,
-    batch_size=8192,
+    batch_size=2048,
+    dcc_batch_size=64,
     noise_const_dims=None,
     with_log_likelihoods=False,
     device=None,
@@ -187,6 +188,7 @@ def truncated_kmeans(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
             f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
         )
+    del nearest_distsq, _d
 
     # initialize parameters
     n_components = len(centroid_ixs)
@@ -200,7 +202,7 @@ def truncated_kmeans(
     N = X.new_zeros(log_proportions.shape, dtype=torch.double)
     prev_sigma = torch.inf
     dcc = X.new_zeros((n_components, n_components))
-    dccbuf = X.new_zeros((n_components, n_components, p))
+    dccbuf = X.new_zeros((dcc_batch_size, n_components, p))
     distsq_buf = torch.zeros_like(X[: 20 * batch_size])
     distsq_buf = (distsq_buf, distsq_buf.clone())
     sigma = sigmasq.sqrt().numpy(force=True).item()
@@ -225,8 +227,10 @@ def truncated_kmeans(
         weight = 0.0
 
         # update centroid dists
-        torch.subtract(centroids[None], centroids[:, None], out=dccbuf).square_()
-        dcc = torch.sum(dccbuf, dim=2, out=dcc)
+        for i0 in range(0, n_components, dcc_batch_size):
+            i1 = min(n_components, i0 + dcc_batch_size)
+            torch.subtract(centroids[None], centroids[i0:i1, None], out=dccbuf[i0:i1]).square_()
+            torch.sum(dccbuf[i0:i1], dim=2, out=dcc[i0:i1])
         dccmask = dcc < max_distance_sq
 
         for i0 in range(0, n, batch_size):
