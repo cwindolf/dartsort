@@ -200,13 +200,13 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
 
     initial_amp_feat: bool = False
-    initial_pc_feats: int = 5
-    initial_pc_transform: str = "sqrt"
-    initial_pc_scale: float = 10.0
+    initial_pc_feats: int = 3
+    initial_pc_transform: str = "none"
+    initial_pc_scale: float = 2.5
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 100_000
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000
@@ -237,12 +237,12 @@ class DeveloperConfig(DARTsortUserConfig):
     core_radius: float = 35.0
     min_cluster_size: int = 50
 
-    use_hellinger: bool = True
+    use_hellinger: bool = False
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
     dpc_mop: bool = False
-    n_neighbors_search: int | None = argfield(default=20, arg_type=int_or_none)
+    n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False

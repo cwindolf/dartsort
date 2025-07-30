@@ -31,6 +31,10 @@ def kdtree_inliers(
     if kdtree is None:
         kdtree = KDTree(X)
 
+    if distance_upper_bound is None or n_neighbors is None:
+        inliers = np.ones(kdtree.n, dtype=bool)
+        return inliers, kdtree
+
     inliers = np.zeros(kdtree.n, dtype=bool)
     for i0 in range(0, kdtree.n, batch_size):
         i1 = min(kdtree.n, i0 + batch_size)
@@ -411,11 +415,12 @@ def gmm_density_peaks(
     hellinger_cutoff=0.95,
     hellinger_strong=0.0,
     hellinger_weak=0.999,
-    max_sigma=6.0,
+    max_sigma=5.0,
     max_samples=2_000_000,
     noise_const_dims=None,
     show_progress=True,
     use_hellinger=True,
+    gibbs_lls=False,
     mop=True,
     n_neighbors_search=20,
     device=None,
@@ -461,8 +466,10 @@ def gmm_density_peaks(
     else:
         choices = slice(None)
 
+    Xi = X[choices]
+    nc = len(Xi)
     inliers, kdtree = kdtree_inliers(
-        X[choices],
+        Xi,
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius * np.sqrt(X.shape[1]),
         workers=workers or 1,
@@ -482,6 +489,7 @@ def gmm_density_peaks(
     )
     logger.dartsortdebug(
         f"gmmdpc: {n_components} components for {cchans.size} channels"
+        f"over {ni}/{nc} inliers"
     )
     res = truncated_kmeans(
         Xi,
@@ -496,6 +504,8 @@ def gmm_density_peaks(
         show_progress=show_progress,
         noise_const_dims=noise_const_dims,
         with_log_likelihoods=mop or not use_hellinger,
+        gibbs=gibbs_lls and not use_hellinger,
+        sigma_atol=1e-3 if (use_hellinger or not gibbs_lls) else -1,
     )
     res["n_components"] = n_components
     n_components = len(res["centroids"])
@@ -503,20 +513,23 @@ def gmm_density_peaks(
     maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
     if not use_hellinger:
         log_likelihoods = res["log_likelihoods"].numpy(force=True)
-        density = np.full(len(X), -np.inf, dtype=log_likelihoods.dtype)
-        density[inliers] = log_likelihoods
+        # density = np.full(len(X), -np.inf, dtype=log_likelihoods.dtype)
+        # density[inliers] = log_likelihoods
         kdtree_res = density_peaks(
-            X,
-            kdtree=kdtree,
-            density=density,
-            outlier_radius=outlier_radius,
-            outlier_neighbor_count=outlier_neighbor_count,
+            X[inliers],
+            density=log_likelihoods,
+            outlier_radius=None,
+            outlier_neighbor_count=None,
             radius_search=maxdist,
             workers=workers,
-            remove_clusters_smaller_than=remove_clusters_smaller_than,
+            remove_clusters_smaller_than=0,
             n_neighbors_search=n_neighbors_search,
         )
-        res.update(kdtree_res)
+        labels = nearest_neighbor_assign(
+            kdtree_res['kdtree'], kdtree_res['labels'], X, radius_search=maxdist, workers=workers
+        )
+        labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
+        res['labels'] = labels
         return res
 
     if show_progress:
