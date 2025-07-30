@@ -206,7 +206,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1_000_000
 
     n_waveforms_fit: int = 20_000
     max_waveforms_fit: int = 50_000

@@ -22,10 +22,12 @@ logger = getLogger(__name__)
 def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
     """"""
     n = distances.shape[0]
+    if n <= 1:
+        return labels, np.arange(n)
     pdist = distances[np.triu_indices(n, k=1)]
     if pdist.min() > threshold:
         if labels is None:
-            return None, np.arange(distances.shape[0])
+            return None, np.arange(n)
         else:
             ids = np.unique(labels)
             return labels, ids[ids >= 0]

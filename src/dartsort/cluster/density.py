@@ -584,9 +584,10 @@ def gmm_density_peaks(
 
     if mop:
         # use k-dtree dpc to mop up any remaining clusters...
-        discarded = np.flatnonzero(labels < 0)
+        inliers = np.flatnonzero(inliers)
+        discarded = np.flatnonzero(labels[inliers] < 0)
         mop_res = density_peaks(
-            X[discarded],
+            Xi[discarded],
             density=res["log_likelihoods"].numpy(force=True)[discarded],
             outlier_radius=outlier_radius,
             outlier_neighbor_count=outlier_neighbor_count,
@@ -598,7 +599,7 @@ def gmm_density_peaks(
         mopped = np.flatnonzero(mop_res["labels"] >= 0)
         mopped_labels = mop_res["labels"][mopped]
         mopped_labels += labels.max() + 1
-        labels[discarded[mopped]] = mopped_labels
+        labels[inliers[discarded[mopped]]] = mopped_labels
 
     return res
 
