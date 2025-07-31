@@ -24,9 +24,15 @@ class BaseWaveformModule(torch.nn.Module):
             self.register_buffer("geom", geom)
 
         self.spike_length_samples = None
-        self._hook = self.register_load_state_dict_pre_hook(
-            self.__class__._pre_load_state
-        )
+        try:
+            self._hook = self.register_load_state_dict_pre_hook(
+                self.__class__._pre_load_state
+            )
+        except AttributeError:
+            # ...? seems to happen in 2.4.1...
+            self._hook = self._register_load_state_dict_pre_hook(
+                self.__class__._pre_load_state
+            )
 
     def __getstate__(self):
         self._hook.remove()
@@ -36,9 +42,14 @@ class BaseWaveformModule(torch.nn.Module):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self._hook = self.register_load_state_dict_pre_hook(
-            self.__class__._pre_load_state
-        )
+        try:
+            self._hook = self.register_load_state_dict_pre_hook(
+                self.__class__._pre_load_state
+            )
+        except AttributeError:
+            self._hook = self._register_load_state_dict_pre_hook(
+                self.__class__._pre_load_state
+            )
 
     def fit(self, waveforms, max_channels, recording, weights=None):
         self.spike_length_samples = waveforms.shape[1]
