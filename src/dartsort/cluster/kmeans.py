@@ -126,7 +126,7 @@ def kmeanspp(
 
 def truncated_kmeans(
     X,
-    max_sigma=6.0,
+    max_sigma=5.0,
     n_components=10,
     n_initializations=10,
     random_state: int | np.random.Generator = 0,
@@ -135,9 +135,12 @@ def truncated_kmeans(
     dirichlet_alpha=1.0,
     kmeanspp_min_dist=0.0,
     sigma_atol=1e-3,
-    batch_size=8192,
+    batch_size=2048,
+    dcc_batch_size=64,
     noise_const_dims=None,
     with_log_likelihoods=False,
+    gibbs=False,
+    burn=50,
     device=None,
     show_progress=False,
 ):
@@ -150,6 +153,7 @@ def truncated_kmeans(
     device = torch.device(device)
     is_gpu = device.type == "cuda"
     X = torch.asarray(X, device=device)
+    gen = spawn_torch_rg(rg, device=X.device)
     n, p = X.shape
 
     # initialize...
@@ -167,7 +171,7 @@ def truncated_kmeans(
         _c, _l, _d, _p = kmeanspp(
             X,
             n_components=n_components,
-            random_state=rg,
+            random_state=gen,
             kmeanspp_initial="random",
             min_distance=kmeanspp_min_dist,
             initial_distances=initial_distances,
@@ -187,6 +191,7 @@ def truncated_kmeans(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
             f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
         )
+    del nearest_distsq, _d
 
     # initialize parameters
     n_components = len(centroid_ixs)
@@ -200,14 +205,16 @@ def truncated_kmeans(
     N = X.new_zeros(log_proportions.shape, dtype=torch.double)
     prev_sigma = torch.inf
     dcc = X.new_zeros((n_components, n_components))
-    dccbuf = X.new_zeros((n_components, n_components, p))
+    dccbuf = X.new_zeros((dcc_batch_size, n_components, p))
     distsq_buf = torch.zeros_like(X[: 20 * batch_size])
     distsq_buf = (distsq_buf, distsq_buf.clone())
     sigma = sigmasq.sqrt().numpy(force=True).item()
     if with_log_likelihoods:
-        log_likelihoods = X.new_full((n,), -torch.inf)
+        log_likelihoods = X.new_full((n,), 0.0 if gibbs else -torch.inf)
     else:
         log_likelihoods = None
+    if gibbs:
+        n_iter = n_iter + burn
 
     if show_progress:
         it = trange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
@@ -225,8 +232,10 @@ def truncated_kmeans(
         weight = 0.0
 
         # update centroid dists
-        torch.subtract(centroids[None], centroids[:, None], out=dccbuf).square_()
-        dcc = torch.sum(dccbuf, dim=2, out=dcc)
+        for i0 in range(0, n_components, dcc_batch_size):
+            i1 = min(n_components, i0 + dcc_batch_size)
+            torch.subtract(centroids[None], centroids[i0:i1, None], out=dccbuf[: i1 - i0]).square_()
+            torch.sum(dccbuf[: i1 - i0], dim=2, out=dcc[i0:i1])
         dccmask = dcc < max_distance_sq
 
         for i0 in range(0, n, batch_size):
@@ -239,27 +248,52 @@ def truncated_kmeans(
                 dbufs=distsq_buf,
             )
             assert distsq_coo.shape == (i1 - i0, n_components)
-            distsq_values = distsq_coo.values().clone()
+            if not gibbs:
+                distsq_values = distsq_coo.values().clone()
             liks = distsq_to_lik_coo(
-                distsq_coo, sigmasq, log_proportions, in_place=True
+                distsq_coo, sigmasq, log_proportions, in_place=not gibbs
             )
-            del distsq_coo
-            if done and with_log_likelihoods:
+            if not gibbs:
+                del distsq_coo
+            if gibbs or (done and with_log_likelihoods):
                 assert log_likelihoods is not None
-                log_likelihoods[i0:i1] = logsumexp_coo(liks)
-                continue
+                batch_liks = logsumexp_coo(liks)
+                if not gibbs:
+                    log_likelihoods[i0:i1] = batch_liks
+                elif j >= burn:
+                    # welford running log lik
+                    log_likelihoods[i0:i1] += batch_liks.sub_(log_likelihoods[i0:i1]).mul_(1. / (j - burn + 1.))
+                if done:
+                    continue
 
             resps = torch.sparse.softmax(liks, dim=1)
-
-            # update labels... torch sparse has no argmax(), so need scipy
-            # or cupy. scipy is a big slowdown here, so cupy if possible.
-            if is_gpu and HAVE_CUPY:
-                resps_cupy = coo_to_cupy(resps).tocsc()
-                batch_labels = resps_cupy.argmax(axis=1).squeeze()
+            if gibbs:
+                batch_labels = torch.multinomial(
+                    resps.to_dense(), num_samples=1, generator=gen, out=labels[i0:i1]
+                )
+                resps = torch.sparse_coo_tensor(
+                    indices=torch.stack(
+                        (
+                            torch.arange(i1 - i0, device=batch_labels.device), 
+                            batch_labels.squeeze(),
+                        ),
+                        dim=0,
+                    ),
+                    values=X.new_ones(batch_labels.shape[0]),
+                    size=resps.shape,
+                    is_coalesced=True,
+                )
+                distsq_values = distsq_coo.to_dense().take_along_dim(dim=1, indices=batch_labels).squeeze()
             else:
-                resps_scipy = coo_to_scipy(resps)
-                batch_labels = resps_scipy.argmax(axis=1, explicit=True)
-            labels[i0:i1] = torch.asarray(batch_labels).to(labels)
+                # update labels... torch sparse has no argmax(), so need scipy
+                # or cupy. scipy is a big slowdown here, so cupy if possible.
+                if is_gpu and HAVE_CUPY:
+                    resps_cupy = coo_to_cupy(resps).tocsc()
+                    batch_labels = resps_cupy.argmax(axis=1).squeeze()
+                else:
+                    resps_scipy = coo_to_scipy(resps)
+                    batch_labels = resps_scipy.argmax(axis=1, explicit=True)
+                labels[i0:i1] = torch.asarray(batch_labels).to(labels)
 
             # get sigmasq
             w = resps.values().clone()

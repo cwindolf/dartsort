@@ -48,10 +48,13 @@ class DARTsortSorting:
 
     def __post_init__(self):
         self.times_samples = np.asarray(self.times_samples, dtype=np.int64)
+        n_spikes = self.times_samples.shape[0]
+        assert self.times_samples.ndim == 1
 
         if self.labels is None:
             self.labels = np.zeros_like(self.times_samples)
         self.labels = np.asarray(self.labels, dtype=np.int64)
+        assert self.labels.shape == (n_spikes,)
         self._n_units = None
         if self.parent_h5_path is not None:
             self.parent_h5_path = Path(self.parent_h5_path).absolute()
@@ -66,7 +69,10 @@ class DARTsortSorting:
             for k in self.extra_features:
                 v = self.extra_features[k] = np.asarray(self.extra_features[k])
                 if not (k.endswith("channel_index") or k == "geom"):
-                    assert v.shape[0] == len(self.times_samples)
+                    if not v.shape[0] == n_spikes:
+                        raise ValueError(
+                            f"Feature {k} has strange shape {v.shape}, since {n_spikes=}."
+                        )
                 assert not hasattr(self, k)
                 self.__dict__[k] = v
 
@@ -129,18 +135,19 @@ class DARTsortSorting:
         return self.mask(valid)
 
     @classmethod
-    def load(cls, sorting_npz):
+    def load(cls, sorting_npz, feature_keys=None):
         extra_features = None
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
             labels = data["labels"]
             sampling_frequency = data["sampling_frequency"]
-            parent_h5_path = feature_keys = None
+            parent_h5_path = None
             if "parent_h5_path" in data:
                 parent_h5_path = str(data["parent_h5_path"])
-                feature_keys = list(map(str, data["feature_keys"]))
-            elif "feature_keys" in data:
+                if feature_keys is None:
+                    feature_keys = list(map(str, data["feature_keys"]))
+            elif "feature_keys" in data and feature_keys is None:
                 feature_keys = list(map(str, data["feature_keys"]))
                 extra_features = {k: data[k] for k in feature_keys}
 

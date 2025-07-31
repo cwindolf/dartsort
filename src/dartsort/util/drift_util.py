@@ -527,7 +527,6 @@ def get_waveforms_on_static_channels(
 
     # ok, now we can return to non-unique world
     shifted_channels = uniq_shifted_channels[uniq_inv]
-    print(f"get_waveforms_on_static_channels {shifted_channels[0]=}")
 
     #     # shape is n_spikes, c, spatial dim
     #     moving_positions = padded_geom[channel_index[main_channels]] + shifts[:, None, :]

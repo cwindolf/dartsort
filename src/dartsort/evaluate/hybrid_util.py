@@ -338,6 +338,12 @@ def load_dartsort_step_sortings(
             else:
                 warnings.warn(f"Initial {npy} does not exist.")
                 yield None, None
+
+            other_initial_npys = sorted(sorting_dir.glob("initial_*_labels.npy"))
+            for npy in other_initial_npys:
+                npy = sorting_dir / npy
+                stem = npy.stem.removesuffix("_labels")
+                yield (stem, dataclasses.replace(st0, labels=np.load(npy)))
         else:
             yield (h5.stem, st0)
 

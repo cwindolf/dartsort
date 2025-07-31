@@ -366,9 +366,9 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
-    n_main_channel_pcs: int = 5
-    pc_scale: float = 10.0
-    pc_transform: Literal["log", "sqrt"] | None = "sqrt"
+    n_main_channel_pcs: int = 3
+    pc_scale: float = 2.5
+    pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
     workers: int = 5
@@ -393,15 +393,16 @@ class ClusteringConfig:
     random_seed: int = 0
 
     # density peaks parameters
+    knn_k : int | None = None
     sigma_local: float = 5.0
     sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
-    n_neighbors_search: int = 20
+    n_neighbors_search: int = 50
     radius_search: float = 25.0
     remove_clusters_smaller_than: int = 50
     noise_density: float = 0.0
     outlier_radius: float = 25.0
     outlier_neighbor_count: int = 10
-    kdtree_subsample_max_size: int = 2_000_000
+    kdtree_subsample_max_size: int = 100_000
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 5
@@ -437,6 +438,7 @@ class RefinementConfig:
     pc_merge_metric: str = "cosine"
     pc_merge_spikes_per_unit: int = 1024
     pc_merge_linkage: str = "complete"
+    pc_merge_rank: int = 5
 
     # -- gmm parameters
     # noise params

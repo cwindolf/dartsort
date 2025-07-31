@@ -132,7 +132,7 @@ class SimpleMatrixFeatures:
             elif clustering_features_cfg.pc_transform == "sqrt":
                 pcs = signed_sqrt_transform(pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale)
             else:
-                assert clustering_features_cfg.pc_transform is None
+                assert clustering_features_cfg.pc_transform in ("none", None)
             pcs *= clustering_features_cfg.pc_scale
             if torch.is_tensor(pcs):
                 pcs = pcs.numpy(force=True)

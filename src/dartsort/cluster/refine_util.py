@@ -310,6 +310,7 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     kept = data.kept_indices
     n = len(kept)
     x = data._train_extract_features.view(n, -1, data.n_channels_extract)
+    x = x[:, :refinement_cfg.pc_merge_rank]
     labels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     means = spiketorch.average_by_label(
         x, labels, data._train_extract_channels, data.n_channels
@@ -318,6 +319,9 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     # compute distances
     if refinement_cfg.pc_merge_metric == "cosine":
         dists = spiketorch.cosine_distance(means)
+    elif refinement_cfg.pc_merge_metric == "euclidean":
+        means = means.reshape(len(means), -1)
+        dists = torch.cdist(means, means)
     else:
         raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
     dists = dists.numpy(force=True)

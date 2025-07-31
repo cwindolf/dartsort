@@ -413,7 +413,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # initialize me
         missing_ids = self.missing_ids()
         if len(missing_ids):
-            self.m_step(show_progress=step_progress, fit_ids=missing_ids)
+            self.m_step(
+                likelihoods=lls, show_progress=step_progress, fit_ids=missing_ids
+            )
         self.cleanup()
 
         # update from my stack
@@ -527,8 +529,13 @@ class SpikeMixtureModel(torch.nn.Module):
         prev_elbo = -np.inf
         done = False
         tmm_labels = None
+        # TODO: move this logic into tmm.
         for j in its:
             is_final = done or j == n_iter - 1
+            if self.tmm.n_random_search_iter and j <= self.tmm.n_random_search_iter:
+                self.tmm.candidates.search_type = "random"
+            else:
+                self.tmm.candidates.search_type = self.tmm.search_type
             if is_final or algorithm == "em":
                 res = self.tmm.step(
                     show_progress=step_progress,
