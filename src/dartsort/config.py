@@ -166,7 +166,7 @@ class DeveloperConfig(DARTsortUserConfig):
     refinement_strategy: str = "gmm"
     recluster_after_first_matching: bool = False
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    signal_rank: Annotated[int, Field(ge=0)] = 0
+    signal_rank: Annotated[int, Field(ge=0)] = 5
     gmm_euclidean_threshold: float = 5.0
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.75
@@ -174,7 +174,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_cosine_complete_only: bool = False
     gmm_noise_fp_correction: bool = False
 
-    pre_refinement_merge: bool = False
+    pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "cosine"
     pre_refinement_merge_threshold: float = 0.025
 

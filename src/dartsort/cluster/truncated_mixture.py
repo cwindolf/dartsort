@@ -62,6 +62,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         exact_kl=True,
         search_type="topk",
         random_search_max_distance=0.5,
+        n_random_search_iter=20,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
@@ -97,6 +98,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.min_log_prop = min_log_prop
         self.metric = metric
         self.search_type = search_type
+        self.n_random_search_iter = n_random_search_iter
         if search_type == "random":
             assert metric == "cosine"
 
@@ -111,7 +113,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
             search_neighborhood_steps=search_neighborhood_steps,
             explore_neighborhood_steps=explore_neighborhood_steps,
-            search_type=search_type,
+            search_type="random" if n_random_search_iter else search_type,
             random_search_max_distance=random_search_max_distance,
         )
 

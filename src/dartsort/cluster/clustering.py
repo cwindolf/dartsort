@@ -190,6 +190,7 @@ clustering_strategies["grid_snap"] = GridSnapClusterer
 class DensityPeaksClusterer(Clusterer):
     def __init__(
         self,
+        knn_k=None,
         sigma_local=5.0,
         sigma_regional: float | None = 25.0,
         n_neighbors_search=20,
@@ -205,6 +206,7 @@ class DensityPeaksClusterer(Clusterer):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.knn_k = knn_k
         self.uhdversion = uhdversion
         self.sigma_local = sigma_local
         self.sigma_regional = sigma_regional
@@ -230,6 +232,7 @@ class DensityPeaksClusterer(Clusterer):
     ):
         uhdversion = clustering_cfg.cluster_strategy == "density_peaks_uhdversion"
         return cls(
+            knn_k=clustering_cfg.knn_k,
             sigma_local=clustering_cfg.sigma_local,
             sigma_regional=clustering_cfg.sigma_regional,
             n_neighbors_search=clustering_cfg.n_neighbors_search,
@@ -263,11 +266,12 @@ class DensityPeaksClusterer(Clusterer):
         if not self.uhdversion:
             res = density.density_peaks(
                 X_fit,
+                knn_k=self.knn_k,
                 sigma_local=self.sigma_local,
                 sigma_regional=self.sigma_regional,
                 n_neighbors_search=self.n_neighbors_search,
                 radius_search=self.radius_search,
-                remove_clusters_smaller_than=self.remove_clusters_smaller_than,
+                remove_clusters_smaller_than=0,
                 noise_density=self.noise_density,
                 outlier_radius=self.outlier_radius,
                 outlier_neighbor_count=self.outlier_neighbor_count,
@@ -304,6 +308,11 @@ class DensityPeaksClusterer(Clusterer):
             labels = cluster_util.combine_disjoint(
                 choices, labels, not_choices, other_labels
             )
+        
+        labels = cluster_util.decrumb(
+            labels, min_size=self.remove_clusters_smaller_than, in_place=True
+        )
+            
 
         return labels
 

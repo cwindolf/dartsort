@@ -154,7 +154,7 @@ def _te_batch_e(
         (lls.shape[0], n_candidates), dtype=torch.long, device=lls.device
     )
     topk_out = (all_lls[:, :n_candidates], all_inds)
-    toplls, topinds = torch.topk(lls, n_candidates, dim=1, sorted=False, out=topk_out)
+    toplls, topinds = torch.topk(lls, n_candidates, dim=1, out=topk_out)
 
     # -- compute Q
     # all_lls = torch.concatenate((toplls, noise_lls.unsqueeze(1)), dim=1)

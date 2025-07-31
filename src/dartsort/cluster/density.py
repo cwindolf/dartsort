@@ -263,16 +263,47 @@ def guess_mode(
     return np.argmax(density)
 
 
+def knn_density(kdtree, X, k, distance_upper_bound, batch_size=2 ** 12, workers=-1, sigma=None):
+    n, d = X.shape
+    density = np.full(n, -np.inf, dtype='float32')
+
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        distances, indices = kdtree.query(
+            X[i0:i1],
+            k=k,
+            distance_upper_bound=distance_upper_bound,
+            workers=workers,
+        )
+        if sigma is None:
+            np.nan_to_num(distances, copy=False, posinf=-np.inf)
+            n_neighbs = (indices < kdtree.n).sum(axis=1)
+            max_dist = distances[:, 1:].max(1)
+            np.nan_to_num(max_dist, copy=False, posinf=-np.inf)
+            # forget the sphere factor and the factor of n.
+            density[i0:i1] = n_neighbs / (max_dist ** d)
+        else:
+            kernel = np.square(distances, out=distances)
+            kernel *= -(sigma ** -2)
+            np.exp(kernel, out=kernel)
+            density[i0:i1] = kernel.sum(1)
+
+    return density
+
+
 def density_peaks(
     X,
     kdtree=None,
     density=None,
+    knn_k=None,
+    use_knn=False,
+    use_histograms=False,
     sigma_local=5.0,
     sigma_regional=None,
     outlier_neighbor_count=10,
     outlier_radius=25.0,
     n_neighbors_search=20,
-    radius_search=5.0,
+    radius_search=25.0,
     noise_density=0.0,
     remove_clusters_smaller_than=10,
     remove_borders=False,
@@ -288,6 +319,9 @@ def density_peaks(
      - Noise: you can throw away points with too low of a density (ratio)
     """
     n = len(X)
+    radius_search = radius_search * np.sqrt(X.shape[1])
+    if outlier_radius is not None:
+        outlier_radius = outlier_radius * np.sqrt(X.shape[1])
     inliers, kdtree = kdtree_inliers(
         X,
         kdtree=kdtree,
@@ -297,19 +331,28 @@ def density_peaks(
     )
 
     if density is None:
-        sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
-        density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
-        if sigma_regional is not None:
-            d0, d1 = density
-            assert isinstance(d0, np.ndarray)
-            assert isinstance(d1, np.ndarray)
-            d1_0 = np.flatnonzero(d1 == 0)
-            assert np.all(d0[d1_0] == 0.0)
-            d1[d1_0] = 1.0
-            density = d0
-            density /= d1
+        if use_knn:
+            density = knn_density(
+                kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
+            )
+        elif use_histograms:
+            sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
+            density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
+            if sigma_regional is not None:
+                d0, d1 = density
+                assert isinstance(d0, np.ndarray)
+                assert isinstance(d1, np.ndarray)
+                d1_0 = np.flatnonzero(d1 == 0)
+                assert np.all(d0[d1_0] == 0.0)
+                d1[d1_0] = 1.0
+                density = d0
+                density /= d1
+            else:
+                density = density[0]
         else:
-            density = density[0]
+            density = knn_density(
+                kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers, sigma=sigma_local
+            )
 
     nhdn = nearest_higher_density_neighbor(
         kdtree,

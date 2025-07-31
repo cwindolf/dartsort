@@ -393,6 +393,7 @@ class ClusteringConfig:
     random_seed: int = 0
 
     # density peaks parameters
+    knn_k : int | None = None
     sigma_local: float = 5.0
     sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
     n_neighbors_search: int = 50
@@ -437,6 +438,7 @@ class RefinementConfig:
     pc_merge_metric: str = "cosine"
     pc_merge_spikes_per_unit: int = 1024
     pc_merge_linkage: str = "complete"
+    pc_merge_rank: int = 5
 
     # -- gmm parameters
     # noise params
