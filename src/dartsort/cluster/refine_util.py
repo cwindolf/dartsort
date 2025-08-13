@@ -70,13 +70,14 @@ def gmm_refine(
         rgeom=data.prgeom[:-1].numpy(force=True),
     )
     noise_log_priors = get_noise_log_priors(noise, sorting, refinement_cfg)
+    initialize_at_rank_0 = refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
     gmm = SpikeMixtureModel(
         data,
         noise,
         min_count=refinement_cfg.min_count,
         n_threads=computation_cfg.actual_n_jobs(),
         n_spikes_fit=refinement_cfg.n_spikes_fit,
-        ppca_rank=refinement_cfg.signal_rank,
+        ppca_rank=0 if initialize_at_rank_0 else refinement_cfg.signal_rank,
         ppca_inner_em_iter=refinement_cfg.ppca_inner_em_iter,
         n_em_iters=refinement_cfg.n_em_iters,
         distance_metric=refinement_cfg.distance_metric,
@@ -100,12 +101,21 @@ def gmm_refine(
         prior_scales_mean=refinement_cfg.prior_scales_mean,
         laplace_ard=refinement_cfg.laplace_ard,
         kmeans_k=refinement_cfg.kmeansk,
+        cl_alpha=refinement_cfg.cl_alpha,
         noise_log_priors=noise_log_priors,
     )
 
     step_labels = {}
     intermediate_split = "full" if return_step_labels else "kept"
     gmm.log_liks = None
+
+    if initialize_at_rank_0:
+        if refinement_cfg.truncated:
+            res = gmm.tvi(final_split=intermediate_split, lls=gmm.log_liks)
+            gmm.log_liks = res["log_liks"]
+        else:
+            gmm.log_liks = gmm.em(final_split=intermediate_split)
+        gmm.change_rank(refinement_cfg.signal_rank)
 
     for it in range(refinement_cfg.n_total_iters):
         if refinement_cfg.truncated:

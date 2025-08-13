@@ -84,11 +84,20 @@ def ptp(waveforms, dim=1, keepdims=False):
 def elbo(Q, log_liks, reduce_mean=True, dim=1):
     Qpos = Q > 0
     logQ = torch.where(Qpos, Q, _1).log_()
-    log_liks = torch.where(Qpos, log_liks, _0)
-    oelbo = log_liks.add_(logQ).mul_(Q).sum(dim=dim)
+    logP = torch.where(Qpos, log_liks, _0)
+    oelbo = logP.sub_(logQ).mul_(Q).sum(dim=dim)
     if reduce_mean:
         oelbo = oelbo.mean()
     return oelbo
+
+
+def entropy(Q, reduce_mean=True, dim=1):
+    Qpos = Q > 0
+    logQ = torch.where(Qpos, Q, _1).log_()
+    H = logQ.mul_(Q).sum(dim=dim)
+    if reduce_mean:
+        H = H.mean()
+    return H.neg_()
 
 
 def taper(waveforms, t_start=10, t_end=20, dim=1):
@@ -457,15 +466,26 @@ def nancov(
     return cov
 
 
-def cosine_distance(means):
+def cosine_distance(means, means_b=None):
     means = means.reshape(means.shape[0], -1)
-    dot = means @ means.T
+    sym = means_b is None
+    if sym:
+        means_b = means
+    else:
+        means_b = means_b.reshape(means_b.shape[0], -1)
+    dot = means @ means_b.T
     norm = means.square().sum(1).sqrt_()
     norm[norm == 0] = 1
+    if sym:
+        norm_b = norm
+    else:
+        norm_b = means_b.square().sum(1).sqrt_()
+        norm_b[norm_b == 0] = 1
     dot /= norm[:, None]
-    dot /= norm[None, :]
+    dot /= norm_b[None, :]
     dist = torch.subtract(_1, dot, out=dot)
-    dist.diagonal().fill_(0.0)
+    if sym:
+        dist.diagonal().fill_(0.0)
     return dist
 
 
