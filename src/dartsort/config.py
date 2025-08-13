@@ -202,7 +202,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_amp_feat: bool = False
     initial_pc_feats: int = 3
     initial_pc_transform: str = "none"
-    initial_pc_scale: float = 2.5
+    initial_pc_scale: float = 5.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5

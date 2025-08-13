@@ -367,7 +367,7 @@ class ClusteringFeaturesConfig:
     amp_log_c: float = 5.0
     amp_scale: float = 50.0
     n_main_channel_pcs: int = 3
-    pc_scale: float = 2.5
+    pc_scale: float = 5.0
     pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
@@ -393,7 +393,7 @@ class ClusteringConfig:
     random_seed: int = 0
 
     # density peaks parameters
-    knn_k : int | None = None
+    knn_k: int | None = None
     sigma_local: float = 5.0
     sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
     n_neighbors_search: int = 50
@@ -411,7 +411,7 @@ class ClusteringConfig:
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
-    use_hellinger: bool = True
+    use_hellinger: bool = False
     mop: bool = False
 
     # hdbscan parameters
@@ -451,7 +451,7 @@ class RefinementConfig:
     # model params
     channels_strategy: Literal["count", "all"] = "count"
     min_count: int = 50
-    signal_rank: int = 0
+    signal_rank: int = 5
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
     distance_metric: Literal[
@@ -546,29 +546,44 @@ class ComputationConfig:
         return torch.cuda.device_count() > 1
 
 
+# default configs, used as defaults for kwargs in main.py etc
+default_waveform_cfg = WaveformConfig()
+default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
+default_subtraction_cfg = SubtractionConfig()
+default_thresholding_cfg = ThresholdingConfig()
+default_template_cfg = TemplateConfig()
+default_clustering_cfg = ClusteringConfig()
+default_clustering_features_cfg = ClusteringFeaturesConfig()
+default_matching_cfg = MatchingConfig()
+default_motion_estimation_cfg = MotionEstimationConfig()
+default_computation_cfg = ComputationConfig()
+default_refinement_cfg = RefinementConfig(skip_first_split=True)
+default_universal_cfg = UniversalMatchingConfig()
+default_initial_refinement_cfg = RefinementConfig(one_split_only=True)
+default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
+
+
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
-    waveform_cfg: WaveformConfig = WaveformConfig()
-    featurization_cfg: FeaturizationConfig = FeaturizationConfig(
-        learn_cleaned_tpca_basis=True
-    )
+    waveform_cfg: WaveformConfig = default_waveform_cfg
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg
     initial_detection_cfg: (
         SubtractionConfig
         | MatchingConfig
         | ThresholdingConfig
         | UniversalMatchingConfig
-    ) = SubtractionConfig()
-    template_cfg: TemplateConfig = TemplateConfig()
-    clustering_cfg: ClusteringConfig = ClusteringConfig()
-    clustering_features_cfg: ClusteringFeaturesConfig = ClusteringFeaturesConfig()
-    initial_refinement_cfg: RefinementConfig = RefinementConfig(one_split_only=True)
-    pre_refinement_cfg: RefinementConfig | None = None
-    refinement_cfg: RefinementConfig = RefinementConfig(skip_first_split=True)
-    matching_cfg: MatchingConfig = MatchingConfig()
-    motion_estimation_cfg: MotionEstimationConfig = MotionEstimationConfig()
-    computation_cfg: ComputationConfig = ComputationConfig()
+    ) = default_subtraction_cfg
+    template_cfg: TemplateConfig = default_template_cfg
+    clustering_cfg: ClusteringConfig = default_clustering_cfg
+    clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
+    initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
+    pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    refinement_cfg: RefinementConfig = default_refinement_cfg
+    matching_cfg: MatchingConfig = default_matching_cfg
+    motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
+    computation_cfg: ComputationConfig = default_computation_cfg
 
     # high level behavior
     detect_only: bool = False
@@ -827,20 +842,7 @@ def to_internal_config(cfg):
     )
 
 
-# default configs, used as defaults for kwargs in main.py etc
-default_waveform_cfg = WaveformConfig()
-default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
-default_subtraction_cfg = SubtractionConfig()
-default_thresholding_cfg = ThresholdingConfig()
-default_template_cfg = TemplateConfig()
-default_clustering_cfg = ClusteringConfig()
-default_clustering_features_cfg = ClusteringFeaturesConfig()
-default_matching_cfg = MatchingConfig()
-default_motion_estimation_cfg = MotionEstimationConfig()
-default_computation_cfg = ComputationConfig()
 default_dartsort_cfg = DARTsortInternalConfig()
-default_refinement_cfg = RefinementConfig()
-default_universal_cfg = UniversalMatchingConfig()
 
 # configs which are commonly used for specific tasks
 coarse_template_cfg = TemplateConfig(superres_templates=False)

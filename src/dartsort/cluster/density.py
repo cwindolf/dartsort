@@ -351,7 +351,7 @@ def density_peaks(
                 density = density[0]
         else:
             density = knn_density(
-                kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers, sigma=sigma_local
+                kdtree, X, k=n_neighbors_search, distance_upper_bound=radius_search, workers=workers, sigma=sigma_local
             )
 
     nhdn = nearest_higher_density_neighbor(
@@ -462,7 +462,7 @@ def gmm_density_peaks(
     max_samples=2_000_000,
     noise_const_dims=None,
     show_progress=True,
-    use_hellinger=True,
+    use_hellinger=False,
     gibbs_lls=False,
     mop=True,
     n_neighbors_search=20,

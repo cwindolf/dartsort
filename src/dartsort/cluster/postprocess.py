@@ -87,7 +87,6 @@ def realign_and_chuck_noisy_template_units(
         spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=h5_path,
     )
     if template_save_folder is not None:
@@ -129,7 +128,6 @@ def reorder_by_depth(sorting, template_data):
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=template_data.parent_sorting_hdf5_path,
     )
     return sorting, template_data
@@ -273,7 +271,6 @@ def postprocess(
         raw_std_dev=raw_std_dev,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        spike_length_samples=template_data.spike_length_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
     if template_npz_path is not None:
