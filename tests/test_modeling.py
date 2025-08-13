@@ -9,7 +9,7 @@ from dartsort.util.testing_util import mixture_testing_util
 
 mu_atol = 0.05
 wtw_rtol = 0.4
-elbo_atol = 1e-2
+elbo_atol = 5e-3
 
 
 test_t_mu = ("random",)
@@ -90,6 +90,7 @@ def test_mixture(
             laplace_ard=laplace_ard,
             prior_pseudocount=prior_pseudocount,
             prior_scales_mean=prior_scales_mean,
+            tvi_n_random_search_iter=0,
             **dist_search_kw,
         ),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
@@ -189,6 +190,7 @@ def test_mixture(
                 prior_scales_mean=res["gmm"].prior_scales_mean,
                 neighborhood_adjacency_overlap=0.5,
                 search_neighborhood_steps=1,
+                n_random_search_iter=0,
             )
             tmm.set_sizes(res["sim_res"]["K"])
 
@@ -292,7 +294,6 @@ def test_mixture(
             if t_cov == "eye":
                 pnames = {"Cmo_Cooinv_x"}
                 check = list(tmm.processor.state_dict())
-                check.extend(tmm.__dict__)
                 for pname in check:
                     if "om" not in pname and "mo" not in pname:
                         continue

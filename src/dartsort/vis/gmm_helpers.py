@@ -8,9 +8,11 @@ from .colors import glasbey1024
 from .waveforms import geomplot
 
 
-def get_neighbors(gmm, unit_id, n_neighbors=5):
+def get_neighbors(gmm, unit_id, n_neighbors=5, kind=None):
     ids, means, covs, logdets = gmm.stack_units(use_cache=True, mean_only=False)
-    dists = gmm[unit_id].divergence(means, covs, logdets, kind="reverse_kl")
+    if kind is None:
+        kind = gmm.distance_metric
+    dists = gmm[unit_id].divergence(means, covs, logdets, kind=kind)
     dists = dists.view(-1)
     order = ids[torch.argsort(dists).numpy(force=True)]
     order = order.squeeze()

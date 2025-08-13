@@ -452,6 +452,8 @@ class RefinementConfig:
     channels_strategy: Literal["count", "all"] = "count"
     min_count: int = 50
     signal_rank: int = 0
+    initialize_at_rank_0: bool = True
+    cl_alpha: float = 1.0
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
     distance_metric: Literal[
@@ -464,9 +466,10 @@ class RefinementConfig:
     merge_distance_threshold: float = 0.75
     # if None, switches to bimodality
     criterion_threshold: float | None = 0.0
-    criterion: Literal["heldout_loglik", "heldout_elbo", "loglik", "elbo"] = (
-        "heldout_elbo"
-    )
+    criterion: Literal[
+        "heldout_loglik", "heldout_elbo", "loglik", "elbo",
+        "heldout_ecl", "heldout_ecelbo", "ecl", "ecelbo",
+    ] = "heldout_ecl"
     merge_bimodality_threshold: float = 0.05
     refit_before_criteria: bool = False
     n_em_iters: int = 50
@@ -741,6 +744,7 @@ def to_internal_config(cfg):
         kmeansk=cfg.kmeansk,
         prior_scales_mean=cfg.prior_scales_mean,
         noise_fp_correction=cfg.gmm_noise_fp_correction,
+        cl_alpha=cfg.gmm_cl_alpha,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank

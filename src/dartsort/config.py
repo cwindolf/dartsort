@@ -187,8 +187,10 @@ class DeveloperConfig(DARTsortUserConfig):
 
     criterion_threshold: float = 0.0
     criterion: Literal[
-        "heldout_loglik", "heldout_elbo", "loglik", "elbo"
-    ] = "heldout_elbo"
+        "heldout_loglik", "heldout_elbo", "loglik", "elbo",
+        "heldout_ecl", "heldout_ecelbo", "ecl", "ecelbo",
+    ] = "heldout_ecl"
+    gmm_cl_alpha: float = 1.0
     merge_bimodality_threshold: float = 0.05
     n_refinement_iters: int = 3
     n_em_iters: int = 50
