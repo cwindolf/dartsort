@@ -467,8 +467,14 @@ class RefinementConfig:
     # if None, switches to bimodality
     criterion_threshold: float | None = 0.0
     criterion: Literal[
-        "heldout_loglik", "heldout_elbo", "loglik", "elbo",
-        "heldout_ecl", "heldout_ecelbo", "ecl", "ecelbo",
+        "heldout_loglik",
+        "heldout_elbo",
+        "loglik",
+        "elbo",
+        "heldout_ecl",
+        "heldout_ecelbo",
+        "ecl",
+        "ecelbo",
     ] = "heldout_ecl"
     merge_bimodality_threshold: float = 0.05
     refit_before_criteria: bool = False

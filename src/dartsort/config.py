@@ -187,8 +187,14 @@ class DeveloperConfig(DARTsortUserConfig):
 
     criterion_threshold: float = 0.0
     criterion: Literal[
-        "heldout_loglik", "heldout_elbo", "loglik", "elbo",
-        "heldout_ecl", "heldout_ecelbo", "ecl", "ecelbo",
+        "heldout_loglik",
+        "heldout_elbo",
+        "loglik",
+        "elbo",
+        "heldout_ecl",
+        "heldout_ecelbo",
+        "ecl",
+        "ecelbo",
     ] = "heldout_ecl"
     gmm_cl_alpha: float = 1.0
     merge_bimodality_threshold: float = 0.05
@@ -234,7 +240,9 @@ class DeveloperConfig(DARTsortUserConfig):
     interpolation_kernel: str = "thinplate"
     interpolation_rq_alpha: float = 0.5
     interpolation_degree: int = 0
-    glasso_alpha: float | int | None = argfield(default=None, arg_type=int_or_float_or_none)
+    glasso_alpha: float | int | None = argfield(
+        default=None, arg_type=int_or_float_or_none
+    )
     laplace_ard: bool = False
     core_radius: float = 35.0
     min_cluster_size: int = 50
