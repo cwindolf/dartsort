@@ -590,9 +590,6 @@ class SpikeMixtureModel(torch.nn.Module):
         channels, counts = self.tmm.channel_occupancy(
             tmm_labels,
             min_count=self.channels_count_min,
-            # min_prop=0.05,
-            # count_per_unit=self.n_spikes_fit,
-            # neighborhoods=self.data.neighborhoods(neighborhood="core")[1],
             rg=self.rg,
         )
         for j in range(len(self.tmm.means)):
@@ -2008,6 +2005,7 @@ class SpikeMixtureModel(torch.nn.Module):
         distances = sym_function(distances, distances.T)
         distances = distances[np.triu_indices(len(distances), k=1)]
         finite = np.isfinite(distances)
+        print(f"{finite.any()=}")
         if not finite.any():
             return None, None, None, None, None
         if not finite.all():
@@ -2067,7 +2065,9 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         for i, (pa, pb, dist, nab) in its:
+            print(f"{pa=} {pb=} {dist=} {nab=} {max_distance=}")
             if not np.isfinite(dist) or dist > max_distance:
+                print("bail 0")
                 continue
 
             # check if should merge
@@ -2148,6 +2148,7 @@ class SpikeMixtureModel(torch.nn.Module):
             reevaluate_cur_liks=reevaluate_cur_liks,
         )
         return i, leaves, cluster_ids, brute_group_ids, brute_improvement, brute_overlap
+
 
     def brute_merge(
         self,

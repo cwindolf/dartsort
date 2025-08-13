@@ -265,19 +265,6 @@ def test_pconv(tmp_path):
         time_bin_centers_s=np.array([0.0, 1, 2]), displacement=[-1.0, 0, 1]
     )
 
-    # visualize shifted temps
-    # for tix in range(5):
-    #     for shift in (-1, 0, 1):
-    #         spatial_shifted = drift_util.get_waveforms_on_static_channels(
-    #             spat[tix][None],
-    #             reg_geom,
-    #             n_pitches_shift=np.array([shift]),
-    #             registered_geom=geom,
-    #             fill_value=0.0,
-    #         )
-    #         print(f"{shift=}")
-    #         print(f"{spatial_shifted=}")
-
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         pconvdb_path = pairwise_util.compressed_convolve_to_h5(
             Path(tdir) / "test.h5",

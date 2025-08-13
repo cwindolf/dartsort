@@ -34,13 +34,11 @@ class TemplateData:
 
     registered_geom: np.ndarray | None = None
     trough_offset_samples: int = 42
-    spike_length_samples: int = 121
 
     # always set if initialized from a sorting which has one
     parent_sorting_hdf5_path: str | None = None
 
     def __post_init__(self):
-        assert self.templates.shape[1] == self.spike_length_samples
         assert self.trough_offset_samples < self.spike_length_samples
 
         ntemp = len(self.templates)
@@ -58,6 +56,10 @@ class TemplateData:
         if self.registered_geom is not None:
             assert self.registered_geom.ndim == 2
             assert self.registered_geom.shape[0] == nc
+
+    @property
+    def spike_length_samples(self):
+        return self.templates.shape[1]
 
     def main_channels(self):
         amp_vecs = np.nan_to_num(np.ptp(self.templates, axis=1), nan=-np.inf)
@@ -101,7 +103,6 @@ class TemplateData:
             unit_ids=self.unit_ids,
             spike_counts=self.spike_counts,
             trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
         )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom
@@ -137,7 +138,6 @@ class TemplateData:
             ),
             registered_geom=self.registered_geom,
             trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
         )
 
     def coarsen(self):
@@ -211,6 +211,38 @@ class TemplateData:
         tsvd=None,
         computation_cfg=None,
     ):
+        return _from_config_with_realigned_sorting(
+            cls,
+            recording,
+            sorting,
+            template_cfg,
+            waveform_cfg=waveform_cfg,
+            save_folder=save_folder,
+            overwrite=overwrite,
+            motion_est=motion_est,
+            save_npz_name=save_npz_name,
+            localizations_dataset_name=localizations_dataset_name,
+            units_per_job=units_per_job,
+            tsvd=tsvd,
+            computation_cfg=computation_cfg,
+        )
+
+
+def _from_config_with_realigned_sorting(
+    cls,
+    recording,
+    sorting,
+    template_cfg,
+    waveform_cfg=default_waveform_cfg,
+    save_folder=None,
+    overwrite=False,
+    motion_est=None,
+    save_npz_name: str | None="template_data.npz",
+    localizations_dataset_name="point_source_localizations",
+    units_per_job=8,
+    tsvd=None,
+    computation_cfg=None,
+):
         if computation_cfg is None:
             computation_cfg = job_util.get_global_computation_config()
 
@@ -331,7 +363,6 @@ class TemplateData:
                 raw_std_dev=results["raw_std_devs"],
                 registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
                 parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         else:
@@ -343,7 +374,6 @@ class TemplateData:
                 raw_std_dev=results["raw_std_devs"],
                 registered_geom=rgeom,
                 trough_offset_samples=trough_offset_samples,
-                spike_length_samples=spike_length_samples,
                 parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             )
         if save_folder is not None:

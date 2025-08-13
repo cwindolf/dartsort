@@ -188,6 +188,29 @@ class BaseTemporalPCA(BaseWaveformModule):
         pca.temporal_slice = self.temporal_slice  # this is not standard
         return pca
 
+    @classmethod
+    def from_sklearn(cls, channel_index, pca, temporal_slice=None):
+        self = cls(
+            channel_index,
+            rank=pca.rank,
+            whiten=pca.whiten,
+            temporal_slice=temporal_slice,
+        )
+        self.initialize_from_sklearn(pca)
+        return self
+
+    def initialize_from_sklearn(self, pca):
+        if self.temporal_slice is None:
+            self.spike_length_samples = pca.mean.shape[0]
+        else:
+            # not really -- this is a hack.
+            self.spike_length_samples = self.temporal_slice.stop
+        self.initialize_spike_length_dependent_params()
+        self.mean.copy_(torch.from_numpy(pca.mean_))
+        self.components.copy_(torch.from_numpy(pca.components_))
+        self.whitener.copy_(torch.from_numpy(pca.whitener_)).sqrt_()
+        self._needs_fit = False
+
 
 class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
@@ -200,10 +223,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
         ) = get_channels_in_probe(waveforms, max_channels, self.channel_index)
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(
-            waveforms_in_probe,
-            waveforms,
-            channels_in_probe,
-            in_place=True,
+            waveforms_in_probe, waveforms, channels_in_probe, in_place=True
         )
 
 
@@ -257,9 +277,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             device=reconstructions_in_probe.device,
         )
         return set_channels_in_probe(
-            reconstructions_in_probe,
-            reconstructions,
-            channels_in_probe,
+            reconstructions_in_probe, reconstructions, channels_in_probe
         )
 
 

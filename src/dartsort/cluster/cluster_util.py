@@ -281,7 +281,6 @@ def decrumb(labels, min_size=5, in_place=False, flatten=True):
     units_sparse, counts_sparse = np.unique(labels_kept, return_counts=True)
     if not units_sparse.size:
         return labels
-    print(f"decrumb hi {units_sparse.min()=} {units_sparse.max()=}")
 
     k = units_sparse.max() + 1
     counts = np.zeros(k, dtype=counts_sparse.dtype)
