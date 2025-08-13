@@ -15,7 +15,7 @@ def detect_and_deduplicate(
     return_energies=False,
     detection_mask=None,
     trough_priority=None,
-    cumulant_order=0,
+    cumulant_order=None,
 ):
     """Detect and deduplicate peaks
 
@@ -47,7 +47,7 @@ def detect_and_deduplicate(
         peak times in samples relative to start of traces, along
         with corresponding channels
     """
-    if cumulant_order:
+    if cumulant_order is not None:
         # TODO: combine.
         return detect_and_deduplicate_2d_filters(
             traces,

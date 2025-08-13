@@ -174,7 +174,7 @@ class SubtractionConfig:
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
-    cumulant_order: int = 0
+    cumulant_order: int | None = None
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction

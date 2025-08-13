@@ -183,7 +183,7 @@ class DeveloperConfig(DARTsortUserConfig):
     truncated: bool = True
     overwrite_matching: bool = False
 
-    cumulant_order: int = 0
+    cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
 
     criterion_threshold: float = 0.0
     criterion: Literal[

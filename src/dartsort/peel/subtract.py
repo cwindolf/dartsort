@@ -61,7 +61,7 @@ class SubtractionPeeler(BasePeeler):
         n_singlechan_templates=10,
         singlechan_threshold=40.0,
         singlechan_alignment_padding=20,
-        cumulant_order=0,
+        cumulant_order=None,
         first_denoiser_max_waveforms_fit=250_000,
         first_denoiser_thinning=0.5,
         first_denoiser_temporal_jitter=3,
@@ -606,7 +606,7 @@ def subtract_chunk(
     max_iter=100,
     trough_priority=None,
     growth_tolerance=None,
-    cumulant_order=0,
+    cumulant_order=None,
     save_iteration=False,
     save_residnorm_decrease=False,
 ):

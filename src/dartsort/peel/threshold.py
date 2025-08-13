@@ -246,7 +246,7 @@ def threshold_chunk(
     time_jitter=0,
     trough_priority=None,
     spatial_jitter_channel_index=None,
-    cumulant_order=0,
+    cumulant_order=None,
     return_waveforms=True,
     rg=None,
     quiet=False,
