@@ -300,7 +300,7 @@ def detect_and_deduplicate_2d_filters(
         cum_traces = compute_sliding_2d_cumulant(inp.unsqueeze(0), cumulant_order, cumulant_win_size)
         cum_traces = cum_traces.unsqueeze(0)
     else:
-        cum_traces = None
+        cum_traces = traces.unsqueeze(0).unsqueeze(0)
 
     if(radiality is not None):
         radiality = radiality.unsqueeze(0).unsqueeze(0)

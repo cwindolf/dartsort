@@ -182,7 +182,7 @@ def postprocess(
     # merge
     merge_cfg = matching_cfg.template_merge_cfg
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
-        return sorting, template_data
+        return sorting, ensure_save(template_data, template_npz_path)
 
     merge_res = merge_templates(
         sorting=sorting,
@@ -209,7 +209,7 @@ def postprocess(
     ul, uc = np.unique(new_unit_ids, return_counts=True)
     needs_recompute = ul[uc > 1]
     if not needs_recompute.size:
-        return sorting, template_data
+        return sorting, ensure_save(template_data, template_npz_path)
     recompute_labels = np.where(
         np.isin(sorting.labels, needs_recompute), sorting.labels, -1
     )
@@ -273,12 +273,15 @@ def postprocess(
         trough_offset_samples=template_data.trough_offset_samples,
         parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
+    if depth_order:
+        sorting, template_data = reorder_by_depth(sorting, template_data)
+
+    return sorting, ensure_save(template_data, template_npz_path)
+
+
+def ensure_save(template_data, template_npz_path):
     if template_npz_path is not None:
         template_npz_path.parent.parent.mkdir(exist_ok=True)
         template_npz_path.parent.mkdir(exist_ok=True)
         template_data.to_npz(template_npz_path)
-
-    if depth_order:
-        sorting, template_data = reorder_by_depth(sorting, template_data)
-
-    return sorting, template_data
+    return template_data

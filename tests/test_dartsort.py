@@ -114,7 +114,7 @@ def test_cli_help():
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
-    cumulant_order = 0
+    cumulant_order = None
     if type.endswith("_cumulant"):
         cumulant_order = 2
         type = type.removesuffix("_cumulant")

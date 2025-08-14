@@ -95,8 +95,8 @@ class TemplateData:
             if parent_sorting_hdf5_path is not None:
                 parent_sorting_hdf5_path = parent_sorting_hdf5_path.item()
             data["parent_sorting_hdf5_path"] = parent_sorting_hdf5_path
-            if 'spike_length_samples' in data:
-                del data['spike_length_samples']  # todo: remove
+            if "spike_length_samples" in data:
+                del data["spike_length_samples"]  # todo: remove
             return cls(**data)
 
     def to_npz(self, npz_path):
@@ -172,10 +172,10 @@ class TemplateData:
         sorting,
         template_cfg,
         waveform_cfg=default_waveform_cfg,
-        save_folder: Path | None=None,
+        save_folder: Path | None = None,
         overwrite=False,
         motion_est=None,
-        save_npz_name: str | None="template_data.npz",
+        save_npz_name: str | None = "template_data.npz",
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
@@ -207,7 +207,7 @@ class TemplateData:
         save_folder=None,
         overwrite=False,
         motion_est=None,
-        save_npz_name: str | None="template_data.npz",
+        save_npz_name: str | None = "template_data.npz",
         localizations_dataset_name="point_source_localizations",
         units_per_job=8,
         tsvd=None,
@@ -239,149 +239,131 @@ def _from_config_with_realigned_sorting(
     save_folder=None,
     overwrite=False,
     motion_est=None,
-    save_npz_name: str | None="template_data.npz",
+    save_npz_name: str | None = "template_data.npz",
     localizations_dataset_name="point_source_localizations",
     units_per_job=8,
     tsvd=None,
     computation_cfg=None,
 ):
-        if computation_cfg is None:
-            computation_cfg = job_util.get_global_computation_config()
+    if computation_cfg is None:
+        computation_cfg = job_util.get_global_computation_config()
 
-        npz_path = None
-        if save_folder is not None:
-            save_folder = Path(save_folder)
-            if not save_folder.exists():
-                save_folder.mkdir()
-            npz_path = save_folder / save_npz_name
-            if npz_path.exists() and not overwrite:
-                return cls.from_npz(npz_path), sorting
+    npz_path = None
+    if save_folder is not None:
+        save_folder = Path(save_folder)
+        if not save_folder.exists():
+            save_folder.mkdir()
+        assert save_npz_name is not None
+        npz_path = save_folder / save_npz_name
+        if npz_path.exists() and not overwrite:
+            return cls.from_npz(npz_path), sorting
 
-        if sorting is None:
-            raise ValueError(
-                "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
-            )
-
-        parent_sorting_hdf5_path = sorting.parent_h5_path
-
-        fs = recording.sampling_frequency
-        trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
-        spike_length_samples = waveform_cfg.spike_length_samples(fs)
-        realign_max_sample_shift = int(template_cfg.realign_shift_ms * (fs / 1000))
-
-        motion_aware = (
-            (template_cfg.registered_templates or template_cfg.superres_templates)
-            and motion_est is not None
+    if sorting is None:
+        raise ValueError(
+            "TemplateData.from_config needs sorting!=None when its .npz file does not exist."
         )
-        has_localizations = hasattr(sorting, localizations_dataset_name)
-        if motion_aware and not has_localizations:
-            raise ValueError(
-                f"{_motion_error_prefix}"
-                "sorting must contain localizations in the attribute "
-                f"{localizations_dataset_name=}. Using load_simple_features"
-                "=True in DARTsortSorting.from_peeling_hdf5() would put them "
-                "there."
-            )
 
-        # load motion features if necessary
-        geom = recording.get_channel_locations()
-        spike_depths_um = None
-        if motion_aware and has_localizations:
-            # load spike depths
-            # TODO: relying on this index feels wrong
-            spike_depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
-            spike_x_um = sorting.extra_features[localizations_dataset_name][:, 0]
+    parent_sorting_hdf5_path = sorting.parent_h5_path
 
-        kwargs = dict(
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            spikes_per_unit=template_cfg.spikes_per_unit,
-            # realign handled in advance below, not needed in kwargs
-            # realign_peaks=False,
+    fs = recording.sampling_frequency
+    trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
+    spike_length_samples = waveform_cfg.spike_length_samples(fs)
+    realign_max_sample_shift = int(template_cfg.realign_shift_ms * (fs / 1000))
+
+    motion_aware = (
+        template_cfg.registered_templates or template_cfg.superres_templates
+    ) and motion_est is not None
+    has_localizations = hasattr(sorting, localizations_dataset_name)
+    if motion_aware and not has_localizations:
+        raise ValueError(
+            f"{_motion_error_prefix}"
+            "sorting must contain localizations in the attribute "
+            f"{localizations_dataset_name=}. Using load_simple_features"
+            "=True in DARTsortSorting.from_peeling_hdf5() would put them "
+            "there."
+        )
+
+    # load motion features if necessary
+    geom = recording.get_channel_locations()
+
+    kwargs = dict(
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+        spikes_per_unit=template_cfg.spikes_per_unit,
+        denoising_rank=template_cfg.denoising_rank,
+        denoising_fit_radius=template_cfg.denoising_fit_radius,
+        denoising_snr_threshold=template_cfg.denoising_snr_threshold,
+        device=computation_cfg.actual_device(),
+        units_per_job=units_per_job,
+        with_raw_std_dev=template_cfg.with_raw_std_dev,
+        reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
+    )
+    rgeom = geom
+    if template_cfg.registered_templates and motion_est is not None:
+        rgeom = drift_util.registered_geometry(geom, motion_est=motion_est)
+        kwargs["registered_geom"] = rgeom
+        kwargs["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
+            geom=geom, sorting=sorting, motion_est=motion_est
+        )
+
+    # realign before superres
+    if template_cfg.realign_peaks:
+        realign_kwargs = kwargs | dict(
             realign_max_sample_shift=realign_max_sample_shift,
-            denoising_rank=template_cfg.denoising_rank,
-            denoising_fit_radius=template_cfg.denoising_fit_radius,
-            denoising_snr_threshold=template_cfg.denoising_snr_threshold,
-            device=computation_cfg.actual_device(),
-            units_per_job=units_per_job,
-            with_raw_std_dev=template_cfg.with_raw_std_dev,
-            reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
+            spike_length_samples=1,
+            low_rank_denoising=False,
+            realign_peaks=True,
+            with_raw_std_dev=False,
+            n_jobs=computation_cfg.actual_n_jobs(),
         )
-        rgeom = geom
-        if template_cfg.registered_templates and motion_est is not None:
-            rgeom = drift_util.registered_geometry(
-                geom, motion_est=motion_est
-            )
-            kwargs["registered_geom"] = rgeom
-            assert spike_depths_um is not None
-            kwargs["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
-                spike_depths_um,
-                geom,
-                times_s=sorting.times_seconds,
-                motion_est=motion_est,
-            )
+        sorting = get_realigned_sorting(recording, sorting, **realign_kwargs)
+    kwargs["low_rank_denoising"] = template_cfg.low_rank_denoising
+    kwargs["realign_peaks"] = False
+    kwargs["denoising_tsvd"] = tsvd
 
-        # realign before superres
-        if template_cfg.realign_peaks:
-            sorting = get_realigned_sorting(
-                recording,
-                sorting,
-                **kwargs,
-                realign_peaks=True,
-                low_rank_denoising=False,
-                n_jobs=computation_cfg.actual_n_jobs(),
-            )
-        kwargs["low_rank_denoising"] = template_cfg.low_rank_denoising
-        kwargs["realign_peaks"] = False
-        kwargs["denoising_tsvd"] = tsvd
-
-        # handle superresolved templates
-        if template_cfg.superres_templates:
-            unit_ids, sorting = superres_sorting(
-                sorting,
-                sorting.times_seconds,
-                spike_depths_um,
-                geom,
-                motion_est=motion_est,
-                strategy=template_cfg.superres_strategy,
-                superres_bin_size_um=template_cfg.superres_bin_size_um,
-                min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
-                spike_x_um=spike_x_um,
-                adaptive_bin_size=template_cfg.adaptive_bin_size,
-            )
-
-        # main!
-        results = get_templates(
-            recording, sorting, n_jobs=computation_cfg.actual_n_jobs(), **kwargs
+    # handle superresolved templates
+    if template_cfg.superres_templates:
+        unit_ids, sorting = superres_sorting(
+            sorting,
+            geom,
+            motion_est=motion_est,
+            strategy=template_cfg.superres_strategy,
+            superres_bin_size_um=template_cfg.superres_bin_size_um,
+            min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
         )
 
-        # handle registered templates
-        if template_cfg.registered_templates and motion_est is not None:
-            obj = cls(
-                results["templates"],
-                unit_ids=results["unit_ids"],
-                spike_counts=results["spike_counts"],
-                spike_counts_by_channel=results["spike_counts_by_channel"],
-                raw_std_dev=results["raw_std_devs"],
-                registered_geom=rgeom,
-                trough_offset_samples=trough_offset_samples,
-                parent_sorting_hdf5_path=parent_sorting_hdf5_path,
-            )
-        else:
-            obj = cls(
-                results["templates"],
-                unit_ids=results["unit_ids"],
-                spike_counts=results["spike_counts"],
-                spike_counts_by_channel=results["spike_counts_by_channel"],
-                raw_std_dev=results["raw_std_devs"],
-                registered_geom=rgeom,
-                trough_offset_samples=trough_offset_samples,
-                parent_sorting_hdf5_path=parent_sorting_hdf5_path,
-            )
-        if save_folder is not None:
-            obj.to_npz(npz_path)
+    # main!
+    results = get_templates(
+        recording, sorting, n_jobs=computation_cfg.actual_n_jobs(), **kwargs
+    )
 
-        return obj, sorting
+    # handle registered templates
+    if template_cfg.registered_templates and motion_est is not None:
+        obj = cls(
+            results["templates"],
+            unit_ids=results["unit_ids"],
+            spike_counts=results["spike_counts"],
+            spike_counts_by_channel=results["spike_counts_by_channel"],
+            raw_std_dev=results["raw_std_devs"],
+            registered_geom=rgeom,
+            trough_offset_samples=trough_offset_samples,
+            parent_sorting_hdf5_path=parent_sorting_hdf5_path,
+        )
+    else:
+        obj = cls(
+            results["templates"],
+            unit_ids=results["unit_ids"],
+            spike_counts=results["spike_counts"],
+            spike_counts_by_channel=results["spike_counts_by_channel"],
+            raw_std_dev=results["raw_std_devs"],
+            registered_geom=rgeom,
+            trough_offset_samples=trough_offset_samples,
+            parent_sorting_hdf5_path=parent_sorting_hdf5_path,
+        )
+    if save_folder is not None:
+        obj.to_npz(npz_path)
+
+    return obj, sorting
 
 
 def get_chunked_templates(

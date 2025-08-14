@@ -212,7 +212,6 @@ class TemplateConfig:
     superres_bin_size_um: float = 10.0
     superres_bin_min_spikes: int = 5
     superres_strategy: str = "motion_estimate"
-    adaptive_bin_size: bool = False
 
     # low rank denoising?
     low_rank_denoising: bool = True

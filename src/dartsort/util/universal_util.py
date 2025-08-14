@@ -210,7 +210,6 @@ def singlechan_to_library(
         unit_ids=np.arange(nsct * nf),
         spike_counts=np.ones(nsct * nf, dtype=int),
         trough_offset_samples=trough_offset_samples,
-        spike_length_samples=nt,
     )
     return footprints, template_data
 

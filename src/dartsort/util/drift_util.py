@@ -312,13 +312,15 @@ def registered_template(
 
 
 def get_spike_pitch_shifts(
-    depths_um,
+    depths_um=None,
     geom=None,
     registered_depths_um=None,
     times_s=None,
+    sorting=None,
     motion_est=None,
     pitch=None,
     mode="round",
+    localizations_dataset_name="point_source_localizations",
 ):
     """Figure out coarse pitch shifts based on spike positions
 
@@ -328,9 +330,18 @@ def get_spike_pitch_shifts(
     if pitch is None:
         pitch = get_pitch(geom)
 
+    if depths_um is None:
+        assert sorting is not None
+        depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
+
     if registered_depths_um is None and motion_est is None:
-        probe_displacement = np.zeros_like(depths_um)
-    elif registered_depths_um is None:
+        return np.zeros(depths_um.shape, dtype=int)
+
+    if registered_depths_um is None:
+        assert motion_est is not None
+        if times_s is None:
+            assert sorting is not None
+            times_s = sorting.times_seconds
         probe_displacement = -motion_est.disp_at_s(times_s, depths_um)
     else:
         probe_displacement = registered_depths_um - depths_um

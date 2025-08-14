@@ -1238,6 +1238,7 @@ class MatchingPeaks:
         scalings: torch.Tensor | None = None,
         scores: torch.Tensor | None = None,
         device=None,
+        buf_size=None,
     ):
         self.n_spikes = n_spikes
         self._times = times
@@ -1246,16 +1247,20 @@ class MatchingPeaks:
         self._upsampling_indices = upsampling_indices
         self._scalings = scalings
         self._scores = scores
+        if times is not None:
+            self.cur_buf_size = len(times)
+        elif buf_size is None:
+            self.cur_buf_size = self.BUFFER_INIT
+        else:
+            self.cur_buf_size = buf_size
 
         if device is None and times is not None:
             device = times.device
         if times is None:
-            self.cur_buf_size = self.BUFFER_INIT
             self._times = torch.zeros(
                 self.cur_buf_size, dtype=torch.long, device=device
             )
         else:
-            self.cur_buf_size = times.numel()
             assert self.cur_buf_size == n_spikes
         if template_indices is None:
             self._template_indices = torch.zeros(
@@ -1282,21 +1287,21 @@ class MatchingPeaks:
 
         n_spikes = sum(p.n_spikes for p in peaks)
 
-        if peaks[0].times is not None:
+        if n_spikes and peaks[0].times is not None:
             times = torch.concatenate([p.times for p in peaks])
-        if peaks[0].objective_template_indices is not None:
+        if n_spikes and peaks[0].objective_template_indices is not None:
             objective_template_indices = torch.concatenate(
                 [p.objective_template_indices for p in peaks]
             )
-        if peaks[0].template_indices is not None:
+        if n_spikes and peaks[0].template_indices is not None:
             template_indices = torch.concatenate([p.template_indices for p in peaks])
-        if peaks[0].upsampling_indices is not None:
+        if n_spikes and peaks[0].upsampling_indices is not None:
             upsampling_indices = torch.concatenate(
                 [p.upsampling_indices for p in peaks]
             )
-        if peaks[0].scalings is not None:
+        if n_spikes and peaks[0].scalings is not None:
             scalings = torch.concatenate([p.scalings for p in peaks])
-        if peaks[0].scores is not None:
+        if n_spikes and peaks[0].scores is not None:
             scores = torch.concatenate([p.scores for p in peaks])
 
         return cls(
@@ -1307,6 +1312,7 @@ class MatchingPeaks:
             upsampling_indices=upsampling_indices,
             scalings=scalings,
             scores=scores,
+            buf_size=n_spikes,
         )
 
     @property
