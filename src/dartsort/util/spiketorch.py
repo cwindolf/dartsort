@@ -875,7 +875,7 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
         unique_labels, counts = labels.unique(return_counts=True)
         k = unique_labels.amax() + 1
         weights = x.new_zeros(k + 1)
-        weights[:k] = counts.to(weights).reciprocal()
+        weights[unique_labels] = counts.to(weights).reciprocal()
         weights = weights[labels]
     else:
         unique_labels = labels.unique()
