@@ -278,6 +278,8 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
             channel_index = h5["channel_index"][:]
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+    if not featurization_pipeline_pt.exists():
+        raise ValueError(f"No file at {featurization_pipeline_pt=}")
     pipeline = WaveformPipeline.from_state_dict_pt(
         geom, channel_index, featurization_pipeline_pt
     )

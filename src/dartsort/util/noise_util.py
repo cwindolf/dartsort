@@ -675,6 +675,7 @@ class EmbeddedNoise(torch.nn.Module):
         glasso_alpha: int | float | None = None,
         eps=1e-4,
         zero_radius: float | None = None,
+        svd_batch_size=256,
         rgeom=None,
     ):
         """Factory method to estimate noise model from TPCA snippets
@@ -1026,7 +1027,7 @@ def interpolate_residual_snippets(
         snippets = h5[residual_dataset_name][:]
         times_s = h5[residual_times_s_dataset_name][:]
     channel_index = torch.from_numpy(channel_index).to(tpca.components.device)
-    snippets = torch.from_numpy(snippets).to(tpca.components)
+    snippets = torch.from_numpy(snippets)
     times_s = torch.from_numpy(times_s).to(tpca.components)
 
     # tpca project
@@ -1034,6 +1035,7 @@ def interpolate_residual_snippets(
         snippets = snippets[:, tpca.temporal_slice]
     n, t, c = snippets.shape
     snippets = snippets.permute(0, 2, 1).reshape(n * c, t)
+    snippets = snippets.to(tpca.components)
     snippets = tpca._transform_in_probe(snippets)
     snippets = snippets.reshape(n, c, -1).permute(0, 2, 1)
     assert snippets.isfinite().all()

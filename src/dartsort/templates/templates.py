@@ -95,6 +95,8 @@ class TemplateData:
             if parent_sorting_hdf5_path is not None:
                 parent_sorting_hdf5_path = parent_sorting_hdf5_path.item()
             data["parent_sorting_hdf5_path"] = parent_sorting_hdf5_path
+            if 'spike_length_samples' in data:
+                del data['spike_length_samples']  # todo: remove
             return cls(**data)
 
     def to_npz(self, npz_path):
