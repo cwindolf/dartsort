@@ -1,7 +1,7 @@
 """A simple residual updating template matcher."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Self, Sequence, Literal
 from logging import getLogger
 
 import numpy as np
@@ -46,7 +46,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         coarse_approx_error_threshold=0.0,
         margin_factor=2,
         trough_offset_samples=42,
-        threshold=100.0,
+        threshold: float | Literal["fp_control"]=100.0,
         max_fp_per_input_spike=2.5,
         chunk_length_samples=30_000,
         n_seconds_fit=40,
@@ -59,6 +59,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fit_sampling="random",
         max_iter=1000,
         max_spikes_per_second=16384,
+        coarse_cd_iter=0,
         dtype=torch.float,
     ):
         n_templates, spike_length_samples = template_data.templates.shape[:2]
@@ -109,6 +110,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             if template_data.registered_geom is not None
             else self.n_channels
         )
+        self.coarse_cd_iter = coarse_cd_iter
         self.max_spikes_per_second = max_spikes_per_second
         assert channel_selection in ("template", "amplitude")
         self.channel_selection = channel_selection
@@ -512,6 +514,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_max_reweighting=matching_cfg.fit_max_reweighting,
             max_iter=matching_cfg.max_iter,
             max_spikes_per_second=matching_cfg.max_spikes_per_second,
+            coarse_cd_iter=matching_cfg.coarse_cd_iter,
         )
 
     def peel_chunk(
@@ -544,7 +547,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # process spike times and create return result
         match_results["times_samples"] += chunk_start_samples - left_margin
         if match_results["n_spikes"] > self.max_spikes_per_second:
-            raise ValueError(f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}.")
+            raise ValueError(
+                f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}."
+            )
 
         return match_results
 
@@ -669,56 +674,87 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # padded objective has an extra unit (for group_index) and refractory
         # padding (for easier implementation of enforce_refractory)
 
-        # manages buffers for spike train data (peak times, labels, etc)
-        peaks = MatchingPeaks(device=traces.device)
-
         # initialize convolution
         compressed_template_data.convolve(
             residual.T, padding=self.obj_pad_len, out=padded_conv
         )
 
         # main loop
-        for it in range(self.max_iter):
-            # find high-res peaks
-            new_peaks = self.find_peaks(
-                residual,
-                padded_conv,
-                padded_objective,
-                refrac_mask,
-                compressed_template_data,
-                unit_mask=unit_mask,
-            )
-            if new_peaks is None:
-                break
+        previous_peaks = current_peaks = None
+        for cd_it in range(self.coarse_cd_iter + 1):
+            initializing_cd = not cd_it
+            coarse_only = cd_it < self.coarse_cd_iter
 
-            # enforce refractoriness
-            self.enforce_refractory(
-                refrac_mask,
-                new_peaks.times + self.obj_pad_len,
-                new_peaks.objective_template_indices,
-                new_peaks.template_indices,
-            )
+            current_peaks = []
+            for it in range(self.max_iter):
+                if not initializing_cd:
+                    assert previous_peaks is not None
+                    prev_peaks = previous_peaks.pop()
+                    compressed_template_data.unsubtract(
+                        residual_padded,
+                        prev_peaks.times,
+                        prev_peaks.template_indices,
+                        prev_peaks.upsampling_indices,
+                        prev_peaks.scalings,
+                    )
+                    compressed_template_data.unsubtract_conv(
+                        padded_conv,
+                        prev_peaks.times,
+                        prev_peaks.template_indices,
+                        prev_peaks.upsampling_indices,
+                        prev_peaks.scalings,
+                        conv_pad_len=self.obj_pad_len,
+                    )
 
-            # subtract them
-            # TODO: made these nice peak objects and then just ignored them.
-            compressed_template_data.subtract(
-                residual_padded,
-                new_peaks.times,
-                new_peaks.template_indices,
-                new_peaks.upsampling_indices,
-                new_peaks.scalings,
-            )
-            compressed_template_data.subtract_conv(
-                padded_conv,
-                new_peaks.times,
-                new_peaks.template_indices,
-                new_peaks.upsampling_indices,
-                new_peaks.scalings,
-                conv_pad_len=self.obj_pad_len,
-            )
+                # find spikes
+                new_peaks = self.find_peaks(
+                    residual,
+                    padded_conv,
+                    padded_objective,
+                    refrac_mask,
+                    compressed_template_data,
+                    unit_mask=unit_mask,
+                    skip_fine=coarse_only,
+                )
+                if new_peaks is None:
+                    break
 
-            # update spike train
-            peaks.extend(new_peaks)
+                # enforce refractoriness
+                self.enforce_refractory(
+                    refrac_mask,
+                    new_peaks.times + self.obj_pad_len,
+                    new_peaks.objective_template_indices,
+                    new_peaks.template_indices,
+                )
+
+                # subtract them
+                # TODO: made these nice peak objects and then just ignored them.
+                compressed_template_data.subtract(
+                    residual_padded,
+                    new_peaks.times,
+                    new_peaks.template_indices,
+                    new_peaks.upsampling_indices,
+                    new_peaks.scalings,
+                )
+                compressed_template_data.subtract_conv(
+                    padded_conv,
+                    new_peaks.times,
+                    new_peaks.template_indices,
+                    new_peaks.upsampling_indices,
+                    new_peaks.scalings,
+                    conv_pad_len=self.obj_pad_len,
+                )
+
+                # update spike train
+                current_peaks.append(new_peaks)
+
+            # some of this round's peaks will be added back in before
+            # each iteration in the next round
+            previous_peaks = list(reversed(current_peaks))
+
+        # peaks are then the final current_peaks
+        assert current_peaks is not None
+        peaks = MatchingPeaks.concatenate(current_peaks)
 
         # subset to peaks inside the margin and sort for the caller
         max_time = traces.shape[0] - right_margin - 1
@@ -762,6 +798,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         refrac_mask,
         compressed_template_data,
         unit_mask=None,
+        skip_fine=False,
     ):
         # update the coarse objective
         torch.add(
@@ -813,6 +850,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             amp_scale_min=self.amp_scale_min,
             amp_scale_max=self.amp_scale_max,
             superres_index=self.superres_index,
+            skip=skip_fine,
         )
         if time_shifts is not None:
             times += time_shifts
@@ -869,8 +907,8 @@ class MatchingTemplateData:
     compressed_upsampled_temporal: torch.Tensor
     max_channels: torch.LongTensor
     pairwise_conv_db: CompressedPairwiseConv
-    shifts_a: Optional[torch.Tensor]
-    shifts_b: Optional[torch.Tensor]
+    shifts_a: torch.Tensor | None
+    shifts_b: torch.Tensor | None
     channel_selection: str = "template"
     channel_selection_index: torch.LongTensor | None = None
 
@@ -931,6 +969,7 @@ class MatchingTemplateData:
         scalings,
         conv_pad_len=0,
         batch_size=256,
+        sign=-1,
     ):
         n_spikes = times.shape[0]
         for batch_start in range(0, n_spikes, batch_size):
@@ -957,7 +996,10 @@ class MatchingTemplateData:
             )
             ix_template = template_indices_a[:, None]
             ix_time = times_sub[:, None] + (conv_pad_len + self.conv_lags)[None, :]
-            spiketorch.add_at_(conv, (ix_template, ix_time), pconvs, sign=-1)
+            spiketorch.add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
+
+    def unsubtract_conv(self, *args, **kwargs):
+        return self.subtract_conv(*args, **kwargs, sign=1)
 
     def fine_match(
         self,
@@ -970,6 +1012,7 @@ class MatchingTemplateData:
         amp_scale_min=None,
         amp_scale_max=None,
         superres_index=None,
+        skip=False,
     ):
         """Determine superres ids, temporal upsampling, and scaling
 
@@ -993,7 +1036,7 @@ class MatchingTemplateData:
         template_indices : array
         objs : array
         """
-        if (
+        if skip or (
             not self.coarse_objective
             and self.temporal_upsampling_factor == 1
             and not amp_scale_variance
@@ -1105,6 +1148,7 @@ class MatchingTemplateData:
         upsampling_indices,
         scalings,
         batch_templates=...,
+        sign=-1,
     ):
         """Subtract templates from traces."""
         compressed_up_inds = self.compressed_upsampling_map[
@@ -1118,15 +1162,23 @@ class MatchingTemplateData:
         )
         time_ix = times[:, None, None] + self.time_ix[None, :, None]
         spiketorch.add_at_(
-            traces, (time_ix, self.chan_ix[None, None, :]), batch_templates, sign=-1
+            traces, (time_ix, self.chan_ix[None, None, :]), batch_templates, sign=sign
         )
 
+    def unsubtract(self, *args, **kwargs):
+        return self.subtract(*args, **kwargs, sign=1)
+
     def get_collisioncleaned_waveforms(
-        self, residual_padded, peaks, channel_index, spike_length_samples=121, channels=None
+        self,
+        residual_padded,
+        peaks,
+        channel_index,
+        spike_length_samples=121,
+        channels=None,
     ):
         specified_chans = channels is not None
         if channels is None and self.channel_selection == "amplitude":
-            ci = self.channel_selection_index 
+            ci = self.channel_selection_index
         else:
             ci = channel_index
         if channels is None:
@@ -1157,28 +1209,34 @@ class MatchingTemplateData:
             return channels, waveforms
         else:
             channels0 = channels
-            chan_ixs = spiketorch.ptp(waveforms, dim=1).nan_to_num_(nan=-torch.inf).argmax(1)
+            chan_ixs = (
+                spiketorch.ptp(waveforms, dim=1).nan_to_num_(nan=-torch.inf).argmax(1)
+            )
             channels = ci[channels0].take_along_dim(chan_ixs[:, None], dim=1)
             assert channels.shape[1] == 1
             channels = channels[:, 0]
             return self.get_collisioncleaned_waveforms(
-                residual_padded, peaks, channel_index, spike_length_samples=spike_length_samples, channels=channels
+                residual_padded,
+                peaks,
+                channel_index,
+                spike_length_samples=spike_length_samples,
+                channels=channels,
             )
 
 
 class MatchingPeaks:
-    BUFFER_INIT: int = 1500
-    BUFFER_GROWTH: float = 1.5
+    BUFFER_INIT: int = 1000
+    BUFFER_GROWTH: float = 13.0 / 8.0
 
     def __init__(
         self,
         n_spikes: int = 0,
-        times: Optional[torch.LongTensor] = None,
-        objective_template_indices: Optional[torch.LongTensor] = None,
-        template_indices: Optional[torch.LongTensor] = None,
-        upsampling_indices: Optional[torch.LongTensor] = None,
-        scalings: Optional[torch.Tensor] = None,
-        scores: Optional[torch.Tensor] = None,
+        times: torch.Tensor | None = None,
+        objective_template_indices: torch.Tensor | None = None,
+        template_indices: torch.Tensor | None = None,
+        upsampling_indices: torch.Tensor | None = None,
+        scalings: torch.Tensor | None = None,
+        scores: torch.Tensor | None = None,
         device=None,
     ):
         self.n_spikes = n_spikes
@@ -1215,6 +1273,41 @@ class MatchingPeaks:
             )
         if scores is None:
             self._scores = torch.zeros(self.cur_buf_size, device=device)
+
+    @classmethod
+    def concatenate(cls, peaks: Sequence[Self]) -> Self:
+        peaks = list(peaks)
+        times = objective_template_indices = template_indices = None
+        upsampling_indices = scalings = scores = None
+
+        n_spikes = sum(p.n_spikes for p in peaks)
+
+        if peaks[0].times is not None:
+            times = torch.concatenate([p.times for p in peaks])
+        if peaks[0].objective_template_indices is not None:
+            objective_template_indices = torch.concatenate(
+                [p.objective_template_indices for p in peaks]
+            )
+        if peaks[0].template_indices is not None:
+            template_indices = torch.concatenate([p.template_indices for p in peaks])
+        if peaks[0].upsampling_indices is not None:
+            upsampling_indices = torch.concatenate(
+                [p.upsampling_indices for p in peaks]
+            )
+        if peaks[0].scalings is not None:
+            scalings = torch.concatenate([p.scalings for p in peaks])
+        if peaks[0].scores is not None:
+            scores = torch.concatenate([p.scores for p in peaks])
+
+        return cls(
+            n_spikes=n_spikes,
+            times=times,
+            objective_template_indices=objective_template_indices,
+            template_indices=template_indices,
+            upsampling_indices=upsampling_indices,
+            scalings=scalings,
+            scores=scores,
+        )
 
     @property
     def times(self):

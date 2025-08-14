@@ -254,6 +254,9 @@ class DeveloperConfig(DARTsortUserConfig):
     dpc_mop: bool = False
     n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
+    # matching
+    coarse_cd_iter: int = 0
+
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)

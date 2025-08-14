@@ -252,6 +252,7 @@ class MatchingConfig:
     fit_sampling: str = "random"
     fit_max_reweighting: float = 4.0
     max_spikes_per_second: int = 16384
+    coarse_cd_iter: int = 0
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
@@ -817,6 +818,7 @@ def to_internal_config(cfg):
         template_merge_cfg=TemplateMergeConfig(
             merge_distance_threshold=cfg.postprocessing_merge_threshold,
         ),
+        coarse_cd_iter=cfg.coarse_cd_iter,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
