@@ -50,7 +50,7 @@ class BasePeeler(torch.nn.Module):
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
         fit_sampling="random",
-        fit_subsampling_random_state=0,
+        fit_subsampling_random_state: int | np.random.Generator=0,
         trough_offset_samples=42,
         spike_length_samples=121,
         dtype=torch.float,
@@ -153,7 +153,6 @@ class BasePeeler(torch.nn.Module):
 
         if output_hdf5_filename is None:
             # all of these features would require the h5 file.
-            assert skip_features
             assert ignore_resuming
             assert not residual_to_h5
             assert residual_snips_per_chunk is None
@@ -194,6 +193,7 @@ class BasePeeler(torch.nn.Module):
         if residual_snips_per_chunk is None:
             residual_snips_per_chunk = repeat(None)
         elif isinstance(residual_snips_per_chunk, int):
+            residual_to_h5 = bool(residual_snips_per_chunk)
             residual_snips_per_chunk = repeat(residual_snips_per_chunk)
         else:
             assert len(residual_snips_per_chunk) == len(chunks_to_do)
@@ -208,6 +208,8 @@ class BasePeeler(torch.nn.Module):
             chunk_length_samples = self.chunk_length_samples
         if computation_cfg is None:
             computation_cfg = job_util.get_global_computation_config()
+
+        to_numpy = output_hdf5_filename is not None
 
         # main peeling loop
         # wrap in try/finally to ensure file handles get closed if there
@@ -228,6 +230,7 @@ class BasePeeler(torch.nn.Module):
                     skip_features,
                     chunk_length_samples,
                     is_local,
+                    to_numpy,
                 ),
             ) as pool:
                 if is_local:
@@ -255,8 +258,7 @@ class BasePeeler(torch.nn.Module):
                     residual_filename=residual_filename,
                     overwrite=overwrite,
                     skip_features=skip_features,
-                    residual_to_h5=residual_to_h5
-                    or residual_snips_per_chunk is not None,
+                    residual_to_h5=residual_to_h5,
                 ) as (
                     output_h5,
                     h5_spike_datasets,
@@ -384,6 +386,7 @@ class BasePeeler(torch.nn.Module):
         return_residual=False,
         skip_features=False,
         n_resid_snips=None,
+        to_numpy=True,
     ):
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
@@ -400,12 +403,13 @@ class BasePeeler(torch.nn.Module):
             margin=self.chunk_margin_samples,
         )
         chunk = torch.tensor(chunk, device=self.channel_index.device, dtype=self.dtype)
+        return_waveforms = not skip_features and bool(self.featurization_pipeline)
         peel_result = self.peel_chunk(
             chunk,
             chunk_start_samples=chunk_start_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            return_waveforms=not skip_features and self.featurization_pipeline,
+            return_waveforms=return_waveforms,
             return_residual=return_residual or n_resid_snips,
         )
 
@@ -418,26 +422,26 @@ class BasePeeler(torch.nn.Module):
             features = {}
 
         # a user who wants these must featurize with a waveform node
-        # keeping them below adds overhead
         del peel_result["collisioncleaned_waveforms"]
 
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
-        chunk_result = {
-            k: v.numpy(force=True) if torch.is_tensor(v) else v
-            for k, v in chunk_result.items()
-        }
+        if to_numpy:
+            chunk_result = {
+                k: v.numpy(force=True) if torch.is_tensor(v) else v
+                for k, v in chunk_result.items()
+            }
 
-        if "residual" in peel_result:
-            if torch.is_tensor(peel_result["residual"]):
-                peel_result["residual"] = peel_result["residual"].numpy(force=True)
+            if "residual" in peel_result:
+                if torch.is_tensor(peel_result["residual"]):
+                    peel_result["residual"] = peel_result["residual"].numpy(force=True)
 
         # add times in seconds
         segment = self.recording._recording_segments[0]
         chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
             chunk_start_samples
         )
-        if peel_result["n_spikes"]:
+        if peel_result["n_spikes"] and to_numpy:
             chunk_result["times_seconds"] = segment.sample_index_to_time(
                 chunk_result["times_samples"]
             )
@@ -543,7 +547,6 @@ class BasePeeler(torch.nn.Module):
                     computation_cfg=computation_cfg,
                 )
             self.fit_featurization_pipeline(
-                save_folder=save_folder,
                 tmp_dir=tmp_dir,
                 computation_cfg=computation_cfg,
             )
@@ -557,7 +560,7 @@ class BasePeeler(torch.nn.Module):
         self.featurization_pipeline.precompute()
 
     def fit_featurization_pipeline(
-        self, save_folder, tmp_dir=None, computation_cfg=None
+        self, tmp_dir=None, computation_cfg=None
     ):
         if self.featurization_pipeline is None:
             return
@@ -759,10 +762,10 @@ class BasePeeler(torch.nn.Module):
         """Create, overwrite, or re-open output files"""
         if output_hdf5_filename is None:
             assert residual_filename is None
-            assert skip_features
             assert not residual_to_h5
             # this is not usually the case, but it is used by the
             # RunningTemplates peeler.
+            yield None, None, None, 0
             return
 
         output_hdf5_filename = Path(output_hdf5_filename)
@@ -869,11 +872,12 @@ class BasePeeler(torch.nn.Module):
 
 
 class PeelerProcessContext:
-    def __init__(self, peeler, compute_residual, skip_features, chunk_length_samples):
+    def __init__(self, peeler, compute_residual, skip_features, chunk_length_samples, to_numpy):
         self.peeler = peeler
         self.compute_residual = compute_residual
         self.skip_features = skip_features
         self.chunk_length_samples = chunk_length_samples
+        self.to_numpy = to_numpy
 
 
 # this state will be set on each thread globally
@@ -888,6 +892,7 @@ def _peeler_process_init(
     skip_features,
     chunk_length_samples,
     is_local,
+    to_numpy,
 ):
     global _peeler_process_context
 
@@ -908,7 +913,7 @@ def _peeler_process_init(
 
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(
-        peeler, compute_residual, skip_features, chunk_length_samples
+        peeler, compute_residual, skip_features, chunk_length_samples, to_numpy
     )
 
 
@@ -927,4 +932,5 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             chunk_end_samples=chunk_end_samples,
             return_residual=_peeler_process_context.ctx.compute_residual,
             skip_features=_peeler_process_context.ctx.skip_features,
+            to_numpy=_peeler_process_context.ctx.to_numpy,
         )

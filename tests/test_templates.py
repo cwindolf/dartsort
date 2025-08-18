@@ -1,20 +1,137 @@
 import tempfile
 from pathlib import Path
+import pytest
 
 import numpy as np
 import spikeinterface.core as sc
 
 import dartsort
+from dartsort.evaluate import simkit, config_grid
 from dartsort.templates import (
     get_templates,
     pairwise,
     pairwise_util,
     template_util,
     templates,
+    TemplateData,
 )
 from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.internal_config import TemplateConfig
 from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
+
+
+# simkit fixture based test of all algorithms with a global
+# refractory sorting that has no noise
+# can do one with tiny drift and do allclose to test motion pipeline
+@pytest.fixture
+def refractory_simulations(tmp_path_factory):
+    sim_settings = config_grid(
+        common_params=dict(
+            probe_kwargs=dict(
+                num_columns=2, num_contact_per_column=12, y_shift_per_column=None
+            ),
+            temporal_jitter=1,
+            amplitude_jitter=0,
+            common_reference=False,
+            refractory_ms=4.5,
+            noise_kind="zero",
+            duration_seconds=1.9,
+            n_units=16,
+            min_fr_hz=20.0,
+            max_fr_hz=31.0,
+            globally_refractory=True,
+        ),
+        config_cls=None,
+        drift={"y": dict(drift_speed=1e-4), "n": dict(drift_speed=0.0)},
+    )
+    assert len(sim_settings) == 2
+
+    simulations = {}
+    for sim_name, kw in sim_settings.items():
+        p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
+        simulations[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
+
+    return simulations
+
+
+@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("realign_peaks", [False, True])
+@pytest.mark.parametrize("reduction", ["mean", "median"])
+@pytest.mark.parametrize("algorithm", ["by_unit", "by_chunk", "chunk_if_mean"])
+def test_refractory_templates(
+    refractory_simulations, drift, realign_peaks, reduction, algorithm
+):
+    sim_name = f"drift{'y' if drift else 'n'}"
+    sim = refractory_simulations[sim_name]
+
+    template_cfg = TemplateConfig(
+        registered_templates=drift is not False,
+        realign_peaks=realign_peaks,
+        reduction=reduction,
+        algorithm=algorithm,
+        denoising_method="none",
+        with_raw_std_dev=True,
+    )
+    td = TemplateData.from_config(
+        recording=sim["recording"],
+        sorting=sim["sorting"],
+        motion_est=sim["motion_est"],
+        template_cfg=template_cfg,
+    )
+
+    unit_ids, spike_counts = np.unique(sim["sorting"].labels, return_counts=True)
+    assert np.array_equal(td.unit_ids, unit_ids)
+    assert np.array_equal(td.spike_counts, spike_counts)
+    assert td.spike_counts_by_channel is not None
+    assert np.array_equal(np.nanmax(td.spike_counts_by_channel, 1), spike_counts)
+
+    assert np.allclose(td.templates, sim["templates"].templates, atol=5e-2)
+    assert td.raw_std_dev is not None
+    assert np.allclose(td.raw_std_dev, 0.0, atol=5e-2)
+    assert np.array_equal(td.unit_ids, sim["templates"].unit_ids)
+
+
+@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("realign_peaks", [False, True])
+@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted_svd"])
+def test_refractory_templates_algorithm_agreement(
+    refractory_simulations, drift, realign_peaks, denoising_method
+):
+    sim_name = f"drift{'y' if drift else 'n'}"
+    sim = refractory_simulations[sim_name]
+
+    tsvd = None
+    if denoising_method != "none":
+        tsvd = get_templates.fit_tsvd(sim["recording"], sim["sorting"])
+
+    tds = []
+    for algorithm in ("by_chunk", "by_unit"):
+        template_cfg = TemplateConfig(
+            registered_templates=drift is not False,
+            realign_peaks=realign_peaks,
+            reduction="mean",
+            algorithm=algorithm,
+            denoising_method=denoising_method,
+            with_raw_std_dev=True,
+        )
+        td = TemplateData.from_config(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            motion_est=sim["motion_est"],
+            template_cfg=template_cfg,
+            tsvd=tsvd,
+        )
+        tds.append(td)
+
+    td0, td1 = tds
+
+    assert np.array_equal(td0.unit_ids, td1.unit_ids)
+    assert np.array_equal(td0.spike_counts, td1.spike_counts)
+    assert np.array_equal(td0.spike_counts_by_channel, td1.spike_counts_by_channel)
+
+    assert np.allclose(td0.templates, td1.templates, atol=1e-5)
+    assert np.allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
 
 
 def test_roundtrip(tmp_path):
@@ -23,7 +140,7 @@ def test_roundtrip(tmp_path):
     template_data = templates.TemplateData.from_config(
         *no_overlap_recording_sorting(temps, pad=0),
         template_cfg=dartsort.TemplateConfig(
-            low_rank_denoising=False,
+            denoising_method="none",
             superres_bin_min_spikes=0,
             realign_peaks=False,
         ),

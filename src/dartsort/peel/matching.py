@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Self, Sequence, Literal
 from logging import getLogger
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -60,6 +61,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         max_iter=1000,
         max_spikes_per_second=16384,
         coarse_cd_iter=0,
+        parent_sorting_hdf5_path: str | Path | None = None,
         dtype=torch.float,
     ):
         n_templates, spike_length_samples = template_data.templates.shape[:2]
@@ -112,6 +114,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.coarse_cd_iter = coarse_cd_iter
         self.max_spikes_per_second = max_spikes_per_second
+        self.parent_sorting_hdf5_path = parent_sorting_hdf5_path
         assert channel_selection in ("template", "amplitude")
         self.channel_selection = channel_selection
 
@@ -157,8 +160,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         from ..util import noise_util
 
         # fit noise to residuals from the previous detection step
-        assert self.template_data.parent_sorting_hdf5_path is not None
-        resids = get_residual_snips(self.template_data.parent_sorting_hdf5_path)
+        assert self.parent_sorting_hdf5_path is not None
+        resids = get_residual_snips(self.parent_sorting_hdf5_path)
         noise = noise_util.StationaryFactorizedNoise.estimate(resids)
 
         # be reproducible
@@ -453,6 +456,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         featurization_cfg,
         template_data,
         motion_est=None,
+        parent_sorting_hdf5_path=None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
@@ -515,6 +519,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             max_iter=matching_cfg.max_iter,
             max_spikes_per_second=matching_cfg.max_spikes_per_second,
             coarse_cd_iter=matching_cfg.coarse_cd_iter,
+            parent_sorting_hdf5_path=parent_sorting_hdf5_path,
         )
 
     def peel_chunk(

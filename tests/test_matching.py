@@ -62,7 +62,7 @@ def _test_tiny(tmp_path, scaling=0.0):
     rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            low_rank_denoising=False,
+            denoising_method="none",
             superres_bin_min_spikes=0,
         )
         template_data = TemplateData.from_config(
@@ -181,7 +181,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            low_rank_denoising=False,
+            denoising_method="none",
             superres_bin_min_spikes=0,
         )
         template_data = TemplateData.from_config(
@@ -338,7 +338,7 @@ def static_tester(tmp_path, up_factor=1):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            low_rank_denoising=False, superres_bin_min_spikes=0
+            denoising_method="none", superres_bin_min_spikes=0
         )
         template_data = TemplateData.from_config(
             *no_overlap_recording_sorting(templates),
@@ -526,7 +526,7 @@ def _test_fakedata_nonn(tmp_path, threshold):
     )
     tempconf = dartsort.TemplateConfig(
         realign_peaks=False,
-        low_rank_denoising=True,
+        denoising_method="none",
         superres_templates=False,
         registered_templates=False,
     )

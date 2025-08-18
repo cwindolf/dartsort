@@ -246,7 +246,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 spike_counts=np.ones(self.segment.n_units),
                 registered_geom=self.get_channel_locations(),
                 trough_offset_samples=self.segment.trough_offset_samples,
-                parent_sorting_hdf5_path=hdf5_path,
             )
 
         rgeom, matches = self.registered_geom()
@@ -261,7 +260,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             spike_counts=np.ones(self.segment.n_units),
             registered_geom=rgeom,
             trough_offset_samples=self.segment.trough_offset_samples,
-            parent_sorting_hdf5_path=hdf5_path,
         )
 
     def gt_unit_information(self):

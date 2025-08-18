@@ -178,7 +178,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def to_sklearn(self):
         pca = PCA(
-            self.rank,
+            n_components=self.rank,
             random_state=self.random_state,
             whiten=self.whiten,
         )
@@ -192,7 +192,7 @@ class BaseTemporalPCA(BaseWaveformModule):
     def from_sklearn(cls, channel_index, pca, temporal_slice=None):
         self = cls(
             channel_index,
-            rank=pca.rank,
+            rank=pca.n_components,
             whiten=pca.whiten,
             temporal_slice=temporal_slice,
         )
@@ -201,14 +201,14 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def initialize_from_sklearn(self, pca):
         if self.temporal_slice is None:
-            self.spike_length_samples = pca.mean.shape[0]
+            self.spike_length_samples = pca.mean_.shape[0]
         else:
             # not really -- this is a hack.
             self.spike_length_samples = self.temporal_slice.stop
         self.initialize_spike_length_dependent_params()
         self.mean.copy_(torch.from_numpy(pca.mean_))
         self.components.copy_(torch.from_numpy(pca.components_))
-        self.whitener.copy_(torch.from_numpy(pca.whitener_)).sqrt_()
+        self.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
         self._needs_fit = False
 
 

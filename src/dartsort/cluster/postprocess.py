@@ -58,7 +58,6 @@ def realign_and_chuck_noisy_template_units(
         )
         assert sorting is not None
     assert template_data.spike_counts_by_channel is not None
-    assert template_data.parent_sorting_hdf5_path == h5_path
 
     template_ptps = np.ptp(template_data.templates, 1).max(1)
     template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
@@ -87,7 +86,6 @@ def realign_and_chuck_noisy_template_units(
         spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        parent_sorting_hdf5_path=h5_path,
     )
     if template_save_folder is not None:
         if template_npz_filename is not None:
@@ -128,7 +126,6 @@ def reorder_by_depth(sorting, template_data):
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        parent_sorting_hdf5_path=template_data.parent_sorting_hdf5_path,
     )
     return sorting, template_data
 
@@ -153,7 +150,7 @@ def postprocess(
             return sorting, TemplateData.from_npz(template_npz_path)
 
     # get tsvd to share across steps
-    if tsvd is None and template_cfg.low_rank_denoising:
+    if tsvd is None and template_cfg.denoising_method not in (None, "none"):
         tsvd = fit_tsvd(
             recording,
             sorting,
@@ -175,7 +172,7 @@ def postprocess(
         tsvd=tsvd,
         computation_cfg=computation_cfg,
     )
-    assert sorting.parent_h5_path == h5_path == template_data.parent_sorting_hdf5_path
+    assert sorting.parent_h5_path == h5_path
     fs_ms = recording.sampling_frequency / 1000
     max_shift_samples = int(template_cfg.realign_shift_ms * fs_ms)
 
@@ -271,7 +268,6 @@ def postprocess(
         raw_std_dev=raw_std_dev,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        parent_sorting_hdf5_path=sorting.parent_h5_path,
     )
     if depth_order:
         sorting, template_data = reorder_by_depth(sorting, template_data)

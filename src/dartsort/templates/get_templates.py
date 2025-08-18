@@ -108,11 +108,18 @@ def get_templates(
 
     # estimate peak sample times and realign spike train
     if realign_peaks:
-        # pad the trough_offset_samples and spike_length_samples so that
-        # if the user did not request denoising we can just return the
-        # raw templates right away
-        trough_offset_load = trough_offset_samples + realign_max_sample_shift
-        spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
+        if raw_only:
+            # pad the trough_offset_samples and spike_length_samples so that
+            # if the user did not request denoising we can just return the
+            # raw templates right away
+            trough_offset_load = trough_offset_samples + realign_max_sample_shift
+            spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
+            trough_offset_align = trough_offset_samples
+        else:
+            # otherwise, no need to compute the full thing yet.
+            trough_offset_load = 0 + realign_max_sample_shift
+            spike_length_load = 1 + 2 * realign_max_sample_shift
+            trough_offset_align = 0
         raw_results = get_raw_templates(
             recording,
             sorting,
@@ -132,16 +139,22 @@ def get_templates(
             dtype=dtype,
             device=device,
         )
-        sorting, templates = realign_sorting(
+        sorting, templates, time_shifts = realign_sorting(
             sorting,
             raw_results["raw_templates"],
             raw_results["snrs_by_channel"],
             raw_results["unit_ids"],
             realign_to=realign_to,
             max_shift=realign_max_sample_shift,
-            trough_offset_samples=trough_offset_samples,
+            trough_offset_samples=trough_offset_align,
             recording_length_samples=recording.get_num_samples(),
         )
+        if raw_results.get("raw_std_devs", None) is not None:
+            raw_results["raw_std_devs"] = trim_templates_to_shift(
+                raw_results["raw_std_devs"],
+                max_shift=realign_max_sample_shift,
+                template_shifts=time_shifts,
+            )
         if raw_only:
             # overwrite template dataset with aligned ones
             # handle keep_waveforms_in_hdf5
@@ -289,7 +302,7 @@ def realign_sorting(
 ):
     n, t, c = templates.shape
     if max_shift == 0:
-        return sorting, templates
+        return sorting, templates, None
 
     template_maxchans = snrs_by_channel.argmax(1)
     template_shifts, aligned_templates = realign_templates(
@@ -303,14 +316,37 @@ def realign_sorting(
     )
 
     # create aligned spike train
+    aligned_sorting = apply_time_shifts(
+        sorting,
+        template_shifts=template_shifts,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=t,
+        recording_length_samples=recording_length_samples,
+    )
+
+    return aligned_sorting, aligned_templates, template_shifts
+
+
+def apply_time_shifts(
+    sorting,
+    template_shifts=None,
+    trough_offset_samples=None,
+    spike_length_samples=None,
+    recording_length_samples=None,
+):
+    if template_shifts is None:
+        return sorting
+
     new_times = sorting.times_samples + template_shifts[sorting.labels]
     labels = sorting.labels.copy()
     if recording_length_samples is not None:
-        highlim = recording_length_samples - (t - trough_offset_samples)
+        assert spike_length_samples is not None
+        assert trough_offset_samples is not None
+        tail_samples = spike_length_samples - trough_offset_samples
+        highlim = recording_length_samples - tail_samples
         labels[(new_times < trough_offset_samples) & (new_times > highlim)] = -1
-    aligned_sorting = replace(sorting, labels=labels, times_samples=new_times)
 
-    return aligned_sorting, aligned_templates
+    return replace(sorting, labels=labels, times_samples=new_times)
 
 
 def realign_templates(
@@ -359,15 +395,28 @@ def realign_templates(
         template_shifts = np.zeros(unit_ids.max() + 1, dtype=np.int64)
         template_shifts[unit_ids] = template_shifts_
 
+    aligned_templates = trim_templates_to_shift(
+        templates, max_shift=max_shift, template_shifts=template_shifts
+    )
+
+    return template_shifts, aligned_templates
+
+
+def trim_templates_to_shift(templates, max_shift=0, template_shifts=None):
+    if not max_shift or template_shifts is None:
+        return templates
+
+    n, t, c = templates.shape
+
     # trim templates
     aligned_spike_len = t - 2 * max_shift
     aligned_templates = np.empty((n, aligned_spike_len, c))
-    for i, dt in enumerate(template_shifts_):
+    for i, dt in enumerate(template_shifts):
         aligned_templates[i] = templates[
             i, max_shift + dt : max_shift + dt + aligned_spike_len
         ]
 
-    return template_shifts, aligned_templates
+    return aligned_templates
 
 
 def fit_tsvd(
@@ -579,7 +628,8 @@ def get_all_shifted_raw_and_low_rank_templates(
     raw_std_dev = None
     if with_raw_std_dev:
         raw_std_dev = raw_square_templates
-        raw_std_dev -= raw_templates ** 2
+        raw_std_dev -= raw_templates**2
+        np.abs(raw_std_dev, out=raw_std_dev)
         raw_std_dev **= 0.5
 
     return (
@@ -825,7 +875,9 @@ def _template_job(unit_ids):
                     p.reducer(unit_waveforms.square_(), axis=0).numpy(force=True)
                 )
             counts.append(in_unit.size)
-    snrs_by_chan = np.array([ptp(rt, 0) * c for rt, c in zip(raw_templates, counts)])
+    snrs_by_chan = np.array(
+        [ptp(rt, 0) * np.sqrt(c) for rt, c in zip(raw_templates, counts)]
+    )
     counts_by_chan = np.array(counts)
     if counts_by_chan.ndim == 1:
         counts_by_chan = np.broadcast_to(counts_by_chan[:, None], snrs_by_chan.shape)
@@ -836,7 +888,14 @@ def _template_job(unit_ids):
         raw_square_templates = None
 
     if p.denoising_tsvd is None:
-        return units_chunk, raw_templates, raw_square_templates, None, snrs_by_chan, counts_by_chan
+        return (
+            units_chunk,
+            raw_templates,
+            raw_square_templates,
+            None,
+            snrs_by_chan,
+            counts_by_chan,
+        )
 
     # nt, t, ct = raw_templates.shape
     # low_rank_templates = torch.tensor(raw_templates.transpose(0, 2, 1), device=p.device)
@@ -875,7 +934,14 @@ def _template_job(unit_ids):
             )
     low_rank_templates = np.array(low_rank_templates)
 
-    return units_chunk, raw_templates, raw_square_templates, low_rank_templates, snrs_by_chan, counts_by_chan
+    return (
+        units_chunk,
+        raw_templates,
+        raw_square_templates,
+        low_rank_templates,
+        snrs_by_chan,
+        counts_by_chan,
+    )
 
 
 class TorchSVDProjector(torch.nn.Module):

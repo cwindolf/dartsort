@@ -24,7 +24,7 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples=121,
         chunk_length_samples=30_000,
         n_seconds_fit=40,
-        fit_subsampling_random_state=0,
+        fit_subsampling_random_state: int | np.random.Generator=0,
         dtype=torch.float,
     ):
         super().__init__(
@@ -60,10 +60,11 @@ class GrabAndFeaturize(BasePeeler):
     def process_chunk(
         self,
         chunk_start_samples,
-        n_resid_snips=None,
         chunk_end_samples=None,
         return_residual=False,
         skip_features=False,
+        n_resid_snips=None,
+        to_numpy=True,
     ):
         """Override process_chunk to skip empties."""
         if chunk_end_samples is None:
@@ -83,6 +84,7 @@ class GrabAndFeaturize(BasePeeler):
             chunk_end_samples=chunk_end_samples,
             return_residual=return_residual,
             skip_features=skip_features,
+            to_numpy=to_numpy,
         )
 
     @classmethod

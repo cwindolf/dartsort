@@ -30,8 +30,8 @@ class WaveformPipeline(torch.nn.Module):
     def spike_datasets(self):
         datasets = []
         for transformer in self.transformers:
-                if transformer.is_featurizer:
-                    datasets.extend(transformer.spike_datasets)
+            if transformer.is_featurizer:
+                datasets.extend(transformer.spike_datasets)
         return datasets
 
     @classmethod
@@ -174,6 +174,12 @@ class WaveformPipeline(torch.nn.Module):
 
     def __iter__(self):
         return iter(self.transformers)
+
+    def get_transformer(self, transformer_name):
+        for t in self.transformers:
+            if t.name == transformer_name:
+                return t
+        return None
 
 
 def check_unique_feature_names(transformers):

@@ -286,25 +286,20 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     return pipeline
 
 
-def get_tpca(sorting):
+def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
     """Look for the TemporalPCAFeaturizer in the usual place."""
-    from dartsort.transform import TemporalPCAFeaturizer
-
     pipeline = get_featurization_pipeline(sorting)
-    tpcas = [t for t in pipeline.transformers if isinstance(t, TemporalPCAFeaturizer)]
-    tpca = tpcas[0]
-    return tpca
+    return pipeline.get_transformer(tpca_name)
 
 
-def load_stored_tsvd(sorting):
+def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=True):
     if sorting.parent_h5_path is None:
         return None
     pipeline = get_featurization_pipeline(sorting)
-    tsvd = [t for t in pipeline.transformers if t.name == "collisioncleaned_basis"]
-    if not len(tsvd):
-        return None
-    assert len(tsvd) == 1
-    return tsvd[0].to_sklearn()
+    tsvd = pipeline.get_transformer(tsvd_name)
+    if to_sklearn:
+        tsvd = tsvd.to_sklearn()
+    return tsvd
 
 
 def get_labels(h5_path):
@@ -418,7 +413,7 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
     return replace(sorting, labels=new_labels, extra_features=extra_features)
 
 
-def subsample_to_max_count(sorting, max_spikes=256, seed=0):
+def subsample_to_max_count(sorting, max_spikes=256, seed: int | np.random.Generator=0, discard_triaged=False):
     units, counts = np.unique(sorting.labels, return_counts=True)
     if counts.max() <= max_spikes:
         return sorting

@@ -386,6 +386,7 @@ def match(
         featurization_cfg,
         template_data,
         motion_est=motion_est,
+        parent_sorting_hdf5_path=getattr(sorting, 'parent_h5_path', None),
     )
     sorting = run_peeler(
         matching_peeler,

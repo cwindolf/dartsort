@@ -42,14 +42,18 @@ class WaveformConfig:
             ms_after=samples_after / samples_per_ms,
         )
 
+    @staticmethod
+    def ms_to_samples(ms, sampling_frequency=30_000.0):
+        return int(ms * (sampling_frequency / 1000))
+
     def trough_offset_samples(self, sampling_frequency=30_000):
         sampling_frequency = np.round(sampling_frequency)
-        return int(self.ms_before * (sampling_frequency / 1000))
+        return self.ms_to_samples(self.ms_before, sampling_frequency=sampling_frequency)
 
     def spike_length_samples(self, sampling_frequency=30_000):
         spike_len_ms = self.ms_before + self.ms_after
         sampling_frequency = np.round(sampling_frequency)
-        length = int(spike_len_ms * (sampling_frequency / 1000))
+        length = self.ms_to_samples(spike_len_ms, sampling_frequency=sampling_frequency)
         # odd is better for convolution arithmetic elsewhere
         length = 2 * (length // 2) + 1
         return length
@@ -202,6 +206,8 @@ class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "median"
+    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "by_unit"
+    denoising_method: Literal["none", "exp_weighted_svd"] = "exp_weighted_svd"
 
     # -- template construction parameters
     # registered templates?
@@ -214,7 +220,6 @@ class TemplateConfig:
     superres_strategy: str = "motion_estimate"
 
     # low rank denoising?
-    low_rank_denoising: bool = True
     denoising_rank: int = 5
     denoising_snr_threshold: float = 50.0
     denoising_fit_radius: float = 75.0
@@ -226,6 +231,17 @@ class TemplateConfig:
     # track template over time
     time_tracking: bool = False
     chunk_size_s: int = 300
+
+    # where to find motion data if needed
+    localizations_dataset_name: str = "point_source_localizations"
+
+    def actual_algorithm(self) -> Literal["by_chunk", "by_unit"]:
+        if self.algorithm == "chunk_if_mean":
+            if self.reduction == "mean":
+                return "by_chunk"
+            else:
+                return "by_unit"
+        return self.algorithm
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
@@ -858,16 +874,16 @@ default_dartsort_cfg = DARTsortInternalConfig()
 # configs which are commonly used for specific tasks
 coarse_template_cfg = TemplateConfig(superres_templates=False)
 raw_template_cfg = TemplateConfig(
-    realign_peaks=False, low_rank_denoising=False, superres_templates=False
+    realign_peaks=False, denoising_method="none", superres_templates=False
 )
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
     realign_peaks=False,
-    low_rank_denoising=False,
+    denoising_method="none",
     superres_templates=False,
 )
 unaligned_coarse_denoised_template_cfg = TemplateConfig(
-    realign_peaks=False, low_rank_denoising=True, superres_templates=False
+    realign_peaks=False, denoising_method="none", superres_templates=False
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
