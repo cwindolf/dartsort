@@ -88,7 +88,7 @@ def test_refinement(simulations, sim_name, refkw):
         refkw["split_cfg"] = SplitConfig()
         refkw["merge_cfg"] = TemplateMergeConfig()
         refkw["merge_template_cfg"] = TemplateConfig(
-            realign_peaks=False, low_rank_denoising=False
+            realign_peaks=False, denoising_method="none"
         )
 
     clusterer = get_clusterer(

@@ -40,7 +40,7 @@ class DARTsortSorting:
     times_samples: np.ndarray
     channels: np.ndarray
     labels: np.ndarray | None = None
-    sampling_frequency: float = 30_000.0
+    sampling_frequency: float = 30000.0
     parent_h5_path: str | None = None
 
     # entries in this dictionary will also be set as properties

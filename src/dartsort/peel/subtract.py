@@ -358,10 +358,10 @@ class SubtractionPeeler(BasePeeler):
         self.subtraction_denoising_pipeline.precompute()
 
     def fit_featurization_pipeline(
-        self, save_folder, tmp_dir=None, computation_cfg=None
+        self, tmp_dir=None, computation_cfg=None
     ):
         super().fit_featurization_pipeline(
-            save_folder, tmp_dir=tmp_dir, computation_cfg=computation_cfg
+            tmp_dir=tmp_dir, computation_cfg=computation_cfg
         )
         if self.use_singlechan_templates:
             self.have_singlechan_templates = True

@@ -3,7 +3,7 @@ import spikeinterface.core as sc
 from dartsort.util.data_util import DARTsortSorting
 
 
-def no_overlap_recording_sorting(templates, fs=30000, trough_offset_samples=42, pad=0):
+def no_overlap_recording_sorting(templates, fs=30000, trough_offset_samples=42, pad=242):
     n_templates, spike_length_samples, n_channels = templates.shape
     rec = templates.reshape(n_templates * spike_length_samples, n_channels)
     if pad > 0:

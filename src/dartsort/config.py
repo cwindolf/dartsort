@@ -198,7 +198,7 @@ class DeveloperConfig(DARTsortUserConfig):
     ] = "heldout_ecl"
     gmm_cl_alpha: float = 1.0
     merge_bimodality_threshold: float = 0.05
-    n_refinement_iters: int = 3
+    n_refinement_iters: int = 1
     n_em_iters: int = 50
     channels_strategy: str = "count"
     hard_noise: bool = False

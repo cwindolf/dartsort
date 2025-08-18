@@ -498,7 +498,7 @@ class RefinementConfig:
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
     em_converged_atol: float = 1e-3
-    n_total_iters: int = 3
+    n_total_iters: int = 1
     one_split_only: bool = False
     skip_first_split: bool = False
     hard_noise: bool = False
@@ -584,7 +584,7 @@ default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig(skip_first_split=True)
 default_universal_cfg = UniversalMatchingConfig()
-default_initial_refinement_cfg = RefinementConfig(one_split_only=True)
+default_initial_refinement_cfg = RefinementConfig(one_split_only=True, n_total_iters=1)
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
 

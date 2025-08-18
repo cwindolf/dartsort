@@ -65,10 +65,11 @@ def _test_tiny(tmp_path, scaling=0.0):
             denoising_method="none",
             superres_bin_min_spikes=0,
         )
+        rec_no_overlap, sorting_no_overlap = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
-            *no_overlap_recording_sorting(templates),
-            template_cfg,
-            motion_est=motion_util.IdentityMotionEstimate(),
+            recording=rec_no_overlap,
+            sorting=sorting_no_overlap,
+            template_cfg=template_cfg,
             save_folder=tmp_path,
             overwrite=True,
         )

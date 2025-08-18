@@ -154,6 +154,7 @@ def get_templates(
                 raw_results["raw_std_devs"],
                 max_shift=realign_max_sample_shift,
                 template_shifts=time_shifts,
+                unit_ids=raw_results["unit_ids"],
             )
         if raw_only:
             # overwrite template dataset with aligned ones
@@ -396,13 +397,18 @@ def realign_templates(
         template_shifts[unit_ids] = template_shifts_
 
     aligned_templates = trim_templates_to_shift(
-        templates, max_shift=max_shift, template_shifts=template_shifts
+        templates,
+        max_shift=max_shift,
+        template_shifts=template_shifts,
+        unit_ids=unit_ids,
     )
 
     return template_shifts, aligned_templates
 
 
-def trim_templates_to_shift(templates, max_shift=0, template_shifts=None):
+def trim_templates_to_shift(
+    templates, max_shift=0, template_shifts=None, unit_ids=None
+):
     if not max_shift or template_shifts is None:
         return templates
 
@@ -410,7 +416,11 @@ def trim_templates_to_shift(templates, max_shift=0, template_shifts=None):
 
     # trim templates
     aligned_spike_len = t - 2 * max_shift
-    aligned_templates = np.empty((n, aligned_spike_len, c))
+    aligned_templates = np.empty((n, aligned_spike_len, c), dtype=templates.dtype)
+    if unit_ids is None:
+        assert len(templates) == len(template_shifts) == n
+    else:
+        template_shifts = template_shifts[unit_ids]
     for i, dt in enumerate(template_shifts):
         aligned_templates[i] = templates[
             i, max_shift + dt : max_shift + dt + aligned_spike_len

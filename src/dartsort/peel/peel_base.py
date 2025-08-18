@@ -196,6 +196,7 @@ class BasePeeler(torch.nn.Module):
             residual_to_h5 = bool(residual_snips_per_chunk)
             residual_snips_per_chunk = repeat(residual_snips_per_chunk)
         else:
+            residual_to_h5 = True
             assert len(residual_snips_per_chunk) == len(chunks_to_do)
 
         jobs = list(zip(chunks_to_do, residual_snips_per_chunk))
@@ -482,15 +483,6 @@ class BasePeeler(torch.nn.Module):
 
             if residual_file is not None:
                 chunk_result["residual"].tofile(residual_file)
-
-            if residual_to_h5 and "residual" in chunk_result:
-                n_residuals = len(output_h5["residual"])
-                output_h5["residual"].resize(n_residuals + 1, axis=0)
-                output_h5["residual"][n_residuals:] = chunk_result["residual"]
-                output_h5["residual_times_seconds"].resize(n_residuals + 1, axis=0)
-                output_h5["residual_times_seconds"][n_residuals:] = chunk_result[
-                    "chunk_start_seconds"
-                ]
 
             if "resid_snips" in chunk_result:
                 n_residuals = len(output_h5["residual"])
