@@ -205,8 +205,8 @@ class SubtractionConfig:
 class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "median"
-    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "by_unit"
+    reduction: Literal["median", "mean"] = "mean"
+    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
     denoising_method: Literal["none", "exp_weighted_svd"] = "exp_weighted_svd"
 
     # -- template construction parameters
