@@ -293,7 +293,7 @@ def truncated_kmeans(
                 else:
                     resps_scipy = coo_to_scipy(resps)
                     batch_labels = resps_scipy.argmax(axis=1, explicit=True)
-                labels[i0:i1] = torch.asarray(batch_labels).to(labels)
+                labels[i0:i1] = torch.as_tensor(batch_labels).to(labels)
 
             # get sigmasq
             w = resps.values().clone()
