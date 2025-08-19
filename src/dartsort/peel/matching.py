@@ -898,9 +898,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             row_ix = objective_template_indices[:, None]
         elif self.grouped_temps:
             row_ix = self.group_index[template_indices]
+            row_ix = row_ix[:, :, None]
+            time_ix = time_ix[:, None, :]
         else:
             assert False
-        objective[row_ix[:, :, None], time_ix[:, None, :]] = value
+        objective[row_ix, time_ix] = value
 
     def forget_refractory(self, *args):
         self.enforce_refractory(*args, value=0.0)

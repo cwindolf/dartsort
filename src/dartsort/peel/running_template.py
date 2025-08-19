@@ -207,15 +207,18 @@ class RunningTemplates(GrabAndFeaturize):
         return self.to_template_data()
 
     def setup(self):
+        geom = self.recording.get_channel_locations()
         if self.motion_aware:
-            geom = self.recording.get_channel_locations()
             self.reg_geom = drift_util.registered_geometry(geom, self.motion_est)
             self.n_channels_full = len(self.reg_geom)
 
             n_pitches_shift = self.n_pitches_shift
             if n_pitches_shift is None:
-                depths = geom[self.channels, 1]
+                depths = np.atleast_1d(geom[self.channels, 1])
                 times = self.recording.sample_index_to_time(self.times_samples)
+                print(f"{depths.shape=} {times.shape=}")
+                print(f"{depths=} {times=}")
+                print(f"{self.channels=} {self.times_samples=}")
                 n_pitches_shift = drift_util.get_spike_pitch_shifts(
                     depths, geom, times_s=times, motion_est=self.motion_est
                 )
@@ -234,7 +237,7 @@ class RunningTemplates(GrabAndFeaturize):
             self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
             self.register_buffer("target_channels", target_channels)
         else:
-            self.reg_geom = None
+            self.reg_geom = geom
             self.n_channels_full = self.recording.get_num_channels()
 
         # storage for templates, stds, counts

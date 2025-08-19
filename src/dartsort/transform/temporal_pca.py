@@ -100,9 +100,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             mean = torch.zeros_like(waveforms_fit[0])
 
-        q = self.rank + self.n_oversamples
         n_samples, n_times = waveforms_fit.shape
-        assert q < min(n_samples, n_times)
+        q = min(self.rank + self.n_oversamples, n_samples, n_times)
         M = None
         if self.centered:
             # torch does not seem always to want to broadcast M as advertised?
