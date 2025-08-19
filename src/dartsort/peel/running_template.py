@@ -216,9 +216,6 @@ class RunningTemplates(GrabAndFeaturize):
             if n_pitches_shift is None:
                 depths = np.atleast_1d(geom[self.channels, 1])
                 times = self.recording.sample_index_to_time(self.times_samples)
-                print(f"{depths.shape=} {times.shape=}")
-                print(f"{depths=} {times=}")
-                print(f"{self.channels=} {self.times_samples=}")
                 n_pitches_shift = drift_util.get_spike_pitch_shifts(
                     depths, geom, times_s=times, motion_est=self.motion_est
                 )
