@@ -255,7 +255,8 @@ class DeveloperConfig(DARTsortUserConfig):
     n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
     # matching
-    coarse_cd_iter: int = 0
+    matching_cd_iter: int = 0
+    matching_coarse_cd: bool = True
 
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False

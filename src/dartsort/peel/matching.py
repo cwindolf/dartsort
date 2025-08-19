@@ -60,7 +60,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fit_sampling="random",
         max_iter=1000,
         max_spikes_per_second=16384,
-        coarse_cd_iter=0,
+        cd_iter=0,
+        coarse_cd=True,
         parent_sorting_hdf5_path: str | Path | None = None,
         dtype=torch.float,
     ):
@@ -112,7 +113,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             if template_data.registered_geom is not None
             else self.n_channels
         )
-        self.coarse_cd_iter = coarse_cd_iter
+        self.cd_iter = cd_iter
+        self.coarse_cd = coarse_cd
         self.max_spikes_per_second = max_spikes_per_second
         self.parent_sorting_hdf5_path = parent_sorting_hdf5_path
         assert channel_selection in ("template", "amplitude")
@@ -518,7 +520,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_max_reweighting=matching_cfg.fit_max_reweighting,
             max_iter=matching_cfg.max_iter,
             max_spikes_per_second=matching_cfg.max_spikes_per_second,
-            coarse_cd_iter=matching_cfg.coarse_cd_iter,
+            cd_iter=matching_cfg.cd_iter,
+            coarse_cd=matching_cfg.coarse_cd,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
         )
 
@@ -685,14 +688,16 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # main loop
-        previous_peaks = current_peaks = None
-        for cd_it in range(self.coarse_cd_iter + 1):
+        previous_peaks = current_peaks = prev_refrac_mask = None
+        for cd_it in range(self.cd_iter + 1):
             initializing_cd = not cd_it
-            coarse_only = cd_it < self.coarse_cd_iter
+            coarse_only = self.coarse_cd and cd_it < self.cd_iter
+            if not initializing_cd:
+                refrac_mask = torch.zeros_like(refrac_mask)
 
             current_peaks = []
             for it in range(self.max_iter):
-                if not initializing_cd:
+                if not initializing_cd and len(previous_peaks):
                     assert previous_peaks is not None
                     prev_peaks = previous_peaks.pop()
                     compressed_template_data.unsubtract(
@@ -710,13 +715,22 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                         prev_peaks.scalings,
                         conv_pad_len=self.obj_pad_len,
                     )
+                    self.forget_refractory(
+                        prev_refrac_mask,
+                        prev_peaks.times + self.obj_pad_len,
+                        prev_peaks.objective_template_indices,
+                        prev_peaks.template_indices,
+                    )
+                    apply_refrac_mask = refrac_mask + prev_refrac_mask
+                else:
+                    apply_refrac_mask = refrac_mask
 
                 # find spikes
                 new_peaks = self.find_peaks(
                     residual,
                     padded_conv,
                     padded_objective,
-                    refrac_mask,
+                    apply_refrac_mask,
                     compressed_template_data,
                     unit_mask=unit_mask,
                     skip_fine=coarse_only,
@@ -756,6 +770,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             # some of this round's peaks will be added back in before
             # each iteration in the next round
             previous_peaks = list(reversed(current_peaks))
+            prev_refrac_mask = refrac_mask
 
         # peaks are then the final current_peaks
         assert current_peaks is not None
@@ -871,11 +886,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
     def enforce_refractory(
-        self, objective, times, objective_template_indices, template_indices
+        self, objective, times, objective_template_indices, template_indices, value=-torch.inf
     ):
         if not times.numel():
             return
-        # overwrite objective with -inf to enforce refractoriness
+
         time_ix = times[:, None] + self._refrac_ix[None, :]
         if not self.grouped_temps:
             row_ix = template_indices[:, None]
@@ -885,7 +900,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             row_ix = self.group_index[template_indices]
         else:
             assert False
-        objective[row_ix[:, :, None], time_ix[:, None, :]] = -torch.inf
+        objective[row_ix[:, :, None], time_ix[:, None, :]] = value
+
+    def forget_refractory(self, *args):
+        self.enforce_refractory(*args, value=0.0)
 
 
 @dataclass
