@@ -219,7 +219,7 @@ class RunningTemplates(GrabAndFeaturize):
                 n_pitches_shift = drift_util.get_spike_pitch_shifts(
                     depths, geom, times_s=times, motion_est=self.motion_est
                 )
-            unique_shifts, self.pitch_shift_ixs = np.unique(
+            unique_shifts, pitch_shift_ixs = np.unique(
                 n_pitches_shift, return_inverse=True
             )
             res = drift_util.get_stable_channels(
@@ -230,6 +230,8 @@ class RunningTemplates(GrabAndFeaturize):
                 n_pitches_shift=unique_shifts,
             )
             target_channels = torch.asarray(res[0], device=self.channel_index.device)
+            pitch_shift_ixs = torch.asarray(pitch_shift_ixs, device=self.channel_index.device)
+            self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
             self.register_buffer("target_channels", target_channels)
         else:
             self.reg_geom = None
@@ -291,6 +293,7 @@ class RunningTemplates(GrabAndFeaturize):
                 trough_offset=self.trough_offset_samples,
                 snr_threshold=self.denoising_snr_threshold,
             )
+            weights = weights.astype(raw_templates.dtype)
             low_rank_templates = self.pcmeans.nan_to_num()
             low_rank_templates = self.tpca.force_reconstruct(low_rank_templates)
             low_rank_templates = low_rank_templates.numpy(force=True)
@@ -300,7 +303,7 @@ class RunningTemplates(GrabAndFeaturize):
         assert False
 
     def snrs_by_channel(self):
-        return ptp(self.means).nan_to_num_() * self.counts.to(self.means).sqrt()
+        return ptp(self.means.nan_to_num(nan=-torch.inf)).mul_(self.counts.to(self.means).sqrt())
 
     def stds(self, numpy=False):
         if self.meansq is None:
@@ -354,7 +357,8 @@ class RunningTemplates(GrabAndFeaturize):
         counts.scatter_add_(dim=0, index=ix, src=weights)
 
         # normalized weights in each unit
-        weights.div_(counts[labels])
+        denom = torch.where(counts > 0, counts, 1.0)
+        weights.div_(denom[labels])
 
         # extract squares into a copy if nec
         waveforms.nan_to_num_()
@@ -437,7 +441,8 @@ class RunningTemplates(GrabAndFeaturize):
 
         # update running count and do Welford sums
         self.counts += chunk_result["counts"]
-        w = chunk_result["counts"].div_(self.counts).unsqueeze(1)
+        denom = torch.where(self.counts > 0, self.counts, 1.0)
+        w = chunk_result["counts"].div_(denom).unsqueeze(1)
         self.means += chunk_result["means"].sub_(self.means).mul_(w)
         if self.with_raw_std_dev:
             self.meansq += chunk_result["meansq"].sub_(self.meansq).mul_(w)
