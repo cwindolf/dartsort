@@ -3,7 +3,9 @@ from importlib.metadata import Distribution
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -124,3 +126,42 @@ def resolve_path(p: str | Path, strict=False) -> Path:
     p = p.absolute()
     p = p.resolve(strict=strict)
     return p
+
+
+def dartcopy2(icfg, src, dest):
+    if icfg.workdir_copier == "shutil":
+        try:
+            shutil.copy2(src, dest, follow_symlinks=icfg.workdir_follow_symlinks)
+        except shutil.SameFileError:
+            # this happens in a symlink workflow that I use sometimes
+            return
+    elif icfg.workdir_copier == "rsync":
+        _rsync(src, dest, archive=False, follow_symlinks=icfg.workdir_follow_symlinks)
+    else:
+        assert False
+
+
+def dartcopytree(icfg, src, dest):
+    if icfg.workdir_copier == "shutil":
+        shutil.copytree(
+            src,
+            dest,
+            symlinks=not icfg.workdir_follow_symlinks,
+            dirs_exist_ok=True,
+        )
+    elif icfg.workdir_copier == "rsync":
+        _rsync(
+            f"{src}/",
+            f"{dest}/",
+            archive=True,
+            follow_symlinks=icfg.workdir_follow_symlinks,
+        )
+    else:
+        assert False
+
+
+def _rsync(src, dest, archive=True, follow_symlinks=False):
+    archive_flags = ["-a"] if archive else []
+    link_flags = ["--no-links", "-L"] if follow_symlinks else []
+    res = subprocess.run(["rsync", *archive_flags, *link_flags, str(src), str(dest)])
+    assert not res.returncode

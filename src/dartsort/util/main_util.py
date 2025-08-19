@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dartsort.util.py_util import resolve_path
+from dartsort.util.py_util import resolve_path, dartcopy2, dartcopytree
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.internal_config import DARTsortInternalConfig
 
@@ -38,7 +38,7 @@ def ds_save_intermediate_labels(
     if work_dir is not None:
         targ_labels_npy = output_dir / step_labels_npy.name
         logger.dartsortdebug(f"Copy {step_labels_npy} -> {targ_labels_npy}.")
-        shutil.copy2(step_labels_npy, targ_labels_npy)
+        dartcopy2(cfg, step_labels_npy, targ_labels_npy)
 
 
 def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
@@ -50,7 +50,12 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     logger.dartsortdebug(f"Recorded config to {json_path}.")
 
 
-def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=False, symlinks=True):
+def ds_all_to_workdir(
+    internal_cfg: DARTsortInternalConfig,
+    output_dir: Path,
+    work_dir: Path | None = None,
+    overwrite=False,
+):
     if work_dir is None:
         return
     if overwrite:
@@ -58,7 +63,7 @@ def ds_all_to_workdir(output_dir: Path, work_dir: Path | None = None, overwrite=
         return
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
     logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
-    shutil.copytree(output_dir, work_dir, symlinks=symlinks, dirs_exist_ok=True)
+    dartcopytree(internal_cfg, output_dir, work_dir)
 
 
 def ds_save_motion_est(
@@ -99,11 +104,7 @@ def ds_save_features(
 
     targ_h5 = output_dir / h5_path.name
     logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
-    try:
-        shutil.copy2(h5_path, targ_h5, follow_symlinks=False)
-    except shutil.SameFileError:
-        # this happens in a symlink workflow that I use sometimes
-        return
+    dartcopy2(h5_path, targ_h5, follow_symlinks=False)
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
@@ -111,7 +112,7 @@ def ds_save_features(
         if cfg.matching_cfg.delete_pconv and pconv_h5.exists():
             pconv_h5.unlink()
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
-        shutil.copytree(models_path, targ_models, symlinks=True, dirs_exist_ok=True)
+        dartcopytree(cfg, models_path, targ_models)
 
 
 def ds_handle_delete_intermediate_features(
