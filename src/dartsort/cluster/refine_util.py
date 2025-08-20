@@ -119,7 +119,7 @@ def gmm_refine(
 
     for it in range(refinement_cfg.n_total_iters):
         if refinement_cfg.truncated:
-            res = gmm.tvi(final_split=intermediate_split)
+            res = gmm.tvi(lls=gmm.log_liks, final_split=intermediate_split)
             gmm.log_liks = res["log_liks"]
         else:
             gmm.log_liks = gmm.em(final_split=intermediate_split)
