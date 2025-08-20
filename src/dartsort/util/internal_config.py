@@ -623,6 +623,8 @@ class DARTsortInternalConfig:
 
     # development / debugging flags
     work_in_tmpdir: bool = False
+    workdir_follow_symlinks: bool = False
+    workdir_copier: Literal["shutil", "rsync"] = "shutil"
     tmpdir_parent: str | Path | None = None
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = True
@@ -863,6 +865,8 @@ def to_internal_config(cfg):
         recluster_after_first_matching=cfg.recluster_after_first_matching,
         overwrite_matching=cfg.overwrite_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,
+        workdir_copier=cfg.workdir_copier,
+        workdir_follow_symlinks=cfg.workdir_follow_symlinks,
         tmpdir_parent=cfg.tmpdir_parent,
         save_intermediate_labels=cfg.save_intermediate_labels,
         save_intermediate_features=cfg.save_intermediate_features,

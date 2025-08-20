@@ -59,7 +59,7 @@ from .util.main_util import (
     ds_save_motion_est,
 )
 from .util.peel_util import run_peeler
-from .util.py_util import resolve_path
+from .util.py_util import resolve_path, dartcopytree
 from .util.registration_util import estimate_motion
 
 
@@ -87,7 +87,7 @@ def dartsort(
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             work_dir = resolve_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
-            ds_all_to_workdir(output_dir, work_dir, overwrite, allow_symlinks)
+            ds_all_to_workdir(cfg, output_dir, work_dir, overwrite, allow_symlinks)
             try:
                 return _dartsort_impl(
                     recording, output_dir, cfg, motion_est, work_dir, overwrite
@@ -102,7 +102,7 @@ def dartsort(
                         f"Hit an error. Copying outputs to {error_data_path} "
                         f"and writing traceback to {traceback_path}."
                     )
-                    shutil.copytree(work_dir, error_data_path, dirs_exist_ok=True)
+                    dartcopytree(cfg, work_dir, error_data_path)
                 else:
                     logger.critical(
                         f"Hit an error. Writing traceback to {traceback_path}."
