@@ -104,7 +104,7 @@ def ds_save_features(
 
     targ_h5 = output_dir / h5_path.name
     logger.dartsortdebug(f"Copy intermediate {h5_path=} -> {targ_h5=}.")
-    dartcopy2(h5_path, targ_h5, follow_symlinks=False)
+    dartcopy2(cfg, h5_path, targ_h5)
 
     if models_path.exists():
         targ_models = output_dir / models_path.name
