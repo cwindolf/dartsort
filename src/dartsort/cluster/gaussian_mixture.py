@@ -1,3 +1,4 @@
+import gc
 from logging import getLogger
 import threading
 from dataclasses import replace
@@ -392,6 +393,9 @@ class SpikeMixtureModel(torch.nn.Module):
         self.split_unit_args['ppca_rank'] = new_rank
         self.ppca_rank = new_rank
         self.clear_units()
+
+        # this is mainly to mark the TMM's cuda memory as free in torch
+        gc.collect()
 
     # -- headliners
 

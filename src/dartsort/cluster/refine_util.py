@@ -1,4 +1,5 @@
 from dataclasses import replace
+import gc
 from logging import getLogger
 
 import torch
@@ -196,6 +197,11 @@ def gmm_refine(
         gmm.em(final_split="full")
     sorting = gmm.to_sorting()
     gmm.tmm.processor.pool.shutdown()
+    del gmm
+
+    # this is mainly to mark the TMM's cuda memory as free for torch
+    gc.collect()
+
     return sorting, step_labels
 
 
