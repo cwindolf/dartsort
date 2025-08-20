@@ -2024,7 +2024,6 @@ class SpikeMixtureModel(torch.nn.Module):
         distances = sym_function(distances, distances.T)
         distances = distances[np.triu_indices(len(distances), k=1)]
         finite = np.isfinite(distances)
-        print(f"{finite.any()=}")
         if not finite.any():
             return None, None, None, None, None
         if not finite.all():
@@ -2084,9 +2083,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
 
         for i, (pa, pb, dist, nab) in its:
-            print(f"{pa=} {pb=} {dist=} {nab=} {max_distance=}")
             if not np.isfinite(dist) or dist > max_distance:
-                print("bail 0")
                 continue
 
             # check if should merge
