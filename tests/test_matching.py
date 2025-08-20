@@ -28,7 +28,10 @@ RES_ATOL = 1e-5
 CONV_ATOL = 0.1
 
 
-def _test_tiny(tmp_path, scaling=0.0):
+@pytest.mark.parametrize("scaling", [0.0, 0.01])
+@pytest.mark.parametrize("coarse_cd", [False, True])
+@pytest.mark.parametrize("cd_iter", [0, 1])
+def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
     recording_length_samples = 200
     n_channels = 2
     geom = np.c_[np.zeros(2), np.arange(2)]
@@ -81,6 +84,8 @@ def _test_tiny(tmp_path, scaling=0.0):
                 amplitude_scaling_variance=scaling,
                 threshold=0.01,
                 template_temporal_upsampling_factor=1,
+                cd_iter=cd_iter,
+                coarse_cd=coarse_cd,
             ),
             nofeatcfg,
             template_data,
@@ -93,7 +98,7 @@ def _test_tiny(tmp_path, scaling=0.0):
             return_conv=True,
         )
 
-        ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+        ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
             [0, 1], [0, 1], upsampling_indices_b=[0, 0], grid=True
         )
         maxpc = pconv.max(dim=1).values
@@ -134,17 +139,13 @@ def _test_tiny(tmp_path, scaling=0.0):
         assert torch.all(res["scores"] > 0)
 
 
-def test_tiny_unscaled(tmp_path):
-    _test_tiny(tmp_path)
-
-
-def test_tiny_scaled(tmp_path):
-    _test_tiny(tmp_path, scaling=0.01)
-
-
-def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
+@pytest.mark.parametrize("up_offset", [0, 1, -1])
+@pytest.mark.parametrize("up_factor", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("scaling", [0.0, 0.01])
+@pytest.mark.parametrize("cd_iter", [0, 1])
+def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     recording_length_samples = 2000
-    n_channels = 2
+    n_channels = 3
     geom = np.c_[np.zeros(n_channels), np.arange(n_channels)]
     # template main channel traces
     trace0 = 50 * np.exp(
@@ -155,8 +156,11 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     templates = np.zeros((1, spike_length_samples, n_channels), dtype="float32")
     templates[0, :, 0] = trace0
     # templates[1, :, 1] = trace0
+    print('-- cupts')
     cupts = template_util.compressed_upsampled_templates(
-        templates, max_upsample=up_factor
+        templates,
+        ptps=np.ptp(templates, 1).max(1),
+        max_upsample=up_factor,
     )
 
     # spike train
@@ -165,7 +169,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
     # tclu = []
     # for i in range(up_factor):
     #     tclu.extend((start + 200 * i, 0, 0, i))
-    tclu = [50, 0, 0, up_factor - 1]
+    tclu = [50, 0, 0, min(up_factor - 1, up_offset if up_offset >= 0 else up_factor + up_offset)]
     # fmt: on
     times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
@@ -192,7 +196,9 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
             save_folder=tmp_path,
             overwrite=True,
         )
+        assert np.allclose(template_data.templates, templates)
 
+        print('-- make matcher')
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
             dartsort.default_waveform_cfg,
@@ -200,6 +206,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 threshold=0.01,
                 amplitude_scaling_variance=scaling,
                 template_temporal_upsampling_factor=up_factor,
+                cd_iter=cd_iter,
             ),
             nofeatcfg,
             template_data,
@@ -210,6 +217,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
         lrt = template_util.svd_compress_templates(
             template_data.templates, rank=matcher.svd_compression_rank
         )
+        print('-- tempup')
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
             ptps=np.ptp(template_data.templates, 1).max(1),
@@ -226,7 +234,7 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
         assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
         assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
-            ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+            ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
                 np.arange(1),
                 np.arange(1),
                 upsampling_indices_b=up,
@@ -260,7 +268,6 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
                 assert np.isclose(pconv2, tc)
                 assert np.isclose(pc, tc)
                 assert np.isclose(pconv1, pc)
-                print(f" - {ia=} {ib=} {up=} {pc=} {tc=}")
 
         res = matcher.peel_chunk(
             torch.from_numpy(rec.get_traces().copy()),
@@ -278,27 +285,12 @@ def _test_tiny_up(tmp_path, up_factor=1, scaling=0.0):
         assert torch.all(res["scores"] > 0)
 
 
-def test_tiny_up_1_0(tmp_path):
-    _test_tiny_up(tmp_path, up_factor=1, scaling=0.0)
-
-
-def test_tiny_up_8_0(tmp_path):
-    _test_tiny_up(tmp_path, up_factor=8, scaling=0.0)
-
-
-def test_tiny_up_1_001(tmp_path):
-    _test_tiny_up(tmp_path, up_factor=1, scaling=0.01)
-
-
-def test_tiny_up_8_001(tmp_path):
-    _test_tiny_up(tmp_path, up_factor=8, scaling=0.01)
-
-
-def static_tester(tmp_path, up_factor=1):
+@pytest.mark.parametrize("up_factor", [1, 2, 4, 8])
+@pytest.mark.parametrize("cd_iter", [0, 1])
+def test_static(tmp_path, up_factor, cd_iter):
     recording_length_samples = 40_011
     n_channels = 2
     geom = np.c_[np.zeros(2), np.arange(2)]
-    geom
 
     # template main channel traces
     trace0 = 50 * np.exp(
@@ -359,6 +351,7 @@ def static_tester(tmp_path, up_factor=1):
                 coarse_approx_error_threshold=0.0,
                 conv_ignore_threshold=0.0,
                 template_svd_compression_rank=2,
+                cd_iter=cd_iter,
             ),
             nofeatcfg,
             template_data,
@@ -385,7 +378,7 @@ def static_tester(tmp_path, up_factor=1):
         assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
         assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
-            ixa, ixb, pconv = matcher.pairwise_conv_db.query(
+            ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
                 np.arange(3),
                 np.arange(3),
                 upsampling_indices_b=up + np.zeros(3, dtype=np.int64),
@@ -428,6 +421,7 @@ def static_tester(tmp_path, up_factor=1):
 
         assert res["n_spikes"] == len(times)
         assert np.array_equal(res["times_samples"], times)
+        assert np.array_equal(res["upsampling_indices"], np.zeros_like(res["upsampling_indices"]))
         assert np.array_equal(res["labels"], labels)
         assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
         print(f"D {torch.square(res['conv']).mean()=}")
@@ -435,15 +429,7 @@ def static_tester(tmp_path, up_factor=1):
         assert torch.all(res["scores"] > 0)
 
 
-def test_static_noup(tmp_path):
-    static_tester(tmp_path)
-
-
-def test_static_up(tmp_path):
-    static_tester(tmp_path, up_factor=8)
-
-
-def _test_fakedata_nonn(tmp_path, threshold):
+def test_fakedata_nonn(tmp_path, threshold=7.0):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
     T_s = 9.5
@@ -565,10 +551,6 @@ def _test_fakedata_nonn(tmp_path, threshold):
 
         shutil.rmtree(tmp_path / "match")
         shutil.rmtree(tmp_path / "match2")
-
-
-def test_fakedata_nonn(tmp_path):
-    _test_fakedata_nonn(tmp_path, 7.0)
 
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])

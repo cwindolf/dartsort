@@ -154,10 +154,7 @@ class CompressedPairwiseConv:
         if scalings_b is not None:
             pconvs.mul_(scalings_b[:, None])
 
-        if times_b is not None:
-            return template_indices_a, template_indices_b, times_b, pconvs
-
-        return template_indices_a, template_indices_b, pconvs
+        return template_indices_a, template_indices_b, times_b, pconvs
 
     def __del__(self):
         if self._h5 is not None:

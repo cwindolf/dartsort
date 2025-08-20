@@ -338,7 +338,9 @@ def default_n_upsamples_map(ptps, max_upsample=8):
     max_ptp = 1 + 2 * math.log(max_upsample, 4)
     ptps = np.minimum(ptps, max_ptp)
     upsamples = 4 ** (ptps // 2)
-    return np.clip(upsamples, 1, max_upsample).astype(int)
+    upsamples = upsamples.astype(int)
+    np.clip(upsamples, 1, max_upsample, out=upsamples)
+    return upsamples
 
 
 def compressed_upsampled_templates(
