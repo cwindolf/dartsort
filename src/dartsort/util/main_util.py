@@ -16,12 +16,14 @@ logger = getLogger(__name__)
 def ds_save_intermediate_labels(
     step_name: str,
     step_sorting: DARTsortSorting,
-    output_dir: Path | str,
+    output_dir: Path | str | None,
     cfg: DARTsortInternalConfig | None,
     step_labels: np.ndarray | None = None,
     work_dir: str | Path | None = None,
 ):
     if cfg is not None and not cfg.save_intermediate_labels:
+        return
+    if output_dir is None:
         return
     output_dir = resolve_path(output_dir, strict=True)
     if work_dir is None:

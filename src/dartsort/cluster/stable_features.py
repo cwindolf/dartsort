@@ -8,6 +8,7 @@ import torch
 from dartsort.transform.temporal_pca import TemporalPCAFeaturizer
 from dartsort.util import drift_util, interpolation_util, spiketorch, waveform_util
 from dartsort.util.data_util import DARTsortSorting, get_tpca
+from dartsort.util.job_util import get_global_computation_config
 
 # -- main class
 
@@ -200,6 +201,29 @@ class StableSpikeDataset(torch.nn.Module):
     @property
     def dtype(self):
         return self._train_extract_features.dtype
+
+    @classmethod
+    def from_config(cls, sorting, refinement_cfg, motion_est=None, computation_cfg=None):
+        if computation_cfg is None:
+            computation_cfg = get_global_computation_config()
+        return cls.from_sorting(
+            sorting,
+            motion_est=motion_est,
+            core_radius=refinement_cfg.core_radius,
+            max_n_spikes=refinement_cfg.max_n_spikes,
+            interpolation_method=refinement_cfg.interpolation_method,
+            extrap_method=refinement_cfg.extrapolation_method,
+            extrap_kernel=refinement_cfg.extrapolation_kernel,
+            kernel_name=refinement_cfg.kernel_name,
+            sigma=refinement_cfg.interpolation_sigma,
+            rq_alpha=refinement_cfg.rq_alpha,
+            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            split_proportions=(
+                1.0 - refinement_cfg.val_proportion,
+                refinement_cfg.val_proportion,
+            ),
+            device=computation_cfg.actual_device(),
+        )
 
     @classmethod
     def from_sorting(
