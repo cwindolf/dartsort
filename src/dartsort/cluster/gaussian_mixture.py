@@ -1279,14 +1279,16 @@ class SpikeMixtureModel(torch.nn.Module):
             ids = range(nu)
 
         # stack unit data into one place
-        mean_only = kind in ("noise_metric", "cosine")
+        mean_only = kind in ("noise_metric", "cosine", "cosinesqrt")
         ids, means, covs, logdets = self.stack_units(
             nu=len(ids), ids=ids, units=units, mean_only=mean_only
         )
         n = len(ids)
 
-        if kind == "cosine":
+        if kind.startswith("cosine"):
             dist = spiketorch.cosine_distance(means)
+            if kind == "cosinesqrt":
+                dist = dist.sqrt_()
             dist = dist.numpy(force=True)
             return ids, dist
 
@@ -1294,7 +1296,7 @@ class SpikeMixtureModel(torch.nn.Module):
             dist = torch.cdist(means.view(n, -1), means.view(n, -1))
             return ids, dist.numpy(force=True)
 
-        if kind in ("kl", "reverse_kl", "symkl"):
+        if kind in ("kl", "reverse_kl", "symkl", "crossentropy"):
             W = None
             if covs is not None:
                 W = covs.reshape(n, -1, self.ppca_rank)
@@ -1316,6 +1318,9 @@ class SpikeMixtureModel(torch.nn.Module):
         if kind == "symkl":
             dists *= 0.5
             dists = dists + dists.T
+        if kind == "crossentropy":
+            for j in ids:
+                dists[j] += self[j].entropy()
 
         dists = dists.numpy(force=True)
 
@@ -2820,14 +2825,12 @@ class SpikeMixtureModel(torch.nn.Module):
         hyp_elbo = hyp_elbo.cpu().item() * nu
         cur_entropy = cur_entropy.cpu().item() * nu
         hyp_entropy = hyp_entropy.cpu().item() * nu
-        logger.info(f"{cur_entropy=} {hyp_entropy=}")
 
         hyp_criteria = dict(
             loglik=hyp_loglik,
             elbo=hyp_elbo,
             entropy=hyp_entropy,
             ecl=hyp_loglik - self.cl_alpha * hyp_entropy,
-            nec=hyp_entropy / hyp_loglik,
             ecelbo=hyp_elbo - self.cl_alpha * hyp_entropy,
         )
         cur_criteria = dict(
@@ -2835,7 +2838,6 @@ class SpikeMixtureModel(torch.nn.Module):
             elbo=cur_elbo,
             entropy=cur_entropy,
             ecl=cur_loglik - self.cl_alpha * cur_entropy,
-            nec=cur_entropy / cur_loglik,
             ecelbo=cur_elbo - self.cl_alpha * cur_entropy,
         )
         improvements = {k: vhyp - cur_criteria[k] for k, vhyp in hyp_criteria.items()}
@@ -3770,6 +3772,13 @@ class GaussianUnit(torch.nn.Module):
             tr += torch.trace(my_cov.solve(ncov))
             ld = self_logdet - other_logdets
         return 0.5 * (inv_quad + (tr - k + ld))
+
+    def entropy(self):
+        my_cov = self.marginal_covariance()
+        k = my_cov.shape[0]
+        h = (k / 2) * torch.log(torch.tensor(2 * torch.pi * torch.e))
+        h = h + my_cov.logdet() / 2
+        return h
 
 
 # -- utilities
