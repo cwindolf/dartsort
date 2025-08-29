@@ -1281,6 +1281,7 @@ class CandidateSet:
         """
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
+        self.neighborhood_indicators = neighborhoods.indicators.T.numpy(force=True)
         self.n_spikes = self.neighborhood_ids.numel()
         self.device = device
         self.rg = np.random.default_rng(random_seed)
@@ -1334,21 +1335,23 @@ class CandidateSet:
         assert labels.shape[0] == self.n_spikes
         cinit = labels.view(len(labels), -1)
         (cmask,) = (cinit[:, 0] >= 0).nonzero(as_tuple=True)
-        allow_mask = self.reinit_neighborhoods(
+        un_adj = self.reinit_neighborhoods(
             cinit[cmask, 0], self.neighborhood_ids[cmask]
         )
 
         if labels.ndim == 1:
             closest_neighbors = self.search_sets(
-                distances, n_search=self.n_candidates, allow_mask=allow_mask
+                distances, n_search=self.n_candidates, un_adj=un_adj
             )
             assert closest_neighbors.shape[1] <= self.n_candidates
             closest_neighbors = closest_neighbors.to(self.candidates)
             self.candidates[:, 0] = labels
+            assert un_adj is not None
+            selection_ix = torch.from_numpy(un_adj[-1])[labels, self.neighborhood_ids]
             torch.index_select(
                 closest_neighbors[:, : self.n_candidates - 1],
                 dim=0,
-                index=labels,
+                index=selection_ix.to(labels),
                 out=self.candidates[:, 1 : self.n_candidates],
             )
         else:
@@ -1372,7 +1375,12 @@ class CandidateSet:
         self._initialized = True
 
     def search_sets(
-        self, distances, n_search=None, allow_mask=None, allow_overwrite=True
+        self,
+        distances,
+        n_search=None,
+        constrain_searches=True,
+        un_adj=None,
+        allow_overwrite=True,
     ):
         """Search space for evolutionary candidate updates.
 
@@ -1388,15 +1396,10 @@ class CandidateSet:
         if n_search is None:
             n_search = self.n_search
 
-        if self.search_type == "topk":
+        if self.search_type == "topk" and not constrain_searches:
             if not allow_overwrite:
                 distances = distances.clone()
-
             distances.diagonal().fill_(torch.inf)
-
-            if allow_mask is not None:
-                allow_mask = torch.asarray(allow_mask, device=distances.device)
-                distances[torch.logical_not(allow_mask)] = torch.inf
             max_nneighbs = distances.isfinite().sum(0).max()
 
             k = min(n_search, distances.shape[0] - 1, max_nneighbs)
@@ -1404,6 +1407,36 @@ class CandidateSet:
             assert topkinds.shape == (self.n_units, k)
             topkinds[distances.take_along_dim(topkinds, dim=1).isinf()] = -1
             return topkinds
+        elif self.search_type == "topk":
+            assert constrain_searches
+            assert un_adj is not None
+            adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+            # here, each unit is be assigned a different set of search units
+            # for each neighborhood ID (so each spike gets different search
+            # units depending on its neighborhood and current candidates.)
+            # - For neighborhood IDs not adjacent to any of the unit's
+            #   neighborhoods: the set is empty.
+            # - Otherwise: closest J units which are also adjacent to the
+            #   neighborhood.
+            # adj_uu, adj_nn are a sparsity helper structure that allow us
+            # to skip representing the empty sets above.
+            # so, search matrix will be indexed on the first dim by a lut
+            # ix which represents a unit/neighb pair.
+            # TODO is this slow
+            if not allow_overwrite:
+                distances = distances.clone()
+            distances.diagonal().fill_(torch.inf)
+            max_nneighbs = distances.isfinite().sum(0).max()
+            k = min(n_search, distances.shape[0] - 1, max_nneighbs)
+            topinds = torch.full((len(adj_uu), k), -1)
+            with np.errstate(divide="ignore"):
+                unit_neighb_adj_inf = torch.from_numpy(1.0 / unit_neighb_adj.T).to(distances)
+            for j, (uu, nn) in enumerate(zip(adj_uu, adj_nn)):
+                dists_uunn = distances.T[uu] + unit_neighb_adj_inf[nn]
+                topd_uunn, topi_uunn = torch.topk(dists_uunn, k=k, dim=0, largest=False)
+                topi_uunn[topd_uunn.isinf()] = -1
+                topinds[j] = topi_uunn
+            return topinds
         elif self.search_type == "random":
             probs = self.random_search_distance_upper_bound - distances
             eps = 2.0**-30
@@ -1417,18 +1450,32 @@ class CandidateSet:
                 )
                 assert inds.shape == (self.n_units, k)
                 inds = inds.sort().values
-                inds[
+                far = (
                     distances.take_along_dim(inds, dim=1)
                     > self.random_search_max_distance
-                ] = -1
-                inds[
-                    inds == torch.arange(self.n_units, device=inds.device)[:, None]
-                ] = -1
+                )
+                inds[far] = -1
+                arange_nu = torch.arange(self.n_units, device=inds.device)
+                inds[inds == arange_nu[:, None]] = -1
             else:
                 inds = torch.zeros((self.n_units, 0), dtype=torch.long)
             return inds
         else:
             assert False
+
+    def search_candidates(self, top, unit_search_neighbors, neighb_ids, un_adj=None):
+        if un_adj is None:
+            assert unit_search_neighbors.ndim == 2
+            return unit_search_neighbors[top]
+
+        assert unit_search_neighbors.ndim == 2
+        assert un_adj is not None
+        adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        adj_lut_ixs = un_adj_lut[top, neighb_ids[:, None].broadcast_to(top.shape)]
+        assert adj_lut_ixs.shape == top.shape
+        cands = unit_search_neighbors[adj_lut_ixs]
+        assert cands.ndim == 2
+        return cands
 
     def reinit_neighborhoods(self, labels, neighb_ids, constrain_searches=True):
         # count to determine which units are relevant to each neighborhood
@@ -1447,12 +1494,72 @@ class CandidateSet:
         # determine adjacency of units and neighborhoods
         unit_neighb_ind = (self.unit_neighborhood_counts[:-1] > 0).astype("float32")
         unit_neighb_adj = unit_neighb_ind
+
+        # include neighborhoods which are completely covered already
+        unit_channel_coverage = unit_neighb_adj @ self.neighborhood_indicators
+        unit_channel_coverage = np.clip(
+            unit_channel_coverage, 0.0, 1.0, out=unit_channel_coverage
+        )
+        unit_neighb_coverage = unit_channel_coverage @ self.neighborhood_indicators.T
+        unit_neighb_coverage = unit_neighb_coverage >= self.neighborhood_indicators.sum(
+            1
+        )
+        unit_neighb_coverage = unit_neighb_coverage.astype(unit_neighb_adj.dtype)
+        assert (unit_neighb_coverage >= unit_neighb_adj).all()
+        unit_neighb_adj = unit_neighb_coverage
+
+        # include neighborhoods which are adjacent by steps
         for _ in range(self.search_neighborhood_steps):
             assert self.neighb_adjacency is not None
             unit_neighb_adj = unit_neighb_adj @ self.neighb_adjacency
-        allow_mask = unit_neighb_adj @ unit_neighb_ind.T
 
-        return allow_mask
+        # this is really close to neighb_lut(), but it allows for adjacent
+        # neighborhoods. ok, probably most of the time we're not doing that,
+        # so could only compute this once...
+        adj_uu, adj_nn = np.nonzero(unit_neighb_adj)
+        un_adj_lut = np.zeros(unit_neighb_adj.shape, dtype=np.int64)
+        un_adj_lut[adj_uu, adj_nn] = np.arange(len(adj_uu))
+
+        return adj_uu, adj_nn, unit_neighb_adj, un_adj_lut
+
+    def update_explore_candidates(self, explore_target, neighb_ids):
+        assert explore_target.shape[1] == self.n_explore
+        if not self.n_explore:
+            return
+
+        explore_adj = self.unit_neighborhood_counts
+        for _ in range(self.explore_neighborhood_steps):
+            explore_adj = explore_adj.astype("float32") @ self.neighb_adjacency
+        neighborhood_explore_units = units_overlapping_neighborhoods(explore_adj)
+        neighborhood_explore_units = torch.from_numpy(neighborhood_explore_units)
+
+        # sample the explore units and then write. how many units per neighborhood?
+        # explore units are chosen per neighborhood. we start by figuring out how many
+        # such units there are in each neighborhood.
+        n_units_ = (
+            torch.tensor(self.n_units)[None]
+            .broadcast_to(self.n_neighborhoods, 1)
+            .contiguous()
+        )
+        n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
+            self.n_neighborhoods
+        )
+        n_explore = n_explore[neighb_ids]
+        targs = integers_without_inner_replacement(
+            self.rg, n_explore.numpy(), size=explore_target.shape
+        )
+        targs = torch.from_numpy(targs)
+        explore = neighborhood_explore_units[neighb_ids[:, None], targs]
+        explore[targs < 0] = -1
+        explore_target = explore
+
+    def ensure_adjacent(self, top, neighb_ids, un_adj):
+        if un_adj is None:
+            return
+        adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        unit_neighb_not_adj = torch.from_numpy(unit_neighb_adj == 0).to(top.device)
+        invalid = unit_neighb_not_adj[top, neighb_ids[:, None].broadcast_to(top.shape)]
+        top[invalid] = -1
 
     def propose_candidates(self, distances, indices=None, constrain_searches=True):
         """Assumes invariant 1 and does not mess it up.
@@ -1466,17 +1573,17 @@ class CandidateSet:
         full = indices is None
         if full:
             indices = slice(None)
-        n_neighbs = self.n_neighborhoods
 
+        # some data structures needed in advance
         neighb_ids = self.neighborhood_ids[indices]
-        allow_mask = self.reinit_neighborhoods(
+        un_adj = self.reinit_neighborhoods(
             self.candidates[indices, 0],
             neighb_ids,
             constrain_searches=constrain_searches,
         )
-
-        # update search sets
-        unit_search_neighbors = self.search_sets(distances, allow_mask=allow_mask)
+        unit_search_neighbors = self.search_sets(
+            distances, constrain_searches=constrain_searches, un_adj=un_adj
+        )
         unit_search_neighbors = unit_search_neighbors.to(self.candidates)
         assert unit_search_neighbors.shape[1] <= self.n_search
         n_search = unit_search_neighbors.shape[1]
@@ -1491,40 +1598,23 @@ class CandidateSet:
         n_spikes = len(candidates)
         top = candidates[:, :C]
 
-        # write the search units in place, if not batching
+        # make sure all candidates are in adjacent neighborhoods else vanquish them
+        if constrain_searches:
+            self.ensure_adjacent(top, neighb_ids, un_adj)
+
+        # update search sets
         if n_search:
-            target = candidates[:, search_slice].view(n_spikes, C, n_search)
+            search_target = candidates[:, search_slice].view(n_spikes, C, n_search)
             assert (
-                target.untyped_storage().data_ptr()
+                search_target.untyped_storage().data_ptr()
                 == candidates.untyped_storage().data_ptr()
             )
-            target[:] = unit_search_neighbors[top]
-
-        # which to explore?
-        explore_adj = self.unit_neighborhood_counts
-        for _ in range(self.explore_neighborhood_steps):
-            explore_adj = explore_adj.astype("float32") @ self.neighb_adjacency
-        neighborhood_explore_units = units_overlapping_neighborhoods(explore_adj)
-        neighborhood_explore_units = torch.from_numpy(neighborhood_explore_units)
-
-        # sample the explore units and then write. how many units per neighborhood?
-        # explore units are chosen per neighborhood. we start by figuring out how many
-        # such units there are in each neighborhood.
-        n_units_ = (
-            torch.tensor(self.n_units)[None].broadcast_to(n_neighbs, 1).contiguous()
-        )
-        if self.n_explore:
-            n_explore = torch.searchsorted(neighborhood_explore_units, n_units_).view(
-                n_neighbs
+            search_target[:] = self.search_candidates(
+                top, unit_search_neighbors, neighb_ids
             )
-            n_explore = n_explore[neighb_ids]
-            targs = integers_without_inner_replacement(
-                self.rg, n_explore.numpy(), size=(n_spikes, self.n_explore)
-            )
-            targs = torch.from_numpy(targs)
-            explore = neighborhood_explore_units[neighb_ids[:, None], targs]
-            explore[targs < 0] = -1
-            candidates[:, explore_slice] = explore
+
+        # which to explore? done in-place in first arg.
+        self.update_explore_candidates(candidates[:, explore_slice], neighb_ids)
 
         # replace duplicates with -1. TODO: replace quadratic algorithm with -1.
         erase_dups(candidates.numpy())
