@@ -2,6 +2,7 @@
 This tests relocate.py and the get_waveforms_on... functions
 in drift_util.py
 """
+
 import numpy as np
 from dartsort.cluster import relocate
 from dartsort.util import drift_util, waveform_util
@@ -29,9 +30,7 @@ def test_relocate_fixed_chans():
     dest_chans = np.arange(len(geom) // 2 - 10, len(geom) // 2 + 10)
 
     # amplitudes on the full probe
-    ptps = relocate.point_source_amplitude_vectors(
-        x, y, z, alpha, geom, channels=None
-    )
+    ptps = relocate.point_source_amplitude_vectors(x, y, z, alpha, geom, channels=None)
     assert np.array_equal(
         ptps[:, dest_chans],
         drift_util.get_waveforms_on_static_channels(
@@ -83,10 +82,7 @@ def test_relocate_varying_chans():
     z = rg.uniform(geom[:, 1].min(), geom[:, 1].max(), size=nspikes)
     alpha = 10 + np.square(rg.normal(size=nspikes))
     main_channels = np.array(
-        [
-            np.argmin(np.square(geom - [xx, zz]).sum(axis=1))
-            for xx, zz in zip(x, z)
-        ]
+        [np.argmin(np.square(geom - [xx, zz]).sum(axis=1)) for xx, zz in zip(x, z)]
     )
     channel_index = waveform_util.make_channel_index(geom, radius=100)
 
@@ -95,13 +91,9 @@ def test_relocate_varying_chans():
     dest_chans = np.arange(len(geom) // 2 - 10, len(geom) // 2 + 10)
 
     # amplitudes on the full probe
-    ptps = relocate.point_source_amplitude_vectors(
-        x, y, z, alpha, geom, channels=None
-    )
+    ptps = relocate.point_source_amplitude_vectors(x, y, z, alpha, geom, channels=None)
     ptps = np.pad(ptps, [(0, 0), (0, 1)], constant_values=np.nan)
-    ptps = np.array(
-        [ptps[i][channel_index[mc]] for i, mc in enumerate(main_channels)]
-    )
+    ptps = np.array([ptps[i][channel_index[mc]] for i, mc in enumerate(main_channels)])
 
     # targets on target chans
     targ_ptps = relocate.point_source_amplitude_vectors(

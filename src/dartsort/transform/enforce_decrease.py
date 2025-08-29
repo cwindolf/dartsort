@@ -135,9 +135,7 @@ def make_parents_index(geom, channel_index):
         g_par_to_child = g[:, None] - g[None, :]
         # segments BC (parent on first+only axis)
         g_par_to_detect = g_detect - g
-        cos_across_parent = np.sum(
-            g_par_to_detect[None] * g_par_to_child, axis=2
-        )
+        cos_across_parent = np.sum(g_par_to_detect[None] * g_par_to_child, axis=2)
         cos_across_parent[:, i_rel] = -1
         # don't need to normalize this one since we just care about sign of cosine
 

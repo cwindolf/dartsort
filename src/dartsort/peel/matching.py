@@ -706,7 +706,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             for _ in range(self.max_iter):
                 if not initializing_cd:
                     assert previous_peaks is not None
-                if not initializing_cd and previous_peaks is not None and len(previous_peaks):
+                if (
+                    not initializing_cd
+                    and previous_peaks is not None
+                    and len(previous_peaks)
+                ):
                     assert prev_refrac_mask is not None
                     assert prev_update_residual is not None
 

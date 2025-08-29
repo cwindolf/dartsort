@@ -167,7 +167,9 @@ class StableSpikeDataset(torch.nn.Module):
                     core_channels[ix],
                     n_channels=self.n_channels,
                     neighborhood_ids=(
-                        None if core_neighborhood_ids is None else core_neighborhood_ids[ix]
+                        None
+                        if core_neighborhood_ids is None
+                        else core_neighborhood_ids[ix]
                     ),
                     neighborhoods=core_neighborhoods,
                     features=core_features[ix] if k in _core_feature_splits else None,
@@ -203,7 +205,9 @@ class StableSpikeDataset(torch.nn.Module):
         return self._train_extract_features.dtype
 
     @classmethod
-    def from_config(cls, sorting, refinement_cfg, motion_est=None, computation_cfg=None):
+    def from_config(
+        cls, sorting, refinement_cfg, motion_est=None, computation_cfg=None
+    ):
         if computation_cfg is None:
             computation_cfg = get_global_computation_config()
         return cls.from_sorting(
@@ -230,7 +234,7 @@ class StableSpikeDataset(torch.nn.Module):
         cls,
         sorting,
         motion_est=None,
-        core_radius: float | None=35.0,
+        core_radius: float | None = 35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
         interpolation_method="kriging",
@@ -238,8 +242,8 @@ class StableSpikeDataset(torch.nn.Module):
         sigma=10.0,
         rq_alpha=0.5,
         kriging_poly_degree=1,
-        extrap_method: str | None="kernel",
-        extrap_kernel: str | None="rq",
+        extrap_method: str | None = "kernel",
+        extrap_kernel: str | None = "rq",
         features_dataset_name="collisioncleaned_tpca_features",
         motion_depth_mode="channel",
         split_names=("train", "val"),
@@ -844,7 +848,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         denom = self.indicators.sum(0)
         overlaps /= torch.minimum(denom[:, None], denom)
         return (overlaps >= overlap - 1e-5).to(torch.float)
-
 
 
 # -- helpers

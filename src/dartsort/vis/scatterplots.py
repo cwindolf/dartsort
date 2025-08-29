@@ -670,7 +670,11 @@ def add_labels(ax, labels, feature, depths_um, rev=False):
             (f, d),
             annotation_clip=True,
             color=glasbey1024[u % len(glasbey1024)],
-            bbox=dict(boxstyle='square', pad=0.0, facecolor='w',),
+            bbox=dict(
+                boxstyle="square",
+                pad=0.0,
+                facecolor="w",
+            ),
         )
 
 

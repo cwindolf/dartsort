@@ -4,8 +4,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from ..evaluate.analysis import (DARTsortAnalysis, basic_template_cfg,
-                                        no_realign_template_cfg)
+from ..evaluate.analysis import (
+    DARTsortAnalysis,
+    basic_template_cfg,
+    no_realign_template_cfg,
+)
 from ..util.data_util import DARTsortSorting
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit
@@ -31,7 +34,7 @@ def visualize_sorting(
     make_animations=False,
     superres_templates=False,
     sorting_analysis=None,
-    amplitudes_dataset_name='denoised_ptp_amplitudes',
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -57,7 +60,10 @@ def visualize_sorting(
         if overwrite or not scatter_unreg.exists():
             fig = plt.figure(figsize=layout_figsize)
             fig, axes, scatters = scatterplots.scatter_spike_features(
-                sorting=sorting, figure=fig, amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
+                sorting=sorting,
+                figure=fig,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                amplitudes_dataset_name=amplitudes_dataset_name,
             )
             if have_dredge and motion_est is not None:
                 motion_util.plot_me_traces(motion_est, axes[2], color="r", lw=1)
@@ -72,7 +78,8 @@ def visualize_sorting(
                 motion_est=motion_est,
                 registered=True,
                 figure=fig,
-                amplitude_color_cutoff=amplitude_color_cutoff, amplitudes_dataset_name=amplitudes_dataset_name,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                amplitudes_dataset_name=amplitudes_dataset_name,
             )
             fig.savefig(scatter_reg, dpi=dpi)
             plt.close(fig)
@@ -92,9 +99,13 @@ def visualize_sorting(
         need_analysis = need_analysis or not summaries_done
     if make_animations and is_labeled:
         animation_png = output_directory / "animation.mp4"
-        need_analysis = need_analysis or (make_animations and not animation_png.exists())
+        need_analysis = need_analysis or (
+            make_animations and not animation_png.exists()
+        )
     if need_analysis and sorting_analysis is None:
-        template_cfg = no_realign_template_cfg if superres_templates else basic_template_cfg
+        template_cfg = (
+            no_realign_template_cfg if superres_templates else basic_template_cfg
+        )
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
@@ -173,7 +184,11 @@ def visualize_all_sorting_steps(
     step_sortings = load_dartsort_step_sortings(
         dartsort_dir,
         load_simple_features=True,
-        load_feature_names=('times_seconds', 'point_source_localizations', 'denoised_ptp_amplitudes'),
+        load_feature_names=(
+            "times_seconds",
+            "point_source_localizations",
+            "denoised_ptp_amplitudes",
+        ),
     )
 
     with tqdm(step_sortings, desc="Sorting steps", mininterval=0) as prog:

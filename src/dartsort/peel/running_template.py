@@ -230,7 +230,9 @@ class RunningTemplates(GrabAndFeaturize):
                 n_pitches_shift=unique_shifts,
             )
             target_channels = torch.asarray(res[0], device=self.channel_index.device)
-            pitch_shift_ixs = torch.asarray(pitch_shift_ixs, device=self.channel_index.device)
+            pitch_shift_ixs = torch.asarray(
+                pitch_shift_ixs, device=self.channel_index.device
+            )
             self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
             self.register_buffer("target_channels", target_channels)
         else:
@@ -303,7 +305,9 @@ class RunningTemplates(GrabAndFeaturize):
         assert False
 
     def snrs_by_channel(self):
-        return ptp(self.means.nan_to_num(nan=-torch.inf)).mul_(self.counts.to(self.means).sqrt())
+        return ptp(self.means.nan_to_num(nan=-torch.inf)).mul_(
+            self.counts.to(self.means).sqrt()
+        )
 
     def stds(self, numpy=False):
         if self.meansq is None:

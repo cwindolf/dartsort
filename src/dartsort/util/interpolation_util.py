@@ -271,7 +271,9 @@ def get_kernel(
         else:
             kernel = kernel.exp_()
     elif kernel_name == "multiquadric":
-        kernel = multiquadric_kernel(source_pos=source_pos, target_pos=target_pos, sigma=sigma)
+        kernel = multiquadric_kernel(
+            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+        )
     elif kernel_name == "rq":
         kernel = rq_kernel(
             source_pos=source_pos, target_pos=target_pos, sigma=sigma, alpha=rq_alpha

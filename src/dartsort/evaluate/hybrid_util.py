@@ -292,7 +292,12 @@ def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
     load_feature_names=("times_seconds",),
-    detection_h5_names=("subtraction.h5", "threshold.h5", "universal.h5", "matching0.h5"),
+    detection_h5_names=(
+        "subtraction.h5",
+        "threshold.h5",
+        "universal.h5",
+        "matching0.h5",
+    ),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
     recluster_format="recluster{step}",
@@ -372,7 +377,12 @@ def load_dartsort_step_unit_info_dataframes(
     gt_analysis,
     recording,
     sorting_name=None,
-    detection_h5_names=("subtraction.h5", "threshold.h5", "universal.h5", "matching0.h5"),
+    detection_h5_names=(
+        "subtraction.h5",
+        "threshold.h5",
+        "universal.h5",
+        "matching0.h5",
+    ),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
 ):
@@ -395,9 +405,9 @@ def load_dartsort_step_unit_info_dataframes(
 
 
 def config_grid(
-    common_params: dict | None=None,
+    common_params: dict | None = None,
     name_prefix="",
-    config_cls: Any=DeveloperConfig,
+    config_cls: Any = DeveloperConfig,
     **grid_params,
 ):
     """Configuration grid search helper

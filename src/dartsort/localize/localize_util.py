@@ -1,5 +1,5 @@
-"""Helper functions for localizing things other than torch Tensors
-"""
+"""Helper functions for localizing things other than torch Tensors"""
+
 import threading
 
 import h5py
@@ -73,7 +73,10 @@ def localize_hdf5(
 
     try:
         n_jobs, Executor, context, queue = get_pool(
-            n_jobs, with_rank_queue=True, rank_queue_empty=True, cls="ProcessPoolExecutor"
+            n_jobs,
+            with_rank_queue=True,
+            rank_queue_empty=True,
+            cls="ProcessPoolExecutor",
         )
         with Executor(
             max_workers=n_jobs,
@@ -121,7 +124,7 @@ def localize_hdf5(
                     localizations_dataset[start_ix:end_ix] = xyza_batch
                 pool.shutdown()
     finally:
-        if hasattr(_loc_context, 'ctx'):
+        if hasattr(_loc_context, "ctx"):
             del _loc_context.ctx
 
 

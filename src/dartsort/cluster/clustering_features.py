@@ -16,8 +16,9 @@ def get_clustering_features(
     recording,
     sorting,
     motion_est=None,
-    clustering_features_cfg: ClusteringFeaturesConfig
-    | None = default_clustering_features_config,
+    clustering_features_cfg: (
+        ClusteringFeaturesConfig | None
+    ) = default_clustering_features_config,
 ):
     if clustering_features_cfg is None:
         return None
@@ -80,7 +81,8 @@ class SimpleMatrixFeatures:
         pcs = None
         if do_pcs and not clustering_features_cfg.motion_aware:
             pcs = cluster_util.get_main_channel_pcs(
-                sorting, rank=clustering_features_cfg.n_main_channel_pcs,
+                sorting,
+                rank=clustering_features_cfg.n_main_channel_pcs,
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
         elif do_pcs and clustering_features_cfg.motion_aware:
@@ -91,9 +93,7 @@ class SimpleMatrixFeatures:
                 registered_geom = drift_util.registered_geometry(
                     geom, motion_est=motion_est
                 )
-            res = drift_util.get_shift_info(
-                sorting, motion_est, geom
-            )
+            res = drift_util.get_shift_info(sorting, motion_est, geom)
             channels, shifts, n_pitches_shift = res
             mainchan_ci = single_channel_index(len(geom))
             schan, *_ = drift_util.get_stable_channels(
@@ -123,21 +123,24 @@ class SimpleMatrixFeatures:
                     rq_alpha=clustering_features_cfg.rq_alpha,
                     kriging_poly_degree=clustering_features_cfg.kriging_poly_degree,
                 )
-                pcs = pcs[:, :clustering_features_cfg.n_main_channel_pcs, 0]
+                pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
 
         if do_pcs:
             assert pcs is not None
             if clustering_features_cfg.pc_transform == "log":
-                pcs = signed_log1p(pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale)
+                pcs = signed_log1p(
+                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+                )
             elif clustering_features_cfg.pc_transform == "sqrt":
-                pcs = signed_sqrt_transform(pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale)
+                pcs = signed_sqrt_transform(
+                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+                )
             else:
                 assert clustering_features_cfg.pc_transform in ("none", None)
             pcs *= clustering_features_cfg.pc_scale
             if torch.is_tensor(pcs):
                 pcs = pcs.numpy(force=True)
             features.append(pcs)
-
 
         features = np.concatenate(features, axis=1)
         return cls(features=features, x=x, z=z, z_reg=z_reg, xyza=xyza, amplitudes=amp)
@@ -152,6 +155,7 @@ def signed_log1p(x, pre_scale=1.0):
     torch.log1p(xx, out=xx)
     xx.mul_(torch.sign(x))
     return xx
+
 
 def signed_sqrt_transform(x, pre_scale=1.0):
     """sgn(x) * (sqrt(1 + |x|*pre_scale) - 1)"""

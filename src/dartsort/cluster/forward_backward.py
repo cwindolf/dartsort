@@ -113,13 +113,16 @@ def forward_backward(
                 for u in units_to_match_to[1:]:
                     idxunit2 = np.flatnonzero(labels_2 == u)
                     features_to_match_to = np.c_[
-                            features_to_match_to,
-                            np.median(features2[idxunit2], axis=0)
+                        features_to_match_to, np.median(features2[idxunit2], axis=0)
                     ]
-                
+
                 spikes_to_update = np.flatnonzero(labels_1 == unit_to_split)
                 feat_s = features1[spikes_to_update]
-                labels_1[spikes_to_update] = units_to_match_to[((features_to_match_to.T[:, None] - feat_s[None])** 2).sum(2).argmin(0)]
+                labels_1[spikes_to_update] = units_to_match_to[
+                    ((features_to_match_to.T[:, None] - feat_s[None]) ** 2)
+                    .sum(2)
+                    .argmin(0)
+                ]
 
             # Relabel labels_1 and labels_2
             for unit_to_relabel in units_:
@@ -143,18 +146,30 @@ def forward_backward(
                             [unit_to_split],
                         )
                     )
-                    
-                    features_to_match_to = np.median(features1[labels_1 == units_to_match_to[0]], axis=0)
+
+                    features_to_match_to = np.median(
+                        features1[labels_1 == units_to_match_to[0]], axis=0
+                    )
                     for u in units_to_match_to[1:]:
                         features_to_match_to = np.c_[
-                                features_to_match_to,
-                                np.median(features1[labels_1 == u], axis=0)
+                            features_to_match_to,
+                            np.median(features1[labels_1 == u], axis=0),
                         ]
-                    
+
                     spikes_to_update = np.flatnonzero(labels_2 == unit_to_split)
                     features2[spikes_to_update]
-                    labels_2[spikes_to_update] = units_to_match_to[((features_to_match_to.T[:, None] - features2[spikes_to_update][None])** 2).sum(2).argmin(0)]
-                    
+                    labels_2[spikes_to_update] = units_to_match_to[
+                        (
+                            (
+                                features_to_match_to.T[:, None]
+                                - features2[spikes_to_update][None]
+                            )
+                            ** 2
+                        )
+                        .sum(2)
+                        .argmin(0)
+                    ]
+
             #           Do we need to "regularize" and make sure the distance intra units after merging is smaller than the distance inter units before merging
             # all_labels_1 = np.unique(labels_1)
             # all_labels_1 = all_labels_1[all_labels_1 > -1]

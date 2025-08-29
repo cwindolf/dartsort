@@ -24,7 +24,7 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples=121,
         chunk_length_samples=30_000,
         n_seconds_fit=40,
-        fit_subsampling_random_state: int | np.random.Generator=0,
+        fit_subsampling_random_state: int | np.random.Generator = 0,
         dtype=torch.float,
     ):
         super().__init__(
@@ -52,9 +52,13 @@ class GrabAndFeaturize(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        datasets.append(SpikeDataset(name="indices", shape_per_spike=(), dtype=np.int64))
+        datasets.append(
+            SpikeDataset(name="indices", shape_per_spike=(), dtype=np.int64)
+        )
         if self.labels is not None:
-            datasets.append(SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64))
+            datasets.append(
+                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64)
+            )
         return datasets
 
     def process_chunk(
@@ -132,7 +136,9 @@ class GrabAndFeaturize(BasePeeler):
         assert not return_residual
 
         max_t = chunk_start_samples + self.chunk_length_samples - 1
-        in_chunk = self.times_samples == self.times_samples.clip(chunk_start_samples, max_t)
+        in_chunk = self.times_samples == self.times_samples.clip(
+            chunk_start_samples, max_t
+        )
         (in_chunk,) = in_chunk.nonzero(as_tuple=True)
 
         if not in_chunk.numel():
@@ -166,5 +172,5 @@ class GrabAndFeaturize(BasePeeler):
             collisioncleaned_waveforms=waveforms,
         )
         if self.labels is not None:
-            res['labels'] = self.labels[in_chunk]
+            res["labels"] = self.labels[in_chunk]
         return res

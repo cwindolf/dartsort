@@ -33,9 +33,17 @@ Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
 def flow_layout(
-    plots, same_width_flow=True, max_height=4, figsize=(8.5, 11), figure=None, hspace=0.1, **plot_kwargs
+    plots,
+    same_width_flow=True,
+    max_height=4,
+    figsize=(8.5, 11),
+    figure=None,
+    hspace=0.1,
+    **plot_kwargs,
 ):
-    columns = flow_layout_columns(plots, same_width_flow=same_width_flow, max_height=max_height, **plot_kwargs)
+    columns = flow_layout_columns(
+        plots, same_width_flow=same_width_flow, max_height=max_height, **plot_kwargs
+    )
     max_height = max(sum(card.height for card in col) for col in columns)
 
     # -- draw the figure

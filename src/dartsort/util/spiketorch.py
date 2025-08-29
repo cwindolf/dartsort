@@ -898,7 +898,11 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
         wxu = x[in_u].mul_(wu[:, None])
         torch_add_at_(
             out[u, None],
-            (torch.zeros_like(in_u)[:, None, None], f_arange[None, :, None], cu[:, None]),
+            (
+                torch.zeros_like(in_u)[:, None, None],
+                f_arange[None, :, None],
+                cu[:, None],
+            ),
             wxu,
         )
 

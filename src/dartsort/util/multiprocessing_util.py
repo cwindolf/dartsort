@@ -160,7 +160,7 @@ def get_pool(
 
     if isinstance(cls, str):
         if cls == "threading_unless_multigpu":
-            if (n_jobs > 1 and multi_gpu) or os.name == 'nt':
+            if (n_jobs > 1 and multi_gpu) or os.name == "nt":
                 cls = "ProcessPoolExecutor"
             else:
                 cls = "ThreadPoolExecutor"

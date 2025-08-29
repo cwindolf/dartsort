@@ -663,8 +663,7 @@ def _finalize_missing_full_m(proc, Nlut_N, m):
     nlut = len(proc.lut_units)
     bs = proc.update_batch_size
     bargs = [
-        (slice(i0, min(i0 + bs, nlut)), proc, Nlut_N, m)
-        for i0 in range(0, nlut, bs)
+        (slice(i0, min(i0 + bs, nlut)), proc, Nlut_N, m) for i0 in range(0, nlut, bs)
     ]
     for _ in map(_finalize_missing_full_m_batch, bargs):
         pass

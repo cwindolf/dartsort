@@ -308,9 +308,7 @@ class TemplateLibrarySimulator:
 
         self.n_units = len(templates_local)
         self.templates_local = templates_local
-        self.low_rank_templates = svd_compress_templates(
-            templates_local, allow_na=True
-        )
+        self.low_rank_templates = svd_compress_templates(templates_local, allow_na=True)
         self.temporal_up = upsample_multichan(
             self.low_rank_templates.temporal_components,
             temporal_jitter=temporal_jitter,
@@ -433,7 +431,11 @@ class TemplateLibrarySimulator:
                 target_pos = target_pos.numpy(force=True)
             out = np.full((n, f, nct), np.nan, dtype=spatial_singular.dtype)
             griddata_interp(
-                spatial_singular, source_pos, target_pos, out, method=self.interp_kernel_name
+                spatial_singular,
+                source_pos,
+                target_pos,
+                out,
+                method=self.interp_kernel_name,
             )
         else:
             assert False

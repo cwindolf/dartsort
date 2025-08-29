@@ -319,8 +319,8 @@ def get_template_features(template_data, feature_names, scatter_template_feature
         features["amplitude"] = np.ptp(template_data.templates, 1).max(1)
 
     if "log_peak_to_trough" in feature_names:
-        features["log_peak_to_trough"] = (
-            np.log(-template_data.templates.max((1, 2)) / template_data.templates.min((1, 2)))
+        features["log_peak_to_trough"] = np.log(
+            -template_data.templates.max((1, 2)) / template_data.templates.min((1, 2))
         )
 
     return features

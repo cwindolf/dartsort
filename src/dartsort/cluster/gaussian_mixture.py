@@ -267,7 +267,9 @@ class SpikeMixtureModel(torch.nn.Module):
         self.storage = threading.local()
         self.next_round_annotations = {}
         self.tmm = None
-        self.n_threads, Executor, context = get_pool(n_threads, cls="ThreadPoolExecutor")
+        self.n_threads, Executor, context = get_pool(
+            n_threads, cls="ThreadPoolExecutor"
+        )
         self.thread_pool = Executor(max_workers=n_threads, mp_context=context)
 
         self.to(self.data.device)
@@ -389,8 +391,8 @@ class SpikeMixtureModel(torch.nn.Module):
         if new_rank == self.ppca_rank:
             return
         self.tmm = None
-        self.unit_args['ppca_rank'] = new_rank
-        self.split_unit_args['ppca_rank'] = new_rank
+        self.unit_args["ppca_rank"] = new_rank
+        self.split_unit_args["ppca_rank"] = new_rank
         self.ppca_rank = new_rank
         self.clear_units()
 
@@ -2178,7 +2180,6 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         return i, leaves, cluster_ids, brute_group_ids, brute_improvement, brute_overlap
 
-
     def brute_merge(
         self,
         log_likelihoods,
@@ -2261,7 +2262,9 @@ class SpikeMixtureModel(torch.nn.Module):
                     level_lp,
                     self.log_proportions[current_unit_ids].tolist(),
                 )
-                impstr = ', '.join(f"{k}: {v:.3f}" for k, v in crit["improvements"].items())
+                impstr = ", ".join(
+                    f"{k}: {v:.3f}" for k, v in crit["improvements"].items()
+                )
                 logger.dartsortverbose(impstr)
 
             # store it as best if it was
@@ -2340,7 +2343,9 @@ class SpikeMixtureModel(torch.nn.Module):
             debug_info["full_improvement"] = best_improvement
             logger.dartsortdebug(f"Split full improvement: {best_improvement}")
             logger.dartsortdebug(f"Split full criteria: {full_info['full_criteria']}")
-            logger.dartsortdebug(f"Split merged criteria: {full_info['merged_criteria']}")
+            logger.dartsortdebug(
+                f"Split merged criteria: {full_info['merged_criteria']}"
+            )
             logger.dartsortdebug(f"Split improvements: {full_info['improvements']}")
         if n_units <= 1:
             if debug:
@@ -2348,7 +2353,9 @@ class SpikeMixtureModel(torch.nn.Module):
             return None
 
         cur_fit_liks = self.get_log_likelihoods(hyp_fit_spikes.indices, self.log_liks)
-        cur_eval_liks = self.get_log_likelihoods(eval_spikes.indices, self.log_liks, dense=True)
+        cur_eval_liks = self.get_log_likelihoods(
+            eval_spikes.indices, self.log_liks, dense=True
+        )
         cur_resp = torch.sparse.softmax(cur_fit_liks, dim=0)
         cur_resp = cur_resp.index_select(
             dim=0,
@@ -2460,7 +2467,8 @@ class SpikeMixtureModel(torch.nn.Module):
             for jj, subunit in enumerate(units):
                 merged_unit_memo[(jj,)] = subunit, full_info["hyp_liks_nolp"][jj]
             for group_ids, part, ids_part in all_partitions(
-                np.arange(len(units)), skip_full=skip_complete,
+                np.arange(len(units)),
+                skip_full=skip_complete,
             ):
                 # responsibilities and memoized units at this level
                 level_resps = hyp_fit_resps.new_empty((len(part), n_fit))
@@ -2472,7 +2480,9 @@ class SpikeMixtureModel(torch.nn.Module):
                     lresps = hyp_fit_resps[p]
                     level_resps[j] = lresps.sum(0)
                     if tuple(ids_part[j]) in merged_unit_memo:
-                        level_units[j], level_liks[j] = merged_unit_memo[tuple(ids_part[j])]
+                        level_units[j], level_liks[j] = merged_unit_memo[
+                            tuple(ids_part[j])
+                        ]
                     if len(ids_part[j]) > 1:
                         ipj = np.array(ids_part[j])
                         conn = cos_connectivity(cosines[ipj][:, ipj])
@@ -2500,10 +2510,12 @@ class SpikeMixtureModel(torch.nn.Module):
 
                 if debug:
                     tag = f"Split {ids_part}"
-                    fcrit = full_info['full_criteria']
-                    mcrit = full_info['merged_criteria']
-                    fcrit = ', '.join(f"{k}: {v:.3f}" for k, v in fcrit.items())
-                    imp = ', '.join(f"{k}: {v:.3f}" for k, v in crit['improvements'].items())
+                    fcrit = full_info["full_criteria"]
+                    mcrit = full_info["merged_criteria"]
+                    fcrit = ", ".join(f"{k}: {v:.3f}" for k, v in fcrit.items())
+                    imp = ", ".join(
+                        f"{k}: {v:.3f}" for k, v in crit["improvements"].items()
+                    )
                     logger.dartsortdebug(f"{tag} fvc: {fcrit}")
                     logger.dartsortdebug(f"{tag} mvc: {mcrit}")
                     logger.dartsortdebug(f"{tag} imp: {imp}")
@@ -2511,7 +2523,10 @@ class SpikeMixtureModel(torch.nn.Module):
                 # memoize
                 for j, hu in enumerate(crit["hyp_units"]):
                     if tuple(ids_part[j]) not in merged_unit_memo:
-                        merged_unit_memo[tuple(ids_part[j])] = hu, crit["hyp_liks_nolp"][j]
+                        merged_unit_memo[tuple(ids_part[j])] = (
+                            hu,
+                            crit["hyp_liks_nolp"][j],
+                        )
 
                 # store it as best if it was
                 if improvement > best_improvement:
@@ -2629,7 +2644,13 @@ class SpikeMixtureModel(torch.nn.Module):
             if conn < min_cosine:
                 logger.dartsortverbose(f"vc: Too small {conn=}")
                 return {
-                    "improvements": dict(elbo=-np.inf, loglik=-np.inf, entropy=-np.inf, ecl=-np.inf, ecelbo=-np.inf),
+                    "improvements": dict(
+                        elbo=-np.inf,
+                        loglik=-np.inf,
+                        entropy=-np.inf,
+                        ecl=-np.inf,
+                        ecelbo=-np.inf,
+                    ),
                     "overlap": conn,
                     "hyp_units": None,
                     "eval_labels": None,
@@ -2797,15 +2818,11 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_elbo = spiketorch.elbo(
             Qcur, cur_liks_full[:, vix], dim=0, reduce_mean=False
         )
-        cur_entropy = spiketorch.entropy(
-            Qcur, dim=0, reduce_mean=False
-        )
+        cur_entropy = spiketorch.entropy(Qcur, dim=0, reduce_mean=False)
         hyp_elbo = spiketorch.elbo(
             Qhyp, hyp_liks_full[:, vix], dim=0, reduce_mean=False
         )
-        hyp_entropy = spiketorch.entropy(
-            Qhyp, dim=0, reduce_mean=False
-        )
+        hyp_entropy = spiketorch.entropy(Qhyp, dim=0, reduce_mean=False)
 
         # -- compute final class weighted metrics
         splitting = n_cur == 1
@@ -2958,7 +2975,9 @@ class SpikeMixtureModel(torch.nn.Module):
         # see above
         if not hasattr(self.storage, "torch_rg"):
             # no need for lock since we spawn from thread-local rg
-            self.storage.torch_rg = spiketorch.spawn_torch_rg(self.rg, device=self.data.device)
+            self.storage.torch_rg = spiketorch.spawn_torch_rg(
+                self.rg, device=self.data.device
+            )
         return self.storage.torch_rg
 
     def train_extract_buffer(self):

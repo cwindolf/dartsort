@@ -110,7 +110,9 @@ def test_cli_help():
     assert not res.returncode
 
 
-@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "subtract_cumulant"])
+@pytest.mark.parametrize(
+    "type", ["subtract", "threshold", "match", "subtract_cumulant"]
+)
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")

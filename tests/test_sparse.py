@@ -333,4 +333,3 @@ def test_fisher_yates_replace():
     sparse_util.fisher_yates_replace(rg, 5, y)
     y_sorted = np.sort(y, axis=1)
     assert np.all(np.diff(y_sorted, axis=1) > 0)
-

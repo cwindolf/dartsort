@@ -17,7 +17,12 @@ logger = getLogger(__name__)
 
 
 def kdtree_inliers(
-    X, kdtree=None, n_neighbors=10, distance_upper_bound=25.0, workers=1, batch_size=2**16
+    X,
+    kdtree=None,
+    n_neighbors=10,
+    distance_upper_bound=25.0,
+    workers=1,
+    batch_size=2**16,
 ):
     """Mark outlying points by a neighbors distance criterion
 
@@ -263,9 +268,11 @@ def guess_mode(
     return np.argmax(density)
 
 
-def knn_density(kdtree, X, k, distance_upper_bound, batch_size=2 ** 12, workers=-1, sigma=None):
+def knn_density(
+    kdtree, X, k, distance_upper_bound, batch_size=2**12, workers=-1, sigma=None
+):
     n, d = X.shape
-    density = np.full(n, -np.inf, dtype='float32')
+    density = np.full(n, -np.inf, dtype="float32")
 
     for i0 in range(0, n, batch_size):
         i1 = min(n, i0 + batch_size)
@@ -281,10 +288,10 @@ def knn_density(kdtree, X, k, distance_upper_bound, batch_size=2 ** 12, workers=
             max_dist = distances[:, 1:].max(1)
             np.nan_to_num(max_dist, copy=False, posinf=-np.inf)
             # forget the sphere factor and the factor of n.
-            density[i0:i1] = n_neighbs / (max_dist ** d)
+            density[i0:i1] = n_neighbs / (max_dist**d)
         else:
             kernel = np.square(distances, out=distances)
-            kernel *= -(sigma ** -2)
+            kernel *= -(sigma**-2)
             np.exp(kernel, out=kernel)
             density[i0:i1] = kernel.sum(1)
 
@@ -336,7 +343,9 @@ def density_peaks(
                 kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
             )
         elif use_histograms:
-            sigmas = [sigma_local] + ([sigma_regional] * int(sigma_regional is not None))
+            sigmas = [sigma_local] + (
+                [sigma_regional] * int(sigma_regional is not None)
+            )
             density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
             if sigma_regional is not None:
                 d0, d1 = density
@@ -351,7 +360,12 @@ def density_peaks(
                 density = density[0]
         else:
             density = knn_density(
-                kdtree, X, k=n_neighbors_search, distance_upper_bound=radius_search, workers=workers, sigma=sigma_local
+                kdtree,
+                X,
+                k=n_neighbors_search,
+                distance_upper_bound=radius_search,
+                workers=workers,
+                sigma=sigma_local,
             )
 
     nhdn = nearest_higher_density_neighbor(
@@ -569,10 +583,14 @@ def gmm_density_peaks(
             n_neighbors_search=n_neighbors_search,
         )
         labels = nearest_neighbor_assign(
-            kdtree_res['kdtree'], kdtree_res['labels'], X, radius_search=maxdist, workers=workers
+            kdtree_res["kdtree"],
+            kdtree_res["labels"],
+            X,
+            radius_search=maxdist,
+            workers=workers,
         )
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
-        res['labels'] = labels
+        res["labels"] = labels
         return res
 
     if show_progress:

@@ -22,7 +22,9 @@ from ..util.data_util import subsample_waveforms, yield_chunks
 
 
 default_temporal_kernel_npy = files("dartsort.pretrained")
-default_temporal_kernel_npy = default_temporal_kernel_npy.joinpath("default_temporal_kernel.npy")
+default_temporal_kernel_npy = default_temporal_kernel_npy.joinpath(
+    "default_temporal_kernel.npy"
+)
 default_temporal_kernel_npy = Path(str(default_temporal_kernel_npy))
 
 
@@ -229,10 +231,14 @@ def add_features(h5_path, recording, featurization_cfg):
         wf_dset = h5["collisioncleaned_waveforms"]
         n = wf_dset.shape[0]
         f_dsets = {
-            sd.name: h5.create_dataset(sd.name, shape=(n, *sd.shape_per_spike), dtype=sd.dtype)
+            sd.name: h5.create_dataset(
+                sd.name, shape=(n, *sd.shape_per_spike), dtype=sd.dtype
+            )
             for sd in gt_pipeline.spike_datasets()
         }
-        for sli, chunk in yield_chunks(h5["collisioncleaned_waveforms"], desc_prefix="Featurize"):
+        for sli, chunk in yield_chunks(
+            h5["collisioncleaned_waveforms"], desc_prefix="Featurize"
+        ):
             _, feats = gt_pipeline(chunk, h5["channels"][sli])
             for k, v in feats.items():
                 f_dsets[k][sli] = v.numpy(force=True)

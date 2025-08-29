@@ -234,7 +234,9 @@ def truncated_kmeans(
         # update centroid dists
         for i0 in range(0, n_components, dcc_batch_size):
             i1 = min(n_components, i0 + dcc_batch_size)
-            torch.subtract(centroids[None], centroids[i0:i1, None], out=dccbuf[: i1 - i0]).square_()
+            torch.subtract(
+                centroids[None], centroids[i0:i1, None], out=dccbuf[: i1 - i0]
+            ).square_()
             torch.sum(dccbuf[: i1 - i0], dim=2, out=dcc[i0:i1])
         dccmask = dcc < max_distance_sq
 
@@ -262,7 +264,9 @@ def truncated_kmeans(
                     log_likelihoods[i0:i1] = batch_liks
                 elif j >= burn:
                     # welford running log lik
-                    log_likelihoods[i0:i1] += batch_liks.sub_(log_likelihoods[i0:i1]).mul_(1. / (j - burn + 1.))
+                    log_likelihoods[i0:i1] += batch_liks.sub_(
+                        log_likelihoods[i0:i1]
+                    ).mul_(1.0 / (j - burn + 1.0))
                 if done:
                     continue
 
@@ -274,7 +278,7 @@ def truncated_kmeans(
                 resps = torch.sparse_coo_tensor(
                     indices=torch.stack(
                         (
-                            torch.arange(i1 - i0, device=batch_labels.device), 
+                            torch.arange(i1 - i0, device=batch_labels.device),
                             batch_labels.squeeze(),
                         ),
                         dim=0,
@@ -283,7 +287,11 @@ def truncated_kmeans(
                     size=resps.shape,
                     is_coalesced=True,
                 )
-                distsq_values = distsq_coo.to_dense().take_along_dim(dim=1, indices=batch_labels).squeeze()
+                distsq_values = (
+                    distsq_coo.to_dense()
+                    .take_along_dim(dim=1, indices=batch_labels)
+                    .squeeze()
+                )
             else:
                 # update labels... torch sparse has no argmax(), so need scipy
                 # or cupy. scipy is a big slowdown here, so cupy if possible.

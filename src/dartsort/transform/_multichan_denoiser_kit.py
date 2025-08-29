@@ -206,7 +206,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
     @classmethod
     def load_from_pt(cls, pretrained_path, **kwargs):
         net = cls(**kwargs)
-        state_dict = torch.load(pretrained_path, map_location='cpu')
+        state_dict = torch.load(pretrained_path, map_location="cpu")
         net.spike_length_samples = state_dict.pop("spike_length_samples")
         net.initialize_spike_length_dependent_params()
         net.load_state_dict(state_dict)
@@ -215,7 +215,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
 
     def save_to_pt(self, pretrained_path):
         state = self.state_dict()
-        state['spike_length_samples'] = self.spike_length_samples
+        state["spike_length_samples"] = self.spike_length_samples
         torch.save(state, pretrained_path)
 
 

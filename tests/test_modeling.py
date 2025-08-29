@@ -224,7 +224,9 @@ def test_mixture(
 
             if dist_and_search_type == "kl":
                 assert torch.equal(
-                    tmm.candidates.candidates[:, 1 : tmm.candidates.n_candidates].unique(),
+                    tmm.candidates.candidates[
+                        :, 1 : tmm.candidates.n_candidates
+                    ].unique(),
                     torch.arange(res["sim_res"]["K"]),
                 )
             assert (

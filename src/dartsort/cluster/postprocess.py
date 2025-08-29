@@ -65,7 +65,9 @@ def realign_and_chuck_noisy_template_units(
         template_data.spike_counts >= min_n_spikes,
         template_snrs > min_template_snr,
     )
-    logger.dartsortdebug(f"Discard {np.logical_not(good_templates).sum()} low-signal templates.")
+    logger.dartsortdebug(
+        f"Discard {np.logical_not(good_templates).sum()} low-signal templates."
+    )
 
     good_unit_ids = template_data.unit_ids[good_templates]
     assert np.all(np.diff(good_unit_ids) >= 0)
@@ -156,8 +158,12 @@ def postprocess(
             sorting,
             denoising_rank=template_cfg.denoising_rank,
             denoising_fit_radius=template_cfg.denoising_fit_radius,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(recording.sampling_frequency),
-            spike_length_samples=waveform_cfg.spike_length_samples(recording.sampling_frequency),
+            trough_offset_samples=waveform_cfg.trough_offset_samples(
+                recording.sampling_frequency
+            ),
+            spike_length_samples=waveform_cfg.spike_length_samples(
+                recording.sampling_frequency
+            ),
         )
     h5_path = sorting.parent_h5_path
 
@@ -239,7 +245,10 @@ def postprocess(
         axis=0,
     )
     spike_counts = np.concatenate(
-        [template_data.spike_counts[original_keep], recompute_template_data.spike_counts],
+        [
+            template_data.spike_counts[original_keep],
+            recompute_template_data.spike_counts,
+        ],
         axis=0,
     )
     spike_counts_by_channel = None

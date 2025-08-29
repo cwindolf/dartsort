@@ -27,7 +27,12 @@ from .transform import WaveformPipeline
 
 from .cluster import cluster_util, density, kmeans, merge, postprocess, ppcalib
 from .cluster.gaussian_mixture import SpikeMixtureModel
-from .cluster import get_clusterer, get_clustering_features, clustering_strategies, refinement_strategies
+from .cluster import (
+    get_clusterer,
+    get_clustering_features,
+    clustering_strategies,
+    refinement_strategies,
+)
 from .cluster.stable_features import (
     SpikeFeatures,
     SpikeNeighborhoods,

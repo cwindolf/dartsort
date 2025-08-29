@@ -2,6 +2,7 @@ import dataclasses
 from logging import getLogger
 
 import h5py
+
 try:
     from hdbscan import HDBSCAN
 except ImportError:
@@ -158,7 +159,14 @@ def closest_registered_channels(
 
 
 def grid_snap(
-    times_seconds, x, z_abs, geom, grid_dx=15., grid_dz=15., z_reg=None, motion_est=None
+    times_seconds,
+    x,
+    z_abs,
+    geom,
+    grid_dx=15.0,
+    grid_dz=15.0,
+    z_reg=None,
+    motion_est=None,
 ):
     if motion_est is None:
         motion_est = IdentityMotionEstimate()

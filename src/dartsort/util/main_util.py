@@ -158,7 +158,7 @@ def ds_fast_forward(store_dir, cfg):
     next_step: int
     cur_sorting: DARTsortSorting
     """
-    # if clustering labels 
+    # if clustering labels
     can_resume_from_clustering = cfg.save_intermediate_labels
 
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"

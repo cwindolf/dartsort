@@ -308,11 +308,10 @@ class DensityPeaksClusterer(Clusterer):
             labels = cluster_util.combine_disjoint(
                 choices, labels, not_choices, other_labels
             )
-        
+
         labels = cluster_util.decrumb(
             labels, min_size=self.remove_clusters_smaller_than, in_place=True
         )
-            
 
         return labels
 

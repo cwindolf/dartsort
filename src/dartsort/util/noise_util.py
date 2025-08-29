@@ -950,7 +950,7 @@ class EmbeddedNoise(torch.nn.Module):
     def detection_prior_log_prob(self, templates_pca_projected, threshold=10.0):
         """
         Computes:
-            z(T) = log[p(noise det | T)] 
+            z(T) = log[p(noise det | T)]
                  = log[P(|N|^2 - |N - T|^2 > threshold^2)]
                  = log[log P(2N.T > threshold^2 + |T|^2)]
 
@@ -965,7 +965,9 @@ class EmbeddedNoise(torch.nn.Module):
             log normal_sf(0.5 * (thresh^2 + |T|^2) ; mean=0, scale=sqrt(tr TCT))
         """
         C = self.full_dense_cov()
-        templates_pca_projected = torch.asarray(templates_pca_projected, device=C.device)
+        templates_pca_projected = torch.asarray(
+            templates_pca_projected, device=C.device
+        )
         T = templates_pca_projected.reshape(len(templates_pca_projected), -1)
         assert C.shape == (T.shape[1], T.shape[1])
         tr = torch.einsum("nc,cd,nd->n", T, C, T)
@@ -973,7 +975,9 @@ class EmbeddedNoise(torch.nn.Module):
         crit = T.square().sum(dim=1).add_(threshold**2).mul_(0.5)
         return norm.logsf(crit.numpy(force=True), scale=scale.numpy(force=True))
 
-    def channelwise_detection_prior_log_prob(self, threshold=4.0, n_samples=8192, seed=0):
+    def channelwise_detection_prior_log_prob(
+        self, threshold=4.0, n_samples=8192, seed=0
+    ):
         """Compute the marginal probability that the norm is larger than threshold on each channel.
 
         TPCA is isometry, so no need to know the basis when working with the norm. Further, we can

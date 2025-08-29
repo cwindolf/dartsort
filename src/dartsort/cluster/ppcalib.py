@@ -534,7 +534,9 @@ def get_neighborhood_data(
     ess = weights[keep].sum()
     n_start = 0
     for chans_tuple, chans_data in dedup_data.items():
-        nid, neighb_chans, active_subset, have_missing, missing_subset, xs, mems = chans_data
+        nid, neighb_chans, active_subset, have_missing, missing_subset, xs, mems = (
+            chans_data
+        )
         if len(mems) > 1:
             x = torch.concatenate(xs)
             neighb_members = torch.concatenate(mems)

@@ -215,8 +215,8 @@ class TemplateConfig:
 
     # superresolved templates
     superres_templates: bool = False
-    superres_bin_size_um: float = 10.0
-    superres_bin_min_spikes: int = 5
+    superres_bin_size_um: float = 5.0
+    superres_bin_min_spikes: int = 50
     superres_strategy: str = "motion_estimate"
 
     # low rank denoising?

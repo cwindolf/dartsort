@@ -50,7 +50,7 @@ class BasePeeler(torch.nn.Module):
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
         fit_sampling="random",
-        fit_subsampling_random_state: int | np.random.Generator=0,
+        fit_subsampling_random_state: int | np.random.Generator = 0,
         trough_offset_samples=42,
         spike_length_samples=121,
         dtype=torch.float,
@@ -551,9 +551,7 @@ class BasePeeler(torch.nn.Module):
             return
         self.featurization_pipeline.precompute()
 
-    def fit_featurization_pipeline(
-        self, tmp_dir=None, computation_cfg=None
-    ):
+    def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
         if self.featurization_pipeline is None:
             return
 
@@ -864,7 +862,9 @@ class BasePeeler(torch.nn.Module):
 
 
 class PeelerProcessContext:
-    def __init__(self, peeler, compute_residual, skip_features, chunk_length_samples, to_numpy):
+    def __init__(
+        self, peeler, compute_residual, skip_features, chunk_length_samples, to_numpy
+    ):
         self.peeler = peeler
         self.compute_residual = compute_residual
         self.skip_features = skip_features

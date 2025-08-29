@@ -113,9 +113,7 @@ def get_singlechan_waveforms(
         rec.get_channel_locations(), radius=deduplication_radius, to_torch=True
     )
     baz = "hi"
-    wfeat = Waveform(
-        channel_index, name=baz, spike_length_samples=spike_length_samples
-    )
+    wfeat = Waveform(channel_index, name=baz, spike_length_samples=spike_length_samples)
     thresh = ThresholdAndFeaturize(
         rec,
         channel_index,
@@ -141,7 +139,13 @@ def get_singlechan_waveforms(
 
 
 def spatial_footprint_bank(
-    geom, n_sigmas=3, min_template_size=10.0, dsigma=2.0, max_distance=32.0, dx=32.0, eps=0.025
+    geom,
+    n_sigmas=3,
+    min_template_size=10.0,
+    dsigma=2.0,
+    max_distance=32.0,
+    dx=32.0,
+    eps=0.025,
 ):
     z_unique = np.unique(geom[:, 1])
     dz = 1.0 if z_unique.size == 1 else np.median(np.diff(z_unique))

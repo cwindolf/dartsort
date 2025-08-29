@@ -171,7 +171,7 @@ class MStep(GMMPlot):
         emp_mean = gmm.data.tpca.force_reconstruct(emp_mean.nan_to_num_()).numpy(
             force=True
         )
-        if hasattr(gmm[unit_id], 'mean'):
+        if hasattr(gmm[unit_id], "mean"):
             model_mean = gmm[unit_id].mean[:, chans]
             model_mean = gmm.data.tpca.force_reconstruct(model_mean).numpy(force=True)
         else:
@@ -371,7 +371,7 @@ class WaveformCheck(GMMPlot):
             neighborhood=self.neighborhood,
         )
 
-        c_is_str = isinstance(self.colorvar, str) 
+        c_is_str = isinstance(self.colorvar, str)
         if c_is_str and self.colorvar == "time":
             c = gmm.data.times_seconds[ixs].numpy(force=True)
         elif c_is_str and self.colorvar == "chandepth":
@@ -475,7 +475,7 @@ class Likelihoods(GMMPlot):
         liksf = liks[liks.isfinite()].numpy(force=True)
         mn = max(nliksf.min(), liksf.min())
         mx = min(nliksf.max(), liksf.max())
-        ax_noise.plot([mn, mx], [mn, mx], color='k', lw=0.8, zorder=11)
+        ax_noise.plot([mn, mx], [mn, mx], color="k", lw=0.8, zorder=11)
         histk = dict(histtype="step", orientation="horizontal")
         n, bins, _ = ax_dist.hist(
             liks[torch.isfinite(liks)], color=c, label="unit", bins=64, **histk
@@ -764,7 +764,9 @@ class KMeansSplit(GMMPlot):
             Xp = u[:, :2] * s[:2]
             tv = v[:, :2]
 
-            ax_pca.scatter(*Xp.numpy(force=True).T, c=glasbey1024[split_labels], s=2, lw=0)
+            ax_pca.scatter(
+                *Xp.numpy(force=True).T, c=glasbey1024[split_labels], s=2, lw=0
+            )
             ax_pca.axhline(0, lw=0.8, color="k")
             ax_pca.axvline(0, lw=0.8, color="k")
             if "units" in split_info:

@@ -413,7 +413,9 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
     return replace(sorting, labels=new_labels, extra_features=extra_features)
 
 
-def subsample_to_max_count(sorting, max_spikes=256, seed: int | np.random.Generator=0, discard_triaged=False):
+def subsample_to_max_count(
+    sorting, max_spikes=256, seed: int | np.random.Generator = 0, discard_triaged=False
+):
     units, counts = np.unique(sorting.labels, return_counts=True)
     if counts.max() <= max_spikes:
         return sorting
@@ -644,7 +646,7 @@ def subsample_waveforms(
     if need_open:
         hdf5_filename = resolve_path(hdf5_filename, strict=True)
         h5 = h5py.File(hdf5_filename)
-    
+
     channels: np.ndarray = h5["channels"][:]
     n_wf = channels.shape[0]
     weights = fit_reweighting(
@@ -665,9 +667,7 @@ def subsample_waveforms(
         else:
             uchoices, ichoices = np.unique(choices, return_inverse=True)
             channels = channels[uchoices][ichoices]
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
-                ichoices
-            ]
+            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
     else:
         waveforms: np.ndarray = h5[waveforms_dataset_name][:]
 

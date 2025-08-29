@@ -35,6 +35,13 @@ class TemplateData:
     registered_geom: np.ndarray | None = None
     trough_offset_samples: int = 42
 
+    # stores (n_templates, *) arrays of template properties
+    # possibilities:
+    #  - motion_estimate_bin_centers
+    #    For motion_estimate binned superres sortings, these are the drift
+    #    bin centers for each template.
+    properties: dict[str, np.ndarray] | None = None
+
     def __post_init__(self):
         assert self.trough_offset_samples < self.spike_length_samples
 
@@ -53,6 +60,9 @@ class TemplateData:
         if self.registered_geom is not None:
             assert self.registered_geom.ndim == 2
             assert self.registered_geom.shape[0] == nc
+        if self.properties:
+            for v in self.properties.values():
+                assert v.shape[0] == ntemp
 
     @property
     def spike_length_samples(self):
@@ -95,7 +105,17 @@ class TemplateData:
                 del data["spike_length_samples"]  # todo: remove
             if "parent_sorting_hdf5_path" in data:
                 del data["parent_sorting_hdf5_path"]  # todo: remove
-            return cls(**data)
+
+            properties = {}
+            for k, v in data.items():
+                if k.startswith("__prop_"):
+                    properties[k.removeprefix("__prop_")] = v
+            for k in properties:
+                del data[f"__prop_{k}"]
+            if not properties:
+                properties = None
+
+            return cls(**data, properties=properties)
 
     def to_npz(self, npz_path):
         to_save = dict(
@@ -112,6 +132,9 @@ class TemplateData:
             to_save["raw_std_dev"] = self.raw_std_dev
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
+        if self.properties is not None:
+            for k, p in self.properties.items():
+                to_save[f"__prop_{k}"] = p
         np.savez(npz_path, **to_save)
 
     def __getitem__(self, subset):
@@ -120,6 +143,10 @@ class TemplateData:
             matched = self.unit_ids[subset_ixs] == subset
             assert matched.all()
             subset = subset_ixs
+        if self.properties is not None:
+            properties = {k: p[subset] for k, p in self.properties.items()}
+        else:
+            properties = None
         return self.__class__(
             templates=self.templates[subset],
             unit_ids=self.unit_ids[subset],
@@ -134,6 +161,7 @@ class TemplateData:
             ),
             registered_geom=self.registered_geom,
             trough_offset_samples=self.trough_offset_samples,
+            properties=properties,
         )
 
     def coarsen(self):
@@ -151,6 +179,7 @@ class TemplateData:
             templates=templates,
             unit_ids=unit_ids_unique,
             spike_counts=spike_counts,
+            properties=None,
         )
 
     def unit_mask(self, unit_id):
@@ -319,7 +348,7 @@ def _from_config_with_realigned_sorting(
 
     # handle superresolved templates
     if template_cfg.superres_templates:
-        group_ids, sorting = superres_sorting(
+        superres_data = superres_sorting(
             sorting,
             geom,
             motion_est=motion_est,
@@ -327,8 +356,12 @@ def _from_config_with_realigned_sorting(
             superres_bin_size_um=template_cfg.superres_bin_size_um,
             min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
         )
+        group_ids = superres_data["group_ids"]
+        sorting = superres_data["sorting"]
+        properties = superres_data["properties"]
     else:
         group_ids = None
+        properties = {}
 
     # main!
     results = get_templates(
@@ -365,6 +398,7 @@ def _from_config_with_realigned_sorting(
         raw_std_dev=results["raw_std_devs"],
         registered_geom=rgeom,
         trough_offset_samples=trough_offset_samples,
+        properties=properties,
     )
     if save_folder is not None:
         obj.to_npz(npz_path)

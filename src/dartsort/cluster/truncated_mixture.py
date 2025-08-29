@@ -1026,7 +1026,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             )
             self.Coo_invsqrt[ni].view(R, nco, R, nco)[
                 :, oi[:, None], :, oi[None, :]
-            ] = Coo_invsqrt[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device)
+            ] = (Coo_invsqrt[ni].view(R, ncoi, R, ncoi).permute(1, 3, 0, 2).to(device))
 
     def initialize_changing(self, log_proportions, means, noise_log_prop, bases):
         """Initialize or resize all parameter-dependent arrays

@@ -603,8 +603,7 @@ def _searchsorted_along_columns(out, arr, value):
 
 
 def integers_without_inner_replacement(rg, high, size):
-    """
-    """
+    """ """
     assert len(size) == 2
     out = np.empty(size, dtype=np.int64)
     out_write = out.reshape((-1, size[-1]))
@@ -687,9 +686,7 @@ def erase_dups(arr):
 # sparse kmeans helpers
 
 
-def sparse_centroid_distsq(
-    X, centroids, labels, centroid_mask, dbufs
-):
+def sparse_centroid_distsq(X, centroids, labels, centroid_mask, dbufs):
     neighbors = centroid_mask[labels]
     coo = neighbors.nonzero()
     ii, cc = coo.T
@@ -729,7 +726,7 @@ def logsumexp_coo(coo):
     # first, put the max values into out
     max_values = v.new_full((coo.shape[0],), -torch.inf)
     logsumexps = v.new_zeros((coo.shape[0],))
-    max_values.scatter_reduce_(dim=0, index=i, src=v, reduce='amax')
+    max_values.scatter_reduce_(dim=0, index=i, src=v, reduce="amax")
 
     # now stable exponential
     sv = max_values[i]

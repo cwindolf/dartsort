@@ -211,9 +211,7 @@ def get_mlp(
         final_dim = compression_dim
 
     elif res_type == "unet_linear":
-        layers.append(
-            UNetLinear(input_dim, hidden_dims, out_dim, nonlinearity)
-        )
+        layers.append(UNetLinear(input_dim, hidden_dims, out_dim, nonlinearity))
         final_dim = layers[-1].final_dim
 
     elif res_type in ("none", "outer"):
@@ -269,7 +267,7 @@ def get_waveform_mlp(
     layers = []
     if log_transform:
         layers.append(WaveformOnly(LogTransform()))
-    
+
     if initial_conv_fullheight:
         # what Conv1d considers channels is actually time (conv1d is ncl).
         # so this is matmul over time, and kernel size is 1 to be separate over chans

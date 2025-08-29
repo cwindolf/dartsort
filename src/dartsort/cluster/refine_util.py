@@ -33,12 +33,17 @@ def gmm_refine(
     assert refinement_cfg.refinement_strategy == "gmm"
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
-    initialize_at_rank_0 = refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
+    initialize_at_rank_0 = (
+        refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
+    )
 
     logger.dartsortdebug(f"Refine clustering from {sorting.parent_h5_path}")
 
     gmm = initialize_gmm(
-        sorting, refinement_cfg=refinement_cfg, motion_est=motion_est, computation_cfg=computation_cfg
+        sorting,
+        refinement_cfg=refinement_cfg,
+        motion_est=motion_est,
+        computation_cfg=computation_cfg,
     )
 
     step_labels = {}
@@ -260,7 +265,7 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     kept = data.kept_indices
     n = len(kept)
     x = data._train_extract_features.view(n, -1, data.n_channels_extract)
-    x = x[:, :refinement_cfg.pc_merge_rank]
+    x = x[:, : refinement_cfg.pc_merge_rank]
     labels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     means = spiketorch.average_by_label(
         x, labels, data._train_extract_channels, data.n_channels
@@ -288,7 +293,12 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     return replace(sorting, labels=labels)
 
 
-def initialize_gmm(sorting, refinement_cfg=default_refinement_cfg, motion_est=None, computation_cfg=None):
+def initialize_gmm(
+    sorting,
+    refinement_cfg=default_refinement_cfg,
+    motion_est=None,
+    computation_cfg=None,
+):
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
     data = StableSpikeDataset.from_config(
@@ -308,7 +318,9 @@ def initialize_gmm(sorting, refinement_cfg=default_refinement_cfg, motion_est=No
         zero_radius=refinement_cfg.cov_radius,
         rgeom=data.prgeom[:-1].numpy(force=True),
     )
-    initialize_at_rank_0 = refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
+    initialize_at_rank_0 = (
+        refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
+    )
     noise_log_priors = get_noise_log_priors(noise, sorting, refinement_cfg)
     gmm = SpikeMixtureModel(
         data,

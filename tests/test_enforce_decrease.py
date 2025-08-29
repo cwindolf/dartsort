@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-from dartsort.transform.enforce_decrease import (EnforceDecrease,
-                                                 make_parents_index)
+from dartsort.transform.enforce_decrease import EnforceDecrease, make_parents_index
 from dartsort.util.waveform_util import make_channel_index
 from test_util import dense_layout
 

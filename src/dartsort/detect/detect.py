@@ -63,7 +63,6 @@ def detect_and_deduplicate(
             trough_priority=trough_priority,
         )
 
-
     nsamples, nchans = traces.shape
     all_dedup = isinstance(dedup_channel_index, str) and dedup_channel_index == "all"
     if not all_dedup and dedup_channel_index is not None:
@@ -96,7 +95,10 @@ def detect_and_deduplicate(
             torch.amax(
                 max_energies[relative_peak_channel_index, batch_start:batch_end],
                 dim=1,
-                out=max_energies[:nchans, batch_start:batch_end,],
+                out=max_energies[
+                    :nchans,
+                    batch_start:batch_end,
+                ],
             )
         energies.masked_fill_(max_energies[:nchans] > energies[0], 0.0)
     # unpool will set non-maxima to 0
@@ -238,7 +240,9 @@ def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=256):
     padding = win_size // 2
 
     # Pad spatial dimensions
-    padded = F.pad(radiality.unsqueeze(1), (padding, padding, padding, padding), mode='reflect')  # (C, 1, H+2p, W+2p)
+    padded = F.pad(
+        radiality.unsqueeze(1), (padding, padding, padding, padding), mode="reflect"
+    )  # (C, 1, H+2p, W+2p)
 
     results = []
     start = 0
@@ -251,11 +255,17 @@ def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=256):
         padded_start = start
         padded_end = end + 2 * padding
 
-        chunk = padded[:, :, :, padded_start:padded_end]  # (C, 1, H+2p, chunk_width + 2p)
+        chunk = padded[
+            :, :, :, padded_start:padded_end
+        ]  # (C, 1, H+2p, chunk_width + 2p)
 
         # Unfold to extract sliding windows
-        windows = chunk.unfold(2, win_size, 1).unfold(3, win_size, 1)  # (C, 1, H, chunk_width, win_size, win_size)
-        windows = windows.contiguous().view(C, H, end - start, -1)  # (C, H, chunk_width, win_size*win_size)
+        windows = chunk.unfold(2, win_size, 1).unfold(
+            3, win_size, 1
+        )  # (C, 1, H, chunk_width, win_size, win_size)
+        windows = windows.contiguous().view(
+            C, H, end - start, -1
+        )  # (C, H, chunk_width, win_size*win_size)
 
         # Cumulant calculations
         if order == 1:
@@ -280,38 +290,40 @@ def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=256):
 
 
 def detect_and_deduplicate_2d_filters(
-        traces,
-        cum_traces=None,
-        cumulant_order=2,
-        cumulant_win_size=11,
-        radiality=None,
-        threshold=4,
-        dedup_channel_index=None,
-        peak_sign="neg",
-        relative_peak_radius=5,
-        spatial_dedup_batch_size=512,
-        exclude_edges=True,
-        return_energies=False,
-        detection_mask=None,
-        trough_priority=None,
+    traces,
+    cum_traces=None,
+    cumulant_order=2,
+    cumulant_win_size=11,
+    radiality=None,
+    threshold=4,
+    dedup_channel_index=None,
+    peak_sign="neg",
+    relative_peak_radius=5,
+    spatial_dedup_batch_size=512,
+    exclude_edges=True,
+    return_energies=False,
+    detection_mask=None,
+    trough_priority=None,
 ):
     if cumulant_order and cum_traces is None:
         inp = radiality if radiality is not None else traces
-        cum_traces = compute_sliding_2d_cumulant(inp.unsqueeze(0), cumulant_order, cumulant_win_size)
+        cum_traces = compute_sliding_2d_cumulant(
+            inp.unsqueeze(0), cumulant_order, cumulant_win_size
+        )
         cum_traces = cum_traces.unsqueeze(0)
     else:
         cum_traces = traces.unsqueeze(0).unsqueeze(0)
 
-    if(radiality is not None):
+    if radiality is not None:
         radiality = radiality.unsqueeze(0).unsqueeze(0)
 
     if peak_sign == "neg":
         energies = traces.neg()
-        if(radiality is not None):
+        if radiality is not None:
             radiality = radiality.neg()
     elif peak_sign == "both":
         energies = traces.abs()
-        if(radiality is not None):
+        if radiality is not None:
             radiality = radiality.abs()
     else:
         assert peak_sign == "pos"
@@ -331,7 +343,7 @@ def detect_and_deduplicate_2d_filters(
     # # Apply maxima mask
     # energies = energies * maxima_mask
 
-    if(radiality is not None):
+    if radiality is not None:
         max_radiality = F.max_pool2d(
             radiality,
             kernel_size=2 * relative_peak_radius + 1,
@@ -339,7 +351,7 @@ def detect_and_deduplicate_2d_filters(
             padding=relative_peak_radius,
         )
 
-        maxima_mask = (radiality == max_radiality)  # (1, 1, T, C)
+        maxima_mask = radiality == max_radiality  # (1, 1, T, C)
 
         # Apply maxima mask
         energies = energies * maxima_mask
@@ -351,7 +363,7 @@ def detect_and_deduplicate_2d_filters(
             padding=relative_peak_radius,
         )
 
-        maxima_mask = (cum_traces == max_cum_traces)  # (1, 1, T, C)
+        maxima_mask = cum_traces == max_cum_traces  # (1, 1, T, C)
 
         # Apply maxima mask
         energies = energies * maxima_mask
@@ -364,8 +376,12 @@ def detect_and_deduplicate_2d_filters(
         tp = torch.where(traces < 0, trough_priority, 1.0)
         energies.mul_(tp)
 
-    max_energies = F.max_pool2d(energies, kernel_size=2 * relative_peak_radius + 1, stride=1,
-                                padding=relative_peak_radius)
+    max_energies = F.max_pool2d(
+        energies,
+        kernel_size=2 * relative_peak_radius + 1,
+        stride=1,
+        padding=relative_peak_radius,
+    )
 
     if detection_mask is not None:
         energies.mul_(detection_mask.to(energies))

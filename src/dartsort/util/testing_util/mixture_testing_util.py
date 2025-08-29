@@ -61,12 +61,17 @@ def simulate_moppca(
     if t_cov == "eye":
         cov = np.eye(D)
         noise = dartsort.EmbeddedNoise(
-            rank, nc, cov_kind="scalar", global_std=torch.tensor(1.0, dtype=torch.float, device=device)
+            rank,
+            nc,
+            cov_kind="scalar",
+            global_std=torch.tensor(1.0, dtype=torch.float, device=device),
         )
     elif t_cov == "random":
         _c = rg.normal(size=(D, 10 * D))
         cov = _c @ _c.T / (10 * D)
-        full_cov = torch.asarray(cov, dtype=torch.float, device=device).view(rank, nc, rank, nc)
+        full_cov = torch.asarray(cov, dtype=torch.float, device=device).view(
+            rank, nc, rank, nc
+        )
         noise = dartsort.EmbeddedNoise(rank, nc, cov_kind="full", full_cov=full_cov)
     else:
         assert False
@@ -145,9 +150,7 @@ def simulate_moppca(
         x = torch.take_along_dim(y, channels.unsqueeze(1), dim=2)
     assert x is not None
 
-    neighbs = dartsort.SpikeNeighborhoods.from_channels(
-        channels, nc, device=device
-    )
+    neighbs = dartsort.SpikeNeighborhoods.from_channels(channels, nc, device=device)
 
     init_labels = labels.clone()
     if init_label_corruption:
@@ -551,7 +554,7 @@ def test_moppcas(
         )
     noise_log_priors = None
     if use_nlp:
-        noise_log_priors = sim_res['noise_log_priors']
+        noise_log_priors = sim_res["noise_log_priors"]
     sim_res["noise"].zero_radius = zero_radius
     mm, fit_info = fit_moppcas(
         sim_res["data"],

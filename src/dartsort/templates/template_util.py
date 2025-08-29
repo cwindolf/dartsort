@@ -241,7 +241,11 @@ class LowRankTemplates:
 
 
 def svd_compress_templates(
-    template_data, min_channel_amplitude=0.0, rank=5, channel_sparse=True, allow_na=False
+    template_data,
+    min_channel_amplitude=0.0,
+    rank=5,
+    channel_sparse=True,
+    allow_na=False,
 ):
     """
     Returns:
@@ -268,7 +272,6 @@ def svd_compress_templates(
     vis_mask = amp_vecs > min_channel_amplitude
     vis_templates = templates * vis_mask
     dtype = templates.dtype
-
 
     if not channel_sparse:
         U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
@@ -391,7 +394,9 @@ def compressed_upsampled_templates(
 
     # build the compressed upsampling map
     compressed_upsampling_map = np.full((n_templates, max_upsample), -1, dtype=np.int64)
-    compressed_upsampling_index = np.full((n_templates, max_upsample), -1, dtype=np.int64)
+    compressed_upsampling_index = np.full(
+        (n_templates, max_upsample), -1, dtype=np.int64
+    )
     template_indices = []
     upsampling_indices = []
     current_compressed_index = 0

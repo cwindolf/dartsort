@@ -11,8 +11,7 @@ from .unit import UnitPlot, make_all_summaries, make_unit_summary
 from .waveforms import geomplot
 
 
-
-table_cmap = ['managua', 'cividis']
+table_cmap = ["managua", "cividis"]
 for table_cmap in table_cmap:
     if table_cmap in plt.colormaps:
         break

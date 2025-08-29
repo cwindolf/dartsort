@@ -10,6 +10,7 @@ is all just numpy, and that's why it lives here and not
 in transform/ which has torch-based stuff for use during
 peeling.
 """
+
 import numpy as np
 from dartsort.util import drift_util
 
@@ -36,7 +37,9 @@ def relocated_waveforms_on_static_channels(
     if xyza_from.shape[1] == 4:
         alpha = xyza_from[:, 3]
     elif xyza_from.shape[1] == 3:
-        alpha = determine_alpha(amplitude_vectors, x, y, z_from, geom, channels=channel_index[main_channels])
+        alpha = determine_alpha(
+            amplitude_vectors, x, y, z_from, geom, channels=channel_index[main_channels]
+        )
     else:
         assert False
     if registered_geom is None:
@@ -88,7 +91,7 @@ def point_source_amplitude_vectors(x, y, z_abs, alpha, geom, channels=None):
     dx = geom[..., 0] - x[:, None]
     dz = geom[..., 1] - z_abs[:, None]
     dy = y[:, None]
-    denom = np.sqrt(dy*dy + dx*dx + dz*dz)
+    denom = np.sqrt(dy * dy + dx * dx + dz * dz)
     denom[denom < 1e-8] = 1
 
     return alpha[:, None] / denom
@@ -97,10 +100,10 @@ def point_source_amplitude_vectors(x, y, z_abs, alpha, geom, channels=None):
 def determine_alpha(ampvecs, x, y, z, geom, channels=None):
     geom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
     mask = (channels < len(geom)).astype(ampvecs.dtype)
-    preds = point_source_amplitude_vectors(x, y, z, np.ones_like(z), geom, channels=channels)
-    alpha = (
-        np.nan_to_num(ampvecs * preds * mask).sum(axis=1)
-        / np.nan_to_num(ampvecs * ampvecs * mask).sum(axis=1)
+    preds = point_source_amplitude_vectors(
+        x, y, z, np.ones_like(z), geom, channels=channels
     )
+    alpha = np.nan_to_num(ampvecs * preds * mask).sum(axis=1) / np.nan_to_num(
+        ampvecs * ampvecs * mask
+    ).sum(axis=1)
     return alpha
-

@@ -54,7 +54,9 @@ class SingleChannelTemplates(BaseWaveformModule):
     def initialize_spike_length_dependent_params(self):
         self.template_trough = self.trough_offset_samples - self.alignment_padding
         self.template_length = self.spike_length_samples - 2 * self.alignment_padding
-        self.register_buffer("templates", torch.zeros((self.n_centroids, self.template_length)))
+        self.register_buffer(
+            "templates", torch.zeros((self.n_centroids, self.template_length))
+        )
         self.to(self.channel_index.device)
 
     def fit(self, waveforms, max_channels, recording=None, weights=None):
@@ -64,9 +66,7 @@ class SingleChannelTemplates(BaseWaveformModule):
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
-            choices = rg.choice(
-                len(weights), p=weights, size=self.max_waveforms
-            )
+            choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]

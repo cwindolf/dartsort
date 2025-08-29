@@ -156,7 +156,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     templates = np.zeros((1, spike_length_samples, n_channels), dtype="float32")
     templates[0, :, 0] = trace0
     # templates[1, :, 1] = trace0
-    print('-- cupts')
+    print("-- cupts")
     cupts = template_util.compressed_upsampled_templates(
         templates,
         ptps=np.ptp(templates, 1).max(1),
@@ -198,7 +198,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         )
         assert np.allclose(template_data.templates, templates)
 
-        print('-- make matcher')
+        print("-- make matcher")
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
             dartsort.default_waveform_cfg,
@@ -217,7 +217,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         lrt = template_util.svd_compress_templates(
             template_data.templates, rank=matcher.svd_compression_rank
         )
-        print('-- tempup')
+        print("-- tempup")
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
             ptps=np.ptp(template_data.templates, 1).max(1),
@@ -421,7 +421,9 @@ def test_static(tmp_path, up_factor, cd_iter):
 
         assert res["n_spikes"] == len(times)
         assert np.array_equal(res["times_samples"], times)
-        assert np.array_equal(res["upsampling_indices"], np.zeros_like(res["upsampling_indices"]))
+        assert np.array_equal(
+            res["upsampling_indices"], np.zeros_like(res["upsampling_indices"])
+        )
         assert np.array_equal(res["labels"], labels)
         assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
         print(f"D {torch.square(res['conv']).mean()=}")

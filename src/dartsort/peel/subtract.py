@@ -357,9 +357,7 @@ class SubtractionPeeler(BasePeeler):
     def precompute_peeler_models(self):
         self.subtraction_denoising_pipeline.precompute()
 
-    def fit_featurization_pipeline(
-        self, tmp_dir=None, computation_cfg=None
-    ):
+    def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
         super().fit_featurization_pipeline(
             tmp_dir=tmp_dir, computation_cfg=computation_cfg
         )
@@ -794,7 +792,7 @@ def subtract_chunk(
                 for k in features:
                     features[k] = features[k][keep]
             if save_residnorm_decrease:
-                features['residnorm_decreases'] = reduction[keep]
+                features["residnorm_decreases"] = reduction[keep]
 
         # store this iter's outputs
         spike_times.append(times_samples)

@@ -11,6 +11,7 @@ from dartsort.util.data_util import (
     get_featurization_pipeline,
 )
 from dartsort.util.multiprocessing_util import get_pool
+
 try:
     from hdbscan import HDBSCAN
 except ImportError:

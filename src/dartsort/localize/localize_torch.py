@@ -4,8 +4,7 @@ from torch import vmap
 from torch.func import grad_and_value, hessian
 
 from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
-from dartsort.util.waveform_util import (channel_subset_by_radius,
-                                         full_channel_index)
+from dartsort.util.waveform_util import channel_subset_by_radius, full_channel_index
 
 
 def localize_amplitude_vectors(

@@ -1,14 +1,18 @@
 from dataclasses import replace
+from logging import getLogger
 
 import numpy as np
 from dartsort.util import drift_util
+
+
+logger = getLogger(__name__)
 
 
 def superres_sorting(
     sorting,
     geom,
     motion_est=None,
-    strategy="drift_pitch_loc_bin",
+    strategy="motion_estimate",
     localizations_dataset_name="point_source_localizations",
     superres_bin_size_um=10.0,
     min_spikes_per_bin=5,
@@ -42,10 +46,16 @@ def superres_sorting(
 
     Returns
     -------
-    superres_to_original : np.array
-        Int array such that superres_to_original[superres_id] is the original id of superres unit
-        superres_id
-    superres_sorting : DARTsortSorting
+    dict with keys : values
+        group_ids : np.array
+            Int array such that group_ids[superres_id] is the original id of
+            superres unit superres_id
+        sorting : DARTsortSorting
+        properties : dict of np.array
+            Each array in here is of shape (n_superres_units,) and contains
+            bookkeeping information about the superres process.
+            For instance, for motion_estimate binning, we store the centers
+            of the bins (which are modulo pitch).
     """
     pitch = drift_util.get_pitch(geom)
     full_labels = sorting.labels.copy()
@@ -71,11 +81,12 @@ def superres_sorting(
     spike_depths_um = spike_depths_um[kept]
 
     # make superres spike train
+    properties = {}
     if strategy in ("none", None):
         superres_to_original = np.arange(labels.max() + 1)
         superres_sorting = sorting
     elif strategy == "motion_estimate":
-        superres_labels, superres_to_original = motion_estimate_strategy(
+        superres_labels, superres_to_original, bin_centers = motion_estimate_strategy(
             labels,
             spike_times_s,
             spike_depths_um,
@@ -83,6 +94,7 @@ def superres_sorting(
             motion_est,
             superres_bin_size_um=superres_bin_size_um,
         )
+        properties["motion_estimate_bin_centers"] = bin_centers
     elif strategy == "drift_pitch_loc_bin":
         superres_labels, superres_to_original = drift_pitch_loc_bin_strategy(
             labels,
@@ -103,7 +115,11 @@ def superres_sorting(
     # back to un-triaged label space
     full_labels[kept] = superres_labels
     superres_sorting = replace(sorting, labels=full_labels)
-    return superres_to_original, superres_sorting
+    return dict(
+        group_ids=superres_to_original,
+        sorting=superres_sorting,
+        properties=properties,
+    )
 
 
 def motion_estimate_strategy(
@@ -113,6 +129,7 @@ def motion_estimate_strategy(
     pitch,
     motion_est,
     superres_bin_size_um=10.0,
+    bin_round_atol=0.1,
 ):
     """ """
     # reg_pos = pos - disp, pos = reg_pos + disp
@@ -121,15 +138,27 @@ def motion_estimate_strategy(
         displacements = np.zeros_like(spike_depths_um)
     else:
         displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
-    mod_positions = displacements % pitch
 
+    n_bins = pitch // superres_bin_size_um
+    remainder = pitch - n_bins * superres_bin_size_um
+    if not np.isclose(remainder, 0.0):
+        n_bins = n_bins + (remainder > bin_round_atol)
+        logger.info(
+            f"Superres bin size didn't divide the pitch. Rounding it down from "
+            f"{superres_bin_size_um} to {pitch / n_bins}, for {n_bins} bins."
+        )
+        superres_bin_size_um = pitch / n_bins
+
+    mod_positions = displacements % pitch
+    bin_centers = np.arange(n_bins) * superres_bin_size_um + superres_bin_size_um / 2
     bin_ids = mod_positions // superres_bin_size_um
-    bin_ids = bin_ids.astype(int)
+    bin_ids = bin_ids.astype(original_labels.dtype)
     orig_label_and_bin, superres_labels = np.unique(
         np.c_[original_labels, bin_ids], axis=0, return_inverse=True
     )
     superres_to_original = orig_label_and_bin[:, 0]
-    return superres_labels, superres_to_original
+    bin_centers = bin_centers[orig_label_and_bin[:, 1]]
+    return superres_labels, superres_to_original, bin_centers
 
 
 def drift_pitch_loc_bin_strategy(
