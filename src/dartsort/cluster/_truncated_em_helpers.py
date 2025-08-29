@@ -82,6 +82,9 @@ class TEBatchResult:
     noise_lls: torch.Tensor | None = None
     probs: torch.Tensor | None = None
     hard_labels: torch.Tensor | None = None
+    invquad: torch.Tensor | None = None
+    edata: dict | None = None
+    origcandidates: torch.Tensor | None = None
 
     # if ds_verbose:
     #     __post_init__ = __debug_init__
@@ -103,6 +106,7 @@ def _te_batch_e(
     wburyroot=None,
     with_kl=False,
     with_probs=False,
+    with_invquad=False,
 ):
     """This is the "E step" within the E step."""
     pinobs = log2pi * nobs
@@ -119,6 +123,7 @@ def _te_batch_e(
 
     # observed log likelihoods
     inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot)
+    invquad = inv_quad.clone() if with_invquad else None
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
     if with_kl:
@@ -161,6 +166,8 @@ def _te_batch_e(
     all_lls[:, -1] = noise_lls
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
+    if with_invquad:
+        invquad = invquad.take_along_dim(topinds, 1)
     if _debug and not (new_candidates >= 0).all():
         (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
         raise ValueError(
@@ -194,6 +201,7 @@ def _te_batch_e(
         dkl=dkl,
         noise_lls=nlls,
         probs=toplls if with_probs else None,
+        invquad=invquad,
     )
 
 

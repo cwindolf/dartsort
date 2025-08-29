@@ -252,7 +252,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         self.to(means.device)
 
-    def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
+    def prepare_step(self):
         candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
             self.divergences
         )
@@ -270,6 +270,10 @@ class SpikeTruncatedMixtureModel(nn.Module):
             bases=self.bases,
             unit_neighborhood_counts=unit_neighborhood_counts,
         )
+        return candidates, candidates_needs_update
+
+    def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
+        candidates, candidates_needs_update = self.prepare_step()
         result = self.processor.truncated_e_step(
             candidates=candidates,
             n_candidates=self.n_candidates,
@@ -360,7 +364,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         obs_elbo = result.obs_elbo
         if self.has_prior:
-            obs_elbo += _elbo_prior_correction(
+            epc = _elbo_prior_correction(
                 alpha0=self.alpha0,
                 total_count=result.count,
                 nc=nc,
@@ -370,6 +374,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 alpha=self.alpha if self.laplace_ard and self.M else None,
                 mean_prior=self.prior_scales_mean,
             )
+            obs_elbo += epc
 
         result = dict(
             obs_elbo=obs_elbo.numpy(force=True).item(),
@@ -837,6 +842,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         with_obs_elbo=False,
         with_hard_labels=False,
         with_probs=False,
+        with_invquad=False,
+        with_edata=False,
+        with_origcandidates=False,
     ) -> TEBatchResult:
         assert not with_elbo  # not implemented yet
         if torch.is_tensor(batch_indices):
@@ -850,6 +858,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         else:
             assert candidates.shape[0] == n
         candidates = candidates.to(self.device)
+        origcandidates = candidates.clone() if with_origcandidates else None
 
         # "E step" within the E step.
         neighb_ids, edata = self.load_batch_e(
@@ -862,6 +871,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             candidates=candidates,
             with_kl=with_kl,
             with_probs=with_probs,
+            with_invquad=with_invquad,
             **edata,
         )
         candidates = eres["candidates"]
@@ -948,6 +958,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_lls=eres["noise_lls"],
             hard_labels=hard_labels,
             probs=eres["probs"],
+            invquad=eres["invquad"],
+            edata=edata if with_edata else None,
+            origcandidates=origcandidates,
         )
 
     def initialize_fixed(
@@ -1427,17 +1440,17 @@ class CandidateSet:
         self.unit_neighborhood_counts.fill(0)
         np.add.at(self.unit_neighborhood_counts, (labels, neighb_ids), 1)
 
+        if not constrain_searches:
+            return None
+
         # if `full`, then this is all done in place.
         # determine adjacency of units and neighborhoods
-        if constrain_searches:
-            unit_neighb_ind = (self.unit_neighborhood_counts[:-1] > 0).astype("float32")
-            unit_neighb_adj = unit_neighb_ind
-            for _ in range(self.search_neighborhood_steps):
-                assert self.neighb_adjacency is not None
-                unit_neighb_adj = unit_neighb_adj @ self.neighb_adjacency
-            allow_mask = unit_neighb_adj @ unit_neighb_ind.T
-        else:
-            allow_mask = None
+        unit_neighb_ind = (self.unit_neighborhood_counts[:-1] > 0).astype("float32")
+        unit_neighb_adj = unit_neighb_ind
+        for _ in range(self.search_neighborhood_steps):
+            assert self.neighb_adjacency is not None
+            unit_neighb_adj = unit_neighb_adj @ self.neighb_adjacency
+        allow_mask = unit_neighb_adj @ unit_neighb_ind.T
 
         return allow_mask
 

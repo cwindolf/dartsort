@@ -78,6 +78,7 @@ def test_mixture(
 
     use_nlp = inference_algorithm.endswith("_nlp")
     inference_algorithm = inference_algorithm.removesuffix("_nlp")
+    is_truncated = inference_algorithm == "tvi"
 
     kw = dict(
         t_mu=t_mu,
@@ -130,7 +131,7 @@ def test_mixture(
     # external
     assert torch.equal(data.core_channels, res["sim_res"]["channels"])
 
-    if inference_algorithm == "tvi":
+    if is_truncated:
         # test that channel neighborhoods are handled correctly in TMM
         proc = res["gmm"].tmm.processor
         neighbs = train_extract_neighbs

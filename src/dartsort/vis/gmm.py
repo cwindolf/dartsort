@@ -1197,6 +1197,19 @@ default_gmm_plots = (
     NeighborTreeMerge(metric=None, criterion=None),
 )
 
+noval_plots = (
+    TextInfo(),
+    ISIHistogram(),
+    ISIHistogram(bin_ms=1, max_ms=50),
+    ChansHeatmap(),
+    MStep(),
+    CovarianceResidual(),
+    Likelihoods(),
+    Amplitudes(),
+    NeighborMeans(),
+    NeighborDistances(),
+)
+
 
 def criterion_comparison_plots(*criteria):
     splits = [KMeansSplit(criterion=k) for k in criteria]
@@ -1278,7 +1291,7 @@ def make_all_gmm_summaries(
 
     assert hasattr(gmm, "log_liks")
 
-    save_folder.mkdir(exist_ok=True)
+    save_folder.mkdir(exist_ok=True, parents=True)
 
     global_params = dict(
         **other_global_params,

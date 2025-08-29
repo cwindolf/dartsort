@@ -1038,7 +1038,7 @@ def make_all_summaries(
     if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
 
-    save_folder.mkdir(exist_ok=True)
+    save_folder.mkdir(exist_ok=True, parents=True)
 
     global_params = dict(
         channel_show_radius_um=channel_show_radius_um,

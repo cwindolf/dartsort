@@ -418,6 +418,7 @@ class SpikeMixtureModel(torch.nn.Module):
         initialization="topk",
         atol=None,
         lls=None,
+        initialize_tmm_only=False,
     ):
         if n_threads is None:
             n_threads = self.n_threads
@@ -444,6 +445,11 @@ class SpikeMixtureModel(torch.nn.Module):
         # try reassigning without noise unit...
         if lls is None:
             lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+            self.update_proportions(lls)
+            # TODO: can replace proportions in place.
+            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+        else:
+            self.update_proportions(lls)
         self.update_proportions(lls)
         lls = lls[:, self.data.split_indices["train"].numpy()]
         assert self.with_noise_unit
@@ -523,6 +529,8 @@ class SpikeMixtureModel(torch.nn.Module):
             log_proportions=self.log_proportions[ids],
             noise_log_prop=self.log_proportions[-1],
         )
+        if initialize_tmm_only:
+            return {}
 
         if show_progress:
             its = trange(n_iter, desc=f"t{algorithm}", **tqdm_kw)
