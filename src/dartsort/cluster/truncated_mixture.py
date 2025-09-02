@@ -286,6 +286,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert result.N is not None
         assert result.m is not None
 
+        assert not candidates_needs_update
+        # TODO: remove
         if candidates_needs_update:
             _c = candidates[:, : self.n_candidates].to(self.candidates.candidates)
             self.candidates.candidates[:, : self.n_candidates] = _c
@@ -514,7 +516,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
     def channel_occupancy(
         self,
         labels,
-        min_count=0,
+        min_count=1,
         min_prop=0,
         count_per_unit=None,
         neighborhoods=None,
@@ -1281,7 +1283,14 @@ class CandidateSet:
         """
         self.neighborhood_ids = neighborhoods.neighborhood_ids
         self.n_neighborhoods = neighborhoods.n_neighborhoods
+        # neighborhoods x channels
         self.neighborhood_indicators = neighborhoods.indicators.T.numpy(force=True)
+        # self.neighborhood_subset[i, j] == 1 iff neighb j subset neighb i
+        self.neighborhood_subset = (
+            self.neighborhood_indicators[None, :]
+            <= self.neighborhood_indicators[:, None]
+        ).all(2)
+        self.neighborhood_subset = self.neighborhood_subset.astype(np.float32)
         self.n_spikes = self.neighborhood_ids.numel()
         self.device = device
         self.rg = np.random.default_rng(random_seed)
@@ -1292,6 +1301,7 @@ class CandidateSet:
         self.random_search_distance_upper_bound = random_search_distance_upper_bound
         self.random_search_max_distance = random_search_max_distance
         self.neighb_adjacency = None
+        self.neighborhood_adjacency_overlap = neighborhood_adjacency_overlap
         if search_neighborhood_steps or explore_neighborhood_steps:
             self.neighb_adjacency = neighborhoods.adjacency(
                 neighborhood_adjacency_overlap
@@ -1300,6 +1310,7 @@ class CandidateSet:
 
         # initialized in update_sizes()
         self._candidates = None
+        self.un_adj = None
         self.unit_neighborhood_counts = None
         self._initialized = False
 
@@ -1430,7 +1441,9 @@ class CandidateSet:
             k = min(n_search, distances.shape[0] - 1, max_nneighbs)
             topinds = torch.full((len(adj_uu), k), -1)
             with np.errstate(divide="ignore"):
-                unit_neighb_adj_inf = torch.from_numpy(1.0 / unit_neighb_adj.T).to(distances)
+                unit_neighb_adj_inf = torch.from_numpy(1.0 / unit_neighb_adj.T).to(
+                    distances
+                )
             for j, (uu, nn) in enumerate(zip(adj_uu, adj_nn)):
                 dists_uunn = distances.T[uu] + unit_neighb_adj_inf[nn]
                 topd_uunn, topi_uunn = torch.topk(dists_uunn, k=k, dim=0, largest=False)
@@ -1474,7 +1487,9 @@ class CandidateSet:
         adj_lut_ixs = un_adj_lut[top, neighb_ids[:, None].broadcast_to(top.shape)]
         assert adj_lut_ixs.shape == top.shape
         cands = unit_search_neighbors[adj_lut_ixs]
-        assert cands.ndim == 2
+        cands[top < 0] = -1
+        assert cands.ndim == 3
+        cands = cands.view(top.shape[0], top.shape[1] * unit_search_neighbors.shape[1])
         return cands
 
     def reinit_neighborhoods(self, labels, neighb_ids, constrain_searches=True):
@@ -1496,17 +1511,7 @@ class CandidateSet:
         unit_neighb_adj = unit_neighb_ind
 
         # include neighborhoods which are completely covered already
-        unit_channel_coverage = unit_neighb_adj @ self.neighborhood_indicators
-        unit_channel_coverage = np.clip(
-            unit_channel_coverage, 0.0, 1.0, out=unit_channel_coverage
-        )
-        unit_neighb_coverage = unit_channel_coverage @ self.neighborhood_indicators.T
-        unit_neighb_coverage = unit_neighb_coverage >= self.neighborhood_indicators.sum(
-            1
-        )
-        unit_neighb_coverage = unit_neighb_coverage.astype(unit_neighb_adj.dtype)
-        assert (unit_neighb_coverage >= unit_neighb_adj).all()
-        unit_neighb_adj = unit_neighb_coverage
+        unit_neighb_adj = unit_neighb_adj @ self.neighborhood_subset
 
         # include neighborhoods which are adjacent by steps
         for _ in range(self.search_neighborhood_steps):
@@ -1576,13 +1581,14 @@ class CandidateSet:
 
         # some data structures needed in advance
         neighb_ids = self.neighborhood_ids[indices]
-        un_adj = self.reinit_neighborhoods(
+        # this is stored as a property mainly for tests. it isn't modified elsewhere.
+        self.un_adj = self.reinit_neighborhoods(
             self.candidates[indices, 0],
             neighb_ids,
             constrain_searches=constrain_searches,
         )
         unit_search_neighbors = self.search_sets(
-            distances, constrain_searches=constrain_searches, un_adj=un_adj
+            distances, constrain_searches=constrain_searches, un_adj=self.un_adj
         )
         unit_search_neighbors = unit_search_neighbors.to(self.candidates)
         assert unit_search_neighbors.shape[1] <= self.n_search
@@ -1595,22 +1601,16 @@ class CandidateSet:
         total = C + n_search_total + self.n_explore
         explore_slice = slice(C + n_search_total, total)
         candidates = self.candidates[indices, :total]
-        n_spikes = len(candidates)
         top = candidates[:, :C]
 
         # make sure all candidates are in adjacent neighborhoods else vanquish them
         if constrain_searches:
-            self.ensure_adjacent(top, neighb_ids, un_adj)
+            self.ensure_adjacent(top, neighb_ids, self.un_adj)
 
         # update search sets
         if n_search:
-            search_target = candidates[:, search_slice].view(n_spikes, C, n_search)
-            assert (
-                search_target.untyped_storage().data_ptr()
-                == candidates.untyped_storage().data_ptr()
-            )
-            search_target[:] = self.search_candidates(
-                top, unit_search_neighbors, neighb_ids
+            candidates[:, search_slice] = self.search_candidates(
+                top, unit_search_neighbors, neighb_ids, un_adj=self.un_adj
             )
 
         # which to explore? done in-place in first arg.

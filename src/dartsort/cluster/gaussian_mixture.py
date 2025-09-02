@@ -144,7 +144,7 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-5,
         em_converged_logpx_tol: float = 1e-5,
-        tvi_n_random_search_iter: int = 20,
+        tvi_n_random_search_iter: int = 0,
         min_overlap: float = 0.0,
         hard_noise=False,
         min_log_prop=-50.0,
