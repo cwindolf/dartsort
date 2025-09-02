@@ -1185,8 +1185,17 @@ class TruncatedExpectationProcessor(torch.nn.Module):
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
         """Load data for the E step within the E step."""
         n, C = candidates.shape
+        vcand_ii, vcand_jj = (candidates >= 0).nonzero(as_tuple=True)
+        nv = vcand_ii.numel()
+        vcand_uu = candidates[vcand_ii, vcand_jj]
+        if isinstance(batch_indices, slice):
+            assert batch_indices.step in (1, None)
+            vcand_ss = vcand_ii + batch_indices.start
+        else:
+            vcand_ss = batch_indices[vcand_ii]
         neighborhood_ids = self.neighborhood_ids[batch_indices]
-        lut_ixs = self.lut[candidates, neighborhood_ids[:, None]]
+        vcand_nn = neighborhood_ids[vcand_ii]
+        lut_ixs = self.lut[vcand_uu, vcand_nn]
         lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
         # some things are only needed in the first pass when computing noise lls
@@ -1207,16 +1216,19 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             wburyroot = self.wburyroot[lut_ixs]
         else:
             assert Coo_logdet is not None
-            obs_logdets = Coo_logdet[:, None].broadcast_to(candidates.shape)
+            obs_logdets = Coo_logdet[vcand_ii]
             wburyroot = None
 
         return neighborhood_ids, dict(
+            vcand_ii=vcand_ii,
+            vcand_jj=vcand_jj,
             whitenedx=self.whitenedx[batch_indices].to(self.device, non_blocking=True),
-            whitenednu=self.whitenednu[lut_ixs].view(n, C, -1),
+            whitenednu=self.whitenednu[lut_ixs].view(nv, -1),
             nobs=self.nobs[neighborhood_ids],
+            vnobs=self.nobs[vcand_nn],
             obs_logdets=obs_logdets,
             Coo_logdet=Coo_logdet,
-            log_proportions=self.log_proportions[candidates],
+            log_proportions=self.log_proportions[vcand_uu],
             noise_lls=noise_lls,
             wburyroot=wburyroot,
             noise_log_priors=noise_log_priors,

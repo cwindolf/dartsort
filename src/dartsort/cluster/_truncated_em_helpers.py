@@ -95,9 +95,12 @@ def _te_batch_e(
     n_candidates,
     noise_log_prop,
     candidates,
+    vcand_ii,
+    vcand_jj,
     whitenedx,
     whitenednu,
     nobs,
+    vnobs,
     obs_logdets,
     Coo_logdet,
     log_proportions,
@@ -110,6 +113,7 @@ def _te_batch_e(
 ):
     """This is the "E step" within the E step."""
     pinobs = log2pi * nobs
+    pivnobs = log2pi * vnobs
 
     # marginal noise log likelihoods, if needed
     nlls = noise_lls
@@ -122,33 +126,22 @@ def _te_batch_e(
     noise_lls = nlls + (noise_log_prop + noise_eps)
 
     # observed log likelihoods
-    inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot)
+    whitenedx = whitenedx[vcand_ii]
+    inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot, flat=True, ow_wnu=True)
     invquad = inv_quad.clone() if with_invquad else None
     del whitenednu
-    lls_unnorm = inv_quad.add_(obs_logdets).add_(pinobs[:, None]).mul_(-0.5)
+    lls_unnorm = inv_quad.add_(obs_logdets).add_(pivnobs).mul_(-0.5)
     if with_kl:
         lls = lls_unnorm + log_proportions
     else:
         lls = lls_unnorm.add_(log_proportions)
 
-    if _debug:
-        llsfinite = lls.isfinite()
-        if not torch.logical_or(candidates < 0, llsfinite).all():
-            bad = torch.logical_and(candidates >= 0, torch.logical_not(llsfinite))
-            infspk = bad.any(1)
-            infcands = candidates[bad].unique()
-            msg = (
-                f"_te_batch_e: {lls.shape=} {llsfinite.sum()=} {lls[bad]=} {inv_quad[bad]=}"
-                f"{infcands=} {obs_logdets[infcands]=} {log_proportions[infcands]=} "
-                f"{pinobs[infcands]=} {whitenedx[infspk]} {whitenedx.isfinite().all()=}"
-            )
-            if wburyroot is not None:
-                msg += f" {wburyroot[infcands]=}"
-            raise ValueError(f"{bad.sum()=} {msg}")
-
     # cvalid = candidates >= 0
     # lls = torch.where(cvalid, lls, -torch.inf)
-    lls[candidates < 0] = -torch.inf
+    # lls[candidates < 0] = -torch.inf
+    lls_dense = lls.new_full(candidates.shape, -torch.inf)
+    lls_dense[vcand_ii, vcand_jj] = lls
+    lls = lls_dense
 
     # -- update K_ns
     # toplls, topinds = lls.sort(dim=1, descending=True)
@@ -167,7 +160,9 @@ def _te_batch_e(
     Q = torch.softmax(all_lls, dim=1)
     new_candidates = candidates.take_along_dim(topinds, 1)
     if with_invquad:
-        invquad = invquad.take_along_dim(topinds, 1)
+        invquad_dense = lls.new_full(candidates.shape, torch.nan)
+        invquad_dense[vcand_ii, vcand_jj] = invquad
+        invquad = invquad_dense.take_along_dim(topinds, 1)
     if _debug and not (new_candidates >= 0).all():
         (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
         raise ValueError(
@@ -424,7 +419,7 @@ def _elbo_prior_correction(
     return mu_term - 0.5 * W_term / total_count + alpha_term
 
 
-def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None):
+def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, flat=False, ow_wnu=False):
     """Faster inv quad term in log likelihoods
 
     We want to compute
@@ -447,12 +442,18 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None):
         (B-) (x-nu)' Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1 (x-nu)
                 = | A (x'-z') |^2.
     """
-    wdxz = whitenedx.unsqueeze(1) - whitenednu
+    if not flat:
+        whitenedx = whitenedx.unsqueeze(1)
+    wdxz = torch.subtract(whitenedx, whitenednu, out=whitenednu if ow_wnu else None)
+    dim = 1 + (not flat)
     if wburyroot is None:
-        return wdxz.square_().sum(dim=2)
-    term_b = torch.einsum("ncj,ncjp->ncp", wdxz, wburyroot)
-    term_a = wdxz.square_().sum(dim=2)
-    term_b = term_b.square_().sum(dim=2)
+        return wdxz.square_().sum(dim=dim)
+    if flat:
+        term_b = torch.einsum("nj,njp->np", wdxz, wburyroot)
+    else:
+        term_b = torch.einsum("ncj,ncjp->ncp", wdxz, wburyroot)
+    term_a = wdxz.square_().sum(dim=dim)
+    term_b = term_b.square_().sum(dim=dim)
     return term_a.sub_(term_b)
 
 
