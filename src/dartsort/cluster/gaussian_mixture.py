@@ -82,12 +82,12 @@ class SpikeMixtureModel(torch.nn.Module):
         proportions_sample_size: int = 2**16,
         likelihood_batch_size: int = 2**15,
         channels_strategy: Literal["all", "snr", "count", "count_core"] = "count",
-        channels_count_min: float = 25.0,
+        channels_count_min: float = 1.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
         noise_log_priors: torch.Tensor | np.ndarray | None = None,
-        prior_pseudocount: float = 25.0,
-        prior_scales_mean=True,
+        prior_pseudocount: float = 0.0,
+        prior_scales_mean=False,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 3,
         ppca_inner_em_iter: int = 3,
@@ -161,7 +161,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.n_spikes_fit = n_spikes_fit
         self.likelihood_batch_size = likelihood_batch_size
         self.min_count = min_count
-        self.channels_count_min = channels_count_min
+        self.channels_count_min = max(ppca_rank, channels_count_min)
         self.n_em_iters = n_em_iters
         self.kmeans_k = kmeans_k
         self.kmeans_n_iter = kmeans_n_iter

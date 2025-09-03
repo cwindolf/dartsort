@@ -81,7 +81,7 @@ class StableSpikeDataset(torch.nn.Module):
         features_on_device: bool = False,
         split_names: Sequence[str] | None = None,
         split_mask: torch.Tensor | None = None,
-        core_radius: float | Literal["extract"] | None = 35.0,
+        core_radius: float | None = 35.0,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
         core_neighborhoods=None,
@@ -383,6 +383,16 @@ class StableSpikeDataset(torch.nn.Module):
 
         # load temporal PCA
         tpca = get_tpca(sorting)
+
+        if core_radius == "extract":
+            core_radius = -np.inf
+            for j in range(len(extract_channel_index)):
+                chans = extract_channel_index[j]
+                chans = chans[chans < len(geom)]
+                tmp = np.subtract(geom[chans], geom[j])
+                np.square(tmp, out=tmp)
+                max_dist = tmp.sum(axis=1).max()
+                core_radius = max(core_radius, np.sqrt(max_dist))
 
         self = cls(
             kept_indices=kept_inds,

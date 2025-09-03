@@ -326,6 +326,7 @@ def initialize_gmm(
         data,
         noise,
         min_count=refinement_cfg.min_count,
+        channels_count_min=refinement_cfg.channels_count_min,
         n_threads=computation_cfg.actual_n_jobs(),
         n_spikes_fit=refinement_cfg.n_spikes_fit,
         ppca_rank=0 if initialize_at_rank_0 else refinement_cfg.signal_rank,

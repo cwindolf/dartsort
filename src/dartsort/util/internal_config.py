@@ -468,6 +468,7 @@ class RefinementConfig:
     # model params
     channels_strategy: Literal["count", "all"] = "count"
     min_count: int = 50
+    channels_count_min: int = 1
     signal_rank: int = 5
     initialize_at_rank_0: bool = True
     cl_alpha: float = 1.0
@@ -506,7 +507,7 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 10.0
+    prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
     kmeansk: int = 3
