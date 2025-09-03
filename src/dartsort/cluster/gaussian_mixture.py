@@ -2365,11 +2365,7 @@ class SpikeMixtureModel(torch.nn.Module):
         )
         cur_resp = cur_resp.sum(dim=0).to_dense()
 
-        _, cosines = self.distances(
-            units=units,
-            show_progress=False,
-            kind="cosine",
-        )
+        _, cosines = self.distances(units=units, show_progress=False, kind="cosine")
         cosines = 1.0 - cosines
 
         full_conn = cos_connectivity(cosines)

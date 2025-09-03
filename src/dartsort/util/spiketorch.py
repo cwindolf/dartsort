@@ -43,9 +43,10 @@ def ll_via_inv_quad(cov, y, inv_quad_only=False):
     inv_quad, logdet = linear_operator.inv_quad_logdet(
         cov, y.T, logdet=True, reduce_inv_quad=False
     )
+    assert inv_quad is not None
     if inv_quad_only:
         return inv_quad
-    ll = -0.5 * (inv_quad + logdet + log2pi * y.shape[1])
+    ll = inv_quad.add_(logdet + log2pi * y.shape[1]).mul_(-0.5)
     return ll
 
 

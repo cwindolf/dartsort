@@ -474,7 +474,7 @@ class RefinementConfig:
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
     distance_metric: Literal[
-        "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean"
+        "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean", "cosinesqrt"
     ] = "cosine"
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 5

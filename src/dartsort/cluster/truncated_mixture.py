@@ -510,6 +510,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             )
         elif self.metric == "cosine":
             self.divergences[:] = spiketorch.cosine_distance(self.means[..., :-1])
+            self.divergences[:].sqrt_()
         else:
             assert False
 
