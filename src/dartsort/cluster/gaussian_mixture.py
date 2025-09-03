@@ -144,7 +144,6 @@ class SpikeMixtureModel(torch.nn.Module):
         em_converged_churn: float = 0.01,
         em_converged_atol: float = 1e-5,
         em_converged_logpx_tol: float = 1e-5,
-        tvi_n_random_search_iter: int = 0,
         min_overlap: float = 0.0,
         hard_noise=False,
         min_log_prop=-50.0,
@@ -208,7 +207,6 @@ class SpikeMixtureModel(torch.nn.Module):
         self.search_type = search_type
         self.noise_log_priors = noise_log_priors
         self.cl_alpha = cl_alpha
-        self.tvi_n_random_search_iter = tvi_n_random_search_iter
 
         # store labels on cpu since we're always nonzeroing / writing np data
         assert self.data.original_sorting.labels is not None
@@ -421,6 +419,7 @@ class SpikeMixtureModel(torch.nn.Module):
         atol=None,
         lls=None,
         initialize_tmm_only=False,
+        parameters_from_gmm=True,
     ):
         if n_threads is None:
             n_threads = self.n_threads
@@ -432,42 +431,46 @@ class SpikeMixtureModel(torch.nn.Module):
         step_progress = show_progress and bool(max(0, int(show_progress) - 1))
 
         # initialize me
-        missing_ids = self.missing_ids()
-        if len(missing_ids):
-            self.m_step(
-                likelihoods=lls, show_progress=step_progress, fit_ids=missing_ids
+        if parameters_from_gmm:
+            missing_ids = self.missing_ids()
+            if len(missing_ids):
+                self.m_step(
+                    likelihoods=lls, show_progress=step_progress, fit_ids=missing_ids
+                )
+            self.cleanup()
+    
+            # update from my stack
+            ids, means, covs, logdets, alpha = self.stack_units(
+                mean_only=False, with_alpha=True
             )
-        self.cleanup()
-
-        # update from my stack
-        ids, means, covs, logdets, alpha = self.stack_units(
-            mean_only=False, with_alpha=True
-        )
-
-        # try reassigning without noise unit...
-        if lls is None:
-            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+    
+            # try reassigning without noise unit...
+            if lls is None:
+                lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+                self.update_proportions(lls)
+                # TODO: can replace proportions in place.
+                lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+            else:
+                self.update_proportions(lls)
             self.update_proportions(lls)
-            # TODO: can replace proportions in place.
-            lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
+            lls = lls[:, self.data.split_indices["train"].numpy()]
+            assert self.with_noise_unit
+    
+            assert self.log_proportions is not None
+            keep_mask = self.log_proportions[ids].isfinite().cpu()
+            (keep_ids,) = keep_mask.nonzero(as_tuple=True)
+            ids = ids[keep_ids]
+            assert torch.equal(torch.asarray(ids), torch.asarray(keep_ids))
+            keep_mask_nonoise = torch.concatenate(
+                (keep_mask, torch.zeros((1,), dtype=torch.bool))
+            )
+            lls_keep = csc_sparse_mask_rows(lls, keep_mask_nonoise.numpy(), in_place=True)
+            del lls  # overwritten
+            n_units = len(ids)
+            n_spikes = lls_keep.shape[1]
         else:
-            self.update_proportions(lls)
-        self.update_proportions(lls)
-        lls = lls[:, self.data.split_indices["train"].numpy()]
-        assert self.with_noise_unit
-
-        assert self.log_proportions is not None
-        keep_mask = self.log_proportions[ids].isfinite().cpu()
-        (keep_ids,) = keep_mask.nonzero(as_tuple=True)
-        ids = ids[keep_ids]
-        assert torch.equal(torch.asarray(ids), torch.asarray(keep_ids))
-        keep_mask_nonoise = torch.concatenate(
-            (keep_mask, torch.zeros((1,), dtype=torch.bool))
-        )
-        lls_keep = csc_sparse_mask_rows(lls, keep_mask_nonoise.numpy(), in_place=True)
-        del lls  # overwritten
-        n_units = len(ids)
-        n_spikes = lls_keep.shape[1]
+            self.cleanup(check_mean=False)
+            n_units = self.n_units()
 
         if self.tmm is None:
             self.tmm = truncated_mixture.SpikeTruncatedMixtureModel(
@@ -486,11 +489,12 @@ class SpikeMixtureModel(torch.nn.Module):
                 metric="cosine" if self.distance_metric == "cosine" else "kl",
                 random_search_max_distance=self.merge_distance_threshold,
                 noise_log_priors=self.noise_log_priors,
-                n_random_search_iter=self.tvi_n_random_search_iter,
             )
         self.tmm.set_sizes(n_units)
 
-        if initialization == "topk":
+        if not parameters_from_gmm:
+            labels = self.labels[self.data.split_indices["train"]]
+        elif initialization == "topk":
             nz_lines, nz_init = sparse_topk(
                 lls_keep,
                 # log_proportions=self.log_proportions[ids].numpy(force=True),
@@ -512,25 +516,31 @@ class SpikeMixtureModel(torch.nn.Module):
         else:
             assert False
 
-        unmatched = labels < 0
-        if unmatched.any():
-            g = self.data.prgeom[:-1]
-            coms = np.array([self[j].com(g).numpy(force=True).item() for j in ids])
-            uix = self.data.split_indices["train"][unmatched]
-            ux = g[self.data.original_sorting.channels[uix]].numpy(force=True)
-            coms = KDTree(coms)
-            _, closest = coms.query(ux, workers=-1)
-            assert (closest < coms.n).all()
-            labels[unmatched] = closest
+        if parameters_from_gmm:
+            unmatched = labels < 0
+            if unmatched.any():
+                g = self.data.prgeom[:-1]
+                coms = np.array([self[j].com(g).numpy(force=True).item() for j in ids])
+                uix = self.data.split_indices["train"][unmatched]
+                ux = g[self.data.original_sorting.channels[uix]].numpy(force=True)
+                coms = KDTree(coms)
+                _, closest = coms.query(ux, workers=-1)
+                assert (closest < coms.n).all()
+                labels[unmatched] = closest
 
-        self.tmm.set_parameters(
-            labels=torch.from_numpy(init),
-            means=means[ids],
-            bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
-            alpha=alpha[ids] if alpha is not None else None,
-            log_proportions=self.log_proportions[ids],
-            noise_log_prop=self.log_proportions[-1],
-        )
+            self.tmm.set_parameters(
+                labels=torch.from_numpy(init),
+                means=means[ids],
+                bases=covs[ids].permute(0, 3, 1, 2) if covs is not None else None,
+                alpha=alpha[ids] if alpha is not None else None,
+                log_proportions=self.log_proportions[ids],
+                noise_log_prop=self.log_proportions[-1],
+            )
+        else:
+            self.tmm.clear_parameters()
+            self.tmm.initialize_candidates(labels)
+            self.tmm.to(self.data.device)
+            
         if initialize_tmm_only:
             return {}
 
@@ -561,10 +571,6 @@ class SpikeMixtureModel(torch.nn.Module):
         # TODO: move this logic into tmm.
         for j in its:
             is_final = done or j == n_iter - 1
-            if self.tmm.n_random_search_iter and j <= self.tmm.n_random_search_iter:
-                self.tmm.candidates.search_type = "random"
-            else:
-                self.tmm.candidates.search_type = self.tmm.search_type
             if is_final or algorithm == "em":
                 res = self.tmm.step(
                     show_progress=step_progress,
@@ -620,6 +626,7 @@ class SpikeMixtureModel(torch.nn.Module):
             tmm_labels,
             min_count=self.channels_count_min,
             rg=self.rg,
+            neighborhoods=self.data.neighborhoods(neighborhood="core", split="train")[1],
         )
         for j in range(len(self.tmm.means)):
             basis = None

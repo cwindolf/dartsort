@@ -246,7 +246,7 @@ class DeveloperConfig(DARTsortUserConfig):
         default=None, arg_type=int_or_float_or_none
     )
     laplace_ard: bool = False
-    core_radius: float = 35.0
+    core_radius: float | Literal["extract"] = "extract"
     min_cluster_size: int = 50
 
     use_hellinger: bool = False
