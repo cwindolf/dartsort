@@ -525,7 +525,7 @@ class RefinementConfig:
 
     # stable waveform feature controls
     cov_radius: float = 500.0
-    core_radius: float = 35.0
+    core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
     interpolation_method: str = "kriging"

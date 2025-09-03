@@ -951,7 +951,9 @@ def get_stable_channels(
     device=None,
 ):
     core_channel_index = None
-    if core_radius is not None:
+    if core_radius == "extract":
+        core_channel_index = channel_index
+    elif core_radius is not None:
         core_channel_index = make_channel_index(geom, core_radius)
 
     # extract the main unique chans computation
@@ -985,7 +987,11 @@ def get_stable_channels(
         )
     )
     core_channels = core_neighborhoods = core_neighborhood_ids = None
-    if core_radius is not None:
+    if core_radius == "extract":
+        core_channels = extract_channels
+        core_neighborhoods = extract_neighborhoods
+        core_neighborhood_ids = extract_neighborhood_ids
+    elif core_radius is not None:
         core_channels, core_neighborhoods, core_neighborhood_ids = (
             static_channel_neighborhoods(
                 geom,

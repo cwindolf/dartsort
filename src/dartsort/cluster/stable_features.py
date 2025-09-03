@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, Literal
 
 import h5py
 import numpy as np
@@ -81,7 +81,7 @@ class StableSpikeDataset(torch.nn.Module):
         features_on_device: bool = False,
         split_names: Sequence[str] | None = None,
         split_mask: torch.Tensor | None = None,
-        core_radius: float | None = 35.0,
+        core_radius: float | Literal["extract"] | None = 35.0,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
         core_neighborhoods=None,
@@ -159,9 +159,6 @@ class StableSpikeDataset(torch.nn.Module):
             )
 
         if core_radius is not None:
-            core_channel_index = waveform_util.make_channel_index(
-                prgeom, core_radius, to_torch=True
-            )
             _core_neighborhoods = {
                 f"key_{k}": SpikeNeighborhoods.from_channels(
                     core_channels[ix],
@@ -174,7 +171,6 @@ class StableSpikeDataset(torch.nn.Module):
                     neighborhoods=core_neighborhoods,
                     features=core_features[ix] if k in _core_feature_splits else None,
                     device=device,
-                    channel_index=core_channel_index,
                     name=k,
                 )
                 for k, ix in self.split_indices.items()
@@ -234,7 +230,7 @@ class StableSpikeDataset(torch.nn.Module):
         cls,
         sorting,
         motion_est=None,
-        core_radius: float | None = 35.0,
+        core_radius: float | Literal["extract"] | None = 35.0,
         max_n_spikes=np.inf,
         discard_triaged=False,
         interpolation_method="kriging",
@@ -576,7 +572,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         features=None,
         neighborhood_members=None,
         store_on_device: bool = False,
-        channel_index=None,
         device=None,
         name=None,
     ):
@@ -601,8 +596,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.register_buffer("neighborhoods", neighborhoods)
         assert self.neighborhoods.dtype == torch.long
         self.n_neighborhoods = len(neighborhoods)
-        if channel_index is not None:
-            self.register_buffer("channel_index", channel_index)
         self.name = name
 
         # store neighborhoods as an indicator matrix
@@ -674,7 +667,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         device=None,
         deduplicate=False,
         features=None,
-        channel_index=None,
         name=None,
     ):
         if neighborhood_ids is not None:
@@ -687,7 +679,6 @@ class SpikeNeighborhoods(torch.nn.Module):
                 device=device,
                 deduplicate=deduplicate,
                 features=features,
-                channel_index=channel_index,
                 name=name,
             )
         if device is not None:
@@ -701,7 +692,6 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhood_ids=neighborhood_ids,
             features=features,
             device=channels.device,
-            channel_index=channel_index,
             name=name,
         )
 
@@ -715,7 +705,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         device=None,
         deduplicate=False,
         features=None,
-        channel_index=None,
         name=None,
     ):
         neighborhoods = torch.asarray(neighborhoods)
@@ -738,7 +727,6 @@ class SpikeNeighborhoods(torch.nn.Module):
             neighborhood_ids=neighborhood_ids,
             features=features,
             device=device,
-            channel_index=channel_index,
             name=name,
         )
 

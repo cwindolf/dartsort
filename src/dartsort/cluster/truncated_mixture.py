@@ -62,7 +62,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         exact_kl=True,
         search_type="topk",
         random_search_max_distance=0.5,
-        n_random_search_iter=20,
         fixed_noise_proportion=None,
         sgd_batch_size=None,
         Cinv_in_grad=True,
@@ -98,7 +97,6 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.min_log_prop = min_log_prop
         self.metric = metric
         self.search_type = search_type
-        self.n_random_search_iter = n_random_search_iter
         if search_type == "random":
             assert metric == "cosine"
 
@@ -113,7 +111,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
             search_neighborhood_steps=search_neighborhood_steps,
             explore_neighborhood_steps=explore_neighborhood_steps,
-            search_type="random" if n_random_search_iter else search_type,
+            search_type=search_type,
             random_search_max_distance=random_search_max_distance,
         )
 
@@ -135,6 +133,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             device=self.device,
         )
         self.to(device=self.device)
+        self._parameters_initialized = False
 
     def set_sizes(self, n_units: int | None = None):
         n_candidates = self.initial_n_candidates
@@ -150,6 +149,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             elif self.search_type == "random":
                 n_explore = 0
         if n_units is not None:
+            self.n_units = n_units
             remainder = n_units - n_candidates
             n_search = max(0, min(remainder // n_candidates, n_search))
             remainder -= n_candidates * n_search
@@ -163,6 +163,26 @@ class SpikeTruncatedMixtureModel(nn.Module):
             n_units, self.n_candidates, self.n_search, self.n_explore
         )
 
+    def clear_parameters(self):
+        self._parameters_initialized = False
+        nu = self.n_units
+        rank_ncp1 = self.noise.rank, self.noise.n_channels + 1
+        
+        self.means = nn.Parameter(torch.full((nu, *rank_ncp1), torch.nan), requires_grad=False)
+
+        if self.M:
+            self.bases = nn.Parameter(torch.full((nu, self.M, *rank_ncp1), torch.nan), requires_grad=False)
+        else:
+            self.bases = None
+        if self.M and self.laplace_ard and self.has_prior:
+            self.alpha = nn.Parameter(torch.full((nu, self.M), self.alpha0, dtype=torch.float64), requires_grad=False)
+        else:
+            self.alpha = self.alpha0
+
+        self.log_proportions = nn.Parameter(torch.full((nu,), 1.0 / nu).log_(), requires_grad=False)
+        self.register_buffer("noise_log_prop", torch.log(torch.tensor(1.0 / nu)))
+        self.register_buffer("_N", torch.zeros(nu + 1))
+
     def set_parameters(
         self,
         labels,
@@ -174,8 +194,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         divergences=None,
     ):
         """Parameters are stored padded with an extra channel."""
-        self.n_units = means.shape[0]
-        self.set_sizes(self.n_units)
+        self.set_sizes(means.shape[0])
         means = torch.asarray(means, device=self.device)
         log_proportions = torch.asarray(log_proportions, device=self.device)
         if bases is not None:
@@ -189,6 +208,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
         assert means.isfinite().all()
         assert log_proportions.isfinite().all()
         assert noise_log_prop.isfinite()
+
+        self._parameters_initialized = True
 
         self.means = nn.Parameter(F.pad(means, (0, 1)), requires_grad=False)
         assert self.means.isfinite().all()
@@ -241,53 +262,59 @@ class SpikeTruncatedMixtureModel(nn.Module):
         else:
             self.alpha = self.alpha0
 
+        self.initialize_candidates(labels, divergences)
+        self.to(means.device)
+
+    def initialize_candidates(self, labels, divergences=None):
         self.register_buffer(
-            "divergences", means.new_empty((self.n_units, self.n_units))
+            "divergences", self.means.new_empty((self.n_units, self.n_units))
         )
         if divergences is None:
             self.update_divergences()
         else:
             self.divergences[:] = divergences.to(self.divergences)
-        self.candidates.initialize_candidates(labels, self.divergences)
-
-        self.to(means.device)
+        self.candidates.initialize_candidates(labels, self.divergences, fill_blanks=self._parameters_initialized)
 
     def prepare_step(self):
-        candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
-            self.divergences
-        )
-        assert (
-            candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
-        )
+        if self._parameters_initialized:
+            candidates, unit_neighborhood_counts = self.candidates.propose_candidates(
+                self.divergences
+            )
+            assert (
+                candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
+            )
+            self.processor.update(
+                log_proportions=self.log_proportions,
+                noise_log_prop=self.noise_log_prop,
+                means=self.means,
+                bases=self.bases,
+                unit_neighborhood_counts=unit_neighborhood_counts,
+            )
+            candidates_needs_update = (
+                candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
+            )
+        else:
+            candidates = self.candidates.candidates[:, :1]
+            # no E step is run, so no reassignment should be done
+            candidates_needs_update = False
         candidates = candidates.to(self.device)
-        candidates_needs_update = (
-            candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
-        )
-        self.processor.update(
-            log_proportions=self.log_proportions,
-            noise_log_prop=self.noise_log_prop,
-            means=self.means,
-            bases=self.bases,
-            unit_neighborhood_counts=unit_neighborhood_counts,
-        )
         return candidates, candidates_needs_update
 
     def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
         candidates, candidates_needs_update = self.prepare_step()
         result = self.processor.truncated_e_step(
             candidates=candidates,
-            n_candidates=self.n_candidates,
+            n_candidates=self.n_candidates if self._parameters_initialized else 1,
             show_progress=show_progress,
             with_kl=self.metric == "kl" and not self.exact_kl,
             with_hard_labels=hard_label,
             with_probs=with_probs,
+            initializing=not self._parameters_initialized,
         )
         assert result.obs_elbo is not None
         assert result.N is not None
         assert result.m is not None
 
-        assert not candidates_needs_update
-        # TODO: remove
         if candidates_needs_update:
             _c = candidates[:, : self.n_candidates].to(self.candidates.candidates)
             self.candidates.candidates[:, : self.n_candidates] = _c
@@ -384,6 +411,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             labels=result.hard_labels,
             probs=result.probs,
         )
+        self._parameters_initialized = True
         if tic is not None:
             result["wall"] = time.perf_counter() - tic
         return result
@@ -498,6 +526,11 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.log_proportions[:] = lp[1:]
 
     def update_divergences(self):
+        if not self._parameters_initialized:
+            self.divergences.fill_(torch.inf)
+            self.divergences.diagonal(dim1=-2, dim2=-1).fill_(0.0)
+            return
+
         if self.metric == "kl":
             W = self.bases
             if W is not None:
@@ -539,7 +572,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
                     labels[rg.choice(inu, size=count_per_unit, replace=False)] = u
 
         valid = np.flatnonzero(labels >= 0)
-        vneighbs = self.candidates.neighborhood_ids[valid]
+        assert neighborhoods.neighborhood_ids.shape == labels.shape
+        vneighbs = neighborhoods.neighborhood_ids[valid]
         np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
@@ -644,6 +678,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         show_progress=False,
         with_hard_labels=False,
         with_probs=False,
+        initializing=False,
     ) -> TEStepResult:
         """E step of truncated VEM
 
@@ -693,7 +728,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            (candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs)
+            (candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs, initializing)
             for batchix in self.batches()
         )
         count = 0
@@ -795,6 +830,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             with_kl,
             with_hard_labels,
             with_probs,
+            initializing,
         ) = args
         return self.process_batch(
             candidates=candidates,
@@ -805,6 +841,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             with_kl=with_kl,
             with_hard_labels=with_hard_labels,
             with_probs=with_probs,
+            initializing=initializing,
         )
 
     def batches(self, shuffle=False, show_progress=False, batch_size=None):
@@ -838,6 +875,7 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         batch_indices,
         candidates,
         n_candidates,
+        initializing=False,
         with_grads=False,
         with_stats=False,
         with_kl=False,
@@ -864,23 +902,27 @@ class TruncatedExpectationProcessor(torch.nn.Module):
         origcandidates = candidates.clone() if with_origcandidates else None
 
         # "E step" within the E step.
-        neighb_ids, edata = self.load_batch_e(
-            candidates=candidates, batch_indices=batch_indices
-        )
-        eres = _te_batch_e(  # pyright: ignore [reportCallIssue]
-            n_units=self.n_units,
-            n_candidates=n_candidates,
-            noise_log_prop=self.noise_log_prop,
-            candidates=candidates,
-            with_kl=with_kl,
-            with_probs=with_probs,
-            with_invquad=with_invquad,
-            **edata,
-        )
-        candidates = eres["candidates"]
+        if not initializing:
+            neighb_ids, edata = self.load_batch_e(
+                candidates=candidates, batch_indices=batch_indices
+            )
+            eres = _te_batch_e(  # pyright: ignore [reportCallIssue]
+                n_units=self.n_units,
+                n_candidates=n_candidates,
+                noise_log_prop=self.noise_log_prop,
+                candidates=candidates,
+                with_kl=with_kl,
+                with_probs=with_probs,
+                with_invquad=with_invquad,
+                **edata,
+            )
+            candidates = eres["candidates"]
+            Q = eres["Q"]
+        else:
+            Q = torch.zeros((n, n_candidates + 1), device=self.device)
+            Q[:, :-1][candidates >= 0] = 1.0
         assert candidates is not None
         assert candidates.shape == (n, n_candidates)
-        Q = eres["Q"]
         assert Q is not None
         assert Q.shape == (n, n_candidates + 1)
 
@@ -901,6 +943,8 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             noise_N, N, Nlut, cpos = _te_batch_m_counts(
                 self.n_units, self.nlut, candidates, mdata["lut_ixs"], Q
             )
+            if initializing:
+                noise_N = N.mean()
             ekw = dict(
                 rank=self.rank,
                 n_units=self.n_units,
@@ -1193,9 +1237,9 @@ class TruncatedExpectationProcessor(torch.nn.Module):
             assert batch_indices.step in (1, None)
             vcand_ss = vcand_ii + batch_indices.start
         else:
-            vcand_ss = batch_indices[vcand_ii]
+            vcand_ss = batch_indices.to(vcand_ii)[vcand_ii]
         neighborhood_ids = self.neighborhood_ids[batch_indices]
-        vcand_nn = neighborhood_ids[vcand_ii]
+        vcand_nn = neighborhood_ids.to(vcand_ii)[vcand_ii]
         lut_ixs = self.lut[vcand_uu, vcand_nn]
         lut_ixs[lut_ixs == np.prod(self.lut.shape)] = 0
 
@@ -1354,7 +1398,7 @@ class CandidateSet:
             (n_units + 1, self.n_neighborhoods), dtype=np.int32
         )
 
-    def initialize_candidates(self, labels, distances):
+    def initialize_candidates(self, labels, distances, fill_blanks=True):
         """Imposes invariant 1, or at least tries to start off well."""
         assert labels.shape[0] == self.n_spikes
         cinit = labels.view(len(labels), -1)
@@ -1363,7 +1407,9 @@ class CandidateSet:
             cinit[cmask, 0], self.neighborhood_ids[cmask]
         )
 
-        if labels.ndim == 1:
+        if labels.ndim == 1 and not fill_blanks:
+            self.candidates[:, 0] = labels
+        elif labels.ndim == 1:
             closest_neighbors = self.search_sets(
                 distances, n_search=self.n_candidates, un_adj=un_adj
             )
@@ -1379,6 +1425,7 @@ class CandidateSet:
                 out=self.candidates[:, 1 : self.n_candidates],
             )
         else:
+            assert fill_blanks
             assert labels.shape == (self.n_spikes, self.n_candidates)
             labels, ixs = labels.sort(dim=1, descending=True)
             dup = labels.diff(dim=1) == 0
@@ -1579,6 +1626,32 @@ class CandidateSet:
         invalid = unit_neighb_not_adj[top, neighb_ids[:, None].broadcast_to(top.shape)]
         top[invalid] = -1
 
+    def ensure_no_blanks(self, top, neighb_ids, un_adj):
+        (blanks,) = (top[:, 0] < 0).nonzero(as_tuple=True)
+        if not blanks.numel():
+            return
+
+        # -- pick units to fill top at random according to overlaps with neighb_ids
+        # construct array of probabilities with tiny prob on non-overlapping units
+        adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        probs = unit_neighb_adj[:, neighb_ids[blanks]]
+        assert probs.shape == (blanks.numel(), unit_neighb_adj.shape[0])
+        eps = 2.0**-30
+        probs.clamp_min(min=eps)
+
+        # pick without replacement along dim 1. then non-overlaps chosen only if there
+        # were not enough overlaps (whp)
+        inds = torch.multinomial(
+            probs, num_samples=top.shape[1], replacement=False, generator=self.gen
+        )
+        assert inds.shape == (blanks.numel(), top.shape[1])
+        # find the non-overlapping guys and overwrite with -1s.
+        inds[probs.take_along_dim(inds, dim=1) < 0.5] = -1
+
+        # finish
+        top[blanks] = inds
+        
+
     def propose_candidates(self, distances, indices=None, constrain_searches=True):
         """Assumes invariant 1 and does not mess it up.
 
@@ -1618,6 +1691,7 @@ class CandidateSet:
 
         # make sure all candidates are in adjacent neighborhoods else vanquish them
         if constrain_searches:
+            self.ensure_no_blanks(top, neighb_ids, self.un_adj)
             self.ensure_adjacent(top, neighb_ids, self.un_adj)
 
         # update search sets
