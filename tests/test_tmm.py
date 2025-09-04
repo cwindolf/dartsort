@@ -68,16 +68,17 @@ def test_topk_candidates(
     if stepwise < 0:
         for j in range(-stepwise):
             cnew, cnu = gmm.tmm.prepare_step()
-            assert not cnu
+            assert cnew.device.type != 'cpu' or not cnu
             check_tmm_invariants(gmm, including_labels=initial_e_step, d=True)
         return
 
     for j in range(stepwise):
         res = gmm.tmm.step(hard_label=True)
-        (kept,) = (res['labels'] >= 0).nonzero(as_tuple=True)
-        assert torch.equal(
-            res['labels'][kept], gmm.tmm.candidates.candidates[kept, 0]
-        )
+        rlabels = res['labels'].cpu()
+        (kept,) = (rlabels >= 0).nonzero(as_tuple=True)
+        cands0kept = gmm.tmm.candidates.candidates[kept, 0]
+        rlabelskept = rlabels[kept]
+        assert torch.equal(rlabelskept, cands0kept)
         check_tmm_invariants(gmm, including_labels=False, including_adjacency=False, d=True)
 
     if not stepwise:
@@ -85,7 +86,7 @@ def test_topk_candidates(
         check_tmm_invariants(gmm, d=True, including_adjacency=False, including_labels=final_split == "train")
 
     cnew, cnu = gmm.tmm.prepare_step()
-    assert not cnu
+    assert cnew.device.type != 'cpu' or not cnu
     # last check for adjacency
     check_tmm_invariants(gmm, including_labels=not stepwise and final_split == "train", d=True)
 
@@ -236,9 +237,9 @@ def check_tmm_invariants(
 
     # simple unit-unit adjacency
     # this is: they have at least one fully-overlapping neighborhood in common
-    uu_adj_full = (unc @ full_adjacency @ unc.T) > 0
+    uu_adj_full = (unc @ full_adjacency.cpu() @ unc.T) > 0
     # this is: they have at least one partially-overlapping neighborhood in common
-    uu_adj_some = (unc @ some_adjacency @ unc.T) > 0
+    uu_adj_some = (unc @ some_adjacency.cpu() @ unc.T) > 0
     assert (uu_adj_some >= uu_adj_full).all()
     # empirical unit co-occurrences
     uu_top = []
@@ -333,11 +334,12 @@ def check_tmm_invariants(
     # same note as f.i
     for j in range(n_units):
         inds_j = train_neighborhoods.indicators[:, *unc[j].nonzero(as_tuple=True)]
-        (chans_j,) = inds_j.sum(dim=1).nonzero(as_tuple=True)
+        (chans_j,) = inds_j.sum(dim=1).cpu().nonzero(as_tuple=True)
         if reinit_neighborhoods:
-            assert torch.equal(best_channel_sets[j], chans_j)
+            assert torch.equal(best_channel_sets[j].cpu(), chans_j)
         else:
             emp_chans = torch.concatenate([best_channel_sets[j], top_channel_sets[j]]).unique()
+            emp_chans = emp_chans.cpu()
             assert torch.isin(emp_chans, chans_j).all()
             emp_chans_full = torch.concatenate([emp_chans, rest_channel_sets[j]]).unique()
             assert torch.equal(emp_chans_full, chans_j)

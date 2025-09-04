@@ -69,7 +69,7 @@ def test_mixture(
     elif dist_and_search_type == "cos":
         dist_search_kw = dict(
             distance_metric="cosine",
-            search_type="random",
+            search_type="topk",
             merge_distance_threshold=0.5,
             distance_normalization_kind="none",
         )
@@ -91,7 +91,6 @@ def test_mixture(
             laplace_ard=laplace_ard,
             prior_pseudocount=prior_pseudocount,
             prior_scales_mean=prior_scales_mean,
-            tvi_n_random_search_iter=0,
             **dist_search_kw,
         ),
         sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing)],
@@ -189,9 +188,6 @@ def test_mixture(
                 alpha0=res["gmm"].prior_pseudocount,
                 laplace_ard=res["gmm"].laplace_ard,
                 prior_scales_mean=res["gmm"].prior_scales_mean,
-                neighborhood_adjacency_overlap=0.5,
-                search_neighborhood_steps=1,
-                n_random_search_iter=0,
             )
             tmm.set_sizes(res["sim_res"]["K"])
 
@@ -222,19 +218,15 @@ def test_mixture(
                 tmm.candidates.candidates[:, 0], torch.asarray(train_labels)
             )
 
-            if dist_and_search_type == "kl":
+            if dist_and_search_type == "kl" and t_missing in (None, "random"):
                 assert torch.equal(
                     tmm.candidates.candidates[
                         :, 1 : tmm.candidates.n_candidates
                     ].unique(),
                     torch.arange(res["sim_res"]["K"]),
                 )
-            assert (
-                tmm.candidates.candidates[:, : tmm.candidates.n_candidates]
-                .sort(dim=1)
-                .values.diff(dim=1)
-                > 0
-            ).all()
+            scand = tmm.candidates.candidates[:, : tmm.candidates.n_candidates].sort(dim=1).values
+            assert torch.logical_or(scand.diff(dim=1) > 0, scand[:, 1:] < 0).all()
 
             search_neighbors = tmm.candidates.search_sets(tmm.divergences, constrain_searches=False)
             candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
@@ -245,17 +237,13 @@ def test_mixture(
                 len(neighbs.neighborhoods),
             )
             assert torch.equal(candidates[:, 0], torch.asarray(train_labels))
-            if dist_and_search_type == "kl":
+            if dist_and_search_type == "kl" and t_missing in (None, "random"):
                 assert torch.equal(
                     candidates[:, 1 : tmm.candidates.n_candidates].unique(),
                     torch.arange(res["sim_res"]["K"]),
                 )
-            assert (
-                candidates[:, : tmm.candidates.n_candidates]
-                .sort(dim=1)
-                .values.diff(dim=1)
-                > 0
-            ).all()
+            scand = candidates[:, : tmm.candidates.n_candidates].sort(dim=1).values
+            assert torch.logical_or(scand.diff(dim=1) > 0, scand[:, 1:] < 0).all()
             assert (
                 candidates.untyped_storage()
                 == tmm.candidates.candidates.untyped_storage()

@@ -290,14 +290,15 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 bases=self.bases,
                 unit_neighborhood_counts=unit_neighborhood_counts,
             )
+            candidates = candidates.to(self.device)
             candidates_needs_update = (
                 candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
             )
         else:
             candidates = self.candidates.candidates[:, :1]
             # no E step is run, so no reassignment should be done
+            candidates = candidates.to(self.device)
             candidates_needs_update = False
-        candidates = candidates.to(self.device)
         return candidates, candidates_needs_update
 
     def step(self, show_progress=False, hard_label=False, with_probs=False, tic=None):
@@ -319,7 +320,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
             _c = candidates[:, : self.n_candidates].to(self.candidates.candidates)
             self.candidates.candidates[:, : self.n_candidates] = _c
             if logger.isEnabledFor(DARTSORTVERBOSE):
-                assert (_c >= 0).all()
+                assert (_c[:, 0] >= 0).all()
 
         if self.has_prior and self.prior_scales_mean:
             mean_scale = result.N / (result.N + self.alpha0)

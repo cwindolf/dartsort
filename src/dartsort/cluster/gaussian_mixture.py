@@ -1814,7 +1814,7 @@ class SpikeMixtureModel(torch.nn.Module):
             kmeanspp_initial=self.kmeans_kmeanspp_initial,
             with_proportions=self.kmeans_with_proportions,
             drop_prop=self.kmeans_drop_prop,
-            drop_sum=self.channels_count_min,
+            drop_sum=self.min_count,
         )
         split_labels = kmeans_res["labels"]
         responsibilities = kmeans_res["responsibilities"]
