@@ -82,12 +82,12 @@ class SpikeMixtureModel(torch.nn.Module):
         proportions_sample_size: int = 2**16,
         likelihood_batch_size: int = 2**15,
         channels_strategy: Literal["all", "snr", "count", "count_core"] = "count",
-        channels_count_min: float = 25.0,
+        channels_count_min: float = 1.0,
         channels_snr_amp: float = 1.0,
         with_noise_unit: bool = True,
         noise_log_priors: torch.Tensor | np.ndarray | None = None,
-        prior_pseudocount: float = 25.0,
-        prior_scales_mean=True,
+        prior_pseudocount: float = 0.0,
+        prior_scales_mean=False,
         ppca_rank: int = 0,
         ppca_initial_em_iter: int = 3,
         ppca_inner_em_iter: int = 3,
@@ -161,7 +161,7 @@ class SpikeMixtureModel(torch.nn.Module):
         self.n_spikes_fit = n_spikes_fit
         self.likelihood_batch_size = likelihood_batch_size
         self.min_count = min_count
-        self.channels_count_min = channels_count_min
+        self.channels_count_min = max(ppca_rank, channels_count_min)
         self.n_em_iters = n_em_iters
         self.kmeans_k = kmeans_k
         self.kmeans_n_iter = kmeans_n_iter
@@ -1817,7 +1817,7 @@ class SpikeMixtureModel(torch.nn.Module):
             kmeanspp_initial=self.kmeans_kmeanspp_initial,
             with_proportions=self.kmeans_with_proportions,
             drop_prop=self.kmeans_drop_prop,
-            drop_sum=self.channels_count_min,
+            drop_sum=self.min_count,
         )
         split_labels = kmeans_res["labels"]
         responsibilities = kmeans_res["responsibilities"]
@@ -2352,10 +2352,8 @@ class SpikeMixtureModel(torch.nn.Module):
             debug_info["units"] = units
             debug_info["full_improvement"] = best_improvement
             logger.dartsortdebug(f"Split full improvement: {best_improvement}")
-            logger.dartsortdebug(f"Split full criteria: {full_info['full_criteria']}")
-            logger.dartsortdebug(
-                f"Split merged criteria: {full_info['merged_criteria']}"
-            )
+            logger.dartsortdebug(f"Split hyp criteria: {full_info['hyp_criteria']}")
+            logger.dartsortdebug(f"Split cur criteria: {full_info['cur_criteria']}")
             logger.dartsortdebug(f"Split improvements: {full_info['improvements']}")
         if n_units <= 1:
             if debug:
@@ -2516,14 +2514,15 @@ class SpikeMixtureModel(torch.nn.Module):
 
                 if debug:
                     tag = f"Split {ids_part}"
-                    fcrit = full_info["full_criteria"]
-                    mcrit = full_info["merged_criteria"]
-                    fcrit = ", ".join(f"{k}: {v:.3f}" for k, v in fcrit.items())
+                    hcrit = full_info["hyp_criteria"]
+                    ccrit = full_info["cur_criteria"]
+                    hcrit = ", ".join(f"{k}: {v:.3f}" for k, v in hcrit.items())
+                    ccrit = ", ".join(f"{k}: {v:.3f}" for k, v in ccrit.items())
                     imp = ", ".join(
                         f"{k}: {v:.3f}" for k, v in crit["improvements"].items()
                     )
-                    logger.dartsortdebug(f"{tag} fvc: {fcrit}")
-                    logger.dartsortdebug(f"{tag} mvc: {mcrit}")
+                    logger.dartsortdebug(f"{tag} hvc: {hcrit}")
+                    logger.dartsortdebug(f"{tag} cvc: {ccrit}")
                     logger.dartsortdebug(f"{tag} imp: {imp}")
 
                 # memoize
@@ -2584,9 +2583,11 @@ class SpikeMixtureModel(torch.nn.Module):
         refit_cur_units=False,
         cur_units=None,
         cosines=None,
+        force_all_cur_valid=False,
         min_cosine=0.5,
         in_bag=False,
         return_hyp_liks_nolp=False,
+        return_spikes=False,
     ) -> dict[
         Literal["improvements", "overlap", "hyp_units", "eval_labels", "hyp_liks_nolp"],
         Any,
@@ -2785,7 +2786,6 @@ class SpikeMixtureModel(torch.nn.Module):
             cur_liks_full = torch.concatenate((irr_liks, cur_liks), dim=0)
         else:
             cur_liks = cur_liks_full[current_unit_ids]
-
         cur_logliks = cur_liks_full.logsumexp(dim=0)
 
         # hypothetical units
@@ -2809,11 +2809,14 @@ class SpikeMixtureModel(torch.nn.Module):
         hyp_liks_full = torch.concatenate((irr_liks, hyp_liks), dim=0)
         hyp_logliks = hyp_liks_full.logsumexp(dim=0)
 
-        valid = torch.logical_and(
-            cur_liks.isfinite().all(dim=0), hyp_logliks.isfinite()
-        )
-        (vix,) = valid.cpu().nonzero(as_tuple=True)
-        if vix.numel() == len(spikes):
+        if force_all_cur_valid:
+            valid = torch.logical_and(
+                cur_liks.isfinite().all(dim=0), hyp_logliks.isfinite()
+            )
+            (vix,) = valid.cpu().nonzero(as_tuple=True)
+            if vix.numel() == len(spikes):
+                vix = slice(None)
+        else:
             vix = slice(None)
         cur_loglik = cur_logliks[vix]  # .mean()
         hyp_loglik = hyp_logliks[vix]  # .mean()
@@ -2883,16 +2886,17 @@ class SpikeMixtureModel(torch.nn.Module):
         props /= counts
         overlap = props.min()
 
-        merged_criteria = cur_criteria if splitting else hyp_criteria
-        full_criteria = hyp_criteria if splitting else cur_criteria
         res = dict(
             improvements=improvements,
-            merged_criteria=merged_criteria,
-            full_criteria=full_criteria,
+            hyp_criteria=hyp_criteria,
+            cur_criteria=cur_criteria,
             overlap=overlap,
+            eval_cur_labels=eval_cur_labels,
             eval_labels=eval_labels,
             hyp_units=hyp_units,
             hyp_liks_nolp=hyp_liks_nolp,
+            hyp_log_props=hyp_log_props,
+            spikes=spikes if return_spikes else None,
         )
         return res
 

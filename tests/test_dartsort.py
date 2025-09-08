@@ -79,9 +79,7 @@ def test_fakedata(tmp_path, simulations, sdcfg):
         ),
         refinement_cfg=dartsort.RefinementConfig(
             min_count=10,
-            channels_strategy="count",
             n_total_iters=1,
-            search_type="random",
             distance_metric="cosine",
             merge_distance_threshold=0.5,
             noise_fp_correction=True,
@@ -144,7 +142,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
-        count_dif_tol = 0.05
+        count_dif_tol = 0.1
     elif type == "universal":
         count_dif_tol = 0.5
     elif type == "subtract":

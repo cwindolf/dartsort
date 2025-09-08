@@ -350,10 +350,11 @@ def test_pconv(tmp_path):
 
         for tixa in range(5):
             for tixb in range(5):
-                ixa, ixb, pconv = pconvdb.query(tixa, tixb)
+                ixa, ixb, timesb, pconv = pconvdb.query(tixa, tixb)
                 if (tixa, tixb) not in overlaps:
                     assert not ixa.numel()
                     assert not ixb.numel()
+                    assert timesb is None or not timesb.numel()
                     assert not pconv.numel()
                     continue
 
@@ -396,7 +397,7 @@ def test_pconv(tmp_path):
 
         for tixa in range(5):
             for tixb in range(5):
-                ixa, ixb, pconv = pconvdb.query(tixa, tixb, shifts_a=0, shifts_b=0)
+                ixa, ixb, timesb, pconv = pconvdb.query(tixa, tixb, shifts_a=0, shifts_b=0)
 
                 if (tixa, tixb) not in overlaps:
                     assert not ixa.numel()
@@ -410,21 +411,21 @@ def test_pconv(tmp_path):
 
         for tixb in range(5):
             for shiftb in (-1, 0, 1):
-                ixa, ixb, pconv = pconvdb.query(0, tixb, shifts_a=-1, shifts_b=shiftb)
+                ixa, ixb, timesb, pconv = pconvdb.query(0, tixb, shifts_a=-1, shifts_b=shiftb)
                 assert not ixa.numel()
                 assert not ixb.numel()
                 assert not pconv.numel()
 
         for tixb in range(5):
             for shift in (-1, 0, 1):
-                ixa, ixb, pconv = pconvdb.query(4, tixb, shifts_a=shift, shifts_b=shift)
+                ixa, ixb, timesb, pconv = pconvdb.query(4, tixb, shifts_a=shift, shifts_b=shift)
                 if tixb != 4 or shift == 1:
                     assert not ixa.numel()
                     assert not ixb.numel()
                     assert not pconv.numel()
                 else:
                     assert np.isclose(pconv.max(), 4 if shift < 1 else 0)
-                ixa, ixb, pconv = pconvdb.query(tixb, 4, shifts_a=shift, shifts_b=shift)
+                ixa, ixb, timesb, pconv = pconvdb.query(tixb, 4, shifts_a=shift, shifts_b=shift)
                 if tixb != 4 or shift == 1:
                     assert not ixa.numel()
                     assert not ixb.numel()
@@ -436,7 +437,7 @@ def test_pconv(tmp_path):
             for shiftb in (-1, 0, 1):
                 for tixa in range(5):
                     for tixb in range(5):
-                        ixa, ixb, pconv = pconvdb.query(
+                        ixa, ixb, timesb, pconv = pconvdb.query(
                             tixa, tixb, shifts_a=shifta, shifts_b=shiftb
                         )
                         if shifta != shiftb:

@@ -234,7 +234,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
     kmeansk: int = 3
-    prior_pseudocount: float = 10.0
+    prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
     interpolation_method: str = "kriging"
