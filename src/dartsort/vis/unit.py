@@ -980,7 +980,7 @@ def make_unit_summary(
     pca_radius_um=75.0,
     plots=default_plots,
     max_height=4,
-    figsize=(11, 8.5),
+    figsize=(16, 8.5),
     hspace=0.1,
     figure=None,
     gizmo_name="sorting_analysis",

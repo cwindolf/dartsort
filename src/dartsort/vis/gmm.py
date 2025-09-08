@@ -981,69 +981,6 @@ class NeighborBimodalities(GMMPlot):
                 no_leg_yet = False
 
 
-class NeighborInfoCriteria(GMMPlot):
-    kind = "bim"
-    width = 4
-    height = 9
-
-    def __init__(
-        self,
-        n_neighbors=5,
-        in_bag=False,
-    ):
-        self.n_neighbors = n_neighbors
-        self.in_bag = in_bag
-
-    def draw(self, panel, gmm, unit_id):
-        if not hasattr(gmm[unit_id], "mean"):
-            ax = panel.subplots()
-            ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
-            ax.axis("off")
-            return
-        neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
-        assert neighbors[0] == unit_id
-        others = neighbors[1:]
-        axes = panel.subplots(nrows=len(others), ncols=1)
-        bag = "inbag" if self.in_bag else "heldout"
-        bbox = dict(facecolor="w", alpha=0.5, edgecolor="none")
-        histkw = dict(density=True, histtype="step", log=True)
-        textkw = dict(bbox=bbox, va="top", fontsize="x-small")
-
-        for ax, other_id in zip(axes, others):
-            res = gmm.merge_criteria(
-                [unit_id, other_id],
-                likelihoods=gmm.log_liks,
-                in_bag=self.in_bag,
-                debug=True,
-            )
-            if res is None:
-                ax.text(0.5, 0.5, "abandoned", transform=ax.transAxes)
-                ax.axis("off")
-                continue
-
-            info = res["info"]
-            kept = info["keep_mask"].sum() / len(info["keep_mask"])
-            for uid, ll in zip((unit_id, other_id), info["subunit_logliks"]):
-                if not ll.numel():
-                    continue
-                ax.hist(ll.cpu(), color=glasbey1024[uid], **histkw)
-            merged_ll = info["unit_logliks"]
-            if merged_ll.numel():
-                ax.hist(merged_ll.cpu(), color="k", **histkw)
-
-            message = f"{100 * kept:.1f}%"
-            if "improvements" in res:
-                message = f"{message} {bag} full/merge/imp:"
-                fc, mc = res["full_criteria"], res["merged_criteria"]
-                for k, v in res["improvements"].items():
-                    t = ":) " if v >= 0 else "X( "
-                    message += f"\n{t}{k}: {fc[k]:.1f} / {mc[k]:.1f} / {v:.2f}"
-
-            ax.text(0.05, 0.95, message, transform=ax.transAxes, **textkw)
-            ax.set_xlabel("log lik")
-            sns.despine(ax=ax, left=True, right=True, top=True)
-
-
 class NeighborTreeMerge(GMMPlot):
     kind = "treemerge"
     width = 4
@@ -1074,13 +1011,18 @@ class NeighborTreeMerge(GMMPlot):
         self.decision_algorithm = decision_algorithm
         self.min_overlap = min_overlap
 
-    def draw(self, panel, gmm, unit_id):
+    def draw(self, panel, gmm, unit_id, neighbors=None):
         if not hasattr(gmm[unit_id], "mean"):
             ax = panel.subplots()
             ax.text(0.5, 0.5, "blank unit", ha="center", transform=ax.transAxes)
             ax.axis("off")
             return
-        neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
+        if neighbors is None:
+            neighbors = gmm_helpers.get_neighbors(gmm, unit_id)
+        else:
+            neighbors = np.asarray(neighbors)
+            if neighbors[0] != unit_id:
+                neighbors = np.concatenate([np.array([unit_id]), neighbors])
         assert neighbors[0] == unit_id
 
         criterion = self.criterion
