@@ -24,6 +24,7 @@ from tqdm.auto import trange, tqdm
 
 # %%
 import matplotlib.pyplot as plt
+
 plt.rc("figure", dpi=300)
 
 # %%
@@ -52,15 +53,27 @@ for fcfn in sorted(glob(f"{root}/first_chan_*.npy")):
     wf_ = np.load(wffn)
     if not wf_.shape[0]:
         continue
-        
+
     if wf_.shape[0] != times_.shape[0]:
         if times_[0] < 50:
-            print(np.load(wffn).shape, np.load(locfn).shape, times_.shape, np.load(fcfn).shape, np.load(mcfn).shape)
+            print(
+                np.load(wffn).shape,
+                np.load(locfn).shape,
+                times_.shape,
+                np.load(fcfn).shape,
+                np.load(mcfn).shape,
+            )
             times_ = times_[1:]
         elif times_[-1] > 30000000 - 121:
-            print(np.load(wffn).shape, np.load(locfn).shape, times_.shape, np.load(fcfn).shape, np.load(mcfn).shape)
+            print(
+                np.load(wffn).shape,
+                np.load(locfn).shape,
+                times_.shape,
+                np.load(fcfn).shape,
+                np.load(mcfn).shape,
+            )
             times_ = times_[:-1]
-        
+
     all_times.extend(times_)
 
 # %%
@@ -73,7 +86,10 @@ wffn = f"{root}/waveforms_{mc}_{batchno}.npy"
 fcfn, mcfn, tfn, locfn, wffn
 
 # %%
-mct = np.load(mcfn); tt = np.load(tfn); loct = np.load(locfn); wft = np.load(wffn)
+mct = np.load(mcfn)
+tt = np.load(tfn)
+loct = np.load(locfn)
+wft = np.load(wffn)
 for k, v in zip(["mc", "t", "loc", "wf"], [mct, tt, loct, wft]):
     print(k, v.shape, v.dtype)
 
@@ -94,7 +110,8 @@ sorted_times[:20]
 np.all(sorted_times[1:] >= sorted_times[:-1])
 
 # %%
-N = len(all_times); N
+N = len(all_times)
+N
 
 # %%
 sort_dest = np.zeros_like(sort_order)
@@ -106,7 +123,7 @@ sort_dest[:20]
 with h5py.File("../data/wfs_locs_c.h5", "w") as out:
     out.create_dataset("fs", data=30_000)
     out.create_dataset("geom", data=np.load("../data/np2_channel_map.npy"))
-    
+
     spike_index = out.create_dataset("spike_index", dtype=np.int64, shape=(N, 2))
     maxchans = out.create_dataset("max_channels", dtype=np.int64, shape=N)
     firstchans = out.create_dataset("first_channels", dtype=np.int64, shape=N)
@@ -115,32 +132,34 @@ with h5py.File("../data/wfs_locs_c.h5", "w") as out:
     z = out.create_dataset("z", dtype=np.float64, shape=N)
     alpha = out.create_dataset("alpha", dtype=np.float64, shape=N)
     ptp = out.create_dataset("maxptp", dtype=np.float64, shape=N)
-    waveforms = out.create_dataset("denoised_waveforms", dtype=np.float64, shape=(N, 82, 20), chunks=(512, 82, 20))
-    
+    waveforms = out.create_dataset(
+        "denoised_waveforms", dtype=np.float64, shape=(N, 82, 20), chunks=(512, 82, 20)
+    )
+
     index = 0
-    
+
     for fcfn in tqdm(list(sorted(glob(f"{root}/first_chan_*.npy")))):
         *_, mc, batchno = fcfn.split("/")[-1].split(".")[0].split("_")
         mcfn = f"{root}/max_chan_{mc}_{batchno}.npy"
         tfn = f"{root}/times_{mc}_{batchno}.npy"
         locfn = f"{root}/localization_features_{mc}_{batchno}.npy"
         wffn = f"{root}/waveforms_{mc}_{batchno}.npy"
-        
+
         fc = np.load(fcfn)
         mc = np.load(mcfn)
         ts = np.load(tfn)
         locs = np.load(locfn)
         wfs = np.load(wffn).astype(np.float64)
-        
+
         if not wfs.shape[0]:
             continue
-            
+
         if wf_.shape[0] != times_.shape[0]:
             if ts[0] < 50:
                 ts = ts[1:]
             elif ts[-1] > 30000000 - 121:
                 ts = ts[:-1]
-        
+
         for t, loc, wf in zip(ts, locs, wfs):
             n = sort_dest[index]
             index += 1
@@ -171,18 +190,29 @@ with h5py.File("../data/wfs_locs_c.h5", "r") as f:
     print((ptp == 0).sum(), np.flatnonzero(ptp == 0))
     print(ptp.dtype)
     print(alpha[np.flatnonzero(ptp == 0)])
-    
+
     # check sorted times
     print(np.all(spike_index[1:, 0] >= spike_index[:-1, 0]))
-    
+
     # check everyone looks normal
     # plt.scatter(firstchans, maxchans, s=1); plt.show()
-    plt.scatter(x, z, s=1, c=np.abs(zrel) >= 32); plt.show()
-    plt.hist(x, bins=128); plt.title("x"); plt.show()
-    plt.hist(y, bins=128); plt.title("y"); plt.show()
-    plt.hist(z, bins=128); plt.title("z"); plt.show()
-    plt.hist(ptp, bins=128); plt.title("ptp"); plt.show()
-    plt.hist(alpha, bins=128); plt.title("alpha"); plt.show()
+    plt.scatter(x, z, s=1, c=np.abs(zrel) >= 32)
+    plt.show()
+    plt.hist(x, bins=128)
+    plt.title("x")
+    plt.show()
+    plt.hist(y, bins=128)
+    plt.title("y")
+    plt.show()
+    plt.hist(z, bins=128)
+    plt.title("z")
+    plt.show()
+    plt.hist(ptp, bins=128)
+    plt.title("ptp")
+    plt.show()
+    plt.hist(alpha, bins=128)
+    plt.title("alpha")
+    plt.show()
 
 # %%
 # zrel = waveform_utils.relativize_z(z, maxchans, geom)
@@ -248,13 +278,23 @@ R, dd, tt = lib.faster(amps, depths, times)
 cuts.plot(R)
 
 # %%
-plt.hist(amps, bins=128);
+plt.hist(amps, bins=128)
 
 # %%
-plt.plot(times, depths, "k.", ms=0.1, alpha=0.1);
+plt.plot(times, depths, "k.", ms=0.1, alpha=0.1)
 
 # %%
-regres = reg.register_nonrigid(amps, depths, times, robust_sigma=1, disp=100, destripe=False, n_windows=[30], widthmul=0.25, denoise_sigma=0.075)
+regres = reg.register_nonrigid(
+    amps,
+    depths,
+    times,
+    robust_sigma=1,
+    disp=100,
+    destripe=False,
+    n_windows=[30],
+    widthmul=0.25,
+    denoise_sigma=0.075,
+)
 
 # %%
 z_reg, total_shift = regres

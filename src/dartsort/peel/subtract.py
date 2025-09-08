@@ -732,7 +732,7 @@ def subtract_chunk(
             chan_ix = spatial_dedup_channel_index[channels]
         else:
             chan_ix = channels.unsqueeze(1)
-        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0
+        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
 
         # take extra care to exclude positive peaks appearing near stronger troughs
         if pos_dedup_temporal_radius:

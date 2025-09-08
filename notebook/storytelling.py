@@ -38,7 +38,13 @@ from isosplit import isosplit
 from isosplit5 import isosplit5
 
 # %%
-from spike_psvae import waveform_utils, localization, point_source_centering, vis_utils, statistics
+from spike_psvae import (
+    waveform_utils,
+    localization,
+    point_source_centering,
+    vis_utils,
+    statistics,
+)
 
 # %%
 sns.set_style("ticks")
@@ -66,13 +72,16 @@ feats_h5 = "../data/story_feats_b.h5"
 # %% [markdown]
 # ## helpers
 
+
 # %%
 class timer:
     def __init__(self, name="timer"):
         self.name = name
+
     def __enter__(self):
         self.start = time.time()
         return self
+
     def __exit__(self, *args):
         self.t = time.time() - self.start
         print(self.name, "took", self.t, "s")
@@ -90,9 +99,9 @@ with h5py.File(original_h5, "r") as orig_f:
     ckw = dict(geomkind="updown")
     if "first_channels" in orig_f:
         ckw = dict(geomkind="firstchan", firstchans=orig_f["first_channels"][:])
-        
+
     N, T, C = orig_f["denoised_waveforms"].shape
-    
+
     xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms_batched(
         orig_f["denoised_waveforms"],
         orig_f["geom"][:],
@@ -206,21 +215,31 @@ ex_zr = z_rels[example_inds]
 ex_a = alphas[example_inds]
 
 # %%
-vis_utils.labeledmosaic(exwf.reshape(3, 3, T, C)[:, :, 15:, :], [1, 2, 3], pad=1);
+vis_utils.labeledmosaic(exwf.reshape(3, 3, T, C)[:, :, 15:, :], [1, 2, 3], pad=1)
 
 # %%
 exp = exwf.ptp(1)
-fig, axes = vis_utils.vis_ptps(
-    [exp], ["peak to peak"], "b"
-)
+fig, axes = vis_utils.vis_ptps([exp], ["peak to peak"], "b")
 
 # %%
 exwf_yza, ex_q_hat_yza, ex_p_hat = point_source_centering.relocate_simple(
-    exwf, geom, exmc, ex_x, ex_y, ex_zr, ex_a,
+    exwf,
+    geom,
+    exmc,
+    ex_x,
+    ex_y,
+    ex_zr,
+    ex_a,
     relocate_dims="yza",
 )
 exwf_xyza, ex_q_hat_xyza, ex_p_hat_ = point_source_centering.relocate_simple(
-    exwf, geom, exmc, ex_x, ex_y, ex_zr, ex_a,
+    exwf,
+    geom,
+    exmc,
+    ex_x,
+    ex_y,
+    ex_zr,
+    ex_a,
     relocate_dims="xyza",
 )
 assert (ex_p_hat == ex_p_hat_).all()
@@ -241,7 +260,9 @@ fig, axes = vis_utils.vis_ptps(
 plt.tight_layout(pad=0.25)
 plt.show()
 fig, axes = vis_utils.vis_ptps(
-    [ex_q_xyza, ex_q_hat_xyza.numpy()], ["xyza relocated ptp", "xyza standard ptp"], "kr"
+    [ex_q_xyza, ex_q_hat_xyza.numpy()],
+    ["xyza relocated ptp", "xyza standard ptp"],
+    "kr",
 )
 plt.tight_layout(pad=0.25)
 plt.show()
@@ -262,11 +283,12 @@ vis_utils.labeledmosaic(
 # %% [markdown]
 # ### test: PCA error on a batch of data
 
+
 # %%
 def pca_resid_plot(wfs, ax=None, c="b", name=None, pad=0, K=25):
     wfs = wfs.reshape(wfs.shape[0], -1)
     wfs = wfs - wfs.mean(axis=0, keepdims=True)
-    v = np.square(la.svdvals(wfs)[:K - pad]) / np.prod(wfs.shape)
+    v = np.square(la.svdvals(wfs)[: K - pad]) / np.prod(wfs.shape)
     ax = ax or plt.gca()
     totvar = np.square(wfs).mean()
     residvar = np.concatenate(([totvar], totvar - np.cumsum(v)))
@@ -281,13 +303,25 @@ B = 50_000
 with h5py.File(original_h5, "r") as orig_f:
     batch_wfs = orig_f["denoised_waveforms"][:B]
     batch_mc = orig_f["max_channels"][:B]
-    
+
     batch_wfs_yza, q_hat_yza, p_hat = point_source_centering.relocate_simple(
-        batch_wfs, geom, batch_mc, xs[:B], ys[:B], z_rels[:B], alphas[:B],
+        batch_wfs,
+        geom,
+        batch_mc,
+        xs[:B],
+        ys[:B],
+        z_rels[:B],
+        alphas[:B],
         relocate_dims="yza",
     )
     batch_wfs_xyza, q_hat_xyza, p_hat_ = point_source_centering.relocate_simple(
-        batch_wfs, geom, batch_mc, xs[:B], ys[:B], z_rels[:B], alphas[:B],
+        batch_wfs,
+        geom,
+        batch_mc,
+        xs[:B],
+        ys[:B],
+        z_rels[:B],
+        alphas[:B],
         relocate_dims="xyza",
     )
 
@@ -321,18 +355,18 @@ ipca_xyza = IncrementalPCA(n_components=K)
 with h5py.File(original_h5, "r") as orig_f:
     waveforms = orig_f["denoised_waveforms"]
     maxchans = orig_f["max_channels"][:]
-    
+
     ckw = dict(geomkind="updown")
     if "first_channels" in orig_f:
         ckw = dict(geomkind="firstchan", firstchans=orig_f["first_channels"][:])
-    
+
     for b in trange((N + 1) // 2048, desc="fit"):
         start = b * 2048
         end = min(N, (b + 1) * 2048)
 
         wfs_orig = waveforms[start:end]
         B, _, _ = wfs_orig.shape
-        
+
         wfs_yza, _, _ = point_source_centering.relocate_simple(
             wfs_orig,
             geom,
@@ -359,7 +393,7 @@ with h5py.File(original_h5, "r") as orig_f:
         )
         ipca_orig.partial_fit(wfs_orig.reshape(B, -1))
         ipca_yza.partial_fit(wfs_yza.reshape(B, -1))
-        ipca_xyza.partial_fit(wfs_xyza.reshape(B, -1))        
+        ipca_xyza.partial_fit(wfs_xyza.reshape(B, -1))
 
 # %%
 loadings_orig = np.empty((N, K))
@@ -369,7 +403,7 @@ loadings_xyza = np.empty((N, K))
 with h5py.File(original_h5, "r") as orig_f:
     waveforms = orig_f["denoised_waveforms"]
     maxchans = orig_f["max_channels"][:]
-    
+
     ckw = dict(geomkind="updown")
     if "first_channels" in orig_f:
         ckw = dict(geomkind="firstchan", firstchans=orig_f["first_channels"][:])
@@ -476,9 +510,15 @@ good = np.setdiff1d(good, np.flatnonzero(loadings_xyza[:, 0] == 0))
 # good = np.intersect1d(good, unique_inds)
 
 # feats_orig = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas][good]).T #, loadings_orig[:, :5]][good]).T
-feats_orig = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas, loadings_orig[:, :3]][good]).T
-feats_yza = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas, loadings_yza[:, :3]][good]).T
-feats_xyza = np.ascontiguousarray(np.c_[xs, ys, z_reg, alphas, loadings_xyza[:, :3]][good]).T
+feats_orig = np.ascontiguousarray(
+    np.c_[xs, ys, z_reg, alphas, loadings_orig[:, :3]][good]
+).T
+feats_yza = np.ascontiguousarray(
+    np.c_[xs, ys, z_reg, alphas, loadings_yza[:, :3]][good]
+).T
+feats_xyza = np.ascontiguousarray(
+    np.c_[xs, ys, z_reg, alphas, loadings_xyza[:, :3]][good]
+).T
 
 # %%
 N - len(unique_inds), (N - len(unique_inds)) / N
@@ -522,20 +562,36 @@ with timer("isosplit"):
 # %%
 fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True)
 
-aa.scatter(xs[plot], z_reg[plot], c=labels_orig_full[plot], cmap=plt.cm.rainbow, s=1, marker="x");
+aa.scatter(
+    xs[plot],
+    z_reg[plot],
+    c=labels_orig_full[plot],
+    cmap=plt.cm.rainbow,
+    s=1,
+    marker="x",
+)
 aa.set_ylabel("registered depth")
 aa.set_xlabel("x")
-aa.set_title(f"no relocation - found {labels_orig.max() + 1}");
+aa.set_title(f"no relocation - found {labels_orig.max() + 1}")
 
-ab.scatter(xs[plot], z_reg[plot], c=labels_yza_full[plot], cmap=plt.cm.rainbow, s=1, marker="x");
+ab.scatter(
+    xs[plot], z_reg[plot], c=labels_yza_full[plot], cmap=plt.cm.rainbow, s=1, marker="x"
+)
 # ab.set_ylabel("registered depth")
 ab.set_xlabel("x")
-ab.set_title(f"YZa - found {labels_yza.max() + 1}");
+ab.set_title(f"YZa - found {labels_yza.max() + 1}")
 
-ac.scatter(xs[plot], z_reg[plot], c=labels_xyza_full[plot], cmap=plt.cm.rainbow, s=1, marker="x");
+ac.scatter(
+    xs[plot],
+    z_reg[plot],
+    c=labels_xyza_full[plot],
+    cmap=plt.cm.rainbow,
+    s=1,
+    marker="x",
+)
 # ac.set_ylabel("registered depth")
 ac.set_xlabel("x")
-ac.set_title(f"XYZa -- found {labels_xyza.max() + 1}");
+ac.set_title(f"XYZa -- found {labels_xyza.max() + 1}")
 
 fig.suptitle("ISO-SPLIT clusters (x,y,z,a pcs 1,2,3)")
 plt.tight_layout()
@@ -560,19 +616,19 @@ with h5py.File(feats_h5, "r") as feats_f:
     labels_xyza = feats_f["labels_xyza"][:]
 
 # %%
-vis_utils.lcorrs(z_disp, ys, alphas, loadings_orig, maxptp, plot);
+vis_utils.lcorrs(z_disp, ys, alphas, loadings_orig, maxptp, plot)
 plt.gcf().suptitle("pairplot: Unrelocated PCs vs. drift/localization")
 plt.tight_layout()
 plt.show()
 
 # %%
-vis_utils.lcorrs(z_disp, ys, alphas, loadings_yza, maxptp, plot);
+vis_utils.lcorrs(z_disp, ys, alphas, loadings_yza, maxptp, plot)
 plt.gcf().suptitle("pairplot: YZa PCs vs. drift/localization")
 plt.tight_layout()
 plt.show()
 
 # %%
-vis_utils.lcorrs(z_disp, ys, alphas, loadings_xyza, maxptp, plot);
+vis_utils.lcorrs(z_disp, ys, alphas, loadings_xyza, maxptp, plot)
 plt.gcf().suptitle("pairplot: XYZa PCs vs. drift/localization")
 plt.tight_layout()
 plt.show()
@@ -601,7 +657,7 @@ ac.set_xticklabels([f"pc{i}" for i in range(1, 6)])
 ac.set_title("XYZa")
 
 fig.suptitle("GCS(drift, pc loading) within (unrelocated) clusters")
-plt.show();
+plt.show()
 
 # %%
 fig, (aa, ab, ac) = plt.subplots(1, 3, sharey=True)
@@ -623,6 +679,6 @@ ac.set_xticklabels([f"pc{i}" for i in range(1, 6)])
 ac.set_title("XYZa")
 
 fig.suptitle("SpearmanR(drift, pc loading) within (unrelocated) clusters")
-plt.show();
+plt.show()
 
 # %%

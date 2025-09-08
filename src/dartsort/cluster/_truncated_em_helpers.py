@@ -127,7 +127,9 @@ def _te_batch_e(
 
     # observed log likelihoods
     whitenedx = whitenedx[vcand_ii]
-    inv_quad = woodbury_inv_quad(whitenedx, whitenednu, wburyroot=wburyroot, flat=True, ow_wnu=True)
+    inv_quad = woodbury_inv_quad(
+        whitenedx, whitenednu, wburyroot=wburyroot, flat=True, ow_wnu=True
+    )
     invquad = inv_quad.clone() if with_invquad else None
     del whitenednu
     lls_unnorm = inv_quad.add_(obs_logdets).add_(pivnobs).mul_(-0.5)

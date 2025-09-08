@@ -66,7 +66,7 @@ reloc_half = relocation.relocate_simple(
 np.nonzero(reloc_half), reloc_half[np.nonzero(reloc_half)]
 
 # %%
-(1/(1+0.5**2))/(1/1)
+(1 / (1 + 0.5**2)) / (1 / 1)
 
 # %%
 xyza_to_full = xyza_from.copy()
@@ -82,7 +82,7 @@ reloc_full = relocation.relocate_simple(
 np.nonzero(reloc_full), reloc_full[np.nonzero(reloc_full)]
 
 # %%
-(1/(1+1))/(1/1)
+(1 / (1 + 1)) / (1 / 1)
 
 # %%
 # test a helper for fancy relocation

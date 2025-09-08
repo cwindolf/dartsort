@@ -167,19 +167,28 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self._parameters_initialized = False
         nu = self.n_units
         rank_ncp1 = self.noise.rank, self.noise.n_channels + 1
-        
-        self.means = nn.Parameter(torch.full((nu, *rank_ncp1), torch.nan), requires_grad=False)
+
+        self.means = nn.Parameter(
+            torch.full((nu, *rank_ncp1), torch.nan), requires_grad=False
+        )
 
         if self.M:
-            self.bases = nn.Parameter(torch.full((nu, self.M, *rank_ncp1), torch.nan), requires_grad=False)
+            self.bases = nn.Parameter(
+                torch.full((nu, self.M, *rank_ncp1), torch.nan), requires_grad=False
+            )
         else:
             self.bases = None
         if self.M and self.laplace_ard and self.has_prior:
-            self.alpha = nn.Parameter(torch.full((nu, self.M), self.alpha0, dtype=torch.float64), requires_grad=False)
+            self.alpha = nn.Parameter(
+                torch.full((nu, self.M), self.alpha0, dtype=torch.float64),
+                requires_grad=False,
+            )
         else:
             self.alpha = self.alpha0
 
-        self.log_proportions = nn.Parameter(torch.full((nu,), 1.0 / nu).log_(), requires_grad=False)
+        self.log_proportions = nn.Parameter(
+            torch.full((nu,), 1.0 / nu).log_(), requires_grad=False
+        )
         self.register_buffer("noise_log_prop", torch.log(torch.tensor(1.0 / nu)))
         self.register_buffer("_N", torch.zeros(nu + 1))
 
@@ -273,7 +282,9 @@ class SpikeTruncatedMixtureModel(nn.Module):
             self.update_divergences()
         else:
             self.divergences[:] = divergences.to(self.divergences)
-        self.candidates.initialize_candidates(labels, self.divergences, fill_blanks=self._parameters_initialized)
+        self.candidates.initialize_candidates(
+            labels, self.divergences, fill_blanks=self._parameters_initialized
+        )
 
     def prepare_step(self):
         if self._parameters_initialized:
@@ -281,7 +292,8 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 self.divergences
             )
             assert (
-                candidates.untyped_storage() == self.candidates.candidates.untyped_storage()
+                candidates.untyped_storage()
+                == self.candidates.candidates.untyped_storage()
             )
             self.processor.update(
                 log_proportions=self.log_proportions,
@@ -291,7 +303,25 @@ class SpikeTruncatedMixtureModel(nn.Module):
                 unit_neighborhood_counts=unit_neighborhood_counts,
             )
             candidates_needs_update = (
-                candidates.untyped_storage() != self.candidates.candidates.untyped_storage()
+                candidates.untyped_storage()
+                != self.candidates.candidates.untyped_storage()
+            )
+        elif self._mean_initialized:
+            # M>0 model takes two initialization passes
+            candidates = self.candidates.candidates[:, :1]
+            # no E step is run, so no reassignment should be done
+            candidates_needs_update = False
+            self.candidates.reinit_neighborhoods(
+                candidates[:, 0],
+                self.candidates.neighborhood_ids,
+                constrain_searches=False,
+            )
+            self.processor.update(
+                log_proportions=self.log_proportions,
+                noise_log_prop=self.noise_log_prop,
+                means=self.means,
+                bases=None,
+                unit_neighborhood_counts=self.candidates.unit_neighborhood_counts,
             )
         else:
             candidates = self.candidates.candidates[:, :1]
@@ -728,7 +758,15 @@ class TruncatedExpectationProcessor(torch.nn.Module):
 
         # run loop
         jobs = (
-            (candidates, n_candidates, batchix, with_kl, with_hard_labels, with_probs, initializing)
+            (
+                candidates,
+                n_candidates,
+                batchix,
+                with_kl,
+                with_hard_labels,
+                with_probs,
+                initializing,
+            )
             for batchix in self.batches()
         )
         count = 0
@@ -1650,7 +1688,6 @@ class CandidateSet:
 
         # finish
         top[blanks] = inds
-        
 
     def propose_candidates(self, distances, indices=None, constrain_searches=True):
         """Assumes invariant 1 and does not mess it up.

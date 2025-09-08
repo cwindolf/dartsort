@@ -54,12 +54,14 @@ x.shape[0], np.load(f"{wfs}/wfs_batch_000004.npy").shape
 
 # %%
 with h5py.File("../data/wfs_locs_b.h5", "r+") as h5:
-    dwf = h5.create_dataset("denoised_waveforms", shape=(x.shape[0], 121, 20), dtype=np.float64)
+    dwf = h5.create_dataset(
+        "denoised_waveforms", shape=(x.shape[0], 121, 20), dtype=np.float64
+    )
     start_ix = 0
     for f in tqdm(sorted(glob.glob(f"{wfs}/wfs_batch_*.npy"))):
         batch = np.load(f)
         b, _, __ = batch.shape
-        dwf[start_ix:start_ix + b] = batch
+        dwf[start_ix : start_ix + b] = batch
         start_ix += b
 
 # %%
@@ -162,24 +164,26 @@ good_times.shape[0]
 with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r+") as h5:
     if "denoised_waveforms" in h5:
         del h5["denoised_waveforms"]
-    dwf = h5.create_dataset("denoised_waveforms", shape=(good_times.shape[0], 121, 20), dtype=np.float64)
-    
+    dwf = h5.create_dataset(
+        "denoised_waveforms", shape=(good_times.shape[0], 121, 20), dtype=np.float64
+    )
+
     start_ix = 0
     for f in tqdm(glob.glob(f"{wfs}/wfs_batch_*.npy")):
         batch = np.load(f)
         b, _, __ = batch.shape
-        dwf[start_ix:start_ix + b] = batch
+        dwf[start_ix : start_ix + b] = batch
         start_ix += b
 
 # %%
 with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r") as h5:
     plt.imshow(h5["denoised_waveforms"][10001])
     plt.show()
-    plt.imshow(h5["denoised_waveforms"][20001]) 
+    plt.imshow(h5["denoised_waveforms"][20001])
     plt.show()
-    plt.imshow(h5["denoised_waveforms"][30001])  
+    plt.imshow(h5["denoised_waveforms"][30001])
     plt.show()
-    plt.imshow(h5["denoised_waveforms"][40001])    
+    plt.imshow(h5["denoised_waveforms"][40001])
     plt.show()
 
 # %%
@@ -208,7 +212,9 @@ x.min(), x.max()
 
 # %%
 # add y_rel -- geom is np2, we can use max channel's location
-cm = np.load("/home/charlie/spikes_localization_registration/channels_maps/np2_channel_map.npy")
+cm = np.load(
+    "/home/charlie/spikes_localization_registration/channels_maps/np2_channel_map.npy"
+)
 max_channels = np.load(f"{pos}/results_max_channels.npy")[good_times]
 cm.min(axis=0), cm.max(axis=0), max_channels.min(), max_channels.max()
 
@@ -230,7 +236,7 @@ maxs = np.full((121, 20), -np.inf)
 with h5py.File("/mnt/3TB/charlie/features/wfs_locs.h5", "r") as h5:
     xs = h5["denoised_waveforms"]
     for ix in trange(0, xs.shape[0], 1000):
-        x_ = xs[ix:min(ix + 1000, xs.shape[0])]
+        x_ = xs[ix : min(ix + 1000, xs.shape[0])]
         min_ = x_.min(axis=0)
         max_ = x_.max(axis=0)
         mins = np.minimum(min_, mins)
@@ -243,9 +249,11 @@ mins.min(), mins.max()
 maxs.min(), maxs.max()
 
 # %%
-plt.imshow(mins); plt.colorbar()
+plt.imshow(mins)
+plt.colorbar()
 
 # %%
-plt.imshow(maxs); plt.colorbar()
+plt.imshow(maxs)
+plt.colorbar()
 
 # %%

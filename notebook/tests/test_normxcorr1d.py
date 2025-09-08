@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 
 # %%
 ones = torch.ones(11)
-up = torch.arange(11.)
+up = torch.arange(11.0)
 tri = 5 - torch.abs(up - 5)
 tri
 
@@ -52,7 +52,7 @@ normxcorr1d(tri[None], tri[None], weights=tri)
 plt.plot(normxcorr1d(tri[None], tri[None], weights=tri).squeeze())
 
 # %%
-normxcorr1d(torch.arange(22.).reshape(2, 11), up[None], weights=tri)
+normxcorr1d(torch.arange(22.0).reshape(2, 11), up[None], weights=tri)
 
 # %%
 normxcorr1d(tri[None], tri2[None], weights=tri)

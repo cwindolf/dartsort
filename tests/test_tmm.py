@@ -74,20 +74,27 @@ def test_topk_candidates(
 
     for j in range(stepwise):
         res = gmm.tmm.step(hard_label=True)
-        (kept,) = (res['labels'] >= 0).nonzero(as_tuple=True)
-        assert torch.equal(
-            res['labels'][kept], gmm.tmm.candidates.candidates[kept, 0]
+        (kept,) = (res["labels"] >= 0).nonzero(as_tuple=True)
+        assert torch.equal(res["labels"][kept], gmm.tmm.candidates.candidates[kept, 0])
+        check_tmm_invariants(
+            gmm, including_labels=False, including_adjacency=False, d=True
         )
-        check_tmm_invariants(gmm, including_labels=False, including_adjacency=False, d=True)
 
     if not stepwise:
         gmm.tvi(lls=lls, final_split=final_split)
-        check_tmm_invariants(gmm, d=True, including_adjacency=False, including_labels=final_split == "train")
+        check_tmm_invariants(
+            gmm,
+            d=True,
+            including_adjacency=False,
+            including_labels=final_split == "train",
+        )
 
     cnew, cnu = gmm.tmm.prepare_step()
     assert not cnu
     # last check for adjacency
-    check_tmm_invariants(gmm, including_labels=not stepwise and final_split == "train", d=True)
+    check_tmm_invariants(
+        gmm, including_labels=not stepwise and final_split == "train", d=True
+    )
 
 
 def check_tmm_invariants(
@@ -171,7 +178,9 @@ def check_tmm_invariants(
     # this is a unit-neighb adjacency, see below, getting now to read a runtime shape
     if reinit_neighborhoods:
         un_adj = tmm.candidates.reinit_neighborhoods(candidates[:, 0], neighb_ids)
-        tmm.candidates.ensure_adjacent(candidates[:, :tmm.n_candidates], neighb_ids, un_adj)
+        tmm.candidates.ensure_adjacent(
+            candidates[:, : tmm.n_candidates], neighb_ids, un_adj
+        )
     else:
         assert tmm.candidates.un_adj is not None
         un_adj = tmm.candidates.un_adj
@@ -337,9 +346,13 @@ def check_tmm_invariants(
         if reinit_neighborhoods:
             assert torch.equal(best_channel_sets[j], chans_j)
         else:
-            emp_chans = torch.concatenate([best_channel_sets[j], top_channel_sets[j]]).unique()
+            emp_chans = torch.concatenate(
+                [best_channel_sets[j], top_channel_sets[j]]
+            ).unique()
             assert torch.isin(emp_chans, chans_j).all()
-            emp_chans_full = torch.concatenate([emp_chans, rest_channel_sets[j]]).unique()
+            emp_chans_full = torch.concatenate(
+                [emp_chans, rest_channel_sets[j]]
+            ).unique()
             assert torch.equal(emp_chans_full, chans_j)
 
     # g.
@@ -385,7 +398,9 @@ def check_tmm_invariants(
     # check neighborhood subsets
     for j in range(train_neighborhoods.n_neighborhoods):
         for jj in np.flatnonzero(tmm.candidates.neighborhood_subset[j]):
-            assert (train_neighborhoods.indicators[jj] <= train_neighborhoods.indicators[j]).all()
+            assert (
+                train_neighborhoods.indicators[jj] <= train_neighborhoods.indicators[j]
+            ).all()
 
     # e.i,
     # this would not be true, but that's why ensure_adjacent() is called in

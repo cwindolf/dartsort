@@ -30,7 +30,9 @@ from spikeglx import Reader
 from spike_psvae import subtract, ibme, ibme_corr, ap_filter
 import torch
 from tqdm.auto import tqdm, trange
-import sys; sys.path.append(str(Path("~/neuropixelsLFPregistration/python").expanduser()))
+import sys
+
+sys.path.append(str(Path("~/neuropixelsLFPregistration/python").expanduser()))
 import pixelCSD, lfpreg, batchreg
 
 
@@ -40,13 +42,13 @@ plt.rc("figure", dpi=200)
 SMALL_SIZE = 8
 MEDIUM_SIZE = 10
 BIGGER_SIZE = 12
-plt.rc('font', size=SMALL_SIZE)
-plt.rc('axes', titlesize=MEDIUM_SIZE)
-plt.rc('axes', labelsize=SMALL_SIZE)
-plt.rc('xtick', labelsize=SMALL_SIZE)
-plt.rc('ytick', labelsize=SMALL_SIZE)
-plt.rc('legend', fontsize=SMALL_SIZE)
-plt.rc('figure', titlesize=BIGGER_SIZE)
+plt.rc("font", size=SMALL_SIZE)
+plt.rc("axes", titlesize=MEDIUM_SIZE)
+plt.rc("axes", labelsize=SMALL_SIZE)
+plt.rc("xtick", labelsize=SMALL_SIZE)
+plt.rc("ytick", labelsize=SMALL_SIZE)
+plt.rc("legend", fontsize=SMALL_SIZE)
+plt.rc("figure", titlesize=BIGGER_SIZE)
 
 # %% [markdown]
 # # Params
@@ -86,7 +88,7 @@ lfp0.shape, lfp0.shape[0] / lfsr.fs
 
 # %%
 start = int(250 * lfsr.fs)
-plt.imshow(lfp0[start:start + 10 * int(lfsr.fs)].T, aspect=10);
+plt.imshow(lfp0[start : start + 10 * int(lfsr.fs)].T, aspect=10)
 
 # %% [markdown]
 # # KS drift
@@ -111,6 +113,7 @@ s_start, s_end, (s_end - s_start) / lfsr.fs
 
 # %% [markdown]
 # # LFP
+
 
 # %%
 def zs(x, it=4):
@@ -167,7 +170,7 @@ lfp.shape
 # %%
 # lfp_chunk = downsample(lfp[s_start + 150 * 2500 : s_start + 180 * 2500])
 lfp_chunk = lfp[s_start // 10 + 250 * 250 : s_start // 10 + 280 * 250]
-plt.imshow(lfp_chunk.T, aspect=5);
+plt.imshow(lfp_chunk.T, aspect=5)
 
 # %%
 D, C = ibme_corr.calc_corr_decent(lfp_chunk.T, disp=100, device="cuda:1")
@@ -184,13 +187,13 @@ cividis.set_bad(color=gray)
 fig, ((aa, ab), (ac, ad)) = plt.subplots(2, 2, sharey=True, sharex=True, figsize=(8, 8))
 
 aa.imshow(D, cmap=seismic, interpolation="nearest")
-ab.imshow(C, cmap=cividis, interpolation="nearest");
+ab.imshow(C, cmap=cividis, interpolation="nearest")
 threshold = 0.4
 where = C <= threshold
 cD = np.ma.masked_where(C <= threshold, D)
 cC = np.ma.masked_where(C <= threshold, C)
 ac.imshow(cD, cmap=seismic, interpolation="nearest")
-ad.imshow(cC, cmap=cividis, interpolation="nearest");
+ad.imshow(cC, cmap=cividis, interpolation="nearest")
 
 # %%
 for c in tqdm([0.4, 0.5, 0.6, 0.7, 0.8]):
@@ -199,7 +202,7 @@ for c in tqdm([0.4, 0.5, 0.6, 0.7, 0.8]):
 plt.legend()
 
 # %%
-plt.imshow(lfp_chunk.T, aspect=30);
+plt.imshow(lfp_chunk.T, aspect=30)
 for c in tqdm([0.75, 0.8, 0.85, 0.9]):
     p = ibme_corr.psolvecorr(D, C, mincorr=c, robust_sigma=0)
     plt.plot(p + 192 / 2, label=c, lw=1)
@@ -211,7 +214,7 @@ p_lfp_chunk = ibme_corr.psolvecorr(D, C, mincorr=0.8, robust_sigma=0)
 
 # %%
 csd_chunk = 2 * lfp_chunk[:, 1:-1] - lfp_chunk[:, :-2] - lfp_chunk[:, 2:]
-plt.imshow(csd_chunk.T, aspect=10);
+plt.imshow(csd_chunk.T, aspect=10)
 
 # %%
 Dc, Cc = ibme_corr.calc_corr_decent(csd_chunk.T, disp=100)
@@ -220,13 +223,13 @@ Dc, Cc = ibme_corr.calc_corr_decent(csd_chunk.T, disp=100)
 fig, ((aa, ab), (ac, ad)) = plt.subplots(2, 2, sharey=True, sharex=True, figsize=(4, 4))
 
 aa.imshow(Dc, cmap=seismic, interpolation="nearest")
-ab.imshow(Cc, cmap=cividis, interpolation="nearest");
+ab.imshow(Cc, cmap=cividis, interpolation="nearest")
 threshold = 0.4
 where = Cc <= threshold
 cDc = np.ma.masked_where(Cc <= threshold, Dc)
 cCc = np.ma.masked_where(Cc <= threshold, Cc)
 ac.imshow(cDc, cmap=seismic, interpolation="nearest")
-ad.imshow(cCc, cmap=cividis, interpolation="nearest");
+ad.imshow(cCc, cmap=cividis, interpolation="nearest")
 
 # %%
 for c in tqdm([0.4, 0.5, 0.6, 0.7, 0.8]):
@@ -235,7 +238,7 @@ for c in tqdm([0.4, 0.5, 0.6, 0.7, 0.8]):
 plt.legend()
 
 # %%
-plt.imshow(lfp_chunk.T, aspect=30);
+plt.imshow(lfp_chunk.T, aspect=30)
 for c in tqdm([0.75, 0.8, 0.85, 0.9]):
     p = ibme_corr.psolvecorr(Dc, Cc, mincorr=c, robust_sigma=0)
     plt.plot(p + 192 / 2, label=c, lw=1)
@@ -243,13 +246,15 @@ plt.plot(p_lfp_chunk + 192 / 2, color="w", label="lfp", lw=0.5)
 plt.legend()
 
 # %%
-p_global = ibme_corr.online_register_rigid(lfp.T, mincorr=0.8, disp=100, batch_length=5000, batch_size=128, device="cuda:1")
+p_global = ibme_corr.online_register_rigid(
+    lfp.T, mincorr=0.8, disp=100, batch_length=5000, batch_size=128, device="cuda:1"
+)
 
 # %%
 p_global.shape
 
 # %%
-ks_end = pt02_shift.shape[0] * 30016/30000
+ks_end = pt02_shift.shape[0] * 30016 / 30000
 
 # %%
 ks_end
@@ -300,7 +305,7 @@ for ax, start, end in zip(axes, starts, ends):
     print(start, end)
     ax.imshow(lfp[start:end].T, aspect=0.5 * (end - start) / lfp.shape[1])
     ax.plot(p_global[start:end] - p_global.mean() + 192 / 2, color="w", lw=1)
-    ax.plot(p_ks[start:end] - p_ks.mean() + 192 / 2, color="k", lw=1)    
+    ax.plot(p_ks[start:end] - p_ks.mean() + 192 / 2, color="k", lw=1)
 
 # %%
 np.save("p_global_pt02.npy", p_global)
@@ -315,7 +320,9 @@ np.save("p_global_pt02.npy", p_global)
 raw_dir
 
 # %%
-ap_dir = Path('/local/MotionCorrectionWithNeuropixels/data/NeuropixelsHumanData/Pt02/ap')
+ap_dir = Path(
+    "/local/MotionCorrectionWithNeuropixels/data/NeuropixelsHumanData/Pt02/ap"
+)
 ap_dir.mkdir(exist_ok=True)
 
 # %%
@@ -351,21 +358,23 @@ rec = rec.frame_slice(230 * 30_000, None)
 rec
 
 # %%
-rec_filtered = si.bandpass_filter(rec, freq_min=300., freq_max=6000.)
-rec_cmr = si.common_reference(rec_filtered, reference='global', operator='median')
+rec_filtered = si.bandpass_filter(rec, freq_min=300.0, freq_max=6000.0)
+rec_cmr = si.common_reference(rec_filtered, reference="global", operator="median")
 rec_preprocessed = si.zscore(rec_cmr)
 
 # %%
 rec_preprocessed
 
 # %%
-si.plot_timeseries(rec_preprocessed, time_range=(100, 110), channel_ids=rec.channel_ids[50:60])
+si.plot_timeseries(
+    rec_preprocessed, time_range=(100, 110), channel_ids=rec.channel_ids[50:60]
+)
 
 # %%
 noise_levels = si.get_noise_levels(rec_preprocessed, return_scaled=False)
 fig, ax = plt.subplots(figsize=(3, 2))
 ax.hist(noise_levels, bins=10)
-ax.set_title('noise across channel')
+ax.set_title("noise across channel")
 
 # %%
 preprocess_folder = Path("/local/ppx")
@@ -378,9 +387,9 @@ from spikeinterface.sortingcomponents.peak_detection import detect_peaks
 # %%
 peaks = detect_peaks(
     rec_preprocessed,
-    method='locally_exclusive',
+    method="locally_exclusive",
     local_radius_um=100,
-    peak_sign='both',
+    peak_sign="both",
     detect_threshold=5,
     noise_levels=noise_levels,
     **job_kwargs,
@@ -401,11 +410,11 @@ peak_locations = localize_peaks(
     peaks,
     ms_before=0.3,
     ms_after=0.6,
-    method='monopolar_triangulation',
+    method="monopolar_triangulation",
     method_kwargs={
-        'local_radius_um': 100.,
-        'max_distance_um': 1000.,
-        'optimizer': 'minimize_with_log_penality',
+        "local_radius_um": 100.0,
+        "max_distance_um": 1000.0,
+        "optimizer": "minimize_with_log_penality",
     },
     **job_kwargs,
 )
@@ -421,13 +430,27 @@ def clip_values_for_cmap(x):
 fig, axs = plt.subplots(ncols=2, sharey=True, figsize=(15, 10))
 ax = axs[0]
 si.plot_probe_map(rec_preprocessed, ax=ax)
-ax.scatter(peak_locations['x'], peak_locations['y'], c=clip_values_for_cmap(peaks['amplitude']), s=1, alpha=0.002, cmap=plt.cm.plasma)
-ax.set_xlabel('x')
-ax.set_ylabel('y')
-if 'z' in peak_locations.dtype.fields:
+ax.scatter(
+    peak_locations["x"],
+    peak_locations["y"],
+    c=clip_values_for_cmap(peaks["amplitude"]),
+    s=1,
+    alpha=0.002,
+    cmap=plt.cm.plasma,
+)
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+if "z" in peak_locations.dtype.fields:
     ax = axs[1]
-    ax.scatter(peak_locations['z'], peak_locations['y'], c=clip_values_for_cmap(peaks['amplitude']), s=1, alpha=0.002, cmap=plt.cm.plasma)
-    ax.set_xlabel('z')
+    ax.scatter(
+        peak_locations["z"],
+        peak_locations["y"],
+        c=clip_values_for_cmap(peaks["amplitude"]),
+        s=1,
+        alpha=0.002,
+        cmap=plt.cm.plasma,
+    )
+    ax.set_xlabel("z")
     ax.set_xlim(0, 150)
 ax.set_ylim(1800, 2500)
 
@@ -435,29 +458,57 @@ ax.set_ylim(1800, 2500)
 fig, axs = plt.subplots(ncols=2, sharey=True, figsize=(15, 10))
 ax = axs[0]
 si.plot_probe_map(rec_preprocessed, ax=ax)
-ax.scatter(peak_locations['x'], peak_locations['y'], c=clip_values_for_cmap(peaks['amplitude']), s=1, alpha=0.002, cmap=plt.cm.plasma)
-ax.set_xlabel('x')
-ax.set_ylabel('y')
-if 'z' in peak_locations.dtype.fields:
+ax.scatter(
+    peak_locations["x"],
+    peak_locations["y"],
+    c=clip_values_for_cmap(peaks["amplitude"]),
+    s=1,
+    alpha=0.002,
+    cmap=plt.cm.plasma,
+)
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+if "z" in peak_locations.dtype.fields:
     ax = axs[1]
-    ax.scatter(peak_locations['z'], peak_locations['y'], c=clip_values_for_cmap(peaks['amplitude']), s=1, alpha=0.002, cmap=plt.cm.plasma)
-    ax.set_xlabel('z')
+    ax.scatter(
+        peak_locations["z"],
+        peak_locations["y"],
+        c=clip_values_for_cmap(peaks["amplitude"]),
+        s=1,
+        alpha=0.002,
+        cmap=plt.cm.plasma,
+    )
+    ax.set_xlabel("z")
     ax.set_xlim(0, 150)
 # ax.set_ylim(1800, 2500)
 
 # %%
 fig, ax = plt.subplots()
-x = peaks['sample_ind'] / rec_preprocessed.get_sampling_frequency()
-y = peak_locations['y']
-ax.scatter(x, y, s=1, c=clip_values_for_cmap(peaks['amplitude']), cmap=plt.cm.plasma, alpha=0.25)
+x = peaks["sample_ind"] / rec_preprocessed.get_sampling_frequency()
+y = peak_locations["y"]
+ax.scatter(
+    x,
+    y,
+    s=1,
+    c=clip_values_for_cmap(peaks["amplitude"]),
+    cmap=plt.cm.plasma,
+    alpha=0.25,
+)
 # ax.set_ylim(1300, 2500)
 
 # %%
 fig, ax = plt.subplots()
-which = np.flatnonzero(peaks['amplitude'] > 10)
-x = peaks[which]['sample_ind'] / rec_preprocessed.get_sampling_frequency()
-y = peak_locations['y'][which]
-ax.scatter(x, y, s=1, c=clip_values_for_cmap(peaks[which]['amplitude']), cmap=plt.cm.plasma, alpha=0.25)
+which = np.flatnonzero(peaks["amplitude"] > 10)
+x = peaks[which]["sample_ind"] / rec_preprocessed.get_sampling_frequency()
+y = peak_locations["y"][which]
+ax.scatter(
+    x,
+    y,
+    s=1,
+    c=clip_values_for_cmap(peaks[which]["amplitude"]),
+    cmap=plt.cm.plasma,
+    alpha=0.25,
+)
 # ax.set_ylim(1300, 2500)
 
 # %%

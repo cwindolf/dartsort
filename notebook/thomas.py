@@ -167,7 +167,12 @@ me_yw22_ns_mc1_md100_dt1000, extra_yw2_ns_mc1_md100_dt1000 = newt.register(
     maxptp,
     z,
     t,
-    weights_kw=dict(weights_threshold_low=0.2, weights_threshold_high=0.2, mincorr=0.1, max_dt_s=1000),
+    weights_kw=dict(
+        weights_threshold_low=0.2,
+        weights_threshold_high=0.2,
+        mincorr=0.1,
+        max_dt_s=1000,
+    ),
     precomputed_D_C_maxdisp=(D, C, maxdisp),
     thomas_kw=dict(lambda_s=0),
     # pbar=False,
@@ -178,8 +183,15 @@ me_yw22_ns_mc1_md100_dt1000 = {}
 for pid in pids:
     ff = feats[pid]
     me, extra = newt.register(
-        ff["a"], ff["z"], ff["t"],
-        weights_kw=dict(weights_threshold_low=0.2, weights_threshold_high=0.2, mincorr=0.1, max_dt_s=1000),
+        ff["a"],
+        ff["z"],
+        ff["t"],
+        weights_kw=dict(
+            weights_threshold_low=0.2,
+            weights_threshold_high=0.2,
+            mincorr=0.1,
+            max_dt_s=1000,
+        ),
         thomas_kw=dict(lambda_s=0),
     )
     me_yw22_ns_mc1_md100_dt1000[pid] = dict(me=me, extra=extra)
@@ -189,9 +201,21 @@ me_yw22_mc1_md50_dt1000_altraster = {}
 for pid in pids:
     ff = feats[pid]
     me, extra = newt.register(
-        ff["a"], ff["z"], ff["t"],
-        raster_kw=dict(gaussian_smoothing_sigma_um=1, amp_scale_fn=np.log1p, avg_in_bin=True, post_transform=None),
-        weights_kw=dict(weights_threshold_low=0.2, weights_threshold_high=0.2, mincorr=0.1, max_dt_s=1000),
+        ff["a"],
+        ff["z"],
+        ff["t"],
+        raster_kw=dict(
+            gaussian_smoothing_sigma_um=1,
+            amp_scale_fn=np.log1p,
+            avg_in_bin=True,
+            post_transform=None,
+        ),
+        weights_kw=dict(
+            weights_threshold_low=0.2,
+            weights_threshold_high=0.2,
+            mincorr=0.1,
+            max_dt_s=1000,
+        ),
         thomas_kw=dict(lambda_s=0, lambda_t=1),
         max_disp_um=50,
         device="cuda:1",
@@ -203,9 +227,16 @@ me_yw22_mc1_md50_dt1000_braster = {}
 for pid in pids:
     ff = feats[pid]
     me, extra = newt.register(
-        ff["a"], ff["z"], ff["t"],
+        ff["a"],
+        ff["z"],
+        ff["t"],
         raster_kw=dict(gaussian_smoothing_sigma_um=1),
-        weights_kw=dict(weights_threshold_low=0.2, weights_threshold_high=0.2, mincorr=0.1, max_dt_s=1000),
+        weights_kw=dict(
+            weights_threshold_low=0.2,
+            weights_threshold_high=0.2,
+            mincorr=0.1,
+            max_dt_s=1000,
+        ),
         thomas_kw=dict(lambda_s=0, lambda_t=1),
         max_disp_um=50,
         device="cuda:1",
@@ -216,7 +247,9 @@ for pid in pids:
 thomas_unthresh = {}
 for pid in pids:
     ff = feats[pid]
-    me, extra = newt.register(ff["a"], ff["z"], ff["t"], device="cuda:1", save_full=True)
+    me, extra = newt.register(
+        ff["a"], ff["z"], ff["t"], device="cuda:1", save_full=True
+    )
     thomas_unthresh[pid] = dict(me=me, extra=extra)
 
 # %%
@@ -291,7 +324,6 @@ toplot = [
 print("quux", flush=True)
 for pid in pids:
     print(pid)
-    
 
     fig, aa = plt.subplots(figsize=(20, 20))
     r, dd, tt = mu.fast_raster(feats[pid]["a"], feats[pid]["z"], feats[pid]["t"])
@@ -374,7 +406,7 @@ toplot = [
     ("pyks", pyks_regs, "r"),
     # ("thomas_unthresh", thomas_unthresh, "b"),
     ("thomas_mc1", thomas_mc1, "g"),
-    ("thomas_dt_thresh", thomas_dt_thresh, "b")
+    ("thomas_dt_thresh", thomas_dt_thresh, "b"),
     # ("thomas_mc1_thresh", thomas_mc1_thresh, "orange"),
     # ("thomas_mc1_thresh2", thomas_mc1_thresh2, "g"),
     # ("thomas_mc1_thresh3", thomas_mc1_thresh3, "b"),
@@ -450,7 +482,10 @@ for pid in pids:
         me = meme[pid]["me"]
         for pos in me.spatial_bin_centers_um:
             (ls,) = aa.plot(
-                tt[:-1], pos + offset + me.disp_at_s(tt[:-1], depth_um=pos), color=color, lw=1
+                tt[:-1],
+                pos + offset + me.disp_at_s(tt[:-1], depth_um=pos),
+                color=color,
+                lw=1,
             )
         offset += 40
         names.append(name)
@@ -464,7 +499,7 @@ for pid in pids:
 # %%
 regs_compare = [
     ("pyks", pyks_regs, "r"),
-    ("yw22+ns+mc1+md100+dt1000", me_yw22_ns_mc1_md100_dt1000, "b")
+    ("yw22+ns+mc1+md100+dt1000", me_yw22_ns_mc1_md100_dt1000, "b"),
     # ("thomas_unthresh", thomas_unthresh, "b"),
     # ("thomas_mc1", thomas_mc1, "g"),
     # ("thomas_dt_thresh", thomas_dt_thresh, "b")
@@ -671,6 +706,7 @@ def newt_solve(D, S, Sigma0inv, normalize=None):
 
 
 # %%
+
 
 # %%
 def laplacian(T):

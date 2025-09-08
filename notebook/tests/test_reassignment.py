@@ -27,7 +27,14 @@ import matplotlib.pyplot as plt
 plt.rc("figure", dpi=300)
 
 # %%
-from spike_psvae import deconvolve, extract_deconv, reassignment, cluster_viz_index, drifty_deconv, snr_templates
+from spike_psvae import (
+    deconvolve,
+    extract_deconv,
+    reassignment,
+    cluster_viz_index,
+    drifty_deconv,
+    snr_templates,
+)
 
 # %%
 spikelen = 21
@@ -65,11 +72,11 @@ templates.shape
 
 # %%
 rg = np.random.default_rng(0)
+
+
 def getst(tmin, tmax, size, ref=10):
     while True:
-        st = rg.choice(
-            np.arange(tmin, tmax), size=size, replace=False
-        )
+        st = rg.choice(np.arange(tmin, tmax), size=size, replace=False)
         st.sort()
         if np.diff(st).min() >= ref:
             return st
@@ -109,17 +116,21 @@ waveforms.shape
 fake_proposed_pairs = [np.arange(3)] * 3
 
 # %%
-plt.hist(np.abs(sta[:, 0][None, :] - stb[:, 0][:, None]).ravel(), bins=np.arange(50));
+plt.hist(np.abs(sta[:, 0][None, :] - stb[:, 0][:, None]).ravel(), bins=np.arange(50))
 
 # %%
-temps_loc = reassignment.reassignment_templates_local(templates, fake_proposed_pairs, write_chan_ix)
+temps_loc = reassignment.reassignment_templates_local(
+    templates, fake_proposed_pairs, write_chan_ix
+)
 [t.shape for t in temps_loc]
 
 # %% [markdown]
 # # reas no deconv
 
 # %%
-new_labels, outlier_scores = reassignment.reassign_waveforms(st[:, 1], waveforms, fake_proposed_pairs, temps_loc, norm_p=2)
+new_labels, outlier_scores = reassignment.reassign_waveforms(
+    st[:, 1], waveforms, fake_proposed_pairs, temps_loc, norm_p=2
+)
 
 # %%
 cluster_viz_index.reassignments_viz(
@@ -152,11 +163,11 @@ deconv_res = deconvolve.deconv(
 )
 
 # %%
-dst = deconv_res['deconv_spike_train']
-dstu = deconv_res['deconv_spike_train_upsampled']
+dst = deconv_res["deconv_spike_train"]
+dstu = deconv_res["deconv_spike_train_upsampled"]
 
 # %%
-dst[:,0].min(), dst[:, 0].max()
+dst[:, 0].min(), dst[:, 0].max()
 
 # %%
 deconv_res.keys()
@@ -179,27 +190,29 @@ tsvd.shape
 
 # %%
 for t, c in zip(tsvd, "rgb"):
-    cluster_viz_index.pgeom(t[None], geom=geom, color=c, max_abs_amp=10);
+    cluster_viz_index.pgeom(t[None], geom=geom, color=c, max_abs_amp=10)
 
 # %%
 np.unique(dst[:, 1], return_counts=True)
 
 # %%
-deconv_res['sparse_id_to_orig_id']
+deconv_res["sparse_id_to_orig_id"]
 
 # %%
-deconv_res['deconv_id_sparse_temp_map']
+deconv_res["deconv_id_sparse_temp_map"]
 
 # %%
-deconv_res['deconv_id_sparse_temp_map'][dstu[:, 1]] == dstu[:, 1]
+deconv_res["deconv_id_sparse_temp_map"][dstu[:, 1]] == dstu[:, 1]
 
 # %%
-fake_proposed_pairs_up = [np.arange(len(deconv_res['templates_up']))] * len(deconv_res['templates_up'])
+fake_proposed_pairs_up = [np.arange(len(deconv_res["templates_up"]))] * len(
+    deconv_res["templates_up"]
+)
 
 # %%
 h5 = extract_deconv.extract_deconv(
-    deconv_res['templates_up'],
-    deconv_res['deconv_spike_train_upsampled'],
+    deconv_res["templates_up"],
+    deconv_res["deconv_spike_train_upsampled"],
     "/tmp/deconvaaa",
     "/tmp/testaaa.bin",
     geom=geom,
@@ -219,7 +232,7 @@ with h5py.File(h5) as h:
     reas_labels = deconv_res["sparse_id_to_orig_id"][reas_labels_up]
 
 # %%
-deconv_res['deconv_spike_train'].shape
+deconv_res["deconv_spike_train"].shape
 
 # %%
 reas_labels.shape
@@ -229,7 +242,7 @@ dst.min(), dst.max()
 
 # %%
 cluster_viz_index.reassignments_viz(
-    deconv_res['deconv_spike_train'],
+    deconv_res["deconv_spike_train"],
     reas_labels,
     "/tmp/testaaa.bin",
     "/Users/charlie/data/testreasdc",
@@ -251,7 +264,7 @@ drift = 2
 reclen_drift = 2 * reclen
 drift_p = np.zeros(reclen_drift)
 drift_p[reclen_drift:] = drift
-drift_p_byfs = np.array([0., 2])
+drift_p_byfs = np.array([0.0, 2])
 
 # %%
 # fake bank of osc templates
@@ -286,11 +299,11 @@ templates_drift.shape, xyza_orig.shape, xyza_drift.shape
 
 # %%
 rg = np.random.default_rng(0)
+
+
 def getst(tmin, tmax, size, ref=10):
     while True:
-        st = rg.choice(
-            np.arange(tmin, tmax), size=size, replace=False
-        )
+        st = rg.choice(np.arange(tmin, tmax), size=size, replace=False)
         st.sort()
         if np.diff(st).min() >= ref:
             return st
@@ -368,7 +381,7 @@ dh5, extra = drifty_deconv.extract_superres_shifted_deconv(
 # %%
 with h5py.File(dh5) as hh:
     cluster_viz_index.reassignments_viz(
-        superres['deconv_spike_train'],
+        superres["deconv_spike_train"],
         hh["reassigned_unit_labels"][:],
         "/tmp/testbbb.bin",
         "/Users/charlie/data/testreasdriftydc",
@@ -385,18 +398,25 @@ for j, pairs in enumerate(extra["shifted_upsampled_pairs"]):
     if not j in pairs:
         print(j, pairs, (superres["all_shifted_upsampled_temps"][j] == 0).all())
         assert (superres["all_shifted_upsampled_temps"][j] == 0).all()
-        print((superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j).sum())
-        assert not (superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j).sum()
+        print(
+            (superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j).sum()
+        )
+        assert not (
+            superres["superres_deconv_spike_train_shifted_upsampled"][:, 1] == j
+        ).sum()
     if len(pairs) < 1:
         assert (superres["all_shifted_upsampled_temps"][j] == 0).all()
     for k in pairs:
         assert j in extra["shifted_upsampled_pairs"][k]
-        assert superres["shifted_upsampled_idx_to_shift_id"][j] == superres["shifted_upsampled_idx_to_shift_id"][k]
-    
+        assert (
+            superres["shifted_upsampled_idx_to_shift_id"][j]
+            == superres["shifted_upsampled_idx_to_shift_id"][k]
+        )
+
     supj = superres["shifted_upsampled_idx_to_superres_id"][j]
     for k in pairs:
         supk = superres["shifted_upsampled_idx_to_superres_id"][j]
         assert supk in extra["superres_pairs"][supj]
-        assert supj in extra["superres_pairs"][supk]        
+        assert supj in extra["superres_pairs"][supk]
 
 # %%

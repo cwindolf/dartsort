@@ -24,7 +24,13 @@ import h5py
 from tensorly.decomposition import parafac
 
 # %%
-from spike_psvae import waveform_utils, point_source_centering, localization, vis_utils, decomp
+from spike_psvae import (
+    waveform_utils,
+    point_source_centering,
+    localization,
+    vis_utils,
+    decomp,
+)
 
 # %%
 plt.rc("figure", dpi=200)
@@ -40,11 +46,11 @@ with h5py.File(h5_path, "r+") as h5:
     y = h5["y"][:]
     z = h5["z"][:]
     maxchan = h5["max_channels"][:]
-    
+
     if "geom" not in h5:
         h5.create_dataset("geom", data=np.load("../data/np2_channel_map.npy"))
     geom = h5["geom"][:]
-    
+
     if "z_rel" not in h5:
         h5.create_dataset("z_rel", data=waveform_utils.relativize_z(z, maxchan, geom))
     z_rel = h5["z_rel"][:]
@@ -86,7 +92,7 @@ plt.hist(np.log1p(y_), bins=128)
 plt.show()
 
 # %%
-plt.hist(alpha[y < 0.1], bins=32);
+plt.hist(alpha[y < 0.1], bins=32)
 plt.xlabel("alpha")
 plt.ylabel("frequency")
 plt.title("histogram of alpha when y==0")
@@ -115,7 +121,9 @@ with h5py.File(h5_path, "r+") as h5:
     bx, by, bz, _, balpha = localization.localize_waveforms(bwf, geom, bmaxchan)
 
 # %%
-reloc, r, q = point_source_centering.relocate_simple(bwf, geom, bmaxchan, bx, by, bz, balpha)
+reloc, r, q = point_source_centering.relocate_simple(
+    bwf, geom, bmaxchan, bx, by, bz, balpha
+)
 reloc = reloc.numpy()
 r = r.numpy()
 q = q.numpy()
@@ -134,7 +142,7 @@ vis_utils.labeledmosaic(
     ["original", "relocated", "residual"],
     pad=2,
     separate_norm=True,
-    cbar=False
+    cbar=False,
 )
 
 # %%
@@ -144,22 +152,38 @@ vis_utils.labeledmosaic(
 by.max()
 
 # %%
-fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q], ["observed ptp", "predicted ptp"], "bg", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
+fig, axes = vis_utils.vis_ptps(
+    [bwf.ptp(1), q],
+    ["observed ptp", "predicted ptp"],
+    "bg",
+    subplots_kwargs=dict(sharex=True, figsize=(5, 5)),
+)
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1), r], ["relocated ptp", "standard ptp"], "kr", subplots_kwargs=dict(sharex=True, figsize=(5, 5)))
+fig, axes = vis_utils.vis_ptps(
+    [reloc.ptp(1), r],
+    ["relocated ptp", "standard ptp"],
+    "kr",
+    subplots_kwargs=dict(sharex=True, figsize=(5, 5)),
+)
 plt.show()
 
 # %%
 bix = good[:16]
-reloc_, r_, q_ = point_source_centering.relocate_simple(bwf, geom, bmaxchan, x_[bix], y_[bix], z_rel_[bix], alpha_[bix])
+reloc_, r_, q_ = point_source_centering.relocate_simple(
+    bwf, geom, bmaxchan, x_[bix], y_[bix], z_rel_[bix], alpha_[bix]
+)
 reloc_ = reloc_.numpy()
 r_ = r_.numpy()
 q_ = q_.numpy()
 
 # %%
-fig, axes = vis_utils.vis_ptps([bwf.ptp(1), q_], ["observed ptp", "predicted ptp"], "bg")
+fig, axes = vis_utils.vis_ptps(
+    [bwf.ptp(1), q_], ["observed ptp", "predicted ptp"], "bg"
+)
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc_.ptp(1), r_], ["relocated ptp", "standard ptp"], "kr")
+fig, axes = vis_utils.vis_ptps(
+    [reloc_.ptp(1), r_], ["relocated ptp", "standard ptp"], "kr"
+)
 plt.show()
 
 # %% [markdown]
@@ -171,29 +195,41 @@ plt.show()
 # %%
 wfs = np.load("../data/spt_yass_templates.npy")
 maxchans = wfs.ptp(1).argmax(1)
-local_wfs = waveform_utils.get_local_waveforms(wfs, 10, geom, maxchans, geomkind="standard")
-x, y, z_rel, z_abs, alpha = localization.localize_waveforms(wfs, geom, jac=False, geomkind="standard")
-reloc, r, q = point_source_centering.relocate_simple(local_wfs, geom, maxchans, x, y, z_rel, alpha, geomkind="standard")
-reloc = reloc.numpy(); r = r.numpy(); q = q.numpy()
+local_wfs = waveform_utils.get_local_waveforms(
+    wfs, 10, geom, maxchans, geomkind="standard"
+)
+x, y, z_rel, z_abs, alpha = localization.localize_waveforms(
+    wfs, geom, jac=False, geomkind="standard"
+)
+reloc, r, q = point_source_centering.relocate_simple(
+    local_wfs, geom, maxchans, x, y, z_rel, alpha, geomkind="standard"
+)
+reloc = reloc.numpy()
+r = r.numpy()
+q = q.numpy()
 
 # %%
 vis_utils.labeledmosaic(
-    [local_wfs[:16], reloc[:16]], #, local_wfs[:16] - reloc[:16]],
-    ["original", "relocated"], #, "residual"],
+    [local_wfs[:16], reloc[:16]],  # , local_wfs[:16] - reloc[:16]],
+    ["original", "relocated"],  # , "residual"],
     pad=2,
 )
 
 # %%
-fig, axes = vis_utils.vis_ptps([local_wfs.ptp(1)[big[:16]], q[big[:16]]], ["observed ptp", "predicted ptp"], "bg")
+fig, axes = vis_utils.vis_ptps(
+    [local_wfs.ptp(1)[big[:16]], q[big[:16]]], ["observed ptp", "predicted ptp"], "bg"
+)
 plt.show()
-fig, axes = vis_utils.vis_ptps([reloc.ptp(1)[big[:16]], r[big[:16]]], ["relocated ptp", "standard ptp"], "kr")
+fig, axes = vis_utils.vis_ptps(
+    [reloc.ptp(1)[big[:16]], r[big[:16]]], ["relocated ptp", "standard ptp"], "kr"
+)
 plt.show()
 
 # %%
 fig, (aa, ab) = plt.subplots(2, 1, sharex=False)
-aa.hist(np.square(local_wfs.ptp(1) - q).mean(axis=1), bins=32);
+aa.hist(np.square(local_wfs.ptp(1) - q).mean(axis=1), bins=32)
 aa.set_title("||wf - pred||")
-ab.hist(np.square(reloc.ptp(1) - r).mean(axis=1), bins=32);
+ab.hist(np.square(reloc.ptp(1) - r).mean(axis=1), bins=32)
 ab.set_title("||reloc - std||")
 plt.tight_layout()
 
@@ -221,7 +257,7 @@ well_reloc = np.flatnonzero((np.square(reloc.ptp(1) - r).mean(axis=1)) < 2)
 # %%
 rank0 = pca_rank_plot(local_wfs, name="original")
 rank1 = pca_rank_plot(reloc, c="rk", name="relocated")
-plt.xticks(list(range(0, local_wfs.shape[0], 50)) + [rank0, rank1]);
+plt.xticks(list(range(0, local_wfs.shape[0], 50)) + [rank0, rank1])
 plt.yticks(list(plt.yticks()[0]) + [0.95])
 plt.ylim(0.5, 1.0)
 plt.title("pca: does relocating help?")
@@ -247,9 +283,17 @@ def pca_resid_plot(wfs, ax=None, q=0.95, c="bk", name=None, dup=False):
     print(np.cumsum(v)[:5])
     print(np.cumsum(v)[-5:])
     if dup:
-        ax.plot(np.array([totvar, totvar, totvar, totvar, *residvar[:50]][:50]) / (wfs.shape[1]), marker=".", c=c[0], label=name)
+        ax.plot(
+            np.array([totvar, totvar, totvar, totvar, *residvar[:50]][:50])
+            / (wfs.shape[1]),
+            marker=".",
+            c=c[0],
+            label=name,
+        )
     else:
-        ax.plot(np.array(residvar[:50]) / (wfs.shape[1]), marker=".", c=c[0], label=name)
+        ax.plot(
+            np.array(residvar[:50]) / (wfs.shape[1]), marker=".", c=c[0], label=name
+        )
 
 
 # %%
@@ -275,7 +319,7 @@ def parafac_rank_plot(wfs, ax=None, q=0.95, c="bk", name=None):
     wfs = wfs - wfs.mean(axis=0, keepdims=True)
     seq = decomp.cumparafac(wfs, 50)
     seq = np.array(seq)
-    seq /= np.square(wfs).sum(axis=(1,2)).mean()
+    seq /= np.square(wfs).sum(axis=(1, 2)).mean()
     rank = np.flatnonzero(seq >= q)[0]
     ax.axhline(q, color="gray", zorder=-1)
     ax.plot(seq, c=c[0], label=name)
@@ -289,7 +333,8 @@ seq0 = decomp.cumparafac(local_wfs - local_wfs.mean(axis=0, keepdims=True), 50)
 seq1 = decomp.cumparafac(reloc - reloc.mean(axis=0, keepdims=True), 50)
 
 # %%
-seq0 = np.array(seq0); seq1 = np.array(seq1)
+seq0 = np.array(seq0)
+seq1 = np.array(seq1)
 
 # %%
 seq0
@@ -324,24 +369,29 @@ plt.xlabel("number of components (really starts at 0 this time)")
 # %% [markdown]
 # ### images of 5 component PCA and PARAFAC reconstructions, with and without relocating, for the same 16 waveforms
 
+
 # %%
 def recon_plot(wfs, k=5, addmean=True, label="original"):
     means = wfs.mean(axis=0, keepdims=True)
     wfs = wfs - means
     cmeans = int(addmean) * means
     ogshape = wfs.shape
-    
+
     inds = np.random.default_rng(2).choice(wfs.shape[0], size=16, replace=False)
     batch = wfs[inds] + cmeans
-    
+
     # k component PCA reconstruction
     U, s, Vh = la.svd(wfs.reshape(wfs.shape[0], -1), full_matrices=False)
-    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape((16, *ogshape[1:])) + cmeans
-    
+    pca = (U[inds, :k] @ np.diag(s[:k]) @ Vh[:k, :]).reshape(
+        (16, *ogshape[1:])
+    ) + cmeans
+
     # k component Parafac reconstruction
     weights, factors = parafac(wfs, k)
-    pfac = np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], *factors[1:]) + cmeans
-    
+    pfac = (
+        np.einsum("n,in,jn,kn->ijk", weights, factors[0][inds], *factors[1:]) + cmeans
+    )
+
     vis_utils.labeledmosaic(
         [batch, pca, pfac],
         [label, "pca recon", "parafac recon"],

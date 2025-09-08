@@ -20,7 +20,13 @@
 import numpy as np
 
 # %%
-from spike_psvae import optutils, localize_torch, localize_index, subtract, waveform_utils
+from spike_psvae import (
+    optutils,
+    localize_torch,
+    localize_index,
+    subtract,
+    waveform_utils,
+)
 
 # %%
 from scipy.optimize import minimize
@@ -57,7 +63,12 @@ with h5py.File("/tmp/loctest/subtraction.h5", "r+") as h5:
         del h5["spike_index"]
         if "localizations" in h5:
             del h5["localizations"]
-    print([(k, h5["denoised_ptpvector_info"][k][()]) for k in h5["denoised_ptpvector_info"].keys()])
+    print(
+        [
+            (k, h5["denoised_ptpvector_info"][k][()])
+            for k in h5["denoised_ptpvector_info"].keys()
+        ]
+    )
     h5.create_dataset(
         "spike_index",
         shape=(0, 2),
@@ -206,10 +217,10 @@ with h5py.File(sub_h5_lm, "r") as h5:
 fig, (aa, ab) = plt.subplots(ncols=2, figsize=(10, 10), sharey=True)
 aa.scatter(x_orig, z_orig, c=np.minimum(a, 15), lw=0, s=1)
 ab.scatter(x_lm, z_lm, c=np.minimum(a, 15), lw=0, s=1)
-aa.set_ylim([geom[:,1].min(), geom[:,1].max()])
-ab.set_ylim([geom[:,1].min(), geom[:,1].max()])
-aa.set_xlim([geom[:,0].min() - 100, geom[:,0].max() + 100])
-ab.set_xlim([geom[:,0].min() - 100, geom[:,0].max() + 100])
+aa.set_ylim([geom[:, 1].min(), geom[:, 1].max()])
+ab.set_ylim([geom[:, 1].min(), geom[:, 1].max()])
+aa.set_xlim([geom[:, 0].min() - 100, geom[:, 0].max() + 100])
+ab.set_xlim([geom[:, 0].min() - 100, geom[:, 0].max() + 100])
 aa.set_title("Previous (scipy LBFGS)")
 ab.set_title("New (torch batched LM)")
 
@@ -220,7 +231,9 @@ ptps.shape
 ptps.size * 4 / 1e6
 
 # %%
-x_orig, y_orig, zr_orig, za_orig, alpha_orig = localize_index.localize_ptps_index(ptps, geom, maxchans, ci, radius=100, pbar=True, n_workers=8)
+x_orig, y_orig, zr_orig, za_orig, alpha_orig = localize_index.localize_ptps_index(
+    ptps, geom, maxchans, ci, radius=100, pbar=True, n_workers=8
+)
 
 # %%
 
@@ -245,7 +258,7 @@ tlgs = torch.as_tensor(local_geoms)
 tnms = torch.as_tensor(nanmask)
 
 # %%
-nptps = tptps / torch.as_tensor(a[:, None],device=tptps.device)
+nptps = tptps / torch.as_tensor(a[:, None], device=tptps.device)
 
 # %%
 tptps.shape
@@ -258,15 +271,28 @@ a.shape, nptps.shape
 
 # %%
 xs_orig = x_orig, y_orig, zr_orig, alpha_orig
-x_orig, y_orig, zr_orig, alpha_orig = map(lambda x: torch.as_tensor(x, device="cpu"), xs_orig)
-ptps_orig = localize_torch.bptp_at(x_orig, y_orig, zr_orig, torch.ones_like(alpha_orig), tlgs.cpu()) * tnms
-res_orig = torch.square(nptps.cpu() - ptps_orig).mean(1) - torch.log(10.0 * y_orig) / 10000.0
+x_orig, y_orig, zr_orig, alpha_orig = map(
+    lambda x: torch.as_tensor(x, device="cpu"), xs_orig
+)
+ptps_orig = (
+    localize_torch.bptp_at(
+        x_orig, y_orig, zr_orig, torch.ones_like(alpha_orig), tlgs.cpu()
+    )
+    * tnms
+)
+res_orig = (
+    torch.square(nptps.cpu() - ptps_orig).mean(1) - torch.log(10.0 * y_orig) / 10000.0
+)
 res_orig.min(), res_orig.median(), res_orig.mean(), res_orig.max()
 
 # %%
 tic = time.time()
 x_lm, y_lm, zr_lm, za_lm, alpha_lm = localize_torch.localize_ptps_index_lm(
-    tptps, geom, tmcs, ci, radius=100,
+    tptps,
+    geom,
+    tmcs,
+    ci,
+    radius=100,
     convergence_err=1e-20,
     convergence_g=1e-20,
     max_steps=250,
@@ -279,9 +305,14 @@ print(toc - tic)
 
 xs_lm = x_lm, y_lm, zr_lm, alpha_lm
 x_lm, y_lm, zr_lm, alpha_lm = map(lambda x: torch.as_tensor(x, device="cpu"), xs_lm)
-ptps_lm = localize_torch.bptp_at(x_lm, y_lm, zr_lm, torch.ones_like(alpha_lm), tlgs.cpu()) * tnms
+ptps_lm = (
+    localize_torch.bptp_at(x_lm, y_lm, zr_lm, torch.ones_like(alpha_lm), tlgs.cpu())
+    * tnms
+)
 res_lm = torch.square(nptps.cpu() - ptps_lm).mean(1) - torch.log(10.0 * y_lm) / 10000.0
-res_lm.min(), res_lm.median(), res_lm.mean(), res_lm.max(), (res_lm < res_orig).to(torch.double).mean()
+res_lm.min(), res_lm.median(), res_lm.mean(), res_lm.max(), (res_lm < res_orig).to(
+    torch.double
+).mean()
 
 # %%
 
@@ -359,7 +390,7 @@ with h5py.File(sub_h5, "r", locking=False) as h5:
     geom = h5["geom"][()]
 
 # %%
-plt.plot(ptps.T);
+plt.plot(ptps.T)
 
 # %%
 plt.scatter(x0, zr0)
@@ -401,7 +432,9 @@ localize_torch.localize_ptps_index_lm(tptps, geom, maxchans, ci)
 localize_torch.localize_ptps_index_newton(tptps, geom, maxchans, ci)
 
 # %%
-x0, y0, zr0, za0, a0 = localize_index.localize_ptps_index(ptps, geom, maxchans, ci, n_workers=8, pbar=False);
+x0, y0, zr0, za0, a0 = localize_index.localize_ptps_index(
+    ptps, geom, maxchans, ci, n_workers=8, pbar=False
+)
 
 
 # %%
@@ -412,22 +445,27 @@ def localize_single_torch(ptp, local_geom, nan_mask):
     zcom = (ptp * local_geom[:, 1]).sum() / ptp.sum()
     y0 = 20.0
     xinit = torch.tensor([xcom, y0, zcom])
-    
+
     def obj(loc):
         return localize_torch.mse(loc, nptp, nan_mask, local_geom)
-    
+
     grad_and_func = grad_and_value(obj)
     hess = hessian(obj)
-    
-    x, nevals, i = optutils.single_newton(xinit, grad_and_func, hess, nsteps=15000, max_ls=100, c1=1e-6)
-    
+
+    x, nevals, i = optutils.single_newton(
+        xinit, grad_and_func, hess, nsteps=15000, max_ls=100, c1=1e-6
+    )
+
     alpha = localize_torch.find_alpha(ptp, nan_mask, *x, local_geom)
-    
+
     return [*x, alpha], i
 
 
 # %%
-ressingle = [localize_single_torch(ptp, lg, nm) for ptp, lg, nm in zip(*map(torch.as_tensor, [ptps, local_geoms, nanmask]))]
+ressingle = [
+    localize_single_torch(ptp, lg, nm)
+    for ptp, lg, nm in zip(*map(torch.as_tensor, [ptps, local_geoms, nanmask]))
+]
 
 # %%
 xs1, i1 = zip(*ressingle)
@@ -449,8 +487,15 @@ def localize_multi_torch(ptps, local_geoms, nan_masks, init_y="taylor"):
     xcom, zcom = com.T
     y0 = torch.full_like(xcom, init_y)
     xinit = torch.column_stack([xcom, y0, zcom])
-    
-    x, nevals, i = optutils.batched_newton(xinit, vgrad_and_func, vhess, extra_args=(nptps, nan_masks, local_geoms), max_steps=150, convergence_x=1e-4)
+
+    x, nevals, i = optutils.batched_newton(
+        xinit,
+        vgrad_and_func,
+        vhess,
+        extra_args=(nptps, nan_masks, local_geoms),
+        max_steps=150,
+        convergence_x=1e-4,
+    )
     alpha = localize_torch.bfind_alpha(ptps, nan_masks, *x.T, local_geoms)
     return torch.column_stack((x, alpha)), i
 
@@ -465,7 +510,7 @@ res0.min(), res0.median(), res0.mean(), res0.max()
 # localize_multi_torch(tptps, tlgs, tnms, init_y=1.)
 
 # %%
-xs_bn, ii = localize_multi_torch(tptps, tlgs, tnms, init_y=1.)
+xs_bn, ii = localize_multi_torch(tptps, tlgs, tnms, init_y=1.0)
 x_bn, y_bn, zr_bn, a_bn = map(torch.tensor, zip(*xs_bn))
 ptps_bn = localize_torch.bptp_at(x_bn, y_bn, zr_bn, a_bn, tlgs) * tnms
 res_bn = torch.square(tptps - ptps_bn).sum(1)
@@ -473,7 +518,9 @@ res_bn.min(), res_bn.median(), res_bn.mean(), res_bn.max()
 
 
 # %%
-def localize_multi_lm(ptps, local_geoms, nan_masks, init_y=1., scale_problem="none", tikhonov=0.0):
+def localize_multi_lm(
+    ptps, local_geoms, nan_masks, init_y=1.0, scale_problem="none", tikhonov=0.0
+):
     maxptps, _ = torch.max(torch.nan_to_num(ptps, -1.0), dim=1)
     ptps = torch.nan_to_num(ptps)
     nptps = ptps / maxptps[:, None]
@@ -482,14 +529,12 @@ def localize_multi_lm(ptps, local_geoms, nan_masks, init_y=1., scale_problem="no
     y0 = torch.full_like(xcom, init_y)
     xinit = torch.column_stack([xcom, y0, zcom])
     print(f"{xinit.dtype=}")
-    
+
     x, i = optutils.batched_levenberg_marquardt(
         xinit,
         vgrad_and_func,
         vhess,
-        extra_args=(nptps,
-                    nan_masks,
-                    local_geoms),
+        extra_args=(nptps, nan_masks, local_geoms),
         max_steps=150,
         scale_problem=scale_problem,
         convergence_g=1e-10,
@@ -501,7 +546,9 @@ def localize_multi_lm(ptps, local_geoms, nan_masks, init_y=1., scale_problem="no
 
 
 # %%
-xs_lm, ii_lm = localize_multi_lm(tptps, tlgs, tnms, init_y=1., scale_problem="hessian", tikhonov=0.0)
+xs_lm, ii_lm = localize_multi_lm(
+    tptps, tlgs, tnms, init_y=1.0, scale_problem="hessian", tikhonov=0.0
+)
 x_lm, y_lm, zr_lm, a_lm = map(torch.tensor, zip(*xs_lm))
 ptps_lm = localize_torch.bptp_at(x_lm, y_lm, zr_lm, a_lm, tlgs) * tnms
 res_lm = torch.square(tptps - ptps_lm).sum(1)
@@ -535,7 +582,7 @@ ii_lm
 # %%
 
 # %%
-x3,y3,zr3,za3,a3 =localize_torch.localize_ptps_index(
+x3, y3, zr3, za3, a3 = localize_torch.localize_ptps_index(
     tptps,
     geom,
     maxchans,
@@ -556,8 +603,8 @@ res0.min(), res0.median(), res0.mean(), res0.max()
 (res3 < res0).to(float).mean()
 
 # %%
-plt.hist(res_lm.numpy(), bins=np.arange(0, 100), histtype="step");
-plt.hist(res0, bins=np.arange(0, 100), histtype="step");
+plt.hist(res_lm.numpy(), bins=np.arange(0, 100), histtype="step")
+plt.hist(res0, bins=np.arange(0, 100), histtype="step")
 
 # %%
 (res3 - res0)[res3 < res0].mean()
@@ -575,7 +622,7 @@ plt.hist(res0, bins=np.arange(0, 100), histtype="step");
 x3.min(), x3.max()
 
 # %%
-geom[:,0].min(), geom[:,0].max()
+geom[:, 0].min(), geom[:, 0].max()
 
 # %%
 
@@ -605,18 +652,12 @@ N, C = ptps.shape
 
 # handle channel subsetting
 nc = len(channel_index)
-subset = channel_index_subset(
-    geom, channel_index, n_channels=n_channels, radius=radius
-)
+subset = channel_index_subset(geom, channel_index, n_channels=n_channels, radius=radius)
 subset = binary_subset_to_relative(subset)
-channel_index_pad = F.pad(
-    torch.as_tensor(channel_index), (0, 1, 0, 0), value=nc
-)
+channel_index_pad = F.pad(torch.as_tensor(channel_index), (0, 1, 0, 0), value=nc)
 channel_index = channel_index_pad[torch.arange(nc)[:, None], subset]
 # pad with 0s rather than nans, we will mask below.
-ptps = F.pad(ptps, (0, 1, 0, 0))[
-    torch.arange(N)[:, None], subset[maxchans]
-]
+ptps = F.pad(ptps, (0, 1, 0, 0))[torch.arange(N)[:, None], subset[maxchans]]
 
 # torch everyone
 device = ptps.device

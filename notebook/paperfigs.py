@@ -42,7 +42,13 @@ from isosplit import isosplit
 from isosplit5 import isosplit5
 
 # %%
-from spike_psvae import waveform_utils, localization, point_source_centering, vis_utils, statistics
+from spike_psvae import (
+    waveform_utils,
+    localization,
+    point_source_centering,
+    vis_utils,
+    statistics,
+)
 
 # %%
 rg = lambda k=0: np.random.default_rng(k)
@@ -97,7 +103,12 @@ th_h5 = h5py.File("../data/ks_np2_nzy_thalamus.h5", "r")
 np1_h5 = h5py.File("../data/yass_np1_nzy.h5", "r")
 
 # %%
-h5s = {"NP2 Cortex": ctx_h5, "NP2 Hippocampus": hc_h5, "NP2 Thalamus": th_h5, "NP1": np1_h5}
+h5s = {
+    "NP2 Cortex": ctx_h5,
+    "NP2 Hippocampus": hc_h5,
+    "NP2 Thalamus": th_h5,
+    "NP1": np1_h5,
+}
 
 # %%
 fns = {"NP2 Cortex": "ctx", "NP2 Hippocampus": "hc", "NP2 Thalamus": "th", "NP1": "np1"}
@@ -112,26 +123,37 @@ p = np.load("../data/np2_p_rigid.npy")
 
 # %%
 # load unified loc data for NP2 rasters
-times_2 = np.concatenate([
-    ctx_h5["spike_index"][:, 0],
-    hc_h5["spike_index"][:, 0],
-    th_h5["spike_index"][:, 0],
-]) / 30_000
-z_reg_2 = np.concatenate([
-    ctx_h5["z_reg"],
-    hc_h5["z_reg"],
-    th_h5["z_reg"],
-])
-x_2 = np.concatenate([
-    ctx_h5["x"],
-    hc_h5["x"],
-    th_h5["x"],
-])
-maxptp_2 = np.concatenate([
-    ctx_h5["maxptp"],
-    hc_h5["maxptp"],
-    th_h5["maxptp"],
-])
+times_2 = (
+    np.concatenate(
+        [
+            ctx_h5["spike_index"][:, 0],
+            hc_h5["spike_index"][:, 0],
+            th_h5["spike_index"][:, 0],
+        ]
+    )
+    / 30_000
+)
+z_reg_2 = np.concatenate(
+    [
+        ctx_h5["z_reg"],
+        hc_h5["z_reg"],
+        th_h5["z_reg"],
+    ]
+)
+x_2 = np.concatenate(
+    [
+        ctx_h5["x"],
+        hc_h5["x"],
+        th_h5["x"],
+    ]
+)
+maxptp_2 = np.concatenate(
+    [
+        ctx_h5["maxptp"],
+        hc_h5["maxptp"],
+        th_h5["maxptp"],
+    ]
+)
 
 # %%
 # load NP1 loc data
@@ -174,7 +196,9 @@ meanproj2, _, _ = lib.faster(maxptp_2, z_reg_2, x_2)
 
 # make plot
 fig, axes = plt.subplot_mosaic("ab\ncc", figsize=(6, 5))
-aa = axes["a"]; ab = axes["b"]; ac = axes["c"]
+aa = axes["a"]
+ab = axes["b"]
+ac = axes["c"]
 
 cuts.plot(Rreg2, ax=aa)
 aa.axhline(1175, lw=1, c=blue)
@@ -183,7 +207,15 @@ aa.set_ylabel("registered z")
 aa.set_xlabel("time", labelpad=-9)
 aa.set_title("raster: PTP by time and reg.\\ z")
 
-ab.hist(z_reg_2, facecolor="k", edgecolor="w", linewidth=0, bins=np.arange(3050, step=1), log=True, color="k")
+ab.hist(
+    z_reg_2,
+    facecolor="k",
+    edgecolor="w",
+    linewidth=0,
+    bins=np.arange(3050, step=1),
+    log=True,
+    color="k",
+)
 ab.set_box_aspect(1)
 ab.axvline(1175, lw=1, c=blue)
 ab.axvline(1870, lw=1, c=blue)
@@ -198,9 +230,33 @@ ac.set_ylabel("x", labelpad=-12)
 ac.set_xlabel("reg.\\ z", labelpad=-9)
 ac.set_title("mean projection of PTP on x/reg.\\ z")
 
-ac.text(587.5, 66, "cortex", color=blue, backgroundcolor=[1,1,1,1], ha="center", va="center")
-ac.text(1525, 66, "hippocampus", color=blue, backgroundcolor=[1,1,1,1], ha="center", va="center")
-ac.text(2500, 66, "thalamus", color=blue, backgroundcolor=[1,1,1,1], ha="center", va="center")
+ac.text(
+    587.5,
+    66,
+    "cortex",
+    color=blue,
+    backgroundcolor=[1, 1, 1, 1],
+    ha="center",
+    va="center",
+)
+ac.text(
+    1525,
+    66,
+    "hippocampus",
+    color=blue,
+    backgroundcolor=[1, 1, 1, 1],
+    ha="center",
+    va="center",
+)
+ac.text(
+    2500,
+    66,
+    "thalamus",
+    color=blue,
+    backgroundcolor=[1, 1, 1, 1],
+    ha="center",
+    va="center",
+)
 
 # plt.tight_layout(pad=0.0)
 fig.suptitle("NP2 recording regions (divided at registered z=1175,1870)", y=0.96)
@@ -214,14 +270,24 @@ meanproj1, _, _ = lib.faster(maxptp_1, z_reg_1, x_1)
 
 # make plot
 fig, axes = plt.subplot_mosaic("ab\ncc", figsize=(6, 5))
-aa = axes["a"]; ab = axes["b"]; ac = axes["c"]
+aa = axes["a"]
+ab = axes["b"]
+ac = axes["c"]
 
 cuts.plot(Rreg1, ax=aa)
 aa.set_ylabel("registered z")
 aa.set_xlabel("time", labelpad=-9)
 aa.set_title("raster: PTP by time and reg.\\ z")
 
-ab.hist(z_reg_1, facecolor="k", edgecolor="w", linewidth=0, bins=np.arange(3050, step=1), log=True, color="k")
+ab.hist(
+    z_reg_1,
+    facecolor="k",
+    edgecolor="w",
+    linewidth=0,
+    bins=np.arange(3050, step=1),
+    log=True,
+    color="k",
+)
 ab.set_box_aspect(1)
 # ab.set_xlabel("registered depth")
 ab.set_ylabel("spike count")
@@ -254,8 +320,9 @@ fig, axes = plt.subplots(2, 2, sharex=True, sharey=True)
 for ax, (k, v) in zip(axes.flat, h5s.items()):
     vis_utils.reloc_pcaresidplot(v, name=k, ax=ax, nolabel=True)
 plt.suptitle("PCA error before/after relocation")
-for ax in axes[1]: ax.set_xlabel("number of factors")
-fig.text(0.04, 0.5, 'PCA unexplained variance (s.u.)', va='center', rotation='vertical')
+for ax in axes[1]:
+    ax.set_xlabel("number of factors")
+fig.text(0.04, 0.5, "PCA unexplained variance (s.u.)", va="center", rotation="vertical")
 fig.savefig("../figs/pcaerr.pdf")
 plt.show()
 
@@ -265,10 +332,19 @@ print("hi")
 # %%
 fig, axes = plt.subplots(2, 2, sharex=True, sharey=True)
 for ax, (k, v) in zip(axes.flat, h5s.items()):
-    vis_utils.reloc_pcaresidplot(v, name=k, ax=ax, nolabel=True, B=50_000, kind="invert")
+    vis_utils.reloc_pcaresidplot(
+        v, name=k, ax=ax, nolabel=True, B=50_000, kind="invert"
+    )
 plt.suptitle("PCA error before/after relocation")
-for ax in axes[1]: ax.set_xlabel("number of factors")
-fig.text(0.04, 0.5, 'PCA error after inverting relocation (s.u.)', va='center', rotation='vertical')
+for ax in axes[1]:
+    ax.set_xlabel("number of factors")
+fig.text(
+    0.04,
+    0.5,
+    "PCA error after inverting relocation (s.u.)",
+    va="center",
+    rotation="vertical",
+)
 fig.savefig("../figs/pcainverr.pdf")
 plt.show()
 
@@ -312,10 +388,14 @@ for k, v in h5s.items():
 for k, v in h5s.items():
     for unit in range(2):
         for which in ["orig", "yza", "xyza"]:
-            top, grid = vis_utils.pairplot_loadings(v, unit, which, name=k, by="counttrend")
+            top, grid = vis_utils.pairplot_loadings(
+                v, unit, which, name=k, by="counttrend"
+            )
             plt.gcf().suptitle(f"{k} unit {top}, {which}", y=0.98)
             plt.tight_layout()
-            plt.savefig(f"../figs/{fns[k]}_pair_{which}_{unit}.pdf", bbox_inches="tight")
+            plt.savefig(
+                f"../figs/{fns[k]}_pair_{which}_{unit}.pdf", bbox_inches="tight"
+            )
             plt.show()
 
 # %%
@@ -341,7 +421,7 @@ for k, v in h5s.items():
 # # sorter cluster vis
 
 # %%
-np.std(np.arange(35).reshape(5,7), axis=0)
+np.std(np.arange(35).reshape(5, 7), axis=0)
 
 # %%
 for k, v in h5s.items():
@@ -366,7 +446,7 @@ for k, v in h5s.items():
     y = v["y"][:]
     z_rel = v["z_rel"][:]
     alpha = v["alpha"][:]
-    
+
     pserr = np.empty(len(v["denoised_waveforms"]))
     pserr[:] = np.inf
     for b in trange((N + 1) // batch_size, desc="fit"):
@@ -387,7 +467,7 @@ for k, v in h5s.items():
             geomkind="standard",
         )
         pserr[start:end] = np.square(ptp - ptp_hat).mean(axis=1)
-    
+
     pserrs[k] = pserr
 
 # %%
@@ -408,7 +488,7 @@ ariss = {}
 
 for k, v in h5s.items():
     print(k, flush=True)
-    
+
     shuffle = rg().permutation(len(well_modeled[k]))
     invshuf = np.empty_like(shuffle)
     for i, j in enumerate(shuffle):
@@ -419,19 +499,19 @@ for k, v in h5s.items():
     z = v["z_reg"][:][well_modeled[k]]
     alpha = v["alpha"][:][well_modeled[k]]
     ids = v["spike_train"][:, 1][well_modeled[k]]
-    
+
     lo = v["loadings_orig"][:]
     lo /= np.std(lo, axis=0, keepdims=True) / 16
     lo = lo[well_modeled[k]]
-    
+
     ly = v["loadings_yza"][:]
     ly /= np.std(lo, axis=0, keepdims=True) / 16
     ly = ly[well_modeled[k]]
-    
+
     lx = v["loadings_xyza"][:]
     lx /= np.std(lo, axis=0, keepdims=True) / 16
     lx = lx[well_modeled[k]]
-    
+
     f = np.c_[x, y, z, alpha, lo[:, :npcs]]
     co = isosplit(f[shuffle].T, K_init=1024)
     co = co[invshuf]
@@ -444,11 +524,11 @@ for k, v in h5s.items():
     cx = isosplit(f[shuffle].T, K_init=1024)
     cx = cx[invshuf]
     arix = adjusted_rand_score(ids, cx)
-    
+
     aris = {"orig": ario, "yza": ariy, "xyza": arix}
     ariss[k] = aris
     c = {"orig": co, "yza": cy, "xyza": cx}
-    clustering[k] = c    
+    clustering[k] = c
 
 # %%
 for k, v in h5s.items():
@@ -457,24 +537,23 @@ for k, v in h5s.items():
     z = v["z_reg"][:][well_modeled[k]]
     alpha = v["alpha"][:][well_modeled[k]]
     ids = v["spike_train"][:, 1][well_modeled[k]]
-    
+
     lo = v["loadings_orig"][:, :3]
     lo /= np.std(lo, axis=0, keepdims=True)
     lo = lo[well_modeled[k]]
-    
+
     ly = v["loadings_yza"][:, :3]
     ly /= np.std(lo, axis=0, keepdims=True)
     ly = ly[well_modeled[k]]
-    
+
     lx = v["loadings_xyza"][:, :3]
     lx /= np.std(lo, axis=0, keepdims=True)
     lx = lx[well_modeled[k]]
-    
-    
+
     zlims = None
     if "NP1" in k:
         zlims = [1100, 2400]
-    
+
     vis_utils.relocclusts(
         k,
         x,
@@ -499,7 +578,9 @@ for k, v in h5s.items():
 templates = ctx_h5["templates"][:]
 
 # %%
-twfs, mcs = waveform_utils.get_local_waveforms(templates, 8, ctx_h5["geom"][:], geomkind="standard")
+twfs, mcs = waveform_utils.get_local_waveforms(
+    templates, 8, ctx_h5["geom"][:], geomkind="standard"
+)
 
 # %%
 twfs.shape
@@ -513,7 +594,9 @@ mcs = mcs[gtz]
 vis_utils.labeledmosaic([twfs[:8], twfs[8:16]], cbar=False)
 
 # %%
-x, y, zr, za, alpha = localization.localize_waveforms(twfs, ctx_h5["geom"][:], maxchans=mcs, geomkind="standard", channel_radius=8)
+x, y, zr, za, alpha = localization.localize_waveforms(
+    twfs, ctx_h5["geom"][:], maxchans=mcs, geomkind="standard", channel_radius=8
+)
 
 # %%
 p, q = point_source_centering.ptp_fit(
@@ -542,8 +625,15 @@ vis_utils.labeledmosaic([twfs[units]], collabels=units, rowlabels="", cbar=True)
 from scipy import signal
 
 # %%
-sns.regplot(x=np.arange(len(y)), y=y[rg().permutation(len(y))], scatter_kws=dict(s=1), label="shuffled")
-sns.regplot(x=np.arange(len(y)), y=y[byfit], scatter_kws=dict(s=1), label="sorted by PS fit")
+sns.regplot(
+    x=np.arange(len(y)),
+    y=y[rg().permutation(len(y))],
+    scatter_kws=dict(s=1),
+    label="shuffled",
+)
+sns.regplot(
+    x=np.arange(len(y)), y=y[byfit], scatter_kws=dict(s=1), label="sorted by PS fit"
+)
 plt.ylabel("y")
 plt.xlabel("template index (before/after sorting by PS fit)")
 plt.legend()
@@ -559,12 +649,12 @@ def simplot(ix):
     zr0 = zr[ix]
     a0 = alpha[ix]
     print(ix, ":", x0, y0, zr0, a0)
-    
+
     pos = ctx_h5["pcs_orig"][:]
     pys = ctx_h5["pcs_yza"][:]
     pxs = ctx_h5["pcs_xyza"][:]
     print(pos.shape)
-    
+
     lzos = []
     lzys = []
     lzxs = []
@@ -606,8 +696,12 @@ def simplot(ix):
             relocate_dims="xyza",
         )
         lzos.append(np.einsum("ktc,tc->k", pos, shifted - ctx_h5["mean_orig"][:]))
-        lzys.append(np.einsum("ktc,tc->k", pys, std_yza.numpy() - ctx_h5["mean_yza"][:]))
-        lzxs.append(np.einsum("ktc,tc->k", pxs, std_xyza.numpy() - ctx_h5["mean_xyza"][:]))
+        lzys.append(
+            np.einsum("ktc,tc->k", pys, std_yza.numpy() - ctx_h5["mean_yza"][:])
+        )
+        lzxs.append(
+            np.einsum("ktc,tc->k", pxs, std_xyza.numpy() - ctx_h5["mean_xyza"][:])
+        )
     lzos = np.array(lzos)
     lzys = np.array(lzys)
     lzxs = np.array(lzxs)
@@ -635,7 +729,7 @@ list(ctx_h5.keys())
 # %%
 def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
     assert shiftdim in "xyza"
-    
+
     if ix is not None:
         wf = twfs[ix]
         mc = mcs[ix]
@@ -653,18 +747,20 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
         ix = ctx_h5["spike_train"][spike_ix, 1]
     print(ix, ":", x0, y0, zr0, a0)
     print(wf.shape, mc)
-    
+
     pos = ctx_h5["pcs_orig"][:]
     pys = ctx_h5["pcs_yza"][:]
     pxs = ctx_h5["pcs_xyza"][:]
     print(pos.shape)
-    
+
     lzos = []
     lzys = []
     lzxs = []
     shifts = []
-    
-    fig, axes = plt.subplot_mosaic("aaaabbbb\n..cdef..", figsize=(6,5), gridspec_kw=dict(height_ratios=(4, 2)))
+
+    fig, axes = plt.subplot_mosaic(
+        "aaaabbbb\n..cdef..", figsize=(6, 5), gridspec_kw=dict(height_ratios=(4, 2))
+    )
     aa = axes["a"]
     ab = axes["b"]
     dimname = dict(x="x", z="z", y="y", a="\\alpha")[shiftdim]
@@ -675,10 +771,15 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
         ab.set_xlabel(f"target ${dimname}$")
     ab.set_ylabel("first PC loading")
     ab.set_title(f"cortex unit {ix}")
-    
+
     fig.suptitle(f"PCA vs. ${dimname}$ shifts {xtitle}")
-    
-    shift_range = dict(z=range(-16, 17), x=range(-10, 42), y=[1, 2, 3, 4, 5, 6, 7, 8, 9] + list(range(10, 200, 5)), a=range(20, 200, 5))[shiftdim]
+
+    shift_range = dict(
+        z=range(-16, 17),
+        x=range(-10, 42),
+        y=[1, 2, 3, 4, 5, 6, 7, 8, 9] + list(range(10, 200, 5)),
+        a=range(20, 200, 5),
+    )[shiftdim]
     for dd in shift_range:
         shifts.append(dd)
 
@@ -690,15 +791,20 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
             shift_kwarg = dict(y1=dd)
         elif shiftdim == "a":
             shift_kwarg = dict(alpha1=dd)
-        
+
         shifted, shift_target_ptp = point_source_centering.shift(
-            wf, mc, ctx_h5["geom"][:], channel_radius=8, geomkind="standard", **shift_kwarg
+            wf,
+            mc,
+            ctx_h5["geom"][:],
+            channel_radius=8,
+            geomkind="standard",
+            **shift_kwarg,
         )
         orig_ptp = wf.ptp(0)
         shifted_ptp = shifted.ptp(0)
         sx, sy, szr, sza, salpha = localization.localize_ptp(
             shifted_ptp,
-            mc, # + (shifted_ptp.argmax() - wf.ptp(0).argmax()),
+            mc,  # + (shifted_ptp.argmax() - wf.ptp(0).argmax()),
             ctx_h5["geom"][:],
             geomkind="standard",
         )
@@ -726,18 +832,24 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
             geomkind="standard",
             relocate_dims="xyza",
         )
-        
+
         lzos.append(np.einsum("ktc,tc->k", pos, shifted - ctx_h5["mean_orig"][:]))
-        lzys.append(np.einsum("ktc,tc->k", pys, std_yza.numpy() - ctx_h5["mean_yza"][:]))
-        lzxs.append(np.einsum("ktc,tc->k", pxs, std_xyza.numpy() - ctx_h5["mean_xyza"][:]))
-        
+        lzys.append(
+            np.einsum("ktc,tc->k", pys, std_yza.numpy() - ctx_h5["mean_yza"][:])
+        )
+        lzxs.append(
+            np.einsum("ktc,tc->k", pxs, std_xyza.numpy() - ctx_h5["mean_xyza"][:])
+        )
+
         show = np.array([wf, shifted, std_yza.numpy(), std_xyza.numpy()])[:, 20:-40]
         print(show.min(), show.max())
         vmin = -50
         vmax = 10
         show = np.clip(show, vmin, vmax)
         # print(wf.shape, pos.shape, pys.shape, pxs.shape)
-        pcshow = np.array([np.full(wf.shape, vmax), 8 * pos[0], 8 * pys[0], 8 * pxs[0]])[:, 20:-40]
+        pcshow = np.array(
+            [np.full(wf.shape, vmax), 8 * pos[0], 8 * pys[0], 8 * pxs[0]]
+        )[:, 20:-40]
         vis_utils.labeledmosaic(
             [show, pcshow],
             rowlabels=["waveform", "pcs"],
@@ -747,14 +859,35 @@ def simmov(ix=None, spike_ix=None, shiftdim="z", xtitle="", pc=0):
             vmax=vmax,
             cbar=False,
         )
-        nrl = ab.scatter(shifts, np.array(lzos)[:, pc], marker=".", color="k", label="no reloc")
-        yrl = ab.scatter(shifts, np.array(lzys)[:, pc], marker=".", color=green, label="$yz\\alpha$")
-        xrl = ab.scatter(shifts, np.array(lzxs)[:, pc], marker=".", color=purple, label="$xyz\\alpha$")
-        ab.legend(labels=["no reloc", "$yz\\alpha$", "$xyz\\alpha$"], handles=[nrl, yrl, xrl])
-        for ww, pp, kk, cc, dd, tt in zip([orig_ptp, shifted_ptp, std_yza.numpy().ptp(0), std_xyza.numpy().ptp(0)], [None, shift_target_ptp, stereo_yza, stereo_xyza], "cdef", ["k", "k", darkgreen, darkpurple], ["silver", "silver", lightgreen, lightpurple], ["orig", "shifted", "yza stdized", "xyza stdized"]):
+        nrl = ab.scatter(
+            shifts, np.array(lzos)[:, pc], marker=".", color="k", label="no reloc"
+        )
+        yrl = ab.scatter(
+            shifts, np.array(lzys)[:, pc], marker=".", color=green, label="$yz\\alpha$"
+        )
+        xrl = ab.scatter(
+            shifts,
+            np.array(lzxs)[:, pc],
+            marker=".",
+            color=purple,
+            label="$xyz\\alpha$",
+        )
+        ab.legend(
+            labels=["no reloc", "$yz\\alpha$", "$xyz\\alpha$"], handles=[nrl, yrl, xrl]
+        )
+        for ww, pp, kk, cc, dd, tt in zip(
+            [orig_ptp, shifted_ptp, std_yza.numpy().ptp(0), std_xyza.numpy().ptp(0)],
+            [None, shift_target_ptp, stereo_yza, stereo_xyza],
+            "cdef",
+            ["k", "k", darkgreen, darkpurple],
+            ["silver", "silver", lightgreen, lightpurple],
+            ["orig", "shifted", "yza stdized", "xyza stdized"],
+        ):
             vis_utils.plot_ptp(ww[None, ...], np.array([axes[kk]]), "", cc, [""])
             if pp is not None:
-                vis_utils.plot_ptp(np.array(pp)[None, ...], np.array([axes[kk]]), "", dd, [""])
+                vis_utils.plot_ptp(
+                    np.array(pp)[None, ...], np.array([axes[kk]]), "", dd, [""]
+                )
             axes[kk].set_title(tt)
         plt.tight_layout()
         camera.snap()

@@ -33,7 +33,9 @@ geom = np.load("../data/np2_channel_map.npy")
 maxchans = wfs.ptp(1).argmax(1)
 
 # %%
-local_wfs = waveform_utils.get_local_waveforms(wfs, 10, geom, maxchans, geomkind="standard")
+local_wfs = waveform_utils.get_local_waveforms(
+    wfs, 10, geom, maxchans, geomkind="standard"
+)
 
 # %%
 fig = plt.figure(figsize=(4, 10))
@@ -78,7 +80,9 @@ with h5py.File("../data/spt_yasstemplates.h5", "w") as h5:
     h5.create_dataset("maxchans", data=maxchans)
 
 # %%
-xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(local_wfs, geom, maxchans, geomkind="standard")
+xs, ys, z_rels, z_abss, alphas = localization.localize_waveforms(
+    local_wfs, geom, maxchans, geomkind="standard"
+)
 
 # %%
 (ys < 0.01).mean()

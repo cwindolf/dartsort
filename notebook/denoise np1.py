@@ -63,26 +63,44 @@ plt.plot(geom_np1[:20, 0], geom_np1[:20, 1], lw=0.1)
 rg = np.random.default_rng(0)
 
 # %%
-raw_np1_test, denoised_np1_test, inds_np1_test, fcs_np1_test = extract.get_denoised_waveforms("/media/peter/2TB/NP1/standardized.bin", spike_index_np1[rg.choice(1530553, 1000, replace=False)], geom_np1, batch_size=128, threshold=6, geomkind="standard", channel_radius=8)
+raw_np1_test, denoised_np1_test, inds_np1_test, fcs_np1_test = (
+    extract.get_denoised_waveforms(
+        "/media/peter/2TB/NP1/standardized.bin",
+        spike_index_np1[rg.choice(1530553, 1000, replace=False)],
+        geom_np1,
+        batch_size=128,
+        threshold=6,
+        geomkind="standard",
+        channel_radius=8,
+    )
+)
 
 # %%
 raw_np1_test.shape
 
 # %%
-vis_utils.labeledmosaic(raw_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1)
+vis_utils.labeledmosaic(
+    raw_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1
+)
 
 # %%
 m1 = raw_np1_test[:100].ptp(1).argmax(1)
 raw_np1_test[np.arange(100), :, m1].argmin(1)
 
 # %%
-vis_utils.labeledmosaic(denoised_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1)
+vis_utils.labeledmosaic(
+    denoised_np1_test[:100].reshape(5, 20, 121, 18), rowlabels="ab", pad=1
+)
 
 # %%
 fig, axes = plt.subplots(5, 18, sharey="row", sharex=True, figsize=(10, 10))
 for i in range(5):
-    vis_utils.traceplot(raw_np1_test[i, :80, :], c="b", axes=axes[i], label="raw", strip=True)
-    vis_utils.traceplot(denoised_np1_test[i, :80, :], c="g", axes=axes[i], label="denoised", strip=True)
+    vis_utils.traceplot(
+        raw_np1_test[i, :80, :], c="b", axes=axes[i], label="raw", strip=True
+    )
+    vis_utils.traceplot(
+        denoised_np1_test[i, :80, :], c="g", axes=axes[i], label="denoised", strip=True
+    )
     axes[i, 0].set_ylabel(f"spike {i}")
 # plt.legend();
 plt.show()
@@ -92,7 +110,15 @@ plt.show()
 
 # %% tags=[]
 raw_np1, denoised_np1, indices_np1, firstchans_np1 = extract.get_denoised_waveforms(
-    "/media/peter/2TB/NP1/standardized.bin", spike_index_np1, geom_np1, threshold=0, device="cpu", inmem=False, geomkind="standard", channel_radius=8, pad_for_denoiser=8,
+    "/media/peter/2TB/NP1/standardized.bin",
+    spike_index_np1,
+    geom_np1,
+    threshold=0,
+    device="cpu",
+    inmem=False,
+    geomkind="standard",
+    channel_radius=8,
+    pad_for_denoiser=8,
 )
 
 # %%
@@ -107,7 +133,7 @@ with h5py.File("../data/yass_np1.h5", "w") as np1h5:
     np1h5.create_dataset("denoised_waveforms", data=denoised_np1)
     np1h5.create_dataset("first_channels", data=firstchans_np1)
     np1h5.create_dataset("selection_indices", data=indices_np1)
-    
+
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
@@ -129,7 +155,7 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
     maxchans = np.array(maxchans)
     np1h5.create_dataset("max_channels", data=maxchans)
     np1h5["spike_index"][:, 1] = maxchans
-    
+
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
@@ -141,24 +167,26 @@ from spike_psvae import localization
 
 # %%
 with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    xs_np1, ys_np1, z_rels_np1, z_abss_np1, alphas_np1 = localization.localize_waveforms_batched(
-        np1h5["denoised_waveforms"],
-        np1h5["geom"][:],
-        maxchans=np1h5["max_channels"][:],
-        channel_radius=8,
-        n_workers=5,
-        jac=False,
-        firstchans=np1h5["first_channels"][:],
-        geomkind="firstchanstandard",
-        batch_size=128,
+    xs_np1, ys_np1, z_rels_np1, z_abss_np1, alphas_np1 = (
+        localization.localize_waveforms_batched(
+            np1h5["denoised_waveforms"],
+            np1h5["geom"][:],
+            maxchans=np1h5["max_channels"][:],
+            channel_radius=8,
+            n_workers=5,
+            jac=False,
+            firstchans=np1h5["first_channels"][:],
+            geomkind="firstchanstandard",
+            batch_size=128,
+        )
     )
-    
+
     np1h5.create_dataset("x", data=xs_np1)
     np1h5.create_dataset("y", data=ys_np1)
     np1h5.create_dataset("z_abs", data=z_abss_np1)
     np1h5.create_dataset("z_rel", data=z_rels_np1)
     np1h5.create_dataset("alpha", data=alphas_np1)
-    
+
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
@@ -170,7 +198,7 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
         maxptps_np1.append(wf.astype(float).ptp(0).ptp())
     maxptps_np1 = np.array(maxptps_np1)
     np1h5.create_dataset("maxptp", data=maxptps_np1)
-    
+
     for k in np1h5:
         print(k, np1h5[k].shape, np1h5[k].dtype)
 
@@ -179,7 +207,9 @@ print("hi")
 
 # %%
 with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
-    R, _, _ = lib.faster(np1h5["maxptp"][:], np1h5["z_abs"][:], np1h5["spike_index"][:, 0] / 30000)
+    R, _, _ = lib.faster(
+        np1h5["maxptp"][:], np1h5["z_abs"][:], np1h5["spike_index"][:, 0] / 30000
+    )
 
 # %%
 cuts.plot(R)
@@ -210,7 +240,9 @@ with h5py.File("../data/yass_np1.h5", "r+") as np1h5:
 
 # %%
 with h5py.File("../data/yass_np1.h5", "r") as np1h5:
-    Rreg, _, _ = lib.faster(np1h5["maxptp"][:], z_reg, np1h5["spike_index"][:, 0] / 30000)
+    Rreg, _, _ = lib.faster(
+        np1h5["maxptp"][:], z_reg, np1h5["spike_index"][:, 0] / 30000
+    )
     cuts.plot(Rreg)
 
 # %%
@@ -226,7 +258,7 @@ big_y.mean()
 with h5py.File("../data/yass_np1.h5", "r") as h5:
     N, T, C = h5["denoised_waveforms"].shape
     print(T, C, flush=True)
-        
+
     with h5py.File(f"../data/yass_np1_nzy.h5", "w") as out:
         # non per-spike data
         for k in ["geom", "templates"]:
@@ -285,7 +317,7 @@ b3 = qq[:, 2]
 qqm = (b1 <= 0) & (b2 <= 0) & (b3 >= 0)
 
 # %%
-1/16
+1 / 16
 
 # %%
 qqm.mean()
@@ -299,16 +331,16 @@ b = (b2 <= 0) & (b3 >= 0)
 a.mean() * b.mean() * 2, (a & b).mean()
 
 # %%
-((qq[:,0] <= 0) & (qq[:,1] <= 0)).mean()
+((qq[:, 0] <= 0) & (qq[:, 1] <= 0)).mean()
 
 # %%
-3/8
+3 / 8
 
 # %%
-((qq[:,1] <= 0) & (qq[:,2] >= 0)).mean()
+((qq[:, 1] <= 0) & (qq[:, 2] >= 0)).mean()
 
 # %%
-np.arctan(np.sqrt(2)) / (2*np.pi)
+np.arctan(np.sqrt(2)) / (2 * np.pi)
 
 # %%
 ix = (b2 <= 0) & (b3 >= 0)

@@ -58,13 +58,13 @@ plt.rc("figure", dpi=200)
 SMALL_SIZE = 8
 MEDIUM_SIZE = 10
 BIGGER_SIZE = 12
-plt.rc('font', size=SMALL_SIZE)
-plt.rc('axes', titlesize=MEDIUM_SIZE)
-plt.rc('axes', labelsize=SMALL_SIZE)
-plt.rc('xtick', labelsize=SMALL_SIZE)
-plt.rc('ytick', labelsize=SMALL_SIZE)
-plt.rc('legend', fontsize=SMALL_SIZE)
-plt.rc('figure', titlesize=BIGGER_SIZE)
+plt.rc("font", size=SMALL_SIZE)
+plt.rc("axes", titlesize=MEDIUM_SIZE)
+plt.rc("axes", labelsize=SMALL_SIZE)
+plt.rc("xtick", labelsize=SMALL_SIZE)
+plt.rc("ytick", labelsize=SMALL_SIZE)
+plt.rc("legend", fontsize=SMALL_SIZE)
+plt.rc("figure", titlesize=BIGGER_SIZE)
 
 # %% [markdown] tags=[]
 # ## Paths / config
@@ -106,7 +106,7 @@ nc = 128
 chanmap_mat = dsroot / ".." / "chanMap.mat"
 h = loadmat(chanmap_mat)
 cm0i = h["chanMap0ind"].squeeze().astype(int)
-geom = np.c_[h['xcoords'].squeeze(), h['ycoords'].squeeze()]
+geom = np.c_[h["xcoords"].squeeze(), h["ycoords"].squeeze()]
 geom.shape
 
 # %%
@@ -137,15 +137,15 @@ rec.set_probe(probe, in_place=True)
 rec
 
 # %%
-rec_show = si.bandpass_filter(rec, freq_min=300., freq_max=6000., dtype='float32')
-rec_show = si.common_reference(rec_show, reference='global', operator='median')
+rec_show = si.bandpass_filter(rec, freq_min=300.0, freq_max=6000.0, dtype="float32")
+rec_show = si.common_reference(rec_show, reference="global", operator="median")
 
 # %%
 plt.figure(figsize=(3, 2))
 noise_levels = si.get_noise_levels(rec_show)
-plt.hist(noise_levels, bins=32);
+plt.hist(noise_levels, bins=32)
 dead_level = 6.4e-6
-plt.axvline(dead_level, color="k");
+plt.axvline(dead_level, color="k")
 plt.savefig(dsout / "probe_and_raw_data" / "noise_levels.png")
 
 # %% tags=[]
@@ -207,14 +207,15 @@ rec = rec.channel_slice([str(c) for c in alive_chans[depthsort]])
 
 # %%
 # rec = si.phase_shift(rec)
-rec = si.bandpass_filter(rec, dtype='float32')
+rec = si.bandpass_filter(rec, dtype="float32")
 rec = rec.frame_slice(t_start * fs, t_end * fs if t_end else None)
-rec = si.common_reference(rec, reference='global', operator='median')
+rec = si.common_reference(rec, reference="global", operator="median")
 rec = si.zscore(rec)
 rec_fly = rec
 
 # %%
-if (dsout / "sippx").exists(): shutil.rmtree(dsout / "sippx")
+if (dsout / "sippx").exists():
+    shutil.rmtree(dsout / "sippx")
 rec = rec.save(folder=dsout / "sippx", n_jobs=8, chunk_size=fs)
 
 # %%
@@ -327,7 +328,7 @@ with h5py.File(next((dsout / "sub").glob("sub*h5")), "r+" if overwrite else "r")
     maxchans = spike_index[:, 1]
     t = spike_index[:, 0] / fs
     z = z_abs
-    
+
     # dispmap -= dispmap.mean()
     if "z_reg" in h5 and not overwrite:
         z_reg = h5["z_reg"][:]
@@ -336,7 +337,7 @@ with h5py.File(next((dsout / "sub").glob("sub*h5")), "r+" if overwrite else "r")
         if overwrite and "z_reg" in h5:
             del h5["z_reg"]
             del h5["p"]
-        
+
         # z_reg, dispmap = ibme.register_nonrigid(
         z_reg, p = ibme.register_rigid(
             maxptps,
@@ -360,7 +361,15 @@ with h5py.File(next((dsout / "sub").glob("sub*h5")), "r+" if overwrite else "r")
 fig, ax = plt.subplots(figsize=(8, 6))
 for zz in np.unique(geom[:, 1]):
     ax.axhline(zz, lw=1, color="k", alpha=0.2)
-ax.scatter(t, geom[maxchans, 1], c=np.clip(maxptp, 0, 15), s=50, alpha=1, linewidths=0, marker=".")
+ax.scatter(
+    t,
+    geom[maxchans, 1],
+    c=np.clip(maxptp, 0, 15),
+    s=50,
+    alpha=1,
+    linewidths=0,
+    marker=".",
+)
 plt.colorbar(
     plt.cm.ScalarMappable(plt.Normalize(0, 15), plt.cm.viridis),
     label="denoised peak-to-peak amp.",
@@ -398,7 +407,9 @@ fig.savefig(dsout / "scatterplots" / "initial_detection_t_v_y.png")
 plt.close(fig)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t, z_reg, c=np.clip(maxptp, 0, 15), s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t, z_reg, c=np.clip(maxptp, 0, 15), s=5, alpha=0.5, marker=".", linewidths=0
+)
 plt.colorbar(
     plt.cm.ScalarMappable(plt.Normalize(0, 15), plt.cm.viridis),
     label="denoised peak-to-peak amp.",
@@ -406,7 +417,7 @@ plt.colorbar(
     pad=0.025,
     ax=plt.gca(),
 )
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -416,8 +427,17 @@ plt.close(fig)
 
 fig, (aa, ab) = plt.subplots(ncols=2, figsize=(6, 6), gridspec_kw=dict(wspace=0.05))
 ordd = np.argsort(maxptp)
-aa.scatter(x[ordd], z_abs[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0)
-ab.scatter(np.log(5+maxptp[ordd]), z_abs[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0)
+aa.scatter(
+    x[ordd], z_abs[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0
+)
+ab.scatter(
+    np.log(5 + maxptp[ordd]),
+    z_abs[ordd],
+    c=np.clip(maxptp[ordd], 0, 15),
+    s=1,
+    alpha=0.25,
+    linewidths=0,
+)
 plt.colorbar(
     plt.cm.ScalarMappable(plt.Normalize(0, 15), plt.cm.viridis),
     label="denoised peak-to-peak amp.",
@@ -435,8 +455,17 @@ plt.close(fig)
 
 fig, (aa, ab) = plt.subplots(ncols=2, figsize=(6, 6), gridspec_kw=dict(wspace=0.05))
 ordd = np.argsort(maxptp)
-aa.scatter(x[ordd], z_reg[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0)
-ab.scatter(np.log(5+maxptp[ordd]), z_reg[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0)
+aa.scatter(
+    x[ordd], z_reg[ordd], c=np.clip(maxptp[ordd], 0, 15), s=1, alpha=0.25, linewidths=0
+)
+ab.scatter(
+    np.log(5 + maxptp[ordd]),
+    z_reg[ordd],
+    c=np.clip(maxptp[ordd], 0, 15),
+    s=1,
+    alpha=0.25,
+    linewidths=0,
+)
 plt.colorbar(
     plt.cm.ScalarMappable(plt.Normalize(0, 15), plt.cm.viridis),
     label="denoised peak-to-peak amp.",
@@ -465,23 +494,49 @@ ab.set_ylabel("est. displacement")
 ab.set_xlabel("time (s)")
 fig.suptitle(f"{humanX}, start time {t_start}", y=0.95, fontsize=10)
 
-fig.savefig(dsout / "drift" / f"{humanX}_initial_detection_disp_tstart{t_start}.png", dpi=300)
-np.savetxt(dsout / "drift" / f"{humanX}_initial_detection_disp_tstart{t_start}.csv", p, delimiter=",")
+fig.savefig(
+    dsout / "drift" / f"{humanX}_initial_detection_disp_tstart{t_start}.png", dpi=300
+)
+np.savetxt(
+    dsout / "drift" / f"{humanX}_initial_detection_disp_tstart{t_start}.csv",
+    p,
+    delimiter=",",
+)
 plt.close(fig)
 
 fig, (aa, ab) = plt.subplots(ncols=2, figsize=(8, 3))
 counts, edges, _ = aa.hist(p, bins=128, color="k")
-p_mode = edges[counts.argmax():counts.argmax()+2].mean()
+p_mode = edges[counts.argmax() : counts.argmax() + 2].mean()
 lo = p_mode - pitch / 2
 hi = p_mode + pitch / 2
 p_good = (lo < p) & (hi > p)
 aa.set_xlabel("est. displacement")
 aa.set_ylabel("frequency")
-aa.axvline(edges[counts.argmax():counts.argmax()+2].mean(), color=plt.cm.Greens(0.4), label="mode est.", lw=2, ls="--")
+aa.axvline(
+    edges[counts.argmax() : counts.argmax() + 2].mean(),
+    color=plt.cm.Greens(0.4),
+    label="mode est.",
+    lw=2,
+    ls="--",
+)
 aa.legend()
 ab.plot(t_start + np.arange(len(p)), p, c="gray", lw=1)
-ab.scatter(t_start + np.arange(len(p))[~p_good], p[~p_good], c="k", s=1, label=f"disp too far {(~p_good).sum()}s", zorder=12)
-ab.scatter(t_start + np.arange(len(p))[p_good], p[p_good], color=plt.cm.Greens(0.4), s=1, label=f"disp within pitch/2 of mode {(p_good).sum()}s", zorder=12)
+ab.scatter(
+    t_start + np.arange(len(p))[~p_good],
+    p[~p_good],
+    c="k",
+    s=1,
+    label=f"disp too far {(~p_good).sum()}s",
+    zorder=12,
+)
+ab.scatter(
+    t_start + np.arange(len(p))[p_good],
+    p[p_good],
+    color=plt.cm.Greens(0.4),
+    s=1,
+    label=f"disp within pitch/2 of mode {(p_good).sum()}s",
+    zorder=12,
+)
 ab.set_ylabel("est. displacement")
 ab.set_xlabel("time (s)")
 ab.legend()
@@ -529,9 +584,7 @@ spike_train, templates, order = newms.new_merge_split(
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     split_kwargs=dict(
-        split_steps=(
-            before_deconv_merge_split.herding_split,
-        ),
+        split_steps=(before_deconv_merge_split.herding_split,),
         recursive_steps=(True,),
         split_step_kwargs=(
             dict(
@@ -542,11 +595,11 @@ spike_train, templates, order = newms.new_merge_split(
                 ),
             ),
         ),
-    )
+    ),
 )
 
 # %%
-(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
+(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1] >= 0).mean()
 
 # %% tags=[]
 for k in ("split", "merge"):
@@ -619,19 +672,48 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "initclust_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged & ~good_times], z_reg[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
-plt.scatter(t[order][triaged & good_times], z_reg[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged & ~good_times],
+    z_reg[order][triaged & ~good_times],
+    color="k",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="outside stable",
+)
+plt.scatter(
+    t[order][triaged & good_times],
+    z_reg[order][triaged & good_times],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -642,12 +724,39 @@ kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged & ~good_times], z[order][triaged & ~good_times], color="k", s=5, alpha=0.5, marker=".", linewidths=0, label="outside stable")
-plt.scatter(t[order][triaged & good_times], z[order][triaged & good_times], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged & ~good_times],
+    z[order][triaged & ~good_times],
+    color="k",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="outside stable",
+)
+plt.scatter(
+    t[order][triaged & good_times],
+    z[order][triaged & good_times],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -658,14 +767,16 @@ fig.savefig(dsout / "scatterplots" / "initclust_scatter_sorted_t_v_y.png")
 # ## Deconv 1
 
 # %%
-spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
-    np.load(dsout / "clust" / "merge_st.npy"),
-    geom.shape[0],
-    dsout / "sippx" / "traces_cached_seg0.raw",
-    trough_offset=trough_offset,
-    spike_length_samples=spike_length_samples,
-    max_shift=0,
-    min_n_spikes=5,
+spike_train, order, templates, template_shifts = (
+    spike_train_utils.clean_align_and_get_templates(
+        np.load(dsout / "clust" / "merge_st.npy"),
+        geom.shape[0],
+        dsout / "sippx" / "traces_cached_seg0.raw",
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_shift=0,
+        min_n_spikes=5,
+    )
 )
 
 # %%
@@ -697,23 +808,25 @@ superres = drifty_deconv.superres_deconv(
 )
 
 # %% tags=[]
-extract_deconv1_h5, extract_deconv1_extra = drifty_deconv.extract_superres_shifted_deconv(
-    superres,
-    save_cleaned_waveforms=True,
-    save_cleaned_tpca_projs=True,
-    save_residual=False,
-    sampling_rate=fs,
-    subtraction_h5=sub_h5,
-    nn_denoise=False,
-    geom=geom,
-    n_jobs=1,
-    # save_reassignment_residuals=True,
-    # pairs_method="radius",
-    max_resid_dist=20,
-    do_reassignment_tpca=True,
-    do_reassignment=False,
-    n_sec_train_feats=80,
-    tpca_weighted=tpca_weighted,
+extract_deconv1_h5, extract_deconv1_extra = (
+    drifty_deconv.extract_superres_shifted_deconv(
+        superres,
+        save_cleaned_waveforms=True,
+        save_cleaned_tpca_projs=True,
+        save_residual=False,
+        sampling_rate=fs,
+        subtraction_h5=sub_h5,
+        nn_denoise=False,
+        geom=geom,
+        n_jobs=1,
+        # save_reassignment_residuals=True,
+        # pairs_method="radius",
+        max_resid_dist=20,
+        do_reassignment_tpca=True,
+        do_reassignment=False,
+        n_sec_train_feats=80,
+        tpca_weighted=tpca_weighted,
+    )
 )
 
 # %%
@@ -725,15 +838,14 @@ with h5py.File(extract_deconv1_h5, "r+" if overwrite else "r") as h5:
     if "z_reg" in h5:
         print("already done, skip")
 
-    samples = h5["spike_index"][:, 0] #- h5["start_sample"][()]
+    samples = h5["spike_index"][:, 0]  # - h5["start_sample"][()]
     x, y, z_abs, alpha, _ = h5["localizations"][:].T
     maxptp = maxptps = h5["maxptps"][:]
     spike_index = h5["spike_index"][:]
     maxchans = spike_index[:, 1]
     t = spike_index[:, 0] / fs
     z = z_abs
-    
-    
+
     if "z_reg" in h5 and not overwrite:
         z_reg = h5["z_reg"][:]
         pap = p = h5["p"][:]
@@ -758,9 +870,7 @@ with h5py.File(extract_deconv1_h5, "r+" if overwrite else "r") as h5:
                 batch_size=64,
             )
         else:
-            *_, tt = ibme.fast_raster(
-                maxptp, z_abs - z_abs.min(), t
-            )
+            *_, tt = ibme.fast_raster(maxptp, z_abs - z_abs.min(), t)
             z_reg = ibme.warp_rigid(z_abs, t, tt, p)
         z_reg -= np.median(z_reg - z_abs)
         h5.create_dataset("z_reg", data=z_reg)
@@ -814,18 +924,38 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "deconv1_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z_reg[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z_reg[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -833,11 +963,29 @@ plt.title(f"{humanX}: time vs. registered y.  {kept.sum()} sorted spikes.")
 fig.savefig(dsout / "scatterplots" / "deconv1_scatter_sorted_t_v_regy.png", dpi=300)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -883,9 +1031,7 @@ spike_train, templates, order = newms.new_merge_split(
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     split_kwargs=dict(
-        split_steps=(
-            before_deconv_merge_split.herding_split,
-        ),
+        split_steps=(before_deconv_merge_split.herding_split,),
         recursive_steps=(True,),
         split_step_kwargs=(
             dict(
@@ -896,11 +1042,11 @@ spike_train, templates, order = newms.new_merge_split(
                 ),
             ),
         ),
-    )
+    ),
 )
 
 # %%
-(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
+(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1] >= 0).mean()
 
 # %% tags=[]
 for k in ("split", "merge"):
@@ -973,30 +1119,70 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "deconv1clust_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z_reg[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z_reg[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
 plt.title(f"{humanX}: time vs. registered y.  {kept.sum()} sorted spikes.")
-fig.savefig(dsout / "scatterplots" / "deconv1clust_scatter_sorted_t_v_regy.png", dpi=300)
+fig.savefig(
+    dsout / "scatterplots" / "deconv1clust_scatter_sorted_t_v_regy.png", dpi=300
+)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -1009,14 +1195,16 @@ fig.savefig(dsout / "scatterplots" / "deconv1clust_scatter_sorted_t_v_y.png")
 # ## Deconv 2
 
 # %%
-spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
-    np.load(dsout / "deconv1clust" / "merge_st.npy"),
-    geom.shape[0],
-    dsout / "sippx" / "traces_cached_seg0.raw",
-    trough_offset=trough_offset,
-    spike_length_samples=spike_length_samples,
-    max_shift=0,
-    min_n_spikes=5,
+spike_train, order, templates, template_shifts = (
+    spike_train_utils.clean_align_and_get_templates(
+        np.load(dsout / "deconv1clust" / "merge_st.npy"),
+        geom.shape[0],
+        dsout / "sippx" / "traces_cached_seg0.raw",
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_shift=0,
+        min_n_spikes=5,
+    )
 )
 
 # %%
@@ -1048,23 +1236,25 @@ superres2 = drifty_deconv.superres_deconv(
 )
 
 # %% tags=[]
-extract_deconv2_h5, extract_deconv2_extra = drifty_deconv.extract_superres_shifted_deconv(
-    superres2,
-    save_cleaned_waveforms=True,
-    save_cleaned_tpca_projs=True,
-    save_residual=False,
-    sampling_rate=fs,
-    subtraction_h5=extract_deconv1_h5,
-    nn_denoise=False,
-    geom=geom,
-    n_jobs=1,
-    # save_reassignment_residuals=True,
-    # pairs_method="radius",
-    max_resid_dist=20,
-    do_reassignment_tpca=True,
-    do_reassignment=False,
-    n_sec_train_feats=80,
-    tpca_weighted=tpca_weighted,
+extract_deconv2_h5, extract_deconv2_extra = (
+    drifty_deconv.extract_superres_shifted_deconv(
+        superres2,
+        save_cleaned_waveforms=True,
+        save_cleaned_tpca_projs=True,
+        save_residual=False,
+        sampling_rate=fs,
+        subtraction_h5=extract_deconv1_h5,
+        nn_denoise=False,
+        geom=geom,
+        n_jobs=1,
+        # save_reassignment_residuals=True,
+        # pairs_method="radius",
+        max_resid_dist=20,
+        do_reassignment_tpca=True,
+        do_reassignment=False,
+        n_sec_train_feats=80,
+        tpca_weighted=tpca_weighted,
+    )
 )
 
 # %%
@@ -1076,15 +1266,14 @@ with h5py.File(extract_deconv2_h5, "r+" if overwrite else "r") as h5:
     if "z_reg" in h5:
         print("already done, skip")
 
-    samples = h5["spike_index"][:, 0] #- h5["start_sample"][()]
+    samples = h5["spike_index"][:, 0]  # - h5["start_sample"][()]
     x, y, z_abs, alpha, _ = h5["localizations"][:].T
     maxptp = maxptps = h5["maxptps"][:]
     spike_index = h5["spike_index"][:]
     maxchans = spike_index[:, 1]
     t = spike_index[:, 0] / fs
     z = z_abs
-    
-    
+
     if "z_reg" in h5 and not overwrite:
         z_reg = h5["z_reg"][:]
         pap = p = h5["p"][:]
@@ -1109,9 +1298,7 @@ with h5py.File(extract_deconv2_h5, "r+" if overwrite else "r") as h5:
                 batch_size=64,
             )
         else:
-            *_, tt = ibme.fast_raster(
-                maxptp, z_abs - z_abs.min(), t
-            )
+            *_, tt = ibme.fast_raster(maxptp, z_abs - z_abs.min(), t)
             z_reg = ibme.warp_rigid(z_abs, t, tt, p)
         z_reg -= np.median(z_reg - z_abs)
         h5.create_dataset("z_reg", data=z_reg)
@@ -1165,18 +1352,38 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "deconv2_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z_reg[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z_reg[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -1184,11 +1391,29 @@ plt.title(f"{humanX}: time vs. registered y.  {kept.sum()} sorted spikes.")
 fig.savefig(dsout / "scatterplots" / "deconv2_scatter_sorted_t_v_regy.png", dpi=300)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -1234,9 +1459,7 @@ spike_train, templates, order = newms.new_merge_split(
     trough_offset=trough_offset,
     spike_length_samples=spike_length_samples,
     split_kwargs=dict(
-        split_steps=(
-            before_deconv_merge_split.herding_split,
-        ),
+        split_steps=(before_deconv_merge_split.herding_split,),
         recursive_steps=(True,),
         split_step_kwargs=(
             dict(
@@ -1247,11 +1470,11 @@ spike_train, templates, order = newms.new_merge_split(
                 ),
             ),
         ),
-    )
+    ),
 )
 
 # %%
-(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1]>=0).mean()
+(spike_train[:, 1] >= 0).sum(), (spike_train[good_times, 1] >= 0).mean()
 
 # %% tags=[]
 for k in ("split", "merge"):
@@ -1324,30 +1547,70 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "deconv2clust_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z_reg[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z_reg[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
 plt.title(f"{humanX}: time vs. registered y.  {kept.sum()} sorted spikes.")
-fig.savefig(dsout / "scatterplots" / "deconv2clust_scatter_sorted_t_v_regy.png", dpi=300)
+fig.savefig(
+    dsout / "scatterplots" / "deconv2clust_scatter_sorted_t_v_regy.png", dpi=300
+)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -1358,14 +1621,16 @@ fig.savefig(dsout / "scatterplots" / "deconv2clust_scatter_sorted_t_v_y.png")
 # ## Deconv 3
 
 # %%
-spike_train, order, templates, template_shifts = spike_train_utils.clean_align_and_get_templates(
-    np.load(dsout / "deconv2clust" / "merge_st.npy"),
-    geom.shape[0],
-    dsout / "sippx" / "traces_cached_seg0.raw",
-    trough_offset=trough_offset,
-    spike_length_samples=spike_length_samples,
-    max_shift=0,
-    min_n_spikes=5,
+spike_train, order, templates, template_shifts = (
+    spike_train_utils.clean_align_and_get_templates(
+        np.load(dsout / "deconv2clust" / "merge_st.npy"),
+        geom.shape[0],
+        dsout / "sippx" / "traces_cached_seg0.raw",
+        trough_offset=trough_offset,
+        spike_length_samples=spike_length_samples,
+        max_shift=0,
+        min_n_spikes=5,
+    )
 )
 
 # %%
@@ -1397,23 +1662,25 @@ superres3 = drifty_deconv.superres_deconv(
 )
 
 # %% tags=[]
-extract_deconv3_h5, extract_deconv3_extra = drifty_deconv.extract_superres_shifted_deconv(
-    superres3,
-    save_cleaned_waveforms=True,
-    save_cleaned_tpca_projs=True,
-    save_residual=False,
-    sampling_rate=fs,
-    subtraction_h5=extract_deconv2_h5,
-    nn_denoise=False,
-    geom=geom,
-    n_jobs=1,
-    # save_reassignment_residuals=True,
-    # pairs_method="radius",
-    max_resid_dist=20,
-    do_reassignment_tpca=True,
-    do_reassignment=False,
-    n_sec_train_feats=80,
-    tpca_weighted=tpca_weighted,
+extract_deconv3_h5, extract_deconv3_extra = (
+    drifty_deconv.extract_superres_shifted_deconv(
+        superres3,
+        save_cleaned_waveforms=True,
+        save_cleaned_tpca_projs=True,
+        save_residual=False,
+        sampling_rate=fs,
+        subtraction_h5=extract_deconv2_h5,
+        nn_denoise=False,
+        geom=geom,
+        n_jobs=1,
+        # save_reassignment_residuals=True,
+        # pairs_method="radius",
+        max_resid_dist=20,
+        do_reassignment_tpca=True,
+        do_reassignment=False,
+        n_sec_train_feats=80,
+        tpca_weighted=tpca_weighted,
+    )
 )
 
 # %%
@@ -1425,15 +1692,14 @@ with h5py.File(extract_deconv3_h5, "r+" if overwrite else "r") as h5:
     if "z_reg" in h5:
         print("already done, skip")
 
-    samples = h5["spike_index"][:, 0] #- h5["start_sample"][()]
+    samples = h5["spike_index"][:, 0]  # - h5["start_sample"][()]
     x, y, z_abs, alpha, _ = h5["localizations"][:].T
     maxptp = maxptps = h5["maxptps"][:]
     spike_index = h5["spike_index"][:]
     maxchans = spike_index[:, 1]
     t = spike_index[:, 0] / fs
     z = z_abs
-    
-    
+
     if "z_reg" in h5 and not overwrite:
         z_reg = h5["z_reg"][:]
         pap = p = h5["p"][:]
@@ -1458,9 +1724,7 @@ with h5py.File(extract_deconv3_h5, "r+" if overwrite else "r") as h5:
                 batch_size=64,
             )
         else:
-            *_, tt = ibme.fast_raster(
-                maxptp, z_abs - z_abs.min(), t
-            )
+            *_, tt = ibme.fast_raster(maxptp, z_abs - z_abs.min(), t)
             z_reg = ibme.warp_rigid(z_abs, t, tt, p)
         z_reg -= np.median(z_reg - z_abs)
         h5.create_dataset("z_reg", data=z_reg)
@@ -1514,18 +1778,38 @@ axes[0].set_ylabel("depth (um)")
 axes[1].set_yticks([])
 axes[1].set_xlabel("log peak-to-peak amplitude")
 axes[2].set_yticks([])
-axes[1].set_title(f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units.")
+axes[1].set_title(
+    f"Spatial view (zoom) of clustered and triaged spikes. {nunits} units."
+)
 fig.savefig(dsout / "scatterplots" / "deconv3_scatter_detail.png")
 
 kept = spike_train[:, 1] >= 0
 triaged = spike_train[:, 1] < 0
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z_reg[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z_reg[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z_reg[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z_reg[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")
@@ -1533,11 +1817,29 @@ plt.title(f"{humanX}: time vs. registered y.  {kept.sum()} sorted spikes.")
 fig.savefig(dsout / "scatterplots" / "deconv3_scatter_sorted_t_v_regy.png", dpi=300)
 
 fig = plt.figure(figsize=(8, 6))
-plt.scatter(t[order][triaged], z[order][triaged], color="gray", s=5, alpha=0.5, marker=".", linewidths=0, label="triaged")
-plt.scatter(t[order][kept], z[order][kept], c=spike_train[kept, 1], cmap=cc.m_glasbey, s=5, alpha=0.5, marker=".", linewidths=0)
+plt.scatter(
+    t[order][triaged],
+    z[order][triaged],
+    color="gray",
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+    label="triaged",
+)
+plt.scatter(
+    t[order][kept],
+    z[order][kept],
+    c=spike_train[kept, 1],
+    cmap=cc.m_glasbey,
+    s=5,
+    alpha=0.5,
+    marker=".",
+    linewidths=0,
+)
 plt.legend(markerscale=2.5)
 
-tt = np.arange(0, 100 * (t.max() // 100) , 100)
+tt = np.arange(0, 100 * (t.max() // 100), 100)
 plt.xticks(tt, t_start + tt)
 plt.xlabel("time (s)")
 plt.ylabel("depth (um)")

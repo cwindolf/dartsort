@@ -30,7 +30,15 @@ from sklearn.metrics import adjusted_rand_score
 from IPython.display import HTML
 
 # %%
-from spike_psvae import waveform_utils, localization, point_source_centering, vis_utils, simdata, cluster, featurize
+from spike_psvae import (
+    waveform_utils,
+    localization,
+    point_source_centering,
+    vis_utils,
+    simdata,
+    cluster,
+    featurize,
+)
 
 # %%
 rg = lambda k=0: np.random.default_rng(k)
@@ -146,7 +154,9 @@ pca_temporal_reconstructed = pca_temporal_reconstructed.reshape(n_, t_, 3)
 wfs_reconstructed = np.zeros(wfs_denoised.shape)
 for i in range(wfs_denoised.shape[0]):
     u, s, vh = np.linalg.svd(wfs_denoised[i], False)
-    wfs_reconstructed[i] = np.matmul(pca_temporal_reconstructed[i], s[:3, None] * vh[:3])
+    wfs_reconstructed[i] = np.matmul(
+        pca_temporal_reconstructed[i], s[:3, None] * vh[:3]
+    )
 
 # %%
 ix = rg().choice(denoised_waveforms.shape[0], size=16, replace=False)
@@ -154,36 +164,40 @@ ix = rg().choice(denoised_waveforms.shape[0], size=16, replace=False)
 ptps = denoised_waveforms[ix].ptp(1)
 isos = featurize.isotonic_ptp(ptps)
 cisos = featurize.isotonic_ptp(ptps, central=True)
-vis_utils.vis_ptps(
-    [ptps], 
-    ["ptps"],
-    "k"
-)
+vis_utils.vis_ptps([ptps], ["ptps"], "k")
 plt.show()
-vis_utils.vis_ptps(
-    [ptps, isos, cisos],
-    ["ptps", "up-down", "central up-down"],
-    "krb"
-)
+vis_utils.vis_ptps([ptps, isos, cisos], ["ptps", "up-down", "central up-down"], "krb")
 
 # %%
 feats_yza, rec_yza = featurize.featurize(
-    denoised_waveforms, maxchans, geom_np2, return_recons=True, k=3, #iso_ptp=True
+    denoised_waveforms,
+    maxchans,
+    geom_np2,
+    return_recons=True,
+    k=3,  # iso_ptp=True
 )
 feats_xyza, rec_xyza = featurize.featurize(
-    denoised_waveforms, maxchans, geom_np2, relocate_dims="xyza", return_recons=True, k=3, #iso_ptp=True
+    denoised_waveforms,
+    maxchans,
+    geom_np2,
+    relocate_dims="xyza",
+    return_recons=True,
+    k=3,  # iso_ptp=True
 )
 feats_template_yza, st_z_rel = featurize.featurize(
     loc_shifted_templates, maxchans, geom_np2, return_rel=True, k=3
 )
 feats_template_xyza, _ = featurize.featurize(
-    loc_shifted_templates, maxchans, geom_np2, relocate_dims="xyza", return_rel=True, k=3
+    loc_shifted_templates,
+    maxchans,
+    geom_np2,
+    relocate_dims="xyza",
+    return_rel=True,
+    k=3,
 )
 
 # %%
-vis_utils.labeledmosaic(
-    [loc_templates[:10], loc_templates[10:]]
-)
+vis_utils.labeledmosaic([loc_templates[:10], loc_templates[10:]])
 
 # %%
 idx = rg().choice(len(denoised_waveforms), size=9, replace=False)
@@ -191,7 +205,7 @@ vis_utils.labeledmosaic(
     [
         full_shifted_templates[idx].repeat(2, axis=1),
         full_noised_waveforms[idx].repeat(2, axis=1),
-        full_denoised_waveforms[idx].repeat(2, axis=1)
+        full_denoised_waveforms[idx].repeat(2, axis=1),
     ],
     rowlabels=["shifted templates", "with noise", "denoised"],
     # separate_norm=True, cbar=False
@@ -202,7 +216,8 @@ vis_utils.labeledmosaic(
 vis_utils.labeledmosaic(
     [loc_shifted_templates[idx], denoised_waveforms[idx]],
     rowlabels=["local shifted template", "local denoised"],
-    separate_norm=True, cbar=False
+    separate_norm=True,
+    cbar=False,
 )
 
 
@@ -251,7 +266,7 @@ fig.suptitle("True v. denoised est. localizations by true cluster")
 plt.show()
 
 # %%
-vis_utils.cluster_scatter(locs[:, 0], feats_template_yza[:, 0], cluster_ids,alpha=0.2)
+vis_utils.cluster_scatter(locs[:, 0], feats_template_yza[:, 0], cluster_ids, alpha=0.2)
 
 # %%
 locs[:, 4]
@@ -268,11 +283,17 @@ np.sqrt(np.square(locs[:, 3] - feats_template_xyza[:, 2]).mean())
 # %%
 fig, ((aa, ab), (ac, ad)) = plt.subplots(2, 2, figsize=(6, 6))
 
-vis_utils.cluster_scatter(locs[:, 0], feats_template_xyza[:, 0], cluster_ids, ax=aa, alpha=0.2)
-vis_utils.cluster_scatter(locs[:, 1], feats_template_xyza[:, 1], cluster_ids, ax=ab, alpha=0.2)
+vis_utils.cluster_scatter(
+    locs[:, 0], feats_template_xyza[:, 0], cluster_ids, ax=aa, alpha=0.2
+)
+vis_utils.cluster_scatter(
+    locs[:, 1], feats_template_xyza[:, 1], cluster_ids, ax=ab, alpha=0.2
+)
 # vis_utils.cluster_scatter(locs[:, 3], feats_template_xyza[:, 2], cluster_ids, ax=ac, alpha=0.2)
 vis_utils.cluster_scatter(locs[:, 2], st_z_rel, cluster_ids, ax=ac, alpha=0.2)
-vis_utils.cluster_scatter(locs[:, 4], feats_template_xyza[:, 3], cluster_ids, ax=ad, alpha=0.2)
+vis_utils.cluster_scatter(
+    locs[:, 4], feats_template_xyza[:, 3], cluster_ids, ax=ad, alpha=0.2
+)
 
 for ax in (aa, ab, ac, ad):
     # ax.plot(ax.get_xlim(), ax.get_ylim(), c="w", lw=3)
@@ -280,7 +301,7 @@ for ax in (aa, ab, ac, ad):
     ya, yb = ylim = np.array(ax.get_ylim())
     ax.plot((xa - 100, xb + 100), (xa - 100, xb + 100), c="k", lw=1)
     ax.set_xlim([min(xa, ya), max(xb, yb)])
-    ax.set_ylim([min(xa, ya), max(xb, yb)])    
+    ax.set_ylim([min(xa, ya), max(xb, yb)])
 
 aa.set_title("x")
 ab.set_title("y")
@@ -298,11 +319,34 @@ maxptp = loc_shifted_templates.ptp(1).max(1)
 # %%
 fig, ((aa, ab), (ac, ad)) = plt.subplots(2, 2, figsize=(6, 6))
 
-vis_utils.cluster_scatter(locs[:, 0], feats_template_xyza[:, 0], cluster_ids, c=np.repeat(pserrs, 100), ax=aa, alpha=0.2)
-vis_utils.cluster_scatter(locs[:, 1], feats_template_xyza[:, 1], cluster_ids, c=np.repeat(pserrs, 100), ax=ab, alpha=0.2)
+vis_utils.cluster_scatter(
+    locs[:, 0],
+    feats_template_xyza[:, 0],
+    cluster_ids,
+    c=np.repeat(pserrs, 100),
+    ax=aa,
+    alpha=0.2,
+)
+vis_utils.cluster_scatter(
+    locs[:, 1],
+    feats_template_xyza[:, 1],
+    cluster_ids,
+    c=np.repeat(pserrs, 100),
+    ax=ab,
+    alpha=0.2,
+)
 # vis_utils.cluster_scatter(locs[:, 3], feats_template_xyza[:, 2], cluster_ids, ax=ac, alpha=0.2)
-vis_utils.cluster_scatter(locs[:, 2], st_z_rel, cluster_ids, c=np.repeat(pserrs, 100), ax=ac, alpha=0.2)
-vis_utils.cluster_scatter(locs[:, 4], feats_template_xyza[:, 3], cluster_ids, c=np.repeat(pserrs, 100), ax=ad, alpha=0.2)
+vis_utils.cluster_scatter(
+    locs[:, 2], st_z_rel, cluster_ids, c=np.repeat(pserrs, 100), ax=ac, alpha=0.2
+)
+vis_utils.cluster_scatter(
+    locs[:, 4],
+    feats_template_xyza[:, 3],
+    cluster_ids,
+    c=np.repeat(pserrs, 100),
+    ax=ad,
+    alpha=0.2,
+)
 
 for ax in (aa, ab, ac, ad):
     # ax.plot(ax.get_xlim(), ax.get_ylim(), c="w", lw=3)
@@ -311,8 +355,7 @@ for ax in (aa, ab, ac, ad):
     ax.plot((xa - 100, xb + 100), (xa - 100, xb + 100), c="k", lw=1)
     ax.set_xlim([min(xa, ya), max(xb, yb)])
     ax.set_ylim([min(xa, ya), max(xb, yb)])
-    
-    
+
 
 aa.set_title("x")
 ab.set_title("y")
@@ -339,7 +382,7 @@ for ax in (aa, ab, ac, ad):
     ya, yb = ylim = np.array(ax.get_ylim())
     ax.plot((xa - 100, xb + 100), (xa - 100, xb + 100), c="k", lw=1)
     ax.set_xlim([min(xa, ya), max(xb, yb)])
-    ax.set_ylim([min(xa, ya), max(xb, yb)])    
+    ax.set_ylim([min(xa, ya), max(xb, yb)])
 
 aa.set_title("x")
 ab.set_title("y")
@@ -401,7 +444,9 @@ fig.suptitle("Spike featurization (xyza reloc.) by true cluster", y=0.95)
 plt.show()
 
 # %%
-fig, ((aa, ab, ac), (ad, ae, af)) = plt.subplots(2, 3, figsize=(6, 6), sharey=True, sharex="col")
+fig, ((aa, ab, ac), (ad, ae, af)) = plt.subplots(
+    2, 3, figsize=(6, 6), sharey=True, sharex="col"
+)
 
 vis_utils.cluster_scatter(feats_xyza[:, 0], feats_xyza[:, 2], cluster_ids, ax=aa)
 vis_utils.cluster_scatter(feats_xyza[:, 1], feats_xyza[:, 2], cluster_ids, ax=ab)
@@ -441,15 +486,40 @@ scales_xyza = cluster.dim_scales_lsq(full_denoised_waveforms, feats_xyza)
 
 # %%
 bins = np.arange(300)
-plt.hist(cluster.pairdists(full_shifted_templates, square=False), bins=bins, label="Shifted templates", histtype="step");
-plt.hist(cluster.pairdists(full_noised_waveforms, square=False), bins=bins, label="Noised", histtype="step");
-plt.hist(cluster.pairdists(full_denoised_waveforms, square=False), bins=bins, label="Denoised", histtype="step");
-plt.hist(cluster.pdist(feats_yza * scales_yza), bins=bins, label="scaled yza Features", histtype="step");
-plt.hist(cluster.pdist(feats_xyza * scales_xyza), bins=bins, label="scaled xyza Features", histtype="step");
+plt.hist(
+    cluster.pairdists(full_shifted_templates, square=False),
+    bins=bins,
+    label="Shifted templates",
+    histtype="step",
+)
+plt.hist(
+    cluster.pairdists(full_noised_waveforms, square=False),
+    bins=bins,
+    label="Noised",
+    histtype="step",
+)
+plt.hist(
+    cluster.pairdists(full_denoised_waveforms, square=False),
+    bins=bins,
+    label="Denoised",
+    histtype="step",
+)
+plt.hist(
+    cluster.pdist(feats_yza * scales_yza),
+    bins=bins,
+    label="scaled yza Features",
+    histtype="step",
+)
+plt.hist(
+    cluster.pdist(feats_xyza * scales_xyza),
+    bins=bins,
+    label="scaled xyza Features",
+    histtype="step",
+)
 plt.xlabel("distance between pairs")
 plt.ylabel("frequency")
 # plt.title("nelder mead")
-plt.legend();
+plt.legend()
 
 # %%
 fig, axes = plt.subplots(3, 2, sharex=True, sharey=True, figsize=(4, 5))
@@ -494,7 +564,9 @@ im = axes[1, 0].imshow(cluster.squareform(np.log(cluster.pdist(feats_yza))))
 fig.colorbar(im, ax=axes[1, 0], shrink=0.6)
 axes[1, 0].set_title("yza features")
 
-im = axes[1, 1].imshow(cluster.squareform(np.log(cluster.pdist(feats_yza * scales_yza))))
+im = axes[1, 1].imshow(
+    cluster.squareform(np.log(cluster.pdist(feats_yza * scales_yza)))
+)
 fig.colorbar(im, ax=axes[1, 1], shrink=0.6)
 axes[1, 1].set_title("scaled yza features")
 
@@ -502,7 +574,9 @@ im = axes[2, 0].imshow(cluster.squareform(np.log(cluster.pdist(feats_xyza))))
 fig.colorbar(im, ax=axes[2, 0], shrink=0.6)
 axes[2, 0].set_title("xyza features")
 
-im = axes[2, 1].imshow(cluster.squareform(np.log(cluster.pdist(feats_xyza * scales_xyza))))
+im = axes[2, 1].imshow(
+    cluster.squareform(np.log(cluster.pdist(feats_xyza * scales_xyza)))
+)
 fig.colorbar(im, ax=axes[2, 1], shrink=0.6)
 axes[2, 1].set_title("scaled xyza features")
 

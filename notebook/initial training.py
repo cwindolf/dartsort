@@ -51,7 +51,7 @@ hidden_dim = 512
 
 # %%
 # load up data
-y_keys = ["alpha", "x", "y", "z_rel"] # , "spread"]
+y_keys = ["alpha", "x", "y", "z_rel"]  # , "spread"]
 dataset = SpikeHDF5Dataset(input_h5, "denoised_waveforms", y_keys)
 
 # %%
@@ -125,35 +125,34 @@ for e in range(n_epochs):
         if not batch_idx % 1000:
             print(e, batch_idx, loss.item(), flush=True)
 
-
             # -- Losses
             writer.add_scalar("Loss/loss", loss.cpu(), global_step)
             for k, v in loss_dict.items():
                 writer.add_scalar(f"Loss/{k}", v.cpu(), global_step)
-                
+
             # -- Images
             x_ = x.cpu()
             recon_x_ = recon_x.cpu()
             im = torch.hstack((x_, recon_x_, x_ - recon_x_))
             im = im - im.min()
-            im *= 255. / im.max()
+            im *= 255.0 / im.max()
             writer.add_images(
                 "x,recon_x,residual",
                 im.to(torch.uint8).view(*im.shape, 1),
                 global_step,
                 dataformats="NHWC",
             )
-            
+
             # -- Stats
             y_hat_ = y_hat.cpu()
             y_ = y.cpu()
             y_mses = (y_hat_ - y_).pow(2).mean(axis=0)
             for y_key, y_mse in zip(y_keys, y_mses):
                 writer.add_scalar(f"Stat/{y_key}_mse", y_mse, global_step)
-            
+
             if np.isnan(loss.item()):
                 break
-        
+
         global_step += 1
     print("epoch", e, "took", (time.time() - tic) / 60, "min")
 

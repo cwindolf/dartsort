@@ -36,6 +36,8 @@ refractory = 11
 
 # %%
 rg = np.random.default_rng(0)
+
+
 # refractory spike train generator
 def getst(tmin, tmax, size, ref=refractory):
     # rejection sampling is too slow
@@ -46,22 +48,22 @@ def getst(tmin, tmax, size, ref=refractory):
     #     st.sort()
     #     if np.diff(st).min() >= ref:
     #         return st
-    
+
     # stars and bars solution
     # we want size stars spaced out by at least `refractory` bars,
     # out of tmax - tmin total stars+bars
     total_refractory_bars = (size - 1) * refractory
     n_other_bars = tmax - tmin - size - total_refractory_bars
-    
+
     # randomly distribute the stars among the non-refractory bars
     stars_and_other_bars = np.zeros(size + n_other_bars, dtype=bool)
     stars_and_other_bars[:size] = True
     rg.shuffle(stars_and_other_bars)
-    
+
     # find their positions and space them out
     spike_times = np.flatnonzero(stars_and_other_bars)
     spike_times += refractory * np.arange(size)
-    
+
     return spike_times + tmin
 
 
@@ -79,19 +81,23 @@ st = st[stsort]
 st.shape
 
 # %%
-np.diff(st[:,0]).mean()
+np.diff(st[:, 0]).mean()
 
 # %%
-np.diff(sta[:,0]).min(), np.diff(stb[:,0]).min(), np.diff(stc[:,0]).min()
+np.diff(sta[:, 0]).min(), np.diff(stb[:, 0]).min(), np.diff(stc[:, 0]).min()
 
 # %%
-np.diff(sta[:,0]).mean(), np.diff(stb[:,0]).mean(), np.diff(stc[:,0]).mean()
+np.diff(sta[:, 0]).mean(), np.diff(stb[:, 0]).mean(), np.diff(stc[:, 0]).mean()
 
 # %%
 from scipy.optimize import linear_sum_assignment
 from scipy import sparse
-from scipy.sparse.csgraph import maximum_bipartite_matching, min_weight_full_bipartite_matching
+from scipy.sparse.csgraph import (
+    maximum_bipartite_matching,
+    min_weight_full_bipartite_matching,
+)
 from scipy.spatial.distance import cdist
+
 
 def timesagree_dense(times1, times2, max_dt=21):
     # C = cdist(times1[:, None], times2[:, None], metric="minkowski", p=1)
@@ -101,25 +107,31 @@ def timesagree_dense(times1, times2, max_dt=21):
     # valid_2 = valid.any(axis=1)
     # C[~valid] = 1000 + C.max()
     # print(valid_1.sum(), valid_2.sum())
-    
+
     ii, jj = linear_sum_assignment(C)
     costs = C[ii, jj]
     valid = costs <= max_dt
-    
+
     # tp: matched spikes
     tp = valid.sum()
     # fn: true spikes not found
     fn = len(times1) - tp
     # fp: new spikes not matched
     fp = len(times2) - tp
-    
+
     accuracy = tp / (tp + fn + fp)
     recall = tp / (tp + fn)
     precision = tp / (tp + fp)
     fdr = fp / (tp + fp)
     miss_rate = fn / len(times1)
-    
-    return dict(accuracy=accuracy, recall=recall, precision=precision, fdr=fdr, miss_rate=miss_rate)
+
+    return dict(
+        accuracy=accuracy,
+        recall=recall,
+        precision=precision,
+        fdr=fdr,
+        miss_rate=miss_rate,
+    )
 
 
 def timesagree_dense_sparsified(times1, times2, max_dt=21):
@@ -129,7 +141,7 @@ def timesagree_dense_sparsified(times1, times2, max_dt=21):
     # valid_2 = valid.any(axis=1)
     # C[~valid] = 1000 + C.max()
     # print(valid_1.sum(), valid_2.sum())
-    
+
     searchrad = 10 * max_dt
     for i, t1 in enumerate(times1):
         for j, t2 in enumerate(times2):
@@ -141,27 +153,34 @@ def timesagree_dense_sparsified(times1, times2, max_dt=21):
     ii, jj = linear_sum_assignment(C)
     costs = C[ii, jj]
     valid = costs <= max_dt
-    
+
     # tp: matched spikes
     tp = valid.sum()
     # fn: true spikes not found
     fn = len(times1) - tp
     # fp: new spikes not matched
     fp = len(times2) - tp
-    
+
     accuracy = tp / (tp + fn + fp)
     recall = tp / (tp + fn)
     precision = tp / (tp + fp)
     fdr = fp / (tp + fp)
     miss_rate = fn / len(times1)
-    
-    return dict(accuracy=accuracy, recall=recall, precision=precision, fdr=fdr, miss_rate=miss_rate)
+
+    return dict(
+        accuracy=accuracy,
+        recall=recall,
+        precision=precision,
+        fdr=fdr,
+        miss_rate=miss_rate,
+    )
+
 
 def timesagree_sparse(times1, times2, max_dt=21):
     searchrad = 5 * max_dt
     if len(times1) > len(times2):
         times1, times2 = times2, times1
-    
+
     dtdt = sparse.dok_matrix((len(times1), len(times2)))
     C = sparse.dok_matrix((len(times1), len(times2)))
     min_j = 0
@@ -171,12 +190,12 @@ def timesagree_sparse(times1, times2, max_dt=21):
             t2 = times2[j]
             dtdt[i, j] = abs(t1 - t2)
             if abs(t1 - t2) <= searchrad:
-                C[i, j] = -(1+abs(t1 - t2))
+                C[i, j] = -(1 + abs(t1 - t2))
     dtdt = dtdt.tocsr()
     perm = maximum_bipartite_matching(-C.tocsr())
     # ii, jj = min_weight_full_bipartite_matching(C.tocsr())
     # cost = (C[perm].diagonal() <= max_dt).sum()
-    
+
     # tp: matched spikes
     tp = ((dtdt[perm[perm >= 0]].diagonal()) <= max_dt).sum()
     # tp = (dtdt[ii, jj] <= max_dt).sum()
@@ -184,14 +203,21 @@ def timesagree_sparse(times1, times2, max_dt=21):
     fn = len(times1) - tp
     # fp: new spikes not matched
     fp = len(times2) - tp
-    
+
     accuracy = tp / (tp + fn + fp)
     recall = tp / (tp + fn)
     precision = tp / (tp + fp)
     fdr = fp / (tp + fp)
     miss_rate = fn / len(times1)
-    
-    return dict(accuracy=accuracy, recall=recall, precision=precision, fdr=fdr, miss_rate=miss_rate)
+
+    return dict(
+        accuracy=accuracy,
+        recall=recall,
+        precision=precision,
+        fdr=fdr,
+        miss_rate=miss_rate,
+    )
+
 
 def timesagree_sparse_fast(times1, times2, max_dt=21):
     # if np.array_equal(times1, times2):
@@ -199,7 +225,7 @@ def timesagree_sparse_fast(times1, times2, max_dt=21):
     searchrad = 50 * max_dt
     if len(times1) > len(times2):
         times1, times2 = times2, times1
-    
+
     dtdt = sparse.dok_matrix((len(times1), len(times2)))
     C = sparse.dok_matrix((len(times1), len(times2)))
     min_j = 0
@@ -213,12 +239,12 @@ def timesagree_sparse_fast(times1, times2, max_dt=21):
             t2 = times2[j]
             dtdt[i, j] = abs(t1 - t2)
             if abs(t1 - t2) <= searchrad:
-                C[i, j] = -(1+abs(t1 - t2))
+                C[i, j] = -(1 + abs(t1 - t2))
     dtdt = dtdt.tocsr()
     perm = maximum_bipartite_matching(-C.tocsr())
     # ii, jj = min_weight_full_bipartite_matching(C.tocsr())
     # cost = (C[perm].diagonal() <= max_dt).sum()
-    
+
     # tp: matched spikes
     tp = ((dtdt[perm[perm >= 0]].diagonal()) <= max_dt).sum()
     # tp = (dtdt[ii, jj] <= max_dt).sum()
@@ -226,20 +252,30 @@ def timesagree_sparse_fast(times1, times2, max_dt=21):
     fn = len(times1) - tp
     # fp: new spikes not matched
     fp = len(times2) - tp
-    
+
     accuracy = tp / (tp + fn + fp)
     recall = tp / (tp + fn)
     precision = tp / (tp + fp)
     fdr = fp / (tp + fp)
     miss_rate = fn / len(times1)
-    
-    return dict(accuracy=accuracy, recall=recall, precision=precision, fdr=fdr, miss_rate=miss_rate)
-  
+
+    return dict(
+        accuracy=accuracy,
+        recall=recall,
+        precision=precision,
+        fdr=fdr,
+        miss_rate=miss_rate,
+    )
+
+
 def metrics_matrix(st1, st2, max_dt=21, fn=timesagree_sparse):
     k1 = st1[:, 1].max() + 1
     k2 = st2[:, 1].max() + 1
-    metrics = {k: np.zeros((k1, k2)) for k in ("accuracy", "recall", "precision", "fdr", "miss_rate")}
-    
+    metrics = {
+        k: np.zeros((k1, k2))
+        for k in ("accuracy", "recall", "precision", "fdr", "miss_rate")
+    }
+
     for u1 in range(k1):
         times1 = st1[st1[:, 1] == u1, 0]
         if not len(times1):
@@ -248,7 +284,7 @@ def metrics_matrix(st1, st2, max_dt=21, fn=timesagree_sparse):
             times2 = st2[st2[:, 1] == u2, 0]
             if not len(times2):
                 continue
-            
+
             ag12 = fn(times1, times2, max_dt=max_dt)
             ag21 = fn(times2, times1, max_dt=max_dt)
             ag = ag12 if ag12["accuracy"] > ag21["accuracy"] else ag21
@@ -256,6 +292,7 @@ def metrics_matrix(st1, st2, max_dt=21, fn=timesagree_sparse):
                 metrics[k][u1, u2] = ag[k]
 
     return metrics
+
 
 def hungarian_metrics(metrics):
     best_match_i, best_match_j = linear_sum_assignment(-metrics["accuracy"])
@@ -272,10 +309,10 @@ import time
 # %%
 for dt in (0, 1, 5, 11, 21, 31, 100):
     print(f"----- {dt=}")
-    
+
     # spikeinterface matching
     sorting_gt = si.NumpySorting.from_times_labels(*st.T, sampling_frequency=1000)
-    
+
     toc = time.time()
     cmp = si.compare_sorter_to_ground_truth(
         sorting_gt,
@@ -289,42 +326,41 @@ for dt in (0, 1, 5, 11, 21, 31, 100):
     )
     siperf = cmp.get_performance()
     sitic = time.time() - toc
-    
+
     # this matching
     toc = time.time()
     mets_sparse = metrics_matrix(st, st, max_dt=dt, fn=timesagree_sparse_fast)
     perf_sparse = hungarian_metrics(mets_sparse)
     sftic = time.time() - toc
     sftic = time.time() - toc
-    
+
     toc = time.time()
     mets_dense = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense)
     perf_dense = hungarian_metrics(mets_dense)
     stic = time.time() - toc
-    
-    
-#     toc = time.time()
-#     mets_slow = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense_sparsified)
-#     perf_slow = hungarian_metrics(mets_slow)
-#     stic = time.time() - toc
-    
+
+    #     toc = time.time()
+    #     mets_slow = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense_sparsified)
+    #     perf_slow = hungarian_metrics(mets_slow)
+    #     stic = time.time() - toc
+
     toc = time.time()
     mets_dense = metrics_matrix(st, st, max_dt=dt, fn=timesagree_dense)
     perf_dense = hungarian_metrics(mets_dense)
     dtic = time.time() - toc
-    
+
     # plot both
     fig, ((aa, ab), (ac, ad)) = plt.subplots(nrows=2, ncols=2, figsize=(6, 6))
     sns.heatmap(cmp.agreement_scores, annot=True, cmap=plt.cm.Greens, ax=aa)
     sns.heatmap(mets_sparse["accuracy"], annot=True, cmap=plt.cm.Reds, ax=ab)
     # sns.heatmap(mets_slow["accuracy"], annot=True, cmap=plt.cm.Purples, ax=ac)
     sns.heatmap(mets_dense["accuracy"], annot=True, cmap=plt.cm.Blues, ax=ad)
-    
+
     aa.set_title(f"si -- {sitic:0.2f}s")
     ab.set_title(f"sp fast -- {sftic:0.2f}s")
     # ac.set_title(f"sp slow -- {stic:0.2f}s")
     # ad.set_title(f"exact -- {dtic:0.2f}s")
-    
+
     plt.show()
     plt.close("all")
 

@@ -27,7 +27,17 @@ from pathlib import Path
 from tqdm.auto import trange, tqdm
 
 # %%
-from spike_psvae import denoise, vis_utils, waveform_utils, localization, point_source_centering, linear_ae, ibme, detect, subtract
+from spike_psvae import (
+    denoise,
+    vis_utils,
+    waveform_utils,
+    localization,
+    point_source_centering,
+    linear_ae,
+    ibme,
+    detect,
+    subtract,
+)
 from npx import reg
 
 # %%
@@ -41,9 +51,16 @@ rg = lambda: np.random.default_rng(0)
 dsdir = Path("/mnt/3TB/charlie/subtracted_datasets/CSHL049_dnd/")
 openalyx = Path("/mnt/3TB/charlie/.one/openalyx.internationalbrainlab.org/")
 
-sub_h5_path = dsdir / "subtraction__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_350.h5"
-res_bin_path = dsdir / "residual__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_350.bin"
-raw_bin_path = openalyx / "churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin"
+sub_h5_path = (
+    dsdir / "subtraction__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_350.h5"
+)
+res_bin_path = (
+    dsdir / "residual__spikeglx_ephysData_g0_t0.imec.ap.normalized_t_250_350.bin"
+)
+raw_bin_path = (
+    openalyx
+    / "churchlandlab/Subjects/CSHL049/2020-01-08/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec.ap.normalized.bin"
+)
 
 # %%
 # subh5 = h5py.File("/mnt/3TB/charlie/subtracted_datasets/churchlandlab_CSHL049_p7_t_2000_2010.h5", "r")
@@ -96,7 +113,7 @@ raw = np.memmap(
     mode="r",
 )
 raw = raw.reshape(-1, 384)
-raw = raw[subh5["start_sample"][()]:subh5["end_sample"][()]]
+raw = raw[subh5["start_sample"][()] : subh5["end_sample"][()]]
 
 # %%
 
@@ -197,17 +214,17 @@ which = (42 < (si[:, 0])) & (79 < (600 - si[:, 0]))
 si = si[which]
 
 # %%
-# mct = 
+# mct =
 # mct.argmin(1)
 
 # %%
-wf = torch.as_tensor(np.pad(snip[400:1000], [(0, 0), (0, 1)])[
-    si[:, 0, None, None] + np.arange(-42, 79)[None, :, None],
-    dci[si[:, None, 1]],
-])
-v = dn(
-    wf.permute(0, 2, 1).reshape(-1, 121)
-).detach().numpy()
+wf = torch.as_tensor(
+    np.pad(snip[400:1000], [(0, 0), (0, 1)])[
+        si[:, 0, None, None] + np.arange(-42, 79)[None, :, None],
+        dci[si[:, None, 1]],
+    ]
+)
+v = dn(wf.permute(0, 2, 1).reshape(-1, 121)).detach().numpy()
 v = v.reshape(wf.shape).ptp(1).ptp(1)
 
 # %%
@@ -238,16 +255,14 @@ eci = []
 for c in range(384):
     low = max(0, c - 40 // 2)
     low = min(384 - 40, low)
-    eci.append(
-        np.arange(low, low + 40)
-    )
+    eci.append(np.arange(low, low + 40))
 eci = np.array(eci)
 
 # %%
 eci
 
 # %%
-n_channels=20
+n_channels = 20
 
 # %% tags=[]
 subset = np.empty(shape=eci.shape, dtype=bool)
@@ -276,7 +291,13 @@ c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="n
 # plt.scatter(*si21.T, s=1, c=plt.cm.Reds(0.1), label="voltage detect threshold 1")
 # plt.scatter(*si2.T, s=1, c=plt.cm.Reds(0.5), label="voltage detect threshold 2")
 # plt.scatter(*si.T, s=1, c="b", label="nn detections")
-plt.scatter(*shiftsi[shiftv < -3].T, s=5, c="magenta", label="nn detections, trough aligned, threshold 3", marker="x")
+plt.scatter(
+    *shiftsi[shiftv < -3].T,
+    s=5,
+    c="magenta",
+    label="nn detections, trough aligned, threshold 3",
+    marker="x",
+)
 plt.scatter(*si23.T, s=1, c=plt.cm.Reds(0.9), label="voltage detect threshold 3")
 plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
@@ -288,7 +309,13 @@ c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="n
 # plt.scatter(*si21.T, s=1, c=plt.cm.Reds(0.1), label="voltage detect threshold 1")
 # plt.scatter(*si2.T, s=1, c=plt.cm.Reds(0.5), label="voltage detect threshold 2")
 # plt.scatter(*si.T, s=1, c="b", label="nn detections")
-plt.scatter(*shiftsi[shiftv < -2].T, s=5, c="magenta", label="nn detections, trough aligned, threshold 2", marker="x")
+plt.scatter(
+    *shiftsi[shiftv < -2].T,
+    s=5,
+    c="magenta",
+    label="nn detections, trough aligned, threshold 2",
+    marker="x",
+)
 plt.scatter(*si2.T, s=1, c=plt.cm.Reds(0.9), label="voltage detect threshold 2")
 plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
@@ -304,8 +331,16 @@ sib, _ = detect.nn_detect_and_deduplicate(snip[400:1000].copy(), 4, ddci, 0, d, 
 
 plt.figure(figsize=(8, 8))
 c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="none")
-plt.scatter(*sib.T, s=5, c="magenta", label="deduplicated nn detections, trough aligned, threshold 2", marker="x")
-plt.scatter(*sia.T, s=1, c=plt.cm.Reds(0.9), label="deduplicated voltage detect threshold 2")
+plt.scatter(
+    *sib.T,
+    s=5,
+    c="magenta",
+    label="deduplicated nn detections, trough aligned, threshold 2",
+    marker="x",
+)
+plt.scatter(
+    *sia.T, s=1, c=plt.cm.Reds(0.9), label="deduplicated voltage detect threshold 2"
+)
 plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
 
@@ -319,7 +354,9 @@ dtdn = detect.DenoiserDetect(dn)
 dtdn.to("cuda")
 
 # %%
-import os; os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+import os
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 # %%
 ptp = dtdn.forward_recording(torch.as_tensor(snip[400:1000].copy(), device="cuda"))
@@ -339,13 +376,23 @@ plt.colorbar()
 # %%
 sia, _ = detect.voltage_detect_and_deduplicate(snip[400:1000].copy(), 4, ddci, 0)
 sib, _ = detect.nn_detect_and_deduplicate(snip[400:1000].copy(), 4, ddci, 0, d, dn)
-t, c, _ = detect.denoiser_detect_dedup(snip[400 - 42:1000 + 78].copy(), 3, dtdn, channel_index=ddci)
+t, c, _ = detect.denoiser_detect_dedup(
+    snip[400 - 42 : 1000 + 78].copy(), 3, dtdn, channel_index=ddci
+)
 sic = np.c_[t.cpu().numpy(), c.cpu().numpy()]
 
 plt.figure(figsize=(8, 8))
 c = plt.imshow(snip[400:1000].T, cmap=plt.cm.viridis, aspect=3, interpolation="none")
-plt.scatter(*sib.T, s=5, c="magenta", label="deduplicated nn detections, trough aligned, threshold 2", marker="x")
-plt.scatter(*sia.T, s=1, c=plt.cm.Reds(0.9), label="deduplicated voltage detect threshold 2")
+plt.scatter(
+    *sib.T,
+    s=5,
+    c="magenta",
+    label="deduplicated nn detections, trough aligned, threshold 2",
+    marker="x",
+)
+plt.scatter(
+    *sia.T, s=1, c=plt.cm.Reds(0.9), label="deduplicated voltage detect threshold 2"
+)
 plt.scatter(*sic.T, s=1, c=plt.cm.Blues(0.9), label="denoiser-detect PTP threshold 2")
 plt.colorbar(c)
 plt.legend(loc="upper center", bbox_to_anchor=[0.5, 1.15])
@@ -368,7 +415,7 @@ for ix in show:
     plt.plot(wfs[ix, :82].T.ravel())
     plt.plot(cwf.T.ravel())
     for j in range(39):
-        plt.axvline(82 + 82*j, color = 'black')
+        plt.axvline(82 + 82 * j, color="black")
     plt.show()
 
 # %%
@@ -381,10 +428,12 @@ adbcx
 yyyyy
 zzzzz
 """
+
+
 def subfig(ix):
     t, mc = spike_index[ix]
     print(t, mc)
-    
+
     chans = channel_index[mc]
     goodchans = chans < num_channels
     chans = chans[goodchans]
@@ -392,24 +441,33 @@ def subfig(ix):
     T, C = wf.shape
     dn2 = cwfs[ix][:, goodchans]
     T_, C_ = dn2.shape
-    
-    
+
     raw_ix = raw[t - 42 : t + 79, chans]
     res_ix = residual[t - 42 : t + 79, chans]
     mcr = np.flatnonzero(chans == mc)[0]
     print(raw_ix.shape, res_ix.shape)
     print((res_ix[:, mcr] + wf[:, mcr]).argmin())
-    
+
     vmin = min([v.min() for v in (raw_ix, res_ix, dn2, wf)])
     vmax = max([v.max() for v in (raw_ix, res_ix, dn2, wf)])
-    
-    fig, axes = plt.subplot_mosaic(mosaic, figsize=(6, 5), gridspec_kw=dict(height_ratios=[2, 0.5, 0.5]))
+
+    fig, axes = plt.subplot_mosaic(
+        mosaic, figsize=(6, 5), gridspec_kw=dict(height_ratios=[2, 0.5, 0.5])
+    )
     for k in "dbc":
         axes[k].set_yticks([])
-    axes["a"].imshow(raw_ix[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax))
-    axes["d"].imshow(wf[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax))
-    axes["b"].imshow(res_ix[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax))
-    im = axes["c"].imshow(dn2[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax))
+    axes["a"].imshow(
+        raw_ix[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax)
+    )
+    axes["d"].imshow(
+        wf[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax)
+    )
+    axes["b"].imshow(
+        res_ix[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax)
+    )
+    im = axes["c"].imshow(
+        dn2[20:-20], cmap="RdBu_r", vmin=min(-vmax, vmin), vmax=max(-vmin, vmax)
+    )
     cbar = plt.colorbar(im, ax=[axes[k] for k in "abcd"], shrink=0.5)
     cpos = cbar.ax.get_position()
     cpos.x0 = cpos.x0 - 0.02
@@ -421,40 +479,43 @@ def subfig(ix):
     for k in "abcd":
         axes[k].set_xticks([0, C_])
     axes["a"].axhline(22, lw=1, c="k")
-        
+
     vis_utils.plot_single_ptp_np2(raw_ix.ptp(0), axes["x"], "raw", "k", "")
     vis_utils.plot_single_ptp_np2(res_ix.ptp(0), axes["x"], "residual", "silver", "")
     vis_utils.plot_single_ptp_np2(wf.ptp(0), axes["x"], "subtracted", "g", "")
     vis_utils.plot_single_ptp_np2((wf + res_ix).ptp(0), axes["x"], "cleaned", "b", "")
     vis_utils.plot_single_ptp_np2(dn2.ptp(0), axes["x"], "denoised", "r", "")
     axes["x"].set_ylabel("ptp", labelpad=0)
-    axes["x"].set_xticks([0, C_//2])
+    axes["x"].set_xticks([0, C_ // 2])
     axes["x"].set_box_aspect(1)
     pos = axes["x"].get_position()
     print(pos)
     pos.y0 = axes["c"].get_position().y0 - 0.075
     print(pos)
     axes["x"].set_position(pos)
-    axes["x"].legend(loc="upper center", bbox_to_anchor=(0.5, 1.9), fancybox=False, frameon=False)
-    
+    axes["x"].legend(
+        loc="upper center", bbox_to_anchor=(0.5, 1.9), fancybox=False, frameon=False
+    )
+
     cshow = 6
     axes["y"].plot(raw_ix[:82, :].T.flatten(), "k", lw=0.5)
     axes["y"].plot(wf[:82, :].T.flatten(), "g", lw=0.5)
     axes["y"].plot(res_ix[:82, :].T.flatten(), "silver", lw=0.5)
     axes["y"].set_xlim([0, dn2[:82, :].size])
     for j in range(C):
-        axes["y"].axvline(82 + 82*j, color="k", lw=0.5)
+        axes["y"].axvline(82 + 82 * j, color="k", lw=0.5)
     axes["y"].set_xticks([])
-    
+
     # axes["z"].plot(raw_ix[:82, :].T.flatten(), "k", lw=0.5)
     axes["z"].plot((res_ix + wf)[:82, :].T.flatten(), "b", lw=0.5)
     axes["z"].plot(dn2[:82, :].T.flatten(), "r", lw=0.5)
     # axes["z"].plot(bcwfs[ix, :82, :].T.flatten(), "orange", lw=0.5)
     axes["z"].set_xlim([0, dn2[:82, :].size])
     for j in range(C):
-        axes["z"].axvline(82 + 82*j, color="k", lw=0.5)
+        axes["z"].axvline(82 + 82 * j, color="k", lw=0.5)
     axes["z"].set_xticks([])
     return fig
+
 
 # %% tags=[]
 for ix in show:
@@ -477,16 +538,29 @@ plt.hist(maxptps, bins=100)
 plt.show()
 which = slice(None)
 
-vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=maxptps > 3, suptitle="CSHL049")
+vis_utils.plotlocs(
+    x, y, z_abs, alpha, maxptps, geom, which=maxptps > 3, suptitle="CSHL049"
+)
 
 # %%
-vis_utils.plotlocs(x, y, z_abs, alpha, maxptps, geom, which=z_abs > 2800, suptitle="CSHL049")
+vis_utils.plotlocs(
+    x, y, z_abs, alpha, maxptps, geom, which=z_abs > 2800, suptitle="CSHL049"
+)
 
 # %%
 vis_utils.plotlocs(x, y, z_reg, alpha, maxptps, geom, suptitle="CSHL049")
 
 # %%
-vis_utils.plotlocs(x, y, z_reg, alpha, maxptps, geom, which=z_reg > 2800, suptitle="CSHL049 (NN detect trough threshold 3)")
+vis_utils.plotlocs(
+    x,
+    y,
+    z_reg,
+    alpha,
+    maxptps,
+    geom,
+    which=z_reg > 2800,
+    suptitle="CSHL049 (NN detect trough threshold 3)",
+)
 
 # %%
 subset.sum(axis=1)

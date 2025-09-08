@@ -438,12 +438,12 @@ class SpikeMixtureModel(torch.nn.Module):
                     likelihoods=lls, show_progress=step_progress, fit_ids=missing_ids
                 )
             self.cleanup()
-    
+
             # update from my stack
             ids, means, covs, logdets, alpha = self.stack_units(
                 mean_only=False, with_alpha=True
             )
-    
+
             # try reassigning without noise unit...
             if lls is None:
                 lls = self.log_likelihoods(with_noise_unit=True, show_progress=True)
@@ -455,7 +455,7 @@ class SpikeMixtureModel(torch.nn.Module):
             self.update_proportions(lls)
             lls = lls[:, self.data.split_indices["train"].numpy()]
             assert self.with_noise_unit
-    
+
             assert self.log_proportions is not None
             keep_mask = self.log_proportions[ids].isfinite().cpu()
             (keep_ids,) = keep_mask.nonzero(as_tuple=True)
@@ -464,7 +464,9 @@ class SpikeMixtureModel(torch.nn.Module):
             keep_mask_nonoise = torch.concatenate(
                 (keep_mask, torch.zeros((1,), dtype=torch.bool))
             )
-            lls_keep = csc_sparse_mask_rows(lls, keep_mask_nonoise.numpy(), in_place=True)
+            lls_keep = csc_sparse_mask_rows(
+                lls, keep_mask_nonoise.numpy(), in_place=True
+            )
             del lls  # overwritten
             n_units = len(ids)
             n_spikes = lls_keep.shape[1]
@@ -540,7 +542,7 @@ class SpikeMixtureModel(torch.nn.Module):
             self.tmm.clear_parameters()
             self.tmm.initialize_candidates(labels)
             self.tmm.to(self.data.device)
-            
+
         if initialize_tmm_only:
             return {}
 
@@ -622,11 +624,12 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # reupdate my GaussianUnits
         self.clear_units()
+        count_neighbs = self.data.neighborhoods(neighborhood="core", split="train")[1]
         channels, counts = self.tmm.channel_occupancy(
             tmm_labels,
             min_count=self.channels_count_min,
             rg=self.rg,
-            neighborhoods=self.data.neighborhoods(neighborhood="core", split="train")[1],
+            neighborhoods=count_neighbs,
         )
         for j in range(len(self.tmm.means)):
             basis = None

@@ -236,7 +236,9 @@ def test_mixture(
                 > 0
             ).all()
 
-            search_neighbors = tmm.candidates.search_sets(tmm.divergences, constrain_searches=False)
+            search_neighbors = tmm.candidates.search_sets(
+                tmm.divergences, constrain_searches=False
+            )
             candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
                 tmm.divergences
             )

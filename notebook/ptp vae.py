@@ -25,7 +25,16 @@ import torch
 import time
 
 # %%
-from spike_psvae import denoise, vis_utils, waveform_utils, localization, point_source_centering, linear_ae, ptp_vae, stacks
+from spike_psvae import (
+    denoise,
+    vis_utils,
+    waveform_utils,
+    localization,
+    point_source_centering,
+    linear_ae,
+    ptp_vae,
+    stacks,
+)
 from npx import reg
 
 # %%
@@ -69,7 +78,9 @@ t = locs["t"][:]
 
 
 # %%
-stdwfs, firstchans_std, chans_down = waveform_utils.relativize_waveforms_np1(cwfs[:], cfirstchans, geom, cmaxchans)
+stdwfs, firstchans_std, chans_down = waveform_utils.relativize_waveforms_np1(
+    cwfs[:], cfirstchans, geom, cmaxchans
+)
 
 # %%
 ptps = stdwfs[:].ptp(1)
@@ -97,7 +108,7 @@ cgeom
 
 # %%
 zfc = geom[firstchans_std, 1]
-ozfr = oza + cgeom[0,1] - zfc
+ozfr = oza + cgeom[0, 1] - zfc
 
 # %%
 encoder = stacks.linear_encoder(20, [64, 32, 16], 3, batchnorm=False)
@@ -112,7 +123,7 @@ optimizer = torch.optim.RAdam(ae.parameters(), lr=1e-3)
 device = torch.device("cuda")
 
 # %%
-ae.to(device);
+ae.to(device)
 
 # %%
 pgeom = geom.copy()
@@ -136,7 +147,7 @@ for e in range(n_epochs):
         optimizer.step()
         loss_ = loss.cpu().detach().numpy()
         losses.append(loss_)
-        
+
         if np.isnan(loss_).any():
             print("NaN")
 
@@ -147,38 +158,49 @@ for e in range(n_epochs):
             f"Global steps per sec: {gsps}",
             flush=True,
         )
-        
+
         fig, axes = plt.subplots(5, 5)
         print(x.shape, recon_x.shape, mu.shape)
         vis_utils.plot_ptp(x.cpu().detach().numpy()[:25], axes, "", "k", range(25))
-        vis_utils.plot_ptp(recon_x.cpu().detach().numpy()[:25], axes, "", "silver", range(25))
+        vis_utils.plot_ptp(
+            recon_x.cpu().detach().numpy()[:25], axes, "", "silver", range(25)
+        )
         plt.show()
-        
+
         x, log_y, zz = ae.localize(ptps_)
         x = x.cpu().detach().numpy()
         log_y = log_y.cpu().detach().numpy()
         y = np.exp(log_y)
         zr = zz.cpu().detach().numpy()
-        z_abs = zr - cgeom[0,1] + zfc
+        z_abs = zr - cgeom[0, 1] + zfc
         plt.figure()
         vis_utils.plotlocs(x, y, z_abs, None, maxptp, pgeom)
         plt.show()
-        
-        vis_utils.corr_scatter(np.c_[x, log_y, zr], np.c_[ox, np.log(oy), ozfr], ["AE x", "AE logy", "AE zrel"], ["BFGS x", "BFGS logy", "BFGS zrel"], maxptp, 1, "AE Localizations vs. BFGS", grid=False)
+
+        vis_utils.corr_scatter(
+            np.c_[x, log_y, zr],
+            np.c_[ox, np.log(oy), ozfr],
+            ["AE x", "AE logy", "AE zrel"],
+            ["BFGS x", "BFGS logy", "BFGS zrel"],
+            maxptp,
+            1,
+            "AE Localizations vs. BFGS",
+            grid=False,
+        )
         plt.show()
 
 # %%
-      
+
 x, log_y, zz = ae.localize(ptps_)
 x = x.cpu().detach().numpy()
 log_y = log_y.cpu().detach().numpy()
 y = np.exp(log_y)
 zr = zz.cpu().detach().numpy()
-z_abs = zr - cgeom[0,1] + zfc
+z_abs = zr - cgeom[0, 1] + zfc
 plt.figure()
 vis_utils.plotlocs(x, y, z_abs, None, maxptp, pgeom)
 
 # %%
-vis_utils.plotlocs(ox - geom[:,0].mean(), oy, oza, None, maxptp, pgeom)
+vis_utils.plotlocs(ox - geom[:, 0].mean(), oy, oza, None, maxptp, pgeom)
 
 # %%

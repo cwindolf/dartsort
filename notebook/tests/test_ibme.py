@@ -26,7 +26,7 @@ from spike_psvae import ibme
 # %%
 with h5py.File("/Users/charlie/data/subtraction_KS055_std.ap_t_0_None.h5", "r") as h5:
     z = h5["localizations"][:, 2].T
-    wh = (z < 800)
+    wh = z < 800
     z = z[wh]
     a = h5["maxptps"][:][wh]
     t = h5["spike_index"][:, 0][wh] / 30000
@@ -63,7 +63,17 @@ plt.plot(rme.disp_at_s(tbc) + 500, color="r")
 # %%
 
 # %%
-tme, extra = ibme.register_nonrigid(a, z, t, geom[geom[:, 1] <= 860], disp=100, batch_size=512, win_step_um=300, win_sigma_um=300, window_shape="rect")
+tme, extra = ibme.register_nonrigid(
+    a,
+    z,
+    t,
+    geom[geom[:, 1] <= 860],
+    disp=100,
+    batch_size=512,
+    win_step_um=300,
+    win_sigma_um=300,
+    window_shape="rect",
+)
 
 # %%
 extra["window_centers"]

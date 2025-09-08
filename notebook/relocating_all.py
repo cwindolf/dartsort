@@ -45,34 +45,36 @@ geom = f["geom"][:]
 del f
 
 # %%
-xs, ys, zs, alphas = localization.localize_waveforms_batched(wfs, geom, maxchans=maxchans, batch_size=1024, n_workers=8, jac=True)
+xs, ys, zs, alphas = localization.localize_waveforms_batched(
+    wfs, geom, maxchans=maxchans, batch_size=1024, n_workers=8, jac=True
+)
 
 # %%
 
 # %%
 # zcom
-plt.plot(xs, zs, "k.", ms=1);
+plt.plot(xs, zs, "k.", ms=1)
 
 # %%
 # 0
 
 # %%
 # jac
-plt.plot(xs, zs, "k.", ms=1, label="mine");
-plt.plot(x, z_abs, "b.", ms=1, label="yours");
+plt.plot(xs, zs, "k.", ms=1, label="mine")
+plt.plot(x, z_abs, "b.", ms=1, label="yours")
 
 # %%
 # orig
-plt.plot(xs, zs, "k.", ms=1, label="mine");
-plt.plot(x, z_abs, "b.", ms=1, label="yours");
+plt.plot(xs, zs, "k.", ms=1, label="mine")
+plt.plot(x, z_abs, "b.", ms=1, label="yours")
 
 # %%
 # plt.hist(y, bins=128);
-plt.axvline(15, color="r");
+plt.axvline(15, color="r")
 
 # %%
-plt.hist(alpha, bins=128);
-plt.axvline(175, color="r");
+plt.hist(alpha, bins=128)
+plt.axvline(175, color="r")
 
 # %%
 np.corrcoef(y, alpha)[1, 0]
@@ -101,10 +103,16 @@ bz = torch.tensor(z[:16])
 bmaxchan = torch.LongTensor(maxchans[:16])
 print(bmaxchan)
 balpha = torch.tensor(alpha[:16])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+reloc = point_source_centering.relocate_simple(
+    batch, geom, bmaxchan, bx, by, bz, balpha
+)
 
 # %%
-vis_utils.labeledmosaic([batch, reloc, torch.abs(batch - reloc)], ["original", "relocated", "|resid|"], pad=2)
+vis_utils.labeledmosaic(
+    [batch, reloc, torch.abs(batch - reloc)],
+    ["original", "relocated", "|resid|"],
+    pad=2,
+)
 
 # %%
 plt.plot(bx, ".", ms=5, label="x")
@@ -125,7 +133,9 @@ bz = torch.tensor(z[:])
 bmaxchan = torch.LongTensor(maxchans[:])
 print(bmaxchan)
 balpha = torch.tensor(alpha[:])
-reloc = point_source_centering.relocate_simple(batch, geom, bmaxchan, bx, by, bz, balpha)
+reloc = point_source_centering.relocate_simple(
+    batch, geom, bmaxchan, bx, by, bz, balpha
+)
 
 # %%
 vals = linalg.svdvals(batch.numpy().reshape(10000, -1))

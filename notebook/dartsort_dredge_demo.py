@@ -92,7 +92,7 @@ else:
 plt.imshow(rec.get_traces(0, 0, 1000).T, aspect="auto")
 plt.colorbar(label="amplitude (su)")
 plt.xlabel("time (samples)")
-plt.ylabel("channel");
+plt.ylabel("channel")
 
 # %%
 # run spike detection and localization
@@ -105,12 +105,14 @@ initial_detections, subtraction_h5 = subtract(rec, output_path, n_jobs=2)
 
 # %%
 # load up extra data including spike locations
-initial_detections = DARTsortSorting.from_peeling_hdf5(subtraction_h5, load_simple_features=True)
+initial_detections = DARTsortSorting.from_peeling_hdf5(
+    subtraction_h5, load_simple_features=True
+)
 initial_detections
 
 # %%
 # plot unregistered positions
-dartvis.scatter_spike_features(subtraction_h5);
+dartvis.scatter_spike_features(subtraction_h5)
 
 # %%
 geom = rec.get_channel_locations()
@@ -133,10 +135,10 @@ motion_est, extra_info = register(a, z, t)
 # %%
 # plot the registration result: motion traces over unregistered spike positions
 dartvis.scatter_time_vs_depth(subtraction_h5)
-mu.plot_me_traces(motion_est, plt.gca(), color="r");
+mu.plot_me_traces(motion_est, plt.gca(), color="r")
 
 # %%
 # plot the registered spike positions
-dartvis.scatter_time_vs_depth(subtraction_h5, registered=True, motion_est=motion_est);
+dartvis.scatter_time_vs_depth(subtraction_h5, registered=True, motion_est=motion_est)
 
 # %%
