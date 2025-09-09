@@ -2655,7 +2655,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 ecl=-np.inf,
                 ecelbo=-np.inf,
             ),
-            "overlap": None,
+            "overlap": 0.0,
             "hyp_units": None,
             "eval_labels": None,
             "hyp_liks_nolp": None,
