@@ -126,8 +126,9 @@ def detect_and_deduplicate(
             stride=1,
             padding=dedup_temporal_radius,
         )
+        self_ix = torch.arange(indices.shape[-1], device=indices.device)
         remove = torch.logical_and(
-            max_energies == energies, indices != torch.arange(indices.shape[-1])
+            max_energies == energies, indices != self_ix
         )
         energies[remove] = 0.0
     elif dedup_temporal_radius:
