@@ -12,6 +12,7 @@ def detect_and_deduplicate(
     dedup_channel_index=None,
     spatial_dedup_batch_size=512,
     exclude_edges=True,
+    remove_exact_duplicates=True,
     return_energies=False,
     detection_mask=None,
     trough_priority=None,
@@ -86,6 +87,7 @@ def detect_and_deduplicate(
         stride=1,
         padding=relative_peak_radius,
     )
+
     # spatial peak criterion
     if relative_peak_channel_index is not None:
         # we are in 1CT right now
@@ -95,10 +97,7 @@ def detect_and_deduplicate(
             torch.amax(
                 max_energies[relative_peak_channel_index, batch_start:batch_end],
                 dim=1,
-                out=max_energies[
-                    :nchans,
-                    batch_start:batch_end,
-                ],
+                out=max_energies[:nchans, batch_start:batch_end],
             )
         energies.masked_fill_(max_energies[:nchans] > energies[0], 0.0)
     # unpool will set non-maxima to 0
@@ -119,7 +118,19 @@ def detect_and_deduplicate(
     # -- temporal deduplication
     if detection_mask is not None:
         energies.mul_(detection_mask.T.to(energies))
-    if dedup_temporal_radius:
+    if dedup_temporal_radius and remove_exact_duplicates:
+        del indices
+        max_energies, indices = F.max_pool1d_with_indices(
+            energies,
+            kernel_size=2 * dedup_temporal_radius + 1,
+            stride=1,
+            padding=dedup_temporal_radius,
+        )
+        remove = torch.logical_and(
+            max_energies == energies, indices != torch.arange(indices.shape[-1])
+        )
+        energies[remove] = 0.0
+    elif dedup_temporal_radius:
         max_energies = F.max_pool1d(
             energies,
             kernel_size=2 * dedup_temporal_radius + 1,

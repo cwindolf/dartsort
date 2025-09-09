@@ -351,7 +351,7 @@ def check_recording(
     random_chunks = get_random_data_chunks(
         rec,
         num_chunks_per_segment=num_chunks_per_segment,
-        chunk_size=int(rec.sampling_frequency),
+        chunk_size=min(rec.get_num_samples(), int(rec.sampling_frequency)),
         concatenated=False,
     )
     dedup_channel_index = None
@@ -359,7 +359,6 @@ def check_recording(
         dedup_channel_index = make_channel_index(
             rec.get_channel_locations(), dedup_spatial_radius
         )
-    failed = False
 
     # run detection and compute spike detection rate and data range
     spike_rates = []
@@ -370,11 +369,13 @@ def check_recording(
             peak_sign="both",
             dedup_channel_index=torch.tensor(dedup_channel_index),
         )
-        spike_rates.append(times.shape[0])
+        chunk_len_s = rec.sampling_frequency / chunk.shape[0]
+        spike_rates.append(times.shape[0] / chunk_len_s)
 
     avg_detections_per_second = np.mean(spike_rates)
     max_abs = np.max(random_chunks)
 
+    failed = False
     if avg_detections_per_second > expected_spikes_per_sec:
         warnings.warn(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is "

@@ -47,6 +47,7 @@ class SubtractionPeeler(BasePeeler):
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         temporal_dedup_radius_samples=7,
+        remove_exact_duplicates=True,
         positive_temporal_dedup_radius_samples=41,
         trough_priority=2.0,
         n_seconds_fit=40,
@@ -91,6 +92,7 @@ class SubtractionPeeler(BasePeeler):
         self.detection_threshold = detection_threshold
         self.residnorm_decrease_threshold = residnorm_decrease_threshold
         self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
+        self.remove_exact_duplicates = remove_exact_duplicates
         self.positive_temporal_dedup_radius_samples = (
             positive_temporal_dedup_radius_samples
         )
@@ -269,6 +271,7 @@ class SubtractionPeeler(BasePeeler):
             relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             temporal_dedup_radius_samples=subtraction_cfg.temporal_dedup_radius_samples,
+            remove_exact_duplicates=subtraction_cfg.remove_exact_duplicates,
             positive_temporal_dedup_radius_samples=subtraction_cfg.positive_temporal_dedup_radius_samples,
             n_seconds_fit=subtraction_cfg.n_seconds_fit,
             max_waveforms_fit=subtraction_cfg.max_waveforms_fit,
@@ -329,6 +332,7 @@ class SubtractionPeeler(BasePeeler):
             relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
             dedup_temporal_radius=self.temporal_dedup_radius_samples,
+            remove_exact_duplicates=self.remove_exact_duplicates,
             pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
             trough_priority=self.trough_priority,
@@ -596,6 +600,7 @@ def subtract_chunk(
     residnorm_decrease_threshold=3.162,  # sqrt(10)
     relative_peak_radius=5,
     dedup_temporal_radius=7,
+    remove_exact_duplicates=True,
     pos_dedup_temporal_radius=None,
     singlechan_templates=None,
     singlechan_threshold=None,
@@ -623,6 +628,7 @@ def subtract_chunk(
             right_margin=right_margin,
             relative_peak_radius=relative_peak_radius,
             dedup_temporal_radius=dedup_temporal_radius,
+            remove_exact_duplicates=remove_exact_duplicates,
             cumulant_order=cumulant_order,
             max_spikes_per_chunk=None,
             quiet=False,
@@ -695,6 +701,7 @@ def subtract_chunk(
                 peak_sign=peak_sign,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,
+                remove_exact_duplicates=remove_exact_duplicates,
                 detection_mask=detection_mask[:, :-1] if it else None,
                 trough_priority=trough_priority,
                 cumulant_order=cumulant_order,

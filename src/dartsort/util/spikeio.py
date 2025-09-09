@@ -16,7 +16,7 @@ def read_full_waveforms(
     channel_subset=None,
     trough_offset_samples=42,
     spike_length_samples=121,
-    return_scaled=False,
+    return_in_uV=False,
 ):
     assert times_samples.ndim == 1
     assert times_samples.size > 0
@@ -28,7 +28,7 @@ def read_full_waveforms(
     n_spikes = times_samples.size
     read_times = times_samples - trough_offset_samples
 
-    if not return_scaled and recording.binary_compatible_with(
+    if not return_in_uV and recording.binary_compatible_with(
         file_offset=0, time_axis=0, file_paths_length=1
     ):
         # fast path. this is like 2x as fast as the read_traces for loop
@@ -61,7 +61,7 @@ def read_full_waveforms(
             0,
             start_frame=t,
             end_frame=t + spike_length_samples,
-            return_scaled=return_scaled,
+            return_in_uV=return_in_uV,
         )
     if channel_subset is not None:
         waveforms = waveforms[:, :, channel_subset]

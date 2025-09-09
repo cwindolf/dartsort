@@ -169,6 +169,7 @@ class SubtractionConfig:
     relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius: float | None = 100.0
     temporal_dedup_radius_samples: int = 11
+    remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
     residnorm_decrease_threshold: float = 0.15 * 10**2
@@ -313,6 +314,8 @@ class ThresholdingConfig:
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     dedup_temporal_radius_samples: int = 7
+    remove_exact_duplicates: bool = True
+
     thinning: float = 0.0
     time_jitter: int = 0
     spatial_jitter_radius: float = 0.0

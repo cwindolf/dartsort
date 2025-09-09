@@ -4,7 +4,6 @@ import threading
 from dataclasses import replace
 from typing import Literal, Optional, Any
 import warnings
-import traceback
 import time
 
 import numba
@@ -914,12 +913,14 @@ class SpikeMixtureModel(torch.nn.Module):
         for j in unit_ids:
             unit = self[j]
             if recompute_mask is None or recompute_mask[j]:
-                covered_neighbs, neighbs, ns_unit = (
-                    spike_neighborhoods.subset_neighborhoods(
-                        unit.channels,
-                        add_to_overlaps=None if topk_sparse else core_overlaps,
-                        batch_size=self.likelihood_batch_size,
-                    )
+                (
+                    covered_neighbs,
+                    neighbs,
+                    ns_unit,
+                ) = spike_neighborhoods.subset_neighborhoods(
+                    unit.channels,
+                    add_to_overlaps=None if topk_sparse else core_overlaps,
+                    batch_size=self.likelihood_batch_size,
                 )
                 if not topk_sparse:
                     unit.annotations["covered_neighbs"] = covered_neighbs
@@ -2017,7 +2018,7 @@ class SpikeMixtureModel(torch.nn.Module):
         unit_ids=None,
         max_distance=1e6,
         threshold=None,
-        criterion="elbo",
+        criterion=None,
         sym_function=np.minimum,
         max_group_size=8,
         min_overlap=None,
@@ -2040,6 +2041,8 @@ class SpikeMixtureModel(torch.nn.Module):
             decision_algorithm = self.merge_decision_algorithm
         if min_overlap is None:
             min_overlap = self.min_overlap
+        if criterion is None:
+            criterion = self.criterion
 
         if distances.shape[0] == 1:
             return None, None, None, None, None
@@ -2106,6 +2109,10 @@ class SpikeMixtureModel(torch.nn.Module):
             criterion,
             reevaluate_cur_liks,
         )
+
+        if criterion.startswith("heldout_"):
+            have_val = (self.labels[self.data.split_indices["val"]] >= 0).any()
+            assert have_val, f"Need val labels for criterion {criterion}."
 
         for i, (pa, pb, dist, nab) in its:
             if not np.isfinite(dist) or dist > max_distance:
@@ -2643,6 +2650,20 @@ class SpikeMixtureModel(torch.nn.Module):
         current_unit_ids = torch.asarray(current_unit_ids, dtype=torch.long)
         irrix = torch.tensor(list(irrix))
 
+        fail_result = {
+            "improvements": dict(
+                elbo=-np.inf,
+                loglik=-np.inf,
+                entropy=-np.inf,
+                ecl=-np.inf,
+                ecelbo=-np.inf,
+            ),
+            "overlap": conn,
+            "hyp_units": None,
+            "eval_labels": None,
+            "hyp_liks_nolp": None,
+        }
+
         # -- check cosine connectivity
         conn = None
         if cosines is not None:
@@ -2650,19 +2671,7 @@ class SpikeMixtureModel(torch.nn.Module):
             conn = cos_connectivity(cosines)
             if conn < min_cosine:
                 logger.dartsortverbose(f"vc: Too small {conn=}")
-                return {
-                    "improvements": dict(
-                        elbo=-np.inf,
-                        loglik=-np.inf,
-                        entropy=-np.inf,
-                        ecl=-np.inf,
-                        ecelbo=-np.inf,
-                    ),
-                    "overlap": conn,
-                    "hyp_units": None,
-                    "eval_labels": None,
-                    "hyp_liks_nolp": None,
-                }
+                return fail_result
 
         # -- fit hypothetical units
         # pick spikes to fit (if necessary)
@@ -2736,7 +2745,6 @@ class SpikeMixtureModel(torch.nn.Module):
                 # coeft = self.log_proportions[uid].exp().broadcast_to(ixs.shape)
                 split_indices.append(split_ixs)
             split_indices = torch.concatenate(split_indices)
-            assert len(split_indices), f"No labels on split {eval_split_name}"
             split_indices, order = split_indices.sort()
             eval_cur_labels = torch.concatenate(eval_cur_labels)[order]
             spikes = self.random_spike_data(
@@ -2747,6 +2755,8 @@ class SpikeMixtureModel(torch.nn.Module):
             )
         else:
             eval_cur_labels = self.labels[spikes.indices]
+        if not len(spikes):
+            return fail_result
 
         # -- evaluate eval log likelihoods
         # never ignore current non-irrelevant units
@@ -3124,7 +3134,7 @@ class SpikeMixtureModel(torch.nn.Module):
         labels=None,
         show_progress=False,
         merge_kind=None,
-        merge_criterion=None,
+        criterion=None,
         debug_info=None,
     ):
         """Unit merging logic
@@ -3143,8 +3153,8 @@ class SpikeMixtureModel(torch.nn.Module):
 
         # merge behavior is either a hierarchical merge or this tree-based
         # idea, depending on the value of a parameter
-        if merge_criterion is None:
-            merge_criterion = self.criterion
+        if criterion is None:
+            criterion = self.criterion
         if merge_kind is None:
             merge_kind = self.merge_decision_algorithm
 
@@ -3175,7 +3185,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 current_log_liks=likelihoods,
                 unit_ids=unit_ids,
                 max_distance=self.merge_distance_threshold,
-                criterion=merge_criterion,
+                criterion=criterion,
                 sym_function=self.merge_sym_function,
                 cosines=cosines,
                 show_progress=show_progress,
@@ -4239,14 +4249,3 @@ def _quick_indices(n_active, counts_so_far, reordered_labels, indices, max_sizes
             n_active -= 1
             if n_active == 0:
                 break
-
-
-def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
-    import sys
-
-    log = file if hasattr(file, "write") else sys.stderr
-    traceback.print_stack(file=log)
-    log.write(warnings.formatwarning(message, category, filename, lineno, line))
-
-
-warnings.showwarning = warn_with_traceback

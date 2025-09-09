@@ -9,6 +9,7 @@ from logging import (
     getLevelNamesMapping,
     basicConfig,
 )
+import warnings
 
 
 DARTSORTVERBOSE = DEBUG + 4
@@ -46,6 +47,10 @@ class DARTsortLogger(getLoggerClass()):
 setLoggerClass(DARTsortLogger)
 
 
+logger: DARTsortLogger = getLogger(__name__)
+
+
+# set to environment-defined log level if present
 if "LOG_LEVEL" in os.environ:
     level = os.environ["LOG_LEVEL"]
     try:
@@ -55,5 +60,17 @@ if "LOG_LEVEL" in os.environ:
         basicConfig(level=ilevel)
     else:
         ilevel = getLevelNamesMapping()[level]
-    logger = getLogger(__name__)
     logger.log(ilevel, f"Log level set to {level} ({ilevel}).")
+
+
+# override warnings to show tracebacks when debugging
+if logger.isEnabledFor(DARTSORTDEBUG):
+    def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+        import sys, traceback
+
+        log = file if hasattr(file, "write") else sys.stderr
+        traceback.print_stack(file=log)
+        log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+    logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
+    warnings.showwarning = warn_with_traceback

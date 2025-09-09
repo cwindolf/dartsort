@@ -31,6 +31,7 @@ class ThresholdAndFeaturize(BasePeeler):
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
         dedup_temporal_radius_samples=7,
+        remove_exact_duplicates=True,
         n_seconds_fit=100,
         n_waveforms_fit=20_000,
         max_waveforms_fit=50_000,
@@ -60,6 +61,7 @@ class ThresholdAndFeaturize(BasePeeler):
 
         self.relative_peak_radius_samples = relative_peak_radius_samples
         self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
+        self.remove_exact_duplicates = remove_exact_duplicates
         self.peak_sign = peak_sign
         self.trough_priority = trough_priority
         if spatial_dedup_channel_index is not None:
@@ -152,6 +154,7 @@ class ThresholdAndFeaturize(BasePeeler):
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
             dedup_temporal_radius_samples=thresholding_cfg.dedup_temporal_radius_samples,
+            remove_exact_duplicates=thresholding_cfg.remove_exact_duplicates,
             n_seconds_fit=thresholding_cfg.n_seconds_fit,
             n_waveforms_fit=thresholding_cfg.n_waveforms_fit,
             max_waveforms_fit=thresholding_cfg.max_waveforms_fit,
@@ -195,6 +198,7 @@ class ThresholdAndFeaturize(BasePeeler):
             right_margin=right_margin,
             relative_peak_channel_index=self.relative_peak_channel_index,
             dedup_temporal_radius=self.dedup_temporal_radius_samples,
+            remove_exact_duplicates=self.remove_exact_duplicates,
             thinning=self.thinning,
             time_jitter=self.time_jitter,
             spatial_jitter_channel_index=self.spatial_jitter_channel_index,
@@ -241,6 +245,7 @@ def threshold_chunk(
     right_margin=0,
     relative_peak_radius=5,
     dedup_temporal_radius=7,
+    remove_exact_duplicates=True,
     max_spikes_per_chunk=None,
     thinning=0,
     time_jitter=0,
@@ -259,6 +264,7 @@ def threshold_chunk(
         dedup_channel_index=spatial_dedup_channel_index,
         peak_sign=peak_sign,
         dedup_temporal_radius=dedup_temporal_radius,
+        remove_exact_duplicates=remove_exact_duplicates,
         relative_peak_radius=relative_peak_radius,
         return_energies=True,
         trough_priority=trough_priority,
