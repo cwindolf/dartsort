@@ -2595,10 +2595,7 @@ class SpikeMixtureModel(torch.nn.Module):
         in_bag=False,
         return_hyp_liks_nolp=False,
         return_spikes=False,
-    ) -> dict[
-        Literal["improvements", "overlap", "hyp_units", "eval_labels", "hyp_liks_nolp"],
-        Any,
-    ]:
+    ) -> dict[str, Any]:
         """Validation criteria to choose between current or hypothetical model
 
         This code handles two cases: splitting and merging.
@@ -2658,7 +2655,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 ecl=-np.inf,
                 ecelbo=-np.inf,
             ),
-            "overlap": conn,
+            "overlap": None,
             "hyp_units": None,
             "eval_labels": None,
             "hyp_liks_nolp": None,
@@ -2669,6 +2666,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if cosines is not None:
             assert cosines.shape == (n_cur, n_cur)
             conn = cos_connectivity(cosines)
+            fail_result["overlap"] = conn
             if conn < min_cosine:
                 logger.dartsortverbose(f"vc: Too small {conn=}")
                 return fail_result

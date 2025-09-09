@@ -69,6 +69,7 @@ class SubtractionPeeler(BasePeeler):
         first_denoiser_spatial_jitter=35.0,
         save_iteration=False,
         save_residnorm_decrease=False,
+        max_iter=100,
         dtype=torch.float,
     ):
         super().__init__(
@@ -100,6 +101,7 @@ class SubtractionPeeler(BasePeeler):
         self.growth_tolerance = growth_tolerance
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
+        self.max_iter = max_iter
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -340,6 +342,7 @@ class SubtractionPeeler(BasePeeler):
             cumulant_order=self.cumulant_order,
             save_iteration=self.save_iteration,
             save_residnorm_decrease=self.save_residnorm_decrease,
+            max_iter=self.max_iter,
             **singlechan_kw,
         )
 

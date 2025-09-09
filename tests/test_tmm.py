@@ -73,6 +73,7 @@ def test_topk_candidates(
         return
 
     for j in range(stepwise):
+        res = gmm.tmm.step(hard_label=True)
         rlabels = res['labels'].cpu()
         (kept,) = (rlabels >= 0).nonzero(as_tuple=True)
         cands0kept = gmm.tmm.candidates.candidates[kept, 0]
