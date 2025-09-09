@@ -118,6 +118,7 @@ def detect_and_deduplicate(
     # -- temporal deduplication
     if detection_mask is not None:
         energies.mul_(detection_mask.T.to(energies))
+    remove = None
     if dedup_temporal_radius and remove_exact_duplicates:
         del indices
         max_energies, indices = F.max_pool1d_with_indices(
@@ -130,7 +131,6 @@ def detect_and_deduplicate(
         remove = torch.logical_and(
             max_energies == energies, indices != self_ix
         )
-        energies[remove] = 0.0
     elif dedup_temporal_radius:
         max_energies = F.max_pool1d(
             energies,
@@ -162,6 +162,8 @@ def detect_and_deduplicate(
 
     # if temporal/spatial max made you grow, you were not a peak!
     if dedup_temporal_radius or (dedup_channel_index is not None):
+        if remove_exact_duplicates and remove is not None:
+            energies[remove[0].T] = 0.0
         # max_energies[max_energies > energies] = 0.0
         max_energies.masked_fill_(max_energies > energies, 0.0)
 
