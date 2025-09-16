@@ -570,13 +570,12 @@ def yield_chunks(
             for s in range(0, len(dataset), fallback_chunk_length)
         )
     else:
-        try:
-            assert dataset.chunks[0] <= dataset.shape[0]
-            for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
-                assert c == s
-        except AssertionError:
+        for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
+            if c == s:
+                continue
             raise ValueError(
-                f"Dataset {dataset} can only be chunked along the first axis."
+                f"Dataset {dataset} can only be chunked on the first axis. "
+                f"Found {dataset.chunks=} with {dataset.shape=}."
             )
 
         chunks = dataset.iter_chunks()

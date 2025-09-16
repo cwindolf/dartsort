@@ -23,6 +23,7 @@ from ..util.waveform_util import (
     get_relative_subset,
     make_channel_index,
     relative_channel_subset_index,
+    get_channel_index_rel_inds,
 )
 
 from .peel_base import BasePeeler
@@ -77,7 +78,7 @@ class SubtractionPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=2 * spike_length_samples,
+            chunk_margin_samples=self.next_margin(2 * spike_length_samples),
             n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
@@ -106,6 +107,10 @@ class SubtractionPeeler(BasePeeler):
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
         self.register_buffer("subtract_channel_index", subtract_channel_index)
+        self.register_buffer(
+            "subtract_index_rel_inds",
+            get_channel_index_rel_inds(subtract_channel_index),
+        )
         self.fixed_output_data.append(
             (
                 "subtract_channel_index",
@@ -122,9 +127,14 @@ class SubtractionPeeler(BasePeeler):
             self.register_buffer("extract_subtract_mask", esmask)
         else:
             self.extract_subtract_mask = None
+        self.dedup_batch_size = self.nearest_batch_length()
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index", spatial_dedup_channel_index
+            )
+            self.register_buffer(
+                "spatial_dedup_rel_inds",
+                get_channel_index_rel_inds(spatial_dedup_channel_index),
             )
         else:
             self.spatial_dedup_channel_index = None
@@ -333,6 +343,7 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=self.peak_sign,
             relative_peak_channel_index=self.relative_peak_channel_index,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            dedup_batch_size=self.dedup_batch_size,
             dedup_temporal_radius=self.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.remove_exact_duplicates,
             pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
@@ -343,6 +354,8 @@ class SubtractionPeeler(BasePeeler):
             save_iteration=self.save_iteration,
             save_residnorm_decrease=self.save_residnorm_decrease,
             max_iter=self.max_iter,
+            subtract_rel_inds=self.subtract_index_rel_inds,
+            spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
             **singlechan_kw,
         )
 
@@ -600,11 +613,14 @@ def subtract_chunk(
     peak_sign="both",
     relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
+    subtract_rel_inds=None,
+    spatial_dedup_rel_inds=None,
     residnorm_decrease_threshold=3.162,  # sqrt(10)
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
     pos_dedup_temporal_radius=None,
+    dedup_batch_size=512,
     singlechan_templates=None,
     singlechan_threshold=None,
     singlechan_trough_offset=None,
@@ -625,12 +641,14 @@ def subtract_chunk(
             peak_sign=peak_sign,
             relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
+            spatial_dedup_rel_inds=spatial_dedup_rel_inds,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
             relative_peak_radius=relative_peak_radius,
             dedup_temporal_radius=dedup_temporal_radius,
+            dedup_batch_size=dedup_batch_size,
             remove_exact_duplicates=remove_exact_duplicates,
             cumulant_order=cumulant_order,
             max_spikes_per_chunk=None,
@@ -704,7 +722,9 @@ def subtract_chunk(
                 peak_sign=peak_sign,
                 relative_peak_radius=relative_peak_radius,
                 dedup_temporal_radius=spike_length_samples,
+                spatial_dedup_batch_size=dedup_batch_size,
                 remove_exact_duplicates=remove_exact_duplicates,
+                dedup_index_inds=subtract_rel_inds,
                 detection_mask=detection_mask[:, :-1] if it else None,
                 trough_priority=trough_priority,
                 cumulant_order=cumulant_order,
@@ -746,7 +766,6 @@ def subtract_chunk(
 
         # take extra care to exclude positive peaks appearing near stronger troughs
         if pos_dedup_temporal_radius:
-            pd_mask = torch.ones_like(detection_mask)
             (neg,) = (voltages < 0).nonzero(as_tuple=True)
             time_ix = times_samples[neg].unsqueeze(1) + pos_dedup_temporal_ix
             time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
@@ -754,6 +773,8 @@ def subtract_chunk(
                 chan_ix = spatial_dedup_channel_index[channels[neg]]
             else:
                 chan_ix = channels[neg].unsqueeze(1)
+
+            pd_mask = torch.ones_like(detection_mask)
             pd_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0
             pd_mask = torch.logical_or(pd_mask, residual < 0)
             detection_mask = torch.logical_and(detection_mask, pd_mask)

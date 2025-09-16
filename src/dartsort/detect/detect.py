@@ -9,10 +9,11 @@ def detect_and_deduplicate(
     relative_peak_radius=5,
     relative_peak_channel_index=None,
     dedup_temporal_radius=11,
-    dedup_channel_index=None,
-    spatial_dedup_batch_size=512,
+    dedup_channel_index: torch.Tensor | None = None,
+    spatial_dedup_batch_size=550,
     exclude_edges=True,
-    remove_exact_duplicates=True,
+    remove_exact_duplicates=False,
+    dedup_index_inds=None,
     return_energies=False,
     detection_mask=None,
     trough_priority=None,
@@ -65,6 +66,7 @@ def detect_and_deduplicate(
         )
 
     nsamples, nchans = traces.shape
+    sbs = min(nsamples, spatial_dedup_batch_size)
     all_dedup = isinstance(dedup_channel_index, str) and dedup_channel_index == "all"
     if not all_dedup and dedup_channel_index is not None:
         assert dedup_channel_index.shape[0] == nchans
@@ -91,15 +93,23 @@ def detect_and_deduplicate(
     # spatial peak criterion
     if relative_peak_channel_index is not None:
         # we are in 1CT right now
-        max_energies = F.pad(energies[0], (0, 0, 0, 1))
-        for batch_start in range(0, nsamples, spatial_dedup_batch_size):
-            batch_end = batch_start + spatial_dedup_batch_size
+        batch_buffer = energies.new_zeros((nchans + 1, sbs))
+        batch_max = energies.new_zeros((nchans, sbs))
+        for batch_start in range(0, nsamples, sbs):
+            batch_end = min(nsamples, batch_start + sbs)
+            batch = energies[:, :, batch_start:batch_end]
+            batch_buffer[:nchans, : batch_end - batch_start] = batch
+            batch = batch_buffer[:, : batch_end - batch_start]
             torch.amax(
-                max_energies[relative_peak_channel_index, batch_start:batch_end],
+                batch[relative_peak_channel_index],
                 dim=1,
-                out=max_energies[:nchans, batch_start:batch_end],
+                out=batch_max[:, : batch_end - batch_start],
             )
-        energies.masked_fill_(max_energies[:nchans] > energies[0], 0.0)
+            energies[:, :, batch_start:batch_end].masked_fill_(
+                batch_max[:, : batch_end - batch_start]
+                > energies[:, :, batch_start:batch_end],
+                0.0,
+            )
     # unpool will set non-maxima to 0
     energies = F.max_unpool1d(
         energies,
@@ -128,10 +138,9 @@ def detect_and_deduplicate(
             padding=dedup_temporal_radius,
         )
         self_ix = torch.arange(indices.shape[-1], device=indices.device)
-        remove = torch.logical_and(
-            max_energies == energies, indices != self_ix
-        )
-        energies[remove] = 0.0
+        remove = indices != self_ix
+        energies.masked_fill_(remove, 0.0)
+
     elif dedup_temporal_radius:
         max_energies = F.max_pool1d(
             energies,
@@ -149,25 +158,58 @@ def detect_and_deduplicate(
     # this is max pooling within the channel index's neighborhood's
     if all_dedup:
         max_energies = max_energies.amax(dim=1, keepdim=True)
+    elif dedup_channel_index is not None and remove_exact_duplicates:
+        assert remove is not None
+        assert dedup_index_inds is not None
+        remove = remove[0].T
+
+        # pad channel axis with extra chan of 0s
+        batch_buffer = max_energies.new_zeros((sbs, nchans + 1))
+        inds_buffer = dedup_index_inds.new_empty((sbs, nchans))
+        for batch_start in range(0, nsamples, sbs):
+            batch_end = min(nsamples, batch_start + sbs)
+
+            batch = max_energies[batch_start:batch_end]
+            batch_buffer[: batch_end - batch_start, :nchans] = batch
+            batch = batch_buffer[: batch_end - batch_start]
+
+            binds = inds_buffer[: batch_end - batch_start]
+            torch.max(
+                batch[:, dedup_channel_index],
+                dim=2,
+                out=(max_energies[batch_start:batch_end], binds),
+            )
+            torch.logical_or(
+                remove[batch_start:batch_end],
+                binds != dedup_index_inds,
+                out=remove[batch_start:batch_end],
+            )
     elif dedup_channel_index is not None:
         # pad channel axis with extra chan of 0s
-        max_energies = F.pad(max_energies, (0, 1))
-        for batch_start in range(0, nsamples, spatial_dedup_batch_size):
-            batch_end = batch_start + spatial_dedup_batch_size
+        batch_buffer = max_energies.new_zeros((sbs, nchans + 1))
+        for batch_start in range(0, nsamples, sbs):
+            batch_end = min(nsamples, batch_start + sbs)
+            batch = max_energies[batch_start:batch_end]
+            batch_buffer[: batch_end - batch_start, :nchans] = batch
+            batch = batch_buffer[: batch_end - batch_start]
             torch.amax(
-                max_energies[batch_start:batch_end, dedup_channel_index],
+                batch[:, dedup_channel_index],
                 dim=2,
-                out=max_energies[batch_start:batch_end, :nchans],
+                out=max_energies[batch_start:batch_end],
             )
-        max_energies = max_energies[:, :nchans]
 
     # if temporal/spatial max made you grow, you were not a peak!
+    if remove is not None:
+        energies.masked_fill_(remove, 0.0)
     if dedup_temporal_radius or (dedup_channel_index is not None):
-        max_energies.masked_fill_(max_energies > energies, 0.0)
+        remove = torch.gt(max_energies, energies, out=remove)
+        max_energies.masked_fill_(remove, 0.0)
 
-    # sparsify and return
+    # this matches the behavior of scipy argrelmax
     if exclude_edges:
         max_energies[[0, -1], :] = 0.0
+
+    # sparsify and return
     times, chans = torch.nonzero(max_energies, as_tuple=True)
 
     if return_energies:

@@ -87,6 +87,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.val_split_p = val_split_p
         self.random_seed = random_seed
         self.inference_batch_size = inference_batch_size
+        self.nc = len(self.geom)
 
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
@@ -282,8 +283,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         # make a validation set for early stopping
         if self.val_split_p:
-            istrain = rg.binomial(1, p=self.val_split_p, size=len(waveforms))
-            istrain = istrain.astype(bool)
+            n_train = int(np.ceil(self.val_split_p * len(waveforms)))
+            istrain = np.zeros(len(waveforms), dtype=bool)
+            istrain[rg.choice(len(waveforms), size=n_train, replace=False)] = True
             isval = np.logical_not(istrain)
             val_waveforms = waveforms[isval]
             val_amps = amps[isval]
@@ -330,9 +332,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     chans_batch = chans_batch[0]
 
                     optimizer.zero_grad()
-                    channels_mask = self.model_channel_index[chans_batch] < len(
-                        self.geom
-                    )
+                    channels_mask = self.model_channel_index[chans_batch] < self.nc
                     channels_mask = channels_mask.to(waveform_batch)
                     reconstructed_amps, mu, var = self.forward(
                         waveform_batch, channels_mask, amps_batch, chans_batch
@@ -350,7 +350,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     if self.variational:
                         total_kld += kld.item()
 
-                    n_examples += self.batch_size
+                    n_examples += chans_batch.numel()
                     if n_examples >= self.epoch_size:
                         break
 
@@ -375,7 +375,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         valbatch += 1
                     self.train()
 
-                nbatch = n_examples / self.batch_size
+                nbatch = np.ceil(n_examples / self.batch_size)
                 loss = total_loss / nbatch
                 mse = total_mse / nbatch
                 val_loss = val_loss / valbatch

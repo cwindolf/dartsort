@@ -9,6 +9,7 @@ import h5py
 import numpy as np
 import torch
 from spikeinterface.core.recording_tools import get_chunk_with_margin
+from sympy import divisors
 from tqdm.auto import tqdm
 
 from dartsort.transform import WaveformPipeline
@@ -856,6 +857,17 @@ class BasePeeler(torch.nn.Module):
             with _lock:
                 self._rgs.rg = self.fit_subsampling_random_state.spawn(1)[0]
         return self._rgs.rg
+
+    @staticmethod
+    def next_margin(length, factor=10):
+        return factor * int(np.ceil(length / factor))
+
+    def nearest_batch_length(self, target=512):
+        factors = divisors(self.chunk_length_samples + 2 * self.chunk_margin_samples)
+        factors = np.array(factors)
+        return factors[np.abs(factors - target).argmin()]
+
+
 
 
 # -- helper functions and objects for parallelism

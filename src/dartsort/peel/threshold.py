@@ -8,7 +8,7 @@ from ..detect import detect_and_deduplicate
 from ..transform import WaveformPipeline
 from ..util import spiketorch
 from ..util.data_util import SpikeDataset
-from ..util.waveform_util import make_channel_index
+from ..util.waveform_util import make_channel_index, get_channel_index_rel_inds
 
 from .peel_base import BasePeeler
 
@@ -47,7 +47,7 @@ class ThresholdAndFeaturize(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=spike_length_samples,
+            chunk_margin_samples=self.next_margin(spike_length_samples, factor=5),
             n_seconds_fit=n_seconds_fit,
             n_waveforms_fit=n_waveforms_fit,
             max_waveforms_fit=max_waveforms_fit,
@@ -64,9 +64,14 @@ class ThresholdAndFeaturize(BasePeeler):
         self.remove_exact_duplicates = remove_exact_duplicates
         self.peak_sign = peak_sign
         self.trough_priority = trough_priority
+        self.dedup_batch_size = self.nearest_batch_length()
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index", spatial_dedup_channel_index
+            )
+            self.register_buffer(
+                "spatial_dedup_rel_inds",
+                get_channel_index_rel_inds(spatial_dedup_channel_index),
             )
         else:
             self.spatial_dedup_channel_index = None
@@ -192,6 +197,8 @@ class ThresholdAndFeaturize(BasePeeler):
             detection_threshold=self.detection_threshold,
             peak_sign=self.peak_sign,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
+            dedup_batch_size=self.dedup_batch_size,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
@@ -239,6 +246,8 @@ def threshold_chunk(
     peak_sign="both",
     relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
+    spatial_dedup_rel_inds=None,
+    dedup_batch_size=512,
     trough_offset_samples=42,
     spike_length_samples=121,
     left_margin=0,
@@ -262,6 +271,8 @@ def threshold_chunk(
         detection_threshold,
         relative_peak_channel_index=relative_peak_channel_index,
         dedup_channel_index=spatial_dedup_channel_index,
+        dedup_index_inds=spatial_dedup_rel_inds,
+        spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
         dedup_temporal_radius=dedup_temporal_radius,
         remove_exact_duplicates=remove_exact_duplicates,
