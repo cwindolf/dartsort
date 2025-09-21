@@ -163,21 +163,12 @@ def detect_and_deduplicate(
         assert dedup_index_inds is not None
         remove = remove[0].T
 
-        # pad channel axis with extra chan of 0s
-        batch_buffer = max_energies.new_zeros((sbs, nchans + 1))
-        inds_buffer = dedup_index_inds.new_empty((sbs, nchans))
         for batch_start in range(0, nsamples, sbs):
             batch_end = min(nsamples, batch_start + sbs)
 
-            batch = max_energies[batch_start:batch_end]
-            batch_buffer[: batch_end - batch_start, :nchans] = batch
-            batch = batch_buffer[: batch_end - batch_start]
-
-            binds = inds_buffer[: batch_end - batch_start]
-            torch.max(
-                batch[:, dedup_channel_index],
-                dim=2,
-                out=(max_energies[batch_start:batch_end], binds),
+            batch = F.pad(max_energies[batch_start:batch_end], (0, 1))
+            max_energies[batch_start:batch_end], binds = torch.max(
+                batch[:, dedup_channel_index], dim=2
             )
             torch.logical_or(
                 remove[batch_start:batch_end],

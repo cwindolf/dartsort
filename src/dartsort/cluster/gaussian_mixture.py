@@ -419,6 +419,7 @@ class SpikeMixtureModel(torch.nn.Module):
         lls=None,
         initialize_tmm_only=False,
         parameters_from_gmm=True,
+        neighborhood_adjacency_overlap=0.75,
     ):
         if n_threads is None:
             n_threads = self.n_threads
@@ -490,6 +491,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 metric="cosine" if self.distance_metric == "cosine" else "kl",
                 random_search_max_distance=self.merge_distance_threshold,
                 noise_log_priors=self.noise_log_priors,
+                neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
             )
         self.tmm.set_sizes(n_units)
 

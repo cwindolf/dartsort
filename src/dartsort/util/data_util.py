@@ -649,6 +649,10 @@ def subsample_waveforms(
 
     channels: np.ndarray = h5["channels"][:]
     n_wf = channels.shape[0]
+    if not n_wf:
+        emptyi = torch.tensor([], dtype=torch.long)
+        emptywf = torch.zeros(h5[waveforms_dataset_name].shape)
+        return emptyi, emptywf, None
     weights = fit_reweighting(
         h5=h5,
         log_voltages=log_voltages,

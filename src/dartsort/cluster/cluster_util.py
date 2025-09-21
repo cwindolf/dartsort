@@ -20,12 +20,15 @@ from dredge.motion_util import IdentityMotionEstimate
 logger = getLogger(__name__)
 
 
-def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
+def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps=1e-5):
     """"""
     n = distances.shape[0]
+    assert eps < threshold  # that would be confusing.
     if n <= 1:
         return labels, np.arange(n)
     pdist = distances[np.triu_indices(n, k=1)]
+    # tolearate some numerical zeros.
+    pdist[np.logical_and(pdist > -eps, pdist < 0)] = 0.0
     if pdist.min() > threshold:
         if labels is None:
             return None, np.arange(n)
@@ -39,7 +42,12 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0):
         pdist[np.logical_not(finite)] = inf
 
     Z = linkage(pdist, method=linkage_method)
-    new_ids = fcluster(Z, threshold, criterion="distance")
+    try:
+        new_ids = fcluster(Z, threshold, criterion="distance")
+    except ValueError as e:
+        raise ValueError(
+            f"fcluster failed with {threshold=} and smallest pdist {pdist.min()}."
+        ) from e
     # offset by 1, I think always, but I don't want to be wrong?
     new_ids -= new_ids.min()
 

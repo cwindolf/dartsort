@@ -602,6 +602,8 @@ class BasePeeler(torch.nn.Module):
                     voltages_dataset_name="peeled_voltages_fit",
                     waveforms_dataset_name="peeled_waveforms_fit",
                 )
+                if not len(channels):
+                    raise ValueError(f"Found no spikes when trying to fit featurizers.")
 
                 channels = torch.as_tensor(channels, device=device)
                 waveforms = torch.as_tensor(waveforms, device=device)
