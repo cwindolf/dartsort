@@ -637,8 +637,10 @@ def subsample_waveforms(
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
+    fixed_property_keys=("channels",),
     replace=True,
     h5=None,
+    device="cpu",
 ):
     random_state = np.random.default_rng(random_state)
 
@@ -662,23 +664,30 @@ def subsample_waveforms(
         )
         if not replace:
             choices.sort()
-            channels = channels[choices]
             waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
+            fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
         else:
             uchoices, ichoices = np.unique(choices, return_inverse=True)
-            channels = channels[uchoices][ichoices]
             waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
+            fixed_properties = {
+                k: h5[k][uchoices][ichoices] for k in fixed_property_keys
+            }
     else:
         waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+        fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
 
     if need_open:
         h5.close()
 
-    waveforms = torch.from_numpy(waveforms)
-    channels = torch.from_numpy(channels)
-    weights = torch.from_numpy(weights) if subsample_by_weighting else None
+    device = torch.device(device)
+    waveforms = torch.as_tensor(waveforms, device=device)
+    fixed_properties = {
+        k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
+    }
+    if subsample_by_weighting:
+        fixed_properties["weights"] = torch.as_tensor(weights, device=device)
 
-    return channels, waveforms, weights
+    return waveforms, fixed_properties
 
 
 def fit_reweighting(

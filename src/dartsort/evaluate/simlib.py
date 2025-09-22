@@ -216,14 +216,14 @@ def add_features(h5_path, recording, featurization_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = h5["geom"][:]
         channel_index = h5["channel_index"][:]
-        channels, waveforms, weights = subsample_waveforms(h5=h5)
+        waveforms, fixed_properties = subsample_waveforms(h5=h5)
         gt_pipeline = WaveformPipeline.from_config(
             featurization_cfg,
             WaveformConfig(),
             geom=geom,
             channel_index=channel_index,
         )
-        gt_pipeline.fit(waveforms, channels, recording)
+        gt_pipeline.fit(recording, waveforms, **fixed_properties)
         models_dir = h5_path.parent / f"{h5_path.stem}_models"
         models_dir.mkdir(exist_ok=True)
         torch.save(gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt")
@@ -239,6 +239,6 @@ def add_features(h5_path, recording, featurization_cfg):
         for sli, chunk in yield_chunks(
             h5["collisioncleaned_waveforms"], desc_prefix="Featurize"
         ):
-            _, feats = gt_pipeline(chunk, h5["channels"][sli])
+            _, feats = gt_pipeline(chunk, channels=h5["channels"][sli])
             for k, v in feats.items():
                 f_dsets[k][sli] = v.numpy(force=True)

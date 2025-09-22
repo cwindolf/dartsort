@@ -44,10 +44,10 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
     def device(self):
         return self.denoiser.conv1[0].weight.device
 
-    def forward(self, waveforms, max_channels=None):
+    def forward(self, waveforms, *, channels, **unused):
         odev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, max_channels, self.channel_index.to(odev)
+            waveforms, channels, self.channel_index.to(odev)
         )
 
         n_in_probe = len(waveforms_in_probe)

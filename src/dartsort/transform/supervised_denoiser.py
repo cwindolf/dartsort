@@ -24,19 +24,19 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         self.exy = self.get_mlp(res_type=self.res_type)
         self.to(self.device)
 
-    def forward_unbatched(self, waveforms, max_channels, to_orig_channels=True):
+    def forward_unbatched(self, waveforms, channels, to_orig_channels=True):
         """Called only at inference time."""
-        waveforms, masks = self.to_nn_channels(waveforms, max_channels)
+        waveforms, masks = self.to_nn_channels(waveforms, channels)
         net_input = waveforms, masks.unsqueeze(1)
         pred = self.exy(net_input)
         if to_orig_channels:
-            pred = self.to_orig_channels(pred, max_channels)
+            pred = self.to_orig_channels(pred, channels)
         return pred
 
-    def fit(self, waveforms, gt_waveforms, max_channels):
-        super().fit(waveforms, max_channels, None, None)
+    def fit(self, recording, waveforms, *, gt_waveforms, channels, **unused):
+        super().fit(recording, waveforms, channels=channels)
         train_loader, val_loader = self._waveforms_to_loaders(
-            waveforms, gt_waveforms, max_channels
+            waveforms, gt_waveforms, channels
         )
         with torch.enable_grad():
             res = self.fit_with_loaders(train_loader, val_loader)

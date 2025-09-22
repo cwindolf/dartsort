@@ -45,6 +45,8 @@ class SubtractionPeeler(BasePeeler):
         detection_threshold=4,
         chunk_length_samples=30_000,
         peak_sign="both",
+        realign_to_denoiser=False,
+        denoiser_realignment_shift=5,
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         temporal_dedup_radius_samples=7,
@@ -73,6 +75,11 @@ class SubtractionPeeler(BasePeeler):
         max_iter=100,
         dtype=torch.float,
     ):
+        if realign_to_denoiser:
+            fixed_property_keys = ("channels", "time_shifts")
+        else:
+            fixed_property_keys = ("channels",)
+
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -87,10 +94,13 @@ class SubtractionPeeler(BasePeeler):
             fit_sampling=fit_sampling,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            fixed_property_keys=fixed_property_keys,
             dtype=dtype,
         )
 
         self.peak_sign = peak_sign
+        self.realign_to_denoiser = realign_to_denoiser
+        self.denoiser_realignment_shift = denoiser_realignment_shift
         self.detection_threshold = detection_threshold
         self.residnorm_decrease_threshold = residnorm_decrease_threshold
         self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
@@ -179,6 +189,8 @@ class SubtractionPeeler(BasePeeler):
 
         if self.save_iteration:
             datasets.append(SpikeDataset("iteration", (), "int32"))
+        if self.realign_to_denoiser:
+            datasets.append(SpikeDataset("time_shifts", (), "int32"))
         if self.save_residnorm_decrease:
             datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
 
@@ -280,6 +292,8 @@ class SubtractionPeeler(BasePeeler):
             detection_threshold=subtraction_cfg.detection_threshold,
             chunk_length_samples=subtraction_cfg.chunk_length_samples,
             peak_sign=subtraction_cfg.peak_sign,
+            realign_to_denoiser=subtraction_cfg.realign_to_denoiser,
+            denoiser_realignment_shift=subtraction_cfg.denoiser_realignment_shift,
             relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             temporal_dedup_radius_samples=subtraction_cfg.temporal_dedup_radius_samples,
@@ -356,6 +370,8 @@ class SubtractionPeeler(BasePeeler):
             max_iter=self.max_iter,
             subtract_rel_inds=self.subtract_index_rel_inds,
             spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
+            realign_to_denoiser=self.realign_to_denoiser,
+            denoiser_realignment_shift=self.denoiser_realignment_shift,
             **singlechan_kw,
         )
 
@@ -498,7 +514,7 @@ class SubtractionPeeler(BasePeeler):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms, weights = subsample_waveforms(
+                waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -506,17 +522,12 @@ class SubtractionPeeler(BasePeeler):
                     fit_max_reweighting=self.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",
                     waveforms_dataset_name="subtract_fit_waveforms",
+                    device=device,
                 )
-
-                channels = torch.as_tensor(channels, device=device)
-                waveforms = torch.as_tensor(waveforms, device=device)
                 fit_denoise = WaveformPipeline(fit_feats)
                 fit_denoise = fit_denoise.to(device)
                 fit_denoise.fit(
-                    waveforms,
-                    max_channels=channels,
-                    recording=self.recording,
-                    weights=weights,
+                    recording=self.recording, waveforms=waveforms, **fixed_properties
                 )
                 fit_denoise = fit_denoise.to("cpu")
                 self.subtraction_denoising_pipeline = orig_denoise
@@ -564,7 +575,7 @@ class SubtractionPeeler(BasePeeler):
                 )
 
                 # get fit weights
-                channels, waveforms, weights = subsample_waveforms(
+                waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -573,12 +584,13 @@ class SubtractionPeeler(BasePeeler):
                     voltages_dataset_name="voltages",
                     waveforms_dataset_name="waveforms",
                     subsample_by_weighting=True,
+                    device=device,
                 )
 
                 # fit the thing
                 fit_pipeline = fit_pipeline.to(device)
                 fit_pipeline.fit(
-                    waveforms, channels, recording=self.recording, weights=weights
+                    recording=self.recording, waveforms=waveforms, **fixed_properties
                 )
                 fit_pipeline.to("cpu")
             finally:
@@ -611,6 +623,8 @@ def subtract_chunk(
     right_margin=0,
     detection_threshold=4,
     peak_sign="both",
+    realign_to_denoiser=False,
+    denoiser_realignment_shift=5,
     relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
     subtract_rel_inds=None,
@@ -655,7 +669,7 @@ def subtract_chunk(
             quiet=False,
         )
         waveforms, features = denoising_pipeline(
-            threshold_res["waveforms"], threshold_res["channels"]
+            threshold_res["waveforms"], channels=threshold_res["channels"]
         )
         return ChunkSubtractionResult(
             n_spikes=threshold_res["n_spikes"],
@@ -804,7 +818,7 @@ def subtract_chunk(
 
         if check_resid:
             residuals = torch.nan_to_num(waveforms)
-        waveforms, features = denoising_pipeline(waveforms, channels)
+        waveforms, features = denoising_pipeline(waveforms, channels=channels)
 
         # test residual norm decrease
         if check_resid:
@@ -825,14 +839,6 @@ def subtract_chunk(
             if save_residnorm_decrease:
                 features["residnorm_decreases"] = reduction[keep]
 
-        # store this iter's outputs
-        spike_times.append(times_samples)
-        spike_channels.append(channels)
-        spike_features.append(features)
-        if save_iteration:
-            spike_features[-1]["iteration"] = torch.full_like(times_samples, it)
-        subtracted_waveforms.append(waveforms)
-
         # -- subtract in place
         residual = spiketorch.subtract_spikes_(
             residual,
@@ -845,6 +851,36 @@ def subtract_chunk(
             already_padded=True,
             in_place=True,
         )
+
+        # -- follow the nn's realignment advice, if requested
+        if realign_to_denoiser:
+            assert subtract_rel_inds is not None
+
+            main_channel_rel_inds = subtract_rel_inds[channels]
+            denoised_main_channel_traces = waveforms.take_along_dim(
+                dim=2, indices=main_channel_rel_inds[:, None, None]
+            )
+            nwf = len(waveforms)
+            assert denoised_main_channel_traces.shape == (nwf, spike_length_samples, 1)
+            denoised_main_channel_traces = denoised_main_channel_traces[:, :, 0]
+            if peak_sign == "both":
+                denoised_main_channel_traces = denoised_main_channel_traces.abs()
+            elif peak_sign == "neg":
+                denoised_main_channel_traces = denoised_main_channel_traces.neg()
+            else:
+                assert peak_sign == "pos"
+            denoised_peaks = denoised_main_channel_traces.argmax(dim=1)
+            dt = denoised_peaks - trough_offset_samples
+            dt.masked_fill_(dt.abs() > denoiser_realignment_shift, 0)
+            features["time_shifts"] = dt
+
+        # -- store this iter's outputs
+        spike_times.append(times_samples)
+        spike_channels.append(channels)
+        spike_features.append(features)
+        if save_iteration:
+            spike_features[-1]["iteration"] = torch.full_like(times_samples, it)
+        subtracted_waveforms.append(waveforms)
 
     # check if we got no spikes
     if not spike_times:

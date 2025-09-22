@@ -166,6 +166,8 @@ class SubtractionConfig:
     # subtraction
     detection_threshold: float = 4.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
+    realign_to_denoiser: bool = False
+    denoiser_realignment_shift: int = 5
     relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius: float | None = 100.0
     temporal_dedup_radius_samples: int = 11
@@ -681,6 +683,7 @@ def to_internal_config(cfg):
             detection_threshold=cfg.initial_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             subtract_radius=cfg.subtraction_radius_um,
+            realign_to_denoiser=cfg.realign_to_denoiser,
             singlechan_alignment_padding_ms=cfg.alignment_ms,
             use_singlechan_templates=cfg.use_singlechan_templates,
             residnorm_decrease_threshold=cfg.denoiser_badness_factor

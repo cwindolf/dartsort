@@ -54,6 +54,7 @@ class BasePeeler(torch.nn.Module):
         fit_subsampling_random_state: int | np.random.Generator = 0,
         trough_offset_samples=42,
         spike_length_samples=121,
+        fixed_property_keys=("channels",),
         dtype=torch.float,
     ):
         if recording.get_num_segments() > 1:
@@ -78,6 +79,7 @@ class BasePeeler(torch.nn.Module):
         self.fit_sampling = fit_sampling
         self.fit_max_reweighting = fit_max_reweighting
         self.featurization_pipeline = featurization_pipeline
+        self.fixed_property_keys = fixed_property_keys
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
@@ -118,9 +120,7 @@ class BasePeeler(torch.nn.Module):
             if self.needs_fit():
                 save_folder.mkdir(exist_ok=True)
                 self.fit_models(
-                    save_folder,
-                    overwrite=overwrite,
-                    computation_cfg=computation_cfg,
+                    save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
             self.save_models(save_folder)
         assert not self.needs_precompute()
@@ -371,13 +371,13 @@ class BasePeeler(torch.nn.Module):
     # -- utility methods which users likely won't touch
 
     def featurize_collisioncleaned_waveforms(
-        self, collisioncleaned_waveforms, max_channels
+        self, collisioncleaned_waveforms, **fixed_properties
     ):
         if not self.featurization_pipeline:
             return {}
 
         waveforms, features = self.featurization_pipeline(
-            collisioncleaned_waveforms, max_channels
+            collisioncleaned_waveforms, **fixed_properties
         )
         return features
 
@@ -416,9 +416,9 @@ class BasePeeler(torch.nn.Module):
         )
 
         if peel_result["n_spikes"] > 0 and not skip_features:
+            fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             features = self.featurize_collisioncleaned_waveforms(
-                peel_result["collisioncleaned_waveforms"],
-                peel_result["channels"],
+                peel_result["collisioncleaned_waveforms"], **fixed_properties
             )
         else:
             features = {}
@@ -455,10 +455,10 @@ class BasePeeler(torch.nn.Module):
                 n_resid_snips,
                 self.spike_length_samples,
             )
-            chunk_result["residual_times_seconds"] = (
-                self.recording.sample_index_to_time(
-                    chunk_start_samples + resid_times_samples
-                )
+            chunk_result[
+                "residual_times_seconds"
+            ] = self.recording.sample_index_to_time(
+                chunk_start_samples + resid_times_samples
             )
 
         return chunk_result
@@ -593,7 +593,7 @@ class BasePeeler(torch.nn.Module):
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
-                channels, waveforms, weights = subsample_waveforms(
+                waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
@@ -601,16 +601,15 @@ class BasePeeler(torch.nn.Module):
                     fit_max_reweighting=self.fit_max_reweighting,
                     voltages_dataset_name="peeled_voltages_fit",
                     waveforms_dataset_name="peeled_waveforms_fit",
+                    fixed_property_keys=self.fixed_property_keys,
+                    device=device,
                 )
 
-                channels = torch.as_tensor(channels, device=device)
-                waveforms = torch.as_tensor(waveforms, device=device)
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
-                    waveforms,
-                    max_channels=channels,
                     recording=self.recording,
-                    weights=weights,
+                    waveforms=waveforms,
+                    **fixed_properties,
                 )
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
@@ -866,8 +865,6 @@ class BasePeeler(torch.nn.Module):
         factors = divisors(self.chunk_length_samples + 2 * self.chunk_margin_samples)
         factors = np.array(factors)
         return factors[np.abs(factors - target).argmin()]
-
-
 
 
 # -- helper functions and objects for parallelism

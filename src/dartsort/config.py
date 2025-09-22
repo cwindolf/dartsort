@@ -175,6 +175,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_euclidean_complete_only: bool = False
     initial_cosine_complete_only: bool = False
     gmm_noise_fp_correction: bool = False
+    realign_to_denoiser: bool = False
 
     pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "cosine"

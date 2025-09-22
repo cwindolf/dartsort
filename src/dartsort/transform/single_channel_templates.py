@@ -59,8 +59,8 @@ class SingleChannelTemplates(BaseWaveformModule):
         )
         self.to(self.channel_index.device)
 
-    def fit(self, waveforms, max_channels, recording=None, weights=None):
-        super().fit(waveforms, max_channels, recording, weights)
+    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
+        super().fit(recording, waveforms, channels=channels, weights=weights)
         if weights is not None:
             rg = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -70,9 +70,9 @@ class SingleChannelTemplates(BaseWaveformModule):
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
-            max_channels = max_channels[choices]
+            channels = channels[choices]
         singlechan_waveforms = waveform_util.grab_main_channels_torch(
-            waveforms, max_channels, self.channel_index
+            waveforms, channels, self.channel_index
         )
         assert singlechan_waveforms.ndim == 3
         assert singlechan_waveforms.shape[2] == 1

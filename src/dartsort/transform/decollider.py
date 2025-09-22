@@ -156,20 +156,20 @@ class Decollider(BaseMultichannelDenoiser):
             self.den_net = self.inf_net
         self.to(self.device)
 
-    def fit(self, waveforms, max_channels, recording, weights=None):
-        super().fit(waveforms, max_channels, recording, weights)
+    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
+        super().fit(recording, waveforms, channels=channels, weights=weights)
         train_data, val_data = self._construct_datasets_from_waveforms(
-            waveforms, max_channels, recording, weights
+            waveforms, channels, recording, weights
         )
         with torch.enable_grad():
             res = self._fit(train_data, val_data)
         self._needs_fit = False
         return res
 
-    def forward_unbatched(self, waveforms, max_channels):
+    def forward_unbatched(self, waveforms, channels):
         """Called only at inference time."""
         # TODO: batch all of this.
-        waveforms, masks = self.to_nn_channels(waveforms, max_channels)
+        waveforms, masks = self.to_nn_channels(waveforms, channels)
         net_input = waveforms, masks.unsqueeze(1)
 
         if self.inference_kind == "amortized":
@@ -187,7 +187,7 @@ class Decollider(BaseMultichannelDenoiser):
             for j in range(self.inference_z_samples):
                 m = get_noise(
                     self.recording,
-                    max_channels.numpy(force=True),
+                    channels.numpy(force=True),
                     self.model_channel_index.numpy(force=True),
                     spike_length_samples=self.spike_length_samples,
                     rg=None,
@@ -230,7 +230,7 @@ class Decollider(BaseMultichannelDenoiser):
         else:
             assert False
 
-        pred = self.to_orig_channels(pred, max_channels)
+        pred = self.to_orig_channels(pred, channels)
 
         return pred
 
