@@ -128,11 +128,15 @@ def simulate_sorting(
             )
             for i in range(num_units)
         ]
-        spike_times = np.concatenate(spike_trains)
-        spike_labels = np.repeat(
-            np.arange(num_units),
-            np.array([spike_trains[i].shape[0] for i in range(num_units)]),
-        )
+        if num_units:
+            spike_times = np.concatenate(spike_trains)
+            spike_labels = np.repeat(
+                np.arange(num_units),
+                np.array([spike_trains[i].shape[0] for i in range(num_units)]),
+            )
+        else:
+            spike_times = np.array([], dtype=np.int64)
+            spike_labels = np.array([], dtype=np.int64)
     else:
         global_rate = np.sum(firing_rates)
         spike_times = refractory_poisson_spike_train(
@@ -217,6 +221,8 @@ def add_features(h5_path, recording, featurization_cfg):
         geom = h5["geom"][:]
         channel_index = h5["channel_index"][:]
         waveforms, fixed_properties = subsample_waveforms(h5=h5)
+        if not len(waveforms):
+            return
         gt_pipeline = WaveformPipeline.from_config(
             featurization_cfg,
             WaveformConfig(),

@@ -604,6 +604,8 @@ class BasePeeler(torch.nn.Module):
                     fixed_property_keys=self.fixed_property_keys,
                     device=device,
                 )
+                if not len(channels):
+                    raise ValueError(f"Found no spikes when trying to fit featurizers.")
 
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(

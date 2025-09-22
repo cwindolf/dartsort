@@ -1064,7 +1064,6 @@ def make_all_summaries(
     if n_jobs:
         initargs = (cloudpickle.dumps(initargs),)
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
-    print(f"{n_jobs=}")
     with Executor(
         max_workers=n_jobs,
         mp_context=context,

@@ -561,6 +561,7 @@ class MetricDistribution(ComparisonPlot):
                 palette=list(colors),
                 ax=ax,
                 legend=False,
+                showmeans=True,
             )
             ax.tick_params(axis="x", rotation=90)
             ax.set_ylim([-0.05, 1.05])
@@ -614,7 +615,7 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
 
 box = MetricDistribution(flavor="box", width=2, height=3.5)
 box.kind = "gtmetric"
-gt_overview_plots = (
+full_gt_overview_plots = (
     MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
     MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
     MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
@@ -633,7 +634,7 @@ gt_overview_plots = (
     TrimmedTemplateDistanceMatrix(),
 )
 
-gt_overview_plots_no_temp_dist = (
+default_gt_overview_plots = (
     MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
     MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
     MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
@@ -655,9 +656,9 @@ gt_overview_plots_no_temp_dist = (
 
 def make_gt_overview_summary(
     comparison,
-    plots=gt_overview_plots_no_temp_dist,
+    plots=default_gt_overview_plots,
     max_height=6,
-    figsize=(6, 5),
+    figsize=(10, 10),
     figure=None,
     suptitle=True,
     same_width_flow=True,

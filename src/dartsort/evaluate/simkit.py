@@ -481,10 +481,11 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             -self.trough_offset_samples,
             self.spike_length_samples - self.trough_offset_samples,
         )
-        self.margin = max(
+        self.spike_safe_pad = max(
             self.trough_offset_samples,
             self.spike_length_samples - self.trough_offset_samples,
         )
+        self.margin = 2 * self.spike_safe_pad
         self.extract_channel_index = make_channel_index(
             self.template_simulator.geom, extract_radius
         )
@@ -518,6 +519,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         self.times_samples = sv["sample_index"]
         self.labels = sv["unit_index"]
         self.n_spikes = self.sorting.count_total_num_spikes()
+        assert self.times_samples.shape == self.labels.shape == (self.n_spikes,)
 
         if amplitude_jitter and amp_jitter_family == "gamma":
             alpha = 1.0 / amplitude_jitter**2
@@ -575,11 +577,18 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         noise_with_margin,
         start_frame,
         end_frame,
+        in_chunk_only=True,
         extract=False,
         n_residual_snips=0,
     ):
-        i0 = np.searchsorted(self.times_samples, start_frame)
-        i1 = np.searchsorted(self.times_samples, end_frame)
+        if in_chunk_only:
+            search_start = start_frame
+            search_end = end_frame
+        else:
+            search_start = start_frame - self.spike_safe_pad
+            search_end = end_frame + self.spike_safe_pad
+        i0 = np.searchsorted(self.times_samples, search_start)
+        i1 = np.searchsorted(self.times_samples, search_end)
         t = self.times_samples[i0:i1]
         l = self.labels[i0:i1]
         s = self.scalings[i0:i1]
@@ -659,10 +668,12 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         )
         assert lm == rm == self.margin
         assert traces.shape[1] == self.n_channels
+        assert extract != inject
         spikes = self.get_spikes(
             traces,
             start_frame,
             end_frame,
+            in_chunk_only=not inject,
             extract=extract,
             n_residual_snips=n_residual_snips,
         )

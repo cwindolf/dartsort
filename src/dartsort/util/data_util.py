@@ -649,35 +649,43 @@ def subsample_waveforms(
         hdf5_filename = resolve_path(hdf5_filename, strict=True)
         h5 = h5py.File(hdf5_filename)
 
-    channels: np.ndarray = h5["channels"][:]
-    n_wf = channels.shape[0]
-    weights = fit_reweighting(
-        h5=h5,
-        log_voltages=log_voltages,
-        fit_sampling=fit_sampling,
-        fit_max_reweighting=fit_max_reweighting,
-        voltages_dataset_name=voltages_dataset_name,
-    )
-    if n_wf > n_waveforms_fit and not subsample_by_weighting:
-        choices = random_state.choice(
-            n_wf, p=weights, size=n_waveforms_fit, replace=replace
+    try:
+        channels: np.ndarray = h5["channels"][:]
+        n_wf = channels.shape[0]
+        if not n_wf:
+            emptyi = torch.tensor([], dtype=torch.long)
+            emptywf = torch.zeros(h5[waveforms_dataset_name].shape)
+            return emptywf, dict(channels=emptyi)
+        weights = fit_reweighting(
+            h5=h5,
+            log_voltages=log_voltages,
+            fit_sampling=fit_sampling,
+            fit_max_reweighting=fit_max_reweighting,
+            voltages_dataset_name=voltages_dataset_name,
         )
-        if not replace:
-            choices.sort()
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-            fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
+        if n_wf > n_waveforms_fit and not subsample_by_weighting:
+            choices = random_state.choice(
+                n_wf, p=weights, size=n_waveforms_fit, replace=replace
+            )
+            if not replace:
+                choices.sort()
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
+                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
+            else:
+                uchoices, ichoices = np.unique(choices, return_inverse=True)
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
+                    ichoices
+                ]
+                fixed_properties = {
+                    k: h5[k][uchoices][ichoices] for k in fixed_property_keys
+                }
         else:
-            uchoices, ichoices = np.unique(choices, return_inverse=True)
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
-            fixed_properties = {
-                k: h5[k][uchoices][ichoices] for k in fixed_property_keys
-            }
-    else:
-        waveforms: np.ndarray = h5[waveforms_dataset_name][:]
-        fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
-
-    if need_open:
-        h5.close()
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
+    finally:
+        if need_open:
+            h5.close()
+        del h5
 
     device = torch.device(device)
     waveforms = torch.as_tensor(waveforms, device=device)
