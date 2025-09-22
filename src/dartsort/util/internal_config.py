@@ -182,6 +182,8 @@ class SubtractionConfig:
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
+    convexity_threshold: float | None = None
+    convexity_radius: int = 3
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -317,6 +319,9 @@ class ThresholdingConfig:
     relative_peak_radius_samples: int = 5
     dedup_temporal_radius_samples: int = 7
     remove_exact_duplicates: bool = True
+    cumulant_order: int | None = None
+    convexity_threshold: float | None = None
+    convexity_radius: int = 3
 
     thinning: float = 0.0
     time_jitter: int = 0

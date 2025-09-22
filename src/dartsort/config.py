@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
-from .util.py_util import int_or_none, str_or_none, int_or_float_or_none
+from .util.py_util import float_or_none, int_or_none, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
@@ -187,6 +187,8 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
 
     cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
+    convexity_threshold: float | None = argfield(default=None, arg_type=float_or_none)
+    convexity_radius: Annotated[int, Field(gt=0)] = 3
 
     criterion_threshold: float = 0.0
     criterion: Literal[
