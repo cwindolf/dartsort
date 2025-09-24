@@ -257,6 +257,49 @@ class DARTsortSorting:
             extra_features=extra_features,
         )
 
+    def _stored_datasets(self):
+        if self.parent_h5_path is None:
+            return []
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            return list(h5.keys())
+
+    def _masked_load(self, dset, mask=None, indices=None, batch_transition=1000):
+        assert self.parent_h5_path is not None
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            if indices is not None and len(indices) < batch_transition:
+                return h5[dset][indices]
+            return batched_h5_read(h5[dset], mask=mask, indices=indices)
+
+    def _chunked_map_with_indices(self, dset, fn):
+        """fn should take args slice_, chunk"""
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            g = h5[dset]
+            slices_and_chunks = yield_chunks(g)
+
+            # run once on the first chunk to figure out shapes
+            s, c = next(slices_and_chunks)
+            res = fn(s, c)
+            assert len(res) == len(c)
+            shape_per_spike = res.shape[1:]
+
+            # allocate output and save first chunk result
+            total_shape = (len(g), *shape_per_spike)
+            out = np.empty(total_shape, dtype=res.dtype)
+            out[s] = res
+            del res
+
+            # loop the rest
+            for s, c in slices_and_chunks:
+                out[s] = fn(s, c)
+
+        return out
+
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     """Look for the pipeline in the usual place."""
@@ -570,13 +613,12 @@ def yield_chunks(
             for s in range(0, len(dataset), fallback_chunk_length)
         )
     else:
-        try:
-            assert dataset.chunks[0] <= dataset.shape[0]
-            for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
-                assert c == s
-        except AssertionError:
+        for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
+            if c == s:
+                continue
             raise ValueError(
-                f"Dataset {dataset} can only be chunked along the first axis."
+                f"Dataset {dataset} can only be chunked on the first axis. "
+                f"Found {dataset.chunks=} with {dataset.shape=}."
             )
 
         chunks = dataset.iter_chunks()
@@ -638,8 +680,10 @@ def subsample_waveforms(
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
+    fixed_property_keys=("channels",),
     replace=True,
     h5=None,
+    device="cpu",
 ):
     random_state = np.random.default_rng(random_state)
 
@@ -648,38 +692,53 @@ def subsample_waveforms(
         hdf5_filename = resolve_path(hdf5_filename, strict=True)
         h5 = h5py.File(hdf5_filename)
 
-    channels: np.ndarray = h5["channels"][:]
-    n_wf = channels.shape[0]
-    weights = fit_reweighting(
-        h5=h5,
-        log_voltages=log_voltages,
-        fit_sampling=fit_sampling,
-        fit_max_reweighting=fit_max_reweighting,
-        voltages_dataset_name=voltages_dataset_name,
-    )
-    if n_wf > n_waveforms_fit and not subsample_by_weighting:
-        choices = random_state.choice(
-            n_wf, p=weights, size=n_waveforms_fit, replace=replace
+    try:
+        channels: np.ndarray = h5["channels"][:]
+        n_wf = channels.shape[0]
+        if not n_wf:
+            emptyi = torch.tensor([], dtype=torch.long)
+            emptywf = torch.zeros(h5[waveforms_dataset_name].shape)
+            return emptywf, dict(channels=emptyi)
+        weights = fit_reweighting(
+            h5=h5,
+            log_voltages=log_voltages,
+            fit_sampling=fit_sampling,
+            fit_max_reweighting=fit_max_reweighting,
+            voltages_dataset_name=voltages_dataset_name,
         )
-        if not replace:
-            choices.sort()
-            channels = channels[choices]
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
+        if n_wf > n_waveforms_fit and not subsample_by_weighting:
+            choices = random_state.choice(
+                n_wf, p=weights, size=n_waveforms_fit, replace=replace
+            )
+            if not replace:
+                choices.sort()
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
+                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
+            else:
+                uchoices, ichoices = np.unique(choices, return_inverse=True)
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
+                    ichoices
+                ]
+                fixed_properties = {
+                    k: h5[k][uchoices][ichoices] for k in fixed_property_keys
+                }
         else:
-            uchoices, ichoices = np.unique(choices, return_inverse=True)
-            channels = channels[uchoices][ichoices]
-            waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[ichoices]
-    else:
-        waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
+    finally:
+        if need_open:
+            h5.close()
+        del h5
 
-    if need_open:
-        h5.close()
+    device = torch.device(device)
+    waveforms = torch.as_tensor(waveforms, device=device)
+    fixed_properties = {
+        k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
+    }
+    if subsample_by_weighting:
+        fixed_properties["weights"] = torch.as_tensor(weights, device=device)
 
-    waveforms = torch.from_numpy(waveforms)
-    channels = torch.from_numpy(channels)
-    weights = torch.from_numpy(weights) if subsample_by_weighting else None
-
-    return channels, waveforms, weights
+    return waveforms, fixed_properties
 
 
 def fit_reweighting(

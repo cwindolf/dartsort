@@ -87,6 +87,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.val_split_p = val_split_p
         self.random_seed = random_seed
         self.inference_batch_size = inference_batch_size
+        self.nc = len(self.geom)
 
         self.register_buffer(
             "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
@@ -100,10 +101,10 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def needs_fit(self):
         return self._needs_fit
 
-    def fit(self, waveforms, max_channels, recording=None, weights=None):
-        super().fit(waveforms, max_channels, recording, weights)
+    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
+        super().fit(recording, waveforms, channels=channels, weights=weights)
         with torch.enable_grad():
-            self._fit(waveforms, max_channels, weights=weights)
+            self._fit(waveforms, channels, weights=weights)
         self.eval()
         self._needs_fit = False
 
@@ -282,8 +283,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         # make a validation set for early stopping
         if self.val_split_p:
-            istrain = rg.binomial(1, p=self.val_split_p, size=len(waveforms))
-            istrain = istrain.astype(bool)
+            n_train = int(np.ceil(self.val_split_p * len(waveforms)))
+            istrain = np.zeros(len(waveforms), dtype=bool)
+            istrain[rg.choice(len(waveforms), size=n_train, replace=False)] = True
             isval = np.logical_not(istrain)
             val_waveforms = waveforms[isval]
             val_amps = amps[isval]
@@ -330,9 +332,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     chans_batch = chans_batch[0]
 
                     optimizer.zero_grad()
-                    channels_mask = self.model_channel_index[chans_batch] < len(
-                        self.geom
-                    )
+                    channels_mask = self.model_channel_index[chans_batch] < self.nc
                     channels_mask = channels_mask.to(waveform_batch)
                     reconstructed_amps, mu, var = self.forward(
                         waveform_batch, channels_mask, amps_batch, chans_batch
@@ -350,7 +350,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     if self.variational:
                         total_kld += kld.item()
 
-                    n_examples += self.batch_size
+                    n_examples += chans_batch.numel()
                     if n_examples >= self.epoch_size:
                         break
 
@@ -375,7 +375,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         valbatch += 1
                     self.train()
 
-                nbatch = n_examples / self.batch_size
+                nbatch = np.ceil(n_examples / self.batch_size)
                 loss = total_loss / nbatch
                 mse = total_mse / nbatch
                 val_loss = val_loss / valbatch
@@ -398,7 +398,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
 
-    def transform_unbatched(self, waveforms, max_channels, return_extra=False):
+    def transform_unbatched(self, waveforms, channels, return_extra=False):
         # handle getting amplitudes, reindexing channels, and amplitudes_only logic
         if waveforms.ndim == 2:
             assert self.amplitudes_only
@@ -409,7 +409,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             elif self.amplitude_kind == "peak":
                 obs_amps = waveforms.abs().max(dim=1).values
                 waveforms = obs_amps[:, None]
-        waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
+        waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
         if self.amplitudes_only:
             obs_amps = waveforms[:, 0]
         elif return_extra or self.reference == "com":
@@ -422,7 +422,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             obs_amps = None
 
         # nn inputs
-        mask = self.model_channel_index[max_channels] < self.geom.shape[0]
+        mask = self.model_channel_index[channels] < self.geom.shape[0]
         mask = mask.to(waveforms)
         x_mask = torch.cat((waveforms, mask.unsqueeze(1)), dim=1)
 
@@ -434,18 +434,18 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             mu, var = mu.chunk(2, dim=-1)
         x, y, z = mu[:, :3].T
         y = F.softplus(y)
-        mx, mz = self.get_reference_points(max_channels, obs_amps=obs_amps).T
+        mx, mz = self.get_reference_points(channels, obs_amps=obs_amps).T
         x = x + mx
         z = z + mz
         locs = torch.column_stack((x, y, z))
 
         if return_extra:
-            alphas, pred_amps = self.decode(mu, max_channels, obs_amps, mask)
+            alphas, pred_amps = self.decode(mu, channels, obs_amps, mask)
             return dict(locs=locs, obs_amps=obs_amps, pred_amps=pred_amps, mx=mx, mz=mz)
 
         return locs
 
-    def transform(self, waveforms, max_channels, show_progress=False):
+    def transform(self, waveforms, *, channels, show_progress=False, **unused):
         n = len(waveforms)
         with torch.no_grad():
             if n > self.inference_batch_size:
@@ -456,10 +456,10 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 for bs in rg(0, n, self.inference_batch_size):
                     be = bs + self.inference_batch_size
                     batch = waveforms[bs:be].to(my_device)
-                    batch_chans = max_channels[bs:be].to(my_device)
+                    batch_chans = channels[bs:be].to(my_device)
                     res = self.transform_unbatched(batch, batch_chans)
                     locs[bs:be] = res.to(device_in)
                     del batch, batch_chans, res
             else:
-                locs = self.transform_unbatched(waveforms, max_channels)
+                locs = self.transform_unbatched(waveforms, channels)
         return {self.name: locs}

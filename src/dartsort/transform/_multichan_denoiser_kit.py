@@ -95,7 +95,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self._needs_fit = True
         self.random_seed = random_seed
 
-    def forward(self, waveforms, max_channels):
+    def forward(self, waveforms, *, channels, **unused):
         out = torch.empty_like(waveforms)
         odev = waveforms.device
         idev = self.device
@@ -103,7 +103,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         for bs in range(0, len(waveforms), self.inference_batch_size):
             be = min(bs + self.inference_batch_size, len(waveforms))
             pred = self.forward_unbatched(
-                waveforms[bs:be].to(idev), max_channels[bs:be].to(idev)
+                waveforms[bs:be].to(idev), channels[bs:be].to(idev)
             )
             out[bs:be] = pred.to(odev)
 
@@ -190,16 +190,16 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             scaling=self.scaling,
         )
 
-    def to_nn_channels(self, waveforms, max_channels):
-        waveforms = reindex(max_channels, waveforms, self.relative_index, pad_value=0.0)
-        masks = self.get_masks(max_channels).to(waveforms)
+    def to_nn_channels(self, waveforms, channels):
+        waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
+        masks = self.get_masks(channels).to(waveforms)
         return waveforms, masks
 
-    def to_orig_channels(self, waveforms, max_channels):
-        return reindex(max_channels, waveforms, self.irrelative_index)
+    def to_orig_channels(self, waveforms, channels):
+        return reindex(channels, waveforms, self.irrelative_index)
 
-    def get_masks(self, max_channels):
-        return self.model_channel_index[max_channels] < self.n_channels
+    def get_masks(self, channels):
+        return self.model_channel_index[channels] < self.n_channels
 
     # -- these two below are used for storing pretrained net weights
 

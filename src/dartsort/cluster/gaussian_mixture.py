@@ -423,6 +423,7 @@ class SpikeMixtureModel(torch.nn.Module):
         lls=None,
         initialize_tmm_only=False,
         parameters_from_gmm=True,
+        neighborhood_adjacency_overlap=0.75,
     ):
         if n_threads is None:
             n_threads = self.n_threads
@@ -494,6 +495,7 @@ class SpikeMixtureModel(torch.nn.Module):
                 metric="cosine" if self.distance_metric == "cosine" else "kl",
                 random_search_max_distance=self.merge_distance_threshold,
                 noise_log_priors=self.noise_log_priors,
+                neighborhood_adjacency_overlap=neighborhood_adjacency_overlap,
             )
         self.tmm.set_sizes(n_units)
 
@@ -1433,7 +1435,7 @@ class SpikeMixtureModel(torch.nn.Module):
         # localize labels to the split
         labels = self.labels
         if split_name is not None:
-            labels = self.labels[self.data.split_indices[split_name]]
+            labels = labels[self.data.split_indices[split_name]]
 
         # split_indices_full are inds relative to the split
         if unit_id is not None:
@@ -2855,8 +2857,10 @@ class SpikeMixtureModel(torch.nn.Module):
         nu = len(self.log_proportions)
         l = eval_cur_labels[vix]
         ls, ix, ct = l.unique(return_inverse=True, return_counts=True)
+        ct = ct.to(self.log_proportions)
+        props = ct / ct.sum()
 
-        w = self.log_proportions[l].exp() / ct[ix].to(self.log_proportions)
+        w = self.log_proportions[l].exp() / props[ix]
         cur_loglik = (w * cur_loglik).sum()
         hyp_loglik = (w * hyp_loglik).sum()
         cur_elbo = (w * cur_elbo).sum()
@@ -2864,12 +2868,12 @@ class SpikeMixtureModel(torch.nn.Module):
         cur_entropy = (w * cur_entropy).sum()
         hyp_entropy = (w * hyp_entropy).sum()
 
-        cur_loglik = cur_loglik.cpu().item() * nu
-        hyp_loglik = hyp_loglik.cpu().item() * nu
-        cur_elbo = cur_elbo.cpu().item() * nu
-        hyp_elbo = hyp_elbo.cpu().item() * nu
-        cur_entropy = cur_entropy.cpu().item() * nu
-        hyp_entropy = hyp_entropy.cpu().item() * nu
+        cur_loglik = cur_loglik.cpu().item()
+        hyp_loglik = hyp_loglik.cpu().item()
+        cur_elbo = cur_elbo.cpu().item()
+        hyp_elbo = hyp_elbo.cpu().item()
+        cur_entropy = cur_entropy.cpu().item()
+        hyp_entropy = hyp_entropy.cpu().item()
 
         hyp_criteria = dict(
             loglik=hyp_loglik,

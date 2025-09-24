@@ -39,7 +39,7 @@ class Localization(BaseWaveformFeaturizer):
         self.localization_model = localization_model
         self.batch_size = batch_size
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, *, channels, **unused):
         # get amplitude vectors
         if self.amplitude_kind == "peak":
             ampvecs = waveforms.abs().max(dim=1).values
@@ -58,7 +58,7 @@ class Localization(BaseWaveformFeaturizer):
                 loc_result = localize_amplitude_vectors(
                     ampvecs[sl],
                     self.geom,
-                    max_channels[sl],
+                    channels[sl],
                     channel_index=self.channel_index,
                     radius=self.radius,
                     n_channels_subset=self.n_channels_subset,

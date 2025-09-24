@@ -48,14 +48,14 @@ class EnforceDecrease(BaseWaveformDenoiser):
             persistent=False,
         )
 
-    def forward(self, waveforms, max_channels):
+    def forward(self, waveforms, *, channels, **unused):
         """
         enfdec = EnforceDecrease(geom, channel_index)
         ...
         dec_wfs, dec_ptps = enfdec(waveforms, maxchans)
         """
         n = waveforms.shape[0]
-        assert (n,) == max_channels.shape
+        assert (n,) == channels.shape
         assert waveforms.shape[2] == self.parents_index.shape[1]
 
         # get peak to peak amplitudes -- (N, c) shaped
@@ -69,14 +69,14 @@ class EnforceDecrease(BaseWaveformDenoiser):
         # batching the following:
         # parent_ptps = pad_ptps[
         #     torch.arange(n)[:, None, None],
-        #     self.parents_index[max_channels],
+        #     self.parents_index[channels],
         # ]
         # parent_min_ptps = parent_ptps.min(dim=2).values
         for bs in range(0, n, self.batch_size):
             be = min(n, bs + self.batch_size)
             parent_ptps = pad_ptps[
                 torch.arange(bs, be)[:, None, None],
-                self.parents_index[max_channels[bs:be]],
+                self.parents_index[channels[bs:be]],
             ]
             torch.amin(parent_ptps, dim=2, out=parent_min_ptps[bs:be])
 

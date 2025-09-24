@@ -120,10 +120,10 @@ def test_all_transformers():
     print("-- Pre-fit check")
     _check_saveload(geom, channel_index, pipeline)
     print("-- Fit")
-    pipeline.fit(waveforms, channels, noise_rec)
+    pipeline.fit(recording=noise_rec, waveforms=waveforms, channels=channels)
     assert not pipeline.needs_fit()
     print("-- Forward")
-    twaveforms, features = pipeline(waveforms, channels)
+    twaveforms, features = pipeline(waveforms, channels=channels)
     assert twaveforms.dtype == waveforms.dtype
     assert twaveforms.shape == waveforms.shape
     assert torch.equal(torch.isnan(twaveforms), torch.isnan(waveforms))

@@ -69,20 +69,25 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
 
         super().__init__(name=names)
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, **unused):
         features = {}
         if self.peak_amplitude_vectors:
             features[self.peak_amplitude_vectors_name] = (
                 waveforms.abs().max(dim=1).values
             )
 
+        max_vectors = min_vectors = ptp_vectors = None
+        maxs = mins = ptps = None
         if self.compute_minmax_vectors:
             max_vectors = waveforms.amax(dim=1)
             min_vectors = waveforms.amin(dim=1)
             ptp_vectors = max_vectors - min_vectors
         if self.compute_maxchan:
+            assert ptp_vectors is not None
             maxchans = torch.argmax(ptp_vectors.nan_to_num(), dim=1, keepdim=True)
             if self.log_peak_to_trough:
+                assert max_vectors is not None
+                assert min_vectors is not None
                 maxs = torch.take_along_dim(max_vectors, maxchans, dim=1)[:, 0]
                 mins = torch.take_along_dim(min_vectors, maxchans, dim=1)[:, 0]
                 if self.ptp_max_amplitude:
@@ -93,8 +98,11 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         if self.ptp_amplitude_vectors:
             features[self.ptp_amplitude_vectors_name] = ptp_vectors
         if self.ptp_max_amplitude:
+            assert ptps is not None
             features[self.ptp_max_amplitude_name] = ptps
         if self.log_peak_to_trough:
+            assert maxs is not None
+            assert mins is not None
             logptt = torch.log(maxs) - torch.log(mins.neg())
             features[self.log_peak_to_trough_name] = logptt
 
@@ -123,7 +131,7 @@ class AmplitudeVector(BaseWaveformFeaturizer):
         self.shape = (channel_index.shape[1],)
         self.dtype = dtype
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, **unused):
         if self.kind == "peak":
             return {self.name: waveforms.abs().max(dim=1).values}
         elif self.kind == "ptp":
@@ -152,7 +160,7 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         self.kind = kind
         self.dtype = dtype
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, **unused):
         if self.kind == "peak":
             return {self.name: torch.nan_to_num(waveforms.abs()).max(dim=(1, 2)).values}
         elif self.kind == "ptp":
@@ -180,7 +188,7 @@ class Voltage(BaseWaveformFeaturizer):
         super().__init__(name=name, name_prefix=name_prefix)
         self.dtype = dtype
 
-    def transform(self, waveforms, max_channels=None):
+    def transform(self, waveforms, **unused):
         waveforms = waveforms.view(len(waveforms), -1)
         nanmax = torch.nan_to_num(waveforms).abs_().max(dim=1, keepdim=True)
         voltages = torch.take_along_dim(waveforms, nanmax.indices, dim=1)

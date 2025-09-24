@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
-from .util.py_util import int_or_none, str_or_none, int_or_float_or_none
+from .util.py_util import float_or_none, int_or_none, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
 
 
@@ -68,7 +68,7 @@ class DARTsortUserConfig:
     )
 
     # -- thresholds
-    initial_threshold: Annotated[float, Field(gt=0)] = argfield(
+    voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
         default=4.0,
         doc="Threshold in standardized voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
@@ -79,17 +79,16 @@ class DARTsortUserConfig:
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
     )
-    matching_fp_control: bool = False
-    denoiser_badness_factor: Annotated[float, Field(ge=0, le=1)] = argfield(
-        default=0.15,
-        doc="In initial detection, subtracting clean waveforms inferred "
-        "by the NN denoiser need only decrease the residual norm squared "
-        "by this multiple of the squared matching threshold to be accepted.",
+    initial_threshold: Annotated[float, Field(gt=0)] = argfield(
+        default=16.0,
+        doc="Initial detection's neural net matching threshold. Same as "
+        "matching_threshold, except that a neural net is trying to guess "
+        "the true waveforms here, rather than using cluster templates.",
     )
 
     # -- featurization length, radius, rank parameters
     temporal_pca_rank: Annotated[int, Field(gt=0)] = argfield(
-        default=8, doc="Rank of global temporal PCA."
+        default=8, doc="Rank of temporal PCAs used in denoising and featurization."
     )
     feature_ms_before: Annotated[float, Field(gt=0)] = argfield(
         default=0.75,
@@ -125,10 +124,6 @@ class DARTsortUserConfig:
         default=100.0,
         doc="Radius around main channel used when localizing spikes.",
     )
-
-    # -- clustering parameters
-    density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
-    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
@@ -175,6 +170,10 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_euclidean_complete_only: bool = False
     initial_cosine_complete_only: bool = False
     gmm_noise_fp_correction: bool = False
+    realign_to_denoiser: bool = False
+    matching_fp_control: bool = False
+    density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
+    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
 
     pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "cosine"
@@ -186,6 +185,8 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
 
     cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
+    convexity_threshold: float | None = argfield(default=None, arg_type=float_or_none)
+    convexity_radius: Annotated[int, Field(gt=0)] = 3
 
     criterion_threshold: float = 0.0
     criterion: Literal[

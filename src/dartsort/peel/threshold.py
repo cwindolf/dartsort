@@ -4,11 +4,11 @@ import numpy as np
 import torch
 
 
-from ..detect import detect_and_deduplicate
+from ..detect import detect_and_deduplicate, convexity_filter
 from ..transform import WaveformPipeline
 from ..util import spiketorch
 from ..util.data_util import SpikeDataset
-from ..util.waveform_util import make_channel_index
+from ..util.waveform_util import make_channel_index, get_channel_index_rel_inds
 
 from .peel_base import BasePeeler
 
@@ -31,6 +31,9 @@ class ThresholdAndFeaturize(BasePeeler):
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
         dedup_temporal_radius_samples=7,
+        cumulant_order=None,
+        convexity_threshold=None,
+        convexity_radius=3,
         remove_exact_duplicates=True,
         n_seconds_fit=100,
         n_waveforms_fit=20_000,
@@ -47,7 +50,7 @@ class ThresholdAndFeaturize(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=spike_length_samples,
+            chunk_margin_samples=self.next_margin(spike_length_samples, factor=5),
             n_seconds_fit=n_seconds_fit,
             n_waveforms_fit=n_waveforms_fit,
             max_waveforms_fit=max_waveforms_fit,
@@ -64,9 +67,17 @@ class ThresholdAndFeaturize(BasePeeler):
         self.remove_exact_duplicates = remove_exact_duplicates
         self.peak_sign = peak_sign
         self.trough_priority = trough_priority
+        self.convexity_threshold = convexity_threshold
+        self.convexity_radius = convexity_radius
+        self.cumulant_order = cumulant_order
+        self.dedup_batch_size = self.nearest_batch_length()
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
                 "spatial_dedup_channel_index", spatial_dedup_channel_index
+            )
+            self.register_buffer(
+                "spatial_dedup_rel_inds",
+                get_channel_index_rel_inds(spatial_dedup_channel_index),
             )
         else:
             self.spatial_dedup_channel_index = None
@@ -155,6 +166,9 @@ class ThresholdAndFeaturize(BasePeeler):
             relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
             dedup_temporal_radius_samples=thresholding_cfg.dedup_temporal_radius_samples,
             remove_exact_duplicates=thresholding_cfg.remove_exact_duplicates,
+            cumulant_order=thresholding_cfg.cumulant_order,
+            convexity_threshold=thresholding_cfg.convexity_threshold,
+            convexity_radius=thresholding_cfg.convexity_radius,
             n_seconds_fit=thresholding_cfg.n_seconds_fit,
             n_waveforms_fit=thresholding_cfg.n_waveforms_fit,
             max_waveforms_fit=thresholding_cfg.max_waveforms_fit,
@@ -192,6 +206,8 @@ class ThresholdAndFeaturize(BasePeeler):
             detection_threshold=self.detection_threshold,
             peak_sign=self.peak_sign,
             spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
+            dedup_batch_size=self.dedup_batch_size,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
@@ -199,6 +215,9 @@ class ThresholdAndFeaturize(BasePeeler):
             relative_peak_channel_index=self.relative_peak_channel_index,
             dedup_temporal_radius=self.dedup_temporal_radius_samples,
             remove_exact_duplicates=self.remove_exact_duplicates,
+            cumulant_order=self.cumulant_order,
+            convexity_threshold=self.convexity_threshold,
+            convexity_radius=self.convexity_radius,
             thinning=self.thinning,
             time_jitter=self.time_jitter,
             spatial_jitter_channel_index=self.spatial_jitter_channel_index,
@@ -235,10 +254,12 @@ class ThresholdAndFeaturize(BasePeeler):
 def threshold_chunk(
     traces,
     channel_index,
-    detection_threshold=4,
+    detection_threshold=4.0,
     peak_sign="both",
     relative_peak_channel_index=None,
     spatial_dedup_channel_index=None,
+    spatial_dedup_rel_inds=None,
+    dedup_batch_size=512,
     trough_offset_samples=42,
     spike_length_samples=121,
     left_margin=0,
@@ -247,11 +268,13 @@ def threshold_chunk(
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
     max_spikes_per_chunk=None,
-    thinning=0,
+    thinning=0.0,
     time_jitter=0,
     trough_priority=None,
     spatial_jitter_channel_index=None,
     cumulant_order=None,
+    convexity_threshold=None,
+    convexity_radius=3,
     return_waveforms=True,
     rg=None,
     quiet=False,
@@ -262,6 +285,8 @@ def threshold_chunk(
         detection_threshold,
         relative_peak_channel_index=relative_peak_channel_index,
         dedup_channel_index=spatial_dedup_channel_index,
+        dedup_index_inds=spatial_dedup_rel_inds,
+        spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
         dedup_temporal_radius=dedup_temporal_radius,
         remove_exact_duplicates=remove_exact_duplicates,
@@ -280,6 +305,16 @@ def threshold_chunk(
             voltages=energies,
             waveforms=energies.view(-1, spike_length_samples, n_index),
         )
+    keep = convexity_filter(
+        traces,
+        times_rel,
+        channels,
+        threshold=convexity_threshold,
+        radius=convexity_radius,
+    )
+    times_rel = times_rel[keep]
+    channels = channels[keep]
+    energies = energies[keep]
 
     orig_times_rel = times_rel
     orig_channels = channels

@@ -232,6 +232,15 @@ def make_channel_index(
     return channel_index
 
 
+def get_channel_index_rel_inds(channel_index: torch.Tensor):
+    chans_arange = torch.arange(
+        len(channel_index), device=channel_index.device, dtype=channel_index.dtype
+    )
+    jj, index_inds = (channel_index == chans_arange[:, None]).nonzero(as_tuple=True)
+    assert torch.equal(jj, chans_arange)
+    return index_inds
+
+
 def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
     C = geom.shape[0]
     if not radius:

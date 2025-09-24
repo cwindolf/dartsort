@@ -29,7 +29,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         random_state=0,
         name=None,
         name_prefix="",
-        temporal_slice=None,
+        temporal_slice: slice | None = None,
         n_oversamples=10,
         max_waveforms=20_000,
     ):
@@ -56,15 +56,27 @@ class BaseTemporalPCA(BaseWaveformModule):
     def initialize_spike_length_dependent_params(self):
         nt = self.spike_length_samples
         assert nt is not None
-        if self.temporal_slice is not None:
-            nt = torch.arange(nt)[self.temporal_slice].numel()
+        if self.temporal_slice is None:
+            self._temporal_ix = None
+        else:
+            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
+            nt = self._temporal_ix.numel()
         self.register_buffer("mean", torch.zeros(nt))
         self.register_buffer("components", torch.zeros(self.rank, nt))
         self.register_buffer("whitener", torch.zeros(self.rank))
         self.to(self.channel_index.device)
 
-    def fit(self, waveforms, max_channels, recording=None, weights=None):
-        super().fit(waveforms, max_channels, recording, weights)
+    def fit(
+        self,
+        recording,
+        waveforms,
+        *,
+        channels,
+        weights=None,
+        time_shifts=None,
+        **unused,
+    ):
+        super().fit(recording, waveforms, channels=channels, weights=weights)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -76,23 +88,23 @@ class BaseTemporalPCA(BaseWaveformModule):
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
-            max_channels = max_channels[choices]
-        waveforms = self._temporal_slice(waveforms)
+            channels = channels[choices]
+        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         self.dtype = waveforms.dtype
         train_channel_index = self.channel_index
         if waveforms.device != train_channel_index.device:
             waveforms = waveforms.to(train_channel_index.device)
-            max_channels = max_channels.to(train_channel_index.device)
+            channels = channels.to(train_channel_index.device)
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
-                max_channels,
+                channels,
                 self.channel_index,
                 self.geom,
                 self.fit_radius,
             )
         _, waveforms_fit = get_channels_in_probe(
-            waveforms, max_channels, train_channel_index
+            waveforms, channels, train_channel_index
         )
 
         if self.centered:
@@ -127,11 +139,22 @@ class BaseTemporalPCA(BaseWaveformModule):
     def needs_fit(self):
         return self._needs_fit
 
-    def _temporal_slice(self, waveforms):
-        if getattr(self, "temporal_slice", None) is None:
+    def _temporal_slice(self, waveforms, time_shifts=None):
+        if self.temporal_slice is None:
             return waveforms
 
-        return waveforms[:, self.temporal_slice]
+        if time_shifts is None:
+            return waveforms[:, self.temporal_slice]
+
+        assert self._temporal_ix is not None
+        n, t, c = waveforms.shape
+        t_ = self._temporal_ix.numel()
+        assert t_ <= t
+        assert time_shifts.shape == (n,)
+        time_ix = self._temporal_ix[None, :, None] + time_shifts[:, None, None]
+        waveforms = waveforms.take_along_dim(dim=1, indices=time_ix)
+        assert waveforms.shape == (n, t_, c)
+        return waveforms
 
     def _transform_in_probe(self, waveforms_in_probe):
         x = waveforms_in_probe
@@ -158,10 +181,7 @@ class BaseTemporalPCA(BaseWaveformModule):
                 waveforms_in_probe - self.mean,
                 self.components.T @ self.components,
             )
-        return torch.mm(
-            waveforms_in_probe,
-            self.components.T @ self.components,
-        )
+        return torch.mm(waveforms_in_probe, self.components.T @ self.components)
 
     def force_reconstruct(self, features):
         ndim = features.ndim
@@ -214,12 +234,12 @@ class BaseTemporalPCA(BaseWaveformModule):
 class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
-    def forward(self, waveforms, max_channels):
-        waveforms = self._temporal_slice(waveforms)
+    def forward(self, waveforms, *, channels, time_shifts=None, **unused):
+        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         (
             channels_in_probe,
             waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, max_channels, self.channel_index)
+        ) = get_channels_in_probe(waveforms, channels, self.channel_index)
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(
             waveforms_in_probe, waveforms, channels_in_probe, in_place=True
@@ -230,16 +250,23 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     default_name = "tpca_features"
 
     def transform(
-        self, waveforms, max_channels, channel_index=None, return_in_probe=False
+        self,
+        waveforms,
+        *,
+        channels,
+        channel_index=None,
+        _return_for_combined=False,
+        time_shifts=None,
+        **unused,
     ):
-        waveforms = self._temporal_slice(waveforms)
+        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
 
         if channel_index is None:
             channel_index = self.channel_index
         (
             channels_in_probe,
             waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, max_channels, channel_index)
+        ) = get_channels_in_probe(waveforms, channels, channel_index)
         features_in_probe = self._transform_in_probe(waveforms_in_probe)
         features = torch.full(
             (waveforms.shape[0], self.rank, channel_index.shape[1]),
@@ -252,25 +279,27 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
             features,
             channels_in_probe,
         )
-        if return_in_probe:
-            return features_in_probe, channels_in_probe, {self.name: features}
+        if _return_for_combined:
+            return (
+                waveforms,
+                features_in_probe,
+                channels_in_probe,
+                {self.name: features},
+            )
 
         return {self.name: features}
 
-    def inverse_transform(self, features, max_channels, channel_index=None):
+    def inverse_transform(self, features, channels, channel_index=None):
         if channel_index is None:
             channel_index = self.channel_index
         (
             channels_in_probe,
             features_in_probe,
-        ) = get_channels_in_probe(features, max_channels, channel_index)
+        ) = get_channels_in_probe(features, channels, channel_index)
         reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
+        recshp = (features.shape[0], self.components.shape[1], channel_index.shape[1])
         reconstructions = torch.full(
-            (
-                features.shape[0],
-                self.components.shape[1],
-                channel_index.shape[1],
-            ),
+            recshp,
             torch.nan,
             dtype=reconstructions_in_probe.dtype,
             device=reconstructions_in_probe.device,
@@ -281,22 +310,17 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
 
 class TemporalPCA(BaseWaveformAutoencoder, TemporalPCAFeaturizer):
+    default_name = "tpca_features"
 
-    def forward(self, waveforms, max_channels):
-        waveforms = self._temporal_slice(waveforms)
-        features_in_probe, channels_in_probe, features = self.transform(
+    def forward(self, waveforms, *, channels, time_shifts=None, **unused):
+        waveforms, features_in_probe, channels_in_probe, features = self.transform(
             waveforms,
-            max_channels,
-            return_in_probe=True,
+            channels=channels,
+            time_shifts=time_shifts,
+            _return_for_combined=True,
         )
         reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
         reconstructions = set_channels_in_probe(
-            reconstructions_in_probe,
-            waveforms,
-            channels_in_probe,
+            reconstructions_in_probe, waveforms, channels_in_probe
         )
         return reconstructions, features
-
-
-# could also have one which is both by subclassing both of the above,
-# but we don't use features from PCAs which act as denoisers right now
