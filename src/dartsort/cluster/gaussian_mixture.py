@@ -391,6 +391,10 @@ class SpikeMixtureModel(torch.nn.Module):
         self.unit_args["ppca_rank"] = new_rank
         self.split_unit_args["ppca_rank"] = new_rank
         self.ppca_rank = new_rank
+        self.channels_count_min = max(new_rank, self.channels_count_min)
+        # TODO these should really be methods or something.
+        self.unit_args["channels_count_min"] = self.channels_count_min
+        self.split_unit_args["channels_count_min"] = self.channels_count_min
         self.clear_units()
 
         # this is mainly to mark the TMM's cuda memory as free in torch
@@ -676,12 +680,11 @@ class SpikeMixtureModel(torch.nn.Module):
                 n_columns_full=self.data.n_spikes,
             )
             unit_churn, reas_count, spike_logliks, log_liks = self.reassign(log_liks)
-            # do what happens in e_step
         else:
             unit_churn, reas_count, log_liks, spike_logliks = self.e_step(
                 show_progress=show_progress, split=final_split
             )
-            log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
+        log_liks, _ = self.cleanup(log_liks, relabel_split=final_split)
         result["log_liks"] = log_liks
         return result
 

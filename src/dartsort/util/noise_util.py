@@ -763,19 +763,28 @@ class EmbeddedNoise(torch.nn.Module):
             # we have NaNs, but we can get rid of them because channels are either all
             # NaN or not. below, for the spatial part, no such luck and we have to
             # evaluate the covariance in a masked way
-            x_rank = x.permute(0, 2, 1).reshape(n * n_channels, rank)
-            valid = x_rank.isfinite().all(dim=1)
+
+            # doing this on CPU since the SVD can use a lot of memory.
+            x_rank = x.permute(0, 2, 1)
+            x_rank = x_rank.cpu().reshape(n * n_channels, rank)
+            (valid,) = x_rank.isfinite().all(dim=1).nonzero(as_tuple=True)
             x_rankv = x_rank[valid]
+            orig_device = x.device
             del x
+            assert not x_rankv.requires_grad
             u_rankv, rank_sing, rank_vt = torch.linalg.svd(x_rankv, full_matrices=False)
+
             correction = torch.tensor(len(x_rankv) - 1.0).sqrt()
             rank_std = rank_sing / correction
+            rank_std = rank_std.to(orig_device)
+            correction = correction.to(orig_device)
 
             # whitened spatial part -- reuse storage
             x_spatial = x_rank
             del x_rank
             x_spatial[valid] = u_rankv
             x_spatial = x_spatial.reshape(n, n_channels, rank).permute(0, 2, 1)
+            x_spatial = x_spatial.to(orig_device)
             x_spatial.mul_(correction)
 
         spatial_mask = None

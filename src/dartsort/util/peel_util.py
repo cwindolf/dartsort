@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import h5py
+import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from .data_util import DARTsortSorting
@@ -48,6 +49,9 @@ def run_peeler(
         localization_dataset_name=localization_dataset_name,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
+
+    # ensure torch linalg inits before launching threads...
+    _ensure_torch_linalg(computation_cfg)
 
     # fit models if needed
     peeler.load_or_fit_and_save_models(
@@ -149,3 +153,13 @@ def peeler_is_done(
         chunk_starts_samples=chunk_starts_samples
     )
     return last_chunk_start >= max(chunk_starts_samples)
+
+
+def _ensure_torch_linalg(computation_cfg):
+    device = computation_cfg.actual_device()
+    if device.type == "cpu":
+        return
+    if computation_cfg.actual_n_jobs() == 0:
+        return
+
+    torch.inverse(torch.ones((0, 0), device=device))

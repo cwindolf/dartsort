@@ -1,5 +1,6 @@
 import dataclasses
 from pathlib import Path
+import time
 from typing import Generator, Any
 import warnings
 
@@ -301,24 +302,38 @@ def load_dartsort_step_sortings(
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
     recluster_format="recluster{step}",
+    mtime_gap_minutes=20,
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
-    """Returns list of step names and sortings, ordered."""
+    """Returns list of step names and sortings, ordered.
+
+    The mtime thing is trying to prevent reading hdf5 files which are in active
+    use, although its not a guarantee... h5 locking... need to figure it out.
+    """
+    mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
             detection_h5_path = sorting_dir / dh5n
-            if detection_h5_path.exists():
-                h5s = [detection_h5_path]
-                break
+            if not detection_h5_path.exists():
+                continue
+            if mtime_dt:
+                age = time.time() - detection_h5_path.stat().st_mtime
+                if age < mtime_dt:
+                    continue
+            h5s = [detection_h5_path]
+            break
         else:
             h5s = []
     else:
         h5s = [detection_h5_path]
 
     for j in range(1, 100):
-        if (sorting_dir / f"matching{j}.h5").exists():
-            h5s.append(sorting_dir / f"matching{j}.h5")
-        else:
+        mh5 = sorting_dir / f"matching{j}.h5"
+        if not mh5.exists():
             break
+        if mtime_dt:
+            if time.time() - mh5.stat().st_mtime < mtime_dt:
+                break
+        h5s.append(mh5)
 
     # let's check that there is at least something to do...
     labels_npys = sorting_dir.glob("*_labels.npy")
