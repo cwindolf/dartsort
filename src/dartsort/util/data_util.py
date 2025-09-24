@@ -257,6 +257,49 @@ class DARTsortSorting:
             extra_features=extra_features,
         )
 
+    def _stored_datasets(self):
+        if self.parent_h5_path is None:
+            return []
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            return list(h5.keys())
+
+    def _masked_load(self, dset, mask=None, indices=None, batch_transition=1000):
+        assert self.parent_h5_path is not None
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            if indices is not None and len(indices) < batch_transition:
+                return h5[dset][indices]
+            return batched_h5_read(h5[dset], mask=mask, indices=indices)
+
+    def _chunked_map_with_indices(self, dset, fn):
+        """fn should take args slice_, chunk"""
+        with h5py.File(
+            self.parent_h5_path, "r", libver="latest", locking=False
+        ) as h5:
+            g = h5[dset]
+            slices_and_chunks = yield_chunks(g)
+
+            # run once on the first chunk to figure out shapes
+            s, c = next(slices_and_chunks)
+            res = fn(s, c)
+            assert len(res) == len(c)
+            shape_per_spike = res.shape[1:]
+
+            # allocate output and save first chunk result
+            total_shape = (len(g), *shape_per_spike)
+            out = np.empty(total_shape, dtype=res.dtype)
+            out[s] = res
+            del res
+
+            # loop the rest
+            for s, c in slices_and_chunks:
+                out[s] = fn(s, c)
+
+        return out
+
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     """Look for the pipeline in the usual place."""

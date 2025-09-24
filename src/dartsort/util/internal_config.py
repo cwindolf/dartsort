@@ -168,6 +168,7 @@ class SubtractionConfig:
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = False
     denoiser_realignment_shift: int = 5
+    relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius: float | None = 100.0
     temporal_dedup_radius_samples: int = 11
@@ -290,7 +291,7 @@ class MatchingConfig:
     channel_selection_radius: float | None = 50.0
 
     # template postprocessing parameters
-    min_template_snr: float = 15.0
+    min_template_snr: float = 40.0
     min_template_count: int = 50
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
         merge_distance_threshold=0.025
@@ -685,14 +686,13 @@ def to_internal_config(cfg):
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
         )
         initial_detection_cfg = SubtractionConfig(
-            detection_threshold=cfg.initial_threshold,
+            detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             subtract_radius=cfg.subtraction_radius_um,
             realign_to_denoiser=cfg.realign_to_denoiser,
             singlechan_alignment_padding_ms=cfg.alignment_ms,
             use_singlechan_templates=cfg.use_singlechan_templates,
-            residnorm_decrease_threshold=cfg.denoiser_badness_factor
-            * (cfg.matching_threshold**2),
+            residnorm_decrease_threshold=cfg.initial_threshold,
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
@@ -701,7 +701,7 @@ def to_internal_config(cfg):
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
-            detection_threshold=cfg.initial_threshold,
+            detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
         )

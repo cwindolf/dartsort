@@ -915,27 +915,18 @@ def subtract_chunk(
         )
 
     # concatenate all of the thresholds together into single tensors
-    spike_times = [t.cpu() for t in spike_times]
-    spike_channels = [t.cpu() for t in spike_channels]
     spike_times = torch.concatenate(spike_times)
     spike_channels = torch.concatenate(spike_channels)
     subtracted_waveforms = torch.concatenate(subtracted_waveforms)
-    spike_features_list = spike_features
-    feature_keys = list(spike_features_list[0].keys())
-    spike_features = {}
-    for k in feature_keys:
-        this_feature_list = []
-        for f in spike_features_list:
-            this_feature_list.append(f[k].cpu())
-            del f[k]
-        spike_features[k] = torch.concatenate(this_feature_list)
-        del this_feature_list
-    del spike_features_list
+    spike_features = {
+        k: torch.concatenate([ff[k] for ff in spike_features])
+        for k in spike_features[0].keys()
+    }
 
     # discard spikes in the margins and sort times_samples for caller
     max_valid_t = traces.shape[0] - right_margin - 1
     keep = spike_times == spike_times.clamp(left_margin, max_valid_t)
-    (keep,) = keep.cpu().nonzero(as_tuple=True)
+    (keep,) = keep.nonzero(as_tuple=True)
     if not keep.numel():
         return empty_chunk_subtraction_result(
             spike_length_samples,
