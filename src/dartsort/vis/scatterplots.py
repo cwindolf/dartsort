@@ -26,7 +26,7 @@ def scatter_spike_features(
     semilog_amplitudes=True,
     show_geom=True,
     geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
-    amplitude_color_cutoff=15,
+    amplitude_color_cutoff=15.0,
     amplitude_cmap=plt.cm.viridis,
     max_spikes_plot=500_000,
     probe_margin_um=100,
