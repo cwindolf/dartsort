@@ -404,7 +404,7 @@ class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
                 ]
         else:
             self.indices = torch.multinomial(
-                self.weights, n_draws, self.replacement, generator=generator
+                self.weights.to(generator.device), n_draws, self.replacement, generator=generator
             )
 
 

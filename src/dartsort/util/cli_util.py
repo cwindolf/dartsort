@@ -140,11 +140,13 @@ def dataclass_from_toml(clss, toml_path):
     import tomllib  # TODO: can hold off on py3.11 for now
 
     with open(toml_path, "rb") as toml:
-        for cls in clss:
+        for j, cls in enumerate(clss):
             try:
                 return cls(**tomllib.load(toml))
             except TypeError:
-                continue
+                if j < len(clss) - 1:
+                    continue
+                raise
 
 
 def update_dataclass_from_args(cls, obj, args):

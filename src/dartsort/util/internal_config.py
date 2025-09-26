@@ -8,8 +8,8 @@ from pydantic.dataclasses import dataclass
 from pydantic import ConfigDict
 import torch
 
-from .py_util import int_or_inf, float_or_none
-from .cli_util import argfield
+from .py_util import int_or_inf, float_or_none, resolve_path
+from .cli_util import argfield, dataclass_from_toml
 
 try:
     from importlib.resources import files
@@ -646,6 +646,22 @@ class DARTsortInternalConfig:
 
 def to_internal_config(cfg):
     from dartsort.config import DARTsortUserConfig, DeveloperConfig
+
+    if isinstance(cfg, (str, Path)):
+        # load toml config
+        cfg0 = cfg
+
+        try:
+            cfg = resolve_path(cfg, strict=True)
+        except OSError as e:
+            raise ValueError(f"Configuration file {cfg0} does not exist.") from e
+
+        try:
+            cfg = dataclass_from_toml((DeveloperConfig,), cfg)
+        except Exception as e:
+            raise ValueError(
+                f"Could not read configuration from {cfg0}. More error info above."
+            ) from e
 
     if isinstance(cfg, DARTsortInternalConfig):
         return cfg

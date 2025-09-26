@@ -70,11 +70,44 @@ def dartsort(
     recording: BaseRecording,
     output_dir: str | Path,
     cfg: (
-        DARTsortUserConfig | DeveloperConfig | DARTsortInternalConfig
+        DARTsortUserConfig | str | Path | DeveloperConfig | DARTsortInternalConfig
     ) = default_dartsort_cfg,
     motion_est=None,
     overwrite=False,
 ):
+    """dartsort
+
+    This function runs a spike sorter called dartsort.
+
+    Arguments
+    ---------
+    recording : BaseRecording
+        A spikeinterface.BaseRecording object
+    output_dir: str | Path
+        Folder where outputs are stored
+    cfg: DARTsortUserConfig | DARTsortInternalConfig | str | Path
+        Your settings. Either create a DARTsortUserConfig directly in code, or
+        you can pass a string or Path pointing to a .toml file here.
+    motion_est: optional dredge.MotionEstimate
+        This is meant to allow users to pass their own external motion estimate.
+        To do: support spikeinterface Motion objects here.
+    overwrite : bool, default=False
+        Ignore and overwrite stored results, if any. Otherwise, dartsort will
+        try to resume from the last step that ran, or if it had finished then
+        it will do nothing.
+
+    Returns
+    -------
+    Dictionary of sorting results, with the following keys:
+     - "sorting": DARTsortSorting
+        This has a sorting.to_numpy_sorting() method for those who want to
+        export back to spikeinterface. Which would be everyone? :)
+        Alternatively, you could visualize your results using the functions
+        in the `import dartsort.vis as dartvis` library.
+     - "motion_est": dredge.MotionEstimate
+
+    To do: add the key "motion" with a spikeinterface Motion object.
+    """
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
 
@@ -96,6 +129,7 @@ def dartsort(
                 error_data_path = output_dir / "error_state"
                 with open(traceback_path, "w") as f:
                     traceback.print_exception(e, file=f)
+                logger.exception(e)
                 if cfg.save_everything_on_error:
                     logger.critical(
                         f"Hit an error. Copying outputs to {error_data_path} "
@@ -116,6 +150,7 @@ def dartsort(
         traceback_path = output_dir / "traceback.txt"
         with open(traceback_path, "w") as f:
             traceback.print_exception(e, file=f)
+        logger.exception(e)
         logger.critical(f"Hit an error. Wrote traceback to {traceback_path}.")
         raise
 
@@ -128,9 +163,13 @@ def _dartsort_impl(
     work_dir=None,
     overwrite=False,
 ):
+    """Internal helper function which implements dartsort's main logic."""
     ret = {}
 
+    # are we storing files in the work dir or the output dir?
     store_dir = output_dir if work_dir is None else work_dir
+
+    # if there are previous results stored, resume where they leave off
     next_step, sorting = ds_fast_forward(store_dir, cfg)
 
     if next_step == 0:
@@ -230,6 +269,7 @@ def _dartsort_impl(
                 _save_refined_name_fmt=f"refined{step}{{stepname}}",
             )
 
+    # finally handle scratch directory and delete intermediate files if requested
     if work_dir is not None:
         final_h5_path = output_dir / sorting.parent_h5_path.name
         assert final_h5_path.exists()
@@ -238,6 +278,7 @@ def _dartsort_impl(
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting
+
     return ret
 
 
