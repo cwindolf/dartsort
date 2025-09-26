@@ -123,7 +123,6 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediate_features=True,
-        denoiser_badness_factor=1.0 if type == "universal" else 0.1,
         cumulant_order=cumulant_order,
     )
     res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)

@@ -155,39 +155,73 @@ class DARTsortUserConfig:
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
-
-    detection_type: str = "subtract"
+    # high level behavior
     initial_split_only: bool = True
     resume_with_split: bool = False
     cluster_strategy: str = "gmmdpc"
     refinement_strategy: str = "gmm"
-    recluster_after_first_matching: bool = False
-    initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    signal_rank: Annotated[int, Field(ge=0)] = 5
-    gmm_euclidean_threshold: float = 5.0
-    gmm_kl_threshold: float = 2.0
-    gmm_cosine_threshold: float = 0.75
-    initial_euclidean_complete_only: bool = False
-    initial_cosine_complete_only: bool = False
-    gmm_noise_fp_correction: bool = False
-    realign_to_denoiser: bool = False
-    matching_fp_control: bool = False
-    density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
+    recluster_after_first_matching: bool = True
+
+    # general peeling
+    n_waveforms_fit: int = 20_000
+    max_waveforms_fit: int = 50_000
+
+    # initial detection
+    nn_denoiser_max_waveforms_fit: int = 250_000
+    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
+    nn_denoiser_pretrained_path: str | None = argfield(
+        default=default_pretrained_path, arg_type=str_or_none
+    )
+    do_tpca_denoise: bool = True
+    first_denoiser_thinning: float = 0.5
+    realign_to_denoiser: bool = True
+    detection_type: str = "subtract"
+    use_nn_in_subtraction: bool = True
+    use_singlechan_templates: bool = False
+    cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
+    convexity_threshold: float | None = argfield(default=-25.0, arg_type=float_or_none)
+    convexity_radius: Annotated[int, Field(gt=0)] = 7
+
+    # matching
+    matching_cd_iter: int = 0
+    matching_coarse_cd: bool = True
+    postprocessing_merge_threshold: float = 0.025
+    overwrite_matching: bool = False
+
+    # interpolation for features
+    interpolation_method: str = "kriging"
+    extrapolation_method: str | None = argfield(default="kernel", arg_type=str_or_none)
+    interpolation_kernel: str = "thinplate"
+    interpolation_rq_alpha: float = 0.5
+    interpolation_degree: int = 0
     interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
 
+    # initial clustering
+    initial_euclidean_complete_only: bool = False
+    initial_cosine_complete_only: bool = False
+    initial_amp_feat: bool = False
+    initial_pc_feats: int = 3
+    initial_pc_transform: str = "none"
+    initial_pc_scale: float = 5.0
+    initial_pc_pre_scale: float = 0.5
+    motion_aware_clustering: bool = True
+    clustering_workers: int = 5
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 100_000
     pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "cosine"
     pre_refinement_merge_threshold: float = 0.025
+    use_hellinger: bool = False
+    density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
+    component_overlap: float = 0.95
+    hellinger_strong: float = 0.0
+    hellinger_weak: float = 0.0
+    dpc_mop: bool = False
+    n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
-    use_nn_in_subtraction: bool = True
-    use_singlechan_templates: bool = False
+    # gaussian mixture high level
     truncated: bool = True
-    overwrite_matching: bool = False
-
-    cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
-    convexity_threshold: float | None = argfield(default=None, arg_type=float_or_none)
-    convexity_radius: Annotated[int, Field(gt=0)] = 3
-
+    initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
+    signal_rank: Annotated[int, Field(ge=0)] = 5
     criterion_threshold: float = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -199,68 +233,41 @@ class DeveloperConfig(DARTsortUserConfig):
         "ecl",
         "ecelbo",
     ] = "heldout_ecl"
-    gmm_cl_alpha: float = 1.0
-    merge_bimodality_threshold: float = 0.05
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
+    kmeansk: int = 3
+    min_cluster_size: int = 50
+
+    # gausian mixture low level
     n_refinement_iters: int = 1
     n_em_iters: int = 50
     channels_strategy: str = "count"
-    hard_noise: bool = False
+    gmm_cl_alpha: float = 1.0
     gmm_metric: Literal["kl", "cosine"] = "cosine"
     gmm_search: Literal["topk", "random"] = "topk"
     gmm_n_candidates: int = 5
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
-
-    initial_amp_feat: bool = False
-    initial_pc_feats: int = 3
-    initial_pc_transform: str = "none"
-    initial_pc_scale: float = 5.0
-    initial_pc_pre_scale: float = 0.5
-    motion_aware_clustering: bool = True
-    clustering_workers: int = 5
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 100_000
-
-    n_waveforms_fit: int = 20_000
-    max_waveforms_fit: int = 50_000
-    nn_denoiser_max_waveforms_fit: int = 250_000
-    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = argfield(
-        default=default_pretrained_path, arg_type=str_or_none
-    )
-    do_tpca_denoise: bool = True
-    first_denoiser_thinning: float = 0.5
-    postprocessing_merge_threshold: float = 0.025
-
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
-    kmeansk: int = 3
-    prior_pseudocount: float = 0.0
+    prior_pseudocount: float = 25.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
-    interpolation_method: str = "kriging"
-    extrapolation_method: str | None = argfield(default="kernel", arg_type=str_or_none)
-    interpolation_kernel: str = "thinplate"
-    interpolation_rq_alpha: float = 0.5
-    interpolation_degree: int = 0
     glasso_alpha: float | int | None = argfield(
         default=None, arg_type=int_or_float_or_none
     )
+    gmm_euclidean_threshold: float = 5.0
+    gmm_kl_threshold: float = 2.0
+    gmm_cosine_threshold: float = 0.75
+
+    # gaussian mixture unused
+    merge_bimodality_threshold: float = 0.05
+    hard_noise: bool = False
     laplace_ard: bool = False
     core_radius: float | Literal["extract"] = "extract"
-    min_cluster_size: int = 50
+    gmm_noise_fp_correction: bool = False
+    matching_fp_control: bool = False
 
-    use_hellinger: bool = False
-    component_overlap: float = 0.95
-    hellinger_strong: float = 0.0
-    hellinger_weak: float = 0.0
-    dpc_mop: bool = False
-    n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
-
-    # matching
-    matching_cd_iter: int = 0
-    matching_coarse_cd: bool = True
-
+    # store extra intermediates
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)

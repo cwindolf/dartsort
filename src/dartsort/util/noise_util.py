@@ -441,23 +441,28 @@ class EmbeddedNoise(torch.nn.Module):
         self.zero_radius = zero_radius
 
         self.register_buffer("chans_arange", torch.arange(n_channels))
+        self.register_buffer("global_std", global_std)
+
+        device = None
+        if global_std is not None:
+            device = global_std.device
+
         if mean is not None:
             self.register_buffer("mean", mean)
-        self.register_buffer("global_std", global_std)
         if rank_std is not None:
             self.register_buffer("rank_std", rank_std)
         if channel_std is not None:
             self.register_buffer("channel_std", channel_std)
         if full_std is not None:
             self.register_buffer("full_std", full_std)
-
         if rank_vt is not None:
             self.register_buffer("rank_vt", rank_vt)
         if channel_vt is not None:
             self.register_buffer("channel_vt", channel_vt)
-
         if full_cov is not None:
             self.register_buffer("full_cov", full_cov)
+            if device is None:
+                device = full_cov.device
 
         # precompute stuff
         self._full_cov = None
@@ -466,6 +471,7 @@ class EmbeddedNoise(torch.nn.Module):
         self._logdet = None
         self.register_buffer("mean_full", self.mean_rc().clone().detach())
         self.cache = {}
+        self.to(device)
 
     @property
     def logdet(self):

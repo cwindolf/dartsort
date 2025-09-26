@@ -166,7 +166,7 @@ class SubtractionConfig:
     # subtraction
     detection_threshold: float = 4.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    realign_to_denoiser: bool = False
+    realign_to_denoiser: bool = True
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
@@ -175,7 +175,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 0.15 * 10**2
+    residnorm_decrease_threshold: float = 16.0
     growth_tolerance: float | None = 0.5
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -518,7 +518,7 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 0.0
+    prior_pseudocount: float = 25.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
     kmeansk: int = 3
@@ -629,7 +629,7 @@ class DARTsortInternalConfig:
     detection_type: Literal["subtract", "match", "threshold", "universal"] = "subtract"
     final_refinement: bool = True
     matching_iterations: int = 1
-    recluster_after_first_matching: bool = False
+    recluster_after_first_matching: bool = True
     intermediate_matching_subsampling: float = 1.0
     overwrite_matching: bool = False
 
@@ -644,7 +644,18 @@ class DARTsortInternalConfig:
     save_everything_on_error: bool = False
 
 
-def to_internal_config(cfg):
+def to_internal_config(cfg) -> DARTsortInternalConfig:
+    """Laundromat of configuration formats
+
+    Arguments
+    ---------
+    cfg : str | Path | DARTsortUserConfig | DeveloperConfig
+        If str or Path, it should point to a .toml file.
+
+    Returns
+    -------
+    DARTsortInternalConfig
+    """
     from dartsort.config import DARTsortUserConfig, DeveloperConfig
 
     if isinstance(cfg, (str, Path)):
@@ -734,7 +745,7 @@ def to_internal_config(cfg):
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
             waveform_cfg=tpca_waveform_cfg,
-            threshold=cfg.denoiser_badness_factor * (cfg.matching_threshold**2),
+            threshold=cfg.initial_threshold,
         )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")

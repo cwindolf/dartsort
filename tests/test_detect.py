@@ -276,9 +276,9 @@ def test_detect_edgecases(case, peak_sign, convexity_threshold):
     out_c = out_c[keep]
     out_v = out_v[keep]
     if peak_sign == "neg":
-        assert torch.equal(out_t, emptyi)
-        assert torch.equal(out_c, emptyi)
-        assert torch.equal(out_v, emptyf)
+        assert torch.equal(out_t, emptyi.to(dev))
+        assert torch.equal(out_c, emptyi.to(dev))
+        assert torch.equal(out_v, emptyf.to(dev))
     else:
         assert out_t.numel() == targ_t.numel()
         assert out_t.numel() == out_c.numel() == out_v.numel()
