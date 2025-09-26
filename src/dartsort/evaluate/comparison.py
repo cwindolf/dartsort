@@ -13,8 +13,6 @@ from .analysis import DARTsortAnalysis
 class DARTsortGroundTruthComparison:
     gt_analysis: DARTsortAnalysis
     tested_analysis: DARTsortAnalysis
-    gt_name: Optional[str] = None
-    tested_name: Optional[str] = None
 
     delta_time: float = 0.8
     match_score: float = 0.1
@@ -31,17 +29,11 @@ class DARTsortGroundTruthComparison:
     unsorted_match_radius: float = 50.0
 
     def __post_init__(self):
-        if self.gt_name is None:
-            self.gt_name = self.gt_analysis.name
-
-        if self.tested_name is None:
-            self.tested_name = self.tested_analysis.name
-
         self.comparison = GroundTruthComparison(
             gt_sorting=self.gt_analysis.sorting.to_numpy_sorting(),
             tested_sorting=self.tested_analysis.sorting.to_numpy_sorting(),
-            gt_name=self.gt_name,
-            tested_name=self.tested_name,
+            gt_name=self.gt_analysis.name,
+            tested_name=self.tested_analysis.name,
             delta_time=self.delta_time,
             match_score=self.match_score,
             well_detected_score=self.well_detected_score,
