@@ -53,6 +53,14 @@ class DARTsortGroundTruthComparison:
         if self.compute_unsorted_recall:
             self._calculate_unsorted_detection()
 
+    @property
+    def gt_name(self):
+        return self.gt_analysis.name or "GT"
+
+    @property
+    def tested_name(self):
+        return self.tested_analysis.name or "Tested"
+
     def get_match(self, gt_unit):
         return int(self.comparison.best_match_12[gt_unit])
 

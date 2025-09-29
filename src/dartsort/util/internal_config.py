@@ -639,7 +639,7 @@ class DARTsortInternalConfig:
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     tmpdir_parent: str | Path | None = None
     save_intermediate_labels: bool = False
-    save_intermediate_features: bool = True
+    save_intermediate_features: bool = False
     save_final_features: bool = True
     save_everything_on_error: bool = False
 
@@ -907,8 +907,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         workdir_copier=cfg.workdir_copier,
         workdir_follow_symlinks=cfg.workdir_follow_symlinks,
         tmpdir_parent=cfg.tmpdir_parent,
-        save_intermediate_labels=cfg.save_intermediate_labels,
-        save_intermediate_features=cfg.save_intermediate_features,
+        save_intermediate_labels=cfg.save_intermediates,
+        save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
         save_everything_on_error=cfg.save_everything_on_error,
     )

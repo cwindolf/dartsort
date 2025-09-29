@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import raw_template_cfg
+from ..util.internal_config import raw_template_cfg, ComputationConfig
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit, gt
 from .sorting import make_sorting_summary
@@ -45,6 +45,7 @@ def visualize_sorting(
     layout_max_height=4,
     layout_figsize=(11, 8.5),
     overwrite=False,
+    n_jobs=0,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
 
@@ -81,6 +82,7 @@ def visualize_sorting(
         sorting_analysis=sorting_analysis,
         gt_analysis=gt_analysis,
         overwrite=overwrite,
+        n_jobs=n_jobs,
     )
     summary_png, unit_summary_dir, anim_png, comp_png = paths_or_nones
 
@@ -126,6 +128,7 @@ def visualize_sorting(
             dpi=dpi,
             show_progress=True,
             overwrite=overwrite,
+            n_jobs=n_jobs,
         )
 
 
@@ -139,6 +142,7 @@ def visualize_all_sorting_steps(
     make_unit_summaries=True,
     make_animations=False,
     step_dir_name_format="step{step:02d}_{step_name}",
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
     motion_est=None,
     motion_est_pkl="motion_est.pkl",
     channel_show_radius_um=50.0,
@@ -150,6 +154,7 @@ def visualize_all_sorting_steps(
     dpi=200,
     overwrite=False,
     load_step_sortings_kw=None,
+    n_jobs=0,
 ):
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
@@ -160,19 +165,23 @@ def visualize_all_sorting_steps(
             with open(motion_est_pkl, "rb") as jar:
                 motion_est = pickle.load(jar)
 
+    fnames = (
+            "times_seconds",
+            "point_source_localizations",
+            amplitudes_dataset_name,
+        )
     step_sortings = load_dartsort_step_sortings(
         dartsort_dir,
         load_simple_features=True,
-        load_feature_names=(
-            "times_seconds",
-            "point_source_localizations",
-            "denoised_ptp_amplitudes",
-        ),
+        load_feature_names=fnames,
         **(load_step_sortings_kw or {}),
     )
 
     with tqdm(step_sortings, desc="Sorting steps", mininterval=0) as prog:
         for j, (step_name, step_sorting) in enumerate(prog):
+            if step_name is None:
+                continue
+            assert all(hasattr(step_sorting, fn) for fn in fnames)
             prog.write(f"Vis step  {j}: {step_name}.\n{step_sorting}")
             step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
             visualize_sorting(
@@ -193,6 +202,7 @@ def visualize_all_sorting_steps(
                 layout_max_height=layout_max_height,
                 layout_figsize=layout_figsize,
                 overwrite=overwrite,
+                n_jobs=n_jobs,
             )
 
 
@@ -250,6 +260,7 @@ def _ensure_analysis(
     sorting_analysis=None,
     gt_analysis=None,
     overwrite=False,
+    n_jobs=0,
 ):
     need_analysis = False
     is_labeled = sorting.n_units > 1
@@ -293,6 +304,7 @@ def _ensure_analysis(
             name=output_directory.stem,
             template_cfg=raw_template_cfg,
             allow_template_reload="match" in output_directory.stem,
+            computation_cfg=ComputationConfig.from_n_jobs(n_jobs),
         )
 
     return (

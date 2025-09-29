@@ -47,8 +47,7 @@ class DARTsortUserConfig:
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     workdir_follow_symlinks: bool = False
     tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
-    save_intermediate_labels: bool = False
-    save_intermediate_features: bool = True
+    save_intermediates: bool = False
     save_final_features: bool = True
 
     # -- waveform snippet length parameters
