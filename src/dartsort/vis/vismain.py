@@ -1,5 +1,6 @@
 import pickle
 from pathlib import Path
+import warnings
 
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
@@ -46,6 +47,7 @@ def visualize_sorting(
     layout_figsize=(11, 8.5),
     overwrite=False,
     n_jobs=0,
+    errors_to_warnings=True,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
 
@@ -57,17 +59,24 @@ def visualize_sorting(
         else:
             assert False
 
-    if make_scatterplots:
-        sorting_scatterplots(
-            output_directory,
-            sorting,
-            motion_est=motion_est,
-            amplitude_color_cutoff=amplitude_color_cutoff,
-            amplitudes_dataset_name=amplitudes_dataset_name,
-            layout_figsize=layout_figsize,
-            dpi=dpi,
-            overwrite=overwrite,
-        )
+    try:
+        if make_scatterplots:
+            sorting_scatterplots(
+                output_directory,
+                sorting,
+                motion_est=motion_est,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                amplitudes_dataset_name=amplitudes_dataset_name,
+                layout_figsize=layout_figsize,
+                dpi=dpi,
+                overwrite=overwrite,
+            )
+    except Exception as e:
+        if errors_to_warnings:
+            warnings.warn(str(e))
+        else:
+            raise
+        plt.close('all')
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
@@ -86,15 +95,22 @@ def visualize_sorting(
     )
     summary_png, unit_summary_dir, anim_png, comp_png = paths_or_nones
 
-    if summary_png is not None:
-        if overwrite or not summary_png.exists():
-            fig = make_sorting_summary(
-                sorting_analysis,
-                max_height=layout_max_height,
-                figsize=layout_figsize,
-                figure=None,
-            )
-            fig.savefig(summary_png, dpi=dpi)
+    try:
+        if summary_png is not None:
+            if overwrite or not summary_png.exists():
+                fig = make_sorting_summary(
+                    sorting_analysis,
+                    max_height=layout_max_height,
+                    figsize=layout_figsize,
+                    figure=None,
+                )
+                fig.savefig(summary_png, dpi=dpi)
+    except Exception as e:
+        if errors_to_warnings:
+            warnings.warn(str(e))
+        else:
+            raise
+        plt.close('all')
 
     if anim_png is not None:
         if overwrite or not anim_png.exists():

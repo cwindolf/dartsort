@@ -318,6 +318,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 template_data,
                 min_channel_amplitude=min_channel_amplitude,
                 rank=svd_compression_rank,
+                computation_cfg=computation_cfg,
             )
         temporal_components = self.low_rank_templates.temporal_components.astype(dtype)
         singular_values = self.low_rank_templates.singular_values.astype(dtype)

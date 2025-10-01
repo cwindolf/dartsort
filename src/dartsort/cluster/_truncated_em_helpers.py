@@ -141,9 +141,9 @@ def _te_batch_e(
     # cvalid = candidates >= 0
     # lls = torch.where(cvalid, lls, -torch.inf)
     # lls[candidates < 0] = -torch.inf
-    lls_dense = lls.new_full(candidates.shape, -torch.inf)
-    lls_dense[vcand_ii, vcand_jj] = lls
-    lls = lls_dense
+    _lls_dense = lls.new_full(candidates.shape, -torch.inf)
+    _lls_dense[vcand_ii, vcand_jj] = lls
+    lls = _lls_dense
 
     # -- update K_ns
     # toplls, topinds = lls.sort(dim=1, descending=True)
@@ -165,10 +165,10 @@ def _te_batch_e(
         invquad_dense = lls.new_full(candidates.shape, torch.nan)
         invquad_dense[vcand_ii, vcand_jj] = invquad
         invquad = invquad_dense.take_along_dim(topinds, 1)
-    if _debug and not (new_candidates >= 0).all():
+    if _debug and not ((new_candidates >= 0).sum(1) >= lls.isfinite().sum(1).clamp_(max=n_candidates)).all():
         (bad_ix,) = torch.nonzero((new_candidates < 0).any(dim=1).cpu(), as_tuple=True)
         raise ValueError(
-            f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=} {cvalid[bad_ix]=} {cvalid[topinds][bad_ix]=}"
+            f"Bad candidates {lls=} {lls[bad_ix]=} {toplls[bad_ix]=} {topinds[bad_ix]=}"
         )
 
     ncc = dkl = None

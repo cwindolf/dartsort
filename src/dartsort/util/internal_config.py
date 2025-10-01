@@ -713,6 +713,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
         )
         initial_detection_cfg = SubtractionConfig(
+            peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             subtract_radius=cfg.subtraction_radius_um,
@@ -728,6 +729,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
+            peak_sign=cfg.preak_sign,
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
@@ -779,7 +781,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         workers=cfg.clustering_workers,
     )
 
-    skip_step1_first_split = cfg.initial_split_only and not cfg.resume_with_split
     if cfg.gmm_metric == "cosine":
         dist_thresh = cfg.gmm_cosine_threshold
     elif cfg.gmm_metric == "kl":
@@ -819,7 +820,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         interpolation_sigma=cfg.interpolation_bandwidth,
         rq_alpha=cfg.interpolation_rq_alpha,
         kriging_poly_degree=cfg.interpolation_degree,
-        skip_first_split=skip_step1_first_split,
+        skip_first_split=cfg.later_steps in ("neither", "merge"),
+        one_split_only=cfg.later_steps == "split",
         kmeansk=cfg.kmeansk,
         prior_scales_mean=cfg.prior_scales_mean,
         noise_fp_correction=cfg.gmm_noise_fp_correction,
@@ -848,8 +850,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         distance_metric = cfg.gmm_metric
     initial_refinement_cfg = dataclasses.replace(
         refinement_cfg,
-        one_split_only=cfg.initial_split_only,
-        skip_first_split=False,
+        skip_first_split=cfg.initial_steps in ("neither", "merge"),
+        one_split_only=cfg.initial_steps == "split",
         signal_rank=irank,
         merge_distance_threshold=merge_distance_threshold,
         split_decision_algorithm=split_decision_algorithm,
