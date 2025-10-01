@@ -2,14 +2,14 @@ import math
 from dataclasses import dataclass, replace
 
 import numpy as np
+from scipy.interpolate import interp1d
 from scipy.spatial import KDTree
 import torch
 
-from dartsort.util import drift_util, waveform_util
-from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.spiketorch import fast_nanmedian, ptp
-from scipy.interpolate import interp1d
-
+from ..util import drift_util, waveform_util
+from ..util.data_util import DARTsortSorting
+from ..util.job_util import get_global_computation_config
+from ..util.spiketorch import fast_nanmedian, ptp
 from .get_templates import get_raw_templates, get_templates
 
 # -- alternate template constructors
@@ -246,6 +246,8 @@ def svd_compress_templates(
     rank=5,
     channel_sparse=True,
     allow_na=False,
+    computation_cfg=None,
+    batch_size=32,
 ):
     """
     Returns:
@@ -253,6 +255,10 @@ def svd_compress_templates(
     singular_values: n_units, rank
     spatial_components: n_units, rank, n_channels
     """
+    if computation_cfg is None:
+        computation_cfg = get_global_computation_config()
+    dev = computation_cfg.actual_device()
+
     if hasattr(template_data, "templates"):
         templates = template_data.templates
         counts = template_data.spike_counts_by_channel
@@ -270,11 +276,11 @@ def svd_compress_templates(
         amp_vecs = np.nan_to_num(amp_vecs, copy=False)
         templates = np.nan_to_num(templates)
     vis_mask = amp_vecs > min_channel_amplitude
-    vis_templates = templates * vis_mask
     dtype = templates.dtype
 
     if not channel_sparse:
-        U, s, Vh = np.linalg.svd(vis_templates, full_matrices=False)
+        vis_templates = torch.as_tensor(templates * vis_mask)
+        U, s, Vh = torch.linalg.svd(vis_templates, full_matrices=False)
         # s is descending.
         temporal_components = U[:, :, :rank].astype(dtype)
         singular_values = s[:, :rank].astype(dtype)
@@ -285,20 +291,37 @@ def svd_compress_templates(
         # error is the same as above as a function of rank. it's just that
         # we can zero out some spatial components, which is a useful property
         # (used in pairwise convolutions for instance)
+
+        vis_mask = torch.as_tensor(vis_mask)
         n, t, c = templates.shape
+        assert amp_vecs.shape == (n, 1, c)
+        templates = torch.as_tensor(templates)
+        uvec, groups = vis_mask[:, 0].unique(dim=0, return_inverse=True)
+        assert uvec.shape[1] == c
+
         temporal_components = np.zeros((n, t, rank), dtype=dtype)
         singular_values = np.zeros((n, rank), dtype=dtype)
         spatial_components = np.zeros((n, rank, c), dtype=dtype)
-        for i in range(len(templates)):
-            template = templates[i]
-            mask = np.flatnonzero(vis_mask[i, 0])
-            k = min(rank, mask.size)
-            if not k:
+
+        for j in range(len(uvec)):
+            (in_j,) = (groups == j).nonzero(as_tuple=True)
+            nj = in_j.numel()
+            (mask,) = uvec[j].nonzero(as_tuple=True)
+            rankj = min(rank, mask.numel())
+            if not rankj:
                 continue
-            U, s, Vh = np.linalg.svd(template[:, mask], full_matrices=False)
-            temporal_components[i, :, :k] = U[:, :rank]
-            singular_values[i, :k] = s[:rank]
-            spatial_components[i, :k, mask] = Vh[:rank].T
+
+            for bs in range(0, nj, batch_size):
+                be = min(bs + batch_size, nj)
+                binds = in_j[bs:be]
+
+                batch_x = templates[binds[:, None], :, mask[None, :]].to(dev)
+                # fancy ix comes to the front
+                assert batch_x.shape == (be - bs, mask.numel(), t)
+                U, S, Vh = torch.linalg.svd(batch_x, full_matrices=False)
+                spatial_components[binds[:, None], :rankj, mask[None, :]] = U[:, :, :rankj].cpu()
+                singular_values[binds, :rankj] = S[:, :rankj].cpu()
+                temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.cpu()
 
     if allow_na:
         isna = np.broadcast_to(isna, spatial_components.shape)

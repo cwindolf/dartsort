@@ -1006,6 +1006,7 @@ def denoiser_time_shifts(
 ):
     assert subtract_rel_inds is not None
 
+    # extract main channel traces
     main_channel_rel_inds = subtract_rel_inds[channels]
     denoised_main_channel_traces = waveforms.take_along_dim(
         dim=2, indices=main_channel_rel_inds[:, None, None]
@@ -1013,13 +1014,22 @@ def denoiser_time_shifts(
     nwf = len(waveforms)
     assert denoised_main_channel_traces.shape == (nwf, spike_length_samples, 1)
     denoised_main_channel_traces = denoised_main_channel_traces[:, :, 0]
+
+    # extract window around trough
+    start = trough_offset_samples - denoiser_realignment_shift
+    end = trough_offset_samples + denoiser_realignment_shift + 1
+    snips = denoised_main_channel_traces[:, start:end]
+    assert snips.shape == (nwf, 2 * denoiser_realignment_shift + 1)
+
+    # handle the sign of the events so that we can align to maxima
     if peak_sign == "both":
-        denoised_main_channel_traces = denoised_main_channel_traces.abs()
+        snips = snips.abs()
     elif peak_sign == "neg":
-        denoised_main_channel_traces = denoised_main_channel_traces.neg()
+        snips = snips.neg()
     else:
         assert peak_sign == "pos"
-    denoised_peaks = denoised_main_channel_traces.argmax(dim=1)
-    dt = denoised_peaks - trough_offset_samples
-    dt.masked_fill_(dt.abs() > denoiser_realignment_shift, 0)
+
+    # find shifts just by argmax
+    peaks = snips.argmax(dim=1)
+    dt = peaks.sub_(denoiser_realignment_shift)
     return dt

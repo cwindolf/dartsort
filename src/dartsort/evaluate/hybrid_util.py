@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 from probeinterface import Probe
 from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist
 from spikeinterface.generation.drift_tools import (
     InjectDriftingTemplatesRecording,
     DriftingTemplates,
@@ -167,7 +168,7 @@ def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p
     gt_unmatched = np.ones(len(gt_coords), dtype=bool)
 
     for j, thresh in enumerate(
-        tqdm(np.arange(0.0, max_val + dx + 2e-5, dx), desc="match")
+        tqdm(np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx), desc="match")
     ):
         test_unmatched = np.flatnonzero(assignments < 0)
         if not test_unmatched.size:
@@ -201,6 +202,42 @@ def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p
     return assignments
 
 
+def greedy_match_counts(gt_sorting, tested_sorting, radius_um=35.0, radius_frames=12):
+    from scipy.optimize import linear_sum_assignment
+
+    gt_t = gt_sorting.times_samples / radius_frames
+    tested_t = tested_sorting.times_samples / radius_frames
+
+    geom = getattr(gt_sorting, 'geom', getattr(tested_sorting, 'geom', None))
+    assert geom is not None
+    gt_x = geom[gt_sorting.channels] / radius_um
+    tested_x = geom[tested_sorting.channels] / radius_um
+
+    step = min(1.0 / radius_frames, pdist(geom).min() / radius_um) / 2
+
+    test2gt_spike = greedy_match(np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step)
+    counts = np.zeros((gt_sorting.n_units, tested_sorting.n_units), dtype=np.int32)
+    test_matched_spike = np.flatnonzero(np.logical_and(test2gt_spike >= 0, tested_sorting.labels >= 0))
+
+    matched_gt_labels = gt_sorting.labels[test2gt_spike[test_matched_spike]]
+    matched_test_labels = tested_sorting.labels[test_matched_spike]
+
+    np.add.at(counts, (matched_gt_labels, matched_test_labels), 1)
+
+    row_ind, col_ind = linear_sum_assignment(counts, maximize=True)
+
+    return dict(
+        counts=counts,
+        test2gt_spike=test2gt_spike,
+        test_matched_spike=test_matched_spike,
+        matched_gt_labels=matched_gt_labels,
+        matched_test_labels=matched_test_labels,
+        counts_ord=counts[row_ind][:, col_ind],
+        gt_unit_order=row_ind,
+        test_unit_order=col_ind,
+    )
+
+
 def sorting_from_times_labels(
     times_samples,
     labels,
@@ -216,11 +253,17 @@ def sorting_from_times_labels(
     if sampling_frequency is None:
         if recording is not None:
             sampling_frequency = recording.sampling_frequency
+
+    extra_features = {}
+    if recording is not None:
+        extra_features['times_seconds'] = recording.sample_index_to_time(times_samples)
+
     sorting = DARTsortSorting(
         times_samples=times_samples,
         channels=channels,
         labels=labels,
         sampling_frequency=sampling_frequency,
+        extra_features=extra_features,
     )
 
     if not determine_channels:
@@ -229,19 +272,11 @@ def sorting_from_times_labels(
     assert recording is not None
 
     _, labels_flat = np.unique(labels, return_inverse=True)
-    sorting = DARTsortSorting(
-        times_samples=times_samples,
-        channels=channels,
-        labels=labels_flat,
-        sampling_frequency=sorting.sampling_frequency,
-    )
+    sorting = dataclasses.replace(sorting, labels=labels_flat)
     template_cfg = dataclasses.replace(template_cfg, spikes_per_unit=spikes_per_unit)
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
     td = TemplateData.from_config(
-        recording,
-        sorting,
-        template_cfg,
-        computation_cfg=comp_cfg,
+        recording, sorting, template_cfg, computation_cfg=comp_cfg
     )
 
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
@@ -261,12 +296,8 @@ def sorting_from_times_labels(
         # largest distance that a unit would ever extend, or something, but let's not worry.
         d, channels = gkdt.query(guess_pos, workers=n_jobs)
 
-    sorting = DARTsortSorting(
-        times_samples=times_samples,
-        channels=channels,
-        labels=labels_flat,
-        sampling_frequency=sorting.sampling_frequency,
-    )
+    sorting = dataclasses.replace(sorting, channels=channels)
+
     return sorting, td
 
 

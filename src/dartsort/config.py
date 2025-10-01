@@ -67,6 +67,11 @@ class DARTsortUserConfig:
     )
 
     # -- thresholds
+    peak_sign: Literal["neg", "both", "pos"] = argfield(
+        default="both",
+        doc="Allow only troughs or events of both signs when detecting threshold "
+        "crossings during initialization. Or positive only, if that's your thing.",
+    )
     voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
         default=4.0,
         doc="Threshold in standardized voltage units for initial detection; "
@@ -155,8 +160,8 @@ class DARTsortUserConfig:
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
     # high level behavior
-    initial_split_only: bool = True
-    resume_with_split: bool = False
+    initial_steps: Literal["neither", "split", "merge", "both"] = "split"
+    later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
     refinement_strategy: str = "gmm"
     recluster_after_first_matching: bool = True

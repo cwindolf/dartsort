@@ -26,7 +26,8 @@ class SortingTextInfo(OverviewPlot):
         if sorting_analysis.name:
             msg += f"Sorting: {sorting_analysis.name}\n"
 
-        msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
+        if sorting_analysis.hdf5_path is not None:
+            msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
 
         nspikes = sorting_analysis.sorting.labels.size
         triaged = np.sum(sorting_analysis.sorting.labels < 0)
