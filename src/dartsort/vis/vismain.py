@@ -9,7 +9,11 @@ from tqdm.auto import tqdm
 from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import raw_template_cfg, ComputationConfig
+from ..util.internal_config import (
+    raw_template_cfg,
+    unshifted_template_cfg,
+    ComputationConfig,
+)
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit, gt
 from .sorting import make_sorting_summary
@@ -30,11 +34,13 @@ def visualize_sorting(
     sorting_path=None,
     motion_est=None,
     gt_analysis=None,
+    gt_comparison_with_distances=True,
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
     sorting_analysis=None,
+    template_cfg=unshifted_template_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
@@ -76,7 +82,7 @@ def visualize_sorting(
             warnings.warn(str(e))
         else:
             raise
-        plt.close('all')
+        plt.close("all")
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
@@ -91,6 +97,7 @@ def visualize_sorting(
         sorting_analysis=sorting_analysis,
         gt_analysis=gt_analysis,
         overwrite=overwrite,
+        template_cfg=template_cfg,
         n_jobs=n_jobs,
     )
     summary_png, unit_summary_dir, anim_png, comp_png = paths_or_nones
@@ -110,7 +117,7 @@ def visualize_sorting(
             warnings.warn(str(e))
         else:
             raise
-        plt.close('all')
+        plt.close("all")
 
     if anim_png is not None:
         if overwrite or not anim_png.exists():
@@ -123,12 +130,15 @@ def visualize_sorting(
 
     if comp_png is not None and gt_analysis is not None:
         if overwrite or not comp_png.exists():
+            assert sorting_analysis is not None
             gt_comp = DARTsortGroundTruthComparison(
                 gt_analysis=gt_analysis,
                 tested_analysis=sorting_analysis,
                 exhaustive_gt=exhaustive_gt,
+                compute_distances=gt_comparison_with_distances,
             )
-            fig = gt.make_gt_overview_summary(gt_comp)
+            plots = gt.full_gt_overview_plots if gt_comparison_with_distances else gt.default_gt_overview_plots
+            fig = gt.make_gt_overview_summary(gt_comp, plots=plots)
             fig.savefig(comp_png, dpi=dpi)
 
     if unit_summary_dir is not None:
@@ -157,6 +167,8 @@ def visualize_all_sorting_steps(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
+    template_cfg=unshifted_template_cfg,
+    gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     motion_est=None,
@@ -182,10 +194,10 @@ def visualize_all_sorting_steps(
                 motion_est = pickle.load(jar)
 
     fnames = (
-            "times_seconds",
-            "point_source_localizations",
-            amplitudes_dataset_name,
-        )
+        "times_seconds",
+        "point_source_localizations",
+        amplitudes_dataset_name,
+    )
     step_sortings = load_dartsort_step_sortings(
         dartsort_dir,
         load_simple_features=True,
@@ -211,9 +223,11 @@ def visualize_all_sorting_steps(
                 make_animations=make_animations,
                 gt_analysis=gt_analysis,
                 exhaustive_gt=exhaustive_gt,
+                gt_comparison_with_distances=gt_comparison_with_distances,
                 channel_show_radius_um=channel_show_radius_um,
                 amplitude_color_cutoff=amplitude_color_cutoff,
                 pca_radius_um=pca_radius_um,
+                template_cfg=template_cfg,
                 dpi=dpi,
                 layout_max_height=layout_max_height,
                 layout_figsize=layout_figsize,
@@ -275,6 +289,7 @@ def _ensure_analysis(
     make_animations=False,
     sorting_analysis=None,
     gt_analysis=None,
+    template_cfg=unshifted_template_cfg,
     overwrite=False,
     n_jobs=0,
 ):
@@ -318,7 +333,7 @@ def _ensure_analysis(
             sorting=sorting,
             motion_est=motion_est,
             name=output_directory.stem,
-            template_cfg=raw_template_cfg,
+            template_cfg=template_cfg,
             allow_template_reload="match" in output_directory.stem,
             computation_cfg=ComputationConfig.from_n_jobs(n_jobs),
         )

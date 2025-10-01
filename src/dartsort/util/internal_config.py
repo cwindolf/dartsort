@@ -919,6 +919,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
+unshifted_template_cfg = TemplateConfig(realign_peaks=False)
 coarse_template_cfg = TemplateConfig(superres_templates=False)
 raw_template_cfg = TemplateConfig(
     realign_peaks=False, denoising_method="none", superres_templates=False

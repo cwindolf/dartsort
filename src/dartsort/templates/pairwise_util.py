@@ -324,10 +324,6 @@ class DeconvResidResult:
     template_a_norms: np.ndarray
     scalings: np.ndarray
 
-    # TODO: how to handle the nnz normalization we used to do?
-    #       that one was done wrong -- the residual was not restricted
-    #       to high amplitude channels.
-
 
 def conv_to_resid(
     # template_data_a: templates.TemplateData,
@@ -404,8 +400,13 @@ def conv_to_resid(
             com_spatial_sing_b,
         ).numpy(force=True)
         template_a_norms_ret = np.abs(ta).max(axis=(1, 2))
-    else:
+    elif distance_kind == "rms":
         template_a_norms_ret = template_a_norms
+    elif distance_kind == "deconv":
+        template_a_norms_ret = np.ones_like(template_a_norms)
+    else:
+        assert False
+
 
     # now, compute reduction in norm of A after matching by B
     scalings = np.ones_like(template_a_norms)
@@ -432,7 +433,7 @@ def conv_to_resid(
         else:
             scaling = 1.0
 
-        if distance_kind == "rms":
+        if distance_kind in ("rms", "deconv"):
             if amplitude_scaling_variance:
                 norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
             else:

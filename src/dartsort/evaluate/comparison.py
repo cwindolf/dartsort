@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal
 
 import numpy as np
 from spikeinterface.comparison import GroundTruthComparison
@@ -22,11 +22,12 @@ class DARTsortGroundTruthComparison:
     match_mode: str = "hungarian"
     compute_labels: bool = False
     verbose: bool = False
-    device: Optional[str] = None
+    device: str | None = None
 
     compute_distances: bool = False
     compute_unsorted_recall: bool = True
     unsorted_match_radius: float = 50.0
+    distance_kind: Literal["rms", "max", "deconv"] = "deconv"
 
     def __post_init__(self):
         self.comparison = GroundTruthComparison(
@@ -72,8 +73,8 @@ class DARTsortGroundTruthComparison:
         df["gt_ptp_amplitude"] = amplitudes
         df["gt_firing_rate"] = firing_rates
         if self.has_templates and (force_distances or self.compute_distances):
-            dist = np.diagonal(self.template_distances)
-            df["temp_dist"] = dist
+            dist = np.nan_to_num(self.template_distances, nan=np.inf).min(axis=1)
+            df["min_temp_dist"] = dist
         rec = []
         for uid in df.index:
             rec.append(self.unsorted_detection[self.gt_analysis.in_unit(uid)].mean())
@@ -113,28 +114,28 @@ class DARTsortGroundTruthComparison:
         if hasattr(self, "_template_distances"):
             return
 
-        gt_td = self.gt_analysis.coarse_template_data
-        nugt = gt_td.templates.shape[0]
-        matches = self.comparison.best_match_12.astype(int).values
-        matched = np.flatnonzero(matches >= 0)
-        matches = matches[matched]
-        tested_td = self.tested_analysis.coarse_template_data[matches]
-
-        dists, shifts, snrs_a, snrs_b, a_mask, b_mask = (
-            merge.cross_match_distance_matrix(
-                gt_td,
-                tested_td,
-                sym_function=np.maximum,
-                n_jobs=1,
-                svd_compression_rank=10,
-                device="cpu",
-                min_spatial_cosine=0.1,
-            )
+        (
+            dists,
+            shifts,
+            snrs_a,
+            snrs_b,
+            a_mask,
+            b_mask,
+        ) = merge.cross_match_distance_matrix(
+            self.gt_analysis.coarse_template_data,
+            self.tested_analysis.coarse_template_data,
+            sym_function=np.maximum,
+            n_jobs=1,
+            svd_compression_rank=10,
+            device="cpu",
+            min_spatial_cosine=0.1,
+            distance_kind=self.distance_kind,
         )
-        self._template_distances = np.full((nugt, nugt), 5.0)
-        self._template_distances[
-            np.arange(nugt)[a_mask][:, None], matched[b_mask][None, :]
-        ] = dists
+        assert dists.shape == (
+            self.gt_analysis.sorting.n_units,
+            self.tested_analysis.sorting.n_units,
+        )
+        self._template_distances = dists
 
     def _calculate_unsorted_detection(self):
         if self._unsorted_detection is not None:
@@ -227,12 +228,16 @@ class DARTsortGroundTruthComparison:
 
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w["which_tp"], w["tp"], _, w["geom"], w["channel_index"] = (
-            self.gt_analysis.unit_raw_waveforms(
-                gt_unit,
-                which=ind_groups["matched_gt_indices"],
-                **waveform_kw,
-            )
+        (
+            w["which_tp"],
+            w["tp"],
+            _,
+            w["geom"],
+            w["channel_index"],
+        ) = self.gt_analysis.unit_raw_waveforms(
+            gt_unit,
+            which=ind_groups["matched_gt_indices"],
+            **waveform_kw,
         )
 
         # load FN waveforms

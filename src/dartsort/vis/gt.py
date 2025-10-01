@@ -496,12 +496,13 @@ class MetricRegPlot(ComparisonPlot):
 
     def draw(self, panel, comparison):
         ax = panel.subplots()
-        df = comparison.unit_info_dataframe()
+        df = comparison.unit_info_dataframe(force_distances=self.x == "min_temp_dist")
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
-            df_show = df[np.isfinite(df[self.y].values)]
-            df_show = df_show[np.isfinite(df_show[self.x].values)]
+            finite_y = np.isfinite(df[self.y].values)
+            finite_x = np.isfinite(df[self.x].values)
+            df_show = df[np.logical_and(finite_y, finite_x)]
             sns.regplot(
                 data=df_show,
                 x=self.x,
@@ -514,7 +515,12 @@ class MetricRegPlot(ComparisonPlot):
         if self.log_x:
             ax.semilogx()
         met = df[self.y].mean()
-        ax.set_title(f"mean {self.y}: {met:.3f}", fontsize="small")
+        n_inf_y = np.logical_not(finite_y).sum()
+        n_inf_x = np.logical_not(finite_x).sum()
+        title = f"mean {self.y}: {met:.3f}"
+        if n_inf_y or n_inf_x:
+            title = f"{title}, yinf: {n_inf_y}, xinf: {n_inf_x}"
+        ax.set_title(title, fontsize="small")
 
 
 class MetricDistribution(ComparisonPlot):
@@ -613,36 +619,54 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         ax.set_xlabel(f"{comparison.tested_name} unit")
 
 
+class SpuriousTemplates(ComparisonPlot):
+    kind = "wide"
+    width = 3
+    height = 1
+
+    def draw(self, panel, comparison):
+        ax = panel.subplots()
+        d = np.nan_to_num(comparison.template_distances, nan=np.inf)
+        min_gt_dist_for_tested_units = d.min(axis=0)
+        finite = np.isfinite(min_gt_dist_for_tested_units)
+        ax.hist(min_gt_dist_for_tested_units[finite], bins=96, c='orange')
+        ax.set_xlabel('dist to GT (min over GT of tested-GT dists)')
+        ax.set_ylabel('count')
+        ninf = np.logical_not(finite).sum()
+        ax.set_title(f'tested template distances to GT library ({ninf} infs)', fontsize='small')
+
+
 box = MetricDistribution(flavor="box", width=2, height=3.5)
 box.kind = "gtmetric"
 full_gt_overview_plots = (
-    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
-    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
-    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g"),
     MetricRegPlot(x="gt_firing_rate", y="accuracy"),
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
-    MetricRegPlot(x="temp_dist", y="precision", color="g", log_x=True),
-    MetricRegPlot(x="gt_ptp_amplitude", y="temp_dist", color="orange", log_x=True),
+    MetricRegPlot(x="min_temp_dist", y="precision", color="g"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="temp_dist", color="orange"),
     MetricRegPlot(x="gt_firing_rate", y="temp_dist", color="orange"),
     MetricRegPlot(
-        x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True
+        x="gt_ptp_amplitude", y="unsorted_recall", color="purple"
     ),
     box,
     MetricDistribution(),
     TrimmedAgreementMatrix(),
     TrimmedTemplateDistanceMatrix(),
+    SpuriousTemplates()
 )
 
 default_gt_overview_plots = (
-    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy", log_x=True),
-    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r", log_x=True),
-    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="accuracy"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g"),
     MetricRegPlot(x="gt_firing_rate", y="accuracy"),
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
     MetricRegPlot(
-        x="gt_ptp_amplitude", y="unsorted_recall", color="purple", log_x=True
+        x="gt_ptp_amplitude", y="unsorted_recall", color="purple"
     ),
     box,
     MetricDistribution(),
@@ -657,8 +681,8 @@ default_gt_overview_plots = (
 def make_gt_overview_summary(
     comparison,
     plots=default_gt_overview_plots,
-    max_height=6,
-    figsize=(10, 10),
+    max_height=8,
+    figsize=(16, 12),
     figure=None,
     suptitle=True,
     same_width_flow=True,
