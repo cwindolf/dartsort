@@ -837,6 +837,7 @@ def subtract_chunk(
             break
         times_samples = times_samples[keep]
         channels = channels[keep]
+        voltages = voltages[keep]
 
         # -- read waveforms, denoise, and test residnorm decrease
         waveforms = spiketorch.grab_spikes(
@@ -868,6 +869,7 @@ def subtract_chunk(
                 waveforms = waveforms[keep]
                 times_samples = times_samples[keep]
                 channels = channels[keep]
+                voltages = voltages[keep]
                 for k in features:
                     features[k] = features[k][keep]
             if save_residnorm_decrease:
@@ -891,6 +893,7 @@ def subtract_chunk(
             features["time_shifts"] = denoiser_time_shifts(
                 waveforms,
                 channels,
+                voltages,
                 subtract_rel_inds,
                 trough_offset_samples,
                 spike_length_samples,
@@ -998,6 +1001,7 @@ def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual
 def denoiser_time_shifts(
     waveforms,
     channels,
+    voltages,
     subtract_rel_inds,
     trough_offset_samples,
     spike_length_samples,
@@ -1013,13 +1017,16 @@ def denoiser_time_shifts(
     nwf = len(waveforms)
     assert denoised_main_channel_traces.shape == (nwf, spike_length_samples, 1)
     denoised_main_channel_traces = denoised_main_channel_traces[:, :, 0]
+
     if peak_sign == "both":
-        denoised_main_channel_traces = denoised_main_channel_traces.abs()
+        denoised_main_channel_traces.mul_(torch.sign(voltages)[:, None])
     elif peak_sign == "neg":
         denoised_main_channel_traces = denoised_main_channel_traces.neg()
     else:
         assert peak_sign == "pos"
+
     denoised_peaks = denoised_main_channel_traces.argmax(dim=1)
     dt = denoised_peaks - trough_offset_samples
     dt.masked_fill_(dt.abs() > denoiser_realignment_shift, 0)
+
     return dt
