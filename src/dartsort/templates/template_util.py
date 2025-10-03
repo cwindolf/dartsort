@@ -280,11 +280,18 @@ def svd_compress_templates(
 
     if not channel_sparse:
         vis_templates = torch.as_tensor(templates * vis_mask)
-        U, s, Vh = torch.linalg.svd(vis_templates, full_matrices=False)
+        try:
+            U, S, Vh = torch.linalg.svd(
+                vis_templates, full_matrices=False, driver='gesvda'
+            )
+        except torch.linalg.LinAlgError:
+            U, S, Vh = torch.linalg.svd(
+                vis_templates, full_matrices=False, driver='gesvd'
+            )
         # s is descending.
-        temporal_components = U[:, :, :rank].astype(dtype)
-        singular_values = s[:, :rank].astype(dtype)
-        spatial_components = Vh[:, :rank, :].astype(dtype)
+        temporal_components = U[:, :, :rank].astype(dtype).numpy(force=True)
+        singular_values = s[:, :rank].astype(dtype).numpy(force=True)
+        spatial_components = Vh[:, :rank, :].astype(dtype).numpy(force=True)
     else:
         # channel sparse: only SVD the nonzero channels
         # this encodes the same exact subspace as above, and the reconstruction
@@ -318,10 +325,17 @@ def svd_compress_templates(
                 batch_x = templates[binds[:, None], :, mask[None, :]].to(dev)
                 # fancy ix comes to the front
                 assert batch_x.shape == (be - bs, mask.numel(), t)
-                U, S, Vh = torch.linalg.svd(batch_x, full_matrices=False)
-                spatial_components[binds[:, None], :rankj, mask[None, :]] = U[:, :, :rankj].cpu()
-                singular_values[binds, :rankj] = S[:, :rankj].cpu()
-                temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.cpu()
+                try:
+                    U, S, Vh = torch.linalg.svd(
+                        batch_x, full_matrices=False, driver='gesvda'
+                    )
+                except torch.linalg.LinAlgError:
+                    U, S, Vh = torch.linalg.svd(
+                        batch_x, full_matrices=False, driver='gesvd'
+                    )
+                spatial_components[binds[:, None], :rankj, mask[None, :]] = U[:, :, :rankj].numpy(force=True)
+                singular_values[binds, :rankj] = S[:, :rankj].numpy(force=True)
+                temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.numpy(force=True)
 
     if allow_na:
         isna = np.broadcast_to(isna, spatial_components.shape)
