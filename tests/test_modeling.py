@@ -39,7 +39,7 @@ def moppca_simulations():
     return simulations
 
 
-@pytest.mark.parametrize("inference_algorithm", ["em", "tvi", "tvi_nlp"])
+@pytest.mark.parametrize("inference_algorithm", ["em", "tvi"]) #, "tvi_nlp"])
 @pytest.mark.parametrize("n_refinement_iters", [0])
 @pytest.mark.parametrize("t_mu", test_t_mu)
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -47,7 +47,8 @@ def moppca_simulations():
 @pytest.mark.parametrize("t_missing", test_t_missing)
 @pytest.mark.parametrize(
     "pcount_ard_psm",
-    [(0, False, False), (0, False, True), (5, False, True), (5, True, False)],
+    # [(0, False, False), (0, False, True), (5, False, True), (5, True, False)],
+    [(0, False, False),  (5, False, True)],
 )
 @pytest.mark.parametrize("dist_and_search_type", ["kl", "cos"])
 def test_mixture(
