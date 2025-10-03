@@ -14,6 +14,7 @@ from ..util.internal_config import (
     unshifted_template_cfg,
     ComputationConfig,
 )
+from ..util.job_util import get_global_computation_config
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit, gt
 from .sorting import make_sorting_summary
@@ -52,10 +53,12 @@ def visualize_sorting(
     layout_max_height=4,
     layout_figsize=(11, 8.5),
     overwrite=False,
-    n_jobs=0,
+    computation_cfg=None,
     errors_to_warnings=True,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
+    if computation_cfg is None:
+        computation_cfg = get_global_computation_config()
 
     if sorting is None and sorting_path is not None:
         if sorting_path.name.endswith(".h5"):
@@ -98,7 +101,7 @@ def visualize_sorting(
         gt_analysis=gt_analysis,
         overwrite=overwrite,
         template_cfg=template_cfg,
-        n_jobs=n_jobs,
+        computation_cfg=computation_cfg,
     )
     summary_png, unit_summary_dir, anim_png, comp_png = paths_or_nones
 
@@ -154,7 +157,7 @@ def visualize_sorting(
             dpi=dpi,
             show_progress=True,
             overwrite=overwrite,
-            n_jobs=n_jobs,
+            n_jobs=computation_cfg.n_jobs_cpu,
         )
 
 
@@ -167,6 +170,7 @@ def visualize_all_sorting_steps(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
+    step_sortings=None,
     template_cfg=unshifted_template_cfg,
     gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
@@ -179,10 +183,11 @@ def visualize_all_sorting_steps(
     layout_max_height=4,
     exhaustive_gt=True,
     layout_figsize=(11, 8.5),
+    start_from_matching=False,
     dpi=200,
     overwrite=False,
     load_step_sortings_kw=None,
-    n_jobs=0,
+    computation_cfg=None,
 ):
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
@@ -193,22 +198,28 @@ def visualize_all_sorting_steps(
             with open(motion_est_pkl, "rb") as jar:
                 motion_est = pickle.load(jar)
 
-    fnames = (
-        "times_seconds",
-        "point_source_localizations",
-        amplitudes_dataset_name,
-    )
-    step_sortings = load_dartsort_step_sortings(
-        dartsort_dir,
-        load_simple_features=True,
-        load_feature_names=fnames,
-        **(load_step_sortings_kw or {}),
-    )
+    fnames = ["times_seconds"]
+    if make_scatterplots or make_sorting_summaries:
+        fnames += ["point_source_localizations", amplitudes_dataset_name]
+    if step_sortings is None:
+        step_sortings = load_dartsort_step_sortings(
+            dartsort_dir,
+            load_simple_features=True,
+            load_feature_names=fnames,
+            **(load_step_sortings_kw or {}),
+        )
+    assert step_sortings is not None
 
     with tqdm(step_sortings, desc="Sorting steps", mininterval=0) as prog:
         for j, (step_name, step_sorting) in enumerate(prog):
             if step_name is None:
                 continue
+            if start_from_matching:
+                h5p = step_sorting.parent_h5_path
+                if h5p is None:
+                    continue
+                if not Path(h5p).stem.startswith("match"):
+                    continue
             assert all(hasattr(step_sorting, fn) for fn in fnames)
             prog.write(f"Vis step  {j}: {step_name}.\n{step_sorting}")
             step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
@@ -232,7 +243,7 @@ def visualize_all_sorting_steps(
                 layout_max_height=layout_max_height,
                 layout_figsize=layout_figsize,
                 overwrite=overwrite,
-                n_jobs=n_jobs,
+                computation_cfg=computation_cfg,
             )
 
 
@@ -291,39 +302,51 @@ def _ensure_analysis(
     gt_analysis=None,
     template_cfg=unshifted_template_cfg,
     overwrite=False,
-    n_jobs=0,
+    computation_cfg=None,
 ):
+    if computation_cfg is None:
+        computation_cfg = get_global_computation_config()
     need_analysis = False
     is_labeled = sorting.n_units > 1
     if make_sorting_summaries and is_labeled:
         sorting_summary_png = output_directory / "sorting_summary.png"
-        need_analysis = need_analysis or not sorting_summary_png.exists()
+        need_summary = overwrite or not sorting_summary_png.exists()
+        need_analysis = need_analysis or need_summary
+        if not need_summary:
+            sorting_summary_png = None
     else:
         sorting_summary_png = None
 
     summaries_done = False
     if make_unit_summaries and is_labeled:
         unit_summary_dir = output_directory / "single_unit_summaries"
-        summaries_done = not overwrite and unit.all_summaries_done(
-            sorting.unit_ids, unit_summary_dir
-        )
-        need_analysis = need_analysis or not summaries_done
-        if summaries_done:
+        if overwrite:
+            need_summaries = True
+        else:
+            need_summaries = not unit.all_summaries_done(
+                sorting.unit_ids, unit_summary_dir
+            )
+        need_analysis = need_analysis or need_summaries
+        if not need_summaries:
             unit_summary_dir = None
     else:
         unit_summary_dir = None
 
     if make_animations and is_labeled:
         animation_png = output_directory / "animation.mp4"
-        need_analysis = need_analysis or (
-            make_animations and not animation_png.exists()
-        )
+        need_anim = overwrite or not animation_png.exists()
+        need_analysis = need_analysis or need_anim
+        if not need_anim:
+            animation_png = None
     else:
         animation_png = None
 
     if gt_analysis is not None and is_labeled:
         comparison_png = output_directory / "gt_comparison.png"
-        need_analysis = need_analysis or not comparison_png.exists()
+        need_comp = overwrite or not comparison_png.exists()
+        need_analysis = need_analysis or need_comp
+        if not need_comp:
+            comparison_png = None
     else:
         comparison_png = None
 
@@ -335,7 +358,7 @@ def _ensure_analysis(
             name=output_directory.stem,
             template_cfg=template_cfg,
             allow_template_reload="match" in output_directory.stem,
-            computation_cfg=ComputationConfig.from_n_jobs(n_jobs),
+            computation_cfg=computation_cfg,
         )
 
     return (

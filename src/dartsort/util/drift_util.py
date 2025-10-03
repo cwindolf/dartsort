@@ -119,8 +119,8 @@ def registered_geometry(
     assert downward_drift >= 0
 
     # pad with an integral number of pitches for simplicity
-    pitches_pad_up = int(np.ceil(upward_drift / pitch))
-    pitches_pad_down = int(np.ceil(downward_drift / pitch))
+    pitches_pad_up = int(np.round(upward_drift / pitch))
+    pitches_pad_down = int(np.round(downward_drift / pitch))
 
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error

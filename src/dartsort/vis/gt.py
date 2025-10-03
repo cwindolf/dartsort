@@ -483,37 +483,90 @@ class TrimmedAgreementMatrix(ComparisonPlot):
         ax.set_ylabel(f"{comparison.tested_name} unit" + ("(ord)" * self.ordered))
 
 
+class TrimmedTemplateDistanceMatrix(ComparisonPlot):
+    kind = "matrix"
+    width = 3
+    height = 2
+
+    def __init__(self, trim_kind="auto", ordered=True, cmap=plt.cm.magma):
+        self.trim_kind = trim_kind
+        self.ordered = ordered
+        self.cmap = cmap
+
+    def draw(self, panel, comparison):
+        agreement = comparison.comparison.get_ordered_agreement_scores()
+        row_order = agreement.index
+        col_order = agreement.columns
+        dist = comparison.template_distances[row_order, :][:, col_order]
+
+        ax = panel.subplots()
+        log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
+        im = ax.imshow(dist.T, norm=log1p_norm, cmap=self.cmap)
+        plt.colorbar(im, ax=ax, shrink=0.3)
+        ax.set_title("Hung. match temp dists")
+        ax.set_xlabel(f"{comparison.gt_name} unit")
+        ax.set_ylabel(f"{comparison.tested_name} unit")
+
+
 class MetricRegPlot(ComparisonPlot):
     kind = "gtmetric"
     width = 2
     height = 2
 
-    def __init__(self, x="gt_ptp_amplitude", y="accuracy", color="b", log_x=False):
+    def __init__(
+        self,
+        x="gt_ptp_amplitude",
+        y="accuracy",
+        color="b",
+        log_x=False,
+        logistic=True,
+        lowess=False,
+        log_y=False,
+        quant_cmap='viridis',
+    ):
         self.x = x
         self.y = y
         self.color = color
+        self.quant_cmap = quant_cmap
         self.log_x = log_x
+        self.logistic = logistic
+        self.lowess = lowess
+        self.log_y = log_y
 
     def draw(self, panel, comparison):
         ax = panel.subplots()
         df = comparison.unit_info_dataframe(force_distances=self.x == "min_temp_dist")
+
+        qcolor = self.color in df.columns
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             finite_y = np.isfinite(df[self.y].values)
             finite_x = np.isfinite(df[self.x].values)
             df_show = df[np.logical_and(finite_y, finite_x)]
+
+            if qcolor:
+                ax.scatter(
+                    df_show[self.x], df_show[self.y], c=df_show[self.color], cmap=plt.get_cmap(self.quant_cmap), lw=0
+                )
+
             sns.regplot(
                 data=df_show,
                 x=self.x,
                 y=self.y,
-                logistic=True,
-                # logx=self.log_x,
-                color=self.color,
+                logistic=self.logistic,
+                lowess=self.lowess,
                 ax=ax,
+                scatter=not qcolor,
+                line_kws=dict(color='k'),
+                **({} if qcolor else dict(color=self.color)),
             )
-        if self.log_x:
+        if self.log_x and self.log_y:
+            ax.loglog()
+        elif self.log_x:
             ax.semilogx()
+        elif self.log_y:
+            ax.semilogy()
         met = df[self.y].mean()
         n_inf_y = np.logical_not(finite_y).sum()
         n_inf_x = np.logical_not(finite_x).sum()
@@ -521,6 +574,7 @@ class MetricRegPlot(ComparisonPlot):
         if n_inf_y or n_inf_x:
             title = f"{title}, yinf: {n_inf_y}, xinf: {n_inf_x}"
         ax.set_title(title, fontsize="small")
+        ax.grid(which='both')
 
 
 class MetricDistribution(ComparisonPlot):
@@ -572,6 +626,7 @@ class MetricDistribution(ComparisonPlot):
             ax.tick_params(axis="x", rotation=90)
             ax.set_ylim([-0.05, 1.05])
             ax.set(xlabel=None, ylabel=None)
+            ax.grid(which='both', axis='y')
 
 
 class TemplateDistanceMatrix(ComparisonPlot):
@@ -579,7 +634,7 @@ class TemplateDistanceMatrix(ComparisonPlot):
     width = 3
     height = 1
 
-    def __init__(self, cmap=plt.cm.magma_r):
+    def __init__(self, cmap=plt.cm.magma):
         self.cmap = cmap
 
     def draw(self, panel, comparison):
@@ -597,43 +652,48 @@ class TemplateDistanceMatrix(ComparisonPlot):
         ax.set_xlabel(f"{comparison.tested_name} unit")
 
 
-class TrimmedTemplateDistanceMatrix(ComparisonPlot):
-    kind = "matrix"
-    width = 3
-    height = 2
-
-    def __init__(self, cmap=plt.cm.magma_r):
-        self.cmap = cmap
-
-    def draw(self, panel, comparison):
-        agreement = comparison.comparison.get_ordered_agreement_scores()
-        row_order = agreement.index
-        dist = comparison.template_distances[row_order, :]
-
-        ax = panel.subplots()
-        log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
-        im = ax.imshow(dist, norm=log1p_norm, cmap=self.cmap)
-        plt.colorbar(im, ax=ax, shrink=0.3)
-        ax.set_title("Hung. match temp dists")
-        ax.set_ylabel(f"{comparison.gt_name} unit")
-        ax.set_xlabel(f"{comparison.tested_name} unit")
-
-
 class SpuriousTemplates(ComparisonPlot):
     kind = "wide"
     width = 3
-    height = 1
+    height = 2
 
     def draw(self, panel, comparison):
         ax = panel.subplots()
         d = np.nan_to_num(comparison.template_distances, nan=np.inf)
+        vm = min(d.min(0).max(), d.min(1).max())
         min_gt_dist_for_tested_units = d.min(axis=0)
         finite = np.isfinite(min_gt_dist_for_tested_units)
-        ax.hist(min_gt_dist_for_tested_units[finite], bins=96, c='orange')
+        x = min_gt_dist_for_tested_units[finite]
+        bins = np.logspace(np.log10(d.min()), np.log10(vm), 96)
+        ax.hist(x, bins=bins, color='orange', log=True)
+        ax.semilogx()
         ax.set_xlabel('dist to GT (min over GT of tested-GT dists)')
         ax.set_ylabel('count')
         ninf = np.logical_not(finite).sum()
         ax.set_title(f'tested template distances to GT library ({ninf} infs)', fontsize='small')
+        ax.grid(which='both')
+
+
+class MissingTemplates(ComparisonPlot):
+    kind = "wide"
+    width = 3
+    height = 2
+
+    def draw(self, panel, comparison):
+        ax = panel.subplots()
+        d = np.nan_to_num(comparison.template_distances, nan=np.inf)
+        vm = min(d.min(0).max(), d.min(1).max())
+        min_tested_dist_for_gt_units = d.min(axis=1)
+        finite = np.isfinite(min_tested_dist_for_gt_units)
+        x = min_tested_dist_for_gt_units[finite]
+        bins = np.logspace(np.log10(d.min()), np.log10(vm), 96)
+        ax.hist(x, bins=bins, color='orange', log=True)
+        ax.semilogx()
+        ax.set_xlabel('dist to tested (min over tested of tested-GT dists)')
+        ax.set_ylabel('count')
+        ninf = np.logical_not(finite).sum()
+        ax.set_title(f'GT template distances to tested library ({ninf} infs)', fontsize='small')
+        ax.grid(which='both')
 
 
 box = MetricDistribution(flavor="box", width=2, height=3.5)
@@ -646,8 +706,10 @@ full_gt_overview_plots = (
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
     MetricRegPlot(x="min_temp_dist", y="precision", color="g"),
-    MetricRegPlot(x="gt_ptp_amplitude", y="temp_dist", color="orange"),
-    MetricRegPlot(x="gt_firing_rate", y="temp_dist", color="orange"),
+    MetricRegPlot(x="min_temp_dist", y="recall", color="gt_ptp_amplitude", log_x=True),
+    MetricRegPlot(x="min_temp_dist", y="unsorted_recall", color="gt_ptp_amplitude", log_x=True),
+    MetricRegPlot(x="gt_ptp_amplitude", y="min_temp_dist", color="orange", logistic=False, lowess=True, log_y=True),
+    MetricRegPlot(x="gt_firing_rate", y="min_temp_dist", color="orange", logistic=False, lowess=True, log_y=True),
     MetricRegPlot(
         x="gt_ptp_amplitude", y="unsorted_recall", color="purple"
     ),
@@ -655,7 +717,8 @@ full_gt_overview_plots = (
     MetricDistribution(),
     TrimmedAgreementMatrix(),
     TrimmedTemplateDistanceMatrix(),
-    SpuriousTemplates()
+    SpuriousTemplates(),
+    MissingTemplates(),
 )
 
 default_gt_overview_plots = (

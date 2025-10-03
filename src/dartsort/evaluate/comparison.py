@@ -30,6 +30,7 @@ class DARTsortGroundTruthComparison:
     distance_kind: Literal["rms", "max", "deconv"] = "deconv"
 
     def __post_init__(self):
+        self._check()
         self.comparison = GroundTruthComparison(
             gt_sorting=self.gt_analysis.sorting.to_numpy_sorting(),
             tested_sorting=self.tested_analysis.sorting.to_numpy_sorting(),
@@ -53,6 +54,20 @@ class DARTsortGroundTruthComparison:
         self._unsorted_detection = None
         if self.compute_unsorted_recall:
             self._calculate_unsorted_detection()
+
+    def _check(self):
+        gt_td = self.gt_analysis.template_data
+        tested_td = self.tested_analysis.template_data
+        if gt_td is not None and tested_td is not None:
+            gt_rg = gt_td.registered_geom
+            tested_rg = tested_td.registered_geom
+            if gt_rg is None:
+                assert tested_rg is None
+            if not np.array_equal(gt_rg, tested_rg):
+                raise ValueError(
+                    f"Template data had different registered geoms: "
+                    f"{gt_rg.shape=} {tested_rg.shape=}"
+                )
 
     @property
     def gt_name(self):
@@ -130,10 +145,6 @@ class DARTsortGroundTruthComparison:
             device="cpu",
             min_spatial_cosine=0.1,
             distance_kind=self.distance_kind,
-        )
-        assert dists.shape == (
-            self.gt_analysis.sorting.n_units,
-            self.tested_analysis.sorting.n_units,
         )
         self._template_distances = dists
 

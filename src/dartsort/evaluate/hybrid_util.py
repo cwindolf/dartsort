@@ -1,4 +1,5 @@
 import dataclasses
+from logging import getLogger
 from pathlib import Path
 import time
 from typing import Generator, Any
@@ -21,6 +22,9 @@ from ..util.data_util import DARTsortSorting
 from ..util.internal_config import unshifted_raw_template_cfg, ComputationConfig
 from ..config import DeveloperConfig
 from . import simkit, comparison, analysis
+
+
+logger = getLogger(__name__)
 
 
 def get_drifty_hybrid_recording(
@@ -333,7 +337,7 @@ def load_dartsort_step_sortings(
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
     recluster_format="recluster{step}",
-    mtime_gap_minutes=20,
+    mtime_gap_minutes=0,
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered.
 

@@ -624,10 +624,11 @@ def get_deconv_resid_decrease_iter(
 def combine_templates(template_data_a, template_data_b):
     rgeom = template_data_a.registered_geom
     if rgeom is not None:
-        assert np.array_equal(rgeom, template_data_b.registered_geom)
-    locs = template_data_a.registered_template_depths_um
-    if locs is not None:
-        locs = np.concatenate((locs, template_data_b.registered_template_depths_um))
+        if not np.array_equal(rgeom, template_data_b.registered_geom):
+            raise ValueError(
+                f"Template data had different registered geoms: "
+                f"{template_data_a.registered_geom=} {template_data_b.registered_geom=}"
+            )
 
     ids_a = template_data_a.unit_ids
     ids_b = template_data_b.unit_ids + ids_a.max() + 1
@@ -649,7 +650,6 @@ def combine_templates(template_data_a, template_data_b):
         unit_ids=unit_ids,
         spike_counts=spike_counts,
         registered_geom=rgeom,
-        registered_template_depths_um=locs,
         spike_counts_by_channel=spike_counts_by_channel,
     )
 

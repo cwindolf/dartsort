@@ -753,7 +753,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
     template_cfg = TemplateConfig(
-        denoising_fit_radius=cfg.fit_radius_um, realign_shift_ms=cfg.alignment_ms
+        denoising_fit_radius=cfg.fit_radius_um,
+        realign_shift_ms=cfg.alignment_ms,
+        spikes_per_unit=cfg.template_spikes_per_unit,
+        reduction=cfg.template_reduction,
+        denoising_method=cfg.template_denoising_method,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -879,6 +883,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         ),
         cd_iter=cfg.matching_cd_iter,
         coarse_cd=cfg.matching_coarse_cd,
+        min_template_snr=cfg.min_template_snr,
+        min_template_count=cfg.min_template_count,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,

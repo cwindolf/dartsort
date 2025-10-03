@@ -111,7 +111,7 @@ class DARTsortAnalysis:
         if hdf5_path:
             featurization_pipeline = get_featurization_pipeline(sorting)
 
-        if template_data is None and allow_template_reload:
+        if template_data is None and allow_template_reload and hdf5_path is not None:
             model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
             template_npz = model_dir / "template_data.npz"
             have_templates = template_npz.exists()
