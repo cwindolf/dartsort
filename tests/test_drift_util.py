@@ -117,8 +117,8 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     upward_drift = max(0, -motion_est.displacement.min())
     assert upward_drift >= 0
     assert downward_drift >= 0
-    pitches_pad_up = int(np.ceil(upward_drift / pitch))
-    pitches_pad_down = int(np.ceil(downward_drift / pitch))
+    pitches_pad_up = int(np.round(upward_drift / pitch))
+    pitches_pad_down = int(np.round(downward_drift / pitch))
     min_distance = min(pitch / 2, pdist(geom).min() / 2)
     unique_shifted_positions = list(geom)
     for shift in range(-pitches_pad_down, pitches_pad_up + 1):

@@ -10,6 +10,7 @@ common_params = dict(
     noise_kind="white",
 )
 drift_params = {"y": dict(drift_speed=1.0), "n": dict(drift_speed=0.0)}
+do_full_size_sims = False
 
 
 @pytest.fixture(scope="session")
@@ -49,8 +50,11 @@ def simulations(tmp_path_factory, mini_simulations):
     assert len(sim_settings) == 2
 
     sims = {**mini_simulations}
-    for sim_name, kw in sim_settings.items():
-        p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
-        sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
+    if do_full_size_sims:
+        for sim_name, kw in sim_settings.items():
+            p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
+            sims[sim_name] = simkit.generate_simulation(
+                p / "sim", p / "noise", **kw
+            )
 
     return sims

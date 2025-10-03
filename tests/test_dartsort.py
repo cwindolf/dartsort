@@ -6,8 +6,10 @@ import dartsort
 
 
 @pytest.mark.parametrize("do_motion_estimation", [False, True])
-def test_fakedata_nonn(tmp_path, simulations, do_motion_estimation):
-    sim_name = "drifty_szreg" if do_motion_estimation else "driftn_szreg"
+@pytest.mark.parametrize("sim_size", ["mini"])
+def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
+    sim_name = "drifty" if do_motion_estimation else "driftn"
+    sim_name = f"{sim_name}_sz{sim_size}"
     sim_recording = simulations[sim_name]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
@@ -65,8 +67,9 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 
 
 @pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
-def test_fakedata(tmp_path, simulations, sdcfg):
-    sim_recording = simulations["driftn_szreg"]["recording"]
+@pytest.mark.parametrize("sim_size", ["mini"])
+def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
+    sim_recording = simulations[f"driftn_sz{sim_size}"]["recording"]
 
     cfg = dartsort.DARTsortInternalConfig(
         initial_detection_cfg=dartsort.SubtractionConfig(
@@ -122,7 +125,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         dredge_only=True,
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
-        save_intermediate_features=True,
+        save_intermediates=True,
         cumulant_order=cumulant_order,
     )
     res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)

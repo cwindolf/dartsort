@@ -242,16 +242,10 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 grid=True,
             )
             centerpc = pconv[:, spike_length_samples - 1]
-            print(f"{pconv.shape=}")
-            print(f"{pconv.abs().max()=}")
             for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
                 tempupb = tempup.compressed_upsampled_templates[
                     tempup.compressed_upsampling_map[ib, up]
                 ]
-                print(f"{tempupb.shape=}")
-                print(f"{lrt.temporal_components[ib].shape=}")
-                print(f"{lrt.singular_values[ib].shape=}")
-                print(f"{lrt.spatial_components[ib].shape=}")
                 tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
                 tc = (templates[ia] * tupb).sum()
 
@@ -262,7 +256,6 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 conv_in = torch.as_tensor(tempupb[None]).mT[None]
                 pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
                 pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
-                print(f"{(pcf-pconv_).abs().max()=}")
                 assert torch.isclose(pcf, pconv_).all()
 
                 pconv2 = (

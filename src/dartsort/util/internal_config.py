@@ -729,7 +729,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
-            peak_sign=cfg.preak_sign,
+            peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
