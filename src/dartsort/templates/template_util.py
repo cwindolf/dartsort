@@ -280,14 +280,7 @@ def svd_compress_templates(
 
     if not channel_sparse:
         vis_templates = torch.as_tensor(templates * vis_mask)
-        try:
-            U, S, Vh = torch.linalg.svd(
-                vis_templates, full_matrices=False, driver='gesvda'
-            )
-        except torch.linalg.LinAlgError:
-            U, S, Vh = torch.linalg.svd(
-                vis_templates, full_matrices=False, driver='gesvd'
-            )
+        U, S, Vh = _svd_helper(vis_templates)
         # s is descending.
         temporal_components = U[:, :, :rank].astype(dtype).numpy(force=True)
         singular_values = s[:, :rank].astype(dtype).numpy(force=True)
@@ -325,17 +318,14 @@ def svd_compress_templates(
                 batch_x = templates[binds[:, None], :, mask[None, :]].to(dev)
                 # fancy ix comes to the front
                 assert batch_x.shape == (be - bs, mask.numel(), t)
-                try:
-                    U, S, Vh = torch.linalg.svd(
-                        batch_x, full_matrices=False, driver='gesvda'
-                    )
-                except torch.linalg.LinAlgError:
-                    U, S, Vh = torch.linalg.svd(
-                        batch_x, full_matrices=False, driver='gesvd'
-                    )
-                spatial_components[binds[:, None], :rankj, mask[None, :]] = U[:, :, :rankj].numpy(force=True)
+                U, S, Vh = _svd_helper(batch_x)
+                spatial_components[binds[:, None], :rankj, mask[None, :]] = U[
+                    :, :, :rankj
+                ].numpy(force=True)
                 singular_values[binds, :rankj] = S[:, :rankj].numpy(force=True)
-                temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.numpy(force=True)
+                temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.numpy(
+                    force=True
+                )
 
     if allow_na:
         isna = np.broadcast_to(isna, spatial_components.shape)
@@ -353,7 +343,7 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(
@@ -461,9 +451,9 @@ def compressed_upsampled_templates(
     )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[compressed_upsampling_index < 0] = (
-        current_compressed_index
-    )
+    compressed_upsampling_index[
+        compressed_upsampling_index < 0
+    ] = current_compressed_index
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(
@@ -487,3 +477,21 @@ def compressed_upsampled_templates(
         template_indices,
         upsampling_indices,
     )
+
+
+def _svd_helper(x):
+    """This matches numpy's behavior in tests/test_matching.py."""
+    if x.device.type == "cuda":
+        # torch's cuda results need a certain driver to agree with numpy
+        try:
+            return torch.linalg.svd(x, full_matrices=False, driver="gesvda")
+        except torch.linalg.LinAlgError:
+            return torch.linalg.svd(x, full_matrices=False, driver="gesvd")
+    else:
+        # torch's CPU results are disagreeing with numpy here.
+        # return torch.linalg.svd(x, full_matrices=False)
+        U, S, Vh = np.linalg.svd(x.numpy(), full_matrices=False)
+        U = torch.from_numpy(U)
+        S = torch.from_numpy(S)
+        Vh = torch.from_numpy(Vh)
+        return U, S, Vh
