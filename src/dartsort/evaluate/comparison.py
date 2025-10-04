@@ -199,12 +199,22 @@ class DARTsortGroundTruthComparison:
 
         assert matched_gt_indices.size == matched_tested_indices.size
 
+        # add unsorted matches and misses
+        if self.unsorted_detection is None:
+            unsorted_tp_indices = unsorted_fn_indices = None
+        else:
+            unsorted_match_mask = self.unsorted_detection[in_gt_unit]
+            unsorted_tp_indices = in_gt_unit[unsorted_match_mask]
+            unsorted_fn_indices = in_gt_unit[np.logical_not(unsorted_match_mask)]
+
         return dict(
             tested_unit=tested_unit,
             matched_tested_indices=matched_tested_indices,
             matched_gt_indices=matched_gt_indices,
             only_gt_indices=only_gt_indices,
             only_tested_indices=only_tested_indices,
+            unsorted_tp_indices=unsorted_tp_indices,
+            unsorted_fn_indices=unsorted_fn_indices,
         )
 
     def get_raw_waveforms_by_category(
@@ -266,5 +276,19 @@ class DARTsortGroundTruthComparison:
             which=ind_groups["only_tested_indices"],
             **waveform_kw,
         )
+
+        if self.unsorted_detection is None:
+            w["unsorted_tp"] = w["unsorted_fn"] = None
+        else:
+            w["which_unsorted_tp"], w["unsorted_tp"], *_ = self.gt_analysis.unit_raw_waveforms(
+                gt_unit,
+                which=ind_groups["unsorted_tp_indices"],
+                **waveform_kw,
+            )
+            w["which_unsorted_fn"], w["unsorted_fn"], *_ = self.gt_analysis.unit_raw_waveforms(
+                gt_unit,
+                which=ind_groups["unsorted_fn_indices"],
+                **waveform_kw,
+            )
 
         return w

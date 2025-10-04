@@ -16,7 +16,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import get_global_computation_config
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
-from . import over_time, scatterplots, unit, gt
+from . import over_time, scatterplots, unit, gt, unit_comparison
 from .sorting import make_sorting_summary
 
 try:
@@ -40,6 +40,8 @@ def visualize_sorting(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
+    make_gt_overviews=True,
+    make_unit_comparisons=True,
     sorting_analysis=None,
     template_cfg=unshifted_template_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -89,7 +91,7 @@ def visualize_sorting(
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
-    sorting_analysis, *paths_or_nones = _ensure_analysis(
+    sorting_analysis, gt_comparison, *paths_or_nones = _ensure_analysis(
         output_directory,
         recording,
         sorting,
@@ -97,13 +99,17 @@ def visualize_sorting(
         make_sorting_summaries=make_sorting_summaries,
         make_unit_summaries=make_unit_summaries,
         make_animations=make_animations,
+        make_gt_overviews=make_gt_overviews,
+        make_unit_comparisons=make_unit_comparisons,
         sorting_analysis=sorting_analysis,
         gt_analysis=gt_analysis,
         overwrite=overwrite,
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
+        exhaustive_gt=exhaustive_gt,
+        gt_comparison_with_distances=gt_comparison_with_distances,
     )
-    summary_png, unit_summary_dir, anim_png, comp_png = paths_or_nones
+    summary_png, unit_summary_dir, anim_png, comp_png, unit_comp_dir = paths_or_nones
 
     try:
         if summary_png is not None:
@@ -133,21 +139,36 @@ def visualize_sorting(
 
     if comp_png is not None and gt_analysis is not None:
         if overwrite or not comp_png.exists():
-            assert sorting_analysis is not None
-            gt_comp = DARTsortGroundTruthComparison(
-                gt_analysis=gt_analysis,
-                tested_analysis=sorting_analysis,
-                exhaustive_gt=exhaustive_gt,
-                compute_distances=gt_comparison_with_distances,
+            assert gt_comparison is not None
+            plots = (
+                gt.full_gt_overview_plots
+                if gt_comparison_with_distances
+                else gt.default_gt_overview_plots
             )
-            plots = gt.full_gt_overview_plots if gt_comparison_with_distances else gt.default_gt_overview_plots
-            fig = gt.make_gt_overview_summary(gt_comp, plots=plots)
+            fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
             fig.savefig(comp_png, dpi=dpi)
 
     if unit_summary_dir is not None:
         unit.make_all_summaries(
             sorting_analysis,
             unit_summary_dir,
+            channel_show_radius_um=channel_show_radius_um,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            amplitudes_dataset_name=amplitudes_dataset_name,
+            pca_radius_um=pca_radius_um,
+            max_height=layout_max_height,
+            figsize=layout_figsize,
+            dpi=dpi,
+            show_progress=True,
+            overwrite=overwrite,
+            n_jobs=computation_cfg.n_jobs_cpu,
+        )
+
+    if unit_comp_dir is not None and gt_analysis is not None:
+        assert gt_comparison is not None
+        unit_comparison.make_all_unit_comparisons(
+            gt_comparison,
+            unit_comp_dir,
             channel_show_radius_um=channel_show_radius_um,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
@@ -170,6 +191,8 @@ def visualize_all_sorting_steps(
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
+    make_gt_overviews=True,
+    make_unit_comparisons=True,
     step_sortings=None,
     template_cfg=unshifted_template_cfg,
     gt_comparison_with_distances=True,
@@ -232,6 +255,8 @@ def visualize_all_sorting_steps(
                 make_sorting_summaries=make_sorting_summaries,
                 make_unit_summaries=make_unit_summaries,
                 make_animations=make_animations,
+                make_gt_overviews=make_gt_overviews,
+                make_unit_comparisons=make_unit_comparisons,
                 gt_analysis=gt_analysis,
                 exhaustive_gt=exhaustive_gt,
                 gt_comparison_with_distances=gt_comparison_with_distances,
@@ -298,16 +323,27 @@ def _ensure_analysis(
     make_sorting_summaries=False,
     make_unit_summaries=False,
     make_animations=False,
+    make_gt_overviews=False,
+    make_unit_comparisons=False,
     sorting_analysis=None,
     gt_analysis=None,
     template_cfg=unshifted_template_cfg,
+    exhaustive_gt=True,
+    gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
 ):
     if computation_cfg is None:
         computation_cfg = get_global_computation_config()
+
+    # goal of this fn is to figure out if we need to instantiate these
+    # SortingAnalysis and GTComparison objects, or if we can skip everything
     need_analysis = False
+    need_comparison = False
+
+    # can't compare or analyze units if there aren't any
     is_labeled = sorting.n_units > 1
+
     if make_sorting_summaries and is_labeled:
         sorting_summary_png = output_directory / "sorting_summary.png"
         need_summary = overwrite or not sorting_summary_png.exists()
@@ -317,7 +353,6 @@ def _ensure_analysis(
     else:
         sorting_summary_png = None
 
-    summaries_done = False
     if make_unit_summaries and is_labeled:
         unit_summary_dir = output_directory / "single_unit_summaries"
         if overwrite:
@@ -341,14 +376,30 @@ def _ensure_analysis(
     else:
         animation_png = None
 
-    if gt_analysis is not None and is_labeled:
+    if gt_analysis is not None and is_labeled and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
         need_comp = overwrite or not comparison_png.exists()
         need_analysis = need_analysis or need_comp
+        need_comparison = need_comparison or need_comp
         if not need_comp:
             comparison_png = None
     else:
         comparison_png = None
+
+    if gt_analysis is not None and is_labeled and make_unit_comparisons:
+        unit_comparison_dir = output_directory / "gt_unit_comparisons"
+        if overwrite:
+            need_ucomps = True
+        else:
+            need_ucomps = not unit.all_summaries_done(
+                gt_analysis.sorting.unit_ids, unit_comparison_dir
+            )
+        need_analysis = need_analysis or need_ucomps
+        need_comparison = need_comparison or need_ucomps
+        if not need_ucomps:
+            unit_comparison_dir = None
+    else:
+        unit_comparison_dir = None
 
     if need_analysis and sorting_analysis is None:
         sorting_analysis = DARTsortAnalysis.from_sorting(
@@ -361,10 +412,24 @@ def _ensure_analysis(
             computation_cfg=computation_cfg,
         )
 
+    if need_comparison:
+        assert sorting_analysis is not None
+        assert gt_analysis is not None
+        gt_comparison = DARTsortGroundTruthComparison(
+            gt_analysis=gt_analysis,
+            tested_analysis=sorting_analysis,
+            exhaustive_gt=exhaustive_gt,
+            compute_distances=gt_comparison_with_distances,
+        )
+    else:
+        gt_comparison = None
+
     return (
         sorting_analysis,
+        gt_comparison,
         sorting_summary_png,
         unit_summary_dir,
         animation_png,
         comparison_png,
+        unit_comparison_dir,
     )
