@@ -54,7 +54,7 @@ class UnitComparisonPlot(BasePlot):
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         raise NotImplementedError
 
-    def neighbors(self, comparison, unit_id, which="gt", method=None, n=None):
+    def neighbors(self, comparison, unit_id, which=None, method=None, n=None):
         """Gather neighboring tested or GT ids and templates for a GT unit."""
         # TODO: maybe this should be a method of the comparison? or it should
         # call one which has most of this logic? (nice to set neighbor_method
@@ -63,6 +63,9 @@ class UnitComparisonPlot(BasePlot):
             method = self.neighbor_method
         if n is None:
             n = self.n_neighbors
+        if which is None:
+            which = self.which
+        assert which in ("gt", "tested")
 
         if method == "templates" and which == "gt":
             ids, dists, templates = comparison.nearby_gt_templates(unit_id, n_neighbors=n)
@@ -106,17 +109,21 @@ class UnitComparisonPlot(BasePlot):
 class GTUnitTextInfo(UnitComparisonPlot):
     kind = "_info"
     width = 3
-    height = 2.5
+    height = 2.25
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         axis = panel.subplots()
         axis.axis("off")
-        msg = f"GT unit: {unit_id}\n"
-        msg += f"Hung. match: {tested_unit_id}\n"
+
+        gtn = comparison.gt_analysis.name
+        tn = comparison.tested_analysis.name
+
+        msg = f"{gtn} unit: {unit_id}\n"
+        msg += f"{tn} Hung. match: {tested_unit_id}\n"
         best_match_id = comparison.get_best_match(unit_id)
-        msg += f"Best match: {best_match_id}\n"
+        msg += f"{tn} best match: {best_match_id}\n"
         if best_match_id != tested_unit_id:
-            msg += " -!- Hungarian =/= best -!-\n"
+            msg += " -!!!- Hungarian =/= best. -!!!-\n"
         msg += "\n"
 
         gt_nspikes = comparison.gt_analysis.spike_counts[
@@ -125,21 +132,21 @@ class GTUnitTextInfo(UnitComparisonPlot):
         tested_nspikes = comparison.tested_analysis.spike_counts[
             comparison.tested_analysis.unit_ids == tested_unit_id
         ].sum()
-        msg += f"{gt_nspikes} spikes in GT unit\n"
-        msg += f"{tested_nspikes} spikes in matched unit\n"
+        msg += f"{gt_nspikes} spikes in {gtn} unit\n"
+        msg += f"{tested_nspikes} spikes in {tn} unit\n"
         msg += "\n"
         
         gt_temp = comparison.gt_analysis.coarse_template_data.unit_templates(unit_id)
         gt_ptp = np.ptp(gt_temp, 1).max(1).squeeze()
         assert gt_ptp.size == 1
-        msg += f"GT PTP: {gt_ptp:0.1f}\n"
+        msg += f"{gtn} PTP: {gt_ptp:0.1f}\n"
 
         if tested_unit_id >= 0:
             tested_temp = comparison.tested_analysis.coarse_template_data.unit_templates(
                 tested_unit_id
             )
             tested_ptp = np.ptp(tested_temp, 1).max(1).squeeze()
-            msg += f"matched PTP: {tested_ptp:0.1f}\n"
+            msg += f"{tn} Hung. PTP: {tested_ptp:0.1f}\n"
         msg += "\n"
 
         inds = comparison.get_spikes_by_category(unit_id)
@@ -162,7 +169,7 @@ class GTUnitTextInfo(UnitComparisonPlot):
 class MatchVennPlot(UnitComparisonPlot):
     kind = "venn"
     width = 3
-    height = 1.75
+    height = 1.5
 
     def __init__(
         self,
@@ -201,7 +208,7 @@ class MatchVennPlot(UnitComparisonPlot):
 class UnsortedVennPlot(UnitComparisonPlot):
     kind = "venn"
     width = 3
-    height = 1.75
+    height = 1.5
 
     def __init__(
         self,
@@ -441,7 +448,11 @@ class NearbyTemplates(UnitComparisonPlot):
         self.neighbor_method = neighbor_method
 
     def draw(self, panel, comparison, unit_id):
-        neighb_ids, templates = self.neighbors(comparison, unit_id, which=self.which)
+        try:
+            neighb_ids, templates = self.neighbors(comparison, unit_id, which=self.which)
+        except Exception:
+            neighbor_error_panel(self, panel, unit_id)
+            return
         # reverse so matched/gt unit comes last for draw order
         neighb_ids = neighb_ids[::-1]
         templates = templates[::-1]
@@ -525,7 +536,11 @@ class NearbyTemplatesDistanceMatrix(UnitComparisonPlot):
         self.cmap = plt.get_cmap(cmap)
 
     def draw(self, panel, comparison, unit_id):
-        gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+        try:
+            gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+        except Exception:
+            neighbor_error_panel(self, panel, unit_id, which="gt")
+            return
         tested_neighb_ids, _ = self.neighbors(comparison, unit_id, which="tested")
         dists = comparison.template_distances[gt_neighb_ids][:, tested_neighb_ids]
         ax = panel.subplots()
@@ -560,7 +575,11 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         self.neighbor_method = neighbor_method
 
     def draw(self, panel, comparison, unit_id):
-        gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+        try:
+            gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+        except Exception:
+            neighbor_error_panel(self, panel, unit_id, which="gt")
+            return
         tested_neighb_ids, _ = self.neighbors(comparison, unit_id, which="tested")
 
         if self.confusion_kind == "siconfusion":
@@ -608,7 +627,6 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
         conf = np.abs(np.clip(conf, min=0.0))
-        logger.info(f"{unit_id=} {self.confusion_kind=} {conf=}")
     
         ax = panel.subplots()
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0, vmax=max(conf.max(), 0.01))
@@ -628,18 +646,20 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
 
 
 class NeighborCCGBreakdown(UnitComparisonPlot):
-    """Tested unit's CCG with nearby GT units, broken down by fp/fn."""
+    """Tested unit's CCG with nearby GT or tested units, broken down by fp/fn."""
     kind = "ccg"
     width = 3
 
     def __init__(
         self,
         n_neighbors=5,
+        which="gt",
         neighbor_method="templates",
         categories=("fn", "fp"),
         max_lag=50,
     ):
         self.n_neighbors = n_neighbors
+        self.which = which
         self.neighbor_method = neighbor_method
         self.height = 1 + 1.5 * len(categories)
         self.categories = categories
@@ -647,24 +667,29 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
         self.max_lag = max_lag
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
-        gt_ids, _ = self.neighbors(comparison, unit_id, which="gt", n=self.n_neighbors + 1)
-        gt_ids = gt_ids[1:]  # remove main.
-        gta = comparison.gt_analysis
+        try:
+            ids, _ = self.neighbors(comparison, unit_id, n=self.n_neighbors + 1)
+        except Exception:
+            neighbor_error_panel(self, panel, unit_id, tested_unit_id)
+            return
+        if self.which == "gt":
+            ids = ids[1:]  # remove main.
         ta = comparison.tested_analysis
-        gt_sts = {u: gta.times_samples(gta.in_unit(u)) for u in gt_ids}
+        va = comparison.gt_analysis if self.which == "gt" else ta
+        vsts = {u: va.times_samples(va.in_unit(u)) for u in ids}
         cat_spikes = comparison.get_spikes_by_category(unit_id, tested_unit_id)
-        colors = glasbey1024[gt_ids % len(glasbey1024)]
+        colors = glasbey1024[ids % len(glasbey1024)]
 
         axes = panel.subplots(nrows=len(self.categories), sharex=True)
         h = 1.5 * len(self.categories)
         for cat, ax in zip(self.categories, axes.flat):
             cat_st = cat_spikes[f"{cat}_times_samples"]
             ccgs = []
-            for u, gt_st in gt_sts.items():
-                clags, ccg = correlogram(cat_st, gt_st, max_lag=self.max_lag)
+            for u, vst in vsts.items():
+                clags, ccg = correlogram(cat_st, vst, max_lag=self.max_lag)
                 ccgs.append(ccg)
 
-            stackbar(ax, clags, ccgs, colors=colors, labels=gt_ids)
+            stackbar(ax, clags, ccgs, colors=colors, labels=ids)
             sns.despine(ax=ax, left=True)
             if cat == self.categories[0]:
                 ax.legend(
@@ -674,18 +699,18 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
                     handlelength=1.0,
                     columnspacing=1.0,
                     frameon=False,
-                    ncols=min(3, len(gt_ids)),
+                    ncols=min(3, len(ids)),
                     bbox_to_anchor=(0, 1, h / (1 + h), 1 / h),
                 )
             ax.grid(which='both')
             ax.axvline(0, lw=0.8, color='k', alpha=0.5)
-            ax.set_ylabel(f'GTCCG v. {cat}', color=_class_colors[cat])
+            ax.set_ylabel(f'{va.name} CCG v. {cat}', color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
         ax.set_xlabel('lag (samples)')
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
-        panel.suptitle(f"{ns} GT CCGs for {cs}", fontsize=10)
+        panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)
         
 
 
@@ -695,6 +720,7 @@ def _get_default_unit_comparison_plots():
         MatchVennPlot(),
         UnsortedVennPlot(),
         NeighborCCGBreakdown(),
+        NeighborCCGBreakdown(which="tested"),
         NeighborCCGBreakdown(neighbor_method="siagreement"),
         NearbyTemplatesDistanceMatrix(),
         # NearbyTemplatesConfusionMatrix(),
@@ -786,3 +812,18 @@ def make_all_unit_comparisons(
         taskname="comparisons",
         **other_global_params,
     )
+
+
+def neighbor_error_panel(
+    plot_obj, panel, unit_id, tested_unit_id=None, which=None
+):
+    ax = panel.subplots()
+    ax.text(
+        0,
+        0,
+        f"no {which or plot_obj.which} neighbor for gt unit {unit_id}\n"
+        f"and tested unit {tested_unit_id} with method\n"
+        f"{plot_obj.neighbor_method} in {plot_obj.__class__.__name__}",
+        fontsize=8,
+    )
+    ax.axis("off")

@@ -357,14 +357,14 @@ def bar(ax, x, y, **kwargs):
 
 
 def stackbar(ax, x, y, colors, labels, fill=True):
-    bottom = 0 if fill else None
+    bottom = np.zeros_like(y[0]) if fill else None
     handles = []
     for yy, cc, ll in zip(y, colors, labels):
         ckw = dict(facecolor=cc, edgecolor=None, lw=0) if fill else dict(color=cc)
-        h = bar(ax, x, yy, baseline=bottom, label=ll, fill=fill, **ckw)
+        h = bar(ax, x, yy + bottom, baseline=bottom, label=ll, fill=fill, **ckw)
         handles.append(h)
         if fill:
-            bottom = bottom + yy
+            bottom += yy
     return handles
 
 
