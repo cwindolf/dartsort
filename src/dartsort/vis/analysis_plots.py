@@ -356,6 +356,18 @@ def bar(ax, x, y, **kwargs):
     return ax.stairs(y, x0, **kwargs)
 
 
+def stackbar(ax, x, y, colors, labels, fill=True):
+    bottom = 0 if fill else None
+    handles = []
+    for yy, cc, ll in zip(y, colors, labels):
+        ckw = dict(facecolor=cc, edgecolor=None, lw=0) if fill else dict(color=cc)
+        h = bar(ax, x, yy, baseline=bottom, label=ll, fill=fill, **ckw)
+        handles.append(h)
+        if fill:
+            bottom = bottom + yy
+    return handles
+
+
 def plot_correlogram(
     axis, times_a, times_b=None, max_lag=50, color="k", fill=True, **stairs_kwargs
 ):

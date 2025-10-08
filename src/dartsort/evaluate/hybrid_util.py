@@ -167,13 +167,41 @@ def closest_clustering(
     return dataclasses.replace(peel_st, labels=labels, extra_features=extra_features)
 
 
-def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p=2.0):
+def greedy_match(
+    gt_coords,
+    test_coords,
+    max_val=1.0,
+    dx=1.0 / 30,
+    workers=-1,
+    p=2.0,
+    show_progress=True,
+):
+    """Greedily match spikes in a test sorting to those in a GT sorting
+
+    Iteratively expands a spatiotemporal neighborhood around each test spike
+    until a GT spike lands in the neighborhood; then arbitrarily pick from
+    the GT spikes in the neighborhood as a match.
+
+    Each spike in the GT and test spike trains will be matched to only one
+    partner in the other sorting.
+
+    Returns gt unit labels for each tested spike and an array describing
+    whether each gt spike was matched.
+
+    TODO: Be a little smarter. If there are ties, pick "best friend" unit.
+    Could be done with two iterations.
+
+    TODO: Return the gt->test assignments, which are easily computable here,
+    if needed.
+    """
     assignments = np.full(len(test_coords), -1)
     gt_unmatched = np.ones(len(gt_coords), dtype=bool)
 
-    for j, thresh in enumerate(
-        tqdm(np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx), desc="match")
-    ):
+    thresholds = np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx)
+    if show_progress:
+        thresholds = tqdm(thresholds, desc="Greedy match")
+
+    for j, thresh in enumerate(thresholds):
         test_unmatched = np.flatnonzero(assignments < 0)
         if not test_unmatched.size:
             break
@@ -203,10 +231,17 @@ def greedy_match(gt_coords, test_coords, max_val=1.0, dx=1.0 / 30, workers=-1, p
         if thresh > max_val:
             break
 
-    return assignments
+    return assignments, gt_unmatched
 
 
-def greedy_match_counts(gt_sorting, tested_sorting, radius_um=35.0, radius_frames=12):
+def greedy_match_counts(
+    gt_sorting,
+    tested_sorting,
+    radius_um=35.0,
+    radius_frames=12,
+    show_progress=True,
+):
+    """A greedy confusion matrix computed using greedy_match()."""
     from scipy.optimize import linear_sum_assignment
 
     gt_t = gt_sorting.times_samples / radius_frames
@@ -219,8 +254,11 @@ def greedy_match_counts(gt_sorting, tested_sorting, radius_um=35.0, radius_frame
 
     step = min(1.0 / radius_frames, pdist(geom).min() / radius_um) / 2
 
-    test2gt_spike = greedy_match(np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step)
-    counts = np.zeros((gt_sorting.n_units, tested_sorting.n_units), dtype=np.int32)
+    test2gt_spike, gt_unmatched = greedy_match(np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step)
+    counts = np.zeros(
+        (gt_sorting.unit_ids.max() + 1, tested_sorting.unit_ids.max() + 1),
+        dtype=np.int32,
+    )
     test_matched_spike = np.flatnonzero(np.logical_and(test2gt_spike >= 0, tested_sorting.labels >= 0))
 
     matched_gt_labels = gt_sorting.labels[test2gt_spike[test_matched_spike]]
@@ -233,6 +271,7 @@ def greedy_match_counts(gt_sorting, tested_sorting, radius_um=35.0, radius_frame
     return dict(
         counts=counts,
         test2gt_spike=test2gt_spike,
+        gt_unmatched=gt_unmatched,
         test_matched_spike=test_matched_spike,
         matched_gt_labels=matched_gt_labels,
         matched_test_labels=matched_test_labels,
@@ -324,6 +363,10 @@ def sorting_from_spikeinterface(
     )
 
 
+def _same(x):
+    return x
+
+
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
@@ -338,6 +381,7 @@ def load_dartsort_step_sortings(
     step_format="refined{step}",
     recluster_format="recluster{step}",
     mtime_gap_minutes=0,
+    name_formatter=None,
 ) -> Generator[tuple[str, DARTsortSorting], None, None]:
     """Returns list of step names and sortings, ordered.
 
@@ -376,6 +420,9 @@ def load_dartsort_step_sortings(
     if not any(f.exists() for f in relevant_files):
         h5s = []
 
+    if name_formatter is None:
+        name_formatter = _same
+
     for step, h5 in enumerate(h5s):
         if not h5.exists():
             continue
@@ -389,7 +436,10 @@ def load_dartsort_step_sortings(
         if h5 == h5s[0]:
             npy = sorting_dir / "initial_labels.npy"
             if npy.exists():
-                yield ("initial", dataclasses.replace(st0, labels=np.load(npy)))
+                yield (
+                    name_formatter("initial"),
+                    dataclasses.replace(st0, labels=np.load(npy)),
+                )
             else:
                 warnings.warn(f"Initial {npy} does not exist.")
                 yield None, None
@@ -398,28 +448,37 @@ def load_dartsort_step_sortings(
             for npy in other_initial_npys:
                 npy = sorting_dir / npy
                 stem = npy.stem.removesuffix("_labels")
-                yield (stem, dataclasses.replace(st0, labels=np.load(npy)))
+                yield (
+                    name_formatter(stem),
+                    dataclasses.replace(st0, labels=np.load(npy)),
+                )
         else:
-            yield (h5.stem, st0)
+            yield (name_formatter(h5.stem), st0)
 
         # reclustering, if applicable
         reclustr = recluster_format.format(step=step)
         recluster_npy = sorting_dir / f"{reclustr}_labels.npy"
         if recluster_npy.exists():
-            yield (reclustr, dataclasses.replace(st0, labels=np.load(recluster_npy)))
+            yield (
+                name_formatter(reclustr),
+                dataclasses.replace(st0, labels=np.load(recluster_npy)),
+            )
 
         # refinement steps
         stepstr = step_format.format(step=step)
         for npy in sorted(sorting_dir.glob(f"{stepstr}refstep*.npy")):
             yield (
-                npy.stem.removesuffix("_labels"),
+                name_formatter(npy.stem.removesuffix("_labels")),
                 dataclasses.replace(st0, labels=np.load(npy)),
             )
 
         # refinement final
         npy = sorting_dir / f"{stepstr}_labels.npy"
         if npy.exists():
-            yield (stepstr, dataclasses.replace(st0, labels=np.load(npy)))
+            yield (
+                name_formatter(stepstr),
+                dataclasses.replace(st0, labels=np.load(npy)),
+            )
 
 
 def load_dartsort_step_unit_info_dataframes(

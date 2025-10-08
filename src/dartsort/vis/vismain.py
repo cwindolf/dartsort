@@ -1,3 +1,4 @@
+from logging import getLogger
 import pickle
 from pathlib import Path
 import warnings
@@ -28,10 +29,14 @@ except ImportError:
     motion_util = None
 
 
+logger = getLogger(__name__)
+
+
 def visualize_sorting(
     recording,
     sorting,
     output_directory,
+    sorting_name=None,
     sorting_path=None,
     motion_est=None,
     gt_analysis=None,
@@ -52,8 +57,6 @@ def visualize_sorting(
     frame_interval=1500,
     exhaustive_gt=True,
     dpi=200,
-    layout_max_height=4,
-    layout_figsize=(11, 8.5),
     overwrite=False,
     computation_cfg=None,
     errors_to_warnings=True,
@@ -78,7 +81,6 @@ def visualize_sorting(
                 motion_est=motion_est,
                 amplitude_color_cutoff=amplitude_color_cutoff,
                 amplitudes_dataset_name=amplitudes_dataset_name,
-                layout_figsize=layout_figsize,
                 dpi=dpi,
                 overwrite=overwrite,
             )
@@ -95,6 +97,7 @@ def visualize_sorting(
         output_directory,
         recording,
         sorting,
+        sorting_name=sorting_name,
         motion_est=motion_est,
         make_sorting_summaries=make_sorting_summaries,
         make_unit_summaries=make_unit_summaries,
@@ -116,8 +119,6 @@ def visualize_sorting(
             if overwrite or not summary_png.exists():
                 fig = make_sorting_summary(
                     sorting_analysis,
-                    max_height=layout_max_height,
-                    figsize=layout_figsize,
                     figure=None,
                 )
                 fig.savefig(summary_png, dpi=dpi)
@@ -156,8 +157,6 @@ def visualize_sorting(
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
             pca_radius_um=pca_radius_um,
-            max_height=layout_max_height,
-            figsize=layout_figsize,
             dpi=dpi,
             show_progress=True,
             overwrite=overwrite,
@@ -173,8 +172,6 @@ def visualize_sorting(
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
             pca_radius_um=pca_radius_um,
-            max_height=layout_max_height,
-            figsize=layout_figsize,
             dpi=dpi,
             show_progress=True,
             overwrite=overwrite,
@@ -197,19 +194,19 @@ def visualize_all_sorting_steps(
     template_cfg=unshifted_template_cfg,
     gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
+    step_name_formatter=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     motion_est=None,
     motion_est_pkl="motion_est.pkl",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
-    layout_max_height=4,
     exhaustive_gt=True,
-    layout_figsize=(11, 8.5),
     start_from_matching=False,
     dpi=200,
     overwrite=False,
     load_step_sortings_kw=None,
+    reverse=False,
     computation_cfg=None,
 ):
     dartsort_dir = Path(dartsort_dir)
@@ -229,12 +226,22 @@ def visualize_all_sorting_steps(
             dartsort_dir,
             load_simple_features=True,
             load_feature_names=fnames,
+            name_formatter=step_name_formatter,
             **(load_step_sortings_kw or {}),
         )
     assert step_sortings is not None
 
-    with tqdm(step_sortings, desc="Sorting steps", mininterval=0) as prog:
-        for j, (step_name, step_sorting) in enumerate(prog):
+    steps = enumerate(step_sortings)
+    if reverse:
+        logger.info("Reversing the steps...")
+        steps = list(steps)
+        nsteps = len(steps)
+        steps = reversed(steps)
+    else:
+        nsteps = None
+
+    with tqdm(steps, desc="Sorting steps", mininterval=0, total=nsteps) as prog:
+        for j, (step_name, step_sorting) in prog:
             if step_name is None:
                 continue
             if start_from_matching:
@@ -249,6 +256,7 @@ def visualize_all_sorting_steps(
             visualize_sorting(
                 recording=recording,
                 sorting=step_sorting,
+                sorting_name=step_name,
                 output_directory=visualizations_dir / step_dir_name,
                 motion_est=motion_est,
                 make_scatterplots=make_scatterplots,
@@ -265,8 +273,6 @@ def visualize_all_sorting_steps(
                 pca_radius_um=pca_radius_um,
                 template_cfg=template_cfg,
                 dpi=dpi,
-                layout_max_height=layout_max_height,
-                layout_figsize=layout_figsize,
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
             )
@@ -281,16 +287,13 @@ def sorting_scatterplots(
     motion_est=None,
     amplitude_color_cutoff=15.0,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
-    layout_figsize=(11, 8.5),
     dpi=200,
     overwrite=False,
 ):
     scatter_unreg = output_directory / "scatter_unreg.png"
     if overwrite or not scatter_unreg.exists():
-        fig = plt.figure(figsize=layout_figsize)
         fig, axes, scatters = scatterplots.scatter_spike_features(
             sorting=sorting,
-            figure=fig,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
@@ -302,12 +305,10 @@ def sorting_scatterplots(
 
     scatter_reg = output_directory / "scatter_reg.png"
     if motion_est is not None and (overwrite or not scatter_reg.exists()):
-        fig = plt.figure(figsize=layout_figsize)
         fig, axes, scatters = scatterplots.scatter_spike_features(
             sorting=sorting,
             motion_est=motion_est,
             registered=True,
-            figure=fig,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
@@ -319,6 +320,7 @@ def _ensure_analysis(
     output_directory,
     recording,
     sorting,
+    sorting_name=None,
     motion_est=None,
     make_sorting_summaries=False,
     make_unit_summaries=False,
@@ -391,8 +393,12 @@ def _ensure_analysis(
         if overwrite:
             need_ucomps = True
         else:
+            # TODO: unit_comparison.all_summaries_done
             need_ucomps = not unit.all_summaries_done(
-                gt_analysis.sorting.unit_ids, unit_comparison_dir
+                gt_analysis.sorting.unit_ids,
+                unit_comparison_dir,
+                sorting_analysis=gt_analysis,
+                namebyamp=True,
             )
         need_analysis = need_analysis or need_ucomps
         need_comparison = need_comparison or need_ucomps
@@ -402,14 +408,17 @@ def _ensure_analysis(
         unit_comparison_dir = None
 
     if need_analysis and sorting_analysis is None:
+        if sorting_name is None:
+            sorting_name = output_directory.stem
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
             motion_est=motion_est,
-            name=output_directory.stem,
+            name=sorting_name,
             template_cfg=template_cfg,
             allow_template_reload="match" in output_directory.stem,
             computation_cfg=computation_cfg,
+            compute_distances=True,
         )
 
     if need_comparison:

@@ -423,6 +423,7 @@ class DARTsortAnalysis:
     def unit_amplitudes(self, unit_ids=None):
         if unit_ids is None:
             unit_ids = self.unit_ids
+        unit_ids = np.atleast_1d(unit_ids)
         amplitudes = np.zeros(unit_ids.shape)
         for j, unit_id in enumerate(unit_ids):
             temps = self.template_data.unit_templates(unit_id)

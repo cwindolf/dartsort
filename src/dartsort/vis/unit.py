@@ -867,7 +867,6 @@ class SplitStrategyPlot(UnitPlot):
             max_height=self.height,
             figsize=(self.width, self.height),
             figure=panel,
-            hspace=0.0,
         )
         desc = f"not split. {in_unit.size} total spikes."
         if split_result.is_split:
@@ -981,7 +980,6 @@ def make_unit_summary(
     plots=default_plots,
     max_height=4,
     figsize=(16, 8.5),
-    hspace=0.1,
     figure=None,
     gizmo_name="sorting_analysis",
     **other_global_params,
@@ -999,7 +997,6 @@ def make_unit_summary(
         plots,
         max_height=max_height,
         figsize=figsize,
-        hspace=hspace,
         figure=figure,
         unit_id=unit_id,
         **{gizmo_name: sorting_analysis},
@@ -1017,16 +1014,17 @@ def make_all_summaries(
     pca_radius_um=75.0,
     max_height=4,
     figsize=(16, 8.5),
-    hspace=0.1,
     dpi=200,
     image_ext="png",
     n_jobs=None,
     show_progress=True,
+    namebyamp=False,
     overwrite=False,
     unit_ids=None,
     gizmo_name="sorting_analysis",
     n_units=None,
     seed=0,
+    taskname="summaries",
     **other_global_params,
 ):
     save_folder = Path(save_folder)
@@ -1035,7 +1033,9 @@ def make_all_summaries(
     if n_units is not None and n_units < len(unit_ids):
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
-    if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
+    if not overwrite and all_summaries_done(
+        unit_ids, save_folder, sorting_analysis=sorting_analysis, namebyamp=namebyamp, ext=image_ext
+    ):
         return
 
     save_folder.mkdir(exist_ok=True, parents=True)
@@ -1051,13 +1051,13 @@ def make_all_summaries(
         plots,
         max_height,
         figsize,
-        hspace,
         dpi,
         save_folder,
         image_ext,
         overwrite,
         global_params,
         gizmo_name,
+        namebyamp,
     )
     if n_jobs is None:
         n_jobs = get_global_computation_config().n_jobs_cpu
@@ -1074,7 +1074,7 @@ def make_all_summaries(
         if show_progress:
             results = tqdm(
                 results,
-                desc="Unit summaries",
+                desc=f"Unit {taskname}",
                 smoothing=0,
                 total=len(unit_ids),
             )
@@ -1094,9 +1094,26 @@ def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
     return waveforms[:, start:end]
 
 
-def all_summaries_done(unit_ids, save_folder, ext="png"):
-    return save_folder.exists() and all(
-        (save_folder / f"unit{unit_id:04d}.{ext}").exists() for unit_id in unit_ids
+def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
+    if not namebyamp:
+        return f"unit{unit_id:04d}.{ext}"
+    if sorting_analysis is None:
+        raise ValueError(f"Need a sorting_analysis if namebyamp.")
+    amp = float(sorting_analysis.unit_amplitudes(unit_id).item())
+    amp = f"{amp:07.2f}"
+    return f"amp{amp}_unit{unit_id:04d}.{ext}"
+
+
+def all_summaries_done(unit_ids, save_folder, sorting_analysis=None, namebyamp=False, ext="png"):
+    if not save_folder.exists():
+        return False
+    return all(
+        (
+            save_folder / pngname(
+                unit_id, sorting_analysis=sorting_analysis, namebyamp=namebyamp, ext=ext
+            )
+        ).exists()
+        for unit_id in unit_ids
     )
 
 
@@ -1110,25 +1127,25 @@ class SummaryJobContext:
         plots,
         max_height,
         figsize,
-        hspace,
         dpi,
         save_folder,
         image_ext,
         overwrite,
         global_params,
         gizmo_name,
+        namebyamp,
     ):
         self.sorting_analysis = sorting_analysis
         self.plots = plots
         self.max_height = max_height
         self.figsize = figsize
-        self.hspace = hspace
         self.dpi = dpi
         self.save_folder = save_folder
         self.image_ext = image_ext
         self.overwrite = overwrite
         self.global_params = global_params
         self.gizmo_name = gizmo_name
+        self.namebyamp = namebyamp
 
 
 _summary_job_context = None
@@ -1145,7 +1162,13 @@ def _summary_job(unit_id):
     # handle resuming/overwriting
     ext = _summary_job_context.image_ext
     tmp_out = _summary_job_context.save_folder / f"tmp_unit{unit_id:04d}.{ext}"
-    final_out = _summary_job_context.save_folder / f"unit{unit_id:04d}.{ext}"
+    imfn = pngname(
+        unit_id,
+        sorting_analysis=_summary_job_context.sorting_analysis,
+        namebyamp=_summary_job_context.namebyamp,
+        ext=_summary_job_context.image_ext,
+    )
+    final_out = _summary_job_context.save_folder / imfn
     if tmp_out.exists():
         tmp_out.unlink()
     if not _summary_job_context.overwrite and final_out.exists():
@@ -1158,17 +1181,19 @@ def _summary_job(unit_id):
         layout="constrained",
         # dpi=_summary_job_context.dpi,
     )
-    make_unit_summary(
-        _summary_job_context.sorting_analysis,
-        unit_id,
-        hspace=_summary_job_context.hspace,
-        plots=_summary_job_context.plots,
-        max_height=_summary_job_context.max_height,
-        figsize=_summary_job_context.figsize,
-        figure=fig,
-        gizmo_name=_summary_job_context.gizmo_name,
-        **_summary_job_context.global_params,
-    )
+    try:
+        make_unit_summary(
+            _summary_job_context.sorting_analysis,
+            unit_id,
+            plots=_summary_job_context.plots,
+            max_height=_summary_job_context.max_height,
+            figsize=_summary_job_context.figsize,
+            figure=fig,
+            gizmo_name=_summary_job_context.gizmo_name,
+            **_summary_job_context.global_params,
+        )
+    except Exception as e:
+        raise ValueError(f"Error making plots for {unit_id=}.") from e
 
     # the save is done sort of atomically to help with the resuming and avoid
     # half-baked image files

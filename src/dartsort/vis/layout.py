@@ -38,7 +38,8 @@ def flow_layout(
     max_height=4,
     figsize=(8.5, 11),
     figure=None,
-    hspace=0.1,
+    plot_hspace=0.0,
+    card_hspace=0.1,
     **plot_kwargs,
 ):
     columns = flow_layout_columns(
@@ -53,7 +54,7 @@ def flow_layout(
     subfigures = figure.subfigures(
         nrows=1,
         ncols=len(columns),
-        hspace=hspace,
+        hspace=0.0,
         width_ratios=width_ratios,
         squeeze=False,
     )
@@ -69,7 +70,7 @@ def flow_layout(
             nrows=n_cards + (remaining_height > 0),
             ncols=1,
             height_ratios=height_ratios,
-            hspace=0.1,
+            hspace=card_hspace,
         )
         cardfigs = np.atleast_1d(cardfigs)
         all_panels.extend(cardfigs)
@@ -79,7 +80,7 @@ def flow_layout(
                 nrows=len(card.plots),
                 ncols=1,
                 height_ratios=[min(p.height, max_height) for p in card.plots],
-                hspace=hspace,
+                hspace=plot_hspace,
             )
             panels = np.atleast_1d(panels)
             for plot, panel in zip(card.plots, panels):

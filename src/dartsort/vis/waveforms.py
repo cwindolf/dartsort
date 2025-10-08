@@ -8,6 +8,7 @@ import torch
 
 def geomplot(
     waveforms,
+    max_channel=None,
     max_channels=None,
     channel_index=None,
     channels=None,
@@ -52,6 +53,9 @@ def geomplot(
         geom = geom.numpy(force=True)
     if torch.is_tensor(c):
         c = c.numpy(force=True)
+    if max_channel is not None:
+        max_channels = np.array([max_channel])
+        max_channels = np.broadcast_to(max_channels, (len(waveforms),))
 
     # randomize if asked to
     if randomize:
