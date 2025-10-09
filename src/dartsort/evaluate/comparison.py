@@ -398,9 +398,9 @@ class DARTsortGTVersus:
     def unit_versus_dataframe(self) -> pd.DataFrame:
         """Combine the performance into one dataframe."""
         if self._unit_vs_df is not None:
-            return self._unit_vs_df
-        dfs = [ocmp.unit_info_dataframe() for ocmp in self.cmps]
+            return self._unit_vs_df.copy(deep=True)
+        dfs = [ocmp.unit_info_dataframe().reset_index() for ocmp in self.cmps]
         for df, sorter in zip(dfs, self.other_names):
             df[self.sorter_var] = sorter
         self._unit_vs_df = pd.concat(dfs, axis=0)
-        return self._unit_vs_df
+        return self._unit_vs_df.copy(deep=True)

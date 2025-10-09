@@ -41,7 +41,7 @@ from .cluster.stable_features import (
 
 from .evaluate import hybrid_util, config_grid, simkit, simlib
 from .evaluate.analysis import DARTsortAnalysis
-from .evaluate.comparison import DARTsortGroundTruthComparison
+from .evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
 
 from .config import *
 

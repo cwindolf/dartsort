@@ -6,6 +6,7 @@ from .unit import *
 from .vismain import *
 from .waveforms import *
 from .gt import *
+from .versus import *
 from .unit_comparison import *
 from .colors import *
 from .recanim import RecordingAnimation

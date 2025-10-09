@@ -37,7 +37,7 @@ _legkw = dict(
     handlelength=1.0,
     columnspacing=1.0,
 )
-_box_kw = dict(showmeans=True, meanprops=dict(color="k", marker="+", s=10))
+_box_kw = dict(showmeans=True, meanprops=dict(markeredgecolor="k", marker="+", markersize=15))
 _scatter_kw = dict(linewidths=0, s=5)
 _reg_common = dict(ci=None, scatter_kws=_scatter_kw)
 _logistic = dict(logistic=True, **_reg_common)
@@ -49,7 +49,7 @@ _regkind = {
     "precision": _logistic,
     "recall": _logistic,
     "unsorted_recall": _logistic,
-    "min_temp_dist": _linear,
+    "min_temp_dist": _lowess,
     "n_units": _none,
 }
 default_metrics = tuple([k for k in _c.keys() if k != "n_units"])
@@ -100,43 +100,63 @@ class MetricColumn(VersusPlot):
             lines = [Line2D([0, 1], [0, 0], color=c) for c in spal]
 
         if self.diff:
-            df_a = df[vs.sorter_var == vs.a_name]
-            df_b = df[vs.sorter_var == vs.b_name]
+            df_a = df[df[vs.sorter_var] == vs.a_name]
+            df_b = df[df[vs.sorter_var] == vs.b_name]
+            df_a = df_a.sort_values(by="gt_unit_id")
+            df_b = df_b.sort_values(by="gt_unit_id")
+            assert np.array_equal(df_b.gt_unit_id, df_b.gt_unit_id)
             df = df_a.copy()
             for met in self.metrics:
+                print(' - ')
+                print(f"{vs.a_name=} {df_a[met].mean()=} {df[met].mean()=}")
+                print(f"{df_b[met].mean()=}")
                 df[met] -= df_b[met]
+                print(f"{df[met].mean()=}")
 
         x = self.x
         if self.box and self.box_x_cuts:
-            bins = [0] + self.box_x_cuts + df[x].max()
+            bins = [0] + self.box_x_cuts + [int(np.ceil(df[x].max().item()))]
             df = df.copy(deep=False)
             edge_strs = [f"{int(b)}" for b in bins]
             bin_strs = np.array([f"{a}-{b}" for a, b in zip(bins, bins[1:])])
-            df[f"{x} bin"] = bin_strs[np.digitize(df[x], bins)]
+            binix = np.searchsorted(bins, df[x].values, side="right") - 1
+            assert binix.min() >= 0
+            df["binix"] = binix
+            df[f"{x} bin"] = bin_strs[binix]
+            df = df.sort_values(by="binix")
             x = f"{x} bin"
+            if self.diff:
+                for met in self.metrics:
+                    for binst in bin_strs:
+                        print(' -  - ')
+                        print(f"{met=} {df[met].mean()=} {binst=} {df[df[x] == binst][met].mean()=}")
         elif self.box:
             x = None
 
         for ax, met in zip(axes.flat, self.metrics):
+            logy = met == "min_temp_dist" and not self.diff
+
             if self.diff:
                 ax.axhline(0, lw=0.8, color="k")
                 ckw = dict(color=_c[met])
+            else:
+                ckw = dict(hue=vs.sorter_var, hue_order=vs.other_names, palette=spal)
 
             if not self.box:
                 regkw = _lowess if self.diff else _regkind[met]
                 if self.diff:
                     regkw = regkw | dict(line_kws=dict(color="k"))
-                    sns.regplot(df, x=x, y=met, logx=self.logx, **regkw, **ckw)
+                    sns.regplot(df, ax=ax, x=x, y=met, **regkw, **ckw)
                 else:
                     # first, scatter in random order
-                    sdf = df.shuffle()
+                    sdf = df.sample(frac=1)
                     sns.scatterplot(
                         sdf,
+                        ax=ax,
                         x=x,
                         y=met,
-                        hue=vs.sorter_var,
-                        palette=spal,
                         legend=False,
+                        **ckw,
                         **_scatter_kw,
                     )
 
@@ -145,47 +165,62 @@ class MetricColumn(VersusPlot):
                         sdf = df[df[vs.sorter_var] == sorter]
                         sns.regplot(
                             sdf,
+                            ax=ax,
                             x=x,
                             y=met,
-                            logx=self.logx,
                             color=color,
                             scatter=False,
                             **regkw,
                         )
             else:
-                sns.boxplot(df, x=x, y=met, legend=False, **_box_kw, **ckw)
+                sns.boxplot(
+                    df, x=x, y=met, legend=False, log_scale=logy, ax=ax, **_box_kw, **ckw
+                )
 
-            if met == "min_temp_dist" and self.logx:
+            if logy and self.logx and not self.box:
                 ax.loglog()
-            elif met == "min_temp_dist":
+            elif logy and not self.box:
                 ax.semilogy()
+            elif self.logx and not self.box:
+                ax.semilogx()
             ax.set_ylabel(met, color=_c[met], fontsize="small")
             ax.grid(which="both")
-            sns.despine(ax=ax, bottom=self.diff)
+            # sns.despine(ax=ax, bottom=self.diff)
             if self.diff:
                 mean = df[met].mean()
                 lines = [Line2D([0, 1], [0, 0], color=_c[met])]
-                labels = [f"{vs.a_name}-{vs.b_name} ({mean:.2g})"]
-                axes.flat[0].legend(
+                labels = [f"{vs.a_name}-{vs.b_name} ({mean:.2f})"]
+                ax.legend(
                     handles=lines,
                     labels=labels,
-                    frameon=False,
-                    ncols=min(3, vs.n_vs),
-                    loc="lower right",
+                    fancybox=False,
+                    loc=("upper" if _o[met] < 0 else "lower") + " right",
                     **_legkw,
                 )
             else:
-                means = [df[vs.sorter_var == s][met].mean() for s in vs.other_names]
-                labels = [f"{n} ({m:.2g})" for n, m in zip(vs.other_names, means)]
-                axes.flat[0].legend(
+                means = [df[df[vs.sorter_var] == s][met].mean() for s in vs.other_names]
+                labels = [f"{n} ({m:.2f})" for n, m in zip(vs.other_names, means)]
+                ax.legend(
                     handles=lines,
                     labels=labels,
-                    frameon=False,
-                    ncols=min(3, vs.n_vs),
-                    loc="lower right",
+                    fancybox=False,
+                    loc=("upper" if _o[met] < 0 else "lower") + " right",
                     **_legkw,
                 )
         ax.set_xlabel(self.x)
+
+        if self.diff and self.box and self.box_x_cuts is None:
+            axes.flat[0].set_title("perf diff boxplots")
+        elif self.diff and self.box:
+            axes.flat[0].set_title("amp binned perf diff boxplots")
+        elif self.box and self.box_x_cuts is None:
+            axes.flat[0].set_title("perf boxplots")
+        elif self.box:
+            axes.flat[0].set_title("amp binned perf boxplots")
+        elif self.diff:
+            axes.flat[0].set_title(f"perf diff scatter vs. {self.x}")
+        else:
+            axes.flat[0].set_title(f"perf scatter vs. {self.x}")
 
 
 class OrderedPerformance(VersusPlot):
@@ -201,14 +236,18 @@ class OrderedPerformance(VersusPlot):
         df = vs.unit_versus_dataframe()
         x = np.arange(vs.n_gt_units)
 
-        for ax, met in zip(self.axes, self.metrics):
+        for ax, met in zip(axes.flat, self.metrics):
             for sorter, color in zip(vs.other_names, glasbey1024):
                 y = df[df[vs.sorter_var] == sorter][met]
                 y = y[np.argsort(-_o[met] * y)]
-                ax.step(x, y, color=color, lw=1)
+                ax.step(x, y, color=color, lw=1, label=sorter)
             ax.grid(which="both")
             ax.set_ylabel(met, color=_c[met])
+            if met == "min_temp_dist":
+                ax.semilogy()
         ax.set_xlabel("ordered GT units")
+        axes.flat[-1].legend(loc="upper left", fancybox=False, **_legkw)
+        axes.flat[0].set_title("sorted performance")
 
 
 def get_versus_plots(vs) -> list[VersusPlot]:
