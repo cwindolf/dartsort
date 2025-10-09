@@ -75,6 +75,7 @@ def generate_simulation(
     featurization_cfg=default_sim_featurization_cfg,
     save_injected_waveforms=False,
     save_noise_waveforms=False,
+    save_collision_waveforms=False,
     # control
     max_drift_per_chunk=0.5,
     max_chunk_len_s=1.0,
@@ -151,6 +152,7 @@ def generate_simulation(
         amp_jitter_family=amp_jitter_family,
         extract_radius=extract_radius,
         features_dtype=features_dtype,
+        compute_collision_waveforms=save_collision_waveforms,
     )
     if no_save:
         return sim_recording, template_simulator
@@ -172,6 +174,7 @@ def generate_simulation(
         chunk_len_s=chunk_len_s,
         save_injected_waveforms=save_injected_waveforms,
         save_noise_waveforms=save_noise_waveforms,
+        save_collision_waveforms=save_collision_waveforms,
     )
     return load_simulation(folder)
 
@@ -295,6 +298,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         n_residual_snips=4096,
         save_injected_waveforms=False,
         save_noise_waveforms=False,
+        save_collision_waveforms=False,
         chunk_len_s=0.5,
     ):
         if overwrite:
@@ -346,6 +350,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     dataset_shapes["injected_waveforms"] = (self.segment.inj_wf_shape, f_dt)
                 if save_noise_waveforms:
                     dataset_shapes["noise_waveforms"] = (self.segment.inj_wf_shape, f_dt)
+                if save_collision_waveforms:
+                    dataset_shapes["collision_waveforms"] = (self.segment.inj_wf_shape, f_dt)
                 datasets = {
                     k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
                     for k, (sh, dt) in dataset_shapes.items()
@@ -402,6 +408,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         featurization_cfg=default_sim_featurization_cfg,
         save_injected_waveforms=False,
         save_noise_waveforms=False,
+        save_collision_waveforms=False,
         chunk_len_s=0.5,
     ):
         folder = resolve_path(folder)
@@ -437,6 +444,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             n_residual_snips=n_residual_snips,
             save_injected_waveforms=save_injected_waveforms,
             save_noise_waveforms=save_noise_waveforms,
+            save_collision_waveforms=save_collision_waveforms,
             chunk_len_s=chunk_len_s,
         )
         if featurization_cfg is not None and not featurization_cfg.skip:
@@ -471,6 +479,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         globally_refractory,
         extract_radius,
         features_dtype="float32",
+        compute_collision_waveforms=False,
     ):
         super().__init__(parent_recording_segment)
         assert self.sampling_frequency is not None
@@ -511,6 +520,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         )
         self.template_shape = (self.n_units, *self.wf_shape)
         self.template_shape_up = (self.n_units, temporal_jitter, *self.wf_shape)
+        self.compute_collision_waveforms = compute_collision_waveforms
 
         # bake all random stuff
         rg = np.random.default_rng(random_seed)
@@ -697,7 +707,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             n_residual_snips=n_residual_snips,
         )
 
-        if not inject:
+        if not inject and not self.compute_collision_waveforms:
             return traces, spikes
 
         waveforms = spikes["waveforms"].astype(traces.dtype, copy=False)
@@ -711,6 +721,11 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:
             traces = traces[:, channel_indices]
+
+        if self.compute_collision_waveforms:
+            cwfs = traces[spikes["tix"][:, :, None], self.chans_arange[None, None]]
+            cwfs -= spikes["collisioncleaned_waveforms"]
+            spikes["collision_waveforms"] = cwfs
 
         return traces, spikes
 
