@@ -526,7 +526,7 @@ def config_grid(
     Example usage:
 
     ```python
-    dartsort_config_grid(
+    config_grid(
         {'save_intermediate_labels': True, 'n_jobs_cpu': 2},
         badness={".1":dict(denoiser_badness_factor=0.1),".25":dict(denoiser_badness_factor=0.25)},
         crit={"hell":dict(merge_criterion="heldout_loglik"),"helb":dict(merge_criterion="heldout_elbo")},

@@ -1,11 +1,11 @@
 from dataclasses import dataclass
+import string
 from typing import Literal
 import warnings
 
 import numpy as np
 import pandas as pd
 from spikeinterface.comparison import GroundTruthComparison
-from scipy.spatial import KDTree
 
 from ..cluster import merge
 from .analysis import DARTsortAnalysis
@@ -87,6 +87,10 @@ class DARTsortGroundTruthComparison:
         return self.gt_analysis.unit_ids
 
     @property
+    def n_gt_units(self):
+        return len(self.gt_analysis.unit_ids)
+
+    @property
     def agreement_scores(self):
         """Make sure that all GT and tested units are present."""
         if self._agreement_scores is not None:
@@ -97,7 +101,6 @@ class DARTsortGroundTruthComparison:
         a = a.reindex(index=gtids, columns=tids, fill_value=0.0)
         self._agreement_scores = a
         return a
-            
 
     def unit_amplitudes(self, unit_ids=None):
         return self.gt_analysis.unit_amplitudes(unit_ids=unit_ids)
@@ -193,6 +196,7 @@ class DARTsortGroundTruthComparison:
 
     def _calculate_greedy_confusion_and_detection(self):
         from ..evaluate.hybrid_util import greedy_match, greedy_match_counts
+
         if self._unsorted_detection is not None:
             return
         if self.verbose:
@@ -205,12 +209,12 @@ class DARTsortGroundTruthComparison:
             radius_frames=delta_frames,
             show_progress=self.verbose,
         )
-        c = greedy_res['counts']
+        c = greedy_res["counts"]
         self._greedy_confusion = c
         u = (c.sum(0, keepdims=True) + c.sum(1, keepdims=True)) - c
         self._greedy_iou = c / u
 
-        self._unsorted_detection = np.logical_not(greedy_res['gt_unmatched'])
+        self._unsorted_detection = np.logical_not(greedy_res["gt_unmatched"])
         gtns = self.gt_analysis.sorting.n_spikes
         assert self._unsorted_detection.shape == (gtns,)
 
@@ -325,15 +329,78 @@ class DARTsortGroundTruthComparison:
         if self.unsorted_detection is None:
             w["unsorted_tp"] = w["unsorted_fn"] = None
         else:
-            w["which_unsorted_tp"], w["unsorted_tp"], *_ = self.gt_analysis.unit_raw_waveforms(
+            (
+                w["which_unsorted_tp"],
+                w["unsorted_tp"],
+                *_,
+            ) = self.gt_analysis.unit_raw_waveforms(
                 gt_unit,
                 which=ind_groups["unsorted_tp_indices"],
                 **waveform_kw,
             )
-            w["which_unsorted_fn"], w["unsorted_fn"], *_ = self.gt_analysis.unit_raw_waveforms(
+            (
+                w["which_unsorted_fn"],
+                w["unsorted_fn"],
+                *_,
+            ) = self.gt_analysis.unit_raw_waveforms(
                 gt_unit,
                 which=ind_groups["unsorted_fn_indices"],
                 **waveform_kw,
             )
 
         return w
+
+
+class DARTsortGTVersus:
+    default_ids = string.ascii_uppercase
+
+    def __init__(
+        self,
+        gt_analysis: DARTsortAnalysis,
+        *other_analyses: DARTsortAnalysis,
+        sorter_var="sorter",
+        comparison_kw=None,
+    ):
+        comparison_kw = comparison_kw or {}
+        self.sorter_var = sorter_var
+
+        # some things we can only do for head to head comparisons
+        # but sometimes it's a battle royale :P
+        self.is_two = len(other_analyses) == 2
+        self.n_vs = len(other_analyses)
+
+        self.gt_name = gt_analysis.name or "GT"
+        self.gt_templates = gt_analysis.template_data
+        self.gt_sorting = gt_analysis.sorting
+        self.gt_analysis = gt_analysis
+
+        self.other_analyses = other_analyses
+        self.other_names = [oa.name for oa in other_analyses]
+        self.other_templates = [
+            (oa.name or f"Test{c}") for oa, c in zip(other_analyses, self.default_ids)
+        ]
+        self.other_sortings = [oa.sorting for oa in other_analyses]
+        self.cmps = [
+            DARTsortGroundTruthComparison(
+                gt_analysis=gt_analysis, tested_analysis=oa, **comparison_kw
+            )
+            for oa in other_analyses
+        ]
+
+        if self.is_two:
+            self.a_name, self.b_name = self.other_names
+            self.a_templates, self.b_templates = self.other_templates
+            self.a_sorting, self.b_sorting = self.other_sortings
+            self.a_cmp, self.b_cmp = self.cmps
+        self._unit_vs_df = None
+        self.n_gt_units = self.cmps[0].n_gt_units
+
+    def unit_versus_dataframe(self) -> pd.DataFrame:
+        """Combine the performance into one dataframe."""
+        if self._unit_vs_df is not None:
+            return self._unit_vs_df
+        dfs = [ocmp.unit_info_dataframe() for ocmp in self.cmps]
+        for df, sorter in zip(dfs, self.other_names):
+            df[self.sorter_var] = sorter
+        self._unit_vs_df = pd.concat(dfs, axis=0)
+        return self._unit_vs_df
