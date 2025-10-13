@@ -733,8 +733,8 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             cwfs = traces_pad[spikes["tix"][:, :, None], spikes["echans"][:, None, :]]
             cwfs -= spikes["collisioncleaned_waveforms"]
             spikes["collision_waveforms"] = cwfs
-            n = len(cwfs)
-            spikes["collidedness"] = torch.linalg.norm(cwfs.nan_to_num().view(n, -1), dim=1)
+            cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)
+            spikes["collidedness"] = np.linalg.norm(cwfs, axis=1)
 
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:
