@@ -118,6 +118,11 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df["gt_ptp_amplitude"] = amplitudes
         df["gt_firing_rate"] = firing_rates
+        coll, matched_coll, missed_coll = self.unit_collidedness()
+        assert coll.shape == matched_coll.shape == missed_coll.shape == df.index.shape
+        df["gt_collidedness"] = coll
+        df["gt_matched_collidedness"] = matched_coll
+        df["gt_missed_collidedness"] = missed_coll
         if self.has_templates and (force_distances or self.compute_distances):
             dist = np.nan_to_num(self.template_distances, nan=np.inf).min(axis=1)
             df["min_temp_dist"] = dist
@@ -146,6 +151,27 @@ class DARTsortGroundTruthComparison:
     def greedy_iou(self):
         self._calculate_greedy_confusion_and_detection()
         return self._greedy_iou
+
+    def unit_collidedness(self):
+        uids = self.gt_analysis.unit_ids
+        c = np.full(len(uids), np.nan)
+        matched_c = c.copy()
+        missed_c = c.copy()
+
+        if not hasattr(self.gt_analysis.sorting, "collidedness"):
+            return c, matched_c, missed_c
+
+        collidedness = self.gt_analysis.sorting.collidedness
+        for j, uid in enumerate(uids):
+            inu, matchu, missu = self.matched_and_missed(uid)
+            if inu.size:
+                c[j] = collidedness[inu].mean()
+            if matchu.size:
+                matched_c[j] = collidedness[matchu].mean()
+            if missu.size:
+                missed_c[j] = collidedness[missu].mean()
+
+        return c, matched_c, missed_c
 
     def nearby_gt_templates(self, gt_unit_id, n_neighbors=5):
         return self.gt_analysis.nearby_coarse_templates(
@@ -218,16 +244,20 @@ class DARTsortGroundTruthComparison:
         gtns = self.gt_analysis.sorting.n_spikes
         assert self._unsorted_detection.shape == (gtns,)
 
-    def get_spikes_by_category(self, gt_unit, tested_unit=None):
-        if tested_unit is None:
-            tested_unit = self.get_match(gt_unit)
-
-        # convert to global index space
+    def matched_and_missed(self, gt_unit):
         (gt_spike_labels,) = self.comparison.get_labels1(gt_unit)
         in_gt_unit = self.gt_analysis.in_unit(gt_unit)
         matched_gt_mask = gt_spike_labels == "TP"
         matched_gt_indices = in_gt_unit[matched_gt_mask]
         only_gt_indices = in_gt_unit[np.logical_not(matched_gt_mask)]
+        return in_gt_unit, matched_gt_indices, only_gt_indices
+
+    def get_spikes_by_category(self, gt_unit, tested_unit=None):
+        if tested_unit is None:
+            tested_unit = self.get_match(gt_unit)
+
+        # convert to global index space
+        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(gt_unit)
 
         if tested_unit >= 0:
             (tested_spike_labels,) = self.comparison.get_labels2(tested_unit)
@@ -240,7 +270,7 @@ class DARTsortGroundTruthComparison:
                 warnings.warn(
                     f"Strange match sizes for {gt_unit=} {tested_unit=}: "
                     f"{matched_gt_indices.shape=} {matched_tested_indices.shape=} "
-                    f"{matched_gt_mask.sum()=} {matched_tested_mask.sum()=}"
+                    f"{matched_tested_mask.sum()=}"
                 )
         else:
             matched_tested_indices = np.zeros(shape=(0,), dtype=np.int64)
@@ -360,6 +390,7 @@ class DARTsortGTVersus:
         *other_analyses: DARTsortAnalysis,
         sorter_var="sorter",
         comparison_kw=None,
+        comparisons=None,
     ):
         comparison_kw = comparison_kw or {}
         self.sorter_var = sorter_var
@@ -380,12 +411,21 @@ class DARTsortGTVersus:
             (oa.name or f"Test{c}") for oa, c in zip(other_analyses, self.default_ids)
         ]
         self.other_sortings = [oa.sorting for oa in other_analyses]
-        self.cmps = [
-            DARTsortGroundTruthComparison(
-                gt_analysis=gt_analysis, tested_analysis=oa, **comparison_kw
-            )
-            for oa in other_analyses
-        ]
+
+        if comparisons is None:
+            comparisons = [None] * self.n_vs
+        else:
+            assert len(comparisons) == self.n_vs
+
+        self.cmps = []
+        for cmp, oa in zip(comparisons, other_analyses):
+            if cmp is not None:
+                assert cmp.tested_analysis.name == oa.name
+            else:
+                cmp = DARTsortGroundTruthComparison(
+                    gt_analysis=gt_analysis, tested_analysis=oa, **comparison_kw
+                )
+            self.cmps.append(cmp)
 
         if self.is_two:
             self.a_name, self.b_name = self.other_names
@@ -404,3 +444,6 @@ class DARTsortGTVersus:
             df[self.sorter_var] = sorter
         self._unit_vs_df = pd.concat(dfs, axis=0)
         return self._unit_vs_df.copy(deep=True)
+
+    def tagname(self):
+        return f"{self.gt_name}_{vsstr}"

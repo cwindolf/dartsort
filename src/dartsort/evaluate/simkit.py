@@ -76,6 +76,7 @@ def generate_simulation(
     save_injected_waveforms=False,
     save_noise_waveforms=False,
     save_collision_waveforms=False,
+    save_collidedness=False,
     # control
     max_drift_per_chunk=0.5,
     max_chunk_len_s=1.0,
@@ -152,7 +153,7 @@ def generate_simulation(
         amp_jitter_family=amp_jitter_family,
         extract_radius=extract_radius,
         features_dtype=features_dtype,
-        compute_collision_waveforms=save_collision_waveforms,
+        compute_collision_waveforms=save_collision_waveforms or save_collidedness,
     )
     if no_save:
         return sim_recording, template_simulator
@@ -175,6 +176,7 @@ def generate_simulation(
         save_injected_waveforms=save_injected_waveforms,
         save_noise_waveforms=save_noise_waveforms,
         save_collision_waveforms=save_collision_waveforms,
+        save_collidedness=save_collidedness,
     )
     return load_simulation(folder)
 
@@ -299,6 +301,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         save_injected_waveforms=False,
         save_noise_waveforms=False,
         save_collision_waveforms=False,
+        save_collidedness=False,
         chunk_len_s=0.5,
     ):
         if overwrite:
@@ -352,6 +355,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     dataset_shapes["noise_waveforms"] = (self.segment.inj_wf_shape, f_dt)
                 if save_collision_waveforms:
                     dataset_shapes["collision_waveforms"] = (self.segment.inj_wf_shape, f_dt)
+                if save_collidedness:
+                    dataset_shapes["collidedness"] = ((), f_dt)
                 datasets = {
                     k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
                     for k, (sh, dt) in dataset_shapes.items()
@@ -409,6 +414,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         save_injected_waveforms=False,
         save_noise_waveforms=False,
         save_collision_waveforms=False,
+        save_collidedness=False,
         chunk_len_s=0.5,
     ):
         folder = resolve_path(folder)
@@ -445,6 +451,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             save_injected_waveforms=save_injected_waveforms,
             save_noise_waveforms=save_noise_waveforms,
             save_collision_waveforms=save_collision_waveforms,
+            save_collidedness=save_collidedness,
             chunk_len_s=chunk_len_s,
         )
         if featurization_cfg is not None and not featurization_cfg.skip:
@@ -675,6 +682,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         spikes["noise_waveforms"] = noise_waveforms
         spikes["injected_waveforms"] = injected_waveforms
         spikes["collisioncleaned_waveforms"] = collisioncleaned_waveforms
+        spikes["echans"] = echans
 
         return spikes
 
@@ -718,14 +726,19 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             waveforms,
         )
 
+        if self.compute_collision_waveforms and not inject:
+            traces_pad = np.pad(
+                traces, [(0, 0), (0, 1)], constant_values=np.nan
+            )
+            cwfs = traces_pad[spikes["tix"][:, :, None], spikes["echans"][:, None, :]]
+            cwfs -= spikes["collisioncleaned_waveforms"]
+            spikes["collision_waveforms"] = cwfs
+            n = len(cwfs)
+            spikes["collidedness"] = torch.linalg.norm(cwfs.nan_to_num().view(n, -1), dim=1)
+
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:
             traces = traces[:, channel_indices]
-
-        if self.compute_collision_waveforms:
-            cwfs = traces[spikes["tix"][:, :, None], self.chans_arange[None, None]]
-            cwfs -= spikes["collisioncleaned_waveforms"]
-            spikes["collision_waveforms"] = cwfs
 
         return traces, spikes
 

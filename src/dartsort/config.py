@@ -194,6 +194,7 @@ class DeveloperConfig(DARTsortUserConfig):
     template_denoising_method: Literal["none", "exp_weighted_svd"] = "exp_weighted_svd"
     min_template_snr: float = 40.0
     min_template_count: int = 50
+    channel_selection_radius: float | None = 50.0
 
     # interpolation for features
     interpolation_method: str = "kriging"

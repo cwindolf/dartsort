@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 
 
 from ..evaluate.analysis import DARTsortAnalysis
-from ..evaluate.comparison import DARTsortGroundTruthComparison
+from ..evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     raw_template_cfg,
@@ -17,7 +17,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import get_global_computation_config
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
-from . import over_time, scatterplots, unit, gt, unit_comparison
+from . import over_time, scatterplots, unit, gt, unit_comparison, versus
 from .sorting import make_sorting_summary
 
 try:
@@ -40,6 +40,7 @@ def visualize_sorting(
     sorting_path=None,
     motion_est=None,
     gt_analysis=None,
+    other_analyses=None,
     gt_comparison_with_distances=True,
     make_scatterplots=True,
     make_sorting_summaries=True,
@@ -47,6 +48,7 @@ def visualize_sorting(
     make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
+    make_versus=True,
     sorting_analysis=None,
     template_cfg=unshifted_template_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -93,7 +95,7 @@ def visualize_sorting(
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
-    sorting_analysis, gt_comparison, *paths_or_nones = _ensure_analysis(
+    sorting_analysis, gt_comparison, gt_vs, *paths_or_nones = _plan_vis(
         output_directory,
         recording,
         sorting,
@@ -104,24 +106,26 @@ def visualize_sorting(
         make_animations=make_animations,
         make_gt_overviews=make_gt_overviews,
         make_unit_comparisons=make_unit_comparisons,
+        make_versus=make_versus,
         sorting_analysis=sorting_analysis,
         gt_analysis=gt_analysis,
+        other_analyses=other_analyses,
         overwrite=overwrite,
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
         exhaustive_gt=exhaustive_gt,
         gt_comparison_with_distances=gt_comparison_with_distances,
     )
-    summary_png, unit_summary_dir, anim_png, comp_png, unit_comp_dir = paths_or_nones
+    sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png = paths_or_nones
 
     try:
-        if summary_png is not None:
-            if overwrite or not summary_png.exists():
+        if sum_png is not None:
+            if overwrite or not sum_png.exists():
                 fig = make_sorting_summary(
                     sorting_analysis,
                     figure=None,
                 )
-                fig.savefig(summary_png, dpi=dpi)
+                fig.savefig(sum_png, dpi=dpi)
     except Exception as e:
         if errors_to_warnings:
             warnings.warn(str(e))
@@ -149,10 +153,10 @@ def visualize_sorting(
             fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
             fig.savefig(comp_png, dpi=dpi)
 
-    if unit_summary_dir is not None:
+    if unit_sum_dir is not None:
         unit.make_all_summaries(
             sorting_analysis,
-            unit_summary_dir,
+            unit_sum_dir,
             channel_show_radius_um=channel_show_radius_um,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
@@ -178,18 +182,24 @@ def visualize_sorting(
             n_jobs=computation_cfg.n_jobs_cpu,
         )
 
+    if vs_png is not None and gt_vs is not None:
+        fig = versus.make_versus_summary(gt_vs)
+        fig.savefig(vs_png, dpi=dpi)
+
 
 def visualize_all_sorting_steps(
     recording,
     dartsort_dir,
     visualizations_dir,
     gt_analysis=None,
+    other_analyses=None,
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
     make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
+    make_versus=True,
     step_sortings=None,
     template_cfg=unshifted_template_cfg,
     gt_comparison_with_distances=True,
@@ -265,7 +275,9 @@ def visualize_all_sorting_steps(
                 make_animations=make_animations,
                 make_gt_overviews=make_gt_overviews,
                 make_unit_comparisons=make_unit_comparisons,
+                make_versus=make_versus,
                 gt_analysis=gt_analysis,
+                other_analyses=other_analyses,
                 exhaustive_gt=exhaustive_gt,
                 gt_comparison_with_distances=gt_comparison_with_distances,
                 channel_show_radius_um=channel_show_radius_um,
@@ -316,7 +328,7 @@ def sorting_scatterplots(
         plt.close(fig)
 
 
-def _ensure_analysis(
+def _plan_vis(
     output_directory,
     recording,
     sorting,
@@ -327,7 +339,9 @@ def _ensure_analysis(
     make_animations=False,
     make_gt_overviews=False,
     make_unit_comparisons=False,
+    make_versus=False,
     sorting_analysis=None,
+    other_analyses=None,
     gt_analysis=None,
     template_cfg=unshifted_template_cfg,
     exhaustive_gt=True,
@@ -342,6 +356,7 @@ def _ensure_analysis(
     # SortingAnalysis and GTComparison objects, or if we can skip everything
     need_analysis = False
     need_comparison = False
+    need_vs = False
 
     # can't compare or analyze units if there aren't any
     is_labeled = sorting.n_units > 1
@@ -378,7 +393,8 @@ def _ensure_analysis(
     else:
         animation_png = None
 
-    if gt_analysis is not None and is_labeled and make_gt_overviews:
+    can_gt = gt_analysis is not None and is_labeled
+    if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
         need_comp = overwrite or not comparison_png.exists()
         need_analysis = need_analysis or need_comp
@@ -388,7 +404,7 @@ def _ensure_analysis(
     else:
         comparison_png = None
 
-    if gt_analysis is not None and is_labeled and make_unit_comparisons:
+    if can_gt and make_unit_comparisons:
         unit_comparison_dir = output_directory / "gt_unit_comparisons"
         if overwrite:
             need_ucomps = True
@@ -406,6 +422,18 @@ def _ensure_analysis(
             unit_comparison_dir = None
     else:
         unit_comparison_dir = None
+
+    if can_gt and other_analyses is not None and make_versus:
+        gtn = gt_analysis.name
+        on = "_vs_".join(oa.name for oa in other_analyses)
+        vs_png = output_directory / f"{gtn}_study_{on}.png"
+        need_vs = overwrite or not vs_png.exists()
+        need_analysis = need_analysis or need_vs
+        need_comparison = need_comparison or need_vs
+        if not need_vs:
+            vs_png = None
+    else:
+        vs_png = None
 
     if need_analysis and sorting_analysis is None:
         if sorting_name is None:
@@ -433,12 +461,32 @@ def _ensure_analysis(
     else:
         gt_comparison = None
 
+    if need_vs:
+        assert sorting_analysis is not None
+        assert gt_analysis is not None
+        assert gt_comparison is not None
+        assert other_analyses is not None
+
+        comparison_kw = dict(exhaustive_gt=exhaustive_gt, compute_distances=gt_comparison_with_distances)
+        cmps = [gt_comparison] + ([None] * len(other_analyses))
+        gt_vs = DARTsortGTVersus(
+            gt_analysis,
+            sorting_analysis,
+            *other_analyses,
+            comparison_kw=comparison_kw,
+            comparisons=cmps,
+        )
+    else:
+        gt_vs = None
+
     return (
         sorting_analysis,
         gt_comparison,
+        gt_vs,
         sorting_summary_png,
         unit_summary_dir,
         animation_png,
         comparison_png,
         unit_comparison_dir,
+        vs_png,
     )

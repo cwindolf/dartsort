@@ -743,6 +743,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_temporal_upsampling_factor=cfg.temporal_upsamples,
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
+            channel_selection_radius=cfg.channel_selection_radius,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -885,6 +886,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         coarse_cd=cfg.matching_coarse_cd,
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
+        channel_selection_radius=cfg.channel_selection_radius,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,

@@ -4,6 +4,7 @@ from logging import getLogger
 import matplotlib.pyplot as plt
 from matplotlib.colors import FuncNorm
 from matplotlib.lines import Line2D
+from matplotlib.scale import FuncScale
 import numpy as np
 import seaborn as sns
 
@@ -140,6 +141,15 @@ class GTUnitTextInfo(UnitComparisonPlot):
         gt_ptp = np.ptp(gt_temp, 1).max(1).squeeze()
         assert gt_ptp.size == 1
         msg += f"{gtn} PTP: {gt_ptp:0.1f}\n"
+
+        td = getattr(comparison, 'template_distances', None)
+        if td is not None:
+            print(f"{td.shape=}")
+            temp_dist = td[unit_id, tested_unit_id]
+            msg += f"Hung. temp dist: {temp_dist:0.1f}\n"
+            mn = td[unit_id].min()
+            if mn < temp_dist:
+                msg += f"But, min temp dist={temp_dist:0.1f}\n"
 
         if tested_unit_id >= 0:
             tested_temp = comparison.tested_analysis.coarse_template_data.unit_templates(
@@ -711,7 +721,80 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)
+
+
+class CollidednessBreakdown(UnitComparisonPlot):
+    kind = "mystery"
+    width = 3
+    height = 3
+
+    def __init__(self, log_x=False, sqrt_x=True, n_bins=64, log=True):
+        self.log_x = log_x
+        self.sqrt_x = sqrt_x
+        self.n_bins = n_bins
+        self.log = log
+
+    def draw(self, panel, comparison, unit_id):
+        gt_sorting = comparison.gt_analysis.sorting
+        ax = panel.subplots()
+        if not hasattr(gt_sorting, "collidedness"):
+            ax.text(
+                0, 0, "gt sorting has\nno collidedness", fontsize=8, ha="center", va="center"
+            )
+            ax.axis("off")
+            return
         
+        inu, matchu, missu = comparison.matched_and_missed(unit_id)
+        unsorted_masku = comparison.unsorted_detection[inu]
+        unsorted_missu = inu[np.logical_not(unsorted_masku)]
+
+        coll_match = gt_sorting.collidedness[matchu]
+        coll_miss = gt_sorting.collidedness[missu]
+        coll_umiss = gt_sorting.collidedness[unsorted_missu]
+
+        colls = [coll_match, coll_miss, coll_umiss]
+        nothing = not any(a.size for a in colls)
+        if nothing:
+            mn = 1
+            mx = 10
+        else:
+            mn = np.floor(min(a.min() for a in colls if a.size))
+            mx = np.ceil(max(a.max() for a in colls if a.size))
+        if self.log_x:
+            bins = np.logspace(np.log10(mn), np.log10(mx), self.n_bins + 1)
+        elif self.sqrt_x:
+            bins = np.square(np.linspace(mn**0.5, mx**0.5, self.n_bins+1))
+        else:
+            bins = np.linspace(mn, mx, self.n_bins + 1)
+
+        labels = ["tp", "fn", "unsorted_fn"]
+        labels = [l for l, c in zip(labels, colls) if c.size]
+        colls = [c for c in colls if c.size]
+        colors = [_class_colors[k] for k in labels]
+        ax.hist(
+            colls, label=labels, color=colors, bins=bins, log=self.log, histtype="step"
+        )
+        if self.log_x:
+            ax.set_xscale("log")
+        elif self.sqrt_x:
+            from matplotlib.scale import FuncScale
+            ax.set_xscale("function", functions=(np.sqrt, np.square))
+        ax.grid()
+        ticks = [0, 10, 25, 50, 100, 200, 350, 600]
+        ticks = [t for t in ticks if mn <= t <= mx]
+        ax.set_xticks(ticks)
+        ax.legend(
+            borderpad=0.2,
+            labelspacing=0.2,
+            handlelength=1.0,
+            columnspacing=0.6,
+            frameon=False,
+            loc="lower center",
+            bbox_to_anchor=(0, 1, 1, 1),
+            ncols=min(3, len(colls)),
+        )
+        ax.set_xlabel("collidedness")
+        ax.set_ylabel("frequency")
 
 
 def _get_default_unit_comparison_plots():
@@ -727,9 +810,8 @@ def _get_default_unit_comparison_plots():
         NearbyTemplatesConfusionMatrix(confusion_kind="siagreement"),
         NearbyTemplatesConfusionMatrix(confusion_kind="greedy"),
         NearbyTemplatesConfusionMatrix(neighbor_method="siagreement", confusion_kind="siagreement"),
-        NearbyTemplatesConfusionMatrix(neighbor_method="siagreement", confusion_kind="greedy"),
-        NearbyTemplatesConfusionMatrix(neighbor_method="greedy", confusion_kind="siagreement"),
         NearbyTemplatesConfusionMatrix(neighbor_method="greedy", confusion_kind="greedy"),
+        CollidednessBreakdown(),
         # MatchRawWaveformsPlot(single_channel=True),
         # MatchRawWaveformsPlot(
         #     show_sorted_matches=False,
@@ -821,9 +903,13 @@ def neighbor_error_panel(
     ax.text(
         0,
         0,
-        f"no {which or plot_obj.which} neighbor for gt unit {unit_id}\n"
-        f"and tested unit {tested_unit_id} with method\n"
-        f"{plot_obj.neighbor_method} in {plot_obj.__class__.__name__}",
+        f"no {which or plot_obj.which} neighbor\n"
+        f"for gt unit {unit_id}\n and\n"
+        f"tested unit {tested_unit_id} with method\n"
+        f"{plot_obj.neighbor_method} in\n"
+        f"{plot_obj.__class__.__name__}",
         fontsize=8,
+        ha="center",
+        va="center",
     )
     ax.axis("off")

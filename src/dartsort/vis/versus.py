@@ -21,7 +21,8 @@ _c = {
     "recall": "r",
     "unsorted_recall": "blueviolet",
     "min_temp_dist": "darkorange",
-    "n_units": "teal",
+    "n_units": "k",
+    "gt_matched_collidedness": "teal",
 }
 _o = {
     "accuracy": 1,
@@ -29,6 +30,7 @@ _o = {
     "recall": 1,
     "unsorted_recall": 1,
     "min_temp_dist": -1,
+    "gt_matched_collidedness": 1,
 }
 
 _legkw = dict(
@@ -51,6 +53,7 @@ _regkind = {
     "unsorted_recall": _logistic,
     "min_temp_dist": _lowess,
     "n_units": _none,
+    "gt_matched_collidedness": _lowess,
 }
 default_metrics = tuple([k for k in _c.keys() if k != "n_units"])
 
@@ -107,11 +110,7 @@ class MetricColumn(VersusPlot):
             assert np.array_equal(df_b.gt_unit_id, df_b.gt_unit_id)
             df = df_a.copy()
             for met in self.metrics:
-                print(' - ')
-                print(f"{vs.a_name=} {df_a[met].mean()=} {df[met].mean()=}")
-                print(f"{df_b[met].mean()=}")
                 df[met] -= df_b[met]
-                print(f"{df[met].mean()=}")
 
         x = self.x
         if self.box and self.box_x_cuts:
@@ -125,16 +124,12 @@ class MetricColumn(VersusPlot):
             df[f"{x} bin"] = bin_strs[binix]
             df = df.sort_values(by="binix")
             x = f"{x} bin"
-            if self.diff:
-                for met in self.metrics:
-                    for binst in bin_strs:
-                        print(' -  - ')
-                        print(f"{met=} {df[met].mean()=} {binst=} {df[df[x] == binst][met].mean()=}")
         elif self.box:
             x = None
 
         for ax, met in zip(axes.flat, self.metrics):
             logy = met == "min_temp_dist" and not self.diff
+            symlogy = met == "min_temp_dist" and self.diff
 
             if self.diff:
                 ax.axhline(0, lw=0.8, color="k")
@@ -149,7 +144,7 @@ class MetricColumn(VersusPlot):
                     sns.regplot(df, ax=ax, x=x, y=met, **regkw, **ckw)
                 else:
                     # first, scatter in random order
-                    sdf = df.sample(frac=1)
+                    sdf = df.sample(frac=1).reset_index()
                     sns.scatterplot(
                         sdf,
                         ax=ax,
@@ -173,8 +168,11 @@ class MetricColumn(VersusPlot):
                             **regkw,
                         )
             else:
+                needcols = [vs.sorter_var, met]
+                if x is not None:
+                    needcols.append(x)
                 sns.boxplot(
-                    df, x=x, y=met, legend=False, log_scale=logy, ax=ax, **_box_kw, **ckw
+                    df[needcols].dropna().reset_index(), x=x, y=met, legend=False, log_scale=logy, ax=ax, **_box_kw, **ckw
                 )
 
             if logy and self.logx and not self.box:
@@ -183,6 +181,10 @@ class MetricColumn(VersusPlot):
                 ax.semilogy()
             elif self.logx and not self.box:
                 ax.semilogx()
+            elif symlogy and not self.box:
+                ax.set_yscale("symlog")
+                if self.logx:
+                    ax.set_xscale("log")
             ax.set_ylabel(met, color=_c[met], fontsize="small")
             ax.grid(which="both")
             # sns.despine(ax=ax, bottom=self.diff)
@@ -238,9 +240,10 @@ class OrderedPerformance(VersusPlot):
 
         for ax, met in zip(axes.flat, self.metrics):
             for sorter, color in zip(vs.other_names, glasbey1024):
-                y = df[df[vs.sorter_var] == sorter][met]
+                y = df[df[vs.sorter_var] == sorter][met].values
+                y = y[np.isfinite(y)]
                 y = y[np.argsort(-_o[met] * y)]
-                ax.step(x, y, color=color, lw=1, label=sorter)
+                ax.step(x[:len(y)], y, color=color, lw=1, label=sorter)
             ax.grid(which="both")
             ax.set_ylabel(met, color=_c[met])
             if met == "min_temp_dist":
@@ -253,6 +256,9 @@ class OrderedPerformance(VersusPlot):
 def get_versus_plots(vs) -> list[VersusPlot]:
     plots = [
         MetricColumn(),
+        MetricColumn(x="gt_collidedness", metrics=["recall", "min_temp_dist"]),
+        MetricColumn(x="gt_matched_collidedness", metrics=["recall", "min_temp_dist"]),
+        MetricColumn(x="gt_missed_collidedness", metrics=["recall", "min_temp_dist"]),
         MetricColumn(diff=True),
         MetricColumn(box=True),
         MetricColumn(box=True, box_x_cuts=[5, 10, 15, 20]),
@@ -267,10 +273,10 @@ def get_versus_plots(vs) -> list[VersusPlot]:
 def make_versus_summary(
     vs: DARTsortGTVersus,
     plots: Sequence[VersusPlot] | None=None,
-    max_height=8,
-    figsize=(10, 10),
+    max_height=6,
+    figsize=(22, 14),
     figure=None,
-    suptitle=True,
+    suptitle=False,
 ):
     if plots is None:
         plots = get_versus_plots(vs)
