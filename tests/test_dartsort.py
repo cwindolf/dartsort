@@ -108,7 +108,7 @@ def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
 def test_cli_help():
     # at least make sure the cli can do -h
     res = subprocess.run(["dartsort", "-h"], capture_output=True)
-    assert not res.returncode
+    assert not res.returncode, res.stderr.decode()
 
 
 @pytest.mark.parametrize(
