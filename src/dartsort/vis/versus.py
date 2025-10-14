@@ -31,8 +31,8 @@ _o = {
     "recall": 1,
     "unsorted_recall": 1,
     "min_temp_dist": -1,
-    "gt_matched_collidedness": 1,
-    "gt_dt_rms": 1,
+    "gt_matched_collidedness": -1,
+    "gt_dt_rms": -1,
 }
 
 _legkw = dict(

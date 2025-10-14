@@ -131,7 +131,6 @@ def visualize_sorting(
             warnings.warn(str(e))
         else:
             raise
-        plt.close("all")
 
     if anim_png is not None:
         if overwrite or not anim_png.exists():
@@ -152,6 +151,10 @@ def visualize_sorting(
             )
             fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
             fig.savefig(comp_png, dpi=dpi)
+
+    if vs_png is not None and gt_vs is not None:
+        fig = versus.make_versus_summary(gt_vs)
+        fig.savefig(vs_png, dpi=dpi)
 
     if unit_sum_dir is not None:
         unit.make_all_summaries(
@@ -182,10 +185,6 @@ def visualize_sorting(
             n_jobs=computation_cfg.n_jobs_cpu,
         )
 
-    if vs_png is not None and gt_vs is not None:
-        fig = versus.make_versus_summary(gt_vs)
-        fig.savefig(vs_png, dpi=dpi)
-
 
 def visualize_all_sorting_steps(
     recording,
@@ -213,6 +212,7 @@ def visualize_all_sorting_steps(
     pca_radius_um=75.0,
     exhaustive_gt=True,
     start_from_matching=False,
+    stop_after=None,
     dpi=200,
     overwrite=False,
     load_step_sortings_kw=None,
@@ -250,6 +250,7 @@ def visualize_all_sorting_steps(
     else:
         nsteps = None
 
+    count = 0
     with tqdm(steps, desc="Sorting steps", mininterval=0, total=nsteps) as prog:
         for j, (step_name, step_sorting) in prog:
             if step_name is None:
@@ -288,6 +289,10 @@ def visualize_all_sorting_steps(
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
             )
+
+            count += 1
+            if stop_after is not None and count >= stop_after:
+                break
 
 
 # -- helpers

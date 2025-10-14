@@ -1,5 +1,6 @@
 from collections import namedtuple
 from dataclasses import dataclass, replace
+from logging import getLogger
 from pathlib import Path
 from typing import Generator
 import warnings
@@ -13,6 +14,8 @@ from tqdm.auto import tqdm
 from ..detect import detect_and_deduplicate
 from ..util.py_util import resolve_path
 from .waveform_util import make_channel_index
+
+logger = getLogger(__name__)
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
@@ -337,11 +340,13 @@ def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
 
 def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=True):
     if sorting.parent_h5_path is None:
+        logger.info("Couldn't load stored basis.")
         return None
     pipeline = get_featurization_pipeline(sorting)
     tsvd = pipeline.get_transformer(tsvd_name)
     if to_sklearn:
         tsvd = tsvd.to_sklearn()
+    logger.info("Loaded stored basis.")
     return tsvd
 
 

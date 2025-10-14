@@ -687,9 +687,9 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
 
 
 class MatchedMisalignmentHist(UnitComparisonPlot):
-    kind = "ccg"
+    kind = "hist"
     width = 3
-    height = 1
+    height = 2
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         ax = panel.subplots()
@@ -702,8 +702,9 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
         df = comparison.delta_frames
         bins = np.arange(-df, df + 1)
         c = glasbey1024[unit_id % len(glasbey1024)]
-        _, _, hist = ax.hist(match_dt, bins=bins, color=c)
+        _, _, hist = ax.hist(match_dt, bins=bins, color=c, log=True)
         ax.set_ylabel("frequency")
+        ax.grid()
         gn = comparison.gt_name
         tn = comparison.tested_name
         ax.set_xlabel(f"matched {tn} time - {gn} time")
@@ -711,9 +712,10 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
             rms = np.sqrt(np.square(match_dt).mean())
             ax.legend(
                 handles=[hist[0]],
-                labels=[f"rms={rms:.1f}"],
-                loc="upper right",
-                fancybox=False,
+                labels=[f"dt,  RMS={rms:.1f}"],
+                loc="lower right",
+                frameon=False,
+                bbox_to_anchor=(0, 1, 1, 1),
             )
 
 
@@ -787,9 +789,9 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
 
 
 class CollidednessBreakdown(UnitComparisonPlot):
-    kind = "mystery"
+    kind = "hist"
     width = 3
-    height = 3
+    height = 2
 
     def __init__(self, log_x=False, sqrt_x=True, n_bins=64, log=True):
         self.log_x = log_x
@@ -884,6 +886,7 @@ def _get_default_unit_comparison_plots():
         NearbyTemplatesConfusionMatrix(
             neighbor_method="greedy", confusion_kind="greedy"
         ),
+        MatchedMisalignmentHist(),
         CollidednessBreakdown(),
         # MatchRawWaveformsPlot(single_channel=True),
         # MatchRawWaveformsPlot(
@@ -916,7 +919,7 @@ def make_unit_comparison(
     unit_id,
     plots=None,
     max_height=18,
-    figsize=(14, 16),
+    figsize=(16, 18),
     figure=None,
     channel_show_radius_um=35.0,
     **other_global_params,
@@ -941,7 +944,7 @@ def make_all_unit_comparisons(
     save_folder,
     plots=None,
     max_height=18,
-    figsize=(14, 16),
+    figsize=(16, 18),
     dpi=300,
     image_ext="png",
     namebyamp=True,
