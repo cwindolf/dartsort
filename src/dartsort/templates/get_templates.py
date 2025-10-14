@@ -38,6 +38,7 @@ def get_templates(
     denoising_rank=5,
     denoising_fit_radius=75,
     denoising_spikes_fit=50_000,
+    recompute_tsvd=False,
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
@@ -174,6 +175,7 @@ def get_templates(
             denoising_spikes_fit=denoising_spikes_fit,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            recompute_tsvd=recompute_tsvd,
             random_seed=random_seed,
         )
 
@@ -437,10 +439,13 @@ def fit_tsvd(
     denoising_spikes_fit=25_000,
     trough_offset_samples=42,
     spike_length_samples=121,
+    recompute_tsvd=False,
     dtype=np.float32,
     random_seed=0,
 ):
-    tsvd = load_stored_tsvd(sorting)
+    tsvd = None
+    if not recompute_tsvd:
+        tsvd = load_stored_tsvd(sorting)
     if tsvd is not None:
         return tsvd
 

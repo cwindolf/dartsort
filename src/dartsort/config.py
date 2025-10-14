@@ -195,6 +195,7 @@ class DeveloperConfig(DARTsortUserConfig):
     min_template_snr: float = 40.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(default=50.0, arg_type=float_or_none)
+    always_recompute_tsvd: bool = False
 
     # interpolation for features
     interpolation_method: str = "kriging"

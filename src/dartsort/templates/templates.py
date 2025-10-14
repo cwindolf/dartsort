@@ -371,6 +371,7 @@ def _from_config_with_realigned_sorting(
         spike_length_samples=spike_length_samples,
         spikes_per_unit=template_cfg.spikes_per_unit,
         denoising_rank=template_cfg.denoising_rank,
+        recompute_tsvd=template_cfg.recompute_tsvd,
         denoising_fit_radius=template_cfg.denoising_fit_radius,
         denoising_snr_threshold=template_cfg.denoising_snr_threshold,
         units_per_job=units_per_job,
@@ -464,9 +465,11 @@ def get_chunked_templates(
 
     # combine into a single sorting, so that we can use the template computer's
     # parallelism in one big loop
-    label_to_sorting_index, label_to_original_label, combined_sorting = (
-        data_util.combine_sortings(chunk_sortings, dodge=True)
-    )
+    (
+        label_to_sorting_index,
+        label_to_original_label,
+        combined_sorting,
+    ) = data_util.combine_sortings(chunk_sortings, dodge=True)
 
     # compute templates in combined label space
     full_template_data = TemplateData.from_config(

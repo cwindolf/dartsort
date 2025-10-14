@@ -169,7 +169,8 @@ class RunningTemplates(GrabAndFeaturize):
 
         # try to load denoiser if denoising is happening
         if tsvd is None and template_cfg.denoising_method not in ("none", None):
-            tsvd = load_stored_tsvd(sorting)
+            if not template_cfg.recompute_tsvd:
+                tsvd = load_stored_tsvd(sorting)
 
         return cls(
             recording=recording,

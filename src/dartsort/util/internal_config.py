@@ -229,6 +229,7 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_snr_threshold: float = 50.0
     denoising_fit_radius: float = 75.0
+    recompute_tsvd: bool = False
 
     # realignment
     realign_peaks: bool = True
@@ -759,6 +760,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         spikes_per_unit=cfg.template_spikes_per_unit,
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
+        recompute_tsvd=cfg.always_recompute_tsvd,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
