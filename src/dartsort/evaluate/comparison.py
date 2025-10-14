@@ -48,6 +48,7 @@ class DARTsortGroundTruthComparison:
             verbose=self.verbose,
             compute_labels=self.compute_labels,
         )
+        self.delta_frames = self.comparison.delta_frames
         self.has_templates = self.tested_analysis.template_data is not None
         self._agreement_scores = None
 
@@ -172,6 +173,13 @@ class DARTsortGroundTruthComparison:
                 missed_c[j] = collidedness[missu].mean()
 
         return c, matched_c, missed_c
+
+    def matched_misalignment(self, gt_unit_id):
+        spikes = self.get_spikes_by_category(gt_unit_id)
+        gt_matched_t = self.gt_analysis.times_samples(spikes["matched_gt_indices"])
+        test_matched_t = self.tested_analysis.times_samples(spikes["matched_tested_indices"])
+        match_dt = test_matched_t - gt_matched_t
+        return match_dt
 
     def nearby_gt_templates(self, gt_unit_id, n_neighbors=5):
         return self.gt_analysis.nearby_coarse_templates(
