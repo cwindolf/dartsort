@@ -23,6 +23,7 @@ _c = {
     "min_temp_dist": "darkorange",
     "n_units": "k",
     "gt_matched_collidedness": "teal",
+    "gt_dt_rms": "palevioletred",
 }
 _o = {
     "accuracy": 1,
@@ -31,6 +32,7 @@ _o = {
     "unsorted_recall": 1,
     "min_temp_dist": -1,
     "gt_matched_collidedness": 1,
+    "gt_dt_rms": 1,
 }
 
 _legkw = dict(
@@ -54,6 +56,7 @@ _regkind = {
     "min_temp_dist": _lowess,
     "n_units": _none,
     "gt_matched_collidedness": _lowess,
+    "gt_dt_rms": _lowess,
 }
 default_metrics = tuple([k for k in _c.keys() if k != "n_units"])
 
@@ -258,7 +261,7 @@ def get_versus_plots(vs) -> list[VersusPlot]:
         MetricColumn(),
         MetricColumn(x="gt_collidedness", metrics=["recall", "min_temp_dist"]),
         MetricColumn(x="gt_matched_collidedness", metrics=["recall", "min_temp_dist"]),
-        MetricColumn(x="gt_missed_collidedness", metrics=["recall", "min_temp_dist"]),
+        MetricColumn(x="gt_dt_rms", metrics=["recall", "min_temp_dist"]),
         MetricColumn(diff=True),
         MetricColumn(box=True),
         MetricColumn(box=True, box_x_cuts=[5, 10, 15, 20]),

@@ -264,12 +264,14 @@ class TemplateDistancesHistogram(ComparisonPlot):
         if self.axis == 0:
             ax.set_xlabel("dist to GT (min over GT of tested-GT dists)")
             ax.set_title(
-                f"tested template distances to GT library ({ninf} infs)", fontsize="small"
+                f"tested template distances to GT library ({ninf} infs)",
+                fontsize="small",
             )
         elif self.axis == 1:
             ax.set_xlabel("dist to tested (min over tested of tested-GT dists)")
             ax.set_title(
-                f"GT template distances to tested library ({ninf} infs)", fontsize="small"
+                f"GT template distances to tested library ({ninf} infs)",
+                fontsize="small",
             )
         else:
             assert False
@@ -281,11 +283,20 @@ full_gt_overview_plots = (
     MetricRegPlot(x="gt_ptp_amplitude", y="accuracy"),
     MetricRegPlot(x="gt_ptp_amplitude", y="recall", color="r"),
     MetricRegPlot(x="gt_ptp_amplitude", y="precision", color="g"),
+    MetricRegPlot(x="gt_ptp_amplitude", y="gt_dt_rms", color="palevioletred"),
     MetricRegPlot(x="gt_firing_rate", y="accuracy"),
     MetricRegPlot(x="gt_firing_rate", y="recall", color="r"),
     MetricRegPlot(x="gt_firing_rate", y="precision", color="g"),
     MetricRegPlot(x="min_temp_dist", y="precision", color="g"),
     MetricRegPlot(x="min_temp_dist", y="recall", color="gt_ptp_amplitude", log_x=True),
+    MetricRegPlot(
+        x="min_temp_dist",
+        y="gt_dt_rms",
+        color="gt_ptp_amplitude",
+        log_x=True,
+        logistic=False,
+        lowess=True,
+    ),
     MetricRegPlot(
         x="min_temp_dist", y="unsorted_recall", color="gt_ptp_amplitude", log_x=True
     ),
@@ -300,6 +311,14 @@ full_gt_overview_plots = (
     MetricRegPlot(
         x="gt_firing_rate",
         y="min_temp_dist",
+        color="orange",
+        logistic=False,
+        lowess=True,
+        log_y=True,
+    ),
+    MetricRegPlot(
+        x="gt_dt_rms",
+        y="gt_ptp_amplitude",
         color="orange",
         logistic=False,
         lowess=True,
@@ -335,8 +354,8 @@ default_gt_overview_plots = (
 def make_gt_overview_summary(
     comparison,
     plots=default_gt_overview_plots,
-    max_height=8,
-    figsize=(16, 12),
+    max_height=10,
+    figsize=(18, 14),
     figure=None,
     suptitle=True,
     same_width_flow=True,

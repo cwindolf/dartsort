@@ -124,6 +124,7 @@ class DARTsortGroundTruthComparison:
         df["gt_collidedness"] = coll
         df["gt_matched_collidedness"] = matched_coll
         df["gt_missed_collidedness"] = missed_coll
+        df["gt_dt_rms"] = self.unit_matched_misalignment_rms()
         if self.has_templates and (force_distances or self.compute_distances):
             dist = np.nan_to_num(self.template_distances, nan=np.inf).min(axis=1)
             df["min_temp_dist"] = dist
@@ -174,10 +175,21 @@ class DARTsortGroundTruthComparison:
 
         return c, matched_c, missed_c
 
+    def unit_matched_misalignment_rms(self):
+        uids = self.gt_analysis.unit_ids
+        match_dt_rms = np.full(len(uids), np.nan)
+        for j, uid in enumerate(uids):
+            udt = self.matched_misalignment(uid)
+            if udt.size:
+                match_dt_rms[j] = np.sqrt(np.square(udt).mean())
+        return match_dt_rms
+
     def matched_misalignment(self, gt_unit_id):
         spikes = self.get_spikes_by_category(gt_unit_id)
         gt_matched_t = self.gt_analysis.times_samples(spikes["matched_gt_indices"])
-        test_matched_t = self.tested_analysis.times_samples(spikes["matched_tested_indices"])
+        test_matched_t = self.tested_analysis.times_samples(
+            spikes["matched_tested_indices"]
+        )
         match_dt = test_matched_t - gt_matched_t
         return match_dt
 
@@ -265,7 +277,9 @@ class DARTsortGroundTruthComparison:
             tested_unit = self.get_match(gt_unit)
 
         # convert to global index space
-        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(gt_unit)
+        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(
+            gt_unit
+        )
 
         if tested_unit >= 0:
             (tested_spike_labels,) = self.comparison.get_labels2(tested_unit)
