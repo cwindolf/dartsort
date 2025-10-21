@@ -157,6 +157,7 @@ class DARTsortUserConfig:
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
+
     # high level behavior
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
@@ -191,10 +192,14 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal["none", "exp_weighted_svd"] = "exp_weighted_svd"
+    template_denoising_method: Literal[
+        "none", "exp_weighted_svd", "t", "t_svd"
+    ] = "exp_weighted_svd"
     min_template_snr: float = 40.0
     min_template_count: int = 50
-    channel_selection_radius: float | None = argfield(default=50.0, arg_type=float_or_none)
+    channel_selection_radius: float | None = argfield(
+        default=50.0, arg_type=float_or_none
+    )
     always_recompute_tsvd: bool = False
 
     # interpolation for features

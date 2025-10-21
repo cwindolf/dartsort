@@ -94,7 +94,7 @@ def test_refractory_templates(
 
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize("realign_peaks", [False, True])
-@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted_svd"])
+@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted_svd", "t", "t_svd"])
 def test_refractory_templates_algorithm_agreement(
     refractory_simulations, drift, realign_peaks, denoising_method
 ):
@@ -107,6 +107,8 @@ def test_refractory_templates_algorithm_agreement(
 
     tds = []
     for algorithm in ("by_chunk", "by_unit"):
+        if algorithm == "by_unit" and denoising_method in ("t", "t_svd"):
+            continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
             realign_peaks=realign_peaks,
@@ -123,6 +125,9 @@ def test_refractory_templates_algorithm_agreement(
             tsvd=tsvd,
         )
         tds.append(td)
+
+    if len(tds) == 1:
+        return
 
     td0, td1 = tds
 

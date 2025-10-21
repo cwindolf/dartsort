@@ -213,7 +213,9 @@ class TemplateConfig:
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal["none", "exp_weighted_svd"] = "exp_weighted_svd"
+    denoising_method: Literal[
+        "none", "exp_weighted_svd", "t", "t_svd"
+    ] = "exp_weighted_svd"
 
     # -- template construction parameters
     # registered templates?
@@ -230,6 +232,10 @@ class TemplateConfig:
     denoising_snr_threshold: float = 50.0
     denoising_fit_radius: float = 75.0
     recompute_tsvd: bool = False
+
+    # t denoising?
+    initial_t_df: float = 1.0
+    fixed_t_df: float | None = None
 
     # realignment
     realign_peaks: bool = True
@@ -249,6 +255,10 @@ class TemplateConfig:
             else:
                 return "by_unit"
         return self.algorithm
+
+    def __post_init__(self):
+        if self.algorithm in ("t", "t_svd") and self.reduction == "median":
+            raise ValueError("Median reduction not supported for 't' templates.")
 
 
 @dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)

@@ -5,9 +5,14 @@ computed. These are shift-averaged and then weighted combined.
 
 The raw and low-rank templates are computed using Welford.
 """
+from dataclasses import dataclass, field
+from logging import getLogger
+from typing import Literal
 
 import numpy as np
 import torch
+from torch.distributions import StudentT, Normal
+import torch.nn.functional as F
 
 
 from ..templates.superres_util import superres_sorting
@@ -15,10 +20,14 @@ from ..transform.transform_base import BaseWaveformModule
 from ..transform import WaveformPipeline, Waveform, TemporalPCAFeaturizer
 from ..util import drift_util
 from ..util.data_util import load_stored_tsvd, subsample_to_max_count
+from ..util.logging_util import DARTsortLogger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
 
 from .grab import GrabAndFeaturize
+
+
+logger: DARTsortLogger = getLogger(__name__)
 
 
 class RunningTemplates(GrabAndFeaturize):
@@ -47,6 +56,8 @@ class RunningTemplates(GrabAndFeaturize):
         group_ids=None,
         motion_est=None,
         time_shifts=None,
+        gamma_df: float | None = None,
+        initial_df: float = 1.0,
         with_raw_std_dev=False,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -58,40 +69,43 @@ class RunningTemplates(GrabAndFeaturize):
         channel_index = torch.tile(torch.arange(n_channels), (n_channels, 1))
         assert labels.min() >= 0
 
+        if denoising_method is None:
+            denoising_method = "none"
         self.denoising_method = denoising_method
-        self.denoising_rank = None
         self.denoising_snr_threshold = denoising_snr_threshold
-        self.compute_low_rank_mean = False
+        self.use_svd = False  # updated below
+        self.denoising_rank = None
+        self.gamma_df = gamma_df
+        self.initial_df = initial_df
 
         # these are not used internally, just stored to record what happened in
         # .from_config() so that users can realign their sortings to match
         self.time_shifts = time_shifts
 
-        featurization_pipeline: List[BaseWaveformModule] = [
-            Waveform(channel_index=channel_index)
-        ]
-        if denoising_method not in ("none", None):
-            if denoising_method == "exp_weighted_svd":
-                if tsvd is not None:
-                    tpca = TemporalPCAFeaturizer.from_sklearn(
-                        channel_index, tsvd, getattr(tsvd, "temporal_slice", None)
-                    )
-                else:
-                    tpca = TemporalPCAFeaturizer(
-                        channel_index=channel_index,
-                        geom=torch.asarray(recording.get_channel_locations()),
-                        rank=tsvd_rank,
-                        centered=False,
-                        fit_radius=tsvd_fit_radius,
-                    )
-                featurization_pipeline.append(tpca)
-                self.denoising_rank = tpca.rank
-                self.compute_low_rank_mean = True
+        waveform_feature = Waveform(channel_index=channel_index)
+        feats: list[BaseWaveformModule] = [waveform_feature]
+        if denoising_method in ("exp_weighted_svd", "t_svd"):
+            if tsvd is not None:
+                tpca = TemporalPCAFeaturizer.from_sklearn(
+                    channel_index, tsvd, getattr(tsvd, "temporal_slice", None)
+                )
             else:
-                raise ValueError(f"Unknown {denoising_method=}.")
-        else:
+                tpca = TemporalPCAFeaturizer(
+                    channel_index=channel_index,
+                    geom=torch.asarray(recording.get_channel_locations()),
+                    rank=tsvd_rank,
+                    centered=False,
+                    fit_radius=tsvd_fit_radius,
+                )
+            feats.append(tpca)
+            self.denoising_rank = tpca.rank
+            use_svd = True
+        elif denoising_method in ("none", "t", None):
             tpca = None
-        featurization_pipeline = WaveformPipeline(featurization_pipeline)
+        else:
+            raise ValueError(f"Unknown {denoising_method=}.")
+
+        featurization_pipeline = WaveformPipeline(feats)
 
         super().__init__(
             recording=recording,
@@ -113,7 +127,15 @@ class RunningTemplates(GrabAndFeaturize):
         self.n_units = labels.max() + 1
         self.group_ids = group_ids
         self.n_pitches_shift = None
+        self.full_featurization_pipeline = featurization_pipeline
+        self.short_featurization_pipeline = WaveformPipeline([waveform_feature])
         self.tpca = tpca
+
+        self.tasks = RunningTemplatesTasks(
+            denoising_method=denoising_method,
+            has_gamma_df=self.gamma_df is not None,
+            with_raw_std_dev=with_raw_std_dev,
+        )
 
     @classmethod
     def from_config(
@@ -191,70 +213,86 @@ class RunningTemplates(GrabAndFeaturize):
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
             fit_subsampling_random_state=random_state,
             time_shifts=time_shifts,
+            gamma_df=template_cfg.fixed_t_df,
+            initial_df=template_cfg.initial_t_df,
         )
 
     def compute_template_data(
         self, show_progress=True, computation_cfg=None, task_name=None
     ):
         super().fit_featurization_pipeline(computation_cfg=computation_cfg)
-        self.setup()
-        self.peel(
-            output_hdf5_filename=None,
-            ignore_resuming=True,
-            show_progress=show_progress,
-            computation_cfg=computation_cfg,
-            task_name=task_name,
-        )
+        self.setup()  # initialize all buffers
+        while self.tasks.plan_step():
+            self.setup_step()
+            self.peel(
+                output_hdf5_filename=None,
+                ignore_resuming=True,
+                show_progress=show_progress,
+                computation_cfg=computation_cfg,
+                task_name=task_name or f"{self.peel_kind}<{self.tasks.active_step}>",
+            )
+            self.finalize_step()
+            self.tasks.finalize_step()
+
         return self.to_template_data()
 
+    def finalize_step(self):
+        if self.tasks.needs_raw_pass:
+            # sets self.raw_stds
+            self.finalize_raw()
+        elif self.tasks.needs_svd_pass:
+            # sets nu (gamma concentration) and svd_stds if is_t
+            self.finalize_svd()
+        elif self.tasks.needs_t_pass:
+            # nothing to do
+            pass
+        else:
+            assert False
+
     def setup(self):
-        geom = self.recording.get_channel_locations()
-        if self.motion_aware:
-            self.reg_geom = drift_util.registered_geometry(geom, self.motion_est)
-            self.n_channels_full = len(self.reg_geom)
+        # this sets motion-related buffers (pitch shifts, geom)
+        self.setup_global()
+        # sets up buffers for raw means + meansq
+        self.setup_raw()
+        # sets up pcmeans, gamma mean buffers
+        self.setup_svd()
+        # sets up raw_t_mean, svd_t_mean, raw_t_counts, svd_t_counts
+        self.setup_t()
 
-            n_pitches_shift = self.n_pitches_shift
-            if n_pitches_shift is None:
-                depths = np.atleast_1d(geom[self.channels, 1])
-                times = self.recording.sample_index_to_time(self.times_samples)
-                n_pitches_shift = drift_util.get_spike_pitch_shifts(
-                    depths, geom, times_s=times, motion_est=self.motion_est
-                )
-            unique_shifts, pitch_shift_ixs = np.unique(
-                n_pitches_shift, return_inverse=True
-            )
-            res = drift_util.get_stable_channels(
-                geom=geom,
-                channels=np.zeros_like(unique_shifts),
-                channel_index=self.channel_index.numpy(force=True),
-                registered_geom=self.reg_geom,
-                n_pitches_shift=unique_shifts,
-            )
-            target_channels = torch.asarray(res[0], device=self.channel_index.device)
-            pitch_shift_ixs = torch.asarray(
-                pitch_shift_ixs, device=self.channel_index.device
-            )
-            self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
-            self.register_buffer("target_channels", target_channels)
+    def setup_step(self):
+        self.counts.fill_(0.0)
+        self.n_spikes = 0
+        if self.tasks.updating_svd_means:
+            self.featurization_pipeline = self.full_featurization_pipeline
         else:
-            self.reg_geom = geom
-            self.n_channels_full = self.recording.get_num_channels()
+            self.featurization_pipeline = self.short_featurization_pipeline
 
-        # storage for templates, stds, counts
-        n = self.n_units
-        t = self.spike_length_samples
-        c = self.n_channels_full
-        self.register_buffer("means", torch.zeros((n, t, c)))
-        self.register_buffer("counts", torch.zeros((n, c)))
-        if self.with_raw_std_dev:
-            self.register_buffer("meansq", torch.zeros((n, t, c)))
-        else:
-            self.meansq = None
-        if self.compute_low_rank_mean:
-            assert self.denoising_rank is not None
-            self.register_buffer("pcmeans", torch.zeros((n, self.denoising_rank, c)))
-        else:
-            self.pcmeans = None
+    def finalize_raw(self):
+        if self.tasks.needs_raw_stds:
+            self.raw_stds = self.raw_means.square()
+            torch.subtract(self.meansq, self.raw_stds, out=self.raw_stds)
+            self.raw_stds.abs_().nan_to_num_().sqrt_()
+
+    def finalize_svd(self):
+        self.finalize_raw()
+        if self.tasks.needs_svd_means:
+            assert self.tpca is not None
+            assert self.pcmeans is not None
+            svd_means = self.pcmeans.nan_to_num()
+            svd_means = self.tpca.force_reconstruct(svd_means)
+            self.svd_means = svd_means.to(self.raw_means)
+
+        if self.tasks.needs_svd_stds:
+            assert getattr(self, "raw_stds", None) is not None
+            raw_var = self.raw_stds.square()
+            dmeansq = (self.svd_means - self.raw_means).square_()
+            self.svd_stds = (raw_var.add_(dmeansq)).sqrt_()
+
+        if self.tasks.needs_gamma_mean:
+            if self.gamma_df is not None:
+                self.nu = self.gamma_df
+            else:
+                self.nu = estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar)
 
     def to_template_data(self):
         from ..templates.templates import TemplateData
@@ -266,59 +304,58 @@ class RunningTemplates(GrabAndFeaturize):
             unit_ids = self.group_ids
 
         templates = self.templates()
+        raw_stds = getattr(self, "raw_stds", None)
+        if raw_stds is not None:
+            raw_stds = raw_stds.numpy(force=True)
 
         return TemplateData(
             templates=templates,
             unit_ids=unit_ids,
             spike_counts_by_channel=counts_by_channel,
             spike_counts=counts_by_channel.max(1),
-            raw_std_dev=self.stds(numpy=True),
+            raw_std_dev=raw_stds,
             registered_geom=self.reg_geom,
             trough_offset_samples=self.trough_offset_samples,
         )
 
     def templates(self):
-        raw_templates = self.means.numpy(force=True)
-        raw_templates = np.nan_to_num(raw_templates)
+        assert self.tasks.done
 
         if self.denoising_method in (None, "none"):
-            return raw_templates
+            return self.raw_means.nan_to_num_().numpy(force=True)
 
         if self.denoising_method == "exp_weighted_svd":
             from ..templates.get_templates import denoising_weights
 
-            assert self.tpca is not None
-            assert self.pcmeans is not None
-
+            raw_means = self.raw_means.nan_to_num_().numpy(force=True)
+            snrs = ptp(self.raw_means.nan_to_num(nan=-torch.inf)).mul_(
+                self.counts.to(self.raw_means).sqrt()
+            )
             weights = denoising_weights(
-                self.snrs_by_channel().numpy(force=True),
+                snrs.numpy(force=True),
                 spike_length_samples=self.spike_length_samples,
                 trough_offset=self.trough_offset_samples,
                 snr_threshold=self.denoising_snr_threshold,
             )
-            weights = weights.astype(raw_templates.dtype)
-            low_rank_templates = self.pcmeans.nan_to_num()
-            low_rank_templates = self.tpca.force_reconstruct(low_rank_templates)
-            low_rank_templates = low_rank_templates.numpy(force=True)
-            templates = weights * raw_templates + (1 - weights) * low_rank_templates
-            return templates
+            weights = weights.astype(raw_means.dtype)
+            svd_means = self.svd_means.nan_to_num_().numpy(force=True)
+            return weights * raw_means + (1 - weights) * svd_means
+
+        if self.denoising_method == "t":
+            return self.raw_t_means.nan_to_num_().numpy(force=True)
+
+        if self.denoising_method == "t_svd":
+            rm = self.raw_t_means.nan_to_num_()
+            sm = self.svd_t_means.nan_to_num_()
+            n, t, c = sm.shape
+            sm = self.tpca._project_in_probe(sm.mT.reshape(n * c, t))
+            sm = sm.reshape(n, c, t).mT
+            denom = self.raw_t_counts + self.svd_t_counts
+            denom = torch.where(denom > 0, denom, 1.0)
+            w = self.raw_t_counts / denom
+            return rm.mul_(w).add_(sm.mul_(1.0 - w)).numpy(force=True)
 
         assert False
-
-    def snrs_by_channel(self):
-        return ptp(self.means.nan_to_num(nan=-torch.inf)).mul_(
-            self.counts.to(self.means).sqrt()
-        )
-
-    def stds(self, numpy=False):
-        if self.meansq is None:
-            return None
-        means_sq = self.means.square()
-        stds = torch.subtract(self.meansq, means_sq, out=means_sq)
-        stds = stds.abs_().nan_to_num_().sqrt_()
-        if numpy:
-            stds = stds.numpy(force=True)
-        return stds
 
     def process_chunk(
         self,
@@ -340,70 +377,10 @@ class RunningTemplates(GrabAndFeaturize):
         if to_numpy or not res["n_spikes"]:
             return res
 
-        # scatter waveforms to reg channels, if necessary
-        waveforms: torch.Tensor = res["waveforms"]
-        spike_ix: torch.LongTensor = res["indices"]
-        labels: torch.LongTensor = res["labels"]
-        chanix = None
-        if self.motion_aware:
-            chanix = self.target_channels[self.pitch_shift_ixs[spike_ix]]
-            chanix = chanix[:, None, :]
-            ix = chanix.broadcast_to(waveforms.shape)
-            reg_waveforms = waveforms.new_full(
-                (*waveforms.shape[:2], self.n_channels_full), torch.nan
-            )
-            waveforms = reg_waveforms.scatter_(src=waveforms, dim=2, index=ix)
-
-        # determine each unit's per-channel counts, for weighting purposes
-        # TODO: sum responsibility weights here
-        counts = waveforms.new_zeros((self.n_units, self.n_channels_full))
-        weights = waveforms[:, 0].isfinite().to(waveforms)
-        ix = labels[:, None].broadcast_to(weights.shape)
-        counts.scatter_add_(dim=0, index=ix, src=weights)
-
-        # normalized weights in each unit
-        denom = torch.where(counts > 0, counts, 1.0)
-        weights.div_(denom[labels])
-
-        # extract squares into a copy if nec
-        waveforms.nan_to_num_()
-        waveformsq = None
-        if self.with_raw_std_dev:
-            waveformsq = waveforms.square()
-
-        # weighted sum
-        means = waveforms.new_zeros(self.means.shape)
-        waveforms.mul_(weights[:, None])
-        ix = labels[:, None, None].broadcast_to(waveforms.shape)
-        means.scatter_add_(dim=0, index=ix, src=waveforms)
-
-        # "" std, optionally ""
-        if self.with_raw_std_dev:
-            assert waveformsq is not None
-            meansq = waveforms.new_zeros(means.shape)
-            waveformsq.mul_(weights[:, None])
-            meansq.scatter_add_(dim=0, index=ix, src=waveformsq)
-            res["meansq"] = meansq
-
-        if self.compute_low_rank_mean:
-            assert self.pcmeans is not None
-            pcmeans = waveforms.new_zeros(self.pcmeans.shape)
-            pcfeats: torch.Tensor = res["tpca_features"]
-            if self.motion_aware:
-                assert chanix is not None
-                reg_pcfeats = pcfeats.new_full(
-                    (*pcfeats.shape[:2], self.n_channels_full), torch.nan
-                )
-                pcfeats = reg_pcfeats.scatter_(
-                    src=pcfeats, dim=2, index=chanix.broadcast_to(pcfeats.shape)
-                )
-            pcfeats.mul_(weights[:, None])
-            ix = labels[:, None, None].broadcast_to(pcfeats.shape)
-            pcmeans.scatter_add_(dim=0, index=ix, src=pcfeats)
-            res["pcmeans"] = pcmeans
-
-        res["counts"] = counts
-        res["means"] = means
+        ires = self._process_chunk_main(
+            res["waveforms"], res["indices"], res["labels"], res.get("tpca_features")
+        )
+        res.update(ires)
 
         return res
 
@@ -444,17 +421,373 @@ class RunningTemplates(GrabAndFeaturize):
         if not n_spikes:
             return n_spikes
 
-        # update running count and do Welford sums
-        self.counts += chunk_result["counts"]
-        denom = torch.where(self.counts > 0, self.counts, 1.0)
-        w = chunk_result["counts"].div_(denom).unsqueeze(1)
-        self.means += chunk_result["means"].sub_(self.means).mul_(w)
-        if self.with_raw_std_dev:
-            self.meansq += chunk_result["meansq"].sub_(self.meansq).mul_(w)
-        if self.compute_low_rank_mean:
-            self.pcmeans += chunk_result["pcmeans"].sub_(self.pcmeans).mul_(w)
+        self.n_spikes += n_spikes
+        self._gather_chunk_main(chunk_result)
 
         return n_spikes
+
+    def _process_chunk_main(
+        self,
+        waveforms: torch.Tensor,
+        spike_ix: torch.LongTensor,
+        labels: torch.LongTensor,
+        pcfeats: torch.Tensor | None,
+    ):
+        """Handles batch statistics for raw or exp weighted templates
+
+        Also is the initialization stage for the t flavored versions.
+        """
+        # scatter waveforms to reg channels, if necessary
+        if self.motion_aware:
+            chanix = self.target_channels[self.pitch_shift_ixs[spike_ix]]
+            waveforms = registerize(waveforms, self.n_channels_full, chanix)
+        else:
+            chanix = None
+
+        if self.tasks.active_step in ("raw", "svd"):
+            return self._process_chunk_raw_svd(
+                waveforms, spike_ix, labels, chanix, pcfeats
+            )
+        elif self.tasks.active_step == "t":
+            return self._process_chunk_t(waveforms, spike_ix, labels)
+
+        assert False
+
+    def _process_chunk_raw_svd(
+        self,
+        waveforms: torch.Tensor,
+        spike_ix: torch.LongTensor,
+        labels: torch.LongTensor,
+        chanix: torch.LongTensor | None,
+        pcfeats: torch.Tensor | None,
+    ):
+        res = {}
+
+        # determine each unit's per-channel counts, for weighting purposes
+        # TODO: sum responsibility weights here
+        counts = waveforms.new_zeros((self.n_units, self.n_channels_full))
+        weights = waveforms[:, 0].isfinite().to(waveforms)
+        ix = labels[:, None].broadcast_to(weights.shape)
+        counts.scatter_add_(dim=0, index=ix, src=weights)
+        res["counts"] = counts
+
+        # normalized weights in each unit
+        denom = torch.where(counts > 0, counts, 1.0)
+        weights.div_(denom[labels])
+
+        if self.tasks.updating_gamma_mean:
+            # self.raw_means already done with. easiest to get w hats
+            # while waveforms still have nans that can be deleted.
+            raw_what = get_gamma_latent(
+                x=waveforms,
+                labels=labels,
+                mu=self.raw_means,
+                nu=self.initial_df,
+                sigma=1.0,
+            )
+            assert raw_what.shape == waveforms.shape
+            raw_what = raw_what.mean(dim=1)  # mean over time...
+            res["wbar"] = torch.nanmean(raw_what)
+            res["sqwbar"] = torch.nanmean(raw_what.square())
+            res["logwbar"] = torch.nanmean(raw_what.log())
+
+        # extract squares into a copy if nec
+        waveforms.nan_to_num_()
+        waveformsq = None
+        if self.tasks.needs_raw_stds:
+            waveformsq = waveforms.square()
+
+        # weighted sum
+        if self.tasks.updating_raw_means:
+            raw_means = waveforms.new_zeros(self.raw_means.shape)
+            waveforms.mul_(weights[:, None])
+            ix = labels[:, None, None].broadcast_to(waveforms.shape)
+            raw_means.scatter_add_(dim=0, index=ix, src=waveforms)
+            res["raw_means"] = raw_means
+
+        # "" std, optionally ""
+        if self.tasks.needs_raw_stds:
+            assert waveformsq is not None
+            meansq = waveforms.new_zeros(self.raw_means.shape)
+            waveformsq.mul_(weights[:, None])
+            meansq.scatter_add_(dim=0, index=ix, src=waveformsq)
+            res["meansq"] = meansq
+
+        if self.tasks.updating_svd_means:
+            assert self.pcmeans is not None
+            assert pcfeats is not None
+            pcmeans = waveforms.new_zeros(self.pcmeans.shape)
+            pcfeats = registerize(pcfeats, self.n_channels_full, chanix)
+            pcfeats.mul_(weights[:, None])
+            ix = labels[:, None, None].broadcast_to(pcfeats.shape)
+            pcmeans.scatter_add_(dim=0, index=ix, src=pcfeats)
+            res["pcmeans"] = pcmeans
+
+        return res
+
+    def _process_chunk_t(
+        self,
+        waveforms: torch.Tensor,
+        spike_ix: torch.LongTensor,
+        labels: torch.LongTensor,
+    ):
+        raw_what = get_gamma_latent(
+            x=waveforms,
+            labels=labels,
+            mu=self.raw_means,
+            nu=self.nu,
+            sigma=self.raw_stds,
+        )
+        pshape = self.raw_means.shape
+        res = {}
+        if self.tasks.is_svd:
+            svd_what = get_gamma_latent(
+                x=waveforms,
+                labels=labels,
+                mu=self.svd_means,
+                nu=self.nu,
+                sigma=self.svd_stds,
+            )
+            resps = get_t_responsibilities(
+                x=waveforms,
+                nu=self.nu,
+                labels=labels,
+                mu0=self.raw_means,
+                sigma0=self.raw_stds,
+                mu1=self.svd_means,
+                sigma1=self.svd_stds,
+            )
+            raw_weight = resps[0] * raw_what
+            svd_weight = resps[1] * raw_what
+            svd_t_counts, svd_t_means = count_and_mean(
+                waveforms, labels, pshape, svd_weight
+            )
+            res["svd_t_counts"] = svd_t_counts
+            res["svd_t_means"] = svd_t_means
+        else:
+            raw_weight = raw_what
+        raw_t_counts, raw_t_means = count_and_mean(
+            waveforms, labels, pshape, raw_weight
+        )
+        res["raw_t_counts"] = raw_t_counts
+        res["raw_t_means"] = raw_t_means
+        return res
+
+    def _gather_chunk_main(self, chunk_result):
+        # update running count and do Welford sums
+
+        # this is the raw/svd step update
+        if "counts" in chunk_result:
+            self.counts += chunk_result["counts"]
+            denom = torch.where(self.counts > 0, self.counts, 1.0)
+            w = chunk_result["counts"].div_(denom).unsqueeze(1)
+        if "raw_means" in chunk_result:
+            self.raw_means += chunk_result["raw_means"].sub_(self.raw_means).mul_(w)
+        if "meansq" in chunk_result:
+            self.meansq += chunk_result["meansq"].sub_(self.meansq).mul_(w)
+        if "pcmeans" in chunk_result:
+            self.pcmeans += chunk_result["pcmeans"].sub_(self.pcmeans).mul_(w)
+        if "wbar" in chunk_result:
+            ww = chunk_result["n_spikes"] / max(self.n_spikes, 1)
+            self.wbar += ww * (chunk_result["wbar"] - self.wbar)
+            self.logwbar += ww * (chunk_result["logwbar"] - self.logwbar)
+            self.sqwbar += ww * (chunk_result["sqwbar"] - self.sqwbar)
+
+        # and, the t step update
+        if "raw_t_counts" in chunk_result:
+            assert "raw_t_means" in chunk_result
+            self.raw_t_counts += chunk_result["raw_t_counts"]
+            d = torch.where(self.raw_t_counts > 0, self.raw_t_counts, 1.0)
+            w = chunk_result["raw_t_counts"].div_(d)
+            self.raw_t_means += (
+                chunk_result["raw_t_means"].sub_(self.raw_t_means).mul_(w)
+            )
+        if "svd_t_counts" in chunk_result:
+            assert "svd_t_means" in chunk_result
+            self.svd_t_counts += chunk_result["svd_t_counts"]
+            d = torch.where(self.svd_t_counts > 0, self.svd_t_counts, 1.0)
+            w = chunk_result["svd_t_counts"].div_(d)
+            self.svd_t_means += (
+                chunk_result["svd_t_means"].sub_(self.svd_t_means).mul_(w)
+            )
+
+    def setup_global(self):
+        geom = self.recording.get_channel_locations()
+        if self.motion_aware:
+            self.reg_geom = drift_util.registered_geometry(geom, self.motion_est)
+            self.n_channels_full = len(self.reg_geom)
+
+            n_pitches_shift = self.n_pitches_shift
+            if n_pitches_shift is None:
+                depths = np.atleast_1d(geom[self.channels, 1])
+                times = self.recording.sample_index_to_time(self.times_samples)
+                n_pitches_shift = drift_util.get_spike_pitch_shifts(
+                    depths, geom, times_s=times, motion_est=self.motion_est
+                )
+            unique_shifts, pitch_shift_ixs = np.unique(
+                n_pitches_shift, return_inverse=True
+            )
+            res = drift_util.get_stable_channels(
+                geom=geom,
+                channels=np.zeros_like(unique_shifts),
+                channel_index=self.channel_index.numpy(force=True),
+                registered_geom=self.reg_geom,
+                n_pitches_shift=unique_shifts,
+            )
+            target_channels = torch.asarray(res[0], device=self.channel_index.device)
+            pitch_shift_ixs = torch.asarray(
+                pitch_shift_ixs, device=self.channel_index.device
+            )
+            self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
+            self.register_buffer("target_channels", target_channels)
+        else:
+            self.reg_geom = geom
+            self.n_channels_full = self.recording.get_num_channels()
+
+    def setup_raw(self):
+        n = self.n_units
+        t = self.spike_length_samples
+        c = self.n_channels_full
+        self.mean_shape = n, t, c
+        self.register_buffer("raw_means", torch.zeros(self.mean_shape))
+        self.register_buffer("counts", torch.zeros((n, c)))
+        if self.tasks.needs_raw_stds:
+            self.register_buffer("meansq", torch.zeros(self.mean_shape))
+        else:
+            self.meansq = None
+
+    def setup_svd(self):
+        n = self.n_units
+        c = self.n_channels_full
+        if self.tasks.needs_svd_means:
+            assert self.denoising_rank is not None
+            self.register_buffer("pcmeans", torch.zeros((n, self.denoising_rank, c)))
+        else:
+            self.pcmeans = None
+        if self.tasks.needs_gamma_mean:
+            self.register_buffer("wbar", torch.zeros(()))
+            self.register_buffer("logwbar", torch.zeros(()))
+            self.register_buffer("sqwbar", torch.zeros(()))
+
+    def setup_t(self):
+        if not self.tasks.is_t:
+            return
+        self.register_buffer("raw_t_counts", torch.zeros(self.mean_shape))
+        self.register_buffer("raw_t_means", torch.zeros(self.mean_shape))
+        if self.tasks.is_svd:
+            self.register_buffer("svd_t_counts", torch.zeros(self.mean_shape))
+            self.register_buffer("svd_t_means", torch.zeros(self.mean_shape))
+
+
+@dataclass(kw_only=True)
+class RunningTemplatesTasks:
+    """Helper state machine for the RunningTemplates peeler.
+
+    Cooperates with peeler's .compute_template_data() and .finalize_step().
+    Sets updating_* flags read by peeler's chunk process and gather methods
+    so it knows what it's doing.
+    """
+
+    denoising_method: Literal["none", "exp_weighted_svd", "t", "t_svd"]
+    has_gamma_df: bool
+    with_raw_std_dev: bool
+
+    # tasks that are requested but have not been done
+    # these will be updated as we go through the steps and are determined
+    # based on denoising_method
+    needs_raw_means: bool = field(init=False)
+    needs_raw_stds: bool = field(init=False)
+    needs_svd_means: bool = field(init=False)
+    needs_svd_stds: bool = field(init=False)
+    needs_gamma_mean: bool = field(init=False)
+    needs_t_params: bool = field(init=False)
+
+    # these hold the tasks that are currently being processed
+    active_step: Literal["", "raw", "svd", "t"] = ""
+    updating_raw_means: bool = False
+    updating_svd_means: bool = False
+    updating_gamma_mean: bool = False
+    updating_t_params: bool = False
+
+    def __post_init__(self):
+        self.is_t = self.denoising_method in ("t", "t_svd")
+        self.is_none = self.denoising_method in ("none", None)
+        self.is_weighted = self.denoising_method == "exp_weighted_svd"
+        self.is_svd = self.denoising_method in ("t_svd", "exp_weighted_svd")
+
+        self.needs_raw_means = True
+        self.needs_raw_stds = self.with_raw_std_dev or self.is_t
+        self.needs_svd_means = self.is_weighted or self.is_svd
+        self.needs_svd_stds = self.is_svd and self.is_t
+        self.needs_gamma_mean = self.is_t and not self.has_gamma_df
+        self.needs_t_params = self.is_t
+
+    def plan_step(self):
+        if self.done:
+            self.active_step = ""
+            logger.dartsortdebug("Template tasks done.")
+            return False
+        elif self.needs_raw_pass:
+            self.updating_raw_means = self.needs_raw_means
+            self.updating_raw_stds = self.needs_raw_stds
+            self.active_step = "raw"
+        elif self.needs_svd_pass:
+            self.updating_raw_means = self.needs_raw_means
+            self.updating_raw_stds = self.needs_raw_stds
+            self.updating_svd_means = self.needs_svd_means
+            self.updating_gamma_mean = self.needs_gamma_mean
+            self.active_step = "svd"
+        elif self.needs_t_pass:
+            self.updating_t_params = self.needs_t_params
+            self.active_step = "t"
+        else:
+            assert False
+        logger.dartsortdebug(f"Template task: {self.active_step}.")
+        return True
+
+    def finalize_step(self):
+        if self.done:
+            assert False
+        elif self.needs_raw_pass:
+            self.updating_raw_means = self.needs_raw_means = False
+            self.updating_raw_stds = self.needs_raw_stds = False
+        elif self.needs_svd_pass:
+            self.updating_raw_means = self.needs_raw_means = False
+            self.updating_svd_means = self.needs_svd_means = False
+            self.updating_gamma_mean = self.needs_gamma_mean = False
+            self.needs_svd_stds = False
+        elif self.needs_t_pass:
+            self.updating_t_params = self.needs_t_params = False
+        else:
+            assert False
+
+    @property
+    def done(self):
+        return not (self.needs_raw_pass or self.needs_svd_pass or self.needs_t_pass)
+
+    @property
+    def needs_raw_pass(self):
+        """Does the peeler need to do a pre-initialization pass?
+
+        This is only used to set up the t weights, or if there's no
+        denoising of any kind.
+        """
+        raw_done = not (self.needs_raw_means or self.needs_raw_stds)
+        none_and_not_done = self.is_none and not raw_done
+        t_and_not_done = self.is_t and not raw_done
+        return none_and_not_done or t_and_not_done
+
+    @property
+    def needs_svd_pass(self):
+        """This pass computes pc means and the gamma latent mean (if nec)."""
+        svd_done = not (self.needs_svd_means or self.needs_gamma_mean)
+        would_need_svd = self.is_t or self.is_svd
+        return would_need_svd and not svd_done
+
+    @property
+    def needs_t_pass(self):
+        t_done = not self.needs_t_params
+        return self.is_t and not t_done
 
 
 def realign_by_running_templates(
@@ -492,7 +825,7 @@ def realign_by_running_templates(
         task_name="Realign",
     )
 
-    sorting, _, time_shifts = realign_sorting(
+    sorting, templates, time_shifts = realign_sorting(
         sorting,
         templates=template_data.templates,
         snrs_by_channel=template_data.snrs_by_channel(),
@@ -504,3 +837,121 @@ def realign_by_running_templates(
         recording_length_samples=recording.get_total_samples(),
     )
     return sorting, peeler.n_pitches_shift, time_shifts
+
+
+def registerize(
+    x: torch.Tensor,
+    nc: int,
+    chanix: torch.LongTensor | None = None,
+    pad_value=torch.nan,
+) -> torch.Tensor:
+    if chanix is None:
+        return x
+    reg_x = x.new_full((*x.shape[:2], nc), pad_value)
+    ix = chanix[:, None, :].broadcast_to(x.shape)
+    reg_x.scatter_(src=x, dim=2, index=ix)
+    return reg_x
+
+
+def get_gamma_latent(x, labels, mu, nu=1.0, sigma=1.0):
+    nu = torch.asarray(nu)
+    if torch.isinf(nu):
+        return x.isfinite().to(x)
+
+    denom = mu[labels]
+    sigmasq = torch.asarray(sigma).to(x).square()
+    nu_sigmasq = nu * sigmasq
+    denom.sub_(x).square_().add_(nu_sigmasq)
+    return torch.div(nu_sigmasq.add_(sigmasq), denom, out=denom)
+
+
+def estimate_gamma_df(wbar, logwbar, sqwbar):
+    """Solves digamma(nu/2) - log(nu) = 1 + logwbar - wbar."""
+    from scipy.special import psi, polygamma
+    from scipy.optimize import root_scalar
+
+    dtype = wbar.dtype
+    dev = wbar.device
+
+    wbar = wbar.numpy(force=True)
+    logwbar = logwbar.numpy(force=True)
+    sqwbar = sqwbar.numpy(force=True)
+
+    # start with a guess based on the gamma MoM
+    vw = sqwbar - wbar**2
+    assert np.isfinite(vw) and vw >= 0
+    if vw == 0:
+        logger.info("Estimated infinite gamma df.")
+        return torch.asarray(torch.inf, device=dev, dtype=dtype)
+    x0 = 1.0 / vw
+
+    def f(x):
+        p = psi(x)
+        p1 = polygamma(1, x)
+        p2 = polygamma(2, x)
+        invx = np.reciprocal(x)
+        f = p - np.log(x)
+        df = p1 - invx
+        ddf = p2 + invx * invx
+        return f, df, ddf
+
+    sol = root_scalar(f, x0=x0, fprime2=True)
+    nu = sol.root / 2.0
+    assert sol.converged
+
+    logger.dartsortdebug(
+        "Gamma nu estimate: final={} x0={} for wbar={} logwbar={} sqwbar={}",
+        nu,
+        x0,
+        wbar,
+        logwbar,
+        sqwbar,
+    )
+    return torch.asarray(nu, device=dev, dtype=dtype)
+
+
+def get_t_responsibilities(x, nu, labels, mu0, sigma0, mu1, sigma1):
+    finite = x.isfinite().nonzero(as_tuple=True)
+    xf = x[finite]
+    mu0 = mu0[labels][finite]
+    sigma0 = sigma0[labels][finite].clamp_(min=1e-5)
+    mu1 = mu1[labels][finite]
+    sigma1 = sigma1[labels][finite].clamp_(min=1e-5)
+    if nu < torch.inf:
+        l0 = StudentT(nu, loc=mu0, scale=sigma0, validate_args=False).log_prob(xf)
+        l1 = StudentT(nu, loc=mu1, scale=sigma1, validate_args=False).log_prob(xf)
+    else:
+        rt2 = torch.sqrt(torch.tensor(2.0)).to(xf)
+        l0 = sigma0.log().sub_(
+            torch.subtract(mu0, xf, out=mu0)
+            .div_(sigma0.mul(rt2))
+            .square_()
+        )
+        l1 = sigma1.log().sub_(
+            torch.subtract(mu1, xf, out=mu1)
+            .div_(sigma1.mul(rt2))
+            .square_()
+        )
+    ll = x.new_full((2, *x.shape), -torch.inf)
+    ll[0, *finite] = l0
+    ll[1, *finite] = l1
+    resp = F.softmax(ll, dim=0)
+    return resp
+
+
+def count_and_mean(waveforms, labels, pshape, weights):
+    assert weights.shape == waveforms.shape
+
+    counts = waveforms.new_zeros(pshape)
+    ix = labels[:, None, None].broadcast_to(weights.shape)
+    counts.scatter_add_(dim=0, index=ix, src=weights)
+
+    denom = torch.where(counts > 0, counts, 1.0)[labels]
+    weights = torch.divide(weights, denom, out=denom)
+
+    means = waveforms.new_zeros(pshape)
+    waveforms = weights.mul_(waveforms)
+    ix = labels[:, None, None].broadcast_to(waveforms.shape)
+    means.scatter_add_(dim=0, index=ix, src=waveforms)
+
+    return counts, means
