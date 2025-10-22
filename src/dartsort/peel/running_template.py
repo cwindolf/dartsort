@@ -58,6 +58,8 @@ class RunningTemplates(GrabAndFeaturize):
         time_shifts=None,
         gamma_df: float | None = None,
         initial_df: float = 1.0,
+        t_iters: int = 1,
+        svd_inside_t: bool = False,
         with_raw_std_dev=False,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -127,6 +129,7 @@ class RunningTemplates(GrabAndFeaturize):
         self.n_units = labels.max() + 1
         self.group_ids = group_ids
         self.n_pitches_shift = None
+        self.svd_inside_t = svd_inside_t
         self.full_featurization_pipeline = featurization_pipeline
         self.short_featurization_pipeline = WaveformPipeline([waveform_feature])
         self.tpca = tpca
@@ -135,6 +138,7 @@ class RunningTemplates(GrabAndFeaturize):
             denoising_method=denoising_method,
             has_gamma_df=self.gamma_df is not None,
             with_raw_std_dev=with_raw_std_dev,
+            t_iters=t_iters,
         )
 
     @classmethod
@@ -215,6 +219,7 @@ class RunningTemplates(GrabAndFeaturize):
             time_shifts=time_shifts,
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
+            t_iters=template_cfg.t_iters,
         )
 
     def compute_template_data(
@@ -262,7 +267,7 @@ class RunningTemplates(GrabAndFeaturize):
     def setup_step(self):
         self.counts.fill_(0.0)
         self.n_spikes = 0
-        if self.tasks.updating_svd_means:
+        if self.tasks.updating_svd_means or (self.tasks.is_t and self.tasks.is_svd and self.svd_inside_t):
             self.featurization_pipeline = self.full_featurization_pipeline
         else:
             self.featurization_pipeline = self.short_featurization_pipeline
@@ -295,12 +300,26 @@ class RunningTemplates(GrabAndFeaturize):
     def finalize_t(self):
         if not self.tasks.is_t:
             return
+
         if self.tasks.is_svd:
             assert self.tpca is not None
             assert self.svd_t_means is not None
             svd_means = self.svd_t_means.nan_to_num()
             svd_means = self.tpca.force_reconstruct(svd_means)
             self.svd_t_means.copy_(svd_means)
+
+        if self.tasks.remaining_t_iters > 1:
+            #todo overwrite raw_means and svd_means with t versions and zero t buffers
+            self.raw_means.copy_(self.raw_t_means)
+        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
+            self.svd_means.copy_(self.svd_t_means)
+        if self.tasks.updating_t_stds:
+            #todo overwrite raw_stds and svd_stds with t versions and zero t buffers
+            self.raw_t_stds.sub_(self.raw_t_means.square()).sqrt_()
+            self.raw_stds.copy_(self.raw_t_stds)
+        if self.tasks.is_svd and self.tasks.updating_t_stds:
+            self.svd_t_stds.sub_(self.svd_t_means.square()).sqrt_()
+            self.svd_stds.copy_(self.svd_t_stds)
 
     def to_template_data(self):
         from ..templates.templates import TemplateData
@@ -457,7 +476,7 @@ class RunningTemplates(GrabAndFeaturize):
                 waveforms, spike_ix, labels, chanix, pcfeats
             )
         elif self.tasks.active_step == "t":
-            return self._process_chunk_t(waveforms, spike_ix, labels)
+            return self._process_chunk_t(waveforms, spike_ix, labels, chanix, pcfeats)
 
         assert False
 
@@ -538,6 +557,8 @@ class RunningTemplates(GrabAndFeaturize):
         waveforms: torch.Tensor,
         spike_ix: torch.LongTensor,
         labels: torch.LongTensor,
+        chanix: torch.LongTensor | None,
+        pcfeats: torch.Tensor | None,
     ):
         raw_what = get_gamma_latent(
             x=waveforms,
@@ -567,18 +588,28 @@ class RunningTemplates(GrabAndFeaturize):
             )
             raw_weight = resps[0] * raw_what
             svd_weight = resps[1] * raw_what
-            svd_t_counts, svd_t_means = count_and_mean(
-                waveforms, labels, pshape, svd_weight
+            if self.svd_inside_t:
+                assert pcfeats is not None
+                pcwfs = self.tpca.force_reconstruct(pcfeats)
+                pcwfs = registerize(pcwfs, self.n_channels_full, chanix)
+            else:
+                pcwfs = waveforms
+            svd_t_counts, svd_t_means, svd_t_meansq = count_and_mean(
+                pcwfs, labels, pshape, svd_weight, with_sq=self.tasks.updating_t_stds
             )
             res["svd_t_counts"] = svd_t_counts
             res["svd_t_means"] = svd_t_means
+            if svd_t_meansq is not None:
+                res["svd_t_meansq"] = svd_t_meansq
         else:
             raw_weight = raw_what
-        raw_t_counts, raw_t_means = count_and_mean(
-            waveforms, labels, pshape, raw_weight
+        raw_t_counts, raw_t_means, raw_t_meansq = count_and_mean(
+            waveforms, labels, pshape, raw_weight, with_sq=self.tasks.updating_t_stds
         )
         res["raw_t_counts"] = raw_t_counts
         res["raw_t_means"] = raw_t_means
+        if raw_t_meansq is not None:
+            res["raw_t_meansq"] = raw_t_meansq
         return res
 
     def _gather_chunk_main(self, chunk_result):
@@ -610,6 +641,10 @@ class RunningTemplates(GrabAndFeaturize):
             self.raw_t_means += (
                 chunk_result["raw_t_means"].sub_(self.raw_t_means).mul_(w)
             )
+        if "raw_t_counts" in chunk_result and "raw_t_meansq" in chunk_result:
+            self.raw_t_stds += (
+                chunk_result["raw_t_meansq"].sub_(self.raw_t_stds).mul_(w)
+            )
         if "svd_t_counts" in chunk_result:
             assert "svd_t_means" in chunk_result
             self.svd_t_counts += chunk_result["svd_t_counts"]
@@ -617,6 +652,10 @@ class RunningTemplates(GrabAndFeaturize):
             w = chunk_result["svd_t_counts"].div_(d)
             self.svd_t_means += (
                 chunk_result["svd_t_means"].sub_(self.svd_t_means).mul_(w)
+            )
+        if "svd_t_counts" in chunk_result and "svd_t_meansq" in chunk_result:
+            self.svd_t_stds += (
+                chunk_result["svd_t_meansq"].sub_(self.svd_t_stds).mul_(w)
             )
 
     def setup_global(self):
@@ -682,9 +721,13 @@ class RunningTemplates(GrabAndFeaturize):
             return
         self.register_buffer("raw_t_counts", torch.zeros(self.mean_shape))
         self.register_buffer("raw_t_means", torch.zeros(self.mean_shape))
+        if self.tasks.needs_t_stds:
+            self.register_buffer("raw_t_stds", torch.zeros(self.mean_shape))
         if self.tasks.is_svd:
             self.register_buffer("svd_t_counts", torch.zeros(self.mean_shape))
             self.register_buffer("svd_t_means", torch.zeros(self.mean_shape))
+        if self.tasks.is_svd and self.tasks.needs_t_stds:
+            self.register_buffer("svd_t_stds", torch.zeros(self.mean_shape))
         if self.gamma_df is not None:
             self.register_buffer("nu", torch.asarray(self.gamma_df))
 
@@ -701,6 +744,7 @@ class RunningTemplatesTasks:
     denoising_method: Literal["none", "exp_weighted_svd", "t", "t_svd"]
     has_gamma_df: bool
     with_raw_std_dev: bool
+    t_iters: int
 
     # tasks that are requested but have not been done
     # these will be updated as we go through the steps and are determined
@@ -711,6 +755,8 @@ class RunningTemplatesTasks:
     needs_svd_stds: bool = field(init=False)
     needs_gamma_mean: bool = field(init=False)
     needs_t_params: bool = field(init=False)
+    needs_t_stds: bool = field(init=False)
+    remaining_t_iters: int = field(init=False)
 
     # these hold the tasks that are currently being processed
     active_step: Literal["", "raw", "svd", "t"] = ""
@@ -718,6 +764,7 @@ class RunningTemplatesTasks:
     updating_svd_means: bool = False
     updating_gamma_mean: bool = False
     updating_t_params: bool = False
+    updating_t_stds: bool = False
 
     def __post_init__(self):
         self.is_t = self.denoising_method in ("t", "t_svd")
@@ -731,6 +778,8 @@ class RunningTemplatesTasks:
         self.needs_svd_stds = self.is_svd and self.is_t
         self.needs_gamma_mean = self.is_t and not self.has_gamma_df
         self.needs_t_params = self.is_t
+        self.needs_t_stds = self.is_t and self.remaining_t_iters > 1
+        self.remaining_t_iters = int(self.is_t) * self.t_iters
 
     def plan_step(self):
         if self.done:
@@ -749,7 +798,8 @@ class RunningTemplatesTasks:
             self.active_step = "svd"
         elif self.needs_t_pass:
             self.updating_t_params = self.needs_t_params
-            self.active_step = "t"
+            self.updating_t_stds = self.remaining_t_iters > 1
+            self.active_step = f"t{self.t_iters - self.remaining_t_iters}/{self.t_iters}"
         else:
             assert False
         logger.dartsortdebug(f"Template task: {self.active_step}.")
@@ -767,7 +817,10 @@ class RunningTemplatesTasks:
             self.updating_gamma_mean = self.needs_gamma_mean = False
             self.needs_svd_stds = False
         elif self.needs_t_pass:
-            self.updating_t_params = self.needs_t_params = False
+            self.updating_t_params = False
+            self.updating_t_stds = False
+            self.remaining_t_iters -= 1
+            self.needs_t_params = self.remaining_t_iters > 0
         else:
             assert False
 
@@ -954,7 +1007,7 @@ def get_t_responsibilities(x, nu, labels, mu0, sigma0, mu1, sigma1):
     return resp
 
 
-def count_and_mean(waveforms, labels, pshape, weights):
+def count_and_mean(waveforms, labels, pshape, weights, with_sq=False):
     assert weights.shape == waveforms.shape
 
     counts = waveforms.new_zeros(pshape)
@@ -969,4 +1022,12 @@ def count_and_mean(waveforms, labels, pshape, weights):
     ix = labels[:, None, None].broadcast_to(waveforms.shape)
     means.scatter_add_(dim=0, index=ix, src=waveforms)
 
-    return counts, means
+    if with_sq:
+        meansq = waveforms.new_zeros(pshape)
+        waveforms.mul_(waveforms)
+        ix = labels[:, None, None].broadcast_to(waveforms.shape)
+        meansq.scatter_add_(dim=0, index=ix, src=waveforms)
+    else:
+        meansq = None
+
+    return counts, means, meansq

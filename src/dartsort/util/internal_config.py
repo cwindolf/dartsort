@@ -236,6 +236,7 @@ class TemplateConfig:
     # t denoising?
     initial_t_df: float = 1.0
     fixed_t_df: float | None = None
+    t_iters: int = 1
 
     # realignment
     realign_peaks: bool = True
