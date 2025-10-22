@@ -1,7 +1,9 @@
 from dataclasses import dataclass, replace
+import gc
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from ..localize.localize_util import localize_waveforms
 from ..util import data_util, drift_util, job_util
@@ -216,6 +218,10 @@ class TemplateData:
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
         return self
 
     @classmethod
@@ -233,7 +239,7 @@ class TemplateData:
         tsvd=None,
         computation_cfg=None,
     ):
-        return _from_config_with_realigned_sorting(
+        self, realigned_sorting = _from_config_with_realigned_sorting(
             cls,
             recording,
             sorting,
@@ -247,6 +253,8 @@ class TemplateData:
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
+
+        return self, realigned_sorting
 
 
 def _from_config_with_realigned_sorting(
@@ -300,6 +308,7 @@ def _from_config_with_realigned_sorting(
             spike_length_samples=peeler.spike_length_samples,
             recording_length_samples=recording.get_total_samples(),
         )
+        del peeler
         return template_data, realigned_sorting
 
     if sorting is None:

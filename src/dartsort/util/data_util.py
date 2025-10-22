@@ -129,7 +129,7 @@ class DARTsortSorting:
             times_samples=self.times_samples[mask],
             channels=self.channels[mask],
             labels=self.labels[mask] if self.labels is not None else None,
-            parent_h5_path=None,
+            parent_h5_path=self.parent_h5_path,
             extra_features=extra_features,
         )
 
@@ -329,12 +329,12 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     pipeline = WaveformPipeline.from_state_dict_pt(
         geom, channel_index, featurization_pipeline_pt
     )
-    return pipeline
+    return pipeline, featurization_pipeline_pt
 
 
 def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
     """Look for the TemporalPCAFeaturizer in the usual place."""
-    pipeline = get_featurization_pipeline(sorting)
+    pipeline, _ = get_featurization_pipeline(sorting)
     return pipeline.get_transformer(tpca_name)
 
 
@@ -342,11 +342,17 @@ def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=Tru
     if sorting.parent_h5_path is None:
         logger.info("Couldn't load stored basis.")
         return None
-    pipeline = get_featurization_pipeline(sorting)
+    pipeline, pt_path = get_featurization_pipeline(sorting)
     tsvd = pipeline.get_transformer(tsvd_name)
+    assert tsvd.name == tsvd_name
     if to_sklearn:
         tsvd = tsvd.to_sklearn()
-    logger.info("Loaded stored basis.")
+    logger.info(
+        f"Loaded stored basis from %s (%s; components shape: %s).",
+        pt_path,
+        tsvd_name,
+        tsvd.components_.shape
+    )
     return tsvd
 
 

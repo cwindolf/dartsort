@@ -1,9 +1,11 @@
-import tempfile
 from concurrent.futures import CancelledError
-from threading import local, Lock
 from contextlib import contextmanager
-from pathlib import Path
+import gc
 from itertools import repeat
+from pathlib import Path
+from sys import getrefcount
+import tempfile
+from threading import local, Lock
 
 import h5py
 import numpy as np
@@ -613,6 +615,11 @@ class BasePeeler(torch.nn.Module):
                     waveforms=waveforms,
                     **fixed_properties,
                 )
+
+                assert getrefcount(waveforms) == 2
+                del waveforms, fixed_properties
+                gc.collect()
+
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:

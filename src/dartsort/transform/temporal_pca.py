@@ -223,7 +223,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             self.spike_length_samples = pca.mean_.shape[0]
         else:
             # not really -- this is a hack.
-            self.spike_length_samples = self.temporal_slice.stop
+            self.spike_length_samples = self.temporal_slice.stop - self.temporal_slice.start
         self.initialize_spike_length_dependent_params()
         self.mean.copy_(torch.from_numpy(pca.mean_))
         self.components.copy_(torch.from_numpy(pca.components_))

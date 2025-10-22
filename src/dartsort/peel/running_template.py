@@ -245,7 +245,7 @@ class RunningTemplates(GrabAndFeaturize):
             self.finalize_svd()
         elif self.tasks.needs_t_pass:
             # nothing to do
-            pass
+            self.finalize_t()
         else:
             assert False
 
@@ -269,7 +269,7 @@ class RunningTemplates(GrabAndFeaturize):
 
     def finalize_raw(self):
         if self.tasks.needs_raw_stds:
-            self.raw_stds = self.raw_means.square()
+            self.register_buffer("raw_stds", self.raw_means.square())
             torch.subtract(self.meansq, self.raw_stds, out=self.raw_stds)
             self.raw_stds.abs_().nan_to_num_().sqrt_()
 
@@ -280,19 +280,27 @@ class RunningTemplates(GrabAndFeaturize):
             assert self.pcmeans is not None
             svd_means = self.pcmeans.nan_to_num()
             svd_means = self.tpca.force_reconstruct(svd_means)
-            self.svd_means = svd_means.to(self.raw_means)
+            self.register_buffer("svd_means", svd_means.to(self.raw_means))
 
         if self.tasks.needs_svd_stds:
             assert getattr(self, "raw_stds", None) is not None
             raw_var = self.raw_stds.square()
             dmeansq = (self.svd_means - self.raw_means).square_()
-            self.svd_stds = (raw_var.add_(dmeansq)).sqrt_()
+            self.register_buffer("svd_stds", (raw_var.add_(dmeansq)).sqrt_())
 
         if self.tasks.needs_gamma_mean:
-            if self.gamma_df is not None:
-                self.nu = self.gamma_df
-            else:
-                self.nu = estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar)
+            assert self.gamma_df is None
+            self.register_buffer("nu", estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
+
+    def finalize_t(self):
+        if not self.tasks.is_t:
+            return
+        if self.tasks.is_svd:
+            assert self.tpca is not None
+            assert self.svd_t_means is not None
+            svd_means = self.svd_t_means.nan_to_num()
+            svd_means = self.tpca.force_reconstruct(svd_means)
+            self.svd_t_means.copy_(svd_means)
 
     def to_template_data(self):
         from ..templates.templates import TemplateData
@@ -677,6 +685,8 @@ class RunningTemplates(GrabAndFeaturize):
         if self.tasks.is_svd:
             self.register_buffer("svd_t_counts", torch.zeros(self.mean_shape))
             self.register_buffer("svd_t_means", torch.zeros(self.mean_shape))
+        if self.gamma_df is not None:
+            self.register_buffer("nu", torch.asarray(self.gamma_df))
 
 
 @dataclass(kw_only=True)
@@ -859,13 +869,16 @@ def get_gamma_latent(x, labels, mu, nu=1.0, sigma=1.0):
         return x.isfinite().to(x)
 
     denom = mu[labels]
-    sigmasq = torch.asarray(sigma).to(x).square()
+    if isinstance(sigma, float):
+        sigmasq = torch.asarray(sigma).to(x).square()
+    else:
+        sigmasq = sigma[labels].square_()
     nu_sigmasq = nu * sigmasq
     denom.sub_(x).square_().add_(nu_sigmasq)
     return torch.div(nu_sigmasq.add_(sigmasq), denom, out=denom)
 
 
-def estimate_gamma_df(wbar, logwbar, sqwbar):
+def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100):
     """Solves digamma(nu/2) - log(nu) = 1 + logwbar - wbar."""
     from scipy.special import psi, polygamma
     from scipy.optimize import root_scalar
@@ -900,13 +913,15 @@ def estimate_gamma_df(wbar, logwbar, sqwbar):
     assert sol.converged
 
     logger.dartsortdebug(
-        "Gamma nu estimate: final={} x0={} for wbar={} logwbar={} sqwbar={}",
+        "Gamma nu estimate: final=%s x0=%s for wbar=%s logwbar=%s sqwbar=%s",
         nu,
         x0,
         wbar,
         logwbar,
         sqwbar,
     )
+    if nu > cutoff:
+        nu = torch.inf
     return torch.asarray(nu, device=dev, dtype=dtype)
 
 

@@ -109,7 +109,7 @@ class DARTsortAnalysis:
         hdf5_path = sorting.parent_h5_path
         featurization_pipeline = None
         if hdf5_path:
-            featurization_pipeline = get_featurization_pipeline(sorting)
+            featurization_pipeline, _ = get_featurization_pipeline(sorting)
 
         if template_data is None and allow_template_reload and hdf5_path is not None:
             model_dir = hdf5_path.parent / f"{hdf5_path.stem}_models"
@@ -200,7 +200,7 @@ class DARTsortAnalysis:
             if (hdf5_path.parent / motion_est_pkl).exists():
                 with open(hdf5_path.parent / motion_est_pkl, "rb") as jar:
                     motion_est = pickle.load(jar)
-        pipeline = get_featurization_pipeline(hdf5_path)
+        pipeline, _ = get_featurization_pipeline(hdf5_path)
         return cls(
             sorting, recording, template_data, hdf5_path, pipeline, motion_est, **kwargs
         )
