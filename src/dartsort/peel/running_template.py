@@ -59,7 +59,6 @@ class RunningTemplates(GrabAndFeaturize):
         gamma_df: float | None = None,
         initial_df: float = 1.0,
         t_iters: int = 1,
-        svd_inside_t: bool = False,
         with_raw_std_dev=False,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -129,7 +128,6 @@ class RunningTemplates(GrabAndFeaturize):
         self.n_units = labels.max() + 1
         self.group_ids = group_ids
         self.n_pitches_shift = None
-        self.svd_inside_t = svd_inside_t
         self.full_featurization_pipeline = featurization_pipeline
         self.short_featurization_pipeline = WaveformPipeline([waveform_feature])
         self.tpca = tpca
@@ -220,7 +218,6 @@ class RunningTemplates(GrabAndFeaturize):
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
             t_iters=template_cfg.t_iters,
-            svd_inside_t=template_cfg.svd_inside_t,
         )
 
     def compute_template_data(
@@ -273,8 +270,7 @@ class RunningTemplates(GrabAndFeaturize):
         if hasattr(self, 'svd_t_counts'):
             self.svd_t_counts.fill_(0.0)
 
-        t_needs_svd = self.tasks.is_t and self.tasks.is_svd and self.svd_inside_t
-        if self.tasks.updating_svd_means or t_needs_svd:
+        if self.tasks.using_tsvd_projection:
             self.featurization_pipeline = self.full_featurization_pipeline
         else:
             self.featurization_pipeline = self.short_featurization_pipeline
@@ -440,7 +436,7 @@ class RunningTemplates(GrabAndFeaturize):
                 waveforms, spike_ix, labels, chanix, pcfeats
             )
         elif self.tasks.active_step.startswith("t"):
-            return self._process_chunk_t(waveforms, spike_ix, labels, chanix, pcfeats)
+            return self._process_chunk_t(waveforms, spike_ix, labels)
 
         assert False
 
@@ -518,8 +514,6 @@ class RunningTemplates(GrabAndFeaturize):
         waveforms: torch.Tensor,
         spike_ix: torch.LongTensor,
         labels: torch.LongTensor,
-        chanix: torch.LongTensor | None,
-        pcfeats: torch.Tensor | None,
     ):
         pshape = self.raw_means.shape
         res = {}
@@ -565,14 +559,8 @@ class RunningTemplates(GrabAndFeaturize):
             )
             raw_weight = resps[0] * raw_what
             svd_weight = resps[1] * raw_what
-            if self.svd_inside_t:
-                assert pcfeats is not None
-                pcwfs = self.tpca.force_reconstruct(pcfeats)
-                pcwfs = registerize(pcwfs, self.n_channels_full, chanix, pad_value=0.0)
-            else:
-                pcwfs = waveforms
             svd_t_counts, svd_t_means, svd_t_meansq = count_and_mean(
-                pcwfs, labels, pshape, svd_weight, with_sq=self.tasks.updating_t_stds
+                waveforms, labels, pshape, svd_weight, with_sq=self.tasks.updating_t_stds
             )
             assert svd_t_counts.isfinite().all()
             assert svd_t_means.isfinite().all()
@@ -767,7 +755,7 @@ class RunningTemplates(GrabAndFeaturize):
         if not self.tasks.is_t:
             return
 
-        if self.tasks.is_svd and not self.svd_inside_t:
+        if self.tasks.is_svd:
             assert self.tpca is not None
             assert self.svd_t_means is not None
             svd_means = self.svd_t_means.nan_to_num()
@@ -860,6 +848,7 @@ class RunningTemplatesTasks:
     updating_gamma_mean: bool = False
     updating_t_params: bool = False
     updating_t_stds: bool = False
+    using_tsvd_projection: bool = False
 
     def __post_init__(self):
         self.is_t = self.denoising_method in ("t", "t_svd")
@@ -889,6 +878,7 @@ class RunningTemplatesTasks:
             self.updating_raw_means = self.needs_raw_means
             self.updating_raw_stds = self.needs_raw_stds
             self.updating_svd_means = self.needs_svd_means
+            self.using_tsvd_projection = self.updating_svd_means
             self.updating_gamma_mean = self.needs_gamma_mean
             self.active_step = "svd"
         elif self.needs_t_pass:
@@ -911,6 +901,7 @@ class RunningTemplatesTasks:
             self.updating_raw_means = self.needs_raw_means = False
             self.updating_svd_means = self.needs_svd_means = False
             self.updating_gamma_mean = self.needs_gamma_mean = False
+            self.using_tsvd_projection = False
             self.needs_svd_stds = False
         elif self.needs_t_pass:
             self.updating_t_params = False
