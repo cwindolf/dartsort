@@ -36,22 +36,26 @@ class BaseTemporalPCA(BaseWaveformModule):
         if fit_radius is not None:
             if geom is None or channel_index is None:
                 raise ValueError("TemporalPCA with fit_radius!=None requires geom.")
+
         super().__init__(
-            channel_index=channel_index,
-            geom=geom,
-            name=name,
-            name_prefix=name_prefix,
+            channel_index=channel_index, geom=geom, name=name, name_prefix=name_prefix
         )
+
+        # behavior
         self.rank = rank
-        self._needs_fit = True
-        self.random_state = random_state
-        self.shape = (rank, channel_index.shape[1])
-        self.fit_radius = fit_radius
         self.centered = centered
         self.whiten = whiten
         self.temporal_slice = temporal_slice
+
+        # fit control
+        self.fit_radius = fit_radius
+        self.random_state = random_state
         self.n_oversamples = n_oversamples
         self.max_waveforms = max_waveforms
+
+        # gizmo
+        self._needs_fit = True
+        self.shape = (rank, channel_index.shape[1])
 
     def initialize_spike_length_dependent_params(self):
         nt = self.spike_length_samples
@@ -230,12 +234,33 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.initialize_from_sklearn(pca)
         return self
 
+    @classmethod
+    def convert(cls, other):
+        assert not other._needs_fit  # doesn't handle fit_radius right.
+        self = cls(
+            channel_index=other.channel_index,
+            rank=other.rank,
+            centered=other.centered,
+            whiten=other.whiten,
+            temporal_slice=other.temporal_slice,
+        )
+        self._needs_fit = other._needs_fit
+        self.spike_length_samples = other.spike_length_samples
+        self.initialize_spike_length_dependent_params()
+        self.to(other.channel_index.device)
+        self.mean.copy_(other.mean)
+        self.components.copy_(other.components)
+        self.whitener.copy_(other.whitener)
+        return self
+
     def initialize_from_sklearn(self, pca):
         if self.temporal_slice is None:
             self.spike_length_samples = pca.mean_.shape[0]
         else:
             # not really -- this is a hack.
-            self.spike_length_samples = self.temporal_slice.stop - self.temporal_slice.start
+            self.spike_length_samples = (
+                self.temporal_slice.stop - self.temporal_slice.start
+            )
         self.initialize_spike_length_dependent_params()
         self.mean.copy_(torch.from_numpy(pca.mean_))
         self.components.copy_(torch.from_numpy(pca.components_))
@@ -248,10 +273,9 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
-        (
-            channels_in_probe,
-            waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, channels, self.channel_index)
+        channels_in_probe, waveforms_in_probe = get_channels_in_probe(
+            waveforms, channels, self.channel_index
+        )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(
             waveforms_in_probe, waveforms, channels_in_probe, in_place=True
@@ -275,10 +299,9 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
         if channel_index is None:
             channel_index = self.channel_index
-        (
-            channels_in_probe,
-            waveforms_in_probe,
-        ) = get_channels_in_probe(waveforms, channels, channel_index)
+        channels_in_probe, waveforms_in_probe = get_channels_in_probe(
+            waveforms, channels, channel_index
+        )
         features_in_probe = self._transform_in_probe(waveforms_in_probe)
         features = torch.full(
             (waveforms.shape[0], self.rank, channel_index.shape[1]),
@@ -304,10 +327,9 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     def inverse_transform(self, features, channels, channel_index=None):
         if channel_index is None:
             channel_index = self.channel_index
-        (
-            channels_in_probe,
-            features_in_probe,
-        ) = get_channels_in_probe(features, channels, channel_index)
+        channels_in_probe, features_in_probe = get_channels_in_probe(
+            features, channels, channel_index
+        )
         reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
         recshp = (features.shape[0], self.components.shape[1], channel_index.shape[1])
         reconstructions = torch.full(
