@@ -585,6 +585,7 @@ class BasePeeler(torch.nn.Module):
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
             temp_hdf5_filename = Path(temp_dir) / "peeler_fit.h5"
+            waveforms = fixed_properties = None
             try:
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
@@ -615,17 +616,15 @@ class BasePeeler(torch.nn.Module):
                     waveforms=waveforms,
                     **fixed_properties,
                 )
-
                 assert getrefcount(waveforms) == 2
-                del waveforms, fixed_properties
-                gc.collect()
-
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:
                 self.to("cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()
+                del waveforms, fixed_properties
+                gc.collect()
 
     def get_chunk_starts(
         self,

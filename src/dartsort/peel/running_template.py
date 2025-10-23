@@ -194,7 +194,7 @@ class RunningTemplates(GrabAndFeaturize):
         sorting = sorting.drop_missing()
 
         # try to load denoiser if denoising is happening
-        if tsvd is None and template_cfg.denoising_method not in ("none", None):
+        if tsvd is None and template_cfg.denoising_method in ("t_svd", "exp_weighted_svd"):
             if not template_cfg.recompute_tsvd:
                 tsvd = load_stored_tsvd(sorting)
 
@@ -220,6 +220,7 @@ class RunningTemplates(GrabAndFeaturize):
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
             t_iters=template_cfg.t_iters,
+            svd_inside_t=template_cfg.svd_inside_t,
         )
 
     def compute_template_data(
@@ -234,7 +235,7 @@ class RunningTemplates(GrabAndFeaturize):
                 ignore_resuming=True,
                 show_progress=show_progress,
                 computation_cfg=computation_cfg,
-                task_name=task_name or f"{self.peel_kind}<{self.tasks.active_step}>",
+                task_name=task_name or f"{self.peel_kind}:{self.denoising_method}<{self.tasks.active_step}>",
             )
             self.finalize_step()
             self.tasks.finalize_step()
@@ -265,61 +266,18 @@ class RunningTemplates(GrabAndFeaturize):
         self.setup_t()
 
     def setup_step(self):
-        self.counts.fill_(0.0)
         self.n_spikes = 0
-        if self.tasks.updating_svd_means or (self.tasks.is_t and self.tasks.is_svd and self.svd_inside_t):
+        self.counts.fill_(0.0)
+        if hasattr(self, 'raw_t_counts'):
+            self.raw_t_counts.fill_(0.0)
+        if hasattr(self, 'svd_t_counts'):
+            self.svd_t_counts.fill_(0.0)
+
+        t_needs_svd = self.tasks.is_t and self.tasks.is_svd and self.svd_inside_t
+        if self.tasks.updating_svd_means or t_needs_svd:
             self.featurization_pipeline = self.full_featurization_pipeline
         else:
             self.featurization_pipeline = self.short_featurization_pipeline
-
-    def finalize_raw(self):
-        if self.tasks.needs_raw_stds:
-            self.register_buffer("raw_stds", self.raw_means.square())
-            torch.subtract(self.meansq, self.raw_stds, out=self.raw_stds)
-            self.raw_stds.abs_().nan_to_num_().sqrt_()
-
-    def finalize_svd(self):
-        self.finalize_raw()
-        if self.tasks.needs_svd_means:
-            assert self.tpca is not None
-            assert self.pcmeans is not None
-            svd_means = self.pcmeans.nan_to_num()
-            svd_means = self.tpca.force_reconstruct(svd_means)
-            self.register_buffer("svd_means", svd_means.to(self.raw_means))
-
-        if self.tasks.needs_svd_stds:
-            assert getattr(self, "raw_stds", None) is not None
-            raw_var = self.raw_stds.square()
-            dmeansq = (self.svd_means - self.raw_means).square_()
-            self.register_buffer("svd_stds", (raw_var.add_(dmeansq)).sqrt_())
-
-        if self.tasks.needs_gamma_mean:
-            assert self.gamma_df is None
-            self.register_buffer("nu", estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
-
-    def finalize_t(self):
-        if not self.tasks.is_t:
-            return
-
-        if self.tasks.is_svd:
-            assert self.tpca is not None
-            assert self.svd_t_means is not None
-            svd_means = self.svd_t_means.nan_to_num()
-            svd_means = self.tpca.force_reconstruct(svd_means)
-            self.svd_t_means.copy_(svd_means)
-
-        if self.tasks.remaining_t_iters > 1:
-            #todo overwrite raw_means and svd_means with t versions and zero t buffers
-            self.raw_means.copy_(self.raw_t_means)
-        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
-            self.svd_means.copy_(self.svd_t_means)
-        if self.tasks.updating_t_stds:
-            #todo overwrite raw_stds and svd_stds with t versions and zero t buffers
-            self.raw_t_stds.sub_(self.raw_t_means.square()).sqrt_()
-            self.raw_stds.copy_(self.raw_t_stds)
-        if self.tasks.is_svd and self.tasks.updating_t_stds:
-            self.svd_t_stds.sub_(self.svd_t_means.square()).sqrt_()
-            self.svd_stds.copy_(self.svd_t_stds)
 
     def to_template_data(self):
         from ..templates.templates import TemplateData
@@ -364,9 +322,12 @@ class RunningTemplates(GrabAndFeaturize):
                 trough_offset=self.trough_offset_samples,
                 snr_threshold=self.denoising_snr_threshold,
             )
-            weights = weights.astype(raw_means.dtype)
+            w = weights.astype(raw_means.dtype)
             svd_means = self.svd_means.nan_to_num_().numpy(force=True)
-            return weights * raw_means + (1 - weights) * svd_means
+            logger.dartsortdebug(
+                f"exp_weighted_svd: Raw weight mean/max={w.mean().item()}/{w.max().item()}"
+            )
+            return w * raw_means + (1 - w) * svd_means
 
         if self.denoising_method == "t":
             return self.raw_t_means.nan_to_num_().numpy(force=True)
@@ -380,6 +341,9 @@ class RunningTemplates(GrabAndFeaturize):
             denom = self.raw_t_counts + self.svd_t_counts
             denom = torch.where(denom > 0, denom, 1.0)
             w = self.raw_t_counts / denom
+            logger.dartsortdebug(
+                f"t_svd: Raw weight mean/max={w.mean().item()}/{w.max().item()}"
+            )
             return rm.mul_(w).add_(sm.mul_(1.0 - w)).numpy(force=True)
 
         assert False
@@ -475,7 +439,7 @@ class RunningTemplates(GrabAndFeaturize):
             return self._process_chunk_raw_svd(
                 waveforms, spike_ix, labels, chanix, pcfeats
             )
-        elif self.tasks.active_step == "t":
+        elif self.tasks.active_step.startswith("t"):
             return self._process_chunk_t(waveforms, spike_ix, labels, chanix, pcfeats)
 
         assert False
@@ -513,41 +477,38 @@ class RunningTemplates(GrabAndFeaturize):
                 sigma=1.0,
             )
             assert raw_what.shape == waveforms.shape
-            raw_what = raw_what.mean(dim=1)  # mean over time...
-            res["wbar"] = torch.nanmean(raw_what)
-            res["sqwbar"] = torch.nanmean(raw_what.square())
-            res["logwbar"] = torch.nanmean(raw_what.log())
+            res["wbar"] = torch.nanmean(raw_what.mean(dim=1))
+            res["sqwbar"] = torch.nanmean(raw_what.square().mean(dim=1))
+            res["logwbar"] = torch.nanmean(raw_what.log().mean(dim=1))
 
-        # extract squares into a copy if nec
         waveforms.nan_to_num_()
-        waveformsq = None
-        if self.tasks.needs_raw_stds:
-            waveformsq = waveforms.square()
 
         # weighted sum
+        x = None
         if self.tasks.updating_raw_means:
             raw_means = waveforms.new_zeros(self.raw_means.shape)
-            waveforms.mul_(weights[:, None])
-            ix = labels[:, None, None].broadcast_to(waveforms.shape)
-            raw_means.scatter_add_(dim=0, index=ix, src=waveforms)
+            x = waveforms.mul(weights[:, None])
+            ix = labels[:, None, None].broadcast_to(x.shape)
+            raw_means.scatter_add_(dim=0, index=ix, src=x)
             res["raw_means"] = raw_means
 
         # "" std, optionally ""
         if self.tasks.needs_raw_stds:
-            assert waveformsq is not None
             meansq = waveforms.new_zeros(self.raw_means.shape)
-            waveformsq.mul_(weights[:, None])
-            meansq.scatter_add_(dim=0, index=ix, src=waveformsq)
+            if x is None:
+                x = waveforms.mul(weights[:, None])
+            x.mul_(waveforms)
+            meansq.scatter_add_(dim=0, index=ix, src=x)
             res["meansq"] = meansq
 
         if self.tasks.updating_svd_means:
             assert self.pcmeans is not None
             assert pcfeats is not None
             pcmeans = waveforms.new_zeros(self.pcmeans.shape)
-            pcfeats = registerize(pcfeats, self.n_channels_full, chanix)
-            pcfeats.mul_(weights[:, None])
-            ix = labels[:, None, None].broadcast_to(pcfeats.shape)
-            pcmeans.scatter_add_(dim=0, index=ix, src=pcfeats)
+            pcfeats = registerize(pcfeats, self.n_channels_full, chanix, pad_value=0.0)
+            x = pcfeats.mul(weights[:, None])
+            ix = labels[:, None, None].broadcast_to(x.shape)
+            pcmeans.scatter_add_(dim=0, index=ix, src=x)
             res["pcmeans"] = pcmeans
 
         return res
@@ -560,6 +521,9 @@ class RunningTemplates(GrabAndFeaturize):
         chanix: torch.LongTensor | None,
         pcfeats: torch.Tensor | None,
     ):
+        pshape = self.raw_means.shape
+        res = {}
+
         raw_what = get_gamma_latent(
             x=waveforms,
             labels=labels,
@@ -567,22 +531,35 @@ class RunningTemplates(GrabAndFeaturize):
             nu=self.nu,
             sigma=self.raw_stds,
         )
-        pshape = self.raw_means.shape
-        res = {}
+
+        if self.tasks.updating_gamma_mean:
+            res["wbar"] = torch.nanmean(raw_what.mean(dim=1))
+            res["sqwbar"] = torch.nanmean(raw_what.square().mean(dim=1))
+            res["logwbar"] = torch.nanmean(raw_what.log().mean(dim=1))
+
         if self.tasks.is_svd:
             svd_what = get_gamma_latent(
                 x=waveforms,
                 labels=labels,
                 mu=self.svd_means,
-                nu=self.nu,
+                nu=self.svd_nu,
                 sigma=self.svd_stds,
             )
+
+            if self.tasks.updating_gamma_mean:
+                res["svd_wbar"] = torch.nanmean(svd_what.mean(dim=1))
+                res["svd_sqwbar"] = torch.nanmean(svd_what.square().mean(dim=1))
+                res["svd_logwbar"] = torch.nanmean(svd_what.log().mean(dim=1))
+
             resps = get_t_responsibilities(
                 x=waveforms,
-                nu=self.nu,
+                nu0=self.nu,
+                nu1=self.svd_nu,
                 labels=labels,
+                lp0=self.raw_t_log_prop,
                 mu0=self.raw_means,
                 sigma0=self.raw_stds,
+                lp1=self.svd_t_log_prop,
                 mu1=self.svd_means,
                 sigma1=self.svd_stds,
             )
@@ -591,12 +568,14 @@ class RunningTemplates(GrabAndFeaturize):
             if self.svd_inside_t:
                 assert pcfeats is not None
                 pcwfs = self.tpca.force_reconstruct(pcfeats)
-                pcwfs = registerize(pcwfs, self.n_channels_full, chanix)
+                pcwfs = registerize(pcwfs, self.n_channels_full, chanix, pad_value=0.0)
             else:
                 pcwfs = waveforms
             svd_t_counts, svd_t_means, svd_t_meansq = count_and_mean(
                 pcwfs, labels, pshape, svd_weight, with_sq=self.tasks.updating_t_stds
             )
+            assert svd_t_counts.isfinite().all()
+            assert svd_t_means.isfinite().all()
             res["svd_t_counts"] = svd_t_counts
             res["svd_t_means"] = svd_t_means
             if svd_t_meansq is not None:
@@ -608,7 +587,10 @@ class RunningTemplates(GrabAndFeaturize):
         )
         res["raw_t_counts"] = raw_t_counts
         res["raw_t_means"] = raw_t_means
+        assert raw_t_counts.isfinite().all()
+        assert raw_t_means.isfinite().all()
         if raw_t_meansq is not None:
+            assert raw_t_meansq.isfinite().all()
             res["raw_t_meansq"] = raw_t_meansq
         return res
 
@@ -631,6 +613,11 @@ class RunningTemplates(GrabAndFeaturize):
             self.wbar += ww * (chunk_result["wbar"] - self.wbar)
             self.logwbar += ww * (chunk_result["logwbar"] - self.logwbar)
             self.sqwbar += ww * (chunk_result["sqwbar"] - self.sqwbar)
+        if "svd_wbar" in chunk_result:
+            ww = chunk_result["n_spikes"] / max(self.n_spikes, 1)
+            self.svd_wbar += ww * (chunk_result["svd_wbar"] - self.svd_wbar)
+            self.svd_logwbar += ww * (chunk_result["svd_logwbar"] - self.svd_logwbar)
+            self.svd_sqwbar += ww * (chunk_result["svd_sqwbar"] - self.svd_sqwbar)
 
         # and, the t step update
         if "raw_t_counts" in chunk_result:
@@ -715,21 +702,129 @@ class RunningTemplates(GrabAndFeaturize):
             self.register_buffer("wbar", torch.zeros(()))
             self.register_buffer("logwbar", torch.zeros(()))
             self.register_buffer("sqwbar", torch.zeros(()))
+        if self.tasks.needs_gamma_mean and self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
+            self.register_buffer("svd_wbar", torch.zeros(()))
+            self.register_buffer("svd_logwbar", torch.zeros(()))
+            self.register_buffer("svd_sqwbar", torch.zeros(()))
 
     def setup_t(self):
         if not self.tasks.is_t:
             return
         self.register_buffer("raw_t_counts", torch.zeros(self.mean_shape))
+        self.register_buffer("raw_t_log_prop", torch.zeros(self.mean_shape))
         self.register_buffer("raw_t_means", torch.zeros(self.mean_shape))
         if self.tasks.needs_t_stds:
             self.register_buffer("raw_t_stds", torch.zeros(self.mean_shape))
         if self.tasks.is_svd:
             self.register_buffer("svd_t_counts", torch.zeros(self.mean_shape))
+            self.register_buffer("svd_t_log_prop", torch.zeros(self.mean_shape))
             self.register_buffer("svd_t_means", torch.zeros(self.mean_shape))
         if self.tasks.is_svd and self.tasks.needs_t_stds:
             self.register_buffer("svd_t_stds", torch.zeros(self.mean_shape))
         if self.gamma_df is not None:
             self.register_buffer("nu", torch.asarray(self.gamma_df))
+            self.register_buffer("svd_nu", torch.asarray(self.gamma_df))
+
+        self.register_buffer("unit_spike_counts", torch.zeros(self.mean_shape[0]))
+        # todo need to count by channel! this is temporary.
+        assert (self.labels >= 0).all()
+        _1 = torch.tensor(1.0).to(self.unit_spike_counts).broadcast_to(self.labels.shape)
+        self.unit_spike_counts.scatter_add_(dim=0, index=self.labels, src=_1)
+
+    def finalize_raw(self):
+        if self.tasks.needs_raw_stds:
+            self.register_buffer("raw_stds", self.raw_means.square())
+            torch.subtract(self.meansq, self.raw_stds, out=self.raw_stds)
+            self.raw_stds.abs_().nan_to_num_().sqrt_()
+            assert self.raw_stds.isfinite().all()
+
+    def finalize_svd(self):
+        self.finalize_raw()
+        if self.tasks.needs_svd_means:
+            assert self.tpca is not None
+            assert self.pcmeans is not None
+            svd_means = self.pcmeans.nan_to_num()
+            svd_means = self.tpca.force_reconstruct(svd_means)
+            self.register_buffer("svd_means", svd_means.to(self.raw_means))
+            assert self.svd_means.isfinite().all()
+
+        if self.tasks.needs_svd_stds:
+            assert getattr(self, "raw_stds", None) is not None
+            raw_var = self.raw_stds.square()
+            dmeansq = (self.svd_means - self.raw_means).square_()
+            self.register_buffer("svd_stds", (raw_var.add_(dmeansq)).sqrt_())
+            assert self.svd_stds.isfinite().all()
+
+        if self.tasks.needs_gamma_mean:
+            assert self.gamma_df is None
+            self.register_buffer("nu", estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
+            self.register_buffer("svd_nu", self.nu.clone().detach())
+            self.wbar.fill_(0.0)
+            self.logwbar.fill_(0.0)
+            self.sqwbar.fill_(0.0)
+
+    def finalize_t(self):
+        if not self.tasks.is_t:
+            return
+
+        if self.tasks.is_svd and not self.svd_inside_t:
+            assert self.tpca is not None
+            assert self.svd_t_means is not None
+            svd_means = self.svd_t_means.nan_to_num()
+            svd_means = self.tpca.force_project(svd_means)
+            self.svd_t_means.copy_(svd_means)
+            assert self.svd_t_means.isfinite().all()
+
+        if self.tasks.remaining_t_iters > 1:
+            #todo overwrite raw_means and svd_means with t versions and zero t buffers
+            self.raw_means.copy_(self.raw_t_means)
+            assert self.raw_means.isfinite().all()
+            self.raw_t_means.fill_(0.0)
+
+        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
+            self.svd_means.copy_(self.svd_t_means)
+            assert self.svd_means.isfinite().all()
+            self.svd_t_means.fill_(0.0)
+
+        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
+            # props
+            self.raw_t_log_prop = self.raw_t_counts.log() - (self.raw_t_counts + self.svd_t_counts).log()
+            self.svd_t_log_prop = 1.0 - self.raw_t_log_prop
+
+        if self.tasks.updating_t_stds:
+            #todo overwrite raw_stds and svd_stds with t versions and zero t buffers
+            assert self.raw_t_stds.isfinite().all()
+            assert self.raw_t_means.isfinite().all()
+            self.raw_t_stds.sub_(self.raw_t_means.square())
+            # rescale by count factor...
+            rescale = self.raw_t_counts / self.unit_spike_counts[:, None, None]
+            self.raw_t_stds.mul_(rescale)
+            self.raw_t_stds.sqrt_()
+            assert self.raw_t_stds.isfinite().all()
+            self.raw_stds.copy_(self.raw_t_stds)
+            assert self.raw_stds.isfinite().all()
+            self.raw_t_stds.fill_(0.0)
+
+        if self.tasks.is_svd and self.tasks.updating_t_stds:
+            self.svd_t_stds.sub_(self.svd_t_means.square())
+            rescale = self.svd_t_counts / self.unit_spike_counts[:, None, None]
+            self.svd_t_stds.mul_(rescale)
+            self.svd_t_stds.sqrt_()
+            self.svd_stds.copy_(self.svd_t_stds)
+            assert self.svd_stds.isfinite().all()
+            self.svd_t_stds.fill_(0.0)
+
+        if self.tasks.updating_gamma_mean:
+            self.nu.fill_(estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
+            self.wbar.fill_(0.0)
+            self.logwbar.fill_(0.0)
+            self.sqwbar.fill_(0.0)
+
+        if self.tasks.is_svd and self.tasks.updating_gamma_mean:
+            self.svd_nu.fill_(estimate_gamma_df(self.svd_wbar, self.svd_logwbar, self.svd_sqwbar))
+            self.svd_wbar.fill_(0.0)
+            self.svd_logwbar.fill_(0.0)
+            self.svd_sqwbar.fill_(0.0)
 
 
 @dataclass(kw_only=True)
@@ -778,8 +873,8 @@ class RunningTemplatesTasks:
         self.needs_svd_stds = self.is_svd and self.is_t
         self.needs_gamma_mean = self.is_t and not self.has_gamma_df
         self.needs_t_params = self.is_t
-        self.needs_t_stds = self.is_t and self.remaining_t_iters > 1
         self.remaining_t_iters = int(self.is_t) * self.t_iters
+        self.needs_t_stds = self.is_t and self.remaining_t_iters > 1
 
     def plan_step(self):
         if self.done:
@@ -799,7 +894,8 @@ class RunningTemplatesTasks:
         elif self.needs_t_pass:
             self.updating_t_params = self.needs_t_params
             self.updating_t_stds = self.remaining_t_iters > 1
-            self.active_step = f"t{self.t_iters - self.remaining_t_iters}/{self.t_iters}"
+            self.updating_gamma_mean = self.remaining_t_iters > 1
+            self.active_step = f"t{1 + self.t_iters - self.remaining_t_iters}/{self.t_iters}"
         else:
             assert False
         logger.dartsortdebug(f"Template task: {self.active_step}.")
@@ -819,6 +915,7 @@ class RunningTemplatesTasks:
         elif self.needs_t_pass:
             self.updating_t_params = False
             self.updating_t_stds = False
+            self.updating_gamma_mean = False
             self.remaining_t_iters -= 1
             self.needs_t_params = self.remaining_t_iters > 0
         else:
@@ -921,17 +1018,19 @@ def get_gamma_latent(x, labels, mu, nu=1.0, sigma=1.0):
     if torch.isinf(nu):
         return x.isfinite().to(x)
 
-    denom = mu[labels]
     if isinstance(sigma, float):
-        sigmasq = torch.asarray(sigma).to(x).square()
+        sigma = torch.asarray(sigma).to(x)
     else:
-        sigmasq = sigma[labels].square_()
-    nu_sigmasq = nu * sigmasq
-    denom.sub_(x).square_().add_(nu_sigmasq)
-    return torch.div(nu_sigmasq.add_(sigmasq), denom, out=denom)
+        sigma = sigma[labels]
+    z = mu[labels].sub_(x).div_(sigma)
+    denom = z.square_().add_(nu)
+    # w = denom.reciprocal_().mul_(nu + 1.0)
+    w = torch.divide(nu + 1.0, denom, out=denom)
+    assert (w >= 0).all()
+    return w
 
 
-def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100):
+def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     """Solves digamma(nu/2) - log(nu) = 1 + logwbar - wbar."""
     from scipy.special import psi, polygamma
     from scipy.optimize import root_scalar
@@ -939,29 +1038,54 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100):
     dtype = wbar.dtype
     dev = wbar.device
 
-    wbar = wbar.numpy(force=True)
-    logwbar = logwbar.numpy(force=True)
-    sqwbar = sqwbar.numpy(force=True)
+    wbar = wbar.numpy(force=True).astype(np.float64)
+    logwbar = logwbar.numpy(force=True).astype(np.float64)
+    sqwbar = sqwbar.numpy(force=True).astype(np.float64)
 
     # start with a guess based on the gamma MoM
     vw = sqwbar - wbar**2
-    assert np.isfinite(vw) and vw >= 0
+    if not np.isfinite(vw) and vw >= 0:
+        raise ValueError(
+            f"Strange gamma statistics {wbar=} {logwbar=} {sqwbar=}."
+        )
     if vw == 0:
         logger.info("Estimated infinite gamma df.")
         return torch.asarray(torch.inf, device=dev, dtype=dtype)
-    x0 = 1.0 / vw
+    x0 = -0.16 / (1 + logwbar - wbar)  # tay
+    x1 = 1.0 / vw  # mom
+
+    rhs = 1 + logwbar - wbar
+    min_rhs = psi(min_df / 2) - np.log(min_df / 2)
+    if min_rhs > rhs:
+        logger.dartsortdebug(f"df from {rhs=} too small, setting to {min_df}.")
+        return torch.asarray(min_df, device=dev, dtype=dtype)
 
     def f(x):
         p = psi(x)
-        p1 = polygamma(1, x)
-        p2 = polygamma(2, x)
-        invx = np.reciprocal(x)
-        f = p - np.log(x)
-        df = p1 - invx
-        ddf = p2 + invx * invx
-        return f, df, ddf
+        # p1 = polygamma(1, x)
+        # p2 = polygamma(2, x)
+        # invx = np.reciprocal(x)
+        f = p - np.log(x) - rhs
+        # df = p1 - invx
+        # ddf = p2 + invx * invx
+        return f #, df, ddf
 
-    sol = root_scalar(f, x0=x0, fprime2=True)
+    init = x0 if x0 > 0 else x1
+    assert init > 0
+    left = x0 
+    while f(left) > 0:
+        left /= 2
+    assert left > 0
+    right = x0
+    while f(right) < 0:
+        right *= 2
+    assert right > left > 0
+    if x1 > right or x1 < left:
+        x1 = (right + left) / 2
+    assert left <= x0 <= right
+    assert left <= x1 <= right
+
+    sol = root_scalar(f, bracket=(left, right), x0=x0, x1=x1)# fprime2=True)
     nu = sol.root / 2.0
     assert sol.converged
 
@@ -978,31 +1102,38 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100):
     return torch.asarray(nu, device=dev, dtype=dtype)
 
 
-def get_t_responsibilities(x, nu, labels, mu0, sigma0, mu1, sigma1):
+def get_t_responsibilities(x, nu0, nu1, labels, lp0, mu0, sigma0, lp1, mu1, sigma1):
     finite = x.isfinite().nonzero(as_tuple=True)
     xf = x[finite]
+    lp0 = lp0[labels][finite]
     mu0 = mu0[labels][finite]
     sigma0 = sigma0[labels][finite].clamp_(min=1e-5)
+    lp1 = lp1[labels][finite]
     mu1 = mu1[labels][finite]
     sigma1 = sigma1[labels][finite].clamp_(min=1e-5)
-    if nu < torch.inf:
-        l0 = StudentT(nu, loc=mu0, scale=sigma0, validate_args=False).log_prob(xf)
-        l1 = StudentT(nu, loc=mu1, scale=sigma1, validate_args=False).log_prob(xf)
+    if nu0 < torch.inf:
+        l0 = StudentT(nu0, loc=mu0, scale=sigma0, validate_args=False).log_prob(xf)
     else:
         rt2 = torch.sqrt(torch.tensor(2.0)).to(xf)
-        l0 = sigma0.log().sub_(
+        l2pi = torch.log(torch.tensor(2.0 * torch.pi)).to(xf) * 0.5
+        l0 = sigma0.log().add_(l2pi).add_(
             torch.subtract(mu0, xf, out=mu0)
             .div_(sigma0.mul(rt2))
             .square_()
-        )
-        l1 = sigma1.log().sub_(
+        ).neg_()
+    if nu1 < torch.inf:
+        l1 = StudentT(nu1, loc=mu1, scale=sigma1, validate_args=False).log_prob(xf)
+    else:
+        rt2 = torch.sqrt(torch.tensor(2.0)).to(xf)
+        l2pi = torch.log(torch.tensor(2.0 * torch.pi)).to(xf) * 0.5
+        l1 = sigma1.log().add_(l2pi).add_(
             torch.subtract(mu1, xf, out=mu1)
             .div_(sigma1.mul(rt2))
             .square_()
-        )
+        ).neg_()
     ll = x.new_full((2, *x.shape), -torch.inf)
-    ll[0, *finite] = l0
-    ll[1, *finite] = l1
+    ll[0, *finite] = l0.add_(lp0)
+    ll[1, *finite] = l1.add_(lp1)
     resp = F.softmax(ll, dim=0)
     return resp
 
@@ -1018,15 +1149,16 @@ def count_and_mean(waveforms, labels, pshape, weights, with_sq=False):
     weights = torch.divide(weights, denom, out=denom)
 
     means = waveforms.new_zeros(pshape)
-    waveforms = weights.mul_(waveforms)
+    x = weights.mul_(waveforms)
+    del weights
     ix = labels[:, None, None].broadcast_to(waveforms.shape)
-    means.scatter_add_(dim=0, index=ix, src=waveforms)
+    means.scatter_add_(dim=0, index=ix, src=x)
 
     if with_sq:
         meansq = waveforms.new_zeros(pshape)
-        waveforms.mul_(waveforms)
-        ix = labels[:, None, None].broadcast_to(waveforms.shape)
-        meansq.scatter_add_(dim=0, index=ix, src=waveforms)
+        x.mul_(waveforms)
+        ix = labels[:, None, None].broadcast_to(x.shape)
+        meansq.scatter_add_(dim=0, index=ix, src=x)
     else:
         meansq = None
 

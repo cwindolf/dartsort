@@ -237,6 +237,7 @@ class TemplateConfig:
     initial_t_df: float = 1.0
     fixed_t_df: float | None = None
     t_iters: int = 1
+    svd_inside_t: bool = False
 
     # realignment
     realign_peaks: bool = True

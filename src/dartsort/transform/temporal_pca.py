@@ -195,6 +195,18 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms = waveforms[0]
         return waveforms
 
+    def force_project(self, features):
+        ndim = features.ndim
+        if ndim == 2:
+            features = features.unsqueeze(0)
+        n, t, c = features.shape
+        waveforms = features.mT.reshape(n * c, t)
+        waveforms = self._project_in_probe(waveforms)
+        waveforms = waveforms.reshape(n, c, t).mT
+        if ndim == 2:
+            waveforms = waveforms[0]
+        return waveforms
+
     def to_sklearn(self):
         pca = PCA(
             n_components=self.rank,
