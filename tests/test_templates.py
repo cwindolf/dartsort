@@ -94,7 +94,7 @@ def test_refractory_templates(
 
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize("realign_peaks", [False, True])
-@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted_svd", "t", "t_svd"])
+@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted", "t", "loot"])
 def test_refractory_templates_algorithm_agreement(
     refractory_simulations, drift, realign_peaks, denoising_method
 ):
@@ -107,7 +107,7 @@ def test_refractory_templates_algorithm_agreement(
 
     tds = []
     for algorithm in ("by_chunk", "by_unit"):
-        if algorithm == "by_unit" and denoising_method in ("t", "t_svd"):
+        if algorithm == "by_unit" and denoising_method in ("t", "loot"):
             continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
@@ -135,6 +135,7 @@ def test_refractory_templates_algorithm_agreement(
     assert np.array_equal(td0.spike_counts, td1.spike_counts)
     assert np.array_equal(td0.spike_counts_by_channel, td1.spike_counts_by_channel)
 
+    print(f"{np.abs(td0.templates - td1.templates).max()=}")
     assert np.allclose(td0.templates, td1.templates, atol=1e-5)
     assert np.allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
 
