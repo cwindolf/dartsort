@@ -193,8 +193,10 @@ class DeveloperConfig(DARTsortUserConfig):
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
     template_denoising_method: Literal[
-        "none", "exp_weighted_svd", "t", "t_svd"
-    ] = "exp_weighted_svd"
+        "none", "exp_weighted", "t", "loot"
+    ] = "exp_weighted"
+    template_mix_zero: bool = False
+    template_mix_svd: bool = True
     min_template_snr: float = 40.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(

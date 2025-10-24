@@ -289,8 +289,8 @@ def _from_config_with_realigned_sorting(
         from ..peel.running_template import RunningTemplates
 
         peeler = RunningTemplates.from_config(
-            sorting,
-            recording,
+            sorting=sorting,
+            recording=recording,
             tsvd=tsvd,
             motion_est=motion_est,
             waveform_cfg=waveform_cfg,
@@ -303,7 +303,7 @@ def _from_config_with_realigned_sorting(
         )
         realigned_sorting = apply_time_shifts(
             sorting,
-            peeler.time_shifts,
+            peeler.properties.get("time_shifts"),
             trough_offset_samples=peeler.trough_offset_samples,
             spike_length_samples=peeler.spike_length_samples,
             recording_length_samples=recording.get_total_samples(),
@@ -327,7 +327,7 @@ def _from_config_with_realigned_sorting(
     if template_cfg.denoising_method in (None, "none"):
         low_rank_denoising = False
     else:
-        assert template_cfg.denoising_method == "exp_weighted_svd"
+        assert template_cfg.denoising_method == "exp_weighted"
         low_rank_denoising = True
 
     motion_aware = motion_est is not None and (
@@ -382,7 +382,7 @@ def _from_config_with_realigned_sorting(
         denoising_rank=template_cfg.denoising_rank,
         recompute_tsvd=template_cfg.recompute_tsvd,
         denoising_fit_radius=template_cfg.denoising_fit_radius,
-        denoising_snr_threshold=template_cfg.denoising_snr_threshold,
+        denoising_snr_threshold=template_cfg.exp_weight_snr_threshold,
         units_per_job=units_per_job,
         with_raw_std_dev=template_cfg.with_raw_std_dev,
         reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,

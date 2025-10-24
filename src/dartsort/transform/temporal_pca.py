@@ -24,7 +24,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         geom=None,
         rank=8,
         whiten=False,
-        centered=True,
+        centered=False,
         fit_radius=None,
         random_state=0,
         name=None,

@@ -213,9 +213,10 @@ class TemplateConfig:
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal[
-        "none", "exp_weighted_svd", "t", "t_svd"
-    ] = "exp_weighted_svd"
+    denoising_method: Literal["none", "exp_weighted", "loot", "t"] = "exp_weighted"
+    use_raw: bool = True
+    use_svd: bool = True
+    use_zero: bool = False
 
     # -- template construction parameters
     # registered templates?
@@ -229,12 +230,14 @@ class TemplateConfig:
 
     # low rank denoising?
     denoising_rank: int = 5
-    denoising_snr_threshold: float = 50.0
     denoising_fit_radius: float = 75.0
     recompute_tsvd: bool = False
 
-    # t denoising?
-    initial_t_df: float = 1.0
+    # exp weight denoising
+    exp_weight_snr_threshold: float = 50.0
+
+    # t denoising
+    initial_t_df: float = 3.0
     fixed_t_df: float | None = None
     t_iters: int = 1
     svd_inside_t: bool = False
@@ -259,7 +262,7 @@ class TemplateConfig:
         return self.algorithm
 
     def __post_init__(self):
-        if self.algorithm in ("t", "t_svd") and self.reduction == "median":
+        if self.algorithm in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
 
@@ -772,6 +775,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         spikes_per_unit=cfg.template_spikes_per_unit,
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
+        use_zero=cfg.template_mix_zero,
+        use_svd=cfg.template_mix_svd,
         recompute_tsvd=cfg.always_recompute_tsvd,
     )
     clustering_cfg = ClusteringConfig(

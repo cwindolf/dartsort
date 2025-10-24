@@ -1,6 +1,7 @@
 import math
 from logging import getLogger
 import warnings
+from typing import overload
 
 import linear_operator
 from linear_operator.utils.cholesky import psd_safe_cholesky
@@ -66,6 +67,16 @@ def nanmean(x, axis=-1):
         return x
     else:
         return x.numpy()
+
+
+@overload
+def ptp(waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False) -> torch.Tensor:
+    ...
+
+
+@overload
+def ptp(waveforms: np.ndarray, dim: int = 1, keepdims: bool = False) -> np.ndarray:
+    ...
 
 
 def ptp(waveforms, dim=1, keepdims=False):

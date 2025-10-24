@@ -1,8 +1,12 @@
+from spikeinterface import BaseRecording
 import torch
 import numpy as np
 
+
 from .peel_base import BasePeeler, SpikeDataset
 from ..transform import WaveformPipeline
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import FeaturizationConfig, WaveformConfig
 from ..util.waveform_util import make_channel_index
 from ..util import spiketorch
 
@@ -92,7 +96,14 @@ class GrabAndFeaturize(BasePeeler):
         )
 
     @classmethod
-    def from_config(cls, sorting, recording, waveform_cfg, featurization_cfg):
+    def from_config(
+        cls,
+        *,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        waveform_cfg: WaveformConfig,
+        featurization_cfg: FeaturizationConfig,
+    ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True

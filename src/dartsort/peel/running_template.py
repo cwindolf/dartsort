@@ -1,25 +1,22 @@
-"""Fast template extractor
-
-Algorithm: Each unit / pitch shift combo has a raw and low-rank template
-computed. These are shift-averaged and then weighted combined.
-
-The raw and low-rank templates are computed using Welford.
-"""
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Literal
 
 import numpy as np
+from spikeinterface.core import BaseRecording
+from sympy.utilities.misc import rawlines
 import torch
 from torch.distributions import StudentT, Normal
 import torch.nn.functional as F
+
+from dartsort.util.internal_config import TemplateConfig, WaveformConfig
 
 
 from ..templates.superres_util import superres_sorting
 from ..transform.transform_base import BaseWaveformModule
 from ..transform import WaveformPipeline, Waveform, TemporalPCAFeaturizer
 from ..util import drift_util
-from ..util.data_util import load_stored_tsvd, subsample_to_max_count
+from ..util.data_util import DARTsortSorting, load_stored_tsvd, subsample_to_max_count
 from ..util.logging_util import DARTsortLogger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
@@ -27,15 +24,13 @@ from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
 
 
-logger: DARTsortLogger = getLogger(__name__)
+logger: DARTsortLogger = getLogger(__name__)  # pyright:ignore
 
 
 class RunningTemplates(GrabAndFeaturize):
     """Compute templates online by Welford summation.
 
-    No medians :(.
-
-    TODO: Denoising and weights.
+    No medians :(. But has some other denoising methods.
     """
 
     peel_kind = "Templates"
@@ -47,45 +42,51 @@ class RunningTemplates(GrabAndFeaturize):
         times_samples,
         channels,
         labels,
+        motion_est=None,
         n_pitches_shift=None,
-        denoising_method=None,
+        use_zero=False,
+        use_raw=True,
+        use_svd=False,
+        with_raw_std_dev=False,
+        denoising_method: Literal["none", "exp_weighted", "loot", "t"] = "none",
         tsvd=None,
         tsvd_rank=5,
         tsvd_fit_radius=75.0,
-        denoising_snr_threshold=50.0,
-        group_ids=None,
-        motion_est=None,
-        time_shifts=None,
+        exp_weight_snr_threshold=50.0,
         gamma_df: float | None = None,
-        initial_df: float = 1.0,
+        initial_df: float = 3.0,
         t_iters: int = 1,
-        with_raw_std_dev=False,
+        group_ids=None,
+        properties=None,
         trough_offset_samples=42,
         spike_length_samples=121,
         chunk_length_samples=30_000,
-        n_seconds_fit=100,
+        n_seconds_fit=600,
         fit_subsampling_random_state: int | np.random.Generator = 0,
     ):
         n_channels = recording.get_num_channels()
         channel_index = torch.tile(torch.arange(n_channels), (n_channels, 1))
         assert labels.min() >= 0
+        assert denoising_method in ("none", "exp_weighted", "loot", "t")
 
-        if denoising_method is None:
+        self.use_zero = use_zero
+        self.use_raw = use_raw
+        self.use_svd = use_svd
+        self.n_subspaces = use_zero + use_raw + use_svd
+        if self.n_subspaces == 1 and denoising_method == "exp_weighted":
+            # this would do nothing.
             denoising_method = "none"
+        if denoising_method == "exp_weighted":
+            assert self.n_subspaces == 2
         self.denoising_method = denoising_method
-        self.denoising_snr_threshold = denoising_snr_threshold
-        self.use_svd = False  # updated below
-        self.denoising_rank = None
+
+        self.exp_weight_snr_threshold = exp_weight_snr_threshold
         self.gamma_df = gamma_df
         self.initial_df = initial_df
 
-        # these are not used internally, just stored to record what happened in
-        # .from_config() so that users can realign their sortings to match
-        self.time_shifts = time_shifts
-
         waveform_feature = Waveform(channel_index=channel_index)
         feats: list[BaseWaveformModule] = [waveform_feature]
-        if denoising_method in ("exp_weighted_svd", "t_svd"):
+        if self.use_svd:
             if tsvd is not None:
                 tpca = TemporalPCAFeaturizer.from_sklearn(
                     channel_index, tsvd, getattr(tsvd, "temporal_slice", None)
@@ -101,10 +102,9 @@ class RunningTemplates(GrabAndFeaturize):
             feats.append(tpca)
             self.denoising_rank = tpca.rank
             use_svd = True
-        elif denoising_method in ("none", "t", None):
-            tpca = None
         else:
-            raise ValueError(f"Unknown {denoising_method=}.")
+            self.denoising_rank = None
+            tpca = None
 
         featurization_pipeline = WaveformPipeline(feats)
 
@@ -127,25 +127,43 @@ class RunningTemplates(GrabAndFeaturize):
         self.with_raw_std_dev = with_raw_std_dev
         self.n_units = labels.max() + 1
         self.group_ids = group_ids
-        self.n_pitches_shift = None
-        self.full_featurization_pipeline = featurization_pipeline
-        self.short_featurization_pipeline = WaveformPipeline([waveform_feature])
+        self.n_pitches_shift = n_pitches_shift
+        self.short_pipeline = WaveformPipeline([waveform_feature])
         self.tpca = tpca
+
+        self.subspace_projectors = []
+        self.raw_subspace_ix = int(use_zero)
+        self.svd_subspace_ix = int(use_zero) + 1
+        if use_zero:
+            self.subspace_projectors.append(torch.zeros_like)
+        if use_raw:
+            self.subspace_projectors.append(identity)
+        if use_svd:
+            assert self.tpca is not None
+            self.subspace_projectors.append(self.tpca.force_project)
+
+        # these are not used internally, just stored to record what happened in
+        # .from_config() and passed through to the TemplateData's properties later
+        self.properties = properties or {}
 
         self.tasks = RunningTemplatesTasks(
             denoising_method=denoising_method,
-            has_gamma_df=self.gamma_df is not None,
+            fixed_df=self.gamma_df is not None,
             with_raw_std_dev=with_raw_std_dev,
             t_iters=t_iters,
+            use_zero=use_zero,
+            use_raw=use_raw,
+            use_svd=use_svd,
         )
 
     @classmethod
-    def from_config(
+    def from_config(  # pyright: ignore
         cls,
-        sorting,
-        recording,
-        waveform_cfg,
-        template_cfg,
+        *,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        waveform_cfg: WaveformConfig,
+        template_cfg: TemplateConfig,
         tsvd=None,
         motion_est=None,
         show_progress=True,
@@ -157,8 +175,8 @@ class RunningTemplates(GrabAndFeaturize):
         # superres sorting if requested
         if template_cfg.superres_templates:
             group_ids, sorting = superres_sorting(
-                sorting,
-                recording.get_channel_locations(),
+                sorting=sorting,
+                geom=recording.get_channel_locations(),
                 motion_est=motion_est,
                 strategy=template_cfg.superres_strategy,
                 superres_bin_size_um=template_cfg.superres_bin_size_um,
@@ -192,9 +210,16 @@ class RunningTemplates(GrabAndFeaturize):
         sorting = sorting.drop_missing()
 
         # try to load denoiser if denoising is happening
-        if tsvd is None and template_cfg.denoising_method in ("t_svd", "exp_weighted_svd"):
+        if tsvd is None and template_cfg.denoising_method in (
+            "t_svd",
+            "exp_weighted_svd",
+        ):
             if not template_cfg.recompute_tsvd:
                 tsvd = load_stored_tsvd(sorting)
+
+        properties = {}
+        if time_shifts is not None:
+            properties["time_shifts"] = time_shifts
 
         return cls(
             recording=recording,
@@ -207,14 +232,16 @@ class RunningTemplates(GrabAndFeaturize):
             tsvd=tsvd,
             tsvd_rank=template_cfg.denoising_rank,
             tsvd_fit_radius=template_cfg.denoising_fit_radius,
-            denoising_snr_threshold=template_cfg.denoising_snr_threshold,
+            exp_weight_snr_threshold=template_cfg.exp_weight_snr_threshold,
             group_ids=group_ids,
             motion_est=motion_est,
+            use_zero=template_cfg.use_zero,
+            use_svd=template_cfg.use_svd,
             with_raw_std_dev=template_cfg.with_raw_std_dev,
             trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
             fit_subsampling_random_state=random_state,
-            time_shifts=time_shifts,
+            properties=properties,
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
             t_iters=template_cfg.t_iters,
@@ -223,8 +250,13 @@ class RunningTemplates(GrabAndFeaturize):
     def compute_template_data(
         self, show_progress=True, computation_cfg=None, task_name=None
     ):
+        # fit my TSVD object if necessary, and then turn it off
+        # we don't need the TSVD projections in the processing, just need
+        # to project at the end. (used to need it inside for the median.)
         super().fit_featurization_pipeline(computation_cfg=computation_cfg)
-        self.setup()  # initialize all buffers
+        self.featurization_pipeline = self.short_pipeline
+
+        self.setup()
         while self.tasks.plan_step():
             self.setup_step()
             self.peel(
@@ -232,7 +264,8 @@ class RunningTemplates(GrabAndFeaturize):
                 ignore_resuming=True,
                 show_progress=show_progress,
                 computation_cfg=computation_cfg,
-                task_name=task_name or f"{self.peel_kind}:{self.denoising_method}<{self.tasks.active_step}>",
+                task_name=task_name
+                or f"{self.peel_kind}:{self.denoising_method}<{self.tasks.active_step}>",
             )
             self.finalize_step()
             self.tasks.finalize_step()
@@ -240,15 +273,10 @@ class RunningTemplates(GrabAndFeaturize):
         return self.to_template_data()
 
     def finalize_step(self):
-        if self.tasks.needs_raw_pass:
-            # sets self.raw_stds
-            self.finalize_raw()
-        elif self.tasks.needs_svd_pass:
-            # sets nu (gamma concentration) and svd_stds if is_t
-            self.finalize_svd()
-        elif self.tasks.needs_t_pass:
-            # nothing to do
-            self.finalize_t()
+        if self.tasks.needs_basic_pass:
+            self.finalize_basic()
+        elif self.tasks.needs_mixture_pass:
+            self.finalize_mixture()
         else:
             assert False
 
@@ -256,24 +284,16 @@ class RunningTemplates(GrabAndFeaturize):
         # this sets motion-related buffers (pitch shifts, geom)
         self.setup_global()
         # sets up buffers for raw means + meansq
-        self.setup_raw()
-        # sets up pcmeans, gamma mean buffers
-        self.setup_svd()
-        # sets up raw_t_mean, svd_t_mean, raw_t_counts, svd_t_counts
-        self.setup_t()
+        self.setup_basic()
+        # sets up subspace stuff and gamma stats
+        self.setup_mixture()
 
     def setup_step(self):
         self.n_spikes = 0
-        self.counts.fill_(0.0)
-        if hasattr(self, 'raw_t_counts'):
-            self.raw_t_counts.fill_(0.0)
-        if hasattr(self, 'svd_t_counts'):
-            self.svd_t_counts.fill_(0.0)
-
-        if self.tasks.using_tsvd_projection:
-            self.featurization_pipeline = self.full_featurization_pipeline
-        else:
-            self.featurization_pipeline = self.short_featurization_pipeline
+        if self.tasks.active_step == "mix":
+            self.b.total_resp.zero_()
+            self.b.total_weight.zero_()
+            self.b.subspace_resp.zero_()
 
     def to_template_data(self):
         from ..templates.templates import TemplateData
@@ -285,8 +305,25 @@ class RunningTemplates(GrabAndFeaturize):
             unit_ids = self.group_ids
 
         templates = self.templates()
-        raw_stds = getattr(self, "raw_stds", None)
+        assert templates.shape == (
+            self.n_units,
+            self.spike_length_samples,
+            self.n_channels_full,
+        )
+
+        if not self.with_raw_std_dev:
+            raw_stds = None
+        elif self.denoising_method in ("none", "exp_weighted"):
+            raw_stds = self.b.meansq.sub(self.raw_means.square())
+            raw_stds = raw_stds.clamp_(min=0.0).sqrt_()
+        else:
+            raw_stds = self.b.meansq[None].sub(self.b.means.square())
+            pi = self.b.log_props.exp()
+            raw_stds = (raw_stds * pi).sum(dim=0)
+            raw_stds = raw_stds.clamp_(min=0.0).sqrt_()
         if raw_stds is not None:
+            assert raw_stds.isfinite().all()
+            assert raw_stds.shape == templates.shape
             raw_stds = raw_stds.numpy(force=True)
 
         return TemplateData(
@@ -297,50 +334,50 @@ class RunningTemplates(GrabAndFeaturize):
             raw_std_dev=raw_stds,
             registered_geom=self.reg_geom,
             trough_offset_samples=self.trough_offset_samples,
+            properties=self.properties or None,
         )
 
     def templates(self):
         assert self.tasks.done
 
         if self.denoising_method in (None, "none"):
-            return self.raw_means.nan_to_num_().numpy(force=True)
+            t = self.raw_means
+            assert t.isfinite().all()
+            return t.numpy(force=True)
 
-        if self.denoising_method == "exp_weighted_svd":
+        if self.denoising_method == "exp_weighted":
             from ..templates.get_templates import denoising_weights
 
             raw_means = self.raw_means.nan_to_num_().numpy(force=True)
             snrs = ptp(self.raw_means.nan_to_num(nan=-torch.inf)).mul_(
-                self.counts.to(self.raw_means).sqrt()
+                self.b.counts.to(self.raw_means).sqrt()
             )
             weights = denoising_weights(
                 snrs.numpy(force=True),
                 spike_length_samples=self.spike_length_samples,
                 trough_offset=self.trough_offset_samples,
-                snr_threshold=self.denoising_snr_threshold,
+                snr_threshold=self.exp_weight_snr_threshold,
             )
             w = weights.astype(raw_means.dtype)
-            svd_means = self.svd_means.nan_to_num_().numpy(force=True)
+            svd_means = self.b.means[self.svd_subspace_ix]
+            svd_means = svd_means.nan_to_num_().numpy(force=True)
             logger.dartsortdebug(
                 f"exp_weighted_svd: Raw weight mean/max={w.mean().item()}/{w.max().item()}"
             )
-            return w * raw_means + (1 - w) * svd_means
+            m = w * raw_means + (1 - w) * svd_means
+            assert np.isfinite(m).all()
+            return m
 
-        if self.denoising_method == "t":
-            return self.raw_t_means.nan_to_num_().numpy(force=True)
-
-        if self.denoising_method == "t_svd":
-            rm = self.raw_t_means.nan_to_num_()
-            sm = self.svd_t_means.nan_to_num_()
-            n, t, c = sm.shape
-            sm = self.tpca._project_in_probe(sm.mT.reshape(n * c, t))
-            sm = sm.reshape(n, c, t).mT
-            denom = self.raw_t_counts + self.svd_t_counts
-            denom = torch.where(denom > 0, denom, 1.0)
-            w = self.raw_t_counts / denom
+        if self.denoising_method in ("loot", "t"):
+            pi = self.b.log_props.exp()
+            raw_pi = pi[self.raw_subspace_ix]
             logger.dartsortdebug(
-                f"t_svd: Raw weight mean/max={w.mean().item()}/{w.max().item()}"
+                f"t_svd: Raw weight mean/max={raw_pi.mean().item():.4f}"
+                f"/{raw_pi.max().item():.4f}"
             )
-            return rm.mul_(w).add_(sm.mul_(1.0 - w)).numpy(force=True)
+            mu = (pi * self.b.means).sum(dim=0)
+            assert mu.isfinite().all()
+            return mu.numpy(force=True)
 
         assert False
 
@@ -364,9 +401,7 @@ class RunningTemplates(GrabAndFeaturize):
         if to_numpy or not res["n_spikes"]:
             return res
 
-        ires = self._process_chunk_main(
-            res["waveforms"], res["indices"], res["labels"], res.get("tpca_features")
-        )
+        ires = self._process_chunk_main(res["waveforms"], res["indices"], res["labels"])
         res.update(ires)
 
         return res
@@ -418,7 +453,6 @@ class RunningTemplates(GrabAndFeaturize):
         waveforms: torch.Tensor,
         spike_ix: torch.LongTensor,
         labels: torch.LongTensor,
-        pcfeats: torch.Tensor | None,
     ):
         """Handles batch statistics for raw or exp weighted templates
 
@@ -426,28 +460,19 @@ class RunningTemplates(GrabAndFeaturize):
         """
         # scatter waveforms to reg channels, if necessary
         if self.motion_aware:
-            chanix = self.target_channels[self.pitch_shift_ixs[spike_ix]]
+            chanix = self.b.target_channels[self.b.pitch_shift_ixs[spike_ix]]
             waveforms = registerize(waveforms, self.n_channels_full, chanix)
         else:
             chanix = None
 
-        if self.tasks.active_step in ("raw", "svd"):
-            return self._process_chunk_raw_svd(
-                waveforms, spike_ix, labels, chanix, pcfeats
-            )
-        elif self.tasks.active_step.startswith("t"):
-            return self._process_chunk_t(waveforms, spike_ix, labels)
+        if self.tasks.active_step == "basic":
+            return self._process_chunk_basic(waveforms, labels)
+        elif self.tasks.active_step == "mixture":
+            return self._process_chunk_mixture(waveforms, labels)
 
         assert False
 
-    def _process_chunk_raw_svd(
-        self,
-        waveforms: torch.Tensor,
-        spike_ix: torch.LongTensor,
-        labels: torch.LongTensor,
-        chanix: torch.LongTensor | None,
-        pcfeats: torch.Tensor | None,
-    ):
+    def _process_chunk_basic(self, waveforms: torch.Tensor, labels: torch.LongTensor):
         res = {}
 
         # determine each unit's per-channel counts, for weighting purposes
@@ -462,176 +487,104 @@ class RunningTemplates(GrabAndFeaturize):
         denom = torch.where(counts > 0, counts, 1.0)
         weights.div_(denom[labels])
 
-        if self.tasks.updating_gamma_mean:
-            # self.raw_means already done with. easiest to get w hats
-            # while waveforms still have nans that can be deleted.
-            raw_what = get_gamma_latent(
-                x=waveforms,
-                labels=labels,
-                mu=self.raw_means,
-                nu=self.initial_df,
-                sigma=1.0,
-            )
-            assert raw_what.shape == waveforms.shape
-            res["wbar"] = torch.nanmean(raw_what.mean(dim=1))
-            res["sqwbar"] = torch.nanmean(raw_what.square().mean(dim=1))
-            res["logwbar"] = torch.nanmean(raw_what.log().mean(dim=1))
-
         waveforms.nan_to_num_()
 
-        # weighted sum
-        x = None
-        if self.tasks.updating_raw_means:
-            raw_means = waveforms.new_zeros(self.raw_means.shape)
-            x = waveforms.mul(weights[:, None])
-            ix = labels[:, None, None].broadcast_to(x.shape)
-            raw_means.scatter_add_(dim=0, index=ix, src=x)
-            res["raw_means"] = raw_means
+        # weighted avg
+        raw_means = waveforms.new_zeros(self.raw_means.shape)
+        x = waveforms.mul(weights[:, None])
+        ix = labels[:, None, None].broadcast_to(x.shape)
+        raw_means.scatter_add_(dim=0, index=ix, src=x)
+        res["raw_means"] = raw_means
 
-        # "" std, optionally ""
-        if self.tasks.needs_raw_stds:
+        if self.tasks.needs_meansq:
             meansq = waveforms.new_zeros(self.raw_means.shape)
-            if x is None:
-                x = waveforms.mul(weights[:, None])
             x.mul_(waveforms)
             meansq.scatter_add_(dim=0, index=ix, src=x)
             res["meansq"] = meansq
 
-        if self.tasks.updating_svd_means:
-            assert self.pcmeans is not None
-            assert pcfeats is not None
-            pcmeans = waveforms.new_zeros(self.pcmeans.shape)
-            pcfeats = registerize(pcfeats, self.n_channels_full, chanix, pad_value=0.0)
-            x = pcfeats.mul(weights[:, None])
-            ix = labels[:, None, None].broadcast_to(x.shape)
-            pcmeans.scatter_add_(dim=0, index=ix, src=x)
-            res["pcmeans"] = pcmeans
-
         return res
 
-    def _process_chunk_t(
-        self,
-        waveforms: torch.Tensor,
-        spike_ix: torch.LongTensor,
-        labels: torch.LongTensor,
-    ):
-        pshape = self.raw_means.shape
-        res = {}
-
-        raw_what = get_gamma_latent(
+    def _process_chunk_mixture(self, waveforms: torch.Tensor, labels: torch.LongTensor):
+        resp, what = smsm_resps_and_latents(
             x=waveforms,
             labels=labels,
-            mu=self.raw_means,
-            nu=self.nu,
-            sigma=self.raw_stds,
+            lps=self.log_props,
+            nus=self.nu,
+            mus=self.means,
+            sigmas=self.scale,
+            meansqs=self.meansq,
+            loo=self.tasks.current_step_is_loot,
+            loo_N=self.counts,
+        )
+        wsum, xbar, xsqbar = count_and_mean(
+            resp=resp,
+            w=what,
+            x=waveforms,
+            labels=labels,
+            s=self.n_subspaces,
+            k=self.n_units,
+            with_sq=self.tasks.updating_subspace_stds,
+        )
+        rsum, rtotal, wbar, sqwbar, logwbar = gamma_count_and_mean(
+            resp=resp,
+            w=what,
+            labels=labels,
+            s=self.n_subspaces,
+            k=self.n_units,
+            count_only=not self.tasks.updating_df,
         )
 
-        if self.tasks.updating_gamma_mean:
-            res["wbar"] = torch.nanmean(raw_what.mean(dim=1))
-            res["sqwbar"] = torch.nanmean(raw_what.square().mean(dim=1))
-            res["logwbar"] = torch.nanmean(raw_what.log().mean(dim=1))
+        res = {}
+        res["weights"] = wsum
+        res["means"] = xbar
+        if xsqbar is not None:
+            res["meansq"] = xsqbar
+        res["resps"] = rsum
+        if wbar is not None:
+            res["rtotal"] = rtotal
+            res["wbar"] = wbar
+            res["sqwbar"] = sqwbar
+            res["logwbar"] = logwbar
 
-        if self.tasks.is_svd:
-            svd_what = get_gamma_latent(
-                x=waveforms,
-                labels=labels,
-                mu=self.svd_means,
-                nu=self.svd_nu,
-                sigma=self.svd_stds,
-            )
-
-            if self.tasks.updating_gamma_mean:
-                res["svd_wbar"] = torch.nanmean(svd_what.mean(dim=1))
-                res["svd_sqwbar"] = torch.nanmean(svd_what.square().mean(dim=1))
-                res["svd_logwbar"] = torch.nanmean(svd_what.log().mean(dim=1))
-
-            resps = get_t_responsibilities(
-                x=waveforms,
-                nu0=self.nu,
-                nu1=self.svd_nu,
-                labels=labels,
-                lp0=self.raw_t_log_prop,
-                mu0=self.raw_means,
-                sigma0=self.raw_stds,
-                lp1=self.svd_t_log_prop,
-                mu1=self.svd_means,
-                sigma1=self.svd_stds,
-            )
-            raw_weight = resps[0] * raw_what
-            svd_weight = resps[1] * raw_what
-            svd_t_counts, svd_t_means, svd_t_meansq = count_and_mean(
-                waveforms, labels, pshape, svd_weight, with_sq=self.tasks.updating_t_stds
-            )
-            assert svd_t_counts.isfinite().all()
-            assert svd_t_means.isfinite().all()
-            res["svd_t_counts"] = svd_t_counts
-            res["svd_t_means"] = svd_t_means
-            if svd_t_meansq is not None:
-                res["svd_t_meansq"] = svd_t_meansq
-        else:
-            raw_weight = raw_what
-        raw_t_counts, raw_t_means, raw_t_meansq = count_and_mean(
-            waveforms, labels, pshape, raw_weight, with_sq=self.tasks.updating_t_stds
-        )
-        res["raw_t_counts"] = raw_t_counts
-        res["raw_t_means"] = raw_t_means
-        assert raw_t_counts.isfinite().all()
-        assert raw_t_means.isfinite().all()
-        if raw_t_meansq is not None:
-            assert raw_t_meansq.isfinite().all()
-            res["raw_t_meansq"] = raw_t_meansq
         return res
 
     def _gather_chunk_main(self, chunk_result):
-        # update running count and do Welford sums
+        """Update running stats with Welford formula."""
+        if self.tasks.active_step == "basic":
+            self._gather_chunk_basic(chunk_result)
+        elif self.tasks.active_step == "mix":
+            self._gather_chunk_mixture(chunk_result)
+        else:
+            assert False
 
-        # this is the raw/svd step update
-        if "counts" in chunk_result:
-            self.counts += chunk_result["counts"]
-            denom = torch.where(self.counts > 0, self.counts, 1.0)
-            w = chunk_result["counts"].div_(denom).unsqueeze(1)
-        if "raw_means" in chunk_result:
-            self.raw_means += chunk_result["raw_means"].sub_(self.raw_means).mul_(w)
-        if "meansq" in chunk_result:
-            self.meansq += chunk_result["meansq"].sub_(self.meansq).mul_(w)
-        if "pcmeans" in chunk_result:
-            self.pcmeans += chunk_result["pcmeans"].sub_(self.pcmeans).mul_(w)
-        if "wbar" in chunk_result:
-            ww = chunk_result["n_spikes"] / max(self.n_spikes, 1)
-            self.wbar += ww * (chunk_result["wbar"] - self.wbar)
-            self.logwbar += ww * (chunk_result["logwbar"] - self.logwbar)
-            self.sqwbar += ww * (chunk_result["sqwbar"] - self.sqwbar)
-        if "svd_wbar" in chunk_result:
-            ww = chunk_result["n_spikes"] / max(self.n_spikes, 1)
-            self.svd_wbar += ww * (chunk_result["svd_wbar"] - self.svd_wbar)
-            self.svd_logwbar += ww * (chunk_result["svd_logwbar"] - self.svd_logwbar)
-            self.svd_sqwbar += ww * (chunk_result["svd_sqwbar"] - self.svd_sqwbar)
+    def _gather_chunk_basic(self, ch_res):
+        self.counts += ch_res["counts"]
+        denom = torch.where(self.counts > 0, self.counts, 1.0)
+        w = ch_res["counts"].div_(denom).unsqueeze(1).to(self.raw_means)
+        self.raw_means += ch_res["raw_means"].sub_(self.raw_means).mul_(w)
+        if "meansq" in ch_res:
+            self.meansq += ch_res["meansq"].sub_(self.meansq).mul_(w)
 
-        # and, the t step update
-        if "raw_t_counts" in chunk_result:
-            assert "raw_t_means" in chunk_result
-            self.raw_t_counts += chunk_result["raw_t_counts"]
-            d = torch.where(self.raw_t_counts > 0, self.raw_t_counts, 1.0)
-            w = chunk_result["raw_t_counts"].div_(d)
-            self.raw_t_means += (
-                chunk_result["raw_t_means"].sub_(self.raw_t_means).mul_(w)
-            )
-        if "raw_t_counts" in chunk_result and "raw_t_meansq" in chunk_result:
-            self.raw_t_stds += (
-                chunk_result["raw_t_meansq"].sub_(self.raw_t_stds).mul_(w)
-            )
-        if "svd_t_counts" in chunk_result:
-            assert "svd_t_means" in chunk_result
-            self.svd_t_counts += chunk_result["svd_t_counts"]
-            d = torch.where(self.svd_t_counts > 0, self.svd_t_counts, 1.0)
-            w = chunk_result["svd_t_counts"].div_(d)
-            self.svd_t_means += (
-                chunk_result["svd_t_means"].sub_(self.svd_t_means).mul_(w)
-            )
-        if "svd_t_counts" in chunk_result and "svd_t_meansq" in chunk_result:
-            self.svd_t_stds += (
-                chunk_result["svd_t_meansq"].sub_(self.svd_t_stds).mul_(w)
-            )
+    def _gather_chunk_mixture(self, ch_res):
+        # track responsibility sum for proportions / scale update
+        self.total_resp += ch_res["resps"]
+
+        # gamma weight
+        self.total_weight += ch_res["weights"]
+        d = torch.where(self.total_weight > 0, self.total_weight, 1.0)
+        gw = ch_res["weights"].div_(d)
+
+        self.means_new += ch_res["means"].sub_(self.means_new).mul_(gw)
+        if self.tasks.updating_subspace_stds:
+            self.scale_new += ch_res["meansq"].sub_(self.scale_new).mul_(gw)
+        if self.tasks.updating_df:
+            # resp weight only needed for gamma stats
+            self.subspace_resp += ch_res["rtotal"]
+            d = torch.where(self.subspace_resp > 0, self.subspace_resp, 1.0)
+            rw = ch_res["rtotal"].div_(d)
+            self.wbar += rw * (ch_res["wbar"] - self.wbar)
+            self.logwbar += rw * (ch_res["logwbar"] - self.logwbar)
+            self.sqwbar += rw * (ch_res["sqwbar"] - self.sqwbar)
 
     def setup_global(self):
         geom = self.recording.get_channel_locations()
@@ -652,13 +605,13 @@ class RunningTemplates(GrabAndFeaturize):
             res = drift_util.get_stable_channels(
                 geom=geom,
                 channels=np.zeros_like(unique_shifts),
-                channel_index=self.channel_index.numpy(force=True),
+                channel_index=self.b.channel_index.numpy(force=True),
                 registered_geom=self.reg_geom,
                 n_pitches_shift=unique_shifts,
             )
-            target_channels = torch.asarray(res[0], device=self.channel_index.device)
+            target_channels = torch.asarray(res[0], device=self.b.channel_index.device)
             pitch_shift_ixs = torch.asarray(
-                pitch_shift_ixs, device=self.channel_index.device
+                pitch_shift_ixs, device=self.b.channel_index.device
             )
             self.register_buffer("pitch_shift_ixs", pitch_shift_ixs)
             self.register_buffer("target_channels", target_channels)
@@ -666,153 +619,121 @@ class RunningTemplates(GrabAndFeaturize):
             self.reg_geom = geom
             self.n_channels_full = self.recording.get_num_channels()
 
-    def setup_raw(self):
-        n = self.n_units
+    def setup_basic(self):
+        k = self.n_units
         t = self.spike_length_samples
         c = self.n_channels_full
-        self.mean_shape = n, t, c
-        self.register_buffer("raw_means", torch.zeros(self.mean_shape))
-        self.register_buffer("counts", torch.zeros((n, c)))
-        if self.tasks.needs_raw_stds:
-            self.register_buffer("meansq", torch.zeros(self.mean_shape))
+        s = self.n_subspaces
+
+        self.register_buffer("counts", torch.zeros((k, c)))
+
+        self.register_buffer("means", torch.zeros((s, k, t, c)))
+        # alias for raw part
+        # this is the only bit that's written in the basic pass
+        self.raw_means = self.b.means[self.raw_subspace_ix]
+
+        if self.tasks.needs_meansq:
+            self.register_buffer("meansq", torch.zeros((k, t, c)))
         else:
             self.meansq = None
 
-    def setup_svd(self):
-        n = self.n_units
-        c = self.n_channels_full
-        if self.tasks.needs_svd_means:
-            assert self.denoising_rank is not None
-            self.register_buffer("pcmeans", torch.zeros((n, self.denoising_rank, c)))
+        if self.tasks.needs_double_buffer:
+            self.register_buffer("means_new", torch.zeros_like(self.b.means))
         else:
-            self.pcmeans = None
-        if self.tasks.needs_gamma_mean:
-            self.register_buffer("wbar", torch.zeros(()))
-            self.register_buffer("logwbar", torch.zeros(()))
-            self.register_buffer("sqwbar", torch.zeros(()))
-        if self.tasks.needs_gamma_mean and self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
-            self.register_buffer("svd_wbar", torch.zeros(()))
-            self.register_buffer("svd_logwbar", torch.zeros(()))
-            self.register_buffer("svd_sqwbar", torch.zeros(()))
+            self.means_new = self.means
 
-    def setup_t(self):
-        if not self.tasks.is_t:
-            return
-        self.register_buffer("raw_t_counts", torch.zeros(self.mean_shape))
-        self.register_buffer("raw_t_log_prop", torch.zeros(self.mean_shape))
-        self.register_buffer("raw_t_means", torch.zeros(self.mean_shape))
-        if self.tasks.needs_t_stds:
-            self.register_buffer("raw_t_stds", torch.zeros(self.mean_shape))
-        if self.tasks.is_svd:
-            self.register_buffer("svd_t_counts", torch.zeros(self.mean_shape))
-            self.register_buffer("svd_t_log_prop", torch.zeros(self.mean_shape))
-            self.register_buffer("svd_t_means", torch.zeros(self.mean_shape))
-        if self.tasks.is_svd and self.tasks.needs_t_stds:
-            self.register_buffer("svd_t_stds", torch.zeros(self.mean_shape))
-        if self.gamma_df is not None:
-            self.register_buffer("nu", torch.asarray(self.gamma_df))
-            self.register_buffer("svd_nu", torch.asarray(self.gamma_df))
-
-        self.register_buffer("unit_spike_counts", torch.zeros(self.mean_shape[0]))
-        # todo need to count by channel! this is temporary.
-        assert (self.labels >= 0).all()
-        _1 = torch.tensor(1.0).to(self.unit_spike_counts).broadcast_to(self.labels.shape)
-        self.unit_spike_counts.scatter_add_(dim=0, index=self.labels, src=_1)
-
-    def finalize_raw(self):
-        if self.tasks.needs_raw_stds:
-            self.register_buffer("raw_stds", self.raw_means.square())
-            torch.subtract(self.meansq, self.raw_stds, out=self.raw_stds)
-            self.raw_stds.abs_().nan_to_num_().sqrt_()
-            assert self.raw_stds.isfinite().all()
-
-    def finalize_svd(self):
-        self.finalize_raw()
-        if self.tasks.needs_svd_means:
-            assert self.tpca is not None
-            assert self.pcmeans is not None
-            svd_means = self.pcmeans.nan_to_num()
-            svd_means = self.tpca.force_reconstruct(svd_means)
-            self.register_buffer("svd_means", svd_means.to(self.raw_means))
-            assert self.svd_means.isfinite().all()
-
-        if self.tasks.needs_svd_stds:
-            assert getattr(self, "raw_stds", None) is not None
-            raw_var = self.raw_stds.square()
-            dmeansq = (self.svd_means - self.raw_means).square_()
-            self.register_buffer("svd_stds", (raw_var.add_(dmeansq)).sqrt_())
-            assert self.svd_stds.isfinite().all()
-
-        if self.tasks.needs_gamma_mean:
-            assert self.gamma_df is None
-            self.register_buffer("nu", estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
-            self.register_buffer("svd_nu", self.nu.clone().detach())
-            self.wbar.fill_(0.0)
-            self.logwbar.fill_(0.0)
-            self.sqwbar.fill_(0.0)
-
-    def finalize_t(self):
-        if not self.tasks.is_t:
+    def setup_mixture(self):
+        if not self.tasks.n_mixture_passes:
             return
 
-        if self.tasks.is_svd:
-            assert self.tpca is not None
-            assert self.svd_t_means is not None
-            svd_means = self.svd_t_means.nan_to_num()
-            svd_means = self.tpca.force_project(svd_means)
-            self.svd_t_means.copy_(svd_means)
-            assert self.svd_t_means.isfinite().all()
+        k = self.n_units
+        t = self.spike_length_samples
+        c = self.n_channels_full
+        s = self.n_subspaces
 
-        if self.tasks.remaining_t_iters > 1:
-            #todo overwrite raw_means and svd_means with t versions and zero t buffers
-            self.raw_means.copy_(self.raw_t_means)
-            assert self.raw_means.isfinite().all()
-            self.raw_t_means.fill_(0.0)
+        # -- gamma df
+        # initial value for subspace dfs will be used in first mixture pass
+        self.register_buffer("nu", torch.full((s,), self.initial_df))
+        # ^ will be updated based on ...
+        self.register_buffer("subspace_resp", torch.zeros((s,)))
+        self.register_buffer("wbar", torch.zeros((s,)))
+        self.register_buffer("sqwbar", torch.zeros((s,)))
+        self.register_buffer("logwbar", torch.zeros((s,)))
 
-        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
-            self.svd_means.copy_(self.svd_t_means)
-            assert self.svd_means.isfinite().all()
-            self.svd_t_means.fill_(0.0)
+        # -- pixelwise weights and responsibilities
+        # log proportion is zero in first pass
+        self.register_buffer("log_props", torch.zeros_like(self.b.means))
+        # ^ is updated based on ...
+        self.register_buffer("total_resp", torch.zeros_like(self.b.means))
+        # total weight doesn't contribute to total resp, but it needs to be
+        # known for intermediate averaging and also to rescale sigma ests in finalize
+        # they're (sum weight moment)/Nk, not (sum weight moment)/(sum weight)
+        self.register_buffer("total_weight", torch.zeros_like(self.b.means))
 
-        if self.tasks.is_svd and self.tasks.remaining_t_iters > 1:
-            # props
-            self.raw_t_log_prop = self.raw_t_counts.log() - (self.raw_t_counts + self.svd_t_counts).log()
-            self.svd_t_log_prop = 1.0 - self.raw_t_log_prop
+        # -- subspace scale params
+        if self.tasks.needs_subspace_stds:
+            self.register_buffer("scale", torch.zeros_like(self.b.means))
+        else:
+            self.scale = None
+        if self.tasks.std_needs_double_buffer:
+            self.register_buffer("scale_new", torch.zeros_like(self.b.means))
+        elif self.tasks.needs_subspace_stds:
+            self.scale_new = self.scale
 
-        if self.tasks.updating_t_stds:
-            #todo overwrite raw_stds and svd_stds with t versions and zero t buffers
-            assert self.raw_t_stds.isfinite().all()
-            assert self.raw_t_means.isfinite().all()
-            self.raw_t_stds.sub_(self.raw_t_means.square())
-            # rescale by count factor...
-            rescale = self.raw_t_counts / self.unit_spike_counts[:, None, None]
-            self.raw_t_stds.mul_(rescale)
-            self.raw_t_stds.sqrt_()
-            assert self.raw_t_stds.isfinite().all()
-            self.raw_stds.copy_(self.raw_t_stds)
-            assert self.raw_stds.isfinite().all()
-            self.raw_t_stds.fill_(0.0)
+    def finalize_basic(self):
+        # save projected means
+        print(f"fbasic {self.n_subspaces=}")
+        for j in range(self.n_subspaces):
+            if j == self.raw_subspace_ix:
+                continue
+            print(f"{j=} {self.subspace_projectors[j]=}")
+            self.b.means[j].copy_(self.subspace_projectors[j](self.raw_means))
+        assert self.b.means.isfinite().all()
 
-        if self.tasks.is_svd and self.tasks.updating_t_stds:
-            self.svd_t_stds.sub_(self.svd_t_means.square())
-            rescale = self.svd_t_counts / self.unit_spike_counts[:, None, None]
-            self.svd_t_stds.mul_(rescale)
-            self.svd_t_stds.sqrt_()
-            self.svd_stds.copy_(self.svd_t_stds)
-            assert self.svd_stds.isfinite().all()
-            self.svd_t_stds.fill_(0.0)
+        # we wrote into means here, not means_new, and i am acknowledging that
+        if self.tasks.needs_double_buffer:
+            pass
 
-        if self.tasks.updating_gamma_mean:
-            self.nu.fill_(estimate_gamma_df(self.wbar, self.logwbar, self.sqwbar))
-            self.wbar.fill_(0.0)
-            self.logwbar.fill_(0.0)
-            self.sqwbar.fill_(0.0)
+    def finalize_mixture(self):
+        # -- means
+        if self.needs_double_buffer:
+            self.b.means.copy_(self.b.means_new)
+            self.b.means_new.zero_()
+            assert self.b.means.isfinite().all()
 
-        if self.tasks.is_svd and self.tasks.updating_gamma_mean:
-            self.svd_nu.fill_(estimate_gamma_df(self.svd_wbar, self.svd_logwbar, self.svd_sqwbar))
-            self.svd_wbar.fill_(0.0)
-            self.svd_logwbar.fill_(0.0)
-            self.svd_sqwbar.fill_(0.0)
+        # -- update stds
+        if self.tasks.updating_subspace_stds:
+            # to update sigma, formula as follows. let R be sum of resp,
+            # W be sum of weight (ie total weight and total resp).
+            # we have currently 1/W sum w y^2. our subspace means are
+            # 1/W sum w y, so thankfully
+            # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) + mu^2].
+            self.b.scale_new.add_(self.b.means.square())
+            self.b.scale_new.mul_(self.b.total_weight.div_(self.total_resp))
+        if self.tasks.updating_subspace_stds and self.tasks.std_needs_double_buffer:
+            self.b.scale.copy_(self.b.scale_new)
+            self.b.scale_new.zero_()
+        assert self.b.scale.isfinite().all()
+        self.b.total_weight.zero_()
+
+        # -- proportions
+        self.b.total_resp.log_()
+        self.b.log_props.copy_(F.log_softmax(self.total_resp, dim=0))
+        assert self.b.log_props.isfinite().all()
+        self.b.total_resp.zero_()
+
+        # -- dof
+        if self.tasks.updating_df:
+            dfs = [
+                estimate_gamma_df(wb, logwb, sqwb)
+                for wb, logwb, sqwb in zip(self.wbar, self.logwbar, self.sqwbar)
+            ]
+            dfs = torch.tensor(dfs).to(self.b.nu)
+            self.b.nu.copy_(dfs)
+            self.b.wbar.zero_()
+            self.b.logwbar.zero_()
+            self.b.sqwbar.zero_()
+            assert self.b.nu.isfinite().all()
 
 
 @dataclass(kw_only=True)
@@ -824,121 +745,108 @@ class RunningTemplatesTasks:
     so it knows what it's doing.
     """
 
-    denoising_method: Literal["none", "exp_weighted_svd", "t", "t_svd"]
-    has_gamma_df: bool
+    denoising_method: Literal["none", "exp_weighted", "loot", "t"]
+    fixed_df: bool
     with_raw_std_dev: bool
     t_iters: int
+    use_zero: bool
+    use_raw: bool
+    use_svd: bool
 
-    # tasks that are requested but have not been done
-    # these will be updated as we go through the steps and are determined
-    # based on denoising_method
-    needs_raw_means: bool = field(init=False)
-    needs_raw_stds: bool = field(init=False)
-    needs_svd_means: bool = field(init=False)
-    needs_svd_stds: bool = field(init=False)
-    needs_gamma_mean: bool = field(init=False)
-    needs_t_params: bool = field(init=False)
-    needs_t_stds: bool = field(init=False)
-    remaining_t_iters: int = field(init=False)
+    # things that are requested, so that peeler knows what to setup()
+    needs_meansq: bool = field(init=False)
+    needs_subspace_stds: bool = field(init=False)
+    needs_double_buffer: bool = field(init=False)
+    std_needs_double_buffer: bool = field(init=False)
 
-    # these hold the tasks that are currently being processed
-    active_step: Literal["", "raw", "svd", "t"] = ""
-    updating_raw_means: bool = False
-    updating_svd_means: bool = False
-    updating_gamma_mean: bool = False
-    updating_t_params: bool = False
-    updating_t_stds: bool = False
-    using_tsvd_projection: bool = False
+    # progress tracker
+    n_mixture_passes: int = field(init=False)
+    n_steps: int = field(init=False)
+    active_step: Literal["", "basic", "mix"] = ""
+
+    # currently being processed
+    updating_subspace_stds: bool = False
+    current_step_is_loot: bool = False
+    basic_pass_done: int = False
+    mixture_passes_done: int = 0
 
     def __post_init__(self):
-        self.is_t = self.denoising_method in ("t", "t_svd")
-        self.is_none = self.denoising_method in ("none", None)
-        self.is_weighted = self.denoising_method == "exp_weighted_svd"
-        self.is_svd = self.denoising_method in ("t_svd", "exp_weighted_svd")
+        assert self.denoising_method in ("none", "exp_weighted", "loot", "t")
+        self.is_none = self.denoising_method == "none"
+        self.is_loot = self.denoising_method == "loot"
+        self.is_t = self.denoising_method == "t"
+        self.is_weighted = self.denoising_method == "exp_weighted"
+        self.is_t_or_loot = self.is_t or self.is_loot
 
-        self.needs_raw_means = True
-        self.needs_raw_stds = self.with_raw_std_dev or self.is_t
-        self.needs_svd_means = self.is_weighted or self.is_svd
-        self.needs_svd_stds = self.is_svd and self.is_t
-        self.needs_gamma_mean = self.is_t and not self.has_gamma_df
-        self.needs_t_params = self.is_t
-        self.remaining_t_iters = int(self.is_t) * self.t_iters
-        self.needs_t_stds = self.is_t and self.remaining_t_iters > 1
+        self.n_mixture_passes = (self.t_iters * self.is_t) + self.is_t_or_loot
+        self.n_steps = 1 + self.n_mixture_passes
+
+        self.needs_meansq = self.with_raw_std_dev or self.is_t or self.is_loot
+        # only t needs to actually instantiate subspace std buffers
+        # for loot, can read it off from meansq and subspace means
+        self.needs_subspace_stds = self.is_t
+        self.needs_double_buffer = bool(self.n_mixture_passes)
+        self.std_needs_double_buffer = self.needs_subspace_stds and self.t_iters > 1
+
+    def step_description(self):
+        s = self.active_step
+        if self.active_step == "basic" and self.needs_meansq:
+            s = f"{s}+meansq"
+        if self.n_steps > 1:
+            istep = self.basic_pass_done + self.mixture_passes_done
+            s = f"{s} [{istep}/{self.n_steps}]"
+        return s
 
     def plan_step(self):
         if self.done:
             self.active_step = ""
             logger.dartsortdebug("Template tasks done.")
             return False
-        elif self.needs_raw_pass:
-            self.updating_raw_means = self.needs_raw_means
-            self.updating_raw_stds = self.needs_raw_stds
-            self.active_step = "raw"
-        elif self.needs_svd_pass:
-            self.updating_raw_means = self.needs_raw_means
-            self.updating_raw_stds = self.needs_raw_stds
-            self.updating_svd_means = self.needs_svd_means
-            self.using_tsvd_projection = self.updating_svd_means
-            self.updating_gamma_mean = self.needs_gamma_mean
-            self.active_step = "svd"
-        elif self.needs_t_pass:
-            self.updating_t_params = self.needs_t_params
-            self.updating_t_stds = self.remaining_t_iters > 1
-            self.updating_gamma_mean = self.remaining_t_iters > 1
-            self.active_step = f"t{1 + self.t_iters - self.remaining_t_iters}/{self.t_iters}"
+        elif self.needs_basic_pass:
+            self.active_step = "basic"
+        elif self.needs_mixture_pass:
+            self.active_step = "mix"
+            self.updating_subspace_stds = (
+                self.needs_subspace_stds and not self.is_last_pass
+            )
+            self.updating_df = not self.is_last_pass
+            self.current_step_is_loot = self.n_mixture_passes == 0
         else:
             assert False
-        logger.dartsortdebug(f"Template task: {self.active_step}.")
+        logger.dartsortdebug(f"Template task: {self.step_description()}.")
         return True
 
     def finalize_step(self):
         if self.done:
             assert False
-        elif self.needs_raw_pass:
-            self.updating_raw_means = self.needs_raw_means = False
-            self.updating_raw_stds = self.needs_raw_stds = False
-        elif self.needs_svd_pass:
-            self.updating_raw_means = self.needs_raw_means = False
-            self.updating_svd_means = self.needs_svd_means = False
-            self.updating_gamma_mean = self.needs_gamma_mean = False
-            self.using_tsvd_projection = False
-            self.needs_svd_stds = False
-        elif self.needs_t_pass:
-            self.updating_t_params = False
-            self.updating_t_stds = False
-            self.updating_gamma_mean = False
-            self.remaining_t_iters -= 1
-            self.needs_t_params = self.remaining_t_iters > 0
+        elif self.needs_basic_pass:
+            self.basic_pass_done = True
+        elif self.needs_mixture_pass:
+            self.mixture_passes_done += 1
+            self.updating_subspace_stds = False
+            self.updating_df = False
+            self.current_step_is_loot = False
         else:
             assert False
 
     @property
     def done(self):
-        return not (self.needs_raw_pass or self.needs_svd_pass or self.needs_t_pass)
+        return not self.needs_basic_pass or self.needs_mixture_pass
 
     @property
-    def needs_raw_pass(self):
-        """Does the peeler need to do a pre-initialization pass?
-
-        This is only used to set up the t weights, or if there's no
-        denoising of any kind.
-        """
-        raw_done = not (self.needs_raw_means or self.needs_raw_stds)
-        none_and_not_done = self.is_none and not raw_done
-        t_and_not_done = self.is_t and not raw_done
-        return none_and_not_done or t_and_not_done
+    def needs_basic_pass(self):
+        return not self.basic_pass_done
 
     @property
-    def needs_svd_pass(self):
-        """This pass computes pc means and the gamma latent mean (if nec)."""
-        svd_done = not (self.needs_svd_means or self.needs_gamma_mean)
-        would_need_svd = self.is_t or self.is_svd
-        return would_need_svd and not svd_done
+    def needs_mixture_pass(self):
+        return self.mixture_passes_done < self.n_mixture_passes
 
     @property
-    def needs_t_pass(self):
-        t_done = not self.needs_t_params
-        return self.is_t and not t_done
+    def is_last_pass(self):
+        if not self.n_mixture_passes:
+            return True
+        else:
+            return self.mixture_passes_done == self.n_mixture_passes - 1
 
 
 def realign_by_running_templates(
@@ -993,7 +901,7 @@ def realign_by_running_templates(
 def registerize(
     x: torch.Tensor,
     nc: int,
-    chanix: torch.LongTensor | None = None,
+    chanix: torch.Tensor | None = None,
     pad_value=torch.nan,
 ) -> torch.Tensor:
     if chanix is None:
@@ -1008,22 +916,19 @@ def get_gamma_latent(x, labels, mu, nu=1.0, sigma=1.0):
     nu = torch.asarray(nu)
     if torch.isinf(nu):
         return x.isfinite().to(x)
-
-    if isinstance(sigma, float):
-        sigma = torch.asarray(sigma).to(x)
+    if isinstance(sigma, (float, int)):
+        sigma = torch.asarray(float(sigma)).to(x)
     else:
         sigma = sigma[labels]
     z = mu[labels].sub_(x).div_(sigma)
     denom = z.square_().add_(nu)
-    # w = denom.reciprocal_().mul_(nu + 1.0)
     w = torch.divide(nu + 1.0, denom, out=denom)
-    assert (w >= 0).all()
     return w
 
 
 def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     """Solves digamma(nu/2) - log(nu) = 1 + logwbar - wbar."""
-    from scipy.special import psi, polygamma
+    from scipy.special import psi  # , polygamma
     from scipy.optimize import root_scalar
 
     dtype = wbar.dtype
@@ -1036,9 +941,7 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     # start with a guess based on the gamma MoM
     vw = sqwbar - wbar**2
     if not np.isfinite(vw) and vw >= 0:
-        raise ValueError(
-            f"Strange gamma statistics {wbar=} {logwbar=} {sqwbar=}."
-        )
+        raise ValueError(f"Strange gamma statistics {wbar=} {logwbar=} {sqwbar=}.")
     if vw == 0:
         logger.info("Estimated infinite gamma df.")
         return torch.asarray(torch.inf, device=dev, dtype=dtype)
@@ -1051,6 +954,7 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
         logger.dartsortdebug(f"df from {rhs=} too small, setting to {min_df}.")
         return torch.asarray(min_df, device=dev, dtype=dtype)
 
+    # brent turned out to be better than deriv aware methods
     def f(x):
         p = psi(x)
         # p1 = polygamma(1, x)
@@ -1059,11 +963,11 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
         f = p - np.log(x) - rhs
         # df = p1 - invx
         # ddf = p2 + invx * invx
-        return f #, df, ddf
+        return f  # , df, ddf
 
     init = x0 if x0 > 0 else x1
     assert init > 0
-    left = x0 
+    left = x0
     while f(left) > 0:
         left /= 2
     assert left > 0
@@ -1076,7 +980,7 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     assert left <= x0 <= right
     assert left <= x1 <= right
 
-    sol = root_scalar(f, bracket=(left, right), x0=x0, x1=x1)# fprime2=True)
+    sol = root_scalar(f, bracket=(left, right), x0=x0, x1=x1)  # fprime2=True)
     nu = sol.root / 2.0
     assert sol.converged
 
@@ -1093,64 +997,133 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     return torch.asarray(nu, device=dev, dtype=dtype)
 
 
-def get_t_responsibilities(x, nu0, nu1, labels, lp0, mu0, sigma0, lp1, mu1, sigma1):
+def smsm_resps_and_latents(
+    x, labels, lps, nus, mus, sigmas=None, meansqs=None, loo=False, loo_N=None
+):
+    s = len(lps)
+
+    # TODO: can speed this up. all times same.
     finite = x.isfinite().nonzero(as_tuple=True)
     xf = x[finite]
-    lp0 = lp0[labels][finite]
-    mu0 = mu0[labels][finite]
-    sigma0 = sigma0[labels][finite].clamp_(min=1e-5)
-    lp1 = lp1[labels][finite]
-    mu1 = mu1[labels][finite]
-    sigma1 = sigma1[labels][finite].clamp_(min=1e-5)
-    if nu0 < torch.inf:
-        l0 = StudentT(nu0, loc=mu0, scale=sigma0, validate_args=False).log_prob(xf)
+
+    # log liks for computing resps
+    ll = x.new_full((s, *x.shape), -torch.inf)
+    # gamma latent weight
+    w = x.new_zeros((s, *x.shape))
+
+    if loo:
+        assert loo_N is not None
+        loo_N = loo_N[labels]
+        assert loo_N.shape == x.shape
+        Nf = loo_N[finite]
+        N_N1 = Nf / (Nf - 1)
+        xf_N = xf / Nf
+        xfsq_N = xf.square().div_(Nf)
     else:
-        rt2 = torch.sqrt(torch.tensor(2.0)).to(xf)
-        l2pi = torch.log(torch.tensor(2.0 * torch.pi)).to(xf) * 0.5
-        l0 = sigma0.log().add_(l2pi).add_(
-            torch.subtract(mu0, xf, out=mu0)
-            .div_(sigma0.mul(rt2))
-            .square_()
-        ).neg_()
-    if nu1 < torch.inf:
-        l1 = StudentT(nu1, loc=mu1, scale=sigma1, validate_args=False).log_prob(xf)
-    else:
-        rt2 = torch.sqrt(torch.tensor(2.0)).to(xf)
-        l2pi = torch.log(torch.tensor(2.0 * torch.pi)).to(xf) * 0.5
-        l1 = sigma1.log().add_(l2pi).add_(
-            torch.subtract(mu1, xf, out=mu1)
-            .div_(sigma1.mul(rt2))
-            .square_()
-        ).neg_()
-    ll = x.new_full((2, *x.shape), -torch.inf)
-    ll[0, *finite] = l0.add_(lp0)
-    ll[1, *finite] = l1.add_(lp1)
+        N_N1 = xf_N = xfsq_N = None
+
+    if sigmas is None:
+        sigmas = [None] * s
+    if meansqs is None:
+        meansqs = [None] * s
+
+    params = zip(lps, nus, mus, sigmas, meansqs)
+    for j, (lp, nu, mu, sigma, meansq) in enumerate(params):
+        lp = lp[labels][finite]
+        loc = mu[labels][finite]
+
+        if loo:
+            assert meansq is not None
+            loc.sub_(xf_N).mul_(N_N1)
+            scale = meansq[labels][finite].sub_(xfsq_N).mul_(N_N1)
+            scale.sub_(loc.square())
+        else:
+            assert sigma is not None
+            scale = sigma[labels][finite]
+
+        if s == 1:
+            l = 0.0  # doesn't matter at all
+        elif nu < torch.inf:
+            l = StudentT(nu, loc=loc, scale=scale, validate_args=False).log_prob(xf)
+            l.add_(lp)
+        else:
+            l = Normal(loc=loc, scale=scale, validate_args=False).log_prob(xf)
+            l.add_(lp)
+
+        ll[j, *finite] = l
+
+        if nu < torch.inf:
+            z = loc.sub(xf).div_(scale)
+            denom = z.square_().add_(nu)
+            w[j, *finite] = torch.divide(nu + 1.0, denom, out=denom)
+        else:
+            w[j, *finite] = 1.0
+
     resp = F.softmax(ll, dim=0)
-    return resp
+    return resp, w
 
 
-def count_and_mean(waveforms, labels, pshape, weights, with_sq=False):
-    assert weights.shape == waveforms.shape
+def count_and_mean(
+    resp,
+    w,
+    x,
+    labels,
+    s,
+    k,
+    with_sq=False,
+):
+    n, t, c = x.shape
+    assert w.shape == (s, n, t, c)
 
-    counts = waveforms.new_zeros(pshape)
-    ix = labels[:, None, None].broadcast_to(weights.shape)
-    counts.scatter_add_(dim=0, index=ix, src=weights)
+    wr = w * resp
 
-    denom = torch.where(counts > 0, counts, 1.0)[labels]
-    weights = torch.divide(weights, denom, out=denom)
+    wsum = w.new_zeros((s, k, t, c))
+    ix = labels[None, :, None, None].broadcast_to(w.shape)
+    wsum.scatter_add_(dim=1, index=ix, src=wr)
 
-    means = waveforms.new_zeros(pshape)
-    x = weights.mul_(waveforms)
-    del weights
-    ix = labels[:, None, None].broadcast_to(waveforms.shape)
-    means.scatter_add_(dim=0, index=ix, src=x)
+    denom = torch.where(wsum > 0, wsum, 1.0)[:, labels]
+    assert denom.shape == (n, s, t, c)
+    ww = wr / denom.permute(1, 0, 2, 3)
+
+    xbar = x.new_zeros((s, k, t, c))
+    wx = ww.mul_(x[None])
+    del ww
+    xbar.scatter_add_(dim=1, index=ix, src=wx)
 
     if with_sq:
-        meansq = waveforms.new_zeros(pshape)
-        x.mul_(waveforms)
-        ix = labels[:, None, None].broadcast_to(x.shape)
-        meansq.scatter_add_(dim=0, index=ix, src=x)
+        xsqbar = x.new_zeros((s, k, t, c))
+        wx.mul_(x[None])
+        xsqbar.scatter_add_(dim=1, index=ix, src=wx)
     else:
-        meansq = None
+        xsqbar = None
 
-    return counts, means, meansq
+    return wsum, xbar, xsqbar
+
+
+def gamma_count_and_mean(resp, w, labels, s, k, count_only=False):
+    n, t, c = w.shape
+
+    rsum = resp.new_zeros((s, k, t, c))
+    ix = labels[None, :, None, None].broadcast_to(w.shape)
+    rsum.scatter_add_(dim=1, index=ix, src=resp)
+
+    if count_only:
+        return rsum, None, None, None, None
+
+    rtotal = rsum.sum(dim=(1, 2, 3))
+    weight = resp / rtotal
+    w = w.nan_to_num()
+    wbar = (w * weight).sum(dim=(1, 2, 3))
+    sqwbar = w.square().mul_(weight).sum(dim=(1, 2, 3))
+    logwbar = w.log().mul_(weight).sum(dim=(1, 2, 3))
+
+    return rsum, rtotal, wbar, sqwbar, logwbar
+
+
+def wsum(shp, w, ix, src, dim=0):
+    out = src.new_zeros(shp)
+    out.scatter_add_(dim=dim, ix=ix, src=src.mul(w))
+
+
+def identity(x):
+    return x

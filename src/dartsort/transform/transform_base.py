@@ -55,7 +55,7 @@ class BaseWaveformModule(torch.nn.Module):
             )
 
     def fit(self, recording, waveforms, **fixed_properties) -> Any:
-        del recording
+        del recording, fixed_properties
         self.spike_length_samples = waveforms.shape[1]
         self.initialize_spike_length_dependent_params()
 
@@ -64,10 +64,10 @@ class BaseWaveformModule(torch.nn.Module):
             spike_length_samples=self.spike_length_samples, needs_fit=self.needs_fit()
         )
 
-    def set_extra_state(self, extra_state):
-        self.spike_length_samples = extra_state["spike_length_samples"]
+    def set_extra_state(self, state):
+        self.spike_length_samples = state["spike_length_samples"]
         if hasattr(self, "_needs_fit"):
-            self._needs_fit = extra_state["needs_fit"]
+            self._needs_fit = state["needs_fit"]
 
     def _pre_load_state(
         self,
@@ -114,6 +114,7 @@ class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
 
     def forward(self, waveforms, **unused):
+        del waveforms, unused
         raise NotImplementedError
 
 
@@ -126,6 +127,7 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
     dtype = torch.float
 
     def transform(self, waveforms, **unused):
+        del waveforms, unused
         # returns dict {key=feat name, value=feature}
         raise NotImplementedError
 
@@ -159,6 +161,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def __init__(
         self, pipeline=None, geom=None, channel_index=None, name=None, name_prefix=None
     ):
+        del geom, channel_index
         t = []
         if pipeline is not None:
             t = [t for t in pipeline if t.is_featurizer]
@@ -192,7 +195,10 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def forward(self, waveforms, **fixed_properties):
         if self.pipeline is None:
             return waveforms, {}
-        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, **fixed_properties)
+        pipeline_waveforms, pipeline_features = self.pipeline(
+            waveforms, **fixed_properties
+        )
+        del pipeline_waveforms  # passthrough!
         return waveforms, pipeline_features
 
     @property
@@ -207,12 +213,16 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def transform(self, waveforms, **fixed_properties):
         if self.pipeline is None:
             return {}
-        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, **fixed_properties)
+        pipeline_waveforms, pipeline_features = self.pipeline(
+            waveforms, **fixed_properties
+        )
+        del pipeline_waveforms
         return pipeline_features
 
 
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
     def forward(self, waveforms, **unused):
+        del unused
         return waveforms
 
 
@@ -238,4 +248,5 @@ class Waveform(BaseWaveformFeaturizer):
         self.dtype = dtype
 
     def transform(self, waveforms, **unused):
+        del unused
         return {self.name: waveforms.clone()}

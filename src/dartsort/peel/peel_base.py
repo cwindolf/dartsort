@@ -14,22 +14,23 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from tqdm.auto import tqdm
 
-from dartsort.transform import WaveformPipeline
-from dartsort.util.data_util import (
+from ..transform import WaveformPipeline
+from ..util.data_util import (
     subsample_waveforms,
     SpikeDataset,
     extract_random_snips,
     divide_randomly,
 )
-from dartsort.util.multiprocessing_util import pool_from_cfg
-from dartsort.util.py_util import delay_keyboard_interrupt
-from dartsort.util import job_util
+from ..util.multiprocessing_util import pool_from_cfg
+from ..util.py_util import delay_keyboard_interrupt
+from ..util.torch_util import BModule
+from ..util import job_util
 
 
 _lock = Lock()
 
 
-class BasePeeler(torch.nn.Module):
+class BasePeeler(BModule):
     """Base class for peeling operations (subtraction, deconv, etc)
 
     Subtraction, deconv, and other things like just grabbing waveforms
