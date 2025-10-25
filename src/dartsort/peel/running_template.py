@@ -313,10 +313,8 @@ class RunningTemplates(GrabAndFeaturize):
             raw_stds = self.b.meansq.sub(self.raw_means.square())
             raw_stds = raw_stds.clamp_(min=0.0).sqrt_()
         else:
-            raw_stds = self.b.meansq[None].sub(self.b.means.square())
             pi = self.b.log_props.exp()
-            raw_stds = (raw_stds * pi).sum(dim=0)
-            raw_stds = raw_stds.clamp_(min=0.0).sqrt_()
+            raw_stds = (self.b.scale * pi).sum(dim=0)
         if raw_stds is not None:
             assert raw_stds.isfinite().all()
             assert raw_stds.shape == templates.shape
@@ -519,7 +517,6 @@ class RunningTemplates(GrabAndFeaturize):
             w=what,
             x=waveforms,
             labels=labels,
-            s=self.n_subspaces,
             k=self.n_units,
             with_sq=self.tasks.updating_subspace_stds,
         )
@@ -558,7 +555,7 @@ class RunningTemplates(GrabAndFeaturize):
         assert self.b.counts is self.counts
         self.counts += ch_res["counts"]
         w = ch_res["counts"].div_(self.counts).nan_to_num_().unsqueeze(1).to(self.raw_means)
-        self.means[self.raw_subspace_ix] += ch_res["raw_means"].sub_(self.raw_means).mul_(w)
+        self.b.means[self.raw_subspace_ix] += ch_res["raw_means"].sub_(self.raw_means).mul_(w)
         if "meansq" in ch_res:
             self.meansq += ch_res["meansq"].sub_(self.meansq).mul_(w)
 
@@ -566,13 +563,17 @@ class RunningTemplates(GrabAndFeaturize):
         # track responsibility sum for proportions / scale update
         self.total_resp += ch_res["resps"]
 
-        # gamma weight
+        # gamma x resp weight, used in mean and meansq update
         self.total_weight += ch_res["weights"]
         gw = ch_res["weights"].div_(self.total_weight).nan_to_num_()
 
+        # mean update
         self.means_new += ch_res["means"].sub_(self.means_new).mul_(gw)
+
+        # scale update -- to be rescaled/subspaced in finalize()
         if self.tasks.updating_subspace_stds:
             self.scale_new += ch_res["meansq"].sub_(self.scale_new).mul_(gw)
+
         if self.tasks.updating_df:
             # resp weight only needed for gamma stats
             self.subspace_resp += ch_res["rtotal"]
@@ -696,10 +697,11 @@ class RunningTemplates(GrabAndFeaturize):
             # to update sigma, formula as follows. let R be sum of resp,
             # W be sum of weight (ie total weight and total resp).
             # we have currently 1/W sum w y^2. our subspace means are
-            # 1/W sum w y, so thankfully
+            # mu = 1/W sum w y, so thankfully
             # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) + mu^2].
             self.b.scale_new.add_(self.b.means.square())
             self.b.scale_new.mul_(self.b.total_weight.div_(self.total_resp))
+            self.b.scale_new.clamp_(min=1e-5).sqrt_()
         if self.tasks.updating_subspace_stds and self.tasks.needs_double_buffer:
             self.b.scale.copy_(self.b.scale_new)
             self.b.scale_new.zero_()
@@ -1027,18 +1029,16 @@ def smsm_resps_and_latents(
             scale.sub_(loc.square()).clamp_(min=1e-5).sqrt_()
         else:
             assert sigma is not None
-            scale = sigma[labels][finite].clamp_(min=1e-5)
+            scale = sigma[labels][finite]
 
         if s == 1:
             l = 0.0  # doesn't matter at all
         elif nu < torch.inf:
             l = StudentT(nu, loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
-            l.isfinite().all()
         else:
             l = Normal(loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
-            l.isfinite().all()
 
         ll[j, *finite] = l
 
@@ -1059,17 +1059,18 @@ def count_and_mean(
     w,
     x,
     labels,
-    s,
     k,
     with_sq=False,
 ):
-    n, t, c = x.shape
-    assert w.shape == (s, n, t, c)
+    s, n, t, c = w.shape
+    assert x.shape == (n, t, c)
+    assert resp.shape == w.shape
 
     wr = w * resp
+    del w, resp
 
-    wsum = w.new_zeros((s, k, t, c))
-    ix = labels[None, :, None, None].broadcast_to(w.shape)
+    wsum = wr.new_zeros((s, k, t, c))
+    ix = labels[None, :, None, None].broadcast_to(wr.shape)
     wsum.scatter_add_(dim=1, index=ix, src=wr)
 
     denom = wsum[:, labels]
@@ -1104,11 +1105,10 @@ def gamma_count_and_mean(resp, w, labels, k, count_only=False):
 
     rtotal = rsum.sum(dim=(1, 2, 3))
     weight = resp / rtotal[:, None, None, None]
-    w = w.nan_to_num()
     ww = w * weight
     wbar = ww.sum(dim=(1, 2, 3))
     sqwbar = (ww * w).sum(dim=(1, 2, 3))
-    logwbar = w.log().mul_(weight).sum(dim=(1, 2, 3))
+    logwbar = weight.xlogy(w).sum(dim=(1, 2, 3))
 
     return rsum, rtotal, wbar, sqwbar, logwbar
 
