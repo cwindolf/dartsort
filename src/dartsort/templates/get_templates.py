@@ -178,6 +178,8 @@ def get_templates(
             recompute_tsvd=recompute_tsvd,
             random_seed=random_seed,
         )
+    elif not low_rank_denoising:
+        denoising_tsvd = None
 
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs

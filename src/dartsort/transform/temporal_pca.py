@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD
 
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -211,7 +211,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms = waveforms[0]
         return waveforms
 
-    def to_sklearn(self):
+    def to_sklearn(self) -> PCA:
         pca = PCA(
             n_components=self.rank,
             random_state=self.random_state,
@@ -224,11 +224,17 @@ class BaseTemporalPCA(BaseWaveformModule):
         return pca
 
     @classmethod
-    def from_sklearn(cls, channel_index, pca, temporal_slice=None):
+    def from_sklearn(cls, channel_index, pca: PCA | TruncatedSVD, temporal_slice=None):
+        if isinstance(pca, PCA):
+            whiten = pca.whiten
+        elif isinstance(pca, TruncatedSVD):
+            whiten = False
+        else:
+            assert False
         self = cls(
             channel_index,
             rank=pca.n_components,
-            whiten=pca.whiten,
+            whiten=whiten,
             temporal_slice=temporal_slice,
         )
         self.initialize_from_sklearn(pca)
@@ -255,14 +261,19 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def initialize_from_sklearn(self, pca):
         if self.temporal_slice is None:
-            self.spike_length_samples = pca.mean_.shape[0]
+            self.spike_length_samples = pca.components_.shape[1]
         else:
             # not really -- this is a hack.
             self.spike_length_samples = (
                 self.temporal_slice.stop - self.temporal_slice.start
             )
         self.initialize_spike_length_dependent_params()
-        self.mean.copy_(torch.from_numpy(pca.mean_))
+        if hasattr(pca, 'mean_'):
+            self.mean.copy_(torch.from_numpy(pca.mean_))
+            self.center = not (self.mean == 0.0).all()
+        else:
+            self.mean.zero_()
+            self.center = False
         self.components.copy_(torch.from_numpy(pca.components_))
         self.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
         self._needs_fit = False

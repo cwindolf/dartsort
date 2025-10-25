@@ -210,10 +210,7 @@ class RunningTemplates(GrabAndFeaturize):
         sorting = sorting.drop_missing()
 
         # try to load denoiser if denoising is happening
-        if tsvd is None and template_cfg.denoising_method in (
-            "t_svd",
-            "exp_weighted_svd",
-        ):
+        if tsvd is None and template_cfg.use_svd:
             if not template_cfg.recompute_tsvd:
                 tsvd = load_stored_tsvd(sorting)
 
@@ -264,8 +261,7 @@ class RunningTemplates(GrabAndFeaturize):
                 ignore_resuming=True,
                 show_progress=show_progress,
                 computation_cfg=computation_cfg,
-                task_name=task_name
-                or f"{self.peel_kind}:{self.denoising_method}<{self.tasks.active_step}>",
+                task_name=task_name or self.tasks.step_description(),
             )
             self.finalize_step()
             self.tasks.finalize_step()
@@ -372,8 +368,8 @@ class RunningTemplates(GrabAndFeaturize):
             pi = self.b.log_props.exp()
             raw_pi = pi[self.raw_subspace_ix]
             logger.dartsortdebug(
-                f"t_svd: Raw weight mean/max={raw_pi.mean().item():.4f}"
-                f"/{raw_pi.max().item():.4f}"
+                "Template demixing: Raw weight mean/max="
+                f"{raw_pi.mean().item():.4f}/{raw_pi.max().item():.4f}"
             )
             mu = (pi * self.b.means).sum(dim=0)
             assert mu.isfinite().all()
@@ -467,7 +463,7 @@ class RunningTemplates(GrabAndFeaturize):
 
         if self.tasks.active_step == "basic":
             return self._process_chunk_basic(waveforms, labels)
-        elif self.tasks.active_step == "mixture":
+        elif self.tasks.active_step == "mix":
             return self._process_chunk_mixture(waveforms, labels)
 
         assert False
@@ -516,6 +512,8 @@ class RunningTemplates(GrabAndFeaturize):
             loo=self.tasks.current_step_is_loot,
             loo_N=self.counts,
         )
+        assert resp.isfinite().all()
+        assert what.isfinite().all()
         wsum, xbar, xsqbar = count_and_mean(
             resp=resp,
             w=what,
@@ -529,7 +527,6 @@ class RunningTemplates(GrabAndFeaturize):
             resp=resp,
             w=what,
             labels=labels,
-            s=self.n_subspaces,
             k=self.n_units,
             count_only=not self.tasks.updating_df,
         )
@@ -558,10 +555,10 @@ class RunningTemplates(GrabAndFeaturize):
             assert False
 
     def _gather_chunk_basic(self, ch_res):
+        assert self.b.counts is self.counts
         self.counts += ch_res["counts"]
-        denom = torch.where(self.counts > 0, self.counts, 1.0)
-        w = ch_res["counts"].div_(denom).unsqueeze(1).to(self.raw_means)
-        self.raw_means += ch_res["raw_means"].sub_(self.raw_means).mul_(w)
+        w = ch_res["counts"].div_(self.counts).nan_to_num_().unsqueeze(1).to(self.raw_means)
+        self.means[self.raw_subspace_ix] += ch_res["raw_means"].sub_(self.raw_means).mul_(w)
         if "meansq" in ch_res:
             self.meansq += ch_res["meansq"].sub_(self.meansq).mul_(w)
 
@@ -571,8 +568,7 @@ class RunningTemplates(GrabAndFeaturize):
 
         # gamma weight
         self.total_weight += ch_res["weights"]
-        d = torch.where(self.total_weight > 0, self.total_weight, 1.0)
-        gw = ch_res["weights"].div_(d)
+        gw = ch_res["weights"].div_(self.total_weight).nan_to_num_()
 
         self.means_new += ch_res["means"].sub_(self.means_new).mul_(gw)
         if self.tasks.updating_subspace_stds:
@@ -580,8 +576,7 @@ class RunningTemplates(GrabAndFeaturize):
         if self.tasks.updating_df:
             # resp weight only needed for gamma stats
             self.subspace_resp += ch_res["rtotal"]
-            d = torch.where(self.subspace_resp > 0, self.subspace_resp, 1.0)
-            rw = ch_res["rtotal"].div_(d)
+            rw = ch_res["rtotal"].div_(self.subspace_resp).nan_to_num_()
             self.wbar += rw * (ch_res["wbar"] - self.wbar)
             self.logwbar += rw * (ch_res["logwbar"] - self.logwbar)
             self.sqwbar += rw * (ch_res["sqwbar"] - self.sqwbar)
@@ -626,12 +621,9 @@ class RunningTemplates(GrabAndFeaturize):
         s = self.n_subspaces
 
         self.register_buffer("counts", torch.zeros((k, c)))
+        assert self.b.counts is self.counts
 
         self.register_buffer("means", torch.zeros((s, k, t, c)))
-        # alias for raw part
-        # this is the only bit that's written in the basic pass
-        self.raw_means = self.b.means[self.raw_subspace_ix]
-
         if self.tasks.needs_meansq:
             self.register_buffer("meansq", torch.zeros((k, t, c)))
         else:
@@ -639,8 +631,10 @@ class RunningTemplates(GrabAndFeaturize):
 
         if self.tasks.needs_double_buffer:
             self.register_buffer("means_new", torch.zeros_like(self.b.means))
-        else:
-            self.means_new = self.means
+
+    @property
+    def raw_means(self):
+        return self.b.means[self.raw_subspace_ix]
 
     def setup_mixture(self):
         if not self.tasks.n_mixture_passes:
@@ -675,18 +669,14 @@ class RunningTemplates(GrabAndFeaturize):
             self.register_buffer("scale", torch.zeros_like(self.b.means))
         else:
             self.scale = None
-        if self.tasks.std_needs_double_buffer:
+        if self.tasks.needs_double_buffer:
             self.register_buffer("scale_new", torch.zeros_like(self.b.means))
-        elif self.tasks.needs_subspace_stds:
-            self.scale_new = self.scale
 
     def finalize_basic(self):
         # save projected means
-        print(f"fbasic {self.n_subspaces=}")
         for j in range(self.n_subspaces):
             if j == self.raw_subspace_ix:
                 continue
-            print(f"{j=} {self.subspace_projectors[j]=}")
             self.b.means[j].copy_(self.subspace_projectors[j](self.raw_means))
         assert self.b.means.isfinite().all()
 
@@ -696,7 +686,7 @@ class RunningTemplates(GrabAndFeaturize):
 
     def finalize_mixture(self):
         # -- means
-        if self.needs_double_buffer:
+        if self.tasks.needs_double_buffer:
             self.b.means.copy_(self.b.means_new)
             self.b.means_new.zero_()
             assert self.b.means.isfinite().all()
@@ -710,10 +700,11 @@ class RunningTemplates(GrabAndFeaturize):
             # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) + mu^2].
             self.b.scale_new.add_(self.b.means.square())
             self.b.scale_new.mul_(self.b.total_weight.div_(self.total_resp))
-        if self.tasks.updating_subspace_stds and self.tasks.std_needs_double_buffer:
+        if self.tasks.updating_subspace_stds and self.tasks.needs_double_buffer:
             self.b.scale.copy_(self.b.scale_new)
             self.b.scale_new.zero_()
-        assert self.b.scale.isfinite().all()
+        if self.tasks.updating_subspace_stds:
+            assert self.b.scale.isfinite().all()
         self.b.total_weight.zero_()
 
         # -- proportions
@@ -757,7 +748,6 @@ class RunningTemplatesTasks:
     needs_meansq: bool = field(init=False)
     needs_subspace_stds: bool = field(init=False)
     needs_double_buffer: bool = field(init=False)
-    std_needs_double_buffer: bool = field(init=False)
 
     # progress tracker
     n_mixture_passes: int = field(init=False)
@@ -786,14 +776,13 @@ class RunningTemplatesTasks:
         # for loot, can read it off from meansq and subspace means
         self.needs_subspace_stds = self.is_t
         self.needs_double_buffer = bool(self.n_mixture_passes)
-        self.std_needs_double_buffer = self.needs_subspace_stds and self.t_iters > 1
 
     def step_description(self):
-        s = self.active_step
+        s = f"{self.denoising_method}:{self.active_step}"
         if self.active_step == "basic" and self.needs_meansq:
             s = f"{s}+meansq"
         if self.n_steps > 1:
-            istep = self.basic_pass_done + self.mixture_passes_done
+            istep = 1 + self.basic_pass_done + self.mixture_passes_done
             s = f"{s} [{istep}/{self.n_steps}]"
         return s
 
@@ -810,7 +799,7 @@ class RunningTemplatesTasks:
                 self.needs_subspace_stds and not self.is_last_pass
             )
             self.updating_df = not self.is_last_pass
-            self.current_step_is_loot = self.n_mixture_passes == 0
+            self.current_step_is_loot = self.mixture_passes_done == 0
         else:
             assert False
         logger.dartsortdebug(f"Template task: {self.step_description()}.")
@@ -831,7 +820,7 @@ class RunningTemplatesTasks:
 
     @property
     def done(self):
-        return not self.needs_basic_pass or self.needs_mixture_pass
+        return not (self.needs_basic_pass or self.needs_mixture_pass)
 
     @property
     def needs_basic_pass(self):
@@ -1014,8 +1003,7 @@ def smsm_resps_and_latents(
     if loo:
         assert loo_N is not None
         loo_N = loo_N[labels]
-        assert loo_N.shape == x.shape
-        Nf = loo_N[finite]
+        Nf = loo_N[finite[0], finite[2]]
         N_N1 = Nf / (Nf - 1)
         xf_N = xf / Nf
         xfsq_N = xf.square().div_(Nf)
@@ -1027,7 +1015,7 @@ def smsm_resps_and_latents(
     if meansqs is None:
         meansqs = [None] * s
 
-    params = zip(lps, nus, mus, sigmas, meansqs)
+    params = zip(lps, nus, mus, sigmas, [meansqs] * s)
     for j, (lp, nu, mu, sigma, meansq) in enumerate(params):
         lp = lp[labels][finite]
         loc = mu[labels][finite]
@@ -1036,26 +1024,29 @@ def smsm_resps_and_latents(
             assert meansq is not None
             loc.sub_(xf_N).mul_(N_N1)
             scale = meansq[labels][finite].sub_(xfsq_N).mul_(N_N1)
-            scale.sub_(loc.square())
+            scale.sub_(loc.square()).clamp_(min=1e-5).sqrt_()
         else:
             assert sigma is not None
-            scale = sigma[labels][finite]
+            scale = sigma[labels][finite].clamp_(min=1e-5)
 
         if s == 1:
             l = 0.0  # doesn't matter at all
         elif nu < torch.inf:
             l = StudentT(nu, loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
+            l.isfinite().all()
         else:
             l = Normal(loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
+            l.isfinite().all()
 
         ll[j, *finite] = l
 
         if nu < torch.inf:
             z = loc.sub(xf).div_(scale)
             denom = z.square_().add_(nu)
-            w[j, *finite] = torch.divide(nu + 1.0, denom, out=denom)
+            myw = torch.divide(nu + 1.0, denom, out=denom)
+            w[j, *finite] = myw
         else:
             w[j, *finite] = 1.0
 
@@ -1081,18 +1072,19 @@ def count_and_mean(
     ix = labels[None, :, None, None].broadcast_to(w.shape)
     wsum.scatter_add_(dim=1, index=ix, src=wr)
 
-    denom = torch.where(wsum > 0, wsum, 1.0)[:, labels]
-    assert denom.shape == (n, s, t, c)
-    ww = wr / denom.permute(1, 0, 2, 3)
+    denom = wsum[:, labels]
+    assert denom.shape == (s, n, t, c)
+    ww = torch.divide(wr, denom, out=denom).nan_to_num_()
+    del denom
 
     xbar = x.new_zeros((s, k, t, c))
-    wx = ww.mul_(x[None])
+    wx = ww.mul_(x)
     del ww
     xbar.scatter_add_(dim=1, index=ix, src=wx)
 
     if with_sq:
         xsqbar = x.new_zeros((s, k, t, c))
-        wx.mul_(x[None])
+        wx.mul_(x)
         xsqbar.scatter_add_(dim=1, index=ix, src=wx)
     else:
         xsqbar = None
@@ -1100,8 +1092,8 @@ def count_and_mean(
     return wsum, xbar, xsqbar
 
 
-def gamma_count_and_mean(resp, w, labels, s, k, count_only=False):
-    n, t, c = w.shape
+def gamma_count_and_mean(resp, w, labels, k, count_only=False):
+    s, n, t, c = w.shape
 
     rsum = resp.new_zeros((s, k, t, c))
     ix = labels[None, :, None, None].broadcast_to(w.shape)
@@ -1111,10 +1103,11 @@ def gamma_count_and_mean(resp, w, labels, s, k, count_only=False):
         return rsum, None, None, None, None
 
     rtotal = rsum.sum(dim=(1, 2, 3))
-    weight = resp / rtotal
+    weight = resp / rtotal[:, None, None, None]
     w = w.nan_to_num()
-    wbar = (w * weight).sum(dim=(1, 2, 3))
-    sqwbar = w.square().mul_(weight).sum(dim=(1, 2, 3))
+    ww = w * weight
+    wbar = ww.sum(dim=(1, 2, 3))
+    sqwbar = (ww * w).sum(dim=(1, 2, 3))
     logwbar = w.log().mul_(weight).sum(dim=(1, 2, 3))
 
     return rsum, rtotal, wbar, sqwbar, logwbar

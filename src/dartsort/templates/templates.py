@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 import gc
 from pathlib import Path
+from sys import getrefcount
 
 import numpy as np
 import torch
@@ -308,7 +309,10 @@ def _from_config_with_realigned_sorting(
             spike_length_samples=peeler.spike_length_samples,
             recording_length_samples=recording.get_total_samples(),
         )
+        assert getrefcount(peeler) == 2
         del peeler
+        gc.collect()
+        torch.cuda.empty_cache()
         return template_data, realigned_sorting
 
     if sorting is None:
