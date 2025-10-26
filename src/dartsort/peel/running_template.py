@@ -309,12 +309,15 @@ class RunningTemplates(GrabAndFeaturize):
 
         if not self.with_raw_std_dev:
             raw_stds = None
-        elif self.denoising_method in ("none", "exp_weighted"):
+        elif self.denoising_method in ("none", "exp_weighted", "loot"):
             raw_stds = self.b.meansq.sub(self.raw_means.square())
             raw_stds = raw_stds.clamp_(min=0.0).sqrt_()
-        else:
+        elif self.denoising_method == "t":
             pi = self.b.log_props.exp()
             raw_stds = (self.b.scale * pi).sum(dim=0)
+        else:
+            assert False
+
         if raw_stds is not None:
             assert raw_stds.isfinite().all()
             assert raw_stds.shape == templates.shape
@@ -510,8 +513,6 @@ class RunningTemplates(GrabAndFeaturize):
             loo=self.tasks.current_step_is_loot,
             loo_N=self.counts,
         )
-        assert resp.isfinite().all()
-        assert what.isfinite().all()
         wsum, xbar, xsqbar = count_and_mean(
             resp=resp,
             w=what,
@@ -697,10 +698,11 @@ class RunningTemplates(GrabAndFeaturize):
             # to update sigma, formula as follows. let R be sum of resp,
             # W be sum of weight (ie total weight and total resp).
             # we have currently 1/W sum w y^2. our subspace means are
-            # mu = 1/W sum w y, so thankfully
-            # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) + mu^2].
-            self.b.scale_new.add_(self.b.means.square())
-            self.b.scale_new.mul_(self.b.total_weight.div_(self.total_resp))
+            # mu = 1/W sum w y, so thankfully we can use the variance identity.
+            # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) - mu^2].
+            self.b.scale_new.sub_(self.b.means.square())
+            rescale = self.b.total_weight.div_(self.total_resp).nan_to_num_()
+            self.b.scale_new.mul_(rescale)
             self.b.scale_new.clamp_(min=1e-5).sqrt_()
         if self.tasks.updating_subspace_stds and self.tasks.needs_double_buffer:
             self.b.scale.copy_(self.b.scale_new)
@@ -1066,31 +1068,31 @@ def count_and_mean(
     assert x.shape == (n, t, c)
     assert resp.shape == w.shape
 
-    wr = w * resp
+    wr = w.double() * resp.double()
     del w, resp
 
-    wsum = wr.new_zeros((s, k, t, c))
+    wsum = wr.new_zeros((s, k, t, c), dtype=torch.double)
     ix = labels[None, :, None, None].broadcast_to(wr.shape)
     wsum.scatter_add_(dim=1, index=ix, src=wr)
-
+    
     denom = wsum[:, labels]
-    assert denom.shape == (s, n, t, c)
-    ww = torch.divide(wr, denom, out=denom).nan_to_num_()
+    ww = torch.div(wr, denom, out=denom).nan_to_num_()
     del denom
 
-    xbar = x.new_zeros((s, k, t, c))
+    xbar = x.new_zeros((s, k, t, c), dtype=torch.double)
     wx = ww.mul_(x)
     del ww
     xbar.scatter_add_(dim=1, index=ix, src=wx)
 
     if with_sq:
-        xsqbar = x.new_zeros((s, k, t, c))
+        xsqbar = x.new_zeros((s, k, t, c), dtype=torch.double)
         wx.mul_(x)
         xsqbar.scatter_add_(dim=1, index=ix, src=wx)
+        xsqbar = xsqbar.float()
     else:
         xsqbar = None
 
-    return wsum, xbar, xsqbar
+    return wsum.float(), xbar.float(), xsqbar
 
 
 def gamma_count_and_mean(resp, w, labels, k, count_only=False):
