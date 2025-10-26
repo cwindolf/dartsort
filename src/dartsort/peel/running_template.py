@@ -686,28 +686,44 @@ class RunningTemplates(GrabAndFeaturize):
             pass
 
     def finalize_mixture(self):
-        # -- means
-        if self.tasks.needs_double_buffer:
-            self.b.means.copy_(self.b.means_new)
-            self.b.means_new.zero_()
-            assert self.b.means.isfinite().all()
+        assert self.tasks.needs_double_buffer
 
-        # -- update stds
+        # -- means
+        # this update is split into two pieces.
+        # first we project the new sample means into their subspaces
+        # and put them in the main buffer. then in the stddev update
+        # we use both the sample and projected versions. after the
+        # stddev update we can zero out the new buffer and be done.
+        for j in range(self.n_subspaces):
+            if j == self.raw_subspace_ix:
+                continue
+            self.b.means[j].copy_(self.subspace_projectors[j](self.b.means_new[j]))
+        assert self.b.means.isfinite().all()
+
+        # -- stds
         if self.tasks.updating_subspace_stds:
             # to update sigma, formula as follows. let R be sum of resp,
             # W be sum of weight (ie total weight and total resp).
-            # we have currently 1/W sum w y^2. our subspace means are
-            # mu = 1/W sum w y, so thankfully
-            # 1/R sum w (y-mu)^2 = W/R [1/W (sum w y^2) + mu^2].
-            self.b.scale_new.add_(self.b.means.square())
+            # we have currently 1/W sum w y^2. subspace means_new are
+            # ybar = 1/W sum w y, but we want projected version mu.
+            # so use variance identities to get...
+            # 1/R sum w (y-mu)^2 = W/R 1/W sum w [(y-ybar)+(ybar-mu)]^2
+            #        = W/R [ 1/W sum w (y-ybar)^2 ] +  W/R (ybar-mu)^2
+            # and lastly
+            # 1/W sum w (y-ybar)^2 = [1/W sum w y^2] - ybar^2.
+            self.b.scale_new.sub_(self.b.means_new.square())
+            bias = self.b.means_new.sub_(self.b.means).square_()
+            self.b.scale_new.add_(bias)
             self.b.scale_new.mul_(self.b.total_weight.div_(self.total_resp))
             self.b.scale_new.clamp_(min=1e-5).sqrt_()
-        if self.tasks.updating_subspace_stds and self.tasks.needs_double_buffer:
             self.b.scale.copy_(self.b.scale_new)
             self.b.scale_new.zero_()
         if self.tasks.updating_subspace_stds:
             assert self.b.scale.isfinite().all()
         self.b.total_weight.zero_()
+
+        # //-- means
+        self.b.means_new.zero_()
 
         # -- proportions
         self.b.total_resp.log_()
@@ -777,7 +793,7 @@ class RunningTemplatesTasks:
         # only t needs to actually instantiate subspace std buffers
         # for loot, can read it off from meansq and subspace means
         self.needs_subspace_stds = self.is_t
-        self.needs_double_buffer = bool(self.n_mixture_passes)
+        self.needs_double_buffer = self.is_t_or_loot
 
     def step_description(self):
         s = f"{self.denoising_method}:{self.active_step}"
