@@ -37,7 +37,6 @@ from ..util.sparse_util import (
 )
 from .cluster_util import (
     agglomerate,
-    combine_distances,
     leafsets,
     is_largest_set_smaller_than,
 )
@@ -60,15 +59,6 @@ logger: DARTsortLogger = getLogger(__name__)
 
 
 class SpikeMixtureModel(torch.nn.Module):
-    """Business logic class
-
-    Handles labels, splits, grabbing SpikeFeaturs batches from the
-    SpikeStableDataset, computing distances and bimodality scores.
-
-    The actual numerical computations (log likelihoods, M step
-    formulas) are deferred to the GaussianUnit class (and
-    subclasses?) below.
-    """
 
     def __init__(
         self,
@@ -115,7 +105,6 @@ class SpikeMixtureModel(torch.nn.Module):
         criterion_normalization_kind: Literal["none", "noise", "channels"] = "none",
         merge_linkage: str = "complete",
         merge_distance_threshold: float = 3.0,
-        merge_bimodality_threshold: float = 0.1,
         criterion_threshold: float | None = 0.0,
         criterion: Literal[
             "heldout_loglik",
@@ -129,15 +118,9 @@ class SpikeMixtureModel(torch.nn.Module):
         ] = "heldout_elbo",
         cl_alpha=1.0,
         merge_decision_algorithm: Literal[
-            "brute", "tree", "complete", "bimodality"
+            "brute", "tree", "complete"
         ] = "brute",
         split_decision_algorithm: Literal["brute", "tree", "complete"] = "tree",
-        split_bimodality_threshold: float = 0.1,
-        merge_bimodality_cut: float = 0.0,
-        merge_bimodality_overlap: float = 0.80,
-        merge_bimodality_weighted: bool = True,
-        merge_bimodality_score_kind: str = "tv",
-        merge_bimodality_masked: bool = False,
         merge_sym_function: np.ufunc = np.minimum,
         em_converged_prop: float = 0.001,
         em_converged_churn: float = 0.01,
@@ -173,13 +156,6 @@ class SpikeMixtureModel(torch.nn.Module):
         self.merge_distance_threshold = merge_distance_threshold
         self.criterion = criterion
         self.criterion_threshold = criterion_threshold
-        self.merge_bimodality_threshold = merge_bimodality_threshold
-        self.split_bimodality_threshold = split_bimodality_threshold
-        self.merge_bimodality_cut = merge_bimodality_cut
-        self.merge_bimodality_overlap = merge_bimodality_overlap
-        self.merge_bimodality_score_kind = merge_bimodality_score_kind
-        self.merge_bimodality_weighted = merge_bimodality_weighted
-        self.merge_bimodality_masked = merge_bimodality_masked
         self.merge_sym_function = merge_sym_function
         self.merge_linkage = merge_linkage
         self.em_converged_prop = em_converged_prop
@@ -1364,65 +1340,6 @@ class SpikeMixtureModel(torch.nn.Module):
 
         return ids, dists
 
-    def bimodalities(
-        self,
-        log_liks,
-        compute_mask=None,
-        cut=None,
-        weighted=True,
-        min_overlap=None,
-        masked=None,
-        dt_s=2.0,
-        max_spikes=2048,
-        show_progress=True,
-    ):
-        if cut is None:
-            cut = self.merge_bimodality_cut
-        if cut == "auto":
-            cut = None
-        if min_overlap is None:
-            min_overlap = self.merge_bimodality_overlap
-        if masked is None:
-            masked = self.merge_bimodality_masked
-        nu = self.n_units()
-        in_units = [
-            torch.nonzero(self.labels == j, as_tuple=True)[0] for j in range(nu)
-        ]
-        scores = np.full((nu, nu), np.inf, dtype=np.float32)
-        np.fill_diagonal(scores, 0.0)
-
-        @delayed
-        def bimod_job(i_j):
-            i, j = i_j
-            scores[i, j] = scores[j, i] = self.unit_pair_bimodality(
-                id_a=i,
-                id_b=j,
-                log_liks=log_liks,
-                cut=cut,
-                weighted=weighted,
-                min_overlap=min_overlap,
-                in_units=in_units,
-                masked=masked,
-                max_spikes=max_spikes,
-                dt_s=dt_s,
-            )
-
-        if compute_mask is None:
-            compute_mask = np.ones((nu, nu), dtype=bool)
-        compute_mask = np.logical_or(compute_mask, compute_mask.T)
-        compute_mask[np.tril_indices(nu)] = False
-        ii, jj = np.nonzero(compute_mask)
-
-        results = self.thread_pool.map(bimod_job, zip(ii, jj))
-        if show_progress:
-            results = tqdm(
-                results, desc="Bimodality", total=ii.size, unit="pair", **tqdm_kw
-            )
-        for _ in results:
-            pass
-
-        return scores
-
     # -- helpers
 
     def random_indices(
@@ -1932,89 +1849,6 @@ class SpikeMixtureModel(torch.nn.Module):
         new_ids = new_ids[new_ids >= 0]
         result["new_ids"] = result["clear_ids"] = new_ids
         return result
-
-    def unit_pair_bimodality(
-        self,
-        id_a,
-        id_b,
-        log_liks,
-        loglik_ix_a=None,
-        loglik_ix_b=None,
-        cut=None,
-        weighted=True,
-        min_overlap=None,
-        in_units=None,
-        masked=True,
-        max_spikes=2048,
-        dt_s=2.0,
-        score_kind=None,
-        debug=False,
-    ):
-        if score_kind is None:
-            score_kind = self.merge_bimodality_score_kind
-        if cut is None:
-            cut = self.merge_bimodality_cut
-        if cut == "auto":
-            cut = None
-        if min_overlap is None:
-            min_overlap = self.merge_bimodality_overlap
-        if in_units is not None:
-            ina = in_units[id_a]
-            inb = in_units[id_b]
-        else:
-            (ina,) = torch.nonzero(self.labels == id_a, as_tuple=True)
-            (inb,) = torch.nonzero(self.labels == id_b, as_tuple=True)
-
-        if min(ina.numel(), inb.numel()) < 10:
-            if debug:
-                return dict(score=np.inf)
-            return np.inf
-
-        if masked:
-            times_a = self.data.times_seconds[ina]
-            times_b = self.data.times_seconds[inb]
-            ina = ina[(getdt(times_b, times_a) <= dt_s).cpu()]
-            inb = inb[(getdt(times_a, times_b) <= dt_s).cpu()]
-
-        ina, _ = shrinkfit(ina, max_spikes, self.rg)
-        inb, _ = shrinkfit(inb, max_spikes, self.rg)
-
-        in_pair = torch.concatenate((ina, inb))
-        is_b = torch.zeros(in_pair.shape, dtype=bool)
-        is_b[ina.numel() :] = 1
-        in_pair, order = in_pair.sort()
-        is_b = is_b[order]
-
-        lixa = id_a if loglik_ix_a is None else loglik_ix_a
-        lixb = id_b if loglik_ix_b is None else loglik_ix_b
-        # a - b. if >0, a>b.
-        log_lik_diff = get_diff_sparse(
-            log_liks, lixa, lixb, in_pair, return_extra=debug
-        )
-
-        debug_info = None
-        if debug:
-            log_lik_diff, extra = log_lik_diff
-            debug_info = {}
-            debug_info["log_lik_diff"] = log_lik_diff
-            # adds keys: xi, xj, keep_inds
-            debug_info.update(extra)
-            debug_info["in_pair_kept"] = in_pair[extra["keep_inds"]]
-            # qda adds keys: domain, alternative_density, cut, score, score_kind,
-            # uni_density, sample_weights, samples
-
-        score = qda(
-            is_b.numpy(force=True),
-            diff=log_lik_diff,
-            cut=cut,
-            weighted=weighted,
-            min_overlap=min_overlap,
-            score_kind=score_kind,
-            debug_info=debug_info,
-        )
-        if debug:
-            return debug_info
-        return score
 
     def tree_merge(
         self,
@@ -3173,15 +3007,7 @@ class SpikeMixtureModel(torch.nn.Module):
         if not (pdist <= self.merge_distance_threshold).any():
             return None, None
 
-        if merge_kind == "bimodality":
-            return self.hierarchical_bimodality_merge(
-                distances,
-                labels,
-                likelihoods,
-                show_progress=show_progress,
-                debug_info=debug_info,
-            )
-        elif merge_kind in ("brute", "tree"):
+        if merge_kind in ("brute", "tree"):
             _ids, cosines = self.distances(units=units, kind="cosine")
             cosines = 1.0 - cosines
             assert torch.equal(torch.asarray(unit_ids), torch.asarray(_ids))
@@ -3213,50 +3039,6 @@ class SpikeMixtureModel(torch.nn.Module):
             self.labels.fill_(torch.from_numpy(new_labels))
         else:
             assert False
-
-        return new_labels, new_ids
-
-    def hierarchical_bimodality_merge(
-        self, distances, labels, likelihoods, show_progress=True, debug_info=None
-    ):
-        do_bimodality = self.merge_bimodality_threshold is not None
-        if do_bimodality:
-            if isinstance(likelihoods, csc_array):
-                compute_mask = distances <= self.merge_distance_threshold
-                bimodalities = self.bimodalities(
-                    likelihoods,
-                    compute_mask=compute_mask,
-                    show_progress=show_progress,
-                    weighted=self.merge_bimodality_weighted,
-                )
-            else:
-                assert torch.is_tensor(likelihoods)
-                assert likelihoods.layout == torch.strided
-                bimodalities = bimodalities_dense(
-                    likelihoods.numpy(force=True),
-                    labels,
-                    cut=self.merge_bimodality_cut,
-                    min_overlap=self.merge_bimodality_overlap,
-                    score_kind=self.merge_bimodality_score_kind,
-                )
-
-        distances = (distances, bimodalities)
-        thresholds = (
-            self.merge_distance_threshold,
-            self.merge_bimodality_threshold,
-        )
-        distances = combine_distances(
-            distances,
-            thresholds,
-            sym_function=self.merge_sym_function,
-        )
-        new_labels, new_ids = agglomerate(
-            labels,
-            distances,
-            linkage_method=self.merge_linkage,
-        )
-        if debug_info is not None:
-            debug_info["bimodalities"] = bimodalities
 
         return new_labels, new_ids
 
@@ -3988,43 +3770,6 @@ def logmeanexp(x_csr):
         # dividing by N is subtracting log N
         log_mean_exp[j] = logsumexp(row.data) - log_N
     return log_mean_exp
-
-
-def bimodalities_dense(
-    log_liks,
-    labels,
-    cut=0.0,
-    weighted=True,
-    min_overlap=0.95,
-    score_kind="tv",
-):
-    """Bimodality scores from dense data
-
-    Given dense arrays of log likelihoods (with -infs) and labels, return a matrix
-    of bimodality scores.
-    """
-    if cut == "auto":
-        cut = None
-    n_units = len(log_liks)
-    bimodalities = np.zeros((n_units, n_units), dtype=np.float32)
-    for i in range(n_units):
-        for j in range(i + 1, n_units):
-            ij = np.array([i, j])
-            in_pair = np.flatnonzero(np.isin(labels, ij))
-            if not in_pair.size:
-                bimodalities[j, i] = bimodalities[i, j] = np.inf
-                continue
-            pair_log_liks = log_liks[ij][:, in_pair]
-            bimodalities[j, i] = bimodalities[i, j] = qda(
-                labels[in_pair] == j,
-                pair_log_liks[0],
-                pair_log_liks[1],
-                cut=cut,
-                weighted=weighted,
-                min_overlap=min_overlap,
-                score_kind=score_kind,
-            )
-    return bimodalities
 
 
 def qda(
