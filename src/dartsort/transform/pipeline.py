@@ -218,7 +218,7 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(
             ("Voltage", {"name_prefix": fc.input_waveforms_name})
         )
-    if do_feats and fc.save_input_waveforms:
+    if fc.save_input_waveforms:
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
         )
@@ -241,12 +241,12 @@ def featurization_config_to_class_names_and_kwargs(
 
     if fc.do_enforce_decrease:
         class_names_and_kwargs.append(("EnforceDecrease", {}))
-    if do_feats and fc.save_output_waveforms:
+    if fc.save_output_waveforms:
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.output_waveforms_name, **sls_kw})
         )
 
-    if do_feats and fc.save_output_tpca_projs:
+    if fc.save_output_tpca_projs:
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
