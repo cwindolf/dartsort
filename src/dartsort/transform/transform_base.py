@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Iterable
 
 import torch
 
@@ -122,9 +122,9 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
     is_featurizer = True
     is_multi = False
     # output shape per waveform
-    shape = ()
+    shape: tuple | list[tuple] = ()
     # output dtye
-    dtype = torch.float
+    dtype: torch.dtype | list[torch.dtype] = torch.float
 
     def transform(self, waveforms, **unused):
         del waveforms, unused
@@ -132,8 +132,9 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
         raise NotImplementedError
 
     @property
-    def spike_datasets(self):
+    def spike_datasets(self) -> Iterable[SpikeDataset]:
         if self.is_multi:
+            assert isinstance(self.dtype, (list, tuple))
             datasets = [
                 SpikeDataset(
                     name=n,

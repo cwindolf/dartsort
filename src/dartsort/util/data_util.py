@@ -44,7 +44,7 @@ class DARTsortSorting:
     channels: np.ndarray
     labels: np.ndarray | None = None
     sampling_frequency: float = 30000.0
-    parent_h5_path: str | None = None
+    parent_h5_path: str | Path | None = None
 
     # entries in this dictionary will also be set as properties
     extra_features: dict[str, np.ndarray] | None = None
@@ -76,18 +76,11 @@ class DARTsortSorting:
                         raise ValueError(
                             f"Feature {k} has strange shape {v.shape}, since {n_spikes=}."
                         )
-                assert not hasattr(self, k)
-                self.__dict__[k] = v
 
-    def setattr(self, name, value):
-        if torch.is_tensor(value):
-            value = value.numpy(force=True)
-        if isinstance(value, np.ndarray):
-            assert len(value) == len(self)
-            self.extra_features[name] = value
-            self.__dict__[name] = value
-        else:
-            super().__setattr__(name, value)
+    def __getattr__(self, name: str):
+        if self.extra_features is not None:
+            if name in self.extra_features:
+                return self.extra_features[name]
 
     def to_numpy_sorting(self):
         return NumpySorting.from_samples_and_labels(
@@ -105,8 +98,9 @@ class DARTsortSorting:
         )
         if self.parent_h5_path:
             data["parent_h5_path"] = np.array(str(self.parent_h5_path))
+            assert self.extra_features is not None
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
-        elif self.extra_features:
+        elif self.extra_features is not None:
             data.update(self.extra_features)
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
         np.savez(sorting_npz, **data)
@@ -134,6 +128,7 @@ class DARTsortSorting:
         )
 
     def drop_missing(self):
+        assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
         return self.mask(valid)
 
@@ -486,6 +481,17 @@ def subsample_to_max_count(
     return replace(sorting, labels=new_labels)
 
 
+def restrict_to_valid_times(sorting, recording, waveform_cfg, pad=0):
+    trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+    total = waveform_cfg.spike_length_samples(recording.sampling_frequency)
+    t_min = trough + pad
+    t_max = recording.get_total_samples() - (total - trough) - pad
+    new_labels = sorting.labels.copy()
+    new_labels[sorting.times_samples < t_min] = -1
+    new_labels[sorting.times_samples >= t_max] = -1
+    return replace(sorting, labels=new_labels)
+
+
 def subset_sorting_by_time_samples(
     sorting, start_sample=0, end_sample=np.inf, reference_to_start_sample=True
 ):
@@ -694,7 +700,7 @@ def subsample_waveforms(
     fixed_property_keys=("channels",),
     replace=True,
     h5=None,
-    device="cpu",
+    device: torch.device | str="cpu",
 ):
     random_state = np.random.default_rng(random_state)
 

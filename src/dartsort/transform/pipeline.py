@@ -2,12 +2,15 @@
 
 import torch
 
+from .transform_base import BaseWaveformModule, BaseWaveformFeaturizer
+from ..util.data_util import SpikeDataset
+
 
 class WaveformPipeline(torch.nn.Module):
-    def __init__(self, transformers, kwargs_to_store=None):
+    def __init__(self, transformers: list[BaseWaveformModule], kwargs_to_store=None):
         super().__init__()
         check_unique_feature_names(transformers)
-        self.transformers = torch.nn.ModuleList(transformers)
+        self.transformers: list[BaseWaveformModule] = torch.nn.ModuleList(transformers)  # type: ignore
         self.kwargs_to_store = kwargs_to_store
 
     def __len__(self):
@@ -27,10 +30,11 @@ class WaveformPipeline(torch.nn.Module):
         # extra state in there.
         pass
 
-    def spike_datasets(self):
+    def spike_datasets(self) -> list[SpikeDataset]:
         datasets = []
         for transformer in self.transformers:
             if transformer.is_featurizer:
+                assert isinstance(transformer, BaseWaveformFeaturizer)
                 datasets.extend(transformer.spike_datasets)
         return datasets
 
@@ -132,6 +136,7 @@ class WaveformPipeline(torch.nn.Module):
                 waveforms, new_features = transformer(waveforms, **fixed_properties)
                 features.update(new_features)
             elif transformer.is_featurizer:
+                assert isinstance(transformer, BaseWaveformFeaturizer)
                 features.update(transformer.transform(waveforms, **fixed_properties))
             elif transformer.is_denoiser:
                 waveforms = transformer(waveforms, **fixed_properties)

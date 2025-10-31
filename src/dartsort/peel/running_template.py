@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from logging import getLogger
 from typing import Literal
 
@@ -6,13 +6,9 @@ import h5py
 import numpy as np
 from scipy.special import ndtri
 from spikeinterface.core import BaseRecording
-from sympy.utilities.misc import rawlines
 import torch
 from torch.distributions import StudentT, Normal
 import torch.nn.functional as F
-
-from dartsort.util.internal_config import TemplateConfig, WaveformConfig
-
 
 from ..templates.superres_util import superres_sorting
 from ..transform.transform_base import BaseWaveformModule
@@ -22,8 +18,10 @@ from ..util.data_util import (
     DARTsortSorting,
     load_stored_tsvd,
     subsample_to_max_count,
+    restrict_to_valid_times,
     yield_chunks,
 )
+from ..util.internal_config import TemplateConfig, WaveformConfig
 from ..util.logging_util import DARTsortLogger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
@@ -31,7 +29,7 @@ from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
 
 
-logger: DARTsortLogger = getLogger(__name__)  # pyright:ignore
+logger: DARTsortLogger = getLogger(__name__)  # type: ignore
 
 
 class RunningTemplates(GrabAndFeaturize):
@@ -221,8 +219,18 @@ class RunningTemplates(GrabAndFeaturize):
         computation_cfg=None,
         random_state=0,
     ):
+        assert sorting.labels is not None
         random_state = np.random.default_rng(random_state)
         coll_sorting = sorting if template_cfg.denoising_method == "coll" else None
+
+        # restrict to valid times...
+        fs = recording.sampling_frequency
+        realign_samples = waveform_cfg.ms_to_samples(
+            template_cfg.realign_shift_ms, sampling_frequency=fs
+        )
+        sorting = restrict_to_valid_times(
+            sorting, recording, waveform_cfg, pad=realign_samples
+        )
 
         # superres sorting if requested
         if template_cfg.superres_templates:
@@ -237,7 +245,18 @@ class RunningTemplates(GrabAndFeaturize):
             group_ids = res["group_ids"]  # pyright: ignore
             sorting = res["sorting"]  # pyright: ignore
         else:
-            group_ids = None
+            # check if label set is flat
+            assert sorting.labels is not None
+            unit_ids = np.unique(sorting.labels)
+            group_ids = unit_ids[unit_ids >= 0]
+            if not np.array_equal(group_ids, np.arange(len(group_ids))):
+                # flatten label set if necessary
+                l_valid = np.flatnonzero(sorting.labels >= 0)
+                ixs = np.searchsorted(group_ids, sorting.labels[l_valid])
+                assert np.array_equal(group_ids[ixs], sorting.labels[l_valid])
+                labels_flat = np.full_like(sorting.labels, -1)
+                labels_flat[l_valid] = ixs
+                sorting = replace(sorting, labels=labels_flat)
 
         # restrict to max spikes/template
         sorting = subsample_to_max_count(
@@ -245,19 +264,17 @@ class RunningTemplates(GrabAndFeaturize):
         )
 
         # realign to empirical trough if necessary
-        fs = recording.sampling_frequency
-        realign_samples = waveform_cfg.ms_to_samples(
-            template_cfg.realign_shift_ms, sampling_frequency=fs
-        )
-        n_pitches_shift = time_shifts = None
+        n_pitches_shift = template_time_shifts = None
         if template_cfg.realign_peaks and realign_samples:
-            sorting, n_pitches_shift, time_shifts = realign_by_running_templates(
-                sorting,
-                recording,
-                motion_est=motion_est,
-                realign_samples=realign_samples,
-                show_progress=show_progress,
-                computation_cfg=computation_cfg,
+            sorting, n_pitches_shift, template_time_shifts = (
+                realign_by_running_templates(
+                    sorting,
+                    recording,
+                    motion_est=motion_est,
+                    realign_samples=realign_samples,
+                    show_progress=show_progress,
+                    computation_cfg=computation_cfg,
+                )
             )
 
         loot_or_t = template_cfg.denoising_method in ("loot", "t")
@@ -275,8 +292,8 @@ class RunningTemplates(GrabAndFeaturize):
                 tsvd = load_stored_tsvd(sorting)
 
         properties = {}
-        if time_shifts is not None:
-            properties["time_shifts"] = time_shifts
+        if template_time_shifts is not None:
+            properties["template_time_shifts"] = template_time_shifts
 
         if template_cfg.denoising_method == "coll":
             assert hasattr(sorting, "mask_indices")
@@ -496,7 +513,10 @@ class RunningTemplates(GrabAndFeaturize):
             coll_kw = {}
 
         ires = self._process_chunk_main(
-            res["waveforms"], res["indices"], res["labels"], **coll_kw  # pyright: ignore
+            res["waveforms"],  # pyright: ignore
+            res["indices"],  # pyright: ignore
+            res["labels"],  # pyright: ignore
+            **coll_kw,  # pyright: ignore
         )
         res.update(ires)  # pyright: ignore
 
@@ -921,7 +941,6 @@ class RunningTemplates(GrabAndFeaturize):
             bias = self.b.means_new.sub_(self.b.means).square_()
             self.b.scale_new.add_(bias)
             rescale = self.b.total_weight.div(self.total_resp).nan_to_num_()
-            print(f"{rescale.min()=} {rescale.max()=}")
             self.b.scale_new.mul_(rescale)
             self.b.scale_new.clamp_(min=1e-5).sqrt_()
             self.b.scale.copy_(self.b.scale_new)
@@ -935,13 +954,6 @@ class RunningTemplates(GrabAndFeaturize):
         self.b.total_resp.log_()
         self.b.log_props.copy_(F.log_softmax(self.total_resp, dim=0))
         pi = self.b.log_props.exp()
-        print(f"{pi.shape=}")
-        print(f"{pi.mean(dim=(1, 2, 3))=}")
-        print(f"{pi.amax(dim=(1, 2, 3))=}")
-        print(f"{pi[:, :, 42].mean(dim=(1, 2))=}")
-        print(f"{pi[:, :, 42].amax(dim=(1, 2))=}")
-        print(f"{pi[:, :, 30:60].mean(dim=(1, 2, 3))=}")
-        print(f"{pi[:, :, 30:60].amax(dim=(1, 2, 3))=}")
         # self.b.total_weight.log_()
         # self.b.log_props.copy_(F.log_softmax(self.total_weight, dim=0))
         assert not self.b.log_props.isnan().any()
@@ -1167,7 +1179,7 @@ def realign_by_running_templates(
         task_name="Realign",
     )
 
-    sorting, templates, time_shifts = realign_sorting(
+    sorting, templates, template_time_shifts = realign_sorting(
         sorting,
         templates=template_data.templates,
         snrs_by_channel=template_data.snrs_by_channel(),
@@ -1178,7 +1190,7 @@ def realign_by_running_templates(
         trough_offset_samples=0,
         recording_length_samples=recording.get_total_samples(),
     )
-    return sorting, peeler.n_pitches_shift, time_shifts
+    return sorting, peeler.n_pitches_shift, template_time_shifts
 
 
 def registerize(
