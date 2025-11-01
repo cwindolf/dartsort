@@ -15,7 +15,7 @@ from sklearn.decomposition import TruncatedSVD
 from tqdm.auto import tqdm
 
 from ..util import spikeio
-from ..util.data_util import load_stored_tsvd
+from ..util.data_util import DARTsortSorting, load_stored_tsvd
 from ..util.drift_util import registered_template
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import fast_nanmedian, ptp
@@ -335,21 +335,43 @@ def realign_sorting(
 def apply_time_shifts(
     sorting,
     template_shifts=None,
+    template_data=None,
     trough_offset_samples=None,
     spike_length_samples=None,
     recording_length_samples=None,
-):
+) -> DARTsortSorting:
+    if template_data is not None and template_data.properties:
+        if "template_time_shifts" in template_data.properties:
+            template_shifts = template_data.properties["template_time_shifts"]
+        elif "time_shifts" in template_data.properties:
+            template_shifts = template_data.properties["time_shifts"]
+        unit_ids = template_data.unit_ids
+    else:
+        unit_ids = None
+
     if template_shifts is None:
         return sorting
 
-    new_times = sorting.times_samples + template_shifts[sorting.labels]
-    labels = sorting.labels.copy()
+    ixs = sorting.labels
+    valid = np.flatnonzero(ixs >= 0)
+    ixsv = ixs[valid]
+    if unit_ids is not None and not np.array_equal(unit_ids, np.arange(len(unit_ids))):
+        ixsv = np.searchsorted(unit_ids, ixsv)
+        assert np.array_equal(unit_ids[ixsv], sorting.labels[valid])
+
+    new_times = sorting.times_samples.copy()
+    new_times[valid] += template_shifts[ixsv]
+
     if recording_length_samples is not None:
         assert spike_length_samples is not None
         assert trough_offset_samples is not None
+        labels = sorting.labels.copy()
         tail_samples = spike_length_samples - trough_offset_samples
         highlim = recording_length_samples - tail_samples
-        labels[(new_times < trough_offset_samples) & (new_times > highlim)] = -1
+        labels[new_times < trough_offset_samples] = -1
+        labels[new_times >= highlim] = -1
+    else:
+        labels = sorting.labels
 
     return replace(sorting, labels=labels, times_samples=new_times)
 

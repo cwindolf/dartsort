@@ -1,25 +1,29 @@
 from dataclasses import dataclass, replace
 import gc
+from logging import getLogger
 from pathlib import Path
 from sys import getrefcount
+from typing import Self
 
 import numpy as np
 import torch
 
 from ..localize.localize_util import localize_waveforms
 from ..util import data_util, drift_util, job_util
+from ..util.data_util import DARTsortSorting
 from ..util.internal_config import default_waveform_cfg
+from ..util.spiketorch import fast_nanmedian, nanmean
 
 from .get_templates import get_templates, apply_time_shifts
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, weighted_average
-from ..util.spiketorch import fast_nanmedian, nanmean
 
 _motion_error_prefix = (
-    "If template_cfg has registered_templates==True "
-    "or superres_templates=True, then "
+    "If template_cfg has registered_templates==True or superres_templates=True, then "
 )
 _aware_error = "motion_est must be passed to TemplateData.from_config()"
+
+logger = getLogger(__name__)
 
 
 @dataclass
@@ -138,7 +142,7 @@ class TemplateData:
         if self.properties is not None:
             for k, p in self.properties.items():
                 to_save[f"__prop_{k}"] = p
-        np.savez(npz_path, **to_save)
+        np.savez(npz_path, **to_save)  # type: ignore
 
     def __getitem__(self, subset):
         if not np.array_equal(self.unit_ids, np.arange(len(self.unit_ids))):
@@ -239,7 +243,7 @@ class TemplateData:
         units_per_job=8,
         tsvd=None,
         computation_cfg=None,
-    ):
+    ) -> tuple["TemplateData", DARTsortSorting]:
         self, realigned_sorting = _from_config_with_realigned_sorting(
             cls,
             recording,
@@ -254,14 +258,13 @@ class TemplateData:
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
-
         return self, realigned_sorting
 
 
 def _from_config_with_realigned_sorting(
     cls,
     recording,
-    sorting,
+    sorting: DARTsortSorting,  # type: ignore
     template_cfg,
     waveform_cfg=default_waveform_cfg,
     save_folder=None,
@@ -272,7 +275,7 @@ def _from_config_with_realigned_sorting(
     tsvd=None,
     computation_cfg=None,
     show_progress=True,
-):
+) -> tuple[TemplateData, DARTsortSorting]:
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
 
@@ -285,6 +288,14 @@ def _from_config_with_realigned_sorting(
         npz_path = save_folder / save_npz_name
         if npz_path.exists() and not overwrite:
             return cls.from_npz(npz_path), sorting
+
+    if sorting.extra_features and "time_shifts" in sorting.extra_features:
+        logger.info("Sorting had time_shifts, applying before getting templates.")
+        new_times_samples = sorting.times_samples + sorting.time_shifts
+        ef = {k: v for k, v in sorting.extra_features.items() if k != "time_shifts"}
+        sorting: DARTsortSorting = replace(
+            sorting, times_samples=new_times_samples, extra_features=ef
+        )
 
     if template_cfg.actual_algorithm() == "by_chunk":
         from ..peel.running_template import RunningTemplates
@@ -302,14 +313,18 @@ def _from_config_with_realigned_sorting(
         template_data = peeler.compute_template_data(
             show_progress=show_progress, computation_cfg=computation_cfg
         )
+        print(f"{peeler.properties=}")
+        print(f"{template_data.properties=}")
         realigned_sorting = apply_time_shifts(
             sorting,
-            peeler.properties.get("time_shifts"),
+            template_data=template_data,
             trough_offset_samples=peeler.trough_offset_samples,
             spike_length_samples=peeler.spike_length_samples,
             recording_length_samples=recording.get_total_samples(),
         )
-        assert getrefcount(peeler) == 2
+        assert getrefcount(peeler) == 2, (
+            f"Leaking the template peeler {getrefcount(peeler)=}."
+        )
         del peeler
         gc.collect()
         torch.cuda.empty_cache()
@@ -370,7 +385,7 @@ def _from_config_with_realigned_sorting(
             min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
         )
         group_ids = superres_data["group_ids"]
-        sorting = superres_data["sorting"]
+        sorting: DARTsortSorting = superres_data["sorting"]  # type: ignore
         properties = superres_data["properties"]
     else:
         group_ids = None
@@ -401,7 +416,7 @@ def _from_config_with_realigned_sorting(
     )
     if template_cfg.superres_templates:
         assert group_ids is not None
-        unit_ids = group_ids[results["unit_ids"]]
+        unit_ids = group_ids[results["unit_ids"]]  # type: ignore
     else:
         unit_ids = results["unit_ids"]
     obj = cls(
@@ -460,8 +475,12 @@ def get_chunked_templates(
         global_sorting = get_realigned_sorting(
             recording,
             global_sorting,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
+            trough_offset_samples=waveform_cfg.trough_offset_samples(
+                recording.sampling_frequency
+            ),
+            spike_length_samples=waveform_cfg.spike_length_samples(
+                recording.sampling_frequency
+            ),
             spikes_per_unit=template_cfg.spikes_per_unit,
             realign_max_sample_shift=template_cfg.realign_max_sample_shift,
             n_jobs=computation_cfg.actual_n_jobs(),
@@ -493,7 +512,6 @@ def get_chunked_templates(
         overwrite=overwrite,
         motion_est=motion_est,
         save_npz_name=save_npz_name,
-        localizations_dataset_name=localizations_dataset_name,
         units_per_job=units_per_job,
         computation_cfg=computation_cfg,
         waveform_cfg=waveform_cfg,

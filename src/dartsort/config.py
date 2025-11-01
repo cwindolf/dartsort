@@ -162,7 +162,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: str = "gmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -217,7 +217,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_cosine_complete_only: bool = False
     initial_amp_feat: bool = False
     initial_pc_feats: int = 3
-    initial_pc_transform: str = "none"
+    initial_pc_transform: Literal["log", "sqrt", "none"] = "none"
     initial_pc_scale: float = 5.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
@@ -256,7 +256,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # gausian mixture low level
     n_refinement_iters: int = 1
     n_em_iters: int = 50
-    channels_strategy: str = "count"
+    channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
     gmm_metric: Literal["kl", "cosine"] = "cosine"
     gmm_search: Literal["topk", "random"] = "topk"

@@ -46,11 +46,11 @@ class WaveformConfig:
     def ms_to_samples(ms, sampling_frequency=30_000.0):
         return int(ms * (sampling_frequency / 1000))
 
-    def trough_offset_samples(self, sampling_frequency=30_000):
+    def trough_offset_samples(self, sampling_frequency=30_000.0):
         sampling_frequency = np.round(sampling_frequency)
         return self.ms_to_samples(self.ms_before, sampling_frequency=sampling_frequency)
 
-    def spike_length_samples(self, sampling_frequency=30_000):
+    def spike_length_samples(self, sampling_frequency=30_000.0):
         spike_len_ms = self.ms_before + self.ms_after
         sampling_frequency = np.round(sampling_frequency)
         length = self.ms_to_samples(spike_len_ms, sampling_frequency=sampling_frequency)
@@ -213,10 +213,13 @@ class TemplateConfig:
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal["none", "exp_weighted", "loot", "t"] = "exp_weighted"
+    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = "exp_weighted"
     use_raw: bool = True
     use_svd: bool = True
     use_zero: bool = False
+    use_outlier: bool = False
+    use_raw_outlier: bool = False
+    use_svd_outlier: bool = False
 
     # -- template construction parameters
     # registered templates?
@@ -238,9 +241,10 @@ class TemplateConfig:
 
     # t denoising
     initial_t_df: float = 3.0
-    fixed_t_df: float | None = None
+    fixed_t_df: float | tuple[float, ...] | None = None
     t_iters: int = 1
     svd_inside_t: bool = False
+    loot_cov: Literal["diag", "global"] = "global"
 
     # realignment
     realign_peaks: bool = True
@@ -724,7 +728,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             tpca_fit_radius=cfg.fit_radius_um,
             input_waveforms_name="raw",
             output_waveforms_name="subtracted",
-            save_input_waveforms=cfg.save_subtracted_waveforms,
+            save_output_waveforms=cfg.save_subtracted_waveforms,
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
         )
