@@ -71,11 +71,12 @@ class DARTsortSorting:
         if self.extra_features:
             for k in self.extra_features:
                 v = self.extra_features[k] = np.asarray(self.extra_features[k])
-                if not (k.endswith("channel_index") or k == "geom"):
-                    if not v.shape[0] == n_spikes:
-                        raise ValueError(
-                            f"Feature {k} has strange shape {v.shape}, since {n_spikes=}."
-                        )
+                if k.endswith("channel_index") or k == "geom":
+                    continue
+                if v.shape[0] != n_spikes:
+                    raise ValueError(
+                        f"Feature {k} has strange shape {v.shape}, since {n_spikes=}."
+                    )
 
     def __getattr__(self, name: str):
         if self.extra_features is not None:
@@ -93,9 +94,10 @@ class DARTsortSorting:
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
-            labels=self.labels,
-            sampling_frequency=self.sampling_frequency,
+            sampling_frequency=np.array(self.sampling_frequency),
         )
+        if self.labels is not None:
+            data["labels"] = self.labels
         if self.parent_h5_path:
             data["parent_h5_path"] = np.array(str(self.parent_h5_path))
             assert self.extra_features is not None
@@ -103,7 +105,7 @@ class DARTsortSorting:
         elif self.extra_features is not None:
             data.update(self.extra_features)
             data["feature_keys"] = np.array(list(self.extra_features.keys()))
-        np.savez(sorting_npz, **data)
+        np.savez(sorting_npz, **data, allow_pickle=False)
 
     def mask(self, mask):
         if np.dtype(mask.dtype).kind == "b":
@@ -114,9 +116,12 @@ class DARTsortSorting:
             n = self.n_spikes
             for k, v in self.extra_features.items():
                 assert k != "mask_indices"  # no recursion...
-                if v.shape[0] != n:
+                if k == "geom" or k.endswith("channel_index"):
+                    extra_features[k] = v
+                elif v.shape[0] != n:
                     continue
-                extra_features[k] = v[mask]
+                else:
+                    extra_features[k] = v[mask]
 
         return replace(
             self,
@@ -134,24 +139,29 @@ class DARTsortSorting:
 
     @classmethod
     def load(cls, sorting_npz, feature_keys=None):
-        extra_features = None
+        extra_features = {}
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
-            labels = data["labels"]
+            labels = data.get("labels", None)
             sampling_frequency = data["sampling_frequency"]
+            if isinstance(sampling_frequency, np.ndarray):
+                sampling_frequency = sampling_frequency.item()
             parent_h5_path = None
             if "parent_h5_path" in data:
-                parent_h5_path = str(data["parent_h5_path"])
+                parent_h5_path = str(data["parent_h5_path"].item())
                 if feature_keys is None:
                     feature_keys = list(map(str, data["feature_keys"]))
             elif "feature_keys" in data and feature_keys is None:
+                assert "parent_h5_path" not in data
                 feature_keys = list(map(str, data["feature_keys"]))
                 extra_features = {k: data[k] for k in feature_keys}
 
         if parent_h5_path:
             with h5py.File(parent_h5_path, "r", libver="latest", locking=False) as h5:
-                extra_features = {k: h5[k][()] for k in feature_keys}
+                extra_features: dict[str, np.ndarray] = {
+                    k: h5[k][()] for k in feature_keys  # type: ignore
+                }
 
         return cls(
             times_samples=times_samples,
@@ -201,50 +211,54 @@ class DARTsortSorting:
         load_feature_names=None,
         simple_feature_maxshape=1000,
         load_all_features=False,
-        labels=None,
+        labels=None,  # type: ignore
     ):
-        channels = None
         with h5py.File(
             peeling_hdf5_filename, "r", libver="latest", locking=False
         ) as h5:
-            times_samples = h5[times_samples_dataset][()]
-            sampling_frequency = h5["sampling_frequency"][()]
+            times_samples: np.ndarray = h5[times_samples_dataset][()]  # type: ignore
+            sampling_frequency: float = h5["sampling_frequency"][()]  # type: ignore
             if channels_dataset in h5:
-                channels = h5[channels_dataset][()]
+                channels: np.ndarray = h5[channels_dataset][()]  # type: ignore
+            else:
+                raise ValueError(f"{channels_dataset} not in {peeling_hdf5_filename}.")
             if labels_dataset in h5 and labels is None:
-                labels = h5[labels_dataset][()]
+                labels: np.ndarray = h5[labels_dataset][()]  # type: ignore
 
             n_spikes = len(times_samples)
             extra_features = None
             if load_simple_features or load_all_features:
                 extra_features = {}
-                loaded = (
-                    times_samples_dataset,
-                    channels_dataset,
-                    labels_dataset,
-                )
+                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
                 if load_feature_names is None:
                     load_feature_names = h5.keys()
                 else:
+                    load_feature_names = list(load_feature_names)
+                    gk = (
+                        k
+                        for k in h5.keys()
+                        if k.endswith("channel_index") or k == "geom"
+                    )
+                    load_feature_names.extend(gk)
                     load_all_features = True
                 for k in load_feature_names:
+                    if k.endswith("channel_index") or k == "geom":
+                        extra_features[k] = h5[k][:]  # type: ignore
+                        continue
+
                     is_loadable = (
                         k not in loaded
-                        and 1 <= h5[k].ndim
-                        and h5[k].shape[0] == n_spikes
+                        and 1 <= h5[k].ndim  # type: ignore
+                        and h5[k].shape[0] == n_spikes  # type: ignore
                     )
                     is_simple = (
                         is_loadable
-                        and h5[k].ndim <= 2
-                        and h5[k].shape[0] == n_spikes
-                        and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)
+                        and h5[k].ndim <= 2  # type: ignore
+                        and h5[k].shape[0] == n_spikes  # type: ignore
+                        and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)  # type: ignore
                     )
                     if (load_all_features and is_loadable) or is_simple:
-                        extra_features[k] = h5[k][()]
-                    elif k not in loaded and (
-                        k.endswith("channel_index") or k == "geom"
-                    ):
-                        extra_features[k] = h5[k][:]
+                        extra_features[k] = h5[k][()]  # type: ignore
 
         return cls(
             times_samples,
@@ -258,25 +272,19 @@ class DARTsortSorting:
     def _stored_datasets(self):
         if self.parent_h5_path is None:
             return []
-        with h5py.File(
-            self.parent_h5_path, "r", libver="latest", locking=False
-        ) as h5:
+        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
             return list(h5.keys())
 
-    def _masked_load(self, dset, mask=None, indices=None, batch_transition=1000):
+    def _masked_load(self, dset, mask=None, indices=None, batch_transition=1000) -> np.ndarray:
         assert self.parent_h5_path is not None
-        with h5py.File(
-            self.parent_h5_path, "r", libver="latest", locking=False
-        ) as h5:
+        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
             if indices is not None and len(indices) < batch_transition:
-                return h5[dset][indices]
+                return h5[dset][indices]  # type: ignore
             return batched_h5_read(h5[dset], mask=mask, indices=indices)
 
     def _chunked_map_with_indices(self, dset, fn):
         """fn should take args slice_, chunk"""
-        with h5py.File(
-            self.parent_h5_path, "r", libver="latest", locking=False
-        ) as h5:
+        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
             g = h5[dset]
             slices_and_chunks = yield_chunks(g)
 
@@ -287,7 +295,8 @@ class DARTsortSorting:
             shape_per_spike = res.shape[1:]
 
             # allocate output and save first chunk result
-            total_shape = (len(g), *shape_per_spike)
+            N: int = len(g)  # type: ignore
+            total_shape = (N, *shape_per_spike)
             out = np.empty(total_shape, dtype=res.dtype)
             out[s] = res
             del res
@@ -306,17 +315,28 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     if isinstance(sorting, Path):
         base_dir = sorting.parent
         stem = sorting.stem
+        # TODO how to type this better... don't understand.
+        geom = channel_index = None  # type: ignore
     else:
-        base_dir = sorting.parent_h5_path.parent
-        stem = sorting.parent_h5_path.stem
+        assert isinstance(sorting, DARTsortSorting)
+        if sorting.parent_h5_path is None:
+            raise ValueError("Can't load featurization pipeline.")
+
+        h5_path = resolve_path(sorting.parent_h5_path)
+        base_dir = h5_path.parent
+        stem = h5_path.stem
+
+        geom = getattr(sorting, "geom", None)  # type: ignore
+        channel_index = getattr(sorting, "channel_index", None)  # type: ignore
+
     model_dir = base_dir / f"{stem}_models"
-    if hasattr(sorting, "geom"):
-        geom = sorting.geom
-        channel_index = sorting.channel_index
-    else:
+    if geom is None or channel_index is None:
         with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
-            geom = h5["geom"][:]
-            channel_index = h5["channel_index"][:]
+            geom: np.ndarray = h5["geom"][:]  # type: ignore
+            channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
+    assert geom is not None
+    assert channel_index is not None
+
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
     if not featurization_pipeline_pt.exists():
@@ -334,31 +354,35 @@ def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
 
 
 def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=True):
+    from ..transform import BaseTemporalPCA
+
     if sorting.parent_h5_path is None:
         logger.info("Couldn't load stored basis.")
         return None
     pipeline, pt_path = get_featurization_pipeline(sorting)
     tsvd = pipeline.get_transformer(tsvd_name)
+    assert tsvd is not None
     assert tsvd.name == tsvd_name
+    assert isinstance(tsvd, BaseTemporalPCA)
     if to_sklearn:
         tsvd = tsvd.to_sklearn()
     logger.info(
         f"Loaded stored basis from %s (%s; components shape: %s).",
         pt_path,
         tsvd_name,
-        tsvd.components_.shape
+        tsvd.components_.shape,
     )
     return tsvd
 
 
-def get_labels(h5_path):
+def get_labels(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r") as h5:
-        return h5["labels"][:]
+        return h5["labels"][:]  # type: ignore
 
 
-def get_residual_snips(h5_path):
+def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]
+        return h5["residual"][:]  # type: ignore
 
 
 def keep_only_most_recent_spikes(
@@ -412,12 +436,14 @@ def check_recording(
     # run detection and compute spike detection rate and data range
     spike_rates = []
     for chunk in random_chunks:
-        times, _ = detect_and_deduplicate(
+        dres = detect_and_deduplicate(
             torch.tensor(chunk, dtype=dtype),
             threshold=threshold,
             peak_sign="both",
             dedup_channel_index=torch.tensor(dedup_channel_index),
         )
+        times = dres[0]
+        del dres
         chunk_len_s = rec.sampling_frequency / chunk.shape[0]
         spike_rates.append(times.shape[0] / chunk_len_s)
 
@@ -542,12 +568,18 @@ def combine_sortings(sortings, dodge=False):
     if dodge:
         label_to_sorting_index = []
         label_to_original_label = []
+    else:
+        label_to_sorting_index = None
+        label_to_original_label = None
+
     next_label = 0
     for j, sorting in enumerate(sortings):
         kept = np.flatnonzero(sorting.labels >= 0)
         assert np.all(labels[kept] < 0)
         labels[kept] = sorting.labels[kept] + next_label
         if dodge:
+            assert label_to_sorting_index is not None
+            assert label_to_original_label is not None
             n_new_labels = 0
             if kept.size:
                 n_new_labels = 1 + sorting.labels[kept].max()
@@ -559,6 +591,8 @@ def combine_sortings(sortings, dodge=False):
     sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
 
     if dodge:
+        assert label_to_sorting_index is not None
+        assert label_to_original_label is not None
         label_to_sorting_index = np.concatenate(label_to_sorting_index)
         label_to_original_label = np.concatenate(label_to_original_label)
         return label_to_sorting_index, label_to_original_label, sorting
@@ -688,7 +722,7 @@ def extract_random_snips(rg, chunk, n, sniplen):
 
 
 def subsample_waveforms(
-    hdf5_filename=None,
+    hdf5_filename: str | Path | None = None,
     fit_sampling="random",
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
@@ -700,21 +734,24 @@ def subsample_waveforms(
     fixed_property_keys=("channels",),
     replace=True,
     h5=None,
-    device: torch.device | str="cpu",
-):
+    device: torch.device | str = "cpu",
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     random_state = np.random.default_rng(random_state)
 
     need_open = h5 is None
-    if need_open:
+    if need_open and hdf5_filename is not None:
         hdf5_filename = resolve_path(hdf5_filename, strict=True)
         h5 = h5py.File(hdf5_filename)
+    elif need_open:
+        raise ValueError("Need h5 or hdf5_filename.")
 
     try:
-        channels: np.ndarray = h5["channels"][:]
+        channels: np.ndarray = h5["channels"][:]  # type: ignore
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            emptywf = torch.zeros(h5[waveforms_dataset_name].shape)
+            wfshape = h5[waveforms_dataset_name].shape  # type: ignore
+            emptywf = torch.zeros(wfshape)
             return emptywf, dict(channels=emptyi)
         weights = fit_reweighting(
             h5=h5,
@@ -730,36 +767,37 @@ def subsample_waveforms(
             if not replace:
                 choices.sort()
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
+                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}  # type: ignore
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
                     ichoices
                 ]
                 fixed_properties = {
-                    k: h5[k][uchoices][ichoices] for k in fixed_property_keys
+                    k: h5[k][uchoices][ichoices]  # type: ignore
+                    for k in fixed_property_keys
                 }
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
-            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]  # type: ignore
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}  # type: ignore
     finally:
         if need_open:
             h5.close()
         del h5
 
     device = torch.device(device)
-    waveforms = torch.as_tensor(waveforms, device=device)
+    waveformsr = torch.as_tensor(waveforms, device=device)
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }
     if subsample_by_weighting:
         fixed_properties["weights"] = torch.as_tensor(weights, device=device)
 
-    return waveforms, fixed_properties
+    return waveformsr, fixed_properties
 
 
 def fit_reweighting(
-    voltages=None,
+    voltages: np.ndarray | None = None,  # type: ignore
     h5=None,
     hdf5_path=None,
     log_voltages=True,
@@ -776,9 +814,10 @@ def fit_reweighting(
             voltages = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
-                voltages = h5[voltages_dataset_name][:]
+                voltages: np.ndarray = h5[voltages_dataset_name][:]  # type: ignore
         else:
             assert False
+    assert isinstance(voltages, np.ndarray)
 
     from ..cluster.density import get_smoothed_densities
 
@@ -789,6 +828,7 @@ def fit_reweighting(
         voltages = sign * np.log(np.abs(voltages))
     sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
     dens = get_smoothed_densities(voltages[:, None], sigmas=sigma)
+    assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
     sample_p = sample_p.astype(float)  # ensure double before normalizing

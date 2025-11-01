@@ -205,6 +205,7 @@ def visualize_all_sorting_steps(
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
+    amp_vecs_dataset_name="denoised_ptp_amplitude_vectors",
     motion_est=None,
     motion_est_pkl="motion_est.pkl",
     channel_show_radius_um=50.0,
@@ -230,7 +231,11 @@ def visualize_all_sorting_steps(
 
     fnames = ["times_seconds"]
     if make_scatterplots or make_sorting_summaries:
-        fnames += ["point_source_localizations", amplitudes_dataset_name]
+        fnames += [
+            "point_source_localizations",
+            amplitudes_dataset_name,
+            amp_vecs_dataset_name,
+        ]
     if step_sortings is None:
         step_sortings = load_dartsort_step_sortings(
             dartsort_dir,
@@ -415,6 +420,7 @@ def _plan_vis(
             need_ucomps = True
         else:
             # TODO: unit_comparison.all_summaries_done
+            assert gt_analysis is not None
             need_ucomps = not unit.all_summaries_done(
                 gt_analysis.sorting.unit_ids,
                 unit_comparison_dir,
@@ -429,6 +435,7 @@ def _plan_vis(
         unit_comparison_dir = None
 
     if can_gt and other_analyses is not None and make_versus:
+        assert gt_analysis is not None
         gtn = gt_analysis.name
         on = "_vs_".join(oa.name for oa in other_analyses)
         vs_png = output_directory / f"{gtn}_study_{on}.png"
@@ -472,7 +479,9 @@ def _plan_vis(
         assert gt_comparison is not None
         assert other_analyses is not None
 
-        comparison_kw = dict(exhaustive_gt=exhaustive_gt, compute_distances=gt_comparison_with_distances)
+        comparison_kw = dict(
+            exhaustive_gt=exhaustive_gt, compute_distances=gt_comparison_with_distances
+        )
         cmps = [gt_comparison] + ([None] * len(other_analyses))
         gt_vs = DARTsortGTVersus(
             gt_analysis,

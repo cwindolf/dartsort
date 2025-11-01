@@ -313,6 +313,7 @@ class BasePeeler(BModule):
             # memory tied up while dartsort wants to go do other stuff
             global _peeler_process_context
             del _peeler_process_context.ctx
+            _peeler_process_context.ctx = None
 
         return output_hdf5_filename
 
@@ -903,6 +904,7 @@ class PeelerProcessContext:
 
 # this state will be set on each thread globally
 _peeler_process_context = local()
+_peeler_process_context.ctx = None
 
 
 def _peeler_process_init(
