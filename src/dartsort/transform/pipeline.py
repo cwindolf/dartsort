@@ -89,7 +89,7 @@ class WaveformPipeline(torch.nn.Module):
         recording=None,
         geom=None,
         channel_index=None,
-        sampling_frequency=30_000,
+        sampling_frequency: int | float=30_000,
     ):
         if geom is None:
             from dartsort.util.waveform_util import make_channel_index
@@ -202,7 +202,7 @@ def check_unique_feature_names(transformers):
 def featurization_config_to_class_names_and_kwargs(
     featurization_cfg,
     waveform_cfg,
-    sampling_frequency=30_000,
+    sampling_frequency: int | float=30_000,
 ):
     """Convert this config into a list of waveform transformer classes and arguments
 

@@ -1,16 +1,17 @@
-import tempfile
+from itertools import product
 from pathlib import Path
 import pytest
+import tempfile
 
 import numpy as np
 import spikeinterface.core as sc
+import torch
 
 import dartsort
 from dartsort.evaluate import simkit, config_grid
+from dartsort.peel.matching_util import pairwise, pairwise_util
 from dartsort.templates import (
     get_templates,
-    pairwise,
-    pairwise_util,
     template_util,
     templates,
     TemplateData,
@@ -140,20 +141,27 @@ def test_refractory_templates_algorithm_agreement(
     assert np.allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
 
 
-def test_roundtrip(tmp_path):
+@pytest.mark.parametrize("algorithm", ("by_unit", "by_chunk"))
+def test_roundtrip(tmp_path, algorithm):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
+    rec, st = no_overlap_recording_sorting(temps, pad=0)
+    assert st.labels is not None
+    assert np.array_equal(np.unique(st.labels), np.arange(len(temps)))
     template_data = templates.TemplateData.from_config(
-        *no_overlap_recording_sorting(temps, pad=0),
+        recording=rec,
+        sorting=st,
         template_cfg=dartsort.TemplateConfig(
             denoising_method="none",
             superres_bin_min_spikes=0,
             realign_peaks=False,
+            algorithm=algorithm,
         ),
         motion_est=IdentityMotionEstimate(),
         save_folder=tmp_path,
         overwrite=True,
     )
+    assert np.array_equal(template_data.unit_ids, np.arange(len(temps)))
     assert np.array_equal(template_data.templates, temps)
 
 
@@ -303,7 +311,8 @@ def test_main_object():
     )
 
 
-def test_pconv(tmp_path):
+@pytest.mark.parametrize("unit_ids", [np.arange(5), np.array([0, 0, 1, 1, 2])])
+def test_pconv(tmp_path, unit_ids):
     # want to make sure drift handling is as expected
     # design an experiment
 
@@ -330,9 +339,9 @@ def test_pconv(tmp_path):
     print(f"--------- no drift")
     tdata = templates.TemplateData(
         templates=temps,
-        unit_ids=np.array([0, 0, 1, 1, 2]),
+        unit_ids=unit_ids,
         spike_counts=np.ones(5),
-        registered_geom=None,
+        registered_geom=geom,
         trough_offset_samples=0,
     )
     svd_compressed = template_util.svd_compress_templates(temps, rank=1)
@@ -343,30 +352,41 @@ def test_pconv(tmp_path):
         kind="cubic",
     )
 
-    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
-        pconvdb_path = pairwise_util.compressed_convolve_to_h5(
-            Path(tdir) / "test.h5",
-            geom=geom,
-            template_data=tdata,
-            low_rank_templates=svd_compressed,
-            compressed_upsampled_temporal=ctempup,
-        )
-        pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
-        assert (pconvdb.pconv[0] == 0.0).all()
+    for motion_est, chunk_centers in [(None, None), (IdentityMotionEstimate(), [1, 2])]:
+        with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
+            pconvdb_path = pairwise_util.compressed_convolve_to_h5(
+                Path(tdir) / "test.h5",
+                geom=geom,
+                template_data=tdata,
+                low_rank_templates=svd_compressed,
+                compressed_upsampled_temporal=ctempup,
+                motion_est=motion_est,
+                chunk_time_centers_s=chunk_centers,
+            )
+            assert pconvdb_path == Path(tdir) / "test.h5"
+            pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
 
-        for tixa in range(5):
-            for tixb in range(5):
-                ixa, ixb, timesb, pconv = pconvdb.query(tixa, tixb)
-                if (tixa, tixb) not in overlaps:
-                    assert not ixa.numel()
-                    assert not ixb.numel()
-                    assert timesb is None or not timesb.numel()
-                    assert not pconv.numel()
-                    continue
+            assert (pconvdb.b.pconv[0] == 0.0).all()
+            assert pconvdb.b.shifts_a.shape == (1,)
+            assert pconvdb.b.shifts_b.shape == (1,)
+            assert (pconvdb.b.shifts_a == 0).all()
+            assert (pconvdb.b.shifts_b == 0).all()
+            assert pconvdb.b.shifted_template_index_a.shape[1] == 1
+            assert torch.equal(pconvdb.b.shifted_template_index_a, torch.arange(5)[:, None])
+            assert torch.equal(pconvdb.b.upsampled_shifted_template_index_b, torch.arange(5)[:, None, None])
 
-                olap = overlaps[tixa, tixb]
-                assert (ixa, ixb) == (tixa, tixb)
-                assert np.isclose(pconv.max(), olap)
+            ixa, pconvs, which_b = pconvdb.query(torch.arange(5), torch.arange(5))
+            ixb = torch.arange(5)[which_b]
+            pairs = set()
+            for ii, jj, pc in zip(ixa, ixb, pconvs):
+                ii = ii.item()
+                jj = jj.item()
+                pairs.add((ii, jj))
+                assert isinstance(ii, int)
+                assert isinstance(jj, int)
+                assert (ii, jj) in overlaps
+                assert np.isclose(pc.max(), overlaps[ii, jj])
+            assert pairs == set(overlaps.keys())
 
     # drifting version
     # rigid drift from -1 to 0 to 1, note pitch=1
@@ -377,7 +397,7 @@ def test_pconv(tmp_path):
     reg_geom = np.c_[np.zeros(c + 2), np.arange(c + 2).astype(float)]
     tdata = templates.TemplateData(
         templates=tempspad,
-        unit_ids=np.array([0, 0, 1, 1, 2]),
+        unit_ids=unit_ids,
         spike_counts=np.ones(5),
         registered_geom=reg_geom,
         trough_offset_samples=0,
@@ -395,59 +415,42 @@ def test_pconv(tmp_path):
             low_rank_templates=svd_compressed,
             compressed_upsampled_temporal=ctempup,
             motion_est=motion_est,
-            chunk_time_centers_s=[0, 1, 2],
+            chunk_time_centers_s=np.array([0., 1, 2]),
         )
         pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
-        assert (pconvdb.pconv[0] == 0.0).all()
-        print(f"{pconvdb.pconv.shape=}")
+        assert (pconvdb.b.pconv[0] == 0.0).all()
 
-        for tixa in range(5):
-            for tixb in range(5):
-                ixa, ixb, timesb, pconv = pconvdb.query(tixa, tixb, shifts_a=0, shifts_b=0)
-
-                if (tixa, tixb) not in overlaps:
-                    assert not ixa.numel()
-                    assert not ixb.numel()
-                    assert not pconv.numel()
-                    continue
-
-                olap = overlaps[tixa, tixb]
-                assert (ixa, ixb) == (tixa, tixb)
-                assert np.isclose(pconv.max(), olap)
-
-        for tixb in range(5):
-            for shiftb in (-1, 0, 1):
-                ixa, ixb, timesb, pconv = pconvdb.query(0, tixb, shifts_a=-1, shifts_b=shiftb)
+        for shifta, shiftb in product((0, -1, 1), (0, -1, 1)):
+            ixa, pconvs, which_b = pconvdb.query(
+                torch.arange(5),
+                torch.arange(5),
+                shifts_a=torch.zeros(5, dtype=torch.long) + shifta,
+                shifts_b=torch.zeros(5, dtype=torch.long) + shiftb,
+            )
+            ixb = torch.arange(5)[which_b]
+            if shifta != shiftb:
+                # rigid, impossible
                 assert not ixa.numel()
-                assert not ixb.numel()
-                assert not pconv.numel()
+                assert not pconvs.numel()
+                assert not which_b.numel()
+                continue
 
-        for tixb in range(5):
-            for shift in (-1, 0, 1):
-                ixa, ixb, timesb, pconv = pconvdb.query(4, tixb, shifts_a=shift, shifts_b=shift)
-                if tixb != 4 or shift == 1:
-                    assert not ixa.numel()
-                    assert not ixb.numel()
-                    assert not pconv.numel()
-                else:
-                    assert np.isclose(pconv.max(), 4 if shift < 1 else 0)
-                ixa, ixb, timesb, pconv = pconvdb.query(tixb, 4, shifts_a=shift, shifts_b=shift)
-                if tixb != 4 or shift == 1:
-                    assert not ixa.numel()
-                    assert not ixb.numel()
-                    assert not pconv.numel()
-                else:
-                    assert np.isclose(pconv.max(), 4)
-
-        for shifta in (-1, 0, 1):
-            for shiftb in (-1, 0, 1):
-                for tixa in range(5):
-                    for tixb in range(5):
-                        ixa, ixb, timesb, pconv = pconvdb.query(
-                            tixa, tixb, shifts_a=shifta, shifts_b=shiftb
-                        )
-                        if shifta != shiftb:
-                            # this is because we are rigid here
-                            assert not ixa.numel()
-                            assert not ixb.numel()
-                            assert not pconv.numel()
+            pairs = set()
+            for ii, jj, pc in zip(ixa, ixb, pconvs):
+                ii = ii.item()
+                jj = jj.item()
+                pairs.add((ii, jj))
+                assert isinstance(ii, int)
+                assert isinstance(jj, int)
+                assert (ii, jj) in overlaps
+                assert np.isclose(pc.max(), overlaps[ii, jj])
+            if shifta == 0:
+                assert pairs == set(overlaps.keys())
+            elif shifta == 1:
+                # 4 falls off the edge
+                assert pairs == (set(overlaps.keys()) - {(4, 4)})
+            elif shifta == -1:
+                # 0 falls off the edge
+                assert pairs == (set(overlaps.keys()) - {(0, 0)})
+            else:
+                assert False

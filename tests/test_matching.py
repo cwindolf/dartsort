@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import dartsort
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.templates import TemplateData, template_util
+from dartsort.peel.matching_util import CompressedUpsampledMatchingTemplates
 from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
 
@@ -66,6 +67,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
             denoising_method="none",
+            realign_peaks=False,
             superres_bin_min_spikes=0,
         )
         rec_no_overlap, sorting_no_overlap = no_overlap_recording_sorting(templates)
@@ -97,9 +99,10 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
             return_residual=True,
             return_conv=True,
         )
+        assert matcher.matching_templates is not None
 
-        ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
-            [0, 1], [0, 1], upsampling_indices_b=[0, 0], grid=True
+        ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(
+            [0, 1], [0, 1], upsampling_indices_b=[0, 0]
         )
         maxpc = pconv.max(dim=1).values
         for ia, ib, pc in zip(ixa, ixb, maxpc):
@@ -132,9 +135,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
         assert np.array_equal(res["times_samples"], times)
         assert np.array_equal(res["labels"], labels)
         assert np.array_equal(res["upsampling_indices"], [0, 0])
-        print(f'{torch.square(res["residual"]).mean()=}')
         assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-        print(f'{torch.square(res["conv"]).mean()=}')
         assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
         assert torch.all(res["scores"] > 0)
 
@@ -200,23 +201,24 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         assert np.allclose(template_data.templates, templates)
 
         print("-- make matcher")
+        matching_cfg = dartsort.MatchingConfig(
+            threshold=0.01,
+            amplitude_scaling_variance=scaling,
+            template_temporal_upsampling_factor=up_factor,
+            cd_iter=cd_iter,
+        )
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            dartsort.default_waveform_cfg,
-            dartsort.MatchingConfig(
-                threshold=0.01,
-                amplitude_scaling_variance=scaling,
-                template_temporal_upsampling_factor=up_factor,
-                cd_iter=cd_iter,
-            ),
-            nofeatcfg,
-            template_data,
+            recording=rec,
+            waveform_cfg=dartsort.default_waveform_cfg,
+            matching_cfg=matching_cfg,
+            featurization_cfg=nofeatcfg,
+            template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
 
         lrt = template_util.svd_compress_templates(
-            template_data.templates, rank=matcher.svd_compression_rank
+            template_data.templates, rank=matching_cfg.template_svd_compression_rank
         )
         print("-- tempup")
         tempup = template_util.compressed_upsampled_templates(
@@ -224,22 +226,19 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )
+        matchdata = matcher.matching_templates
+        assert isinstance(matchdata, CompressedUpsampledMatchingTemplates)
         assert np.array_equal(
-            matcher.compressed_upsampled_temporal,
+            matchdata.b.cup_temporal.numpy(force=True),
             tempup.compressed_upsampled_templates,
         )
         assert np.array_equal(
-            matcher.objective_spatial_components, lrt.spatial_components
+            matchdata.b.obj_spatial_sing.numpy(force=True),
+            lrt.singular_values[:, :, None] * lrt.spatial_components,
         )
-        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
-        assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
-        assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
-            ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
-                np.arange(1),
-                np.arange(1),
-                upsampling_indices_b=up,
-                grid=True,
+            ixa, pconv, ixb = matchdata.pconv_db.query(
+                np.arange(1), np.arange(1), upsampling_indices_b=up
             )
             centerpc = pconv[:, spike_length_samples - 1]
             for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
@@ -341,11 +340,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             save_folder=tmp_path,
             overwrite=True,
         )
-
-        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            dartsort.default_waveform_cfg,
-            dartsort.MatchingConfig(
+        matching_cfg = dartsort.MatchingConfig(
                 threshold=0.01,
                 template_temporal_upsampling_factor=up_factor,
                 amplitude_scaling_variance=0.0,
@@ -353,15 +348,22 @@ def test_static(tmp_path, up_factor, cd_iter):
                 conv_ignore_threshold=0.0,
                 template_svd_compression_rank=2,
                 cd_iter=cd_iter,
-            ),
-            nofeatcfg,
-            template_data,
+            )
+
+        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
+            rec,
+            waveform_cfg=dartsort.default_waveform_cfg,
+            matching_cfg=matching_cfg,
+            featurization_cfg=nofeatcfg,
+            template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
+        matchdata = matcher.matching_templates
+        assert isinstance(matchdata, CompressedUpsampledMatchingTemplates)
 
         lrt = template_util.svd_compress_templates(
-            template_data.templates, rank=matcher.svd_compression_rank
+            template_data.templates, rank=matching_cfg.template_svd_compression_rank
         )
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
@@ -369,21 +371,18 @@ def test_static(tmp_path, up_factor, cd_iter):
             max_upsample=up_factor,
         )
         assert np.array_equal(
-            matcher.compressed_upsampled_temporal,
+            matchdata.b.cup_temporal.numpy(force=True),
             tempup.compressed_upsampled_templates,
         )
         assert np.array_equal(
-            matcher.objective_spatial_components, lrt.spatial_components
+            matchdata.b.obj_spatial_sing.numpy(force=True),
+            lrt.singular_values[:, :, None] * lrt.spatial_components,
         )
-        assert np.array_equal(matcher.objective_singular_values, lrt.singular_values)
-        assert np.array_equal(matcher.spatial_components, lrt.spatial_components)
-        assert np.array_equal(matcher.singular_values, lrt.singular_values)
         for up in range(up_factor):
-            ixa, ixb, tb, pconv = matcher.pairwise_conv_db.query(
+            ixa, pconv, ixb = matchdata.pconv_db.query(
                 np.arange(3),
                 np.arange(3),
                 upsampling_indices_b=up + np.zeros(3, dtype=np.int64),
-                grid=True,
             )
             centerpc = pconv[:, spike_length_samples - 1]
             for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):

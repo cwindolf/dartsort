@@ -403,6 +403,7 @@ def get_waveforms_on_static_channels(
     out=None,
     fill_value=np.nan,
     workers=4,
+    return_padded=False,
 ):
     """Load a set of drifting waveforms on a static set of channels
 
@@ -497,6 +498,7 @@ def get_waveforms_on_static_channels(
             match_distance,
             fill_value,
             out=out,
+            return_padded=return_padded,
         )
         if two_d:
             static_waveforms = static_waveforms[:, 0, :]
@@ -559,21 +561,40 @@ def get_waveforms_on_static_channels(
     # shifted_channels = shifted_channels.reshape(n_spikes, c)
 
     # scatter the waveforms into their static channel neighborhoods
-    if out is None:
-        if torch.is_tensor(waveforms):
-            static_waveforms = torch.full(
-                (n_spikes, t, n_static_channels + 1),
-                fill_value=fill_value,
-                dtype=waveforms.dtype,
-                device=waveforms.device,
-            )
-        else:
-            static_waveforms = np.full(
-                (n_spikes, t, n_static_channels + 1),
-                fill_value=fill_value,
-                dtype=waveforms.dtype,
-            )
+    if out is None and torch.is_tensor(waveforms):
+        static_waveforms = waveforms.new_full(
+            (n_spikes, t, n_static_channels + 1),
+            fill_value=fill_value,
+        )
+    elif torch.is_tensor(waveforms):
+        assert out is not None
+        assert out.shape == (n_spikes, t, n_static_channels + 1)
+        assert torch.is_tensor(out)
+        out.fill_(fill_value)
+        static_waveforms = out
     else:
+        static_waveforms = None
+
+    if torch.is_tensor(waveforms):
+        ix = torch.asarray(shifted_channels[:, None, :])
+        ix = ix.broadcast_to(waveforms.shape)
+        assert static_waveforms is not None
+        static_waveforms.scatter_(dim=3, index=ix, src=waveforms)
+        if not return_padded:
+            static_waveforms = static_waveforms[:, :, :n_static_channels]
+        if two_d:
+            static_waveforms = static_waveforms[:, 0]
+        return static_waveforms
+    
+    # below, numpy case.
+    if out is None:
+        static_waveforms = np.full(
+            (n_spikes, t, n_static_channels + 1),
+            fill_value=fill_value,
+            dtype=waveforms.dtype,
+        )
+    else:
+        assert isinstance(out, np.ndarray)
         assert out.shape == (n_spikes, t, n_static_channels + 1)
         out.fill(fill_value)
         static_waveforms = out
@@ -581,10 +602,10 @@ def get_waveforms_on_static_channels(
     time_ix = np.arange(t)[None, :, None]
     chan_ix = shifted_channels[:, None, :]
     static_waveforms[spike_ix, time_ix, chan_ix] = waveforms
-    static_waveforms = static_waveforms[:, :, :n_static_channels]
+    if not return_padded:
+        static_waveforms = static_waveforms[:, :, :n_static_channels]
     if two_d:
         static_waveforms = static_waveforms[:, 0, :]
-
     return static_waveforms
 
 
@@ -597,6 +618,7 @@ def _full_probe_shifting_fast(
     match_distance,
     fill_value,
     out=None,
+    return_padded=False,
 ):
     is_tensor = torch.is_tensor(waveforms)
 
@@ -637,7 +659,10 @@ def _full_probe_shifting_fast(
         tix[None, :, None],
         shifted_channels[shift_inverse][:, None, :],
     ] = waveforms
-    return static_waveforms[:, :, : target_kdtree.n]
+    if return_padded:
+        return static_waveforms
+    else:
+        return static_waveforms[:, :, : target_kdtree.n]
 
 
 def static_channel_neighborhoods(

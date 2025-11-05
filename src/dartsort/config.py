@@ -276,7 +276,6 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cosine_threshold: float = 0.75
 
     # gaussian mixture unused
-    merge_bimodality_threshold: float = 0.05
     hard_noise: bool = False
     laplace_ard: bool = False
     core_radius: float | Literal["extract"] = "extract"

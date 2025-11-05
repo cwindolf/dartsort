@@ -3,6 +3,8 @@ A collection of helper functions for dealing with which channels
 waveforms are extracted on, things like that.
 """
 
+from typing import overload, Literal
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -185,14 +187,39 @@ def _regularize_1d(geom, radius, eps, dim=1):
 # -- channel index creation
 
 
+@overload
 def make_channel_index(
-    geom,
-    radius,
-    p=2,
-    pad_val=None,
-    to_torch=False,
-    fill_holes=False,
-):
+    geom: np.ndarray | torch.Tensor,
+    radius: float,
+    *,
+    to_torch: Literal[True],
+    p: int | float = 2,
+    pad_val: int | None = None,
+    fill_holes: bool = False,
+) -> torch.LongTensor: ...
+
+
+@overload
+def make_channel_index(
+    geom: np.ndarray | torch.Tensor,
+    radius: float,
+    *,
+    to_torch: Literal[False],
+    p: int | float = 2,
+    pad_val: int | None = None,
+    fill_holes: bool = False,
+) -> np.ndarray: ...
+
+
+def make_channel_index(
+    geom: np.ndarray | torch.Tensor,
+    radius: float,
+    *,
+    to_torch: bool = False,
+    p: int | float = 2,
+    pad_val: int | None = None,
+    fill_holes: bool = False,
+) -> np.ndarray | torch.LongTensor:
     """
     Compute an array whose whose ith row contains the neighbors for the ith channel
     """

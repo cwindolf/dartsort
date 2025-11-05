@@ -4,7 +4,7 @@ import numpy as np
 from ..util import universal_util, waveform_util
 from ..transform import WaveformPipeline
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
-from ..templates.pairwise import SeparablePairwiseConv
+from .matching_util.pairwise import SeparablePairwiseConv
 from ..templates.template_util import LowRankTemplates
 
 

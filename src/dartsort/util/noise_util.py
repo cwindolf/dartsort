@@ -1296,3 +1296,42 @@ def fp_control_threshold(
             assert False
 
     return threshold
+
+
+def fp_control_threshold_from_h5(
+    hdf5_path,
+    low_rank_templates,
+    unit_ids=None,
+    spike_counts=None,
+    rg: int | np.random.Generator=0,
+    refractory_radius_frames=10,
+    num_frames=0,
+    max_fp_per_input_spike=1.0,
+):
+    from ..util.data_util import get_residual_snips
+
+    resids = get_residual_snips(hdf5_path)
+    noise = StationaryFactorizedNoise.estimate(resids)
+
+    # be reproducible
+    rg = np.random.default_rng(rg)
+    generator = spiketorch.spawn_torch_rg(rg)
+
+    # restrict my low rank templates to usual geom...
+    # TODO: this is not a very logical way to handle drift here...
+
+    # simulate fps
+    fp_res = noise.unit_false_positives(
+        low_rank_templates,
+        radius=refractory_radius_frames,
+        generator=generator,
+    )
+    return fp_control_threshold(
+        fp_res["fp_dataframe"],
+        fp_res["total_samples"],
+        tp_unit_ids=unit_ids,
+        tp_counts=spike_counts,
+        clustering_num_frames=num_frames,
+        template_normsqs=fp_res["normsq"],
+        max_fp_per_input_spike=max_fp_per_input_spike,
+    )

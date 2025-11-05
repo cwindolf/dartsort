@@ -27,7 +27,7 @@ from ..util.waveform_util import (
     get_channel_index_rel_inds,
 )
 
-from .peel_base import BasePeeler
+from .peel_base import BasePeeler, PeelingBatchResult
 from .threshold import threshold_chunk, ThresholdAndFeaturize
 
 
@@ -131,17 +131,17 @@ class SubtractionPeeler(BasePeeler):
         self.fixed_output_data.append(
             (
                 "subtract_channel_index",
-                self.subtract_channel_index.numpy(force=True).copy(),
+                self.b.subtract_channel_index.numpy(force=True).copy(),
             ),
         )
         self.extract_subtract_same = torch.equal(
-            self.subtract_channel_index, self.channel_index
+            self.b.subtract_channel_index, self.b.channel_index
         )
         if not self.extract_subtract_same:
             esmask = relative_channel_subset_index(
                 self.subtract_channel_index, self.channel_index
             )
-            self.register_buffer("extract_subtract_mask", esmask)
+            self.register_buffer("extract_subtract_mask", torch.asarray(esmask))
         else:
             self.extract_subtract_mask = None
         self.dedup_batch_size = self.nearest_batch_length()
@@ -332,12 +332,15 @@ class SubtractionPeeler(BasePeeler):
     def peel_chunk(
         self,
         traces,
+        *,
         chunk_start_samples=0,
         left_margin=0,
         right_margin=0,
         return_residual=False,
         return_waveforms=True,
     ):
+        del return_waveforms  # always done here
+
         extract_index = None if self.extract_subtract_same else self.channel_index
         traces = traces.to(self.dtype)
         if self.have_singlechan_templates:
@@ -383,13 +386,13 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
             realign_to_denoiser=self.realign_to_denoiser,
             denoiser_realignment_shift=self.denoiser_realignment_shift,
-            **singlechan_kw,
+            **singlechan_kw,  # type: ignore
         )
 
         # add in chunk_start_samples
         times_samples = subtraction_result.times_samples + chunk_start_samples
 
-        peel_result = dict(
+        peel_result = PeelingBatchResult(
             n_spikes=subtraction_result.n_spikes,
             times_samples=times_samples,
             channels=subtraction_result.channels,
@@ -401,7 +404,7 @@ class SubtractionPeeler(BasePeeler):
 
         return peel_result
 
-    def precompute_peeler_models(self):
+    def precompute_peeler_models(self, save_folder, overwrite=False, computation_cfg=None):
         self.subtraction_denoising_pipeline.precompute()
 
     def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
@@ -496,10 +499,12 @@ class SubtractionPeeler(BasePeeler):
             # this is the sequence of transforms to actually use in fitting
             fit_feats = already_fitted + fit_feats
         else:
+            fit_feats = None
             already_fitted = [t for t in orig_denoise if t.is_denoiser]
 
         # if fitting the very first denoiser...
         if which == "denoisers" and not already_fitted:
+            assert fit_feats is not None
             fit_pipeline = WaveformPipeline(fit_feats)
             self._threshold_to_fit(
                 tmp_dir, fit_pipeline, computation_cfg=computation_cfg
@@ -535,6 +540,7 @@ class SubtractionPeeler(BasePeeler):
                     waveforms_dataset_name="subtract_fit_waveforms",
                     device=device,
                 )
+                assert fit_feats is not None
                 fit_denoise = WaveformPipeline(fit_feats)
                 fit_denoise = fit_denoise.to(device)
                 fit_denoise.fit(
@@ -721,6 +727,8 @@ def subtract_chunk(
     residnormsq_thresh = residnorm_decrease_threshold**2
     if growth_tolerance is not None:
         gtol = traces.abs().add_(growth_tolerance)
+    else:
+        gtol = 0.0
 
     # initialize residual, it needs to be padded to support
     # our channel indexing convention. this copies the input.
@@ -748,7 +756,7 @@ def subtract_chunk(
             residual_det = residual_det.clamp(-gtol, gtol)
 
         if singlechan_templates is None:
-            times_samples, channels = detect_and_deduplicate(
+            times_samples, channels = detect_and_deduplicate(  # type: ignore
                 residual_det,
                 detection_threshold,
                 relative_peak_channel_index=relative_peak_channel_index,
@@ -764,11 +772,11 @@ def subtract_chunk(
                 cumulant_order=cumulant_order,
             )
         else:
-            times_samples, channels = singlechan_template_detect_and_deduplicate(
+            times_samples, channels = singlechan_template_detect_and_deduplicate(  # type: ignore
                 residual_det,
                 singlechan_templates,
-                threshold=singlechan_threshold,
-                trough_offset_samples=singlechan_trough_offset,
+                threshold=singlechan_threshold,  # type: ignore
+                trough_offset_samples=singlechan_trough_offset,  # type: ignore
                 relative_peak_channel_index=relative_peak_channel_index,
                 dedup_channel_index=channel_index,
                 relative_peak_radius=relative_peak_radius,
@@ -851,10 +859,13 @@ def subtract_chunk(
 
         if check_resid:
             residuals = torch.nan_to_num(waveforms)
+        else:
+            residuals = None
 
         waveforms, features = denoising_pipeline(waveforms, channels=channels)
 
         if check_resid:
+            assert residuals is not None
             orig_normsq = residuals.square().sum(dim=(1, 2))
             residuals = residuals.sub_(waveforms).nan_to_num_()
             new_normsq = residuals.square_().sum(dim=(1, 2))

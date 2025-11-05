@@ -342,7 +342,6 @@ def initialize_gmm(
         merge_distance_threshold=refinement_cfg.merge_distance_threshold,
         criterion_threshold=refinement_cfg.criterion_threshold,
         criterion=refinement_cfg.criterion,
-        merge_bimodality_threshold=refinement_cfg.merge_bimodality_threshold,
         em_converged_prop=refinement_cfg.em_converged_prop,
         em_converged_churn=refinement_cfg.em_converged_churn,
         em_converged_atol=refinement_cfg.em_converged_atol,

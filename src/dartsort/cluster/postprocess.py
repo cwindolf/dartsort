@@ -152,7 +152,7 @@ def postprocess(
             return sorting, TemplateData.from_npz(template_npz_path)
 
     # apply my time shifts only once and remove them so template extractor doesn't do it again
-    if "time_shifts" in sorting.extra_features:
+    if sorting.extra_features and "time_shifts" in sorting.extra_features:
         logger.info("Sorting had time_shifts, applying before getting templates.")
         new_times_samples = sorting.times_samples + sorting.time_shifts
         ef = {k: v for k, v in sorting.extra_features.items() if k != "time_shifts"}

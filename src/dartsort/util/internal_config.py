@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import field, fields
 from pathlib import Path
-from typing import Literal
+from typing import Literal, dataclass_transform
 
 import numpy as np
 from pydantic.dataclasses import dataclass
@@ -15,7 +15,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files
+        from importlib_resources import files  # pyright: ignore[reportMissingImports]
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -27,7 +27,15 @@ default_pretrained_path = str(default_pretrained_path)
 _pydantic_strict_cfg = ConfigDict(strict=True, extra="forbid")
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+# needed to annotate pydantic for pyright to pick up cfg fields
+@dataclass_transform(kw_only_default=True, frozen_default=True)
+def cfg_dataclass(*args, frozen=True, kw_only=True, **kwargs):
+    return dataclass(
+        *args, **kwargs, frozen=frozen, kw_only=kw_only, config=_pydantic_strict_cfg
+    )
+
+
+@cfg_dataclass
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
 
@@ -73,7 +81,7 @@ class WaveformConfig:
         return slice(start_offset, other_len - end_offset)
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class FeaturizationConfig:
     """Featurization and denoising configuration
 
@@ -151,7 +159,7 @@ class FeaturizationConfig:
     output_waveforms_name: str = "denoised"
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -207,13 +215,15 @@ class SubtractionConfig:
     save_residnorm_decrease: bool = False
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = "exp_weighted"
+    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
+        "exp_weighted"
+    )
     use_raw: bool = True
     use_svd: bool = True
     use_zero: bool = False
@@ -270,7 +280,7 @@ class TemplateConfig:
             raise ValueError("Median reduction not supported for 't' templates.")
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class TemplateMergeConfig:
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
@@ -282,7 +292,7 @@ class TemplateMergeConfig:
     svd_compression_rank: int = 20
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -309,6 +319,9 @@ class MatchingConfig:
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
     channel_selection_radius: float | None = 50.0
+    template_type: Literal["individual_compressed_upsampled"] = (
+        "individual_compressed_upsampled"
+    )
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -320,7 +333,7 @@ class MatchingConfig:
     delete_pconv: bool = True
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
@@ -350,7 +363,7 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class UniversalMatchingConfig:
     # peeling common
     chunk_length_samples: int = 1_000
@@ -370,7 +383,7 @@ class UniversalMatchingConfig:
     waveform_cfg: WaveformConfig = WaveformConfig(ms_before=0.75, ms_after=1.25)
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class MotionEstimationConfig:
     """Configure motion estimation."""
 
@@ -393,7 +406,7 @@ class MotionEstimationConfig:
     rigid: bool = False
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class SplitConfig:
     split_strategy: str = "FeatureSplit"
     recursive_split: bool = True
@@ -402,7 +415,7 @@ class SplitConfig:
     )
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class ClusteringFeaturesConfig:
     features_type: Literal["simple_matrix", "stable_waveforms"] = "simple_matrix"
 
@@ -432,7 +445,7 @@ class ClusteringFeaturesConfig:
     kriging_poly_degree: int = 0
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class ClusteringConfig:
     cluster_strategy: str = "gmmdpc"
 
@@ -477,7 +490,7 @@ class ClusteringConfig:
     sklearn_kwargs: dict | None = None
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class RefinementConfig:
     refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
 
@@ -513,7 +526,6 @@ class RefinementConfig:
     n_search: int | None = None
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 0.75
-    # if None, switches to bimodality
     criterion_threshold: float | None = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -525,7 +537,6 @@ class RefinementConfig:
         "ecl",
         "ecelbo",
     ] = "heldout_ecl"
-    merge_bimodality_threshold: float = 0.05
     refit_before_criteria: bool = False
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
@@ -569,7 +580,7 @@ class RefinementConfig:
     kriging_poly_degree: int = 0
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
@@ -621,7 +632,7 @@ default_initial_refinement_cfg = RefinementConfig(one_split_only=True, n_total_i
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class DARTsortInternalConfig:
     """This is an internal object. Make a DARTsortUserConfig, not one of these."""
 
@@ -823,7 +834,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         signal_rank=cfg.signal_rank,
         criterion=cfg.criterion,
         criterion_threshold=cfg.criterion_threshold,
-        merge_bimodality_threshold=cfg.merge_bimodality_threshold,
         n_total_iters=cfg.n_refinement_iters,
         n_em_iters=cfg.n_em_iters,
         max_n_spikes=cfg.gmm_max_spikes,

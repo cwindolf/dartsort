@@ -514,7 +514,7 @@ def restrict_to_valid_times(sorting, recording, waveform_cfg, pad=0):
     t_max = recording.get_total_samples() - (total - trough) - pad
     new_labels = sorting.labels.copy()
     new_labels[sorting.times_samples < t_min] = -1
-    new_labels[sorting.times_samples >= t_max] = -1
+    new_labels[sorting.times_samples > t_max] = -1
     return replace(sorting, labels=new_labels)
 
 

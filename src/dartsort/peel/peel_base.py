@@ -6,6 +6,8 @@ from pathlib import Path
 from sys import getrefcount
 import tempfile
 from threading import local, Lock
+from types import MappingProxyType
+from typing import TypedDict, Literal, overload
 
 import h5py
 import numpy as np
@@ -119,7 +121,9 @@ class BasePeeler(BModule):
             self.load_models(save_folder)
         if self.needs_precompute() or self.needs_fit():
             if self.needs_precompute():
-                self.precompute_models()
+                self.precompute_models(
+                    save_folder, overwrite=overwrite, computation_cfg=computation_cfg
+                )
             if self.needs_fit():
                 save_folder.mkdir(exist_ok=True)
                 self.fit_models(
@@ -216,7 +220,7 @@ class BasePeeler(BModule):
         if computation_cfg is None:
             computation_cfg = job_util.get_global_computation_config()
 
-        to_numpy = output_hdf5_filename is not None
+        to_cpu = output_hdf5_filename is not None
 
         # main peeling loop
         # wrap in try/finally to ensure file handles get closed if there
@@ -237,7 +241,7 @@ class BasePeeler(BModule):
                     skip_features,
                     chunk_length_samples,
                     is_local,
-                    to_numpy,
+                    to_cpu,
                 ),
             ) as pool:
                 if is_local:
@@ -322,12 +326,13 @@ class BasePeeler(BModule):
     def peel_chunk(
         self,
         traces,
+        *,
         chunk_start_samples=0,
         left_margin=0,
         right_margin=0,
         return_residual=False,
         return_waveforms=True,
-    ):
+    ) -> "PeelingBatchResult":
         # subclasses should implement this method
 
         # they should return a dictionary with keys:
@@ -360,8 +365,15 @@ class BasePeeler(BModule):
         # subclasses should override if they need to fit models for peeling
         assert not self.peeling_needs_fit()
 
-    def precompute_peeler_models(self):
-        # subclasses should override if they need to fit models for peeling
+    def precompute_peeler_models(
+        self, save_folder, overwrite=False, computation_cfg=None
+    ):
+        if self.peeling_needs_precompute():
+            self.precompute_peeling_data(
+                save_folder=save_folder,
+                overwrite=overwrite,
+                computation_cfg=computation_cfg,
+            )
         assert not self.peeling_needs_precompute()
 
     # subclasses can add to this list
@@ -395,13 +407,14 @@ class BasePeeler(BModule):
 
     def process_chunk(
         self,
-        chunk_start_samples,
-        chunk_end_samples=None,
-        return_residual=False,
-        skip_features=False,
+        chunk_start_samples: int,
+        *,
+        chunk_end_samples: int | None = None,
+        return_residual: bool = False,
+        skip_features: bool = False,
         n_resid_snips: int | None = None,
-        to_numpy=True,
-    ):
+        to_cpu: bool = True,
+    ) -> "PeelingBatchResult":
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
         Main function called in peeling workers
@@ -429,7 +442,7 @@ class BasePeeler(BModule):
             return_residual=return_residual or bool(n_resid_snips),
         )
 
-        if peel_result["n_spikes"] > 0 and not skip_features:
+        if peel_result["n_spikes"] > 0 and return_waveforms:
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             features = self.featurize_collisioncleaned_waveforms(
                 peel_result["collisioncleaned_waveforms"], **fixed_properties
@@ -438,26 +451,27 @@ class BasePeeler(BModule):
             features = {}
 
         # a user who wants these must featurize with a waveform node
-        del peel_result["collisioncleaned_waveforms"]
+        # then they'll end up in `features`
+        if "collisioncleaned_waveforms" in peel_result:
+            del peel_result["collisioncleaned_waveforms"]
 
         assert not any(k in features for k in peel_result)
         chunk_result = {**peel_result, **features}
-        if to_numpy:
+        if to_cpu:
             chunk_result = {
-                k: v.numpy(force=True) if torch.is_tensor(v) else v
-                for k, v in chunk_result.items()
+                k: v.cpu() if torch.is_tensor(v) else v for k, v in chunk_result.items()
             }
 
             if "residual" in peel_result:
                 if torch.is_tensor(peel_result["residual"]):
-                    peel_result["residual"] = peel_result["residual"].numpy(force=True)
+                    peel_result["residual"] = peel_result["residual"].cpu()  # type: ignore
 
         # add times in seconds
         segment = self.recording._recording_segments[0]
         chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
             chunk_start_samples
         )
-        if peel_result["n_spikes"] and to_numpy:
+        if peel_result["n_spikes"] and to_cpu:
             chunk_result["times_seconds"] = segment.sample_index_to_time(
                 chunk_result["times_samples"]
             )
@@ -475,7 +489,7 @@ class BasePeeler(BModule):
                 )
             )
 
-        return chunk_result
+        return chunk_result  # type: ignore
 
     def gather_chunk_result(
         self,
@@ -527,16 +541,18 @@ class BasePeeler(BModule):
         return n_new_spikes
 
     def needs_fit(self):
-        it_does = self.peeling_needs_fit()
+        if self.peeling_needs_fit():
+            return True
         if self.featurization_pipeline is not None:
-            it_does = it_does or self.featurization_pipeline.needs_fit()
-        return it_does
+            return self.featurization_pipeline.needs_fit()
+        return False
 
     def needs_precompute(self):
-        it_does = self.peeling_needs_precompute()
+        if self.peeling_needs_precompute():
+            return True
         if self.featurization_pipeline is not None:
-            it_does = it_does or self.featurization_pipeline.needs_precompute()
-        return it_does
+            return self.featurization_pipeline.needs_precompute()
+        return False
 
     def fit_models(
         self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
@@ -559,9 +575,13 @@ class BasePeeler(BModule):
             )
         assert not self.needs_fit()
 
-    def precompute_models(self):
+    def precompute_models(self, save_folder, overwrite=False, computation_cfg=None):
         if self.peeling_needs_precompute():
-            self.precompute_peeler_models()
+            self.precompute_peeler_models(
+                save_folder=save_folder,
+                overwrite=overwrite,
+                computation_cfg=computation_cfg,
+            )
         if self.featurization_pipeline is None:
             return
         self.featurization_pipeline.precompute()
@@ -888,18 +908,35 @@ class BasePeeler(BModule):
         return factors[np.abs(factors - target).argmin()]
 
 
+# -- batch result type stub
+
+
+try:
+    # this isn't supported until 3.15, but it helps the type checker
+    # so I'm keeping it in here. everything seems to be fine just setting
+    # it to dict in practice in the except clause.
+
+    class PeelingBatchResult(TypedDict, extra_items=torch.Tensor):
+        n_spikes: int
+except TypeError:
+    PeelingBatchResult = dict  # type: ignore
+
+
+peeling_empty_result: PeelingBatchResult = MappingProxyType(dict(n_spikes=0))  # type: ignore
+
+
 # -- helper functions and objects for parallelism
 
 
 class PeelerProcessContext:
     def __init__(
-        self, peeler, compute_residual, skip_features, chunk_length_samples, to_numpy
+        self, peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
     ):
         self.peeler = peeler
         self.compute_residual = compute_residual
         self.skip_features = skip_features
         self.chunk_length_samples = chunk_length_samples
-        self.to_numpy = to_numpy
+        self.to_cpu = to_cpu
 
 
 # this state will be set on each thread globally
@@ -915,7 +952,7 @@ def _peeler_process_init(
     skip_features,
     chunk_length_samples,
     is_local,
-    to_numpy,
+    to_cpu,
 ):
     global _peeler_process_context
 
@@ -936,7 +973,7 @@ def _peeler_process_init(
 
     # update process-local variables
     _peeler_process_context.ctx = PeelerProcessContext(
-        peeler, compute_residual, skip_features, chunk_length_samples, to_numpy
+        peeler, compute_residual, skip_features, chunk_length_samples, to_cpu
     )
 
 
@@ -955,5 +992,5 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             chunk_end_samples=chunk_end_samples,
             return_residual=_peeler_process_context.ctx.compute_residual,
             skip_features=_peeler_process_context.ctx.skip_features,
-            to_numpy=_peeler_process_context.ctx.to_numpy,
+            to_cpu=_peeler_process_context.ctx.to_cpu,
         )

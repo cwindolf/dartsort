@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 from ..util.internal_config import TemplateConfig
 from ..templates import TemplateData, template_util
-from ..templates.pairwise_util import (
+from ..peel.matching_util.pairwise_util import (
     construct_shift_indices,
     iterate_compressed_pairwise_convolutions,
 )
@@ -483,10 +483,6 @@ def cross_match(
     units_b,
     merge_distance_threshold=0.5,
 ):
-    # assert np.array_equal(units_a, np.arange(units_a.size))
-    # assert np.array_equal(units_b, np.arange(units_b.size))
-    # print(f"{np.unique(sorting_b.labels)=}")
-
     ia, ib = np.nonzero(dists <= merge_distance_threshold)
     weights = coo_array(
         (-dists[ia, ib], (ia.astype(np.intc), ib.astype(np.intc))),
@@ -500,9 +496,7 @@ def cross_match(
     # matched B units are given their A-match's label, and unmatched units get labels
     # starting from A's next cluster label
     matched = b_to_a >= 0
-    print(f"{matched.sum()=}")
     next_a_label = units_a.max() + 1
-    print(f"{next_a_label=}")
     b_reindex = np.full_like(units_b, -1)
     matched_a_units = units_a[b_to_a[matched]]
     b_reindex[matched] = matched_a_units

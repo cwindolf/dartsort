@@ -84,20 +84,21 @@ class RunningTemplates(GrabAndFeaturize):
         channel_index = torch.tile(torch.arange(n_channels), (n_channels, 1))
         assert labels.min() >= 0
         assert denoising_method in ("none", "exp_weighted", "loot", "t", "coll")
+        denoising = denoising_method != "none"
 
-        self.use_zero = use_zero
-        self.use_outlier = use_outlier
+        self.use_zero = use_zero and denoising
+        self.use_outlier = use_outlier and denoising
         self.use_raw = use_raw
-        self.use_raw_outlier = use_raw_outlier
-        self.use_svd = use_svd
-        self.use_svd_outlier = use_svd_outlier
+        self.use_raw_outlier = use_raw_outlier and denoising
+        self.use_svd = use_svd and denoising
+        self.use_svd_outlier = use_svd_outlier and denoising
         self.n_subspaces = (
-            use_zero
-            + use_outlier
-            + use_raw
-            + use_raw_outlier
-            + use_svd
-            + use_svd_outlier
+            self.use_zero
+            + self.use_outlier
+            + self.use_raw
+            + self.use_raw_outlier
+            + self.use_svd
+            + self.use_svd_outlier
         )
         self.discard_outlier_classes = discard_outlier_classes
         self.pi_init = pi_init
@@ -167,26 +168,26 @@ class RunningTemplates(GrabAndFeaturize):
         self.global_sigma = global_sigma
 
         self.subspace_projectors = []
-        self.raw_subspace_ix = int(use_zero) + int(use_outlier)
-        self.svd_subspace_ix = int(use_zero) + int(use_outlier) + 1
+        self.raw_subspace_ix = int(self.use_zero) + int(self.use_outlier)
+        self.svd_subspace_ix = int(self.use_zero) + int(self.use_outlier) + 1
         inlier_mask = []
-        if use_zero:
+        if self.use_zero:
             self.subspace_projectors.append(torch.zeros_like)
             inlier_mask.append(1)
-        if use_outlier:
+        if self.use_outlier:
             self.subspace_projectors.append(torch.zeros_like)
             inlier_mask.append(0)
-        if use_raw:
+        if self.use_raw:
             self.subspace_projectors.append(identity)
             inlier_mask.append(1)
-        if use_svd:
+        if self.use_svd:
             assert self.tpca is not None
             self.subspace_projectors.append(self.tpca.force_project)
             inlier_mask.append(1)
-        if use_raw_outlier:
+        if self.use_raw_outlier:
             self.subspace_projectors.append(identity)
             inlier_mask.append(0)
-        if use_svd_outlier:
+        if self.use_svd_outlier:
             assert self.tpca is not None
             self.subspace_projectors.append(self.tpca.force_project)
             inlier_mask.append(0)
@@ -225,9 +226,12 @@ class RunningTemplates(GrabAndFeaturize):
 
         # restrict to valid times...
         fs = recording.sampling_frequency
-        realign_samples = waveform_cfg.ms_to_samples(
-            template_cfg.realign_shift_ms, sampling_frequency=fs
-        )
+        if template_cfg.realign_peaks:
+            realign_samples = waveform_cfg.ms_to_samples(
+                template_cfg.realign_shift_ms, sampling_frequency=fs
+            )
+        else:
+            realign_samples = 0
         sorting = restrict_to_valid_times(
             sorting, recording, waveform_cfg, pad=realign_samples
         )
@@ -287,7 +291,8 @@ class RunningTemplates(GrabAndFeaturize):
         sorting = sorting.drop_missing()
 
         # try to load denoiser if denoising is happening
-        if tsvd is None and template_cfg.use_svd:
+        denoising = template_cfg.denoising_method != "none"
+        if tsvd is None and template_cfg.use_svd and denoising:
             if not template_cfg.recompute_tsvd:
                 tsvd = load_stored_tsvd(sorting)
 
@@ -479,11 +484,12 @@ class RunningTemplates(GrabAndFeaturize):
     def process_chunk(
         self,
         chunk_start_samples,
+        *,
         chunk_end_samples=None,
         return_residual=False,
         skip_features=False,
         n_resid_snips=None,
-        to_numpy=False,
+        to_cpu=False,
     ):
         res = super().process_chunk(
             chunk_start_samples=chunk_start_samples,
@@ -491,13 +497,14 @@ class RunningTemplates(GrabAndFeaturize):
             chunk_end_samples=chunk_end_samples,
             return_residual=return_residual,
             skip_features=skip_features,
-            to_numpy=to_numpy,
+            to_cpu=to_cpu,
         )
-        if to_numpy or not res["n_spikes"]:
+        if to_cpu or not res["n_spikes"]:
             return res
 
         if self.tasks.active_step == "coll":
             # TODO: remove if we don't use this method.
+            assert chunk_end_samples is not None
             coll_kw = dict(
                 chunk_start_samples=chunk_start_samples,
                 chunk_length_samples=chunk_end_samples - chunk_start_samples,
@@ -1448,7 +1455,7 @@ def identity(x):
     return x
 
 
-def global_std_estimate(sorting, res_ds="residual", q=0.75):
+def global_std_estimate(sorting, res_ds="residual", q=0.75, eps=1e-6):
     with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
         ds: h5py.Dataset = h5[res_ds]  # pyright: ignore reportAssignmentType
         mads = np.zeros(len(ds))
@@ -1458,9 +1465,10 @@ def global_std_estimate(sorting, res_ds="residual", q=0.75):
             res = np.abs(res, out=res)
             mads[sli] = np.median(res, axis=(1, 2))
     mad = np.median(mads)
-    std = mad / ndtri(q)
+    std = (mad / ndtri(q)).item()
     logger.info(f"Global std dev estimate: {std:0.3f} ({q:0.3f}).")
-    return std.item()
+    std = max(std, eps)  # so things don't crash when running noise-free tests
+    return std
 
 
 def coll_weights(

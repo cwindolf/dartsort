@@ -10,7 +10,7 @@ from ..util import spiketorch
 from ..util.data_util import SpikeDataset
 from ..util.waveform_util import make_channel_index, get_channel_index_rel_inds
 
-from .peel_base import BasePeeler
+from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
 
 
 class ThresholdAndFeaturize(BasePeeler):
@@ -194,12 +194,13 @@ class ThresholdAndFeaturize(BasePeeler):
     def peel_chunk(
         self,
         traces,
+        *,
         chunk_start_samples=0,
         left_margin=0,
         right_margin=0,
         return_residual=False,
         return_waveforms=True,
-    ):
+    ) -> PeelingBatchResult:
         threshold_res = threshold_chunk(
             traces,
             self.channel_index,
@@ -227,21 +228,27 @@ class ThresholdAndFeaturize(BasePeeler):
             trough_priority=self.trough_priority,
             quiet=False,
         )
+        if not threshold_res["n_spikes"]:
+            return peeling_empty_result
 
         # get absolute times
-        times_samples = threshold_res["times_rel"] + chunk_start_samples
+        times_rel = threshold_res["times_rel"]
+        assert times_rel is not None
+        times_samples = times_rel + chunk_start_samples
 
-        peel_result = dict(
+        peel_result = PeelingBatchResult(
             n_spikes=threshold_res["n_spikes"],
             times_samples=times_samples,
             channels=threshold_res["channels"],
             voltages=threshold_res["voltages"],
-            collisioncleaned_waveforms=threshold_res["waveforms"],
         )
+        if return_waveforms:
+            assert "waveforms" in threshold_res
+            peel_result["collisioncleaned_waveforms"] = threshold_res["waveforms"]
         if self.is_random:
-            peel_result["orig_times_samples"] = (
-                threshold_res["orig_times_rel"] + chunk_start_samples
-            )
+            orig_times_rel = threshold_res["orig_times_rel"]
+            assert orig_times_rel is not None
+            peel_result["orig_times_samples"] = orig_times_rel + chunk_start_samples
             peel_result["orig_channels"] = threshold_res["orig_channels"]
         if return_residual:
             # note, this is same as the input.
@@ -278,9 +285,9 @@ def threshold_chunk(
     return_waveforms=True,
     rg=None,
     quiet=False,
-):
+) -> PeelingBatchResult:
     n_index = channel_index.shape[1]
-    times_rel, channels, energies = detect_and_deduplicate(
+    times_rel, channels, energies = detect_and_deduplicate(  # type: ignore
         traces,
         detection_threshold,
         relative_peak_channel_index=relative_peak_channel_index,
@@ -296,7 +303,7 @@ def threshold_chunk(
         cumulant_order=cumulant_order,
     )
     if not times_rel.numel():
-        return dict(
+        return PeelingBatchResult(
             n_spikes=0,
             orig_times_rel=times_rel,
             times_rel=times_rel,
@@ -343,14 +350,13 @@ def threshold_chunk(
     voltages = traces[orig_times_rel, orig_channels]
     n_detect = times_rel.numel()
     if not n_detect:
-        return dict(
+        return PeelingBatchResult(
             n_spikes=0,
             times_rel=times_rel,
             channels=channels,
             voltages=energies,
             orig_times_rel=orig_times_rel,
             orig_channels=orig_channels,
-            waveforms=None,
         )
 
     if max_spikes_per_chunk is not None:
@@ -371,7 +377,6 @@ def threshold_chunk(
             orig_times_rel = orig_times_rel[best]
 
     # load up the waveforms for this chunk
-    waveforms = None
     if return_waveforms:
         waveforms = spiketorch.grab_spikes(
             traces,
@@ -383,29 +388,33 @@ def threshold_chunk(
             already_padded=False,
             pad_value=torch.nan,
         )
+    else:
+        waveforms = None
 
     # offset times for caller
     orig_times_rel -= left_margin
     times_rel -= left_margin
 
-    return dict(
+    res = PeelingBatchResult(
         n_spikes=times_rel.numel(),
         orig_times_rel=orig_times_rel,
         orig_channels=orig_channels,
         times_rel=times_rel,
         channels=channels,
         voltages=voltages,
-        waveforms=waveforms,
     )
+    if waveforms is not None:
+        res["waveforms"] = waveforms
+    return res
 
 
 def perturb_detections(
     times_rel,
     channels,
-    thinning=0,
+    thinning: float=0,
     time_jitter=0,
     spatial_jitter_channel_index=None,
-    rg=None,
+    rg: np.random.Generator | None = None,
 ):
     keep = slice(None)
     if not (thinning or time_jitter or spatial_jitter_channel_index is not None):
@@ -417,6 +426,7 @@ def perturb_detections(
 
     if thinning:
         assert 0 <= thinning <= 1
+        assert rg is not None
         keep = rg.binomial(n=1, p=1.0 - thinning, size=n)
         keep = torch.from_numpy(np.flatnonzero(keep))
         keep = keep.to(times_rel)
@@ -426,12 +436,14 @@ def perturb_detections(
 
     n = len(times_rel)
     if time_jitter:
+        assert rg is not None
         jitter = rg.integers(low=-time_jitter, high=time_jitter + 1)
         times_rel = times_rel + torch.asarray(
             jitter, dtype=times_rel.dtype, device=times_rel.device
         )
 
     if spatial_jitter_channel_index is not None:
+        assert rg is not None
         n_channels = len(spatial_jitter_channel_index)
         n_valid = (spatial_jitter_channel_index < n_channels).sum(1)
         n_valid = n_valid[channels].cpu()

@@ -5,6 +5,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.spatial import KDTree
 import torch
+import torch.nn.functional as F
 
 from ..util import drift_util, waveform_util
 from ..util.data_util import DARTsortSorting
@@ -152,9 +153,14 @@ def templates_at_time(
     return_pitch_shifts=False,
     geom_kdtree=None,
     match_distance=None,
+    return_padded=False,
+    fill_value=torch.nan,
 ):
-    if registered_geom is None:
+    if registered_geom is None and not return_padded:
         return registered_templates
+    if registered_geom is None and return_padded:
+        assert torch.is_tensor(registered_templates)
+        return F.pad(registered_templates, (0, 1), value=fill_value)
     assert motion_est is not None
     assert registered_template_depths_um is not None
 
@@ -175,9 +181,10 @@ def templates_at_time(
         registered_geom,
         n_pitches_shift=pitch_shifts,
         registered_geom=geom,
-        fill_value=np.nan,
         target_kdtree=geom_kdtree,
         match_distance=match_distance,
+        fill_value=fill_value,
+        return_padded=return_padded,
     )
     if return_pitch_shifts:
         return pitch_shifts, unregistered_templates
@@ -203,6 +210,7 @@ def spatially_mask_templates(template_data, radius_um=0.0):
 
 @dataclass
 class LowRankTemplates:
+    unit_ids: np.ndarray
     temporal_components: np.ndarray
     singular_values: np.ndarray
     spatial_components: np.ndarray
@@ -260,11 +268,13 @@ def svd_compress_templates(
     dev = computation_cfg.actual_device()
 
     if hasattr(template_data, "templates"):
+        unit_ids = template_data.unit_ids
         templates = template_data.templates
         counts = template_data.spike_counts_by_channel
     else:
         templates = template_data
         counts = None
+        unit_ids = np.arange(len(templates))
 
     rank = min(rank, *templates.shape[1:])
 
@@ -332,7 +342,11 @@ def svd_compress_templates(
         spatial_components[isna] = np.nan
 
     return LowRankTemplates(
-        temporal_components, singular_values, spatial_components, counts
+        unit_ids=unit_ids,
+        temporal_components=temporal_components,
+        singular_values=singular_values,
+        spatial_components=spatial_components,
+        spike_counts_by_channel=counts,
     )
 
 
@@ -343,7 +357,9 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
+    tup = np.arange(
+        t, step=1.0 / temporal_upsampling_factor
+    )  # pyright: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(

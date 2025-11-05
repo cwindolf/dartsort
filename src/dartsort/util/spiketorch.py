@@ -180,16 +180,16 @@ def torch_add_at_(dest, ix, src, sign=1):
     Will add multiple times into the same indices. Check out
     docs for scatter_add_ and np.ufunc.at for more details.
     """
-    if sign == -1:
-        src = src.neg()
-    elif sign != 1:
-        src = sign * src
     flat_ix = ravel_multi_index(ix, dest.shape)
     if isinstance(src, (float, int)):
-        src = torch.tensor(src, dtype=dest.dtype, device=dest.device)
+        src = torch.tensor(src * sign, dtype=dest.dtype, device=dest.device)
         src = src.broadcast_to(flat_ix.numel())
     else:
         src = src.reshape(-1)
+        if sign == -1:
+            src = src._neg_view()
+        elif sign != 1:
+            src = sign * src
     dest.view(-1).scatter_add_(0, flat_ix.to(dest.device), src)
 
 
