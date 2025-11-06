@@ -1,3 +1,4 @@
+from typing import Any
 from weakref import proxy, CallableProxyType, ReferenceType
 from torch import Tensor
 from torch.nn import Module
@@ -5,7 +6,7 @@ from torch.nn import Module
 
 class BModule(Module):
     """This only exists to silence some pyright messages
-    
+
     And to extend torch behavior to keep some tensors on CPU without
     stressing too much.
     """
@@ -14,12 +15,13 @@ class BModule(Module):
         super().__init__(*args, **kwargs)
         self._cpu_buffers = {}
         self.b = BufGetter(proxy(self))
-        self.m = ModGetter(proxy(self))
 
     def register_cpu_buffer(self, name: str, buf: Tensor | None):
         self._cpu_buffers[name] = buf
 
-    def register_buffer_or_none(self, name: str, buf: Tensor | None, on_device: bool = True):
+    def register_buffer_or_none(
+        self, name: str, buf: Tensor | None, on_device: bool = True
+    ):
         if buf is None:
             setattr(self, name, None)
             self.register_cpu_buffer(name, None)
@@ -37,11 +39,3 @@ class BufGetter:
         if key in self.module._cpu_buffers:
             return self.module._cpu_buffers[key]
         return self.module.get_buffer(key)
-
-
-class ModGetter:
-    def __init__(self, module: "CallableProxyType[BModule]"):
-        self.module = module
-
-    def __getattr__(self, key) -> Module:
-        return self.module.get_submodule(key)

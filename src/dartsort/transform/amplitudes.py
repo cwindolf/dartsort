@@ -184,8 +184,9 @@ class Voltage(BaseWaveformFeaturizer):
         super().__init__(name=name, name_prefix=name_prefix)
         self.dtype = dtype
 
-    def transform(self, waveforms, *, channels, **unused):
-        w = waveforms.take_along_dim(channels[:, None, None], dim=2)[:, :, 0]
+    def transform(self, waveforms, **unused):
+        c = ptp(waveforms).nan_to_num_().argmax(dim=1)
+        w = waveforms.take_along_dim(c[:, None, None], dim=2)[:, :, 0]
         vix = w.abs().argmax(dim=1)
         voltages = w.take_along_dim(vix[:, None], dim=1)
         return {self.name: voltages[:, 0]}
