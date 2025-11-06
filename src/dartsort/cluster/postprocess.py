@@ -42,13 +42,13 @@ def realign_and_chuck_noisy_template_units(
             npz = Path(template_save_folder) / template_npz_filename
             if npz.exists():
                 return sorting, TemplateData.from_npz(npz)
-    h5_path = sorting.parent_h5_path
 
     if template_data is None:
+        print(f"hi {template_cfg=}")
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
-            template_cfg,
+            template_cfg=template_cfg,
             motion_est=motion_est,
             tsvd=tsvd,
             waveform_cfg=waveform_cfg,
@@ -151,6 +151,10 @@ def postprocess(
         if template_npz_path.exists():
             return sorting, TemplateData.from_npz(template_npz_path)
 
+    assert sorting.labels is not None
+    if (sorting.labels < 0).all():
+        raise ValueError("No labels in sorting input to template postprocessing.")
+
     # apply my time shifts only once and remove them so template extractor doesn't do it again
     if sorting.extra_features and "time_shifts" in sorting.extra_features:
         logger.info("Sorting had time_shifts, applying before getting templates.")
@@ -160,17 +164,15 @@ def postprocess(
 
     # get tsvd to share across steps
     if tsvd is None and template_cfg.denoising_method not in (None, "none"):
+        trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+        full = waveform_cfg.spike_length_samples(recording.sampling_frequency)
         tsvd = fit_tsvd(
             recording,
             sorting,
             denoising_rank=template_cfg.denoising_rank,
             denoising_fit_radius=template_cfg.denoising_fit_radius,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(
-                recording.sampling_frequency
-            ),
-            spike_length_samples=waveform_cfg.spike_length_samples(
-                recording.sampling_frequency
-            ),
+            trough_offset_samples=trough,
+            spike_length_samples=full,
         )
     h5_path = sorting.parent_h5_path
 
@@ -188,6 +190,9 @@ def postprocess(
     assert sorting.parent_h5_path == h5_path
     fs_ms = recording.sampling_frequency / 1000
     max_shift_samples = int(template_cfg.realign_shift_ms * fs_ms)
+    assert sorting.labels is not None
+    if (sorting.labels < 0).all():
+        raise ValueError("All units were thrown away during template postprocessing.")
 
     # merge
     merge_cfg = matching_cfg.template_merge_cfg
@@ -247,35 +252,22 @@ def postprocess(
 
     # pack up the the templates
     original_keep = np.isin(new_unit_ids, ul[uc <= 1])
-    templates = np.concatenate(
-        [template_data.templates[original_keep], recompute_template_data.templates],
-        axis=0,
-    )
-    spike_counts = np.concatenate(
-        [
-            template_data.spike_counts[original_keep],
-            recompute_template_data.spike_counts,
-        ],
-        axis=0,
-    )
+    otemps = template_data.templates[original_keep]
+    templates = np.concatenate([otemps, recompute_template_data.templates], axis=0)
+    osc = template_data.spike_counts[original_keep]
+    spike_counts = np.concatenate([osc, recompute_template_data.spike_counts], axis=0)
     spike_counts_by_channel = None
     if template_data.spike_counts_by_channel is not None:
-        spike_counts_by_channel = np.concatenate(
-            [
-                template_data.spike_counts_by_channel[original_keep],
-                recompute_template_data.spike_counts_by_channel,
-            ],
-            axis=0,
-        )
+        ocounts = template_data.spike_counts_by_channel[original_keep]
+        new_counts = recompute_template_data.spike_counts_by_channel
+        assert new_counts is not None
+        spike_counts_by_channel = np.concatenate([ocounts, new_counts], axis=0)
     raw_std_dev = None
     if template_data.raw_std_dev is not None:
-        raw_std_dev = np.concatenate(
-            [
-                template_data.raw_std_dev[original_keep],
-                recompute_template_data.raw_std_dev,
-            ],
-            axis=0,
-        )
+        ostd = template_data.raw_std_dev[original_keep]
+        new_std = recompute_template_data.raw_std_dev
+        assert new_std is not None
+        raw_std_dev = np.concatenate([ostd, new_std], axis=0)
     template_data = TemplateData(
         templates,
         unit_ids=np.arange(len(templates)),

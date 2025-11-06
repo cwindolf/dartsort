@@ -313,8 +313,6 @@ def _from_config_with_realigned_sorting(
         template_data = peeler.compute_template_data(
             show_progress=show_progress, computation_cfg=computation_cfg
         )
-        print(f"{peeler.properties=}")
-        print(f"{template_data.properties=}")
         realigned_sorting = apply_time_shifts(
             sorting,
             template_data=template_data,

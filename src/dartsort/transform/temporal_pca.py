@@ -268,7 +268,7 @@ class BaseTemporalPCA(BaseWaveformModule):
                 self.temporal_slice.stop - self.temporal_slice.start
             )
         self.initialize_spike_length_dependent_params()
-        if hasattr(pca, 'mean_'):
+        if hasattr(pca, "mean_"):
             self.mean.copy_(torch.from_numpy(pca.mean_))
             self.center = not (self.mean == 0.0).all()
         else:
@@ -288,9 +288,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
             waveforms, channels, self.channel_index
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
-        return set_channels_in_probe(
-            waveforms_in_probe, waveforms, channels_in_probe, in_place=True
-        )
+        return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)
 
 
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):

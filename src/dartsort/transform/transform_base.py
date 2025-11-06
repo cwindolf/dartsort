@@ -3,9 +3,10 @@ from typing import Any, Iterable
 import torch
 
 from ..util.data_util import SpikeDataset
+from ..util.torch_util import BModule
 
 
-class BaseWaveformModule(torch.nn.Module):
+class BaseWaveformModule(BModule):
     is_denoiser = False
     is_featurizer = False
     default_name = ""

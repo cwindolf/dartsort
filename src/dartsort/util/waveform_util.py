@@ -211,6 +211,7 @@ def make_channel_index(
 ) -> np.ndarray: ...
 
 
+@overload
 def make_channel_index(
     geom: np.ndarray | torch.Tensor,
     radius: float,
@@ -219,7 +220,18 @@ def make_channel_index(
     p: int | float = 2,
     pad_val: int | None = None,
     fill_holes: bool = False,
-) -> np.ndarray | torch.LongTensor:
+) -> np.ndarray | torch.Tensor: ...
+
+
+def make_channel_index(
+    geom: np.ndarray | torch.Tensor,
+    radius: float,
+    *,
+    to_torch: bool = False,
+    p: int | float = 2,
+    pad_val: int | None = None,
+    fill_holes: bool = False,
+) -> np.ndarray | torch.Tensor:
     """
     Compute an array whose whose ith row contains the neighbors for the ith channel
     """

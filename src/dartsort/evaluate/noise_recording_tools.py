@@ -14,8 +14,9 @@ from .simlib import default_temporal_kernel_npy, rbf_kernel_sqrt, generate_geom
 
 
 def get_background_recording(
-    noise_recording_folder,
+    noise_recording_folder: Path | None,
     duration_samples,
+    geom=None,
     probe_kwargs=None,
     noise_kind="stationary_factorized_rbf",
     noise_spatial_kernel_bandwidth=15.0,
@@ -26,12 +27,14 @@ def get_background_recording(
     sampling_frequency=30_000.0,
     white_noise_scale=1.0,
     n_jobs=1,
+    in_memory=False,
     overwrite=False,
 ):
-    if (noise_recording_folder / "binary.json").exists():
+    if noise_recording_folder is not None and (noise_recording_folder / "binary.json").exists():
         return read_binary_folder(noise_recording_folder)
 
-    geom = generate_geom(**probe_kwargs or {})
+    if geom is None:
+        geom = generate_geom(**probe_kwargs or {})
     n_channels = len(geom)
     scale = 0.0 if noise_kind == "zero" else white_noise_scale
     recording = WhiteNoiseRecording(
@@ -47,7 +50,10 @@ def get_background_recording(
     if noise_kind == "zero":
         return recording
 
+    if noise_kind == "white" and in_memory:
+        return recording.save_to_memory(n_jobs=1)
     if noise_kind == "white":
+        assert noise_recording_folder is not None
         return recording.save_to_folder(noise_recording_folder, n_jobs=1)
 
     assert noise_kind == "stationary_factorized_rbf"
@@ -67,6 +73,8 @@ def get_background_recording(
         block_size=block_size,
         t=noise_fft_t,
     )
+    assert not in_memory, "Not implemented yet."
+    assert noise_recording_folder is not None
 
     # white noise must be cached before convolving
     with tempfile.TemporaryDirectory() as tdir:

@@ -72,9 +72,7 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
     def transform(self, waveforms, **unused):
         features = {}
         if self.peak_amplitude_vectors:
-            features[self.peak_amplitude_vectors_name] = (
-                waveforms.abs().max(dim=1).values
-            )
+            features[self.peak_amplitude_vectors_name] = waveforms.abs().amax(dim=1)
 
         max_vectors = min_vectors = ptp_vectors = None
         maxs = mins = ptps = None
@@ -133,7 +131,7 @@ class AmplitudeVector(BaseWaveformFeaturizer):
 
     def transform(self, waveforms, **unused):
         if self.kind == "peak":
-            return {self.name: waveforms.abs().max(dim=1).values}
+            return {self.name: waveforms.abs().amax(dim=1)}
         elif self.kind == "ptp":
             return {self.name: ptp(waveforms, dim=1)}
 
@@ -162,11 +160,9 @@ class MaxAmplitude(BaseWaveformFeaturizer):
 
     def transform(self, waveforms, **unused):
         if self.kind == "peak":
-            return {self.name: torch.nan_to_num(waveforms.abs()).max(dim=(1, 2)).values}
+            return {self.name: torch.nan_to_num(waveforms.abs()).amax(dim=(1, 2))}
         elif self.kind == "ptp":
-            return {
-                self.name: torch.nan_to_num(ptp(waveforms, dim=1)).max(dim=1).values
-            }
+            return {self.name: torch.nan_to_num(ptp(waveforms, dim=1)).amax(dim=1)}
 
 
 class Voltage(BaseWaveformFeaturizer):
@@ -188,8 +184,8 @@ class Voltage(BaseWaveformFeaturizer):
         super().__init__(name=name, name_prefix=name_prefix)
         self.dtype = dtype
 
-    def transform(self, waveforms, **unused):
-        waveforms = waveforms.view(len(waveforms), -1)
-        nanmax = torch.nan_to_num(waveforms).abs_().max(dim=1, keepdim=True)
-        voltages = torch.take_along_dim(waveforms, nanmax.indices, dim=1)
+    def transform(self, waveforms, *, channels, **unused):
+        w = waveforms.take_along_dim(channels[:, None, None], dim=2)[:, :, 0]
+        vix = w.abs().argmax(dim=1)
+        voltages = w.take_along_dim(vix[:, None], dim=1)
         return {self.name: voltages[:, 0]}

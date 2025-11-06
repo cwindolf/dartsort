@@ -11,6 +11,7 @@ from ..util.waveform_util import (
 )
 from ..util.interpolation_util import interp_precompute, kernel_interpolate
 from ..templates.template_util import svd_compress_templates
+from ..templates.templates import TemplateData
 
 
 def get_template_simulator(
@@ -45,6 +46,18 @@ def get_template_simulator(
             temporal_jitter=temporal_jitter,
             **template_simulator_kwargs,
         )
+    if templates_kind == "static":
+        assert "template_data" in template_simulator_kwargs
+        template_data = template_simulator_kwargs.pop("template_data")
+        if geom is not None:
+            assert np.array_equal(geom, template_data.registered_geom)
+        assert not common_reference
+        assert n_units == len(template_data.unit_ids)
+        return StaticTemplateSimulator(
+            template_data=template_data,
+            temporal_jitter=temporal_jitter,
+            **template_simulator_kwargs,
+        )
     assert False
 
 
@@ -66,7 +79,61 @@ def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="32"):
 # -- template sims
 
 
-class PointSource3ExpSimulator:
+class BaseTemplateSimulator:
+    n_units: int
+    geom: np.ndarray
+
+    def trough_offset_samples(self) -> int:
+        raise NotImplementedError
+
+    def spike_length_samples(self) -> int:
+        raise NotImplementedError
+
+    def templates(
+        self,
+        drift: float = 0.0,
+        up: bool = False,
+        padded: bool = False,
+        pad_value: float = float("nan"),
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Returns (pos, templates) which are (K, 3) and (K, t, C)."""
+        raise NotImplementedError
+
+
+class StaticTemplateSimulator(BaseTemplateSimulator):
+    """Super simple version."""
+
+    def __init__(self, template_data: TemplateData, temporal_jitter: int = 1):
+        assert template_data.registered_geom is not None
+        self.n_units = template_data.unit_ids.size
+        self.geom = template_data.registered_geom
+        self.template_data = template_data
+        self.temporal_jitter = temporal_jitter
+        self.templates_up = upsample_multichan(self.template_data.templates, temporal_jitter=temporal_jitter)
+
+    def trough_offset_samples(self) -> int:
+        return self.template_data.trough_offset_samples
+
+    def spike_length_samples(self) -> int:
+        return self.template_data.spike_length_samples
+
+    def templates(
+        self,
+        drift: float = 0.0,
+        up: bool = False,
+        padded: bool = False,
+        pad_value: float = float("nan"),
+    ):
+        assert not drift
+        loc = self.template_data.template_locations()
+        temps = self.templates_up if up else self.template_data.templates
+        if padded:
+            zpads = [(0, 0)] * (temps.ndim - 1)
+            temps = np.pad(temps, [*zpads, (0, 1)], constant_values=pad_value)
+        return loc, temps
+
+
+class PointSource3ExpSimulator(BaseTemplateSimulator):
     def __init__(
         self,
         geom,
@@ -275,10 +342,10 @@ class PointSource3ExpSimulator:
         return pos, alpha, templates
 
 
-class TemplateLibrarySimulator:
+class TemplateLibrarySimulator(BaseTemplateSimulator):
     def __init__(
         self,
-        geom,
+        geom: np.ndarray,
         templates_local,
         pos_local,
         radius=250.0,
@@ -288,7 +355,6 @@ class TemplateLibrarySimulator:
         interp_kernel_name="thinplate",
         extrap_method="kernel",
         extrap_kernel_name="rbf",
-        rank=10,
         kriging_poly_degree=0,
         trough_offset_samples=42,
     ):
@@ -297,7 +363,7 @@ class TemplateLibrarySimulator:
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
         self.radius = radius
-        self.channel_index = make_channel_index(geom, radius)
+        self.channel_index = make_channel_index(geom=geom, radius=radius, to_torch=False)
         self._trough_offset_samples = trough_offset_samples
 
         self.interp_method = interp_method
@@ -372,7 +438,7 @@ class TemplateLibrarySimulator:
         templates = templates.astype(dtype)
 
         assert np.isfinite(templates).all()
-        channel_index = make_channel_index(geom, extract_radius)
+        channel_index = make_channel_index(geom, extract_radius, to_torch=False)
         main_channels = np.abs(templates).max(1).argmax(1)
         template_channels = channel_index[main_channels]
 

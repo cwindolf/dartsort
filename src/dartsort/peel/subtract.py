@@ -43,7 +43,7 @@ class SubtractionPeeler(BasePeeler):
         subtract_channel_index=None,
         trough_offset_samples=42,
         spike_length_samples=121,
-        detection_threshold=4,
+        detection_threshold=4.0,
         chunk_length_samples=30_000,
         peak_sign="both",
         realign_to_denoiser=False,
@@ -155,6 +155,7 @@ class SubtractionPeeler(BasePeeler):
             )
         else:
             self.spatial_dedup_channel_index = None
+            self.spatial_dedup_rel_inds = None
         if relative_peak_channel_index is not None:
             self.register_buffer(
                 "relative_peak_channel_index", relative_peak_channel_index
@@ -643,7 +644,7 @@ def subtract_chunk(
     spike_length_samples=121,
     left_margin=0,
     right_margin=0,
-    detection_threshold=4,
+    detection_threshold=4.0,
     peak_sign="both",
     realign_to_denoiser=False,
     denoiser_realignment_shift=5,

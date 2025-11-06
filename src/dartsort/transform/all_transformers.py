@@ -18,6 +18,7 @@ from .temporal_pca import (
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
 )
+from .matching_denoiser import MatchingPursuitDenoiser
 from .transform_base import Passthrough, Waveform
 
 all_transformers = [
@@ -39,6 +40,7 @@ all_transformers = [
     SupervisedDenoiser,
     Passthrough,
     SingleChannelTemplates,
+    MatchingPursuitDenoiser,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

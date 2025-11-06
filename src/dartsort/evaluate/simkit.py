@@ -38,11 +38,13 @@ logger = getLogger(__name__)
 
 
 def generate_simulation(
-    folder,
-    noise_recording_folder,
-    n_units,
-    duration_seconds,
+    folder: str | Path | None,
+    noise_recording_folder: str | Path | None,
+    *,
+    n_units: int,
+    duration_seconds: float,
     # probe parameters
+    geom=None,
     probe_kwargs=None,
     # sorting parameters
     firing_kind="uniform",
@@ -57,12 +59,13 @@ def generate_simulation(
     # template args
     templates_kind="3exp",
     template_library=None,
-    template_simulator_kwargs=None,
+    template_simulator_kwargs: dict | None=None,
     # general parameters
     drift_type="triangle",
     drift_speed=0.0,
     drift_period=30.0,
     temporal_jitter=16,
+    temporal_jitter_family="uniform",
     amplitude_jitter=0.05,
     amp_jitter_family="uniform",
     common_reference=True,
@@ -81,6 +84,7 @@ def generate_simulation(
     max_drift_per_chunk=0.5,
     max_chunk_len_s=1.0,
     random_seed=0,
+    noise_in_memory=False,
     overwrite=False,
     n_jobs=1,
     no_save=False,
@@ -92,12 +96,16 @@ def generate_simulation(
         except Exception:
             pass
 
-    noise_recording_folder = resolve_path(noise_recording_folder)
+    if noise_recording_folder is not None:
+        noise_recording_folder = resolve_path(noise_recording_folder)
+    else:
+        assert noise_in_memory
     duration_samples = int(duration_seconds * sampling_frequency)
     with warnings.catch_warnings(record=True) as ws:
         noise_recording = get_background_recording(
             noise_recording_folder,
             duration_samples=duration_samples,
+            geom=geom,
             probe_kwargs=probe_kwargs,
             noise_kind=noise_kind,
             noise_spatial_kernel_bandwidth=noise_spatial_kernel_bandwidth,
@@ -108,6 +116,7 @@ def generate_simulation(
             white_noise_scale=white_noise_scale,
             sampling_frequency=sampling_frequency,
             n_jobs=n_jobs,
+            in_memory=noise_in_memory,
             overwrite=overwrite,
         )
         for w in ws:
@@ -123,7 +132,10 @@ def generate_simulation(
     if just_noise:
         return
 
-    folder = resolve_path(folder)
+    if folder is not None:
+        folder = resolve_path(folder)
+    else:
+        assert no_save
 
     template_simulator = get_template_simulator(
         n_units=n_units,
@@ -146,6 +158,7 @@ def generate_simulation(
         drift_speed=drift_speed,
         drift_period=drift_period,
         amplitude_jitter=amplitude_jitter,
+        temporal_jitter_family=temporal_jitter_family,
         temporal_jitter=temporal_jitter,
         random_seed=random_seed,
         refractory_ms=refractory_ms,
@@ -221,6 +234,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             )
         )
         self.segment: InjectSpikesPreprocessorSegment = self._recording_segments[0]
+
+    def basic_sorting(self) -> DARTsortSorting:
+        return self.segment.basic_sorting()
 
     def drift(self, t_samples):
         return self.segment.drift(t_samples)
@@ -481,6 +497,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         amplitude_jitter,
         amp_jitter_family,
         temporal_jitter,
+        temporal_jitter_family,
         random_seed,
         refractory_ms,
         globally_refractory,
@@ -496,6 +513,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         self.drift_speed = drift_speed
         self.drift_period = drift_period
         self.temporal_jitter = temporal_jitter
+        self.temporal_jitter_family = temporal_jitter_family
         self.features_dtype = features_dtype
         self.template_simulator = template_simulator
         self.refractory_samples = int(
@@ -566,11 +584,21 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             self.scalings = np.ones(1, dtype=features_dtype)
             self.scalings = np.broadcast_to(self.scalings, (self.n_spikes,))
 
-        if self.temporal_jitter > 1:
+        if self.temporal_jitter > 1 and temporal_jitter_family == "uniform":
             self.jitter_ix = rg.integers(self.temporal_jitter, size=self.n_spikes)
+        elif self.temporal_jitter > 1 and temporal_jitter_family == "by_unit":
+            self.jitter_ix = self.labels % self.n_units
         else:
             self.jitter_ix = np.zeros(1, dtype=np.int64)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
+
+    def basic_sorting(self) -> DARTsortSorting:
+        return DARTsortSorting(
+            times_samples=self.times_samples,
+            labels=self.labels,
+            channels=np.zeros_like(self.times_samples),
+            sampling_frequency=self.sampling_frequency,
+        )
 
     def drift(self, t_samples):
         if not self.drift_speed:
