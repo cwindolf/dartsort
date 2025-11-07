@@ -405,7 +405,9 @@ class SubtractionPeeler(BasePeeler):
 
         return peel_result
 
-    def precompute_peeler_models(self, save_folder, overwrite=False, computation_cfg=None):
+    def precompute_peeler_models(
+        self, save_folder, overwrite=False, computation_cfg=None
+    ):
         self.subtraction_denoising_pipeline.precompute()
 
     def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
@@ -583,8 +585,6 @@ class SubtractionPeeler(BasePeeler):
             cumulant_order=self.cumulant_order,
             remove_exact_duplicates=self.remove_exact_duplicates,
         )
-        device = computation_cfg.actual_device()
-        trainer.to(device)
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
             temp_hdf5_filename = Path(temp_dir) / f"subtraction_denoiser0_fit.h5"
@@ -598,6 +598,7 @@ class SubtractionPeeler(BasePeeler):
                 )
 
                 # get fit weights
+                device = computation_cfg.actual_device()
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling,

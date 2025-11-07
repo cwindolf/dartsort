@@ -40,7 +40,7 @@ class BaseWaveformModule(BModule):
 
     def __getstate__(self):
         self._hook.remove()
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         del state["_hook"]
         return state
 

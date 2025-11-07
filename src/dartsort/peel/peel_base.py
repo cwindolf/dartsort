@@ -883,12 +883,12 @@ class BasePeeler(BModule):
     # -- thread-local rngs. they're not thread safe, and locals can't be pickled
 
     def __getstate__(self):
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         del state["_rgs"]
         return state
 
     def __setstate__(self, state):
-        self.__dict__.update(state)
+        super().__setstate__(state)
         self._rgs = local()
 
     @property
