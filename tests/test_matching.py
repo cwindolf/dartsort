@@ -25,8 +25,8 @@ nofeatcfg = dartsort.FeaturizationConfig(
 spike_length_samples = 121
 trough_offset_samples = 42
 
-RES_ATOL = 1e-5
-CONV_ATOL = 0.1
+RES_ATOL = 1e-10
+CONV_ATOL = 1e-4
 
 
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
@@ -248,26 +248,44 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 tupb = (tempupb * lrt.singular_values[ib]) @ lrt.spatial_components[ib]
                 tc = (templates[ia] * tupb).sum()
 
-                template_a = torch.as_tensor(templates[ia][None])
+                # test against a very direct way of computing this convolution
+                # just directly create the actual templates
+                temp_a = torch.as_tensor(templates[ia])
+                print(f"{temp_a.shape=}")
                 ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
-                conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
-                conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
-                conv_in = torch.as_tensor(tempupb[None]).mT[None]
-                pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
-                assert torch.isclose(pcf, pconv_).all()
+                print(f"{ssb.shape=} {tempupb.shape=}")
+                temp_b = torch.as_tensor(tempupb) @ (torch.as_tensor(ssb))
+                print(f"{temp_b.shape=}")
 
-                pconv2 = (
-                    F.conv2d(
-                        torch.as_tensor(templates[ia])[None, None],
-                        torch.as_tensor(tupb)[None, None],
-                    )
-                    .squeeze()
-                    .numpy(force=True)
+                pconv2 = F.conv2d(
+                    temp_a[None, None], temp_b[None, None], padding=(temp_a.shape[0] - 1, 0)
                 )
-                assert np.isclose(pconv2, tc)
+                print(f"{pconv2.shape=}")
+                print(f"{pconv.shape=}")
+                print(f"{pc.shape=}")
+                pconv2 = pconv2[0, 0, :, 0]
+
+
+                # template_a = torch.as_tensor(templates[ia][None])
+                # ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
+                # conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
+                # conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
+                # conv_in = torch.as_tensor(tempupb[None]).mT[None]
+                # pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
+                # pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
+                # assert torch.isclose(pcf, pconv_).all()
+
+                # pconv2 = (
+                #     F.conv2d(
+                #         torch.as_tensor(templates[ia])[None, None],
+                #         torch.as_tensor(tupb)[None, None],
+                #     )
+                #     .squeeze()
+                #     .numpy(force=True)
+                # )
+                assert np.allclose(pconv2.numpy()[::-1], pconv)
                 assert np.isclose(pc, tc)
-                assert np.isclose(pconv1, pc)
+                # assert np.isclose(pconv1, pc)
 
         res = matcher.peel_chunk(
             torch.from_numpy(rec.get_traces().copy()),
@@ -341,14 +359,14 @@ def test_static(tmp_path, up_factor, cd_iter):
             overwrite=True,
         )
         matching_cfg = dartsort.MatchingConfig(
-                threshold=0.01,
-                template_temporal_upsampling_factor=up_factor,
-                amplitude_scaling_variance=0.0,
-                coarse_approx_error_threshold=0.0,
-                conv_ignore_threshold=0.0,
-                template_svd_compression_rank=2,
-                cd_iter=cd_iter,
-            )
+            threshold=0.01,
+            template_temporal_upsampling_factor=up_factor,
+            amplitude_scaling_variance=0.0,
+            coarse_approx_error_threshold=0.0,
+            conv_ignore_threshold=0.0,
+            template_svd_compression_rank=2,
+            cd_iter=cd_iter,
+        )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,

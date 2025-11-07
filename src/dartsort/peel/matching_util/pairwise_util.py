@@ -674,13 +674,6 @@ def correlate_pairs_lowrank(
     should contain lots of duplicates, since they are already representing
     pairs.
 
-    Templates Ka = Sa Ta, Kb = Sb Tb. The channel-summed convolution is
-        (Ka (*) Kb) = sum_c Ka(c) * Kb(c)
-                    = (Sb.T @ Ka) (*) Tb
-                    = (Sb.T @ Sa @ Ta) (*) Tb
-    where * is cross-correlation, and (*) is channel (or rank) summed.
-    We use full-height conv2d to do rank-summed convs.
-
     Returns
     -------
     pconv, kept
@@ -708,6 +701,8 @@ def correlate_pairs_lowrank(
         max_shift = 0
     elif max_shift == "same":
         max_shift = t // 2
+    else:
+        assert isinstance(max_shift, int)
 
     # batch over n_pairs for memory reasons
     pconv = torch.zeros(
@@ -717,6 +712,7 @@ def correlate_pairs_lowrank(
     )
     for istart in range(0, n_pairs, batch_size):
         iend = min(istart + batch_size, n_pairs)
+        nbatch = iend - istart
         ix = slice(istart, iend)
 
         spatial_a_ = spatial_a[ix_a[conv_ix][ix]]
@@ -728,22 +724,17 @@ def correlate_pairs_lowrank(
             spatial_a_ = spatial_a_ * active[:, None, :]
             spatial_b_ = spatial_b_ * active[:, None, :]
 
-        # want conv filter: nco, 1, rank, t
-        template_a = torch.bmm(temporal_a[ix_a[conv_ix][ix]], spatial_a_)
-        conv_filt = torch.bmm(spatial_b_, template_a.mT)
-        conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
+        ta = temporal_a[ix_a[conv_ix][ix]]
+        tb = temporal_b[conv_compressed_upsampled_ix_b[ix]]
+        assert ta.shape == tb.shape == (nbatch, t, rank)
 
-        # 1, nco, rank, t
-        conv_in = temporal_b[conv_compressed_upsampled_ix_b[ix]].mT[None]
-
-        # conv2d:
-        # depthwise, chans=nco. batch=1. h=rank. w=t. out: nup=1, nco, 1, 2p+1.
-        # input (conv_in): nup, nco, rank, t.
-        # filters (conv_filt): nco, 1, rank, t. (groups=nco).
-        pconv_ = F.conv2d(
-            conv_in, conv_filt, padding=(0, max_shift), groups=iend - istart
+        # # we want to convolve templates A and B. have to do rank^2
+        # because the basis is not shared.
+        sb_ta_sa = torch.einsum(
+            "ntr,nrc,nqc->rnqt", temporal_a[ix_a[conv_ix][ix]], spatial_a_, spatial_b_
         )
-        pconv[istart:iend] = pconv_[0, :, 0, :]  # nco, nup, time
+        pc = F.conv2d(sb_ta_sa, tb.mT[:, None], groups=nbatch, padding=(0, max_shift))
+        pconv[istart:iend] = torch.flip(pc.sum(0)[:, 0], dims=(1,))
 
     # more stringent covisibility
     if conv_ignore_threshold is not None:
