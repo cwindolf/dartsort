@@ -81,16 +81,16 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_cfg,
-            dartsort.MatchingConfig(
+            waveform_cfg=dartsort.default_waveform_cfg,
+            matching_cfg=dartsort.MatchingConfig(
                 amplitude_scaling_variance=scaling,
                 threshold=0.01,
                 template_temporal_upsampling_factor=1,
                 cd_iter=cd_iter,
                 coarse_cd=coarse_cd,
             ),
-            nofeatcfg,
-            template_data,
+            featurization_cfg=nofeatcfg,
+            template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
@@ -115,14 +115,14 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
-            dartsort.default_waveform_cfg,
-            dartsort.MatchingConfig(
+            waveform_cfg=dartsort.default_waveform_cfg,
+            matching_cfg=dartsort.MatchingConfig(
                 threshold=0.01,
                 amplitude_scaling_variance=0.0,
                 template_temporal_upsampling_factor=8,
             ),
-            nofeatcfg,
-            template_data,
+            featurization_cfg=nofeatcfg,
+            template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
@@ -258,13 +258,14 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 print(f"{temp_b.shape=}")
 
                 pconv2 = F.conv2d(
-                    temp_a[None, None], temp_b[None, None], padding=(temp_a.shape[0] - 1, 0)
+                    temp_a[None, None],
+                    temp_b[None, None],
+                    padding=(temp_a.shape[0] - 1, 0),
                 )
                 print(f"{pconv2.shape=}")
                 print(f"{pconv.shape=}")
                 print(f"{pc.shape=}")
                 pconv2 = pconv2[0, 0, :, 0]
-
 
                 # template_a = torch.as_tensor(templates[ia][None])
                 # ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
@@ -552,6 +553,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             featurization_cfg=featconf,
             matching_cfg=matchconf,
         )
+        assert st.scores is not None
         assert np.all(st.scores > 0)
 
         (tmp_path / "match2").mkdir()

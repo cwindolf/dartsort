@@ -1,11 +1,12 @@
-import torch
 import numpy as np
+import torch
 
-from ..util import universal_util, waveform_util
+from ..templates.template_util import LowRankTemplates, compressed_upsampled_templates
 from ..transform import WaveformPipeline
+from ..util import universal_util, waveform_util
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
+from .matching_util.compressed_upsampled import CompressedUpsampledMatchingTemplates
 from .matching_util.pairwise import SeparablePairwiseConv
-from ..templates.template_util import LowRankTemplates
 
 
 class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
@@ -50,6 +51,8 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         fit_subsampling_random_state=0,
         fit_sampling="random",
         fit_max_reweighting=4.0,
+        refractory_radius_frames=10,
+        max_iter=1000,
         dtype=torch.float,
     ):
         shapes, footprints, template_data = (
@@ -76,6 +79,8 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             )
         )
 
+        # TODO: this should all be put in a matchingtemplate+builder
+        # so that it is lazy and resuming works better.
         Nf = len(footprints)
         Ns = len(shapes)
         shapes_ixd = torch.asarray(shapes)[None]
@@ -85,6 +90,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         footprints_ixd = footprints_ixd.broadcast_to((Nf, Ns, *footprints.shape[1:]))
         footprints_ixd = footprints_ixd.reshape(Nf * Ns, 1, *footprints.shape[1:])
         low_rank_templates = LowRankTemplates(
+            unit_ids=np.arange(Nf * Ns),
             temporal_components=shapes_ixd.numpy(),
             singular_values=shapes_ixd.new_ones(Nf * Ns, 1).numpy(),
             spatial_components=footprints_ixd.numpy(),
@@ -93,17 +99,28 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             ),
         )
         pairwise_conv_db = SeparablePairwiseConv(footprints, shapes)
-        super().__init__(
-            recording,
-            template_data,
-            channel_index,
-            featurization_pipeline,
-            pairwise_conv_db=pairwise_conv_db,
+
+        cupt = compressed_upsampled_templates(
+            low_rank_templates.temporal_components, max_upsample=1
+        )
+
+        # TODO: re-using the individually compressed basis algorithm here
+        # which is general enough that it works, but for this separable
+        # basis there is a faster algorithm.
+        matching_templates = CompressedUpsampledMatchingTemplates(
             low_rank_templates=low_rank_templates,
+            pconv_db=pairwise_conv_db,
+            compressed_upsampled_temporal=cupt,
+        )
+
+        super().__init__(
+            recording=recording,
+            matching_templates=matching_templates,
+            channel_index=channel_index,
+            featurization_pipeline=featurization_pipeline,
             threshold=threshold,
             amplitude_scaling_variance=amplitude_scaling_variance,
             amplitude_scaling_boundary=amplitude_scaling_boundary,
-            # usual gizmos
             trough_offset_samples=trough_offset_samples,
             chunk_length_samples=chunk_length_samples,
             n_seconds_fit=n_seconds_fit,
@@ -113,20 +130,12 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             fit_sampling=fit_sampling,
             fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
-            # matching params which don't need setting
-            svd_compression_rank=1,
-            min_channel_amplitude=0.0,
-            motion_est=None,
-            coarse_approx_error_threshold=0.0,
-            conv_ignore_threshold=0.0,
-            coarse_objective=True,
-            temporal_upsampling_factor=1,
-            refractory_radius_frames=10,
-            max_iter=1000,
+            refractory_radius_frames=refractory_radius_frames,
+            max_iter=max_iter,
         )
 
     @classmethod
-    def from_config(cls, recording, universal_cfg, featurization_cfg):
+    def from_config(cls, recording, *, universal_cfg, featurization_cfg):  # type: ignore
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = waveform_util.make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True

@@ -118,6 +118,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
     cumulant_order = None
+    type0 = type
     if type.endswith("_cumulant"):
         cumulant_order = 2
         type = type.removesuffix("_cumulant")
@@ -144,13 +145,13 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
-        count_dif_tol = 0.1
+        count_dif_tol = 0.075
     elif type == "universal":
-        count_dif_tol = 0.5
+        count_dif_tol = 0.01
     elif type == "subtract":
-        count_dif_tol = 0.2
+        count_dif_tol = 0.15
     elif type == "threshold":
-        count_dif_tol = 0.4
+        count_dif_tol = 0.3
     else:
         assert False
     c0 = len(sim["sorting"])

@@ -1,15 +1,20 @@
-from typing import Annotated, Literal
 from pathlib import Path
+from typing import Annotated, Literal
 
 from pydantic import Field
-from pydantic.dataclasses import dataclass
 
-from .util.internal_config import _pydantic_strict_cfg, default_pretrained_path
-from .util.py_util import float_or_none, int_or_none, str_or_none, int_or_float_or_none
 from .util.cli_util import argfield
+from .util.internal_config import default_pretrained_path
+from .util.py_util import (
+    cfg_dataclass,
+    float_or_none,
+    int_or_float_or_none,
+    int_or_none,
+    str_or_none,
+)
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class DARTsortUserConfig:
     """User-facing configuration options"""
 
@@ -154,7 +159,7 @@ class DARTsortUserConfig:
     min_amplitude: float | None = argfield(default=None, arg_type=float)
 
 
-@dataclass(frozen=True, kw_only=True, config=_pydantic_strict_cfg)
+@cfg_dataclass
 class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
@@ -192,9 +197,9 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal[
-        "none", "exp_weighted", "t", "loot"
-    ] = "exp_weighted"
+    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
+        "exp_weighted"
+    )
     template_mix_zero: bool = False
     template_mix_svd: bool = True
     min_template_snr: float = 40.0

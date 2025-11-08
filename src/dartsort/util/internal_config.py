@@ -1,15 +1,13 @@
 import dataclasses
 from dataclasses import field, fields
 from pathlib import Path
-from typing import Literal, dataclass_transform
+from typing import Literal
 
 import numpy as np
-from pydantic.dataclasses import dataclass
-from pydantic import ConfigDict
 import torch
 
-from .py_util import int_or_inf, float_or_none, resolve_path
 from .cli_util import argfield, dataclass_from_toml
+from .py_util import cfg_dataclass, float_or_none, int_or_inf, resolve_path
 
 try:
     from importlib.resources import files
@@ -22,17 +20,6 @@ except ImportError:
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 default_pretrained_path = str(default_pretrained_path)
-
-
-_pydantic_strict_cfg = ConfigDict(strict=True, extra="forbid")
-
-
-# needed to annotate pydantic for pyright to pick up cfg fields
-@dataclass_transform(kw_only_default=True, frozen_default=True)
-def cfg_dataclass(*args, frozen=True, kw_only=True, **kwargs):
-    return dataclass(
-        *args, **kwargs, frozen=frozen, kw_only=kw_only, config=_pydantic_strict_cfg
-    )
 
 
 @cfg_dataclass
@@ -376,7 +363,7 @@ class UniversalMatchingConfig:
 
     n_sigmas: int = 5
     n_centroids: int = 6
-    threshold: float = 100.0
+    threshold: float = 10.0
     detection_threshold: float = 6.0
     alignment_padding_ms: float = 1.5
 

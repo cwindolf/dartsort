@@ -1,16 +1,13 @@
-from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Optional
 
 import h5py
 import numpy as np
 import torch
-from torch._functorch.vmap import _as_tuple
 import torch.nn.functional as F
 
 from ...templates.template_util import CompressedUpsampledTemplates, LowRankTemplates
 from ...templates.templates import TemplateData
-from ...util.torch_util import BModule
 from ...util.py_util import resolve_path
 from ...util import job_util
 from .pairwise_util import compressed_convolve_to_h5
@@ -253,7 +250,7 @@ class CompressedPairwiseConv(PconvBase):
         return template_indices_a, pconvs, which_b
 
 
-class SeparablePairwiseConv(BModule):
+class SeparablePairwiseConv(PconvBase):
     def __init__(self, spatial_footprints, temporal_shapes):
         """Footprint-major rank 1 template convolution database
 

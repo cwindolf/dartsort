@@ -3,22 +3,22 @@ import torch
 from .amortized_localization import AmortizedLocalization
 from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude, Voltage
 from .decollider import Decollider
-from .supervised_denoiser import SupervisedDenoiser
 from .enforce_decrease import EnforceDecrease
 from .localize import Localization, PointSourceLocalization
+from .matching_denoiser import DebugMatchingPursuitDenoiser
 from .pipeline import WaveformPipeline
 from .single_channel_denoiser import (
     SingleChannelDenoiser,
     SingleChannelWaveformDenoiser,
 )
 from .single_channel_templates import SingleChannelTemplates
+from .supervised_denoiser import SupervisedDenoiser
 from .temporal_pca import (
     BaseTemporalPCA,
     TemporalPCA,
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
 )
-from .matching_denoiser import MatchingPursuitDenoiser
 from .transform_base import Passthrough, Waveform
 
 all_transformers = [
@@ -40,7 +40,7 @@ all_transformers = [
     SupervisedDenoiser,
     Passthrough,
     SingleChannelTemplates,
-    MatchingPursuitDenoiser,
+    DebugMatchingPursuitDenoiser,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

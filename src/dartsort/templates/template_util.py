@@ -414,6 +414,7 @@ def compressed_upsampled_templates(
         compressed_index_to_upsampling_index
     """
     n_templates = templates.shape[0]
+    assert templates.ndim == 3
     if max_upsample == 1:
         return CompressedUpsampledTemplates(
             n_templates,

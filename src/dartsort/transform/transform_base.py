@@ -45,7 +45,7 @@ class BaseWaveformModule(BModule):
         return state
 
     def __setstate__(self, state):
-        self.__dict__.update(state)
+        super().__setstate__(state)
         try:
             self._hook = self.register_load_state_dict_pre_hook(
                 self.__class__._pre_load_state
@@ -69,6 +69,7 @@ class BaseWaveformModule(BModule):
         self.spike_length_samples = state["spike_length_samples"]
         if hasattr(self, "_needs_fit"):
             self._needs_fit = state["needs_fit"]
+        self._init_bgetter()
 
     def _pre_load_state(
         self,

@@ -1,6 +1,8 @@
 from pathlib import Path
+from typing import overload, Literal
 
 import h5py
+import numpy as np
 import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
@@ -11,18 +13,73 @@ from ..peel.peel_base import BasePeeler
 from .internal_config import FeaturizationConfig, ComputationConfig
 
 
+@overload
 def run_peeler(
     peeler: BasePeeler,
+    *,
     output_directory: str | Path,
     hdf5_filename: str,
     model_subdir: str,
     featurization_cfg: FeaturizationConfig,
     computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples=None,
-    overwrite=False,
+    chunk_starts_samples: np.ndarray | None = None,
+    overwrite: bool = False,
     residual_filename: str | Path | None = None,
-    show_progress=True,
-    fit_only=False,
+    show_progress: bool = True,
+    fit_only: Literal[True],
+    localization_dataset_name="point_source_localizations",
+) -> None: ...
+
+
+@overload
+def run_peeler(
+    peeler: BasePeeler,
+    *,
+    output_directory: str | Path,
+    hdf5_filename: str,
+    model_subdir: str,
+    featurization_cfg: FeaturizationConfig,
+    computation_cfg: ComputationConfig | None = None,
+    chunk_starts_samples: np.ndarray | None = None,
+    overwrite: bool = False,
+    residual_filename: str | Path | None = None,
+    show_progress: bool = True,
+    fit_only: Literal[False] = False,
+    localization_dataset_name="point_source_localizations",
+) -> DARTsortSorting: ...
+
+
+@overload
+def run_peeler(
+    peeler: BasePeeler,
+    *,
+    output_directory: str | Path,
+    hdf5_filename: str,
+    model_subdir: str,
+    featurization_cfg: FeaturizationConfig,
+    computation_cfg: ComputationConfig | None = None,
+    chunk_starts_samples: np.ndarray | None = None,
+    overwrite: bool = False,
+    residual_filename: str | Path | None = None,
+    show_progress: bool = True,
+    fit_only: bool = False,
+    localization_dataset_name="point_source_localizations",
+) -> DARTsortSorting | None: ...
+
+
+def run_peeler(
+    peeler: BasePeeler,
+    *,
+    output_directory: str | Path,
+    hdf5_filename: str,
+    model_subdir: str,
+    featurization_cfg: FeaturizationConfig,
+    computation_cfg: ComputationConfig | None = None,
+    chunk_starts_samples: np.ndarray | None = None,
+    overwrite: bool = False,
+    residual_filename: str | Path | None = None,
+    show_progress: bool = True,
+    fit_only: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -129,7 +186,7 @@ def peeler_is_done(
         with h5py.File(output_hdf5_filename, "r") as h5:
             if "residual" not in h5:
                 return False
-            if len(h5["residual"]) < n_residual_snips:
+            if len(h5["residual"]) < n_residual_snips:  # type: ignore
                 return False
 
     if do_localization:

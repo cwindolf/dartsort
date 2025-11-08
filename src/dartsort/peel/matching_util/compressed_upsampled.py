@@ -3,30 +3,30 @@ from pathlib import Path
 from typing import Self
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording
-import torch
-import torch.nn.functional as F
 
 from ...templates import (
-    TemplateData,
     CompressedUpsampledTemplates,
     LowRankTemplates,
-    svd_compress_templates,
+    TemplateData,
     compressed_upsampled_templates,
+    svd_compress_templates,
     templates_at_time,
 )
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
-from ...util.spiketorch import add_at_, convolve_lowrank, ptp
-from .pairwise import CompressedPairwiseConv
+from ...util.spiketorch import add_at_, convolve_lowrank
 from .matching_base import (
-    MatchingTemplates,
-    MatchingPeaks,
     ChunkTemplateData,
+    MatchingPeaks,
+    MatchingTemplates,
     PconvBase,
 )
+from .pairwise import CompressedPairwiseConv
 
 
 class CompressedUpsampledMatchingTemplates(MatchingTemplates):
@@ -48,8 +48,8 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
     def __init__(
         self,
         low_rank_templates: LowRankTemplates,
+        pconv_db: PconvBase,
         compressed_upsampled_temporal: CompressedUpsampledTemplates,
-        pconv_db: CompressedPairwiseConv,
         obj_low_rank_templates: LowRankTemplates | None = None,
         geom: np.ndarray | None = None,
         registered_geom: np.ndarray | None = None,
@@ -193,7 +193,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         )
         cupt = compressed_upsampled_templates(
             lrt.temporal_components,
-            ptps=ptp(template_data.templates, 1).max(1),
+            ptps=np.ptp(template_data.templates, axis=1).max(1),
             max_upsample=matching_cfg.template_temporal_upsampling_factor,
         )
 

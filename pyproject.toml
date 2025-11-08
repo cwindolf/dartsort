@@ -4,17 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DARTsort"
-version = "0.3.1"
-authors = [
-  { name="Charlie Windolf", email="ciw2107@columbia.edu" },
-]
+version = "0.3.2"
+authors = [{ name = "Charlie Windolf", email = "ciw2107@columbia.edu" }]
 description = "DARTsort"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
 ]
 
 [project.urls]
@@ -34,7 +32,13 @@ omit = ["*/vis/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--log-level=14"
+filterwarnings = [
+  'ignore:The extractor is not serializable to file. The provenance will not be saved.:UserWarning',
+]
 
 [tool.black]
 line-length = 88
 include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
+
+[tool.ruff]
+line-length = 88

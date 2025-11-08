@@ -729,7 +729,9 @@ def correlate_pairs_lowrank(
         assert ta.shape == tb.shape == (nbatch, t, rank)
 
         # # we want to convolve templates A and B. have to do rank^2
-        # because the basis is not shared.
+        # because the basis is not shared. the conv kind of matvecs the
+        # rank^2 and leaves a rank dim behind.
+        # TODO: rework this whole thing.
         sb_ta_sa = torch.einsum(
             "ntr,nrc,nqc->rnqt", temporal_a[ix_a[conv_ix][ix]], spatial_a_, spatial_b_
         )

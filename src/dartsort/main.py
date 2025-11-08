@@ -1,11 +1,8 @@
+import traceback
 from dataclasses import asdict, replace
-from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import traceback
-import shutil
 
-import numpy as np
 from spikeinterface.core import BaseRecording
 
 from .cluster import (
@@ -15,41 +12,37 @@ from .cluster import (
 )
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
+    GrabAndFeaturize,
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    GrabAndFeaturize,
     ThresholdAndFeaturize,
     UniversalTemplatesMatchingPeeler,
 )
 from .templates import TemplateData
-from .util.data_util import (
-    DARTsortSorting,
-    check_recording,
-    keep_only_most_recent_spikes,
-)
+from .util.data_util import DARTsortSorting, check_recording
 from .util.internal_config import (
-    DARTsortInternalConfig,
-    ComputationConfig,
     ClusteringConfig,
     ClusteringFeaturesConfig,
+    ComputationConfig,
+    DARTsortInternalConfig,
+    MatchingConfig,
     RefinementConfig,
     SubtractionConfig,
     ThresholdingConfig,
-    MatchingConfig,
     UniversalMatchingConfig,
-    to_internal_config,
-    default_dartsort_cfg,
-    default_waveform_cfg,
-    default_template_cfg,
     default_clustering_cfg,
     default_clustering_features_cfg,
+    default_dartsort_cfg,
     default_featurization_cfg,
-    default_subtraction_cfg,
     default_matching_cfg,
+    default_subtraction_cfg,
+    default_template_cfg,
     default_thresholding_cfg,
     default_universal_cfg,
+    default_waveform_cfg,
+    to_internal_config,
 )
-from .util.logging_util import DARTsortLogger
+from .util.logging_util import get_logger
 from .util.main_util import (
     ds_all_to_workdir,
     ds_dump_config,
@@ -59,11 +52,10 @@ from .util.main_util import (
     ds_save_motion_est,
 )
 from .util.peel_util import run_peeler
-from .util.py_util import resolve_path, dartcopytree
+from .util.py_util import dartcopytree, resolve_path
 from .util.registration_util import estimate_motion
 
-
-logger: DARTsortLogger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def dartsort(
@@ -271,7 +263,8 @@ def _dartsort_impl(
 
     # finally handle scratch directory and delete intermediate files if requested
     if work_dir is not None:
-        final_h5_path = output_dir / sorting.parent_h5_path.name
+        orig_h5_path = resolve_path(sorting.parent_h5_path, strict=True)
+        final_h5_path = output_dir / orig_h5_path.name
         assert final_h5_path.exists()
         sorting = replace(sorting, parent_h5_path=final_h5_path)
     ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
@@ -367,8 +360,8 @@ def subtract(
     )
     detections = run_peeler(
         subtraction_peeler,
-        output_dir,
-        hdf5_filename,
+        output_directory=output_dir,
+        hdf5_filename=hdf5_filename,
         model_subdir=model_subdir,
         featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
@@ -420,27 +413,26 @@ def match(
 
     # instantiate peeler
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
-        recording,
-        waveform_cfg,
-        matching_cfg,
-        featurization_cfg,
-        template_data,
+        recording=recording,
+        waveform_cfg=waveform_cfg,
+        matching_cfg=matching_cfg,
+        featurization_cfg=featurization_cfg,
+        template_data=template_data,
         motion_est=motion_est,
         parent_sorting_hdf5_path=getattr(sorting, "parent_h5_path", None),
     )
     sorting = run_peeler(
         matching_peeler,
-        output_dir,
-        hdf5_filename,
-        model_subdir,
-        featurization_cfg,
+        output_directory=output_dir,
+        hdf5_filename=hdf5_filename,
+        model_subdir=model_subdir,
+        featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
-    assert sorting is not None
     return sorting
 
 
@@ -459,14 +451,17 @@ def grab(
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     grabber = GrabAndFeaturize.from_config(
-        sorting, recording, waveform_cfg, featurization_cfg
+        sorting=sorting,
+        recording=recording,
+        waveform_cfg=waveform_cfg,
+        featurization_cfg=featurization_cfg,
     )
     sorting = run_peeler(
         grabber,
-        output_dir,
-        hdf5_filename,
-        model_subdir,
-        featurization_cfg,
+        output_directory=output_dir,
+        hdf5_filename=hdf5_filename,
+        model_subdir=model_subdir,
+        featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
         show_progress=show_progress,
@@ -494,10 +489,10 @@ def threshold(
     )
     sorting = run_peeler(
         thresholder,
-        output_dir,
-        hdf5_filename,
-        model_subdir,
-        featurization_cfg,
+        output_directory=output_dir,
+        hdf5_filename=hdf5_filename,
+        model_subdir=model_subdir,
+        featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
         show_progress=show_progress,
@@ -558,96 +553,17 @@ def universal_match(
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     universal_matcher = UniversalTemplatesMatchingPeeler.from_config(
-        recording, universal_cfg, featurization_cfg
+        recording, universal_cfg=universal_cfg, featurization_cfg=featurization_cfg
     )
     sorting = run_peeler(
         universal_matcher,
-        output_dir,
-        hdf5_filename,
-        model_subdir,
-        featurization_cfg,
+        output_directory=output_dir,
+        hdf5_filename=hdf5_filename,
+        model_subdir=model_subdir,
+        featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
         overwrite=overwrite,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
-    assert sorting is not None
     return sorting
-
-
-def match_chunked(
-    recording,
-    sorting,
-    output_dir=None,
-    motion_est=None,
-    waveform_cfg=default_waveform_cfg,
-    template_cfg=default_template_cfg,
-    featurization_cfg=default_featurization_cfg,
-    matching_cfg=default_matching_cfg,
-    chunk_starts_samples=None,
-    n_jobs_templates=0,
-    n_jobs_match=0,
-    overwrite=False,
-    residual_filename=None,
-    show_progress=True,
-    device=None,
-    template_data=None,
-    template_npz_filename="template_data.npz",
-):
-    # compute chunk time ranges
-    chunk_samples = recording.sampling_frequency * template_cfg.chunk_size_s
-    n_chunks = recording.get_num_samples() / chunk_samples
-    # we'll count the remainder as a chunk if it's at least 2/3 of one
-    n_chunks = np.floor(n_chunks) + (n_chunks - np.floor(n_chunks) > 0.66)
-    n_chunks = int(max(1, n_chunks))
-
-    # evenly divide the recording into chunks
-    assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
-        np.array([0, recording.get_num_samples() - 1])
-    )
-    chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
-
-    sortings = []
-    hdf5_filenames = []
-
-    for j, chunk_time_range in enumerate(chunk_time_ranges_s):
-        sorting_chunk = keep_only_most_recent_spikes(
-            sorting,
-            n_min_spikes=template_cfg.spikes_per_unit,
-            latest_time_sample=chunk_time_range[1] * recording.sampling_frequency,
-        )
-        chunk_starts_samples = recording._recording_segments[0].time_to_sample_index(
-            chunk_time_range
-        )
-        chunk_starts_samples = chunk_starts_samples.astype(int)
-        chunk_starts_samples = np.arange(
-            *chunk_starts_samples, matching_cfg.chunk_length_samples
-        )
-
-        chunk_sorting, chunk_h5 = match(
-            recording,
-            sorting=sorting_chunk,
-            output_dir=output_dir,
-            motion_est=motion_est,
-            waveform_cfg=default_waveform_cfg,
-            template_cfg=default_template_cfg,
-            featurization_cfg=default_featurization_cfg,
-            matching_cfg=default_matching_cfg,
-            chunk_starts_samples=chunk_starts_samples,
-            n_jobs_templates=n_jobs_templates,
-            n_jobs_match=n_jobs_match,
-            overwrite=overwrite,
-            residual_filename=None,
-            show_progress=show_progress,
-            device=device,
-            hdf5_filename=f"matching0_chunk{j:3d}.h5",
-            model_subdir=f"matching0_chunk{j:3d}_models",
-            template_npz_filename=template_npz_filename,
-        )
-
-        sortings.append(chunk_sorting)
-        hdf5_filenames.append(chunk_h5)
-
-    return sortings, hdf5_filenames

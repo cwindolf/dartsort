@@ -155,6 +155,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     def from_config(
         cls,
         recording: BaseRecording,
+        *,
         waveform_cfg: WaveformConfig,
         matching_cfg: MatchingConfig,
         featurization_cfg: FeaturizationConfig,

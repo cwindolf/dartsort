@@ -32,8 +32,8 @@ They should not be perfect withouth that.
 Need to also test per-template shifts.
 """
 
-from dataclasses import replace
 import tempfile
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -41,7 +41,6 @@ import torch
 
 import dartsort
 from dartsort.util.spiketorch import taper
-
 
 # constants
 fs = 1000  # implies 1 sample per millisecond
@@ -123,7 +122,7 @@ def test_denoiser_alignment(align_sim, align_templates):
     data = torch.asarray(data, dtype=torch.float)
     targ_peak = torch.tensor(rolls) + trough
     assert torch.equal(data.argmax(dim=1), targ_peak)
-    pca = dartsort.transform.MatchingPursuitDenoiser(ci, basis=data)
+    pca = dartsort.transform.DebugMatchingPursuitDenoiser(ci, basis=data)
 
     # run subtraction
     denoiser = dartsort.WaveformPipeline([pca])

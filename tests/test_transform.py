@@ -84,7 +84,7 @@ def test_all_transformers():
     # set channels to nan as they would be in a real context
     for i in range(n_spikes):
         rel_chans = channel_index[channels[i]] + 0
-        rel_chans[rel_chans < len(geom)] -= channel_index[channels[i]][0]
+        rel_chans[rel_chans < len(geom)] -= channel_index[channels[i]][0]  # type: ignore
         waveforms[i, :, rel_chans == len(geom)] = np.nan
     assert np.isnan(waveforms).any()
     assert not np.isnan(waveforms).all(axis=(1, 2)).any()

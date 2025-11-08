@@ -1,20 +1,41 @@
 import contextlib
-from importlib.metadata import Distribution
 import json
+import math
 import os
-from pathlib import Path
 import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from importlib.metadata import Distribution
+from pathlib import Path
+from typing import dataclass_transform
 
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
 # check if we are installed in editable mode
 pkgname = sys.modules[__name__].__name__.split(".")[0]
 durl = Distribution.from_name(pkgname).read_text("direct_url.json")
+assert durl is not None
 EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
+
+
+# config.py and internal_config.py use the following decorator
+
+pydantic_strict_cfg = ConfigDict(strict=True, extra="forbid")
+
+
+# needed to annotate pydantic for pyright to pick up cfg fields
+@dataclass_transform(kw_only_default=True, frozen_default=True)
+def cfg_dataclass(*args, frozen=True, kw_only=True, **kwargs):
+    return dataclass(
+        *args, **kwargs, frozen=frozen, kw_only=kw_only, config=pydantic_strict_cfg
+    )
+
+
+# random utility classes
 
 
 class timer:
@@ -46,7 +67,7 @@ class NoKeyboardInterrupt:
         if self.sig:
             signal.signal(signal.SIGINT, self.old_handler)
             sig, self.sig = self.sig, None
-            self.old_handler(*sig)
+            self.old_handler(*sig)  # type: ignore
         self.sig = sig
 
     def __enter__(self):
@@ -61,7 +82,7 @@ class NoKeyboardInterrupt:
         if threading.current_thread() is threading.main_thread() and os.name == "posix":
             signal.signal(signal.SIGINT, self.old_handler)
             if self.sig:
-                self.old_handler(*self.sig)
+                self.old_handler(*self.sig)  # type: ignore
 
 
 if threading.current_thread() is threading.main_thread() and os.name == "posix":
@@ -70,9 +91,12 @@ else:
     delay_keyboard_interrupt = contextlib.nullcontext()
 
 
+# helper functions used as `type`s in argparse
+
+
 def int_or_inf(s):
     s = float(s)
-    if np.isfinite(s):
+    if math.isfinite(s):
         return int(s)
     return s
 
@@ -120,7 +144,12 @@ def str_or_none(s):
     return s
 
 
-def resolve_path(p: str | Path, strict=False) -> Path:
+# files and paths
+
+
+def resolve_path(p: str | Path | None, strict=False) -> Path:
+    if p is None:
+        raise ValueError("Can't resolve path None.")
     p = Path(p)
     p = p.expanduser()
     p = p.absolute()

@@ -69,8 +69,15 @@ if logger.isEnabledFor(DARTSORTVERBOSE):
         import sys, traceback
 
         log = file if hasattr(file, "write") else sys.stderr
+        assert log is not None
         traceback.print_stack(file=log)
         log.write(warnings.formatwarning(message, category, filename, lineno, line))
 
     logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
     warnings.showwarning = warn_with_traceback
+
+
+def get_logger(*args, **kwargs) -> DARTsortLogger:
+    logger = getLogger(*args, **kwargs)
+    assert isinstance(logger, DARTsortLogger)
+    return logger

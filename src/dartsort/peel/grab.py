@@ -104,9 +104,9 @@ class GrabAndFeaturize(BasePeeler):
     @classmethod
     def from_config(
         cls,
+        recording: BaseRecording,
         *,
         sorting: DARTsortSorting,
-        recording: BaseRecording,
         waveform_cfg: WaveformConfig,
         featurization_cfg: FeaturizationConfig,
     ):
