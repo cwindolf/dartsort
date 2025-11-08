@@ -581,7 +581,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         neighborhoods,
         features=None,
         neighborhood_members=None,
-        store_on_device: bool = False,
         device=None,
         name=None,
     ):
@@ -604,7 +603,6 @@ class SpikeNeighborhoods(torch.nn.Module):
         self.neighborhood_ids = neighborhood_ids.cpu()
         self.register_buffer("chans_arange", torch.arange(n_channels))
         self.register_buffer("neighborhoods", neighborhoods)
-        assert self.neighborhoods.dtype == torch.long
         self.n_neighborhoods = len(neighborhoods)
         self.name = name
 
