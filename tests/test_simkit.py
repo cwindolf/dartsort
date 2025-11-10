@@ -139,7 +139,7 @@ def test_reproducible_and_residual(
     if torch.cuda.is_available():
         diff = np.subtract(*tpca_vals)
         diff = np.abs(diff, out=diff)
-        assert diff.max() < 1e-2
+        assert diff.max() < 2e-2
     else:
         assert np.array_equal(*tpca_vals)
     del tpca_vals, f

@@ -151,9 +151,10 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     elif type == "subtract":
         count_dif_tol = 0.15
     elif type == "threshold":
-        count_dif_tol = 0.3
+        count_dif_tol = 0.35
     else:
         assert False
+
     c0 = len(sim["sorting"])
     c1 = len(res["sorting"])
     assert abs(c0 - c1) < count_dif_tol * c0

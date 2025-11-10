@@ -240,7 +240,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return_conv=False,
     ) -> PeelingBatchResult:
         assert self.matching_templates is not None
-
         # get current template set
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
 
