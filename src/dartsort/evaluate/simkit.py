@@ -593,6 +593,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
 
     def basic_sorting(self) -> DARTsortSorting:
+        assert isinstance(self.sampling_frequency, (int, float))
         return DARTsortSorting(
             times_samples=self.times_samples,
             labels=self.labels,
@@ -612,7 +613,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         if self.drift_type == "triangle":
             t_seconds = self.sample_index_to_time(t_samples)
             phase = t_seconds * (2 * np.pi / self.drift_period)
-            wave = sawtooth(phase, width=0.5)
+            wave = sawtooth(phase, width=0.5)  # type: ignore
             # -1 to 1 and back to -1, so divide by 4 to have 2*ptp=drift_speed*drift_period.
             return wave * (self.drift_speed * self.drift_period / 4.0)
 

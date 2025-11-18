@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DARTsort"
-version = "0.3.2"
+version = "0.3.3"
 authors = [{ name = "Charlie Windolf", email = "ciw2107@columbia.edu" }]
 description = "DARTsort"
 readme = "README.md"
@@ -42,3 +42,6 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 
 [tool.ruff]
 line-length = 88
+
+[[tool.jupytext.formats]]
+"notebook/" = "ipynb,py:percent"
