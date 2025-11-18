@@ -1,24 +1,24 @@
 import numpy as np
 import pytest
-
+from sklearn.metrics import rand_score
 
 from dartsort.cluster import (
+    clustering_strategies,
     get_clusterer,
     get_clustering_features,
-    clustering_strategies,
     refinement_strategies,
 )
 from dartsort.cluster.postprocess import reorder_by_depth
+from dartsort.main import cluster
 from dartsort.util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
     RefinementConfig,
-    TemplateMergeConfig,
     SplitConfig,
     TemplateConfig,
+    TemplateMergeConfig,
 )
 from dartsort.util.spiketorch import ptp
-
 
 # this is how they are named in simkit...
 global_feature_kwargs = dict(
@@ -37,6 +37,19 @@ clustering_kwargs += [
     dict(cluster_strategy="gmmdpc", use_hellinger=False),
 ]
 refinement_kwargs = [dict(refinement_strategy=k) for k in refinement_strategies]
+
+
+# only some methods are good enough to actually test the outcome
+eval_clustering_kwargs = [
+    dict(cluster_strategy="none"),  # ground truth
+    dict(cluster_strategy="gmmdpc"),
+]
+eval_initial_refinement_kwargs = [
+    dict(refinement_strategy="pcmerge"),
+]
+eval_refinement_kwargs = [
+    dict(refinement_strategy="gmm"),
+]
 
 
 @pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])
@@ -104,6 +117,27 @@ def test_refinement(simulations, sim_name, refkw):
 
 
 @pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])
+@pytest.mark.parametrize("cluskw", eval_clustering_kwargs)
+@pytest.mark.parametrize("initrefkw", eval_initial_refinement_kwargs)
+@pytest.mark.parametrize("refkw", eval_refinement_kwargs)
+def test_accurate(simulations, sim_name, cluskw, initrefkw, refkw):
+    sim = simulations[sim_name]
+    recording = sim["recording"]
+    sorting = sim["sorting"]
+    motion_est = sim["motion_est"]
+
+    res_sorting = cluster(
+        recording=recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        clustering_cfg=ClusteringConfig(**cluskw),
+        pre_refinement_cfg=RefinementConfig(**initrefkw),
+        refinement_cfg=RefinementConfig(**refkw),
+    )
+    assert rand_score(sorting.labels, res_sorting.labels) > 0.995
+
+
+@pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])
 def test_reorder_by_depth(simulations, sim_name):
     sim = simulations[sim_name]
     sorting = sim["sorting"]
@@ -114,7 +148,12 @@ def test_reorder_by_depth(simulations, sim_name):
     assert np.array_equal(sorting.times_samples, sorting1.times_samples)
     assert np.array_equal(sorting.channels, sorting1.channels)
     assert np.array_equal(sorting.labels >= 0, sorting1.labels >= 0)
-    assert np.array_equal(template_data.registered_geom, template_data1.registered_geom)
+    if template_data1.registered_geom is None:
+        assert template_data.registered_geom is None
+    else:
+        assert np.array_equal(
+            template_data.registered_geom, template_data1.registered_geom
+        )
 
     u0, ix0, c0 = np.unique(sorting.labels, return_counts=True, return_index=True)
     u1, c1 = np.unique(sorting1.labels, return_counts=True)
@@ -141,6 +180,7 @@ def test_reorder_by_depth(simulations, sim_name):
             template_data.spike_counts[old_id], template_data1.spike_counts[new_id]
         )
         if template_data.spike_counts_by_channel is not None:
+            assert template_data1.spike_counts_by_channel is not None
             assert np.array_equal(
                 template_data.spike_counts_by_channel[old_id],
                 template_data1.spike_counts_by_channel[new_id],
@@ -148,6 +188,7 @@ def test_reorder_by_depth(simulations, sim_name):
         else:
             assert template_data1.spike_counts_by_channel is None
         if template_data.raw_std_dev is not None:
+            assert template_data1.raw_std_dev is not None
             assert np.array_equal(
                 template_data.raw_std_dev[old_id],
                 template_data1.raw_std_dev[new_id],
@@ -159,5 +200,6 @@ def test_reorder_by_depth(simulations, sim_name):
     if template_data1.spike_counts_by_channel is not None:
         w *= np.sqrt(template_data1.spike_counts_by_channel)
     w /= w.sum(axis=1, keepdims=True)
-    meanz = np.sum(template_data1.registered_geom[:, 1] * w, axis=1)
-    assert np.array_equal(np.argsort(meanz), np.arange(u1.size))
+    if template_data1.registered_geom is not None:
+        meanz = np.sum(template_data1.registered_geom[:, 1] * w, axis=1)
+        assert np.array_equal(np.argsort(meanz), np.arange(u1.size))
