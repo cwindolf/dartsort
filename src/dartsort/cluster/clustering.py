@@ -7,6 +7,7 @@ from ..util.data_util import chunk_time_ranges
 from ..util.main_util import ds_save_intermediate_labels
 from ..util import job_util
 from . import cluster_util, density, forward_backward, refine_util
+from .gmm import mixture
 
 
 clustering_strategies = {}
@@ -544,6 +545,23 @@ class GMMRefinement(Refinement):
 
 
 refinement_strategies["gmm"] = GMMRefinement
+
+
+class TMMRefinement(Refinement):
+    def _refine(self, features, sorting, recording, motion_est=None):
+        sorting = mixture.tmm_demix(
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_cfg=self.refinement_cfg,
+            computation_cfg=self.computation_cfg,
+            save_step_labels_format=self.labels_fmt,
+            save_step_labels_dir=self.save_labels_dir,
+            save_cfg=self.save_cfg,
+        )
+        return sorting
+
+
+refinement_strategies["tmm"] = TMMRefinement
 
 
 class SplitMergeRefinement(Refinement):

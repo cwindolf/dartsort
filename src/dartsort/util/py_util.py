@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import json
 import math
 import os
@@ -32,6 +33,14 @@ pydantic_strict_cfg = ConfigDict(strict=True, extra="forbid")
 def cfg_dataclass(*args, frozen=True, kw_only=True, **kwargs):
     return dataclass(
         *args, **kwargs, frozen=frozen, kw_only=kw_only, config=pydantic_strict_cfg
+    )
+
+
+# lightweight dataclass defaults
+@dataclass_transform(kw_only_default=True, eq_default=False)
+def databag(*args, slots=True, kw_only=True, eq=False, repr=False, **kwargs):
+    return dataclasses.dataclass(
+        *args, **kwargs, slots=slots, kw_only=kw_only, eq=eq, repr=repr
     )
 
 

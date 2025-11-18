@@ -1,47 +1,46 @@
-import numpy as np
-import torch
-from logging import getLogger
-from torch import nn
 import time
-from linear_operator import operators
-from linear_operator.utils.cholesky import psd_safe_cholesky
-import torch.nn.functional as F
-from tqdm.auto import trange, tqdm
 from itertools import repeat
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+from linear_operator import operators
+from linear_operator.utils.cholesky import psd_safe_cholesky
+from torch import nn
+from tqdm.auto import tqdm, trange
 
-from ..util.noise_util import EmbeddedNoise
-from ..util.sparse_util import (
-    integers_without_inner_replacement,
+from ...util import spiketorch
+from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.multiprocessing_util import get_pool
+from ...util.noise_util import EmbeddedNoise
+from ...util.sparse_util import (
     erase_dups,
     fisher_yates_replace,
+    integers_without_inner_replacement,
 )
-from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
-    neighb_lut,
     TEBatchResult,
     TEStepResult,
-    _te_batch_e,
-    _te_batch_m_counts,
-    _te_batch_m_rank0,
-    _te_batch_m_ppca,
-    units_overlapping_neighborhoods,
-    _grad_counts,
-    _grad_mean,
-    _grad_basis,
     _elbo_prior_correction,
-    observed_and_missing_marginals,
-    missing_indices,
-    _processor_update_mean_batch,
-    _processor_update_pca_batch,
     _finalize_missing_full_m,
     _finalize_missing_full_R,
+    _grad_basis,
+    _grad_counts,
+    _grad_mean,
+    _processor_update_mean_batch,
+    _processor_update_pca_batch,
+    _te_batch_e,
+    _te_batch_m_counts,
+    _te_batch_m_ppca,
+    _te_batch_m_rank0,
+    missing_indices,
+    neighb_lut,
+    observed_and_missing_marginals,
+    units_overlapping_neighborhoods,
 )
-from ..util import spiketorch
-from ..util.multiprocessing_util import get_pool
-from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
+from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SpikeTruncatedMixtureModel(nn.Module):

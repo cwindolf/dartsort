@@ -551,7 +551,11 @@ class EmbeddedNoise(torch.nn.Module):
         return self._full_inverse
 
     def marginal_covariance(
-        self, channels=slice(None), cache_prefix=None, cache_key=None, device=None
+        self,
+        channels: torch.Tensor | slice | None = slice(None),
+        cache_prefix=None,
+        cache_key=None,
+        device=None,
     ):
         if device is not None:
             device = torch.device(device)
@@ -1303,7 +1307,7 @@ def fp_control_threshold_from_h5(
     low_rank_templates,
     unit_ids=None,
     spike_counts=None,
-    rg: int | np.random.Generator=0,
+    rg: int | np.random.Generator = 0,
     refractory_radius_frames=10,
     num_frames=0,
     max_fp_per_input_spike=1.0,

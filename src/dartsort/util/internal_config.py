@@ -479,7 +479,9 @@ class ClusteringConfig:
 
 @cfg_dataclass
 class RefinementConfig:
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
+    refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
+        "gmm"
+    )
 
     # pcmerge
     pc_merge_threshold: float = 0.025
@@ -510,7 +512,8 @@ class RefinementConfig:
     ] = "cosine"
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 5
-    n_search: int | None = None
+    n_search: int | None = 3
+    eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 0.75
     criterion_threshold: float | None = 0.0
@@ -525,6 +528,7 @@ class RefinementConfig:
         "ecelbo",
     ] = "heldout_ecl"
     refit_before_criteria: bool = False
+    criterion_em_iters: int = 5
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
@@ -541,6 +545,7 @@ class RefinementConfig:
     laplace_ard: bool = False
     kmeansk: int = 3
     noise_fp_correction: bool = False
+    merge_group_size: int = 6
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None

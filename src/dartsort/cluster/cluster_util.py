@@ -76,6 +76,25 @@ def leafsets(Z, max_distance=np.inf):
     return leaves
 
 
+def maximal_leaf_groups(Z, max_distance=np.inf, max_group_size: int = 100):
+    """Get largest groups in linkage Z within some max complete dist and group size."""
+    n = len(Z) + 1
+    leaves = {}
+    for i, row in enumerate(Z):
+        pa, pb, dist, nab = row
+        if dist > max_distance:
+            break
+        if nab > max_group_size:
+            continue
+        leavesa = leaves.pop(pa, [int(pa)])
+        leavesb = leaves.pop(pb, [int(pb)])
+        leaves[n + i] = leavesa + leavesb
+        leaves[n + i].sort()
+    groups = leaves.values()
+    assert set(gv for g in groups for gv in g) == set(range(n))
+    return groups
+
+
 def is_largest_set_smaller_than(Z, leaf_descendants, max_size=5):
     n_branches = len(Z)
     n_units = n_branches + 1

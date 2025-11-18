@@ -1,12 +1,10 @@
-from logging import getLogger
-
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm.auto import trange
 
 try:
-    import cupy
+    import cupy  # type: ignore[reportMissingImports]
 
     del cupy
 
@@ -15,19 +13,18 @@ except ImportError:
     HAVE_CUPY = False
 
 
-from .density import guess_mode
+from ..util.logging_util import DARTSORTDEBUG, get_logger
 from ..util.sparse_util import (
-    coo_to_scipy,
     coo_to_cupy,
+    coo_to_scipy,
     distsq_to_lik_coo,
     logsumexp_coo,
     sparse_centroid_distsq,
 )
 from ..util.spiketorch import spawn_torch_rg
-from ..util.logging_util import DARTSORTDEBUG
+from .density import guess_mode
 
-
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def kmeanspp(
@@ -62,11 +59,14 @@ def kmeanspp(
     dists = None
     if has_initial_dists:
         idists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
+    else:
+        idists = None
 
     if kmeanspp_initial == "random":
         if dists is None:
             centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
         else:
+            assert idists is not None
             centroid_ixs[0] = torch.multinomial(idists, 1, generator=gen)
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
@@ -77,7 +77,9 @@ def kmeanspp(
             q = min(mode_dim + 10, *Xm.shape)
             u, s, v = torch.pca_lowrank(Xm, q=q, niter=7)
             Xm = u[:, :mode_dim].mul_(s[:mode_dim])
-        centroid_ixs = guess_mode(Xm.numpy(force=True))
+        cixs = guess_mode(Xm.numpy(force=True))
+        cixs = torch.asarray(cixs, dtype=centroid_ixs.dtype, device=centroid_ixs.device)
+        centroid_ixs.copy_(cixs)
     else:
         assert False
 
@@ -92,6 +94,7 @@ def kmeanspp(
     xrange = trange if show_progress else range
     for j in xrange(1, n_components):
         if has_initial_dists:
+            assert idists is not None
             torch.minimum(dists, idists, out=p)
         else:
             p.copy_(dists)
@@ -113,7 +116,7 @@ def kmeanspp(
         else:
             torch.minimum(dists, newdists, out=dists)
     else:
-        j += 1
+        j += 1  # type: ignore
 
     centroid_ixs = centroid_ixs[:j]
     if not skip_assignment:
@@ -157,7 +160,7 @@ def truncated_kmeans(
     n, p = X.shape
 
     # initialize...
-    sigmasq = torch.inf
+    sigmasq = torch.tensor(torch.inf)
     nearest_distsq = centroid_ixs = labels = None
     if show_progress:
         it = trange(n_initializations, desc="kmeans++")
@@ -191,12 +194,12 @@ def truncated_kmeans(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
             f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
         )
-    del nearest_distsq, _d
+    del nearest_distsq, _d  # type: ignore
 
     # initialize parameters
     n_components = len(centroid_ixs)
     neg_nc_log = -torch.log(torch.tensor(float(n_components)))
-    log_proportions = X.new_full((n_components,), neg_nc_log)
+    log_proportions = X.new_full((n_components,), neg_nc_log)  # type: ignore
     sigmasq = sigmasq / p
     centroids = X[centroid_ixs]
 
@@ -288,7 +291,7 @@ def truncated_kmeans(
                     is_coalesced=True,
                 )
                 distsq_values = (
-                    distsq_coo.to_dense()
+                    distsq_coo.to_dense()  # type: ignore
                     .take_along_dim(dim=1, indices=batch_labels)
                     .squeeze()
                 )
@@ -307,7 +310,7 @@ def truncated_kmeans(
             w = resps.values().clone()
             batch_w = w.sum()
             w /= batch_w
-            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / p
+            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / p  # type: ignore
 
             # get N and centroids
             batch_N = resps.sum(dim=0).to_dense()
@@ -335,14 +338,14 @@ def truncated_kmeans(
         sigmasq = new_sigmasq
 
         # check convergence
-        sigma = torch.sqrt(sigmasq).numpy(force=True).item()
+        sigma = torch.sqrt(sigmasq).numpy(force=True).item()  # type: ignore
         if abs(sigma - prev_sigma) < sigma_atol:
             done = True
             if not with_log_likelihoods:
                 break
         prev_sigma = sigma
         if show_progress:
-            it.set_description(f"kmeans σ={sigma:0.4f}")
+            it.set_description(f"kmeans σ={sigma:0.4f}")  # type: ignore
 
     return dict(
         centroid_ixs=centroid_ixs,
@@ -360,7 +363,7 @@ def kmeans_inner(
     n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
-    random_state: np.random.Generator | int = 0,
+    random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,

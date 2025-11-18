@@ -69,14 +69,22 @@ def nanmean(x, axis=-1):
         return x.numpy()
 
 
-@overload
-def ptp(waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False) -> torch.Tensor:
-    ...
+def sign(x):
+    """torch.sign, but nonzero."""
+    s = torch.sign(x)
+    s.add_(0.1)
+    torch.sign(s, out=s)
+    return s
 
 
 @overload
-def ptp(waveforms: np.ndarray, dim: int = 1, keepdims: bool = False) -> np.ndarray:
-    ...
+def ptp(
+    waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False
+) -> torch.Tensor: ...
+
+
+@overload
+def ptp(waveforms: np.ndarray, dim: int = 1, keepdims: bool = False) -> np.ndarray: ...
 
 
 def ptp(waveforms, dim=1, keepdims=False):
@@ -103,7 +111,7 @@ def elbo(Q, log_liks, reduce_mean=True, dim=1):
     return oelbo
 
 
-def entropy(Q, reduce_mean=True, dim=1):
+def entropy(Q, reduce_mean=True, dim=1) -> torch.Tensor:
     Qpos = Q > 0
     logQ = torch.where(Qpos, Q, _1).log_()
     H = logQ.mul_(Q).sum(dim=dim)
@@ -478,7 +486,7 @@ def nancov(
     return cov
 
 
-def cosine_distance(means, means_b=None):
+def cosine_distance(means, means_b=None, true_distance=True):
     means = means.reshape(means.shape[0], -1)
     sym = means_b is None
     if sym:
@@ -498,6 +506,8 @@ def cosine_distance(means, means_b=None):
     dist = torch.subtract(_1, dot, out=dot)
     if sym:
         dist.diagonal().fill_(0.0)
+    if true_distance:
+        dist.mul_(2.0).sqrt_()
     return dist
 
 
