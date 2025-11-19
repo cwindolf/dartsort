@@ -639,32 +639,6 @@ class DARTsortAnalysis:
         max_chan = np.ptp(temp.mean(0), 0).argmax()
         return max_chan
 
-    def get_registered_channels(self, in_unit, n_samples=1000, random_state=0):
-        amp_samples = slice(None)
-        if in_unit.size > n_samples:
-            rg = np.random.default_rng(random_state)
-            amp_samples = rg.choice(in_unit.size, size=n_samples, replace=False)
-            amp_samples.sort()
-        n_pitches_shift = get_spike_pitch_shifts(
-            self.z(in_unit[amp_samples], registered=False),
-            geom=self.geom,
-            registered_depths_um=self.z(in_unit[amp_samples], registered=False),
-        )
-        amp_vecs = self.amplitude_vectors[in_unit[amp_samples]]
-        rgeom = self.template_data.registered_geom
-        if rgeom is None:
-            rgeom = self.geom
-        amplitude_template = registered_average(
-            amp_vecs,
-            n_pitches_shift,
-            self.geom,
-            rgeom,
-            main_channels=self.sorting.channels[in_unit],
-            channel_index=self.channel_index,
-        )
-        max_registered_channel = amplitude_template.argmax()
-        return max_registered_channel
-
     def unit_select_channels(
         self,
         unit_id,
@@ -687,10 +661,8 @@ class DARTsortAnalysis:
         if read_chans is None:
             read_chans = self.sorting.channels[which]
         if max_chan is None:
-            if self.shifting:
-                max_chan = self.get_registered_channels(which)
-            else:
-                max_chan = self.unit_max_channel(unit_id)
+            # TODO broken under drift. need to pick better show chans.
+            max_chan = self.unit_max_channel(unit_id)
 
         show_chans = show_channel_index[max_chan]
         show_chans = show_chans[show_chans < len(show_geom)]
