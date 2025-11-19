@@ -136,6 +136,14 @@ class DARTsortSorting:
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
         return self.mask(valid)
+    
+    def flatten(self):
+        assert self.labels is not None
+        valid = np.flatnonzero(self.labels >= 0)
+        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        new_labels = np.full_like(self.labels, -1)
+        new_labels[valid] = flat_labels
+        return replace(self, labels=new_labels)
 
     @classmethod
     def load(cls, sorting_npz, feature_keys=None):

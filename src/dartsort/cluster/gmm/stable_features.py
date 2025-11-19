@@ -859,8 +859,11 @@ class SpikeNeighborhoods(BModule):
 
     def partial_order(self):
         """ret[i, j] == 1 iff neighb j subset neighb i"""
-        inds = self.b.indicators
-        return (inds[None] <= inds).all(2)
+        inds = self.b.indicators.T  # nneighb x nc
+        po = (inds[:, None, :] >= inds[None, :, :]).all(2)
+        assert po.shape == (self.n_neighborhoods, self.n_neighborhoods)
+        assert (po >= torch.eye(self.n_neighborhoods)).all()
+        return po
 
 
 # -- helpers

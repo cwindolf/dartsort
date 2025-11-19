@@ -42,4 +42,4 @@ jobs:
 
       - name: pytest
         run: |
-          PYTHONFAULTHANDLER=1 pytest --maxfail=30 --log-level=15 dartsort/tests/
+          PYTHONFAULTHANDLER=1 pytest  --cache-clear --maxfail=30 --log-level=15 dartsort/tests/

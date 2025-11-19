@@ -37,6 +37,7 @@ clustering_kwargs += [
     dict(cluster_strategy="gmmdpc", use_hellinger=False),
 ]
 refinement_kwargs = [dict(refinement_strategy=k) for k in refinement_strategies]
+refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0)] + refinement_kwargs
 
 
 # only some methods are good enough to actually test the outcome
@@ -49,6 +50,7 @@ eval_initial_refinement_kwargs = [
 ]
 eval_refinement_kwargs = [
     dict(refinement_strategy="gmm"),
+    dict(refinement_strategy="tmm"),
 ]
 
 

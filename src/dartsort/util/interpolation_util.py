@@ -186,8 +186,6 @@ def interp_precompute(
         if channel_index is None:
             channel_index = torch.arange(n_source_chans)[None]
             channel_index = channel_index.to(source_geom.device)
-        else:
-            assert len(channel_index) == n_source_chans
         source_pos = source_geom[channel_index]
         valid = channel_index < n_source_chans
     else:

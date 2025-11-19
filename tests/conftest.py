@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 from dartsort.evaluate import simkit, config_grid
+from dartsort import resolve_path
 
 
 common_params = dict(
@@ -14,7 +17,7 @@ do_full_size_sims = False
 
 
 @pytest.fixture(scope="session")
-def mini_simulations(tmp_path_factory):
+def mini_simulations(pytestconfig, tmp_path_factory):
     sim_settings = config_grid(
         common_params=common_params,
         config_cls=None,
@@ -29,7 +32,17 @@ def mini_simulations(tmp_path_factory):
 
     sims = {}
     for sim_name, kw in sim_settings.items():
+        cache_key = f"dartsort/{sim_name}"
+        if (p := pytestconfig.cache.get(cache_key, None)) is not None:
+            p = resolve_path(p)
+            if p.exists():
+                print(f"Simulated data cache hit for {sim_name}")
+                sims[sim_name] = simkit.load_simulation(p / "sim")
+                continue
+
         p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
+        p = resolve_path(p)
+        pytestconfig.cache.set(cache_key, str(p))
         sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
 
     return sims
@@ -53,8 +66,6 @@ def simulations(tmp_path_factory, mini_simulations):
     if do_full_size_sims:
         for sim_name, kw in sim_settings.items():
             p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
-            sims[sim_name] = simkit.generate_simulation(
-                p / "sim", p / "noise", **kw
-            )
+            sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
 
     return sims

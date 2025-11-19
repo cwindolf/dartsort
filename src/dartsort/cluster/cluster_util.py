@@ -1,5 +1,6 @@
 import dataclasses
 from logging import getLogger
+from typing import Callable
 
 import h5py
 
@@ -79,18 +80,25 @@ def leafsets(Z, max_distance=np.inf):
 def maximal_leaf_groups(Z, max_distance=np.inf, max_group_size: int = 100):
     """Get largest groups in linkage Z within some max complete dist and group size."""
     n = len(Z) + 1
-    leaves = {}
-    for i, row in enumerate(Z):
+    covered = set()
+    leaves = leafsets(Z, max_distance=max_distance)
+    leaves = {k: set(v) for k, v in leaves.items()}
+    group_parents = []
+    for i, row in reversed(list(enumerate(Z))):
         pa, pb, dist, nab = row
-        if dist > max_distance:
-            break
         if nab > max_group_size:
             continue
-        leavesa = leaves.pop(pa, [int(pa)])
-        leavesb = leaves.pop(pb, [int(pb)])
-        leaves[n + i] = leavesa + leavesb
-        leaves[n + i].sort()
-    groups = leaves.values()
+        if n + i not in leaves:
+            continue
+        if leaves[n + i].issubset(covered):
+            continue
+        group_parents.append(n + i)
+        covered.update(leaves[n + i])
+    groups = [tuple(sorted(leaves[p])) for p in group_parents]
+    for i in range(n):
+        if i not in covered:
+            groups.append((i,))
+    assert sum(map(len, groups)) == n
     assert set(gv for g in groups for gv in g) == set(range(n))
     return groups
 

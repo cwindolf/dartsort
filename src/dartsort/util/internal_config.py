@@ -532,7 +532,7 @@ class RefinementConfig:
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-3
+    em_converged_atol: float = 1e-4
     n_total_iters: int = 1
     one_split_only: bool = False
     skip_first_split: bool = False

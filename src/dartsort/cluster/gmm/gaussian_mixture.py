@@ -897,7 +897,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     ns_unit,
                 ) = spike_neighborhoods.subset_neighborhoods(
                     unit.channels,
-                    add_to_overlaps=None if topk_sparse else core_overlaps,
                     batch_size=self.likelihood_batch_size,
                 )
                 if not topk_sparse:
