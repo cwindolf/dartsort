@@ -47,7 +47,8 @@ class DARTsortLogger(getLoggerClass()):
 setLoggerClass(DARTsortLogger)
 
 
-logger: DARTsortLogger = getLogger(__name__)
+logger = getLogger(__name__)
+assert isinstance(logger, DARTsortLogger)
 
 
 # set to environment-defined log level if present
@@ -65,6 +66,7 @@ if "LOG_LEVEL" in os.environ:
 
 # override warnings to show tracebacks when debugging
 if logger.isEnabledFor(DARTSORTVERBOSE):
+
     def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
         import sys, traceback
 
@@ -81,3 +83,9 @@ def get_logger(*args, **kwargs) -> DARTsortLogger:
     logger = getLogger(*args, **kwargs)
     assert isinstance(logger, DARTsortLogger)
     return logger
+
+
+logger.dartsortdebug(
+    f"Logger is enabled for: DARTSORTDEBUG={logger.isEnabledFor(DARTSORTDEBUG)}, "
+    f"DARTSORTVERBOSE={logger.isEnabledFor(DARTSORTVERBOSE)}."
+)

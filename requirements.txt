@@ -2,7 +2,7 @@
 h5py
 matplotlib
 numpy >= 2.0
-pytest
+pytest >= 9.0
 torch >= 2.0
 scipy >= 1.15
 scikit-learn

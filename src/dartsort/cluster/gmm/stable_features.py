@@ -615,7 +615,7 @@ class SpikeNeighborhoods(BModule):
         super().__init__()
         self.name = name
         self.n_channels = n_channels
-        self.neighborhood_ids = neighborhood_ids.cpu()
+        self.register_buffer("neighborhood_ids", neighborhood_ids)
         self.register_buffer("chans_arange", torch.arange(n_channels))
         self.register_buffer("neighborhoods", neighborhoods)
         self.n_neighborhoods = len(neighborhoods)
@@ -862,7 +862,6 @@ class SpikeNeighborhoods(BModule):
         inds = self.b.indicators.T  # nneighb x nc
         po = (inds[:, None, :] >= inds[None, :, :]).all(2)
         assert po.shape == (self.n_neighborhoods, self.n_neighborhoods)
-        assert (po >= torch.eye(self.n_neighborhoods)).all()
         return po
 
 

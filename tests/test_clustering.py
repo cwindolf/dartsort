@@ -122,7 +122,7 @@ def test_refinement(simulations, sim_name, refkw):
 @pytest.mark.parametrize("cluskw", eval_clustering_kwargs)
 @pytest.mark.parametrize("initrefkw", eval_initial_refinement_kwargs)
 @pytest.mark.parametrize("refkw", eval_refinement_kwargs)
-def test_accurate(simulations, sim_name, cluskw, initrefkw, refkw):
+def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
@@ -136,7 +136,12 @@ def test_accurate(simulations, sim_name, cluskw, initrefkw, refkw):
         pre_refinement_cfg=RefinementConfig(**initrefkw),
         refinement_cfg=RefinementConfig(**refkw),
     )
-    assert rand_score(sorting.labels, res_sorting.labels) > 0.995
+    print(f"{sorting.labels.shape=}")
+    print(f"{np.isin(sorting.labels, np.array([2,3,4,8,9,10])).sum()=}")
+    with subtests.test(msg="rand score"):
+        assert rand_score(sorting.labels, res_sorting.labels) > 0.995
+    with subtests.test(msg="unit count"):
+        assert sorting.n_units == res_sorting.n_units
 
 
 @pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])

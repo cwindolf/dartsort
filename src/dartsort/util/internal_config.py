@@ -532,7 +532,7 @@ class RefinementConfig:
     n_em_iters: int = 50
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-4
+    em_converged_atol: float = 1e-5
     n_total_iters: int = 1
     one_split_only: bool = False
     skip_first_split: bool = False
@@ -540,7 +540,7 @@ class RefinementConfig:
     truncated: bool = True
     split_decision_algorithm: str = "brute"
     merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 25.0
+    prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
     kmeansk: int = 3

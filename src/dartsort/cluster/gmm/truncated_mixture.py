@@ -81,6 +81,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.noise = noise
         self.device = self.data.device
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
+        self.train_neighborhoods = self.train_neighborhoods.cpu()
 
         if laplace_ard:
             assert alpha0 and alpha0 > 0
@@ -603,7 +604,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         valid = np.flatnonzero(labels >= 0)
         assert neighborhoods.neighborhood_ids.shape == labels.shape
-        vneighbs = neighborhoods.neighborhood_ids[valid]
+        vneighbs = neighborhoods.neighborhood_ids[valid].cpu()
         np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
@@ -1376,7 +1377,7 @@ class CandidateSet:
             The total size of self.candidates[n] is
                 n_candidates + n_candidates*n_search + n_explore
         """
-        self.neighborhood_ids = neighborhoods.neighborhood_ids
+        self.neighborhood_ids = neighborhoods.neighborhood_ids.cpu()
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         # neighborhoods x channels
         self.neighborhood_indicators = neighborhoods.indicators.T.numpy(force=True)
@@ -1582,6 +1583,7 @@ class CandidateSet:
         assert unit_search_neighbors.ndim == 2
         assert un_adj is not None
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         adj_lut_ixs = un_adj_lut[top, neighb_ids[:, None].broadcast_to(top.shape)]
         assert adj_lut_ixs.shape == top.shape
         cands = unit_search_neighbors[adj_lut_ixs]
@@ -1598,6 +1600,7 @@ class CandidateSet:
         assert self.unit_neighborhood_counts is not None
         assert labels.shape == neighb_ids.shape
         self.unit_neighborhood_counts.fill(0)
+        neighb_ids = neighb_ids.cpu()
         np.add.at(self.unit_neighborhood_counts, (labels, neighb_ids), 1)
 
         if not constrain_searches:
@@ -1660,6 +1663,7 @@ class CandidateSet:
         if un_adj is None:
             return
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         unit_neighb_not_adj = torch.from_numpy(unit_neighb_adj == 0).to(top.device)
         invalid = unit_neighb_not_adj[top, neighb_ids[:, None].broadcast_to(top.shape)]
         top[invalid] = -1
@@ -1672,6 +1676,7 @@ class CandidateSet:
         # -- pick units to fill top at random according to overlaps with neighb_ids
         # construct array of probabilities with tiny prob on non-overlapping units
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         probs = unit_neighb_adj[:, neighb_ids[blanks]]
         assert probs.shape == (blanks.numel(), unit_neighb_adj.shape[0])
         eps = 2.0**-30

@@ -167,7 +167,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = "gmm"
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -270,7 +270,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 25.0
+    prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int | None = argfield(
