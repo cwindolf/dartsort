@@ -482,7 +482,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     @property
     def device(self):
-        return self.global_std.device
+        return self.chans_arange.device
 
     def mean_rc(self):
         """Return noise mean as a rank x channels tensor"""

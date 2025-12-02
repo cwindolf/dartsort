@@ -274,6 +274,8 @@ class DensityPeaksClusterer(Clusterer):
             choices.sort()
             not_choices = np.setdiff1d(np.arange(len(X)), choices)
             X_fit = X[choices]
+        else:
+            not_choices = choices = None
 
         if not self.uhdversion:
             res = density.density_peaks(
@@ -309,6 +311,8 @@ class DensityPeaksClusterer(Clusterer):
 
         labels = res["labels"]
         if subsampling:
+            assert choices is not None
+            assert not_choices is not None
             kdtree = res["kdtree"]
             other_labels = density.nearest_neighbor_assign(
                 kdtree,
@@ -581,9 +585,9 @@ class SplitMergeRefinement(Refinement):
             recording,
             sorting,
             motion_est=motion_est,
-            split_config=self.refinement_cfg.split_cfg,
-            merge_config=self.refinement_cfg.merge_cfg,
-            merge_template_config=self.refinement_cfg.merge_template_cfg,
+            split_cfg=self.refinement_cfg.split_cfg,
+            merge_cfg=self.refinement_cfg.merge_cfg,
+            merge_template_cfg=self.refinement_cfg.merge_template_cfg,
             computation_cfg=self.computation_cfg,
         )
 

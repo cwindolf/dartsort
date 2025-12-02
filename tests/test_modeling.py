@@ -2,44 +2,328 @@ from itertools import product
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 
-from dartsort.cluster import truncated_mixture
+
+from dartsort.cluster.gmm import truncated_mixture, mixture
+from dartsort.util.internal_config import RefinementConfig
+from dartsort.util.logging_util import get_logger
 from dartsort.util.sparse_util import integers_without_inner_replacement
 from dartsort.util.testing_util import mixture_testing_util
+
+
+logger = get_logger(__name__)
 
 mu_atol = 0.05
 wtw_rtol = 0.4
 elbo_atol = 5e-3
 
+TEST_RANK = 4
+TMM_ELBO_ATOL = 1e-3
 
-test_t_mu = ("random",)
+
+test_t_mu = ("smooth",)
 test_t_cov = ("eye", "random")
 test_t_w = ("zero", "random")
 test_t_missing = (None, "random", "by_cluster")
-
-# test_t_mu = ("random",)
-# test_t_cov = ("eye",)
-# test_t_w = ("zero",)
-# test_t_w = ("random",)
-# test_t_missing = ("random",)
-# test_t_missing = ("by_cluster",)
+test_corruption = (0.0, 0.2)
 
 
 @pytest.fixture(scope="module")
 def moppca_simulations():
     simulations = {}
-    for t_mu, t_cov, t_w, t_missing in product(
-        test_t_mu, test_t_cov, test_t_w, test_t_missing
+    for t_mu, t_cov, t_w, t_missing, corrupt_p in product(
+        test_t_mu, test_t_cov, test_t_w, test_t_missing, test_corruption
     ):
-        simulations[(t_mu, t_cov, t_w, t_missing)] = (
+        simulations[(t_mu, t_cov, t_w, t_missing, corrupt_p)] = (
             mixture_testing_util.simulate_moppca(
-                t_mu=t_mu, t_cov=t_cov, t_w=t_w, t_missing=t_missing
+                t_mu=t_mu,
+                t_cov=t_cov,
+                t_w=t_w,
+                t_missing=t_missing,
+                init_label_corruption=corrupt_p,
+                rank=TEST_RANK,
             )
         )
     return simulations
 
 
-@pytest.mark.parametrize("inference_algorithm", ["em", "tvi"]) #, "tvi_nlp"])
+@pytest.mark.parametrize("t_mu", ("smooth",))
+@pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
+@pytest.mark.parametrize("t_w", test_t_w)
+@pytest.mark.parametrize("t_missing", test_t_missing)
+@pytest.mark.parametrize("corruption", test_corruption)
+def test_truncated_mixture(
+    moppca_simulations, t_mu, t_cov_zrad, t_w, t_missing, corruption
+):
+    mixture.pnoid = True
+
+    t_cov, zrad = t_cov_zrad
+    sim = moppca_simulations[(t_mu, t_cov, t_w, t_missing, corruption)]
+    true_labels = sim["labels"]
+    init_sorting = sim["init_sorting"]
+    stable_data = sim["data"]
+    noise = sim["noise"]
+    K = sim["K"]
+    M = sim["M"]
+    cmask = sim["channel_observed_by_unit"]
+    nc = sim["n_channels"]
+    e_true = F.one_hot(true_labels, K)
+
+    mu = sim["mu"].view(K, -1)
+    mu_norm = torch.linalg.norm(mu, dim=1)
+    gt_cosines = mu @ mu.T
+    gt_cosines /= mu_norm[:, None] * mu_norm
+    gt_cosines.fill_diagonal_(-torch.inf)
+
+    rg = np.random.default_rng(0)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    ref_cfg = RefinementConfig(
+        refinement_strategy="tmm",
+        signal_rank=M * (t_w != "zero"),
+        n_candidates=K,
+    )
+
+    # copy-pasting from tmm_demix here
+    neighb_cov, erp, train_data, val_data, full_data, noise = (
+        mixture.get_truncated_datasets(
+            init_sorting,
+            motion_est=None,
+            refinement_cfg=ref_cfg,
+            device=device,
+            rg=rg,
+            noise=noise,
+            stable_data=stable_data,
+        )
+    )
+    tmm = mixture.TruncatedMixtureModel.from_config(
+        noise=noise,
+        erp=erp,
+        neighb_cov=neighb_cov,
+        train_data=train_data,
+        refinement_cfg=ref_cfg,
+        seed=rg,
+    )
+    D = tmm.unit_distance_matrix()
+    lut = train_data.bootstrap_candidates(D)
+    tmm.update_lut(lut)
+    eval_scores = None
+
+    # loop: em, then split+em, then merge+em, then false-merge+split+em, false-split+merge+em.
+    for it in range(5):
+        if it == 3:
+            # introduce a false merge, and hope to split it below
+            # merge the highest-cosine pair
+            ii, jj = (gt_cosines == gt_cosines.amax()).nonzero(as_tuple=True)
+            ii = ii[0].item()
+            jj = jj[0].item()
+            ii, jj = min(ii, jj), max(ii, jj)
+            assert ii != jj
+            print(f"False merge: {ii} and {jj}, with cos {gt_cosines[ii, jj]}.")
+            logger.info(f"False merge: {ii} and {jj}, with cos {gt_cosines[ii, jj]}.")
+
+            # update unit ii by just averaging
+            tmm.b.log_proportions[ii] = torch.logaddexp(
+                tmm.b.log_proportions[ii], tmm.b.log_proportions[jj]
+            )
+            tmm.b.means[ii] = 0.5 * (tmm.b.means[ii] + tmm.b.means[jj])
+            if tmm.signal_rank:
+                tmm.b.bases[ii] = 0.5 * (tmm.b.bases[ii] + tmm.b.bases[jj])
+            tmm.b.log_proportions[jj] = -torch.inf
+            assert torch.isclose(
+                tmm.b.log_proportions.logsumexp(dim=0), torch.zeros(()), atol=1e-6
+            )
+
+            # create a label remapping which deletes jj and shuffles everyone larger back by one
+            mapping = torch.arange(K)
+            mapping[jj] = ii
+            mapping = mixture.UnitRemapping(mapping=mapping)
+            flat_map = tmm.cleanup(mapping)
+
+            # re-bootstrap everything
+            distances = tmm.unit_distance_matrix()
+            lut = train_data.remap(distances=distances, remapping=flat_map)
+            tmm.update_lut(lut)
+            em_res = tmm.em(train_data)
+
+        if it == 4:
+            # similarly, do two false splits here
+            # pick 2 random units and just accept the kmeans proposal
+            to_split = rg.choice(K, size=2, replace=False)
+            n_pieces = [3, 3]
+            scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+            tmm_labels = torch.asarray(mixture.labels_from_scores(scores))
+            for k in range(K):
+                logger.info(
+                    f"{k=} {tmm_labels[true_labels==k].unique(return_counts=True)=}"
+                )
+            assert eval_scores is not None
+            print(f"False split: {to_split} into {n_pieces} parts.")
+            logger.info(f"False split: {to_split} into {n_pieces} parts.")
+            split_results = []
+            for unit_id, kmeansk in zip(to_split, n_pieces):
+                split_data = train_data.dense_slice_by_unit(unit_id)
+                assert split_data is not None
+                kmeans_responsibliities = mixture.try_kmeans(
+                    split_data,
+                    k=kmeansk,
+                    erp=tmm.erp,
+                    gen=tmm.rg,
+                    feature_rank=tmm.noise.rank,
+                    min_count=tmm.min_count,
+                )
+                assert kmeans_responsibliities is not None
+                split_model, _ = (
+                    mixture.TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+                        data=split_data,
+                        responsibilities=kmeans_responsibliities,
+                        signal_rank=tmm.signal_rank,
+                        erp=tmm.erp,
+                        min_count=tmm.min_count,
+                        min_channel_count=tmm.min_channel_count,
+                        noise=tmm.noise,
+                        max_group_size=tmm.max_group_size,
+                        max_distance=tmm.max_distance,
+                        neighb_cov=tmm.neighb_cov,
+                        min_iter=tmm.criterion_em_iters,
+                        max_iter=tmm.em_iters,
+                        elbo_atol=tmm.elbo_atol,
+                        prior_pseudocount=tmm.prior_pseudocount,
+                        cl_alpha=tmm.cl_alpha,
+                        total_log_proportion=tmm.b.log_proportions[unit_id].item(),
+                    )
+                )
+                assert split_model.n_units > 1
+                assert split_model.n_units == kmeans_responsibliities.shape[1]
+
+                split_result = mixture.SuccessfulUnitSplitResult(
+                    unit_id=unit_id,
+                    n_split=split_model.n_units,
+                    train_indices=split_data.indices,
+                    train_assignments=kmeans_responsibliities.argmax(dim=1),
+                    means=split_model.b.means,
+                    sub_proportions=kmeans_responsibliities.mean(0),
+                    bases=split_model.b.bases if tmm.signal_rank else None,
+                )
+                split_results.append(split_result)
+
+        if it:
+            # get scores that split needs
+            if val_data is not None:
+                eval_scores = tmm.soft_assign(val_data, needs_bootstrap=True)
+                true_eval_labels = true_labels[stable_data.split_indices["val"]]
+            else:
+                eval_scores = tmm.soft_assign(
+                    train_data, needs_bootstrap=False, max_iter=1
+                )
+                true_eval_labels = true_labels[stable_data.split_indices["train"]]
+            eval_labels = torch.asarray(mixture.labels_from_scores(eval_scores))
+            logger.info(f"At {it=}, label breakdown before split or merge is:")
+            for k in range(K):
+                logger.info(
+                    f"{k=} {eval_labels[true_eval_labels==k].unique(return_counts=True)=}"
+                )
+        else:
+            eval_scores = None
+
+        if it in (1, 3):
+            print("Split.")
+            logger.info("Split.")
+            assert eval_scores is not None
+            split_res = tmm.split(train_data, val_data, scores=eval_scores)
+            logger.info(f"Split created {split_res.n_new_units} new units.")
+            if it == 1:
+                assert split_res.n_new_units == 0
+
+        if it in (2, 4):
+            print("Merge.")
+            logger.info("Merge.")
+            assert eval_scores is not None
+            merge_map = tmm.merge(train_data, val_data, scores=eval_scores)
+            logger.info(f"{gt_cosines=}.")
+            logger.info(f"{true_labels.unique(return_counts=True)=}.")
+            logger.info(
+                f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units."
+            )
+            assert merge_map.nuniq() == K
+
+        # the false merges and splits can lead to label permutations. let's quickly fix those here.
+        if it in (3, 4):
+            em_res = tmm.em(train_data)
+            assert tmm.n_units == K
+            assert tmm.unit_ids.shape[0] == K
+            assert np.diff(em_res.elbos).min(initial=0.0) >= -TMM_ELBO_ATOL
+
+            scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+            tmm_labels = scores.candidates[:, 0]
+            e_tmm = F.one_hot(tmm_labels, K)
+            agreement = (e_true[:, :, None] == e_tmm[:, None, :]).float().mean(0)
+            max_agreements, matches = agreement.max(dim=1)
+            assert torch.allclose(max_agreements, torch.ones_like(max_agreements))
+            print(f"Correcting permutation {matches} (agreements: {max_agreements}).")
+            logger.info(
+                f"Correcting permutation {matches} (agreements: {max_agreements})."
+            )
+
+            perm = mixture.UnitRemapping(mapping=torch.argsort(matches))
+            flat_map = tmm.cleanup(perm)
+
+            # re-bootstrap everything
+            distances = tmm.unit_distance_matrix()
+            lut = train_data.remap(distances=distances, remapping=flat_map)
+            tmm.update_lut(lut)
+
+        em_res = tmm.em(train_data)
+
+        # check count
+        assert tmm.n_units == K
+        assert tmm.unit_ids.shape[0] == K
+
+        # check elbos
+        assert np.diff(em_res.elbos).min(initial=0.0) >= -TMM_ELBO_ATOL
+
+        # check labels
+        scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+        tmm_labels = scores.candidates[:, 0]
+        tmm_labels_noise = torch.asarray(mixture.labels_from_scores(scores))
+        for lpred in (tmm_labels, tmm_labels_noise):
+            acc = (true_labels == lpred).double().mean().item()
+            assert acc >= 0.995
+            assert lpred.max() + 1 == K
+
+        # check parameters
+        # if there is missingness by cluster, lets ignore the always-unobserved stuff.
+        _, c = true_labels.unique(return_counts=True)
+        standard_error = 1.0 / c.sqrt()
+        # uhm. what would the bonferroni be?
+        z = 10 * (1 + 5 * (t_w != "zero") + 5 * (corruption != 0.0))
+        diff = tmm.b.means.view(K, -1) - mu.view(K, -1)
+        if cmask is not None:
+            cmask = torch.asarray(cmask).to(diff)
+            diff.view(K, -1, nc).mul_(cmask[:, None])
+        assert torch.all(diff.abs().amax(dim=1) <= z * standard_error)
+        if t_w != "zero":
+            w0 = sim["W"].permute(0, 3, 1, 2)
+            w_ = tmm.b.bases
+            assert w0.shape[:2] == (K, M)
+            assert w_.shape[:2] == (K, M)
+            w0 = w0.view(K, M, -1)
+            w_ = w_.view(K, M, -1)
+            assert w0.shape == w_.shape
+            wtw0 = w0.mT.bmm(w0)
+            wtw_ = w_.mT.bmm(w_)
+            diff = wtw0 - wtw_
+            if cmask is not None:
+                diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
+                wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
+                diff.mul_(wcmask)
+            assert torch.all(
+                diff.abs().view(K, -1).amax(dim=1) <= 5 * z * standard_error
+            )
+
+
+@pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])  # , "tvi_nlp"])
 @pytest.mark.parametrize("n_refinement_iters", [0])
 @pytest.mark.parametrize("t_mu", test_t_mu)
 @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
@@ -48,10 +332,10 @@ def moppca_simulations():
 @pytest.mark.parametrize(
     "pcount_ard_psm",
     # [(0, False, False), (0, False, True), (5, False, True), (5, True, False)],
-    [(0, False, False),  (5, False, True)],
+    [(0, False, False), (5, False, True)],
 )
 @pytest.mark.parametrize("dist_and_search_type", ["kl", "cos"])
-def test_mixture(
+def test_original_mixture(
     moppca_simulations,
     inference_algorithm,
     n_refinement_iters,
@@ -226,7 +510,11 @@ def test_mixture(
                     ].unique(),
                     torch.arange(res["sim_res"]["K"]),
                 )
-            scand = tmm.candidates.candidates[:, : tmm.candidates.n_candidates].sort(dim=1).values
+            scand = (
+                tmm.candidates.candidates[:, : tmm.candidates.n_candidates]
+                .sort(dim=1)
+                .values
+            )
             assert torch.logical_or(scand.diff(dim=1) > 0, scand[:, 1:] < 0).all()
 
             search_neighbors = tmm.candidates.search_sets(

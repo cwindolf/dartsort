@@ -1004,6 +1004,8 @@ class NeighborhoodInterpolator(BModule):
         neighborhoods: SpikeNeighborhoods,
         method="kernel",
         kernel_name="rbf",
+        extrap_method=None,
+        extrap_kernel_name=None,
         sigma=20.0,
         rq_alpha=1.0,
         kriging_poly_degree=0,
@@ -1026,6 +1028,10 @@ class NeighborhoodInterpolator(BModule):
             channel_index=neighborhoods.neighborhoods,
             source_geom_is_padded=True,
             **self.erpkw,  # type: ignore
+        )
+        self.erpkw |= dict(
+            extrap_method=extrap_method,
+            extrap_kernel_name=extrap_kernel_name,
         )
         self.register_buffer_or_none("neighb_data", neighb_data)
         self.register_buffer("neighb_pos", self.b.prgeom[neighborhoods.b.neighborhoods])

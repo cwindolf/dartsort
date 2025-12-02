@@ -3,6 +3,7 @@ from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from scipy.interpolate import griddata
 import torch
+import torch.nn.functional as F
 
 from ..util.waveform_util import (
     upsample_singlechan,
@@ -109,7 +110,9 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
         self.geom = template_data.registered_geom
         self.template_data = template_data
         self.temporal_jitter = temporal_jitter
-        self.templates_up = upsample_multichan(self.template_data.templates, temporal_jitter=temporal_jitter)
+        self.templates_up = upsample_multichan(
+            self.template_data.templates, temporal_jitter=temporal_jitter
+        )
 
     def trough_offset_samples(self) -> int:
         return self.template_data.trough_offset_samples
@@ -140,6 +143,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         n_units,
         common_reference=False,
         temporal_jitter=1,
+        min_rms_distance=0.0,
         # timing params
         tip_before_min=0.1,
         tip_before_max=0.5,
@@ -222,6 +226,16 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.template_pos = pos
         self.template_alpha = alpha
         _, self.singlechan_templates = self.simulate_singlechan(size=n_units)
+        self.min_rms_distance = min_rms_distance
+        min_dist = min_rms_distance + 0.0
+        n_checks = 0
+        while min_rms_distance and (min_dist <= min_rms_distance):
+            min_dist = self.check_and_fix_distances()
+            n_checks += 1
+            if n_checks > 512:
+                raise ValueError(
+                    f"Couldn't reach min distance {min_rms_distance}, got to {min_dist}."
+                )
         # n, temporal_jitter, t
         self.singlechan_templates_up = upsample_singlechan(
             self.singlechan_templates,
@@ -251,6 +265,31 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         if padded:
             templates[..., -1] = pad_value
         return pos, templates
+
+    def check_and_fix_distances(self):
+        # make rms distance matrix, check templates that are too close, re-sample
+        # just those ones... hopefully this converges.
+        t = torch.asarray(self.templates()[1]).view(self.n_units, -1)
+        t = F.pad(t, (0, 1), value=0.0)
+        rms = (t[:, None] - t[None, :]).square_().mean(dim=2).sqrt_()
+        rms = rms[:-1, :-1]
+        rms.fill_diagonal_(torch.inf)
+        min_rms = rms.amin()
+        if min_rms > self.min_rms_distance:
+            return min_rms
+
+        close = rms <= self.min_rms_distance
+        isclose = torch.logical_or(close.any(dim=1), close.any(dim=0))
+        (isclose,) = isclose.nonzero(as_tuple=True)
+
+        inum = isclose.numel()
+        ipos, ialpha = self.simulate_location(size=inum)
+        _, isinglechan_templates = self.simulate_singlechan(size=inum)
+        self.template_pos[isclose] = ipos
+        self.template_alpha[isclose] = ialpha
+        self.singlechan_templates[isclose] = isinglechan_templates
+
+        return min_rms
 
     def trough_offset_samples(self):
         return int(self.ms_before * (self.sampling_frequency / 1000))
@@ -363,7 +402,9 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
         self.radius = radius
-        self.channel_index = make_channel_index(geom=geom, radius=radius, to_torch=False)
+        self.channel_index = make_channel_index(
+            geom=geom, radius=radius, to_torch=False
+        )
         self._trough_offset_samples = trough_offset_samples
 
         self.interp_method = interp_method

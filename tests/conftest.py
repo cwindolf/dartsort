@@ -11,6 +11,7 @@ common_params = dict(
     ),
     temporal_jitter=4,
     noise_kind="white",
+    template_simulator_kwargs=dict(min_rms_distance=1.0),
 )
 drift_params = {"y": dict(drift_speed=1.0), "n": dict(drift_speed=0.0)}
 do_full_size_sims = False
@@ -24,7 +25,7 @@ def mini_simulations(pytestconfig, tmp_path_factory):
         drift=drift_params,
         sz={
             "mini": dict(
-                duration_seconds=3.0, n_units=20, min_fr_hz=30.0, max_fr_hz=41.0
+                duration_seconds=9.9, n_units=20, min_fr_hz=30.0, max_fr_hz=41.0
             )
         },
     )

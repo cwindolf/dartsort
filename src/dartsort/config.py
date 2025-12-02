@@ -260,7 +260,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # gausian mixture low level
     n_refinement_iters: int = 1
-    n_em_iters: int = 50
+    n_em_iters: int = 150
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
     gmm_metric: Literal["kl", "cosine"] = "cosine"

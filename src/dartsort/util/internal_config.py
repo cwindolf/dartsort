@@ -528,11 +528,11 @@ class RefinementConfig:
         "ecelbo",
     ] = "heldout_ecl"
     refit_before_criteria: bool = False
-    criterion_em_iters: int = 5
-    n_em_iters: int = 50
+    criterion_em_iters: int = 10
+    n_em_iters: int = 250
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-5
+    em_converged_atol: float = 1e-3
     n_total_iters: int = 1
     one_split_only: bool = False
     skip_first_split: bool = False
