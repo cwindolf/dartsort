@@ -14,7 +14,7 @@ from torch.fft import irfft, rfft
 HAVE_CUPY = False
 cp = None
 try:
-    import cupy as cp
+    import cupy as cp  # type: ignore
 
     HAVE_CUPY = True
 except ImportError:
@@ -202,6 +202,7 @@ def torch_add_at_(dest, ix, src, sign=1):
 
 
 def cupy_add_at_(dest, ix, src, sign=1):
+    assert cp is not None
     if torch.is_tensor(dest):
         assert dest.device.type == "cuda"
     dest = cp.asarray(dest)
@@ -378,7 +379,7 @@ def argrelmax(x, radius, threshold, exclude_edge=True):
         stride=1,
     )[0, 0]
     x1[x < x1] = 0
-    F.threshold_(x1, threshold, 0.0)
+    F.threshold_(x1, threshold, 0.0)  # type: ignore
     ix = torch.nonzero(x1)[:, 0]
     if exclude_edge:
         return ix[(ix > 0) & (ix < x.numel() - 1)]
@@ -455,13 +456,13 @@ def nancov(
         if nan_free:
             nobs = weights.sum(0)
         else:
-            nobs = (mask.T * weights) @ mask
+            nobs = (mask.T * weights) @ mask  # type: ignore
     else:
         xtx = x.T @ x
         if nan_free:
             nobs = np.array(len(x), dtype=x.dtype)
         else:
-            nobs = mask.T @ mask
+            nobs = mask.T @ mask  # type: ignore
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
@@ -883,7 +884,7 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
 def isin_sorted(x, y):
     """Like torch.isin(x, y), but faster by assuming both sorted."""
     if not y.numel():
-        return torch.zeros(x.shape, dtype=bool, device=x.device)
+        return torch.zeros(x.shape, dtype=torch.bool, device=x.device)
     ix = torch.searchsorted(y, x, side="right") - 1
     return x == y[ix]
 

@@ -500,6 +500,8 @@ class RefinementConfig:
 
     # model params
     channels_strategy: Literal["count", "all"] = "count"
+    neighb_overlap: float = 0.75
+    explore_neighb_steps: int = 1
     min_count: int = 50
     channels_count_min: int = 1
     signal_rank: int = 5
@@ -511,8 +513,10 @@ class RefinementConfig:
         "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean", "cosinesqrt"
     ] = "cosine"
     search_type: Literal["topk", "random"] = "topk"
-    n_candidates: int = 5
+    n_candidates: int = 3
+    merge_group_size: int = 6
     n_search: int | None = 3
+    n_explore: int = 3
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 0.75
@@ -528,7 +532,7 @@ class RefinementConfig:
         "ecelbo",
     ] = "heldout_ecl"
     refit_before_criteria: bool = False
-    criterion_em_iters: int = 10
+    criterion_em_iters: int = 3
     n_em_iters: int = 250
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
@@ -545,7 +549,7 @@ class RefinementConfig:
     laplace_ard: bool = False
     kmeansk: int = 3
     noise_fp_correction: bool = False
-    merge_group_size: int = 6
+    full_proposal_every: int = 20
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None

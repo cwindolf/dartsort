@@ -43,7 +43,7 @@ import torch
 import torch.nn.functional as F
 from sympy.utilities.iterables import multiset_partitions
 from torch import Tensor
-from tqdm.auto import trange, tqdm
+from tqdm.auto import tqdm, trange
 
 from ...util.data_util import DARTsortSorting, subset_sorting_by_spike_count
 from ...util.internal_config import (
@@ -52,7 +52,7 @@ from ...util.internal_config import (
     RefinementConfig,
 )
 from ...util.job_util import ensure_computation_config
-from ...util.logging_util import get_logger, DARTSORTDEBUG, DARTSORTVERBOSE
+from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.main_util import ds_save_intermediate_labels
 from ...util.noise_util import EmbeddedNoise
 from ...util.py_util import databag
@@ -66,9 +66,7 @@ from .stable_features import (
     StableSpikeDataset,
 )
 
-
 logger = get_logger(__name__)
-
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
 
 
@@ -157,45 +155,56 @@ def tmm_demix(
             tmm.em(train_data, show_progress=prog_level)
 
         if saving:
-            assert save_step_labels_format is not None
-            full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
-            sorting = replace(sorting, labels=labels_from_scores(full_scores))
-            stepname = f"tmm{outer_it}asplit"
-            ds_save_intermediate_labels(
-                save_step_labels_format.format(stepname=stepname),
-                sorting,
-                save_step_labels_dir,
-                save_cfg,
+            save_tmm_labels(
+                tmm=tmm,
+                save_step_labels_format=save_step_labels_format,
+                full_data=full_data,
+                original_sorting=sorting,
+                stepname=f"tmm{outer_it}asplit",
+                save_step_labels_dir=save_step_labels_dir,
+                save_cfg=save_cfg,
             )
 
         if break_after_split:
             break
 
         if val_data is not None:
-            eval_scores = tmm.soft_assign(val_data, needs_bootstrap=True)
+            eval_scores = tmm.soft_assign(
+                val_data, needs_bootstrap=True, show_progress=prog_level
+            )
         else:
-            eval_scores = tmm.soft_assign(train_data, needs_bootstrap=False, max_iter=1)
+            eval_scores = tmm.soft_assign(
+                train_data,
+                needs_bootstrap=False,
+                max_iter=1,
+                show_progress=prog_level,
+            )
         merge_map = tmm.merge(
             train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
         )
         logger.info(f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units.")
         tmm.em(train_data, show_progress=prog_level)
         if saving:
-            assert save_step_labels_format is not None
-            full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
-            sorting = replace(sorting, labels=labels_from_scores(full_scores))
-            stepname = f"tmm{outer_it}asplit"
-            ds_save_intermediate_labels(
-                save_step_labels_format.format(stepname=stepname),
-                sorting,
-                save_step_labels_dir,
-                save_cfg,
+            save_tmm_labels(
+                tmm=tmm,
+                save_step_labels_format=save_step_labels_format,
+                full_data=full_data,
+                original_sorting=sorting,
+                stepname=f"tmm{outer_it}bmerge",
+                save_step_labels_dir=save_step_labels_dir,
+                save_cfg=save_cfg,
             )
 
     # final assignments
     # TODO output these soft probs somehow
     full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
-    sorting = replace(sorting, labels=labels_from_scores(full_scores))
+    extra_features = dict(
+        **(sorting.extra_features or {}),
+        neighborhood_ids=full_data.neighborhood_ids.numpy(force=True),
+    )
+    sorting = replace(
+        sorting, labels=labels_from_scores(full_scores), extra_features=extra_features
+    )
     return sorting
 
 
@@ -664,24 +673,32 @@ class BatchedSpikeData:
         n_explore: int,
         max_n_candidates: int,
         max_n_search: int,
-        max_n_explore: int,
-        candidates: Tensor,
+        max_n_explore: int | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
-        seed: int | np.random.Generator = 0,
+        candidates: Tensor | None = None,
+        neighb_adj: Tensor | None = None,
+        neighb_supset: Tensor | None = None,
+        seed: int | np.random.Generator | None = 0,
         batch_size: int = 128,
         explore_neighb_steps: int = 1,
         neighb_overlap: float = 0.75,
+        proposal_is_complete: bool = False,
     ):
         assert n_candidates <= max_n_candidates
         assert n_search <= max_n_search
-        assert n_explore <= max_n_explore
+        assert max_n_explore is None or n_explore <= max_n_explore
         n_total = n_candidates * (n_search + 1) + n_explore
-        max_n_total = max_n_candidates * (max_n_search + 1) + max_n_explore
-        assert max_n_total >= n_total
+        if max_n_explore is None:
+            max_n_total = None
+        else:
+            max_n_total = max_n_candidates * (max_n_search + 1) + max_n_explore
+            assert max_n_total >= n_total
 
         self.N = N
         self.batch_size = batch_size
+        self.proposal_is_complete = proposal_is_complete
+
         self.candidates = candidates
 
         self.n_candidates = n_candidates
@@ -690,26 +707,34 @@ class BatchedSpikeData:
         self.max_n_candidates = max_n_candidates
         self.max_n_search = max_n_search
         self.max_n_explore = max_n_explore
+        self.max_n_total = max_n_total
         self._update_slices()
 
         # adjacencies...
         self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.b.neighborhood_ids
         self.explore_neighb_steps = explore_neighb_steps
-        self.neighb_adj = neighborhoods.adjacency(neighb_overlap)
-        self.neighb_supset = neighborhoods.partial_order().float()
+        if neighb_adj is None:
+            self.neighb_adj = neighborhoods.adjacency(neighb_overlap)
+        else:
+            self.neighb_adj = neighb_adj
+        if neighb_supset is None:
+            self.neighb_supset = neighborhoods.partial_order().float()
+        else:
+            self.neighb_supset = neighb_supset
         nneighb = self.neighborhoods.n_neighborhoods
         assert self.neighb_supset.shape == (nneighb, nneighb)
 
         self.device = device
-        self.rg = spawn_torch_rg(seed, device=device)
-
-        assert self.candidates.shape[0] == N
-        assert self.candidates.shape[1] >= n_candidates
+        if seed is None:
+            self.rg = None
+        else:
+            self.rg = spawn_torch_rg(seed, device=device)
 
     def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
         logger.dartsortverbose(
-            "%s _update_sizes: candidates %s->%s, search %s->%s, explore %s->%s.",
+            "%s _update_sizes: candidates %s->%s, search %s->%s, explore "
+            "%s->%s (total %s->%s). Max: %s, %s, %s (total: %s).",
             self.__class__.__name__,
             self.n_candidates,
             n_candidates,
@@ -717,6 +742,12 @@ class BatchedSpikeData:
             n_search,
             self.n_explore,
             n_explore,
+            self.n_total,
+            n_candidates * (n_search + 1) + n_explore,
+            self.max_n_candidates,
+            self.max_n_search,
+            self.max_n_explore,
+            self.max_n_total,
         )
         self.n_candidates = n_candidates
         self.n_search = n_search
@@ -761,19 +792,28 @@ class BatchedSpikeData:
 
     def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
         """Update my adjacency either using my labels or just a fixed LUT."""
+        if un_adj_lut is not None:
+            assert un_adj_lut.lut.shape[0] == n_units
+        if self.candidates is None:
+            assert un_adj_lut is not None
+            labels = None
+        else:
+            labels = self.candidates[:, 0]
         self.un_adj_lut, self.un_adj, self.explore_adj = candidate_adjacencies(
-            labels=self.candidates[:, 0],
+            labels=labels,
             neighb_supset=self.neighb_supset,
             neighb_adj=self.neighb_adj,
             n_units=n_units,
             explore_steps=self.explore_neighb_steps,
             neighborhoods=self.neighborhoods,
             un_adj_lut=un_adj_lut,
+            device=self.device,
         )
         assert self.un_adj.max().item() == 1.0
 
     def erase_candidates(self):
-        self.candidates.fill_(-1)
+        if self.candidates is not None:
+            self.candidates.fill_(-1)
 
     def bootstrap_candidates(
         self, distances: Tensor, un_adj_lut: NeighborhoodLUT | None = None
@@ -782,18 +822,22 @@ class BatchedSpikeData:
         self._update_sizes_from_n_units(distances.shape[0])
 
         # fill in missing labels randomly, obeying un_adj
-        same_adj = _fill_blank_labels(
-            labels=self.candidates[:, 0],
-            un_adj=self.un_adj,
-            explore_adj=self.explore_adj,
-            neighborhood_ids=self.neighborhood_ids,
-            gen=self.rg,
-        )
-        if not same_adj:
-            logger.dartsortdebug("_fill_blank_labels needed to use explore adjacency.")
-            self.update_adjacency(n_units=distances.shape[0])
-        if pnoid:
-            assert (self.candidates[:, 0] >= 0).all()
+        if self.candidates is not None:
+            assert self.rg is not None
+            same_adj = _fill_blank_labels(
+                labels=self.candidates[:, 0],
+                un_adj=self.un_adj,
+                explore_adj=self.explore_adj,
+                neighborhood_ids=self.neighborhood_ids,
+                gen=self.rg,
+            )
+            if not same_adj:
+                logger.dartsortdebug(
+                    "_fill_blank_labels needed to use explore adjacency."
+                )
+                self.update_adjacency(n_units=distances.shape[0])
+            if pnoid:
+                assert (self.candidates[:, 0] >= 0).all()
         assert torch.equal(
             self.un_adj,
             (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
@@ -801,16 +845,18 @@ class BatchedSpikeData:
 
         # fill in candidates[:, 1:n_candidates] at random obeying un_adj
         # choosing not to use distances here, since they get used in search sets
-        _bootstrap_top(
-            candidates=self.candidates,
-            neighborhood_ids=self.neighborhood_ids,
-            n_candidates=self.n_candidates,
-            un_adj=self.un_adj,
-            un_adj_lut=self.un_adj_lut,
-            gen=self.rg,
-        )
-        if pnoid:
-            assert (self.candidates[:, 0] >= 0).all()
+        if self.candidates is not None:
+            assert self.rg is not None
+            _bootstrap_top(
+                candidates=self.candidates,
+                neighborhood_ids=self.neighborhood_ids,
+                n_candidates=self.n_candidates,
+                un_adj=self.un_adj,
+                un_adj_lut=self.un_adj_lut,
+                gen=self.rg,
+            )
+            if pnoid:
+                assert (self.candidates[:, 0] >= 0).all()
 
         # call update to fill in search + explore and build lut
         return self.update(new_top_candidates=None, distances=distances)
@@ -820,112 +866,90 @@ class BatchedSpikeData:
         raise NotImplementedError
 
 
-class OnlineSpikeData(BatchedSpikeData):
-    """Like a TruncatedSpikeData, but only stores x, and transfers to device on the fly."""
+class StreamingSpikeData(BatchedSpikeData):
+    """Like a TruncatedSpikeData, but only stores x, and transfers to device on the fly
+
+    This also implements a different search strategy than the evolutionary search
+    used in the TruncatedSpikeData. In that setting, we're evolving the posterior
+    in the context of a truncated EM algorithm while we're still learning the parameters,
+    so it needs to be adaptive. This class is used as a target for .soft_assign() below,
+    implementing a likelihood computation while parameters are held fixed.
+
+    In this setting, we don't want to use the usual "search sets" and explore sets.
+    Actually, we want to propose every possible match (as determined by the LUT) and
+    save out the best n_candidates matches. This is totally deterministic, there are
+    no multinomials here.
+
+    There's no need to save any state (persistent candidates array) here, then. They
+    are always just all of the possible candidates, padded out with -1s for raggedness.
+    Then score_batch() logic deals with grabbing the best n_candidates ones.
+    """
 
     def __init__(
         self,
         *,
         n_candidates: int,
-        n_search: int,
-        n_explore: int,
         max_n_candidates: int,
-        max_n_search: int,
-        max_n_explore: int,
         x: Tensor,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
         neighb_cov: NeighborhoodCovariance,
-        seed: int | np.random.Generator = 0,
         batch_size: int = 512,
-        explore_neighb_steps: int = 0,
-        neighb_overlap: float = 0.75,
     ):
-        self._candidates_full = torch.full(
-            (x.shape[0], max_n_candidates), -1, device=device
-        )
         # I must have explore adj == un_adj. Otherwise, update() should call
         # update_adjacency(). But this object is just designed to do soft
         # assignment given a fixed adjacency, so it doesn't.
-        assert explore_neighb_steps == 0
         super().__init__(
             N=x.shape[0],
             n_candidates=n_candidates,
-            n_search=n_search,
-            n_explore=n_explore,
+            n_search=0,
+            n_explore=0,
             max_n_candidates=max_n_candidates,
-            max_n_search=max_n_search,
-            max_n_explore=max_n_explore,
+            max_n_search=0,
+            max_n_explore=None,
             batch_size=batch_size,
             neighborhoods=neighborhoods,
-            explore_neighb_steps=explore_neighb_steps,
-            neighb_overlap=neighb_overlap,
-            seed=seed,
+            explore_neighb_steps=0,
+            neighb_overlap=0.0,
+            seed=None,
             device=device,
-            candidates=self._candidates_full[:, :n_candidates],
+            proposal_is_complete=True,
         )
         self.neighb_cov = neighb_cov
         self.x = x
+        self.proposals = None
 
     def update(
         self, new_top_candidates: Tensor | None, distances: Tensor
     ) -> NeighborhoodLUT:
-        # fill in top spots. don't update the adjacency, because it can't change
-        if new_top_candidates is not None:
-            self.candidates[:] = new_top_candidates
+        assert new_top_candidates is None
+        assert distances.shape[0] == self.un_adj_lut.lut.shape[0]
 
-        # store everything needed to generate batches of candidates
-        # this means storing the search sets and the explore probabilities
-        self.search_sets = candidate_search_sets(
-            distances, self.un_adj_lut, self.un_adj, self.n_search
-        )
-        if self.n_explore:
-            self.p, self.inds = _get_explore_sampling_data(
-                un_adj_lut=self.un_adj_lut,
-                explore_adj=self.explore_adj,
-                search_sets=self.search_sets,
-            )
+        # which units can be proposed for each neighborhood? all of the ones in the LUT
+        assert self.max_n_total is not None
+        assert self.n_total == self.max_n_total
+        proposals = full_proposal_by_neighb(self.un_adj_lut, self.n_total)
+        self.proposals = proposals.to(self.device)
         return self.un_adj_lut
 
     def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
         super().update_adjacency(n_units=n_units, un_adj_lut=un_adj_lut)
         # my invariant, see __init__
         assert torch.equal(self.un_adj, self.explore_adj)
+        self.max_n_total = max_units_per_neighb(self.un_adj_lut)
 
-    def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
-        assert n_candidates <= self._candidates_full.shape[1]
-        super()._update_sizes(n_candidates, n_search, n_explore)
+    def _update_sizes_from_n_units(self, n_units: int):
+        assert self.max_n_total <= n_units
+        n_candidates = min(self.max_n_candidates, self.max_n_total)
+        n_explore = self.max_n_total - n_candidates
+        self._update_sizes(n_candidates, 0, n_explore)
 
     def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
-        n_pad = self.n_total - self.n_candidates
-        top = self.candidates[spike_indices]
-        n = top.shape[0]
         neighb_ids = self.neighborhood_ids[spike_indices]
-        candidates = F.pad(top, (0, n_pad), value=-1)
-        top_lut_ixs = self.un_adj_lut.lut[top, neighb_ids[:, None]]
-
-        torch.take_along_dim(
-            self.search_sets[:, None, :],
-            dim=0,
-            indices=top_lut_ixs[:, :, None],
-            out=candidates[:, self.search_slice].view(
-                n, self.n_candidates, self.n_search
-            ),
-        )
-        if self.n_explore:
-            _sample_explore_candidates(
-                p=self.p,
-                inds=self.inds,
-                candidates=candidates,
-                lut_ixs=top_lut_ixs[:, 0],
-                n_explore=self.n_explore,
-                gen=self.rg,
-            )
-        _dedup_candidates(candidates)
-
+        assert self.proposals is not None
+        candidates = self.proposals[neighb_ids]
         x = self.x[spike_indices].to(self.device)
         wx, noise_loglik = _whiten_and_noise_score_batch(x, neighb_ids, self.neighb_cov)
-
         return SpikeDataBatch(
             batch=spike_indices,
             x=x,
@@ -970,9 +994,6 @@ class TruncatedSpikeData(BatchedSpikeData):
                    = candidates[:, -n_explore:]
         """
         device = noise_logliks.device
-        max_n_total = max_n_candidates * (max_n_search + 1) + max_n_search
-        n_total = n_candidates * (n_search + 1) + n_search
-        self._candidates_full = torch.full((x.shape[0], max_n_total), -1, device=device)
         super().__init__(
             N=x.shape[0],
             n_candidates=n_candidates,
@@ -987,8 +1008,14 @@ class TruncatedSpikeData(BatchedSpikeData):
             neighb_overlap=neighb_overlap,
             seed=seed,
             device=device,
-            candidates=self._candidates_full[:, :n_total],
         )
+        assert self.max_n_explore is not None
+        assert self.max_n_total is not None
+        self._candidates_full = torch.full(
+            (x.shape[0], self.max_n_total), -1, device=device
+        )
+        self.candidates = self._candidates_full[:, : self.n_total]
+        assert self.candidates.shape[1] >= n_candidates
 
         assert noise_logliks.shape == (self.N,)
         assert x.device == neighborhoods.neighborhood_ids.device == device
@@ -1002,13 +1029,15 @@ class TruncatedSpikeData(BatchedSpikeData):
         self.dense_slice_size_per_unit = dense_slice_size_per_unit
 
     def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
-        n_total = n_candidates * (n_search + 1) + n_explore
-        assert n_total <= self._candidates_full.shape[1]
-        assert n_candidates <= self.max_n_candidates
-        assert n_search <= self.max_n_search
-        assert n_explore <= self.max_n_explore
         super()._update_sizes(n_candidates, n_search, n_explore)
-        self.candidates = self._candidates_full[:, :n_total]
+        assert self.n_candidates <= self.max_n_candidates
+        assert self.n_search <= self.max_n_search
+        assert self.max_n_explore is not None
+        assert self.n_explore <= self.max_n_explore
+        assert self.max_n_total is not None
+        assert self.n_total <= self.max_n_total
+        assert self.n_total <= self._candidates_full.shape[1]
+        self.candidates = self._candidates_full[:, : self.n_total]
 
     @classmethod
     def initialize_from_labels(
@@ -1081,10 +1110,12 @@ class TruncatedSpikeData(BatchedSpikeData):
 
         # fill in explore set randomly using explore adjacency
         if self.n_explore:
+            assert self.rg is not None
             p, inds = _get_explore_sampling_data(
                 un_adj_lut=self.un_adj_lut,
                 explore_adj=self.explore_adj,
                 search_sets=search_sets,
+                n_explore=self.n_explore,
             )
             _sample_explore_candidates(
                 p=p,
@@ -1106,6 +1137,9 @@ class TruncatedSpikeData(BatchedSpikeData):
             n_units=distances.shape[0],
         )
         return lut
+
+    def erase_candidates(self):
+        self.candidates.fill_(-1)
 
     def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
         candidates = self.candidates[spike_indices]
@@ -1191,6 +1225,66 @@ class TruncatedSpikeData(BatchedSpikeData):
         # spikes whose candidates contain the units that were split. this way, the
         # lut invariants are maintained, and at least the top labels are the same.
         return self.bootstrap_candidates(distances)
+
+    def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
+        return FullProposalDataView.from_truncated_spike_data(self, un_adj_lut)
+
+
+class FullProposalDataView(BatchedSpikeData):
+    def __init__(self, n_explore: int, data: TruncatedSpikeData, proposals: Tensor):
+        super().__init__(
+            N=data.N,
+            n_candidates=data.n_candidates,
+            n_search=0,
+            n_explore=n_explore,
+            max_n_candidates=data.n_candidates,
+            max_n_search=0,
+            max_n_explore=n_explore,
+            neighborhoods=data.neighborhoods,
+            device=data.device,
+            candidates=None,
+            neighb_adj=data.neighb_adj,
+            neighb_supset=data.neighb_supset,
+            seed=None,
+            batch_size=data.batch_size,
+            explore_neighb_steps=0,
+            neighb_overlap=0.0,
+            proposal_is_complete=True,
+        )
+        self.proposals = proposals.to(self.device)
+        self.data = data
+
+    @classmethod
+    def from_truncated_spike_data(
+        cls, data: TruncatedSpikeData, un_adj_lut: NeighborhoodLUT
+    ) -> Self:
+        n_proposed = max_units_per_neighb(un_adj_lut)
+        n_proposed = max(data.n_candidates, n_proposed)
+        n_explore = n_proposed - data.n_candidates
+        proposals = full_proposal_by_neighb(un_adj_lut, n_proposed)
+        self = cls(n_explore=n_explore, data=data, proposals=proposals)
+        return self
+
+    def update(
+        self, new_top_candidates: Tensor | None, distances: Tensor
+    ) -> NeighborhoodLUT:
+        raise ValueError("View doesn't update.")
+
+    def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
+        raise ValueError("View doesn't update.")
+
+    def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
+        neighb_ids = self.neighborhood_ids[spike_indices]
+        candidates = self.proposals[neighb_ids]
+        return SpikeDataBatch(
+            batch=spike_indices,
+            neighborhood_ids=self.neighborhood_ids[spike_indices],
+            x=self.data.x[spike_indices],
+            candidates=candidates,
+            CmoCooinvx=self.data.CmoCooinvx[spike_indices],
+            whitenedx=self.data.whitenedx[spike_indices],
+            noise_logliks=self.data.noise_logliks[spike_indices],
+        )
 
 
 class BaseMixtureModel(BModule):
@@ -1310,6 +1404,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         min_count: int,
         prior_pseudocount: float,
         cl_alpha: float,
+        full_proposal_every: int = 10,
         distance_kind: Literal["cosine"] = "cosine",
         lut_puff: float = 1.5,
         seed: int | np.random.Generator = 0,
@@ -1336,6 +1431,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.split_k = split_k
         self.lut_puff = lut_puff
         self.elbo_atol = elbo_atol
+        self.full_proposal_every = full_proposal_every
         self.register_buffer("log_proportions", log_proportions)
         self.register_buffer_or_none("noise_log_prop", noise_log_prop)
         self.register_buffer("means", means)
@@ -1379,6 +1475,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         seed: int | np.random.Generator,
         prior_pseudocount: float,
         cl_alpha: float,
+        full_proposal_every: int = 10,
         distance_kind: Literal["cosine"] = "cosine",
         min_channel_count: int = 1,
         elbo_atol: float = 1e-4,
@@ -1411,6 +1508,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             em_iters=em_iters,
             criterion_em_iters=criterion_em_iters,
             prior_pseudocount=prior_pseudocount,
+            full_proposal_every=full_proposal_every,
             elbo_atol=elbo_atol,
             cl_alpha=cl_alpha,
         )
@@ -1429,12 +1527,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert refinement_cfg.search_type == "topk"
         assert refinement_cfg.merge_decision_algorithm == "brute"
         assert refinement_cfg.split_decision_algorithm == "brute"
-        # assert not refinement_cfg.hard_noise  # TODO: remove all unused
-        # assert not refinement_cfg.laplace_ard
-        # assert not refinement_cfg.prior_pseudocount
-        # assert not refinement_cfg.prior_scales_mean
-        # assert not refinement_cfg.noise_fp_correction
-        # assert refinement_cfg.distance_metric != "cosinesqrt"
+        # TODO: remove all unused refinement_cfg parameters
         return cls.initialize_from_data_with_labels(
             noise=noise,
             erp=erp,
@@ -1451,6 +1544,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             criterion_em_iters=refinement_cfg.criterion_em_iters,
             elbo_atol=refinement_cfg.em_converged_atol,
             prior_pseudocount=refinement_cfg.prior_pseudocount,
+            full_proposal_every=refinement_cfg.full_proposal_every,
             cl_alpha=refinement_cfg.cl_alpha,
         )
 
@@ -1566,8 +1660,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             iters = range(self.em_iters)
         elbos = []
         for j in iters:
-            eres = self.e_step(data, show_progress=show_progress > 2)
+            if j and self.full_proposal_every and not j % self.full_proposal_every:
+                step_data = data.full_proposal_view(self.lut)
+            else:
+                step_data = data
+            eres = self.e_step(step_data, show_progress=show_progress > 2)
             elb = eres.stats.elbo.cpu().item()
+            assert math.isfinite(elb)
             elbos.append(elb)
             if show_progress:
                 iters.set_description(f"EM(elbo={elb:.3f})")  # type: ignore
@@ -1577,7 +1676,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 break
 
         if logger.isEnabledFor(DARTSORTDEBUG) and len(elbos):
-            elbstr = ", ".join(f"{x:0.3f}" for x in elbos)
+            if len(elbos) > 8:
+                a = ", ".join(f"{x:0.4f}" for x in elbos[:4])
+                b = ", ".join(f"{x:0.4f}" for x in elbos[-4:])
+                elbstr = a + " ... " + b
+            else:
+                elbstr = ", ".join(f"{x:0.4f}" for x in elbos)
             begend = elbos[-1] - elbos[0]
             smalldif = np.diff(elbos).min()
             bigdiff = np.diff(elbos).max()
@@ -1590,10 +1694,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return EMResult(elbos=elbos)
 
     def e_step(
-        self, data: TruncatedSpikeData, show_progress: bool = False
+        self,
+        data: TruncatedSpikeData | FullProposalDataView,
+        show_progress: bool = False,
     ) -> TruncatedEStepResult:
         assert self.lut_params is not None
-        candidates = torch.empty_like(data.candidates[:, : data.n_candidates])
+        candidates = torch.empty(
+            (data.N, data.n_candidates), dtype=torch.long, device=data.device
+        )
         stats = SufficientStatistics.zeros(
             n_units=self.n_units,
             n_lut=self.lut_params.n_lut,
@@ -1684,12 +1792,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     break
 
         if logger.isEnabledFor(DARTSORTVERBOSE) and len(elbos):
-            elbstr = ", ".join(f"{x:0.3f}" for x in elbos)
             begend = elbos[-1] - elbos[0]
             smalldif = np.diff(elbos).min()
             bigdiff = np.diff(elbos).max()
             logger.dartsortdebug(
-                f"Fixed EM elbos={elbstr}, with end-start={begend:0.3f} and biggest/smallest "
+                f"Fixed EM elbo end-start={begend:0.3f}, biggest/smallest "
                 f"diffs {bigdiff:0.3f} and {smalldif:0.3f}."
             )
         assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 1e-3)
@@ -1769,16 +1876,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
         scores = Scores(
             log_liks=distances.new_empty(data.N, data.n_candidates + 1),
             responsibilities=distances.new_empty(data.N, data.n_candidates + 1),
-            candidates=torch.empty_like(data.candidates[:, : data.n_candidates]),
+            candidates=torch.full((data.N, data.n_candidates), -1, device=data.device),
         )
         assert scores.responsibilities is not None
         assert max_iter >= 1
-        if show_progress:
+        if show_progress and not data.proposal_is_complete:
             iters = trange(max_iter, desc="SoftAssign")
+            show_batch_progress = show_progress > 1 or data.proposal_is_complete
         else:
             iters = range(max_iter)
+            show_batch_progress = False
         for it in iters:
-            for batch in data.batches(show_progress=show_progress > 1):
+            for batch in data.batches(show_progress=show_batch_progress):
                 batch_scores = self.score_batch(batch, data.n_candidates)
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
@@ -1786,12 +1895,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 scores.log_liks[bix] = batch_scores.log_liks.cpu()
                 scores.responsibilities[bix] = batch_scores.responsibilities.cpu()
 
+            if data.proposal_is_complete:
+                break
             is_final = it == max_iter - 1
+            assert data.candidates is not None
             if not is_final and torch.equal(
                 scores.candidates[:, : data.n_candidates],
                 data.candidates[:, : data.n_candidates],
             ):
-                logger.dartsortdebug(f"Soft assign completely converged at iteration {it}.")
+                logger.dartsortdebug(f"Soft assign converged at iteration {it}.")
                 break
             if not is_final:
                 data.update(scores.candidates, distances)
@@ -1996,6 +2108,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # no-merge cases
             if group_res is None:
                 continue
+            if logger.isEnabledFor(DARTSORTVERBOSE):
+                logger.dartsortverbose(
+                    "Group %s best partition %s had improvement %s.",
+                    group.tolist(),
+                    group_res.grouping.group_ids.tolist(),
+                    group_res.improvement,
+                )
             if group_res.improvement <= 0:
                 continue
             if group_res.grouping.n_groups == group.numel():
@@ -2005,16 +2124,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
             groups = group_res.grouping.group_ids.unique()
             assert groups.numel() == group_res.grouping.n_groups
 
-            # new_props = props[group].sum() * sub_props
+            # log(new_props = props[group].sum() * sub_props)
             group_log_prop = self.b.log_proportions[group].logsumexp(dim=0)
-            new_log_props = group_res.sub_proportions.log() + group_log_prop
+            new_log_props = group_res.sub_proportions.log().add_(group_log_prop)
 
             for gix, g in enumerate(groups):
                 (in_group,) = (group_res.grouping.group_ids == g).nonzero(as_tuple=True)
-                if in_group.numel() == 1:
-                    continue
-                elif logger.isEnabledFor(DARTSORTVERBOSE):
-                    logger.dartsortverbose("Merging: %s.", group[in_group])
                 ids_in_group = group[in_group]
                 first = ids_in_group[0]
                 rest = ids_in_group[1:]
@@ -2022,14 +2137,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 result_map.mapping[ids_in_group] = ids_in_group[0]
 
                 # first is the group, rest are discarded. first retains id for now.
-                self.b.log_proportions[rest] = -torch.inf
-
                 # first gets the parameter update
-                self.b.means[first] = group_res.means[gix]
                 self.b.log_proportions[first] = new_log_props[gix]
+                self.b.means[first] = group_res.means[gix]
                 if self.signal_rank:
                     assert group_res.bases is not None
                     self.b.bases[first] = group_res.bases[gix]
+
+                # rest are poisoned
+                self.b.log_proportions[rest] = -torch.inf
+                self.b.means[rest].fill_(torch.nan)
+                if self.signal_rank:
+                    self.b.bases[rest].fill_(torch.nan)
 
         assert any_merged != result_map.is_identity()
         if not any_merged:
@@ -2104,6 +2223,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # rearrange parameters and delete parameters for destroyed units
         if (uniq_first_inds >= new_ids).all():
             # since we read later indices than are being written, in place is fine
+            assert torch.equal(uniq_first_inds.sort().values, uniq_first_inds)
+            assert torch.equal(new_ids, torch.arange(new_n_units))
             for old_id, new_id in zip(uniq_first_inds, new_ids):
                 assert old_id >= new_id
                 new_remapping.mapping[remapping.mapping == old_id] = new_id
@@ -2114,11 +2235,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.log_proportions[new_id] = self.b.log_proportions[old_id]
                 if self.signal_rank:
                     self.b.bases[new_id] = self.b.bases[old_id]
+
+                self.b.means[old_id].fill_(torch.nan)
                 self.b.log_proportions[old_id] = -torch.inf
+                if self.signal_rank:
+                    self.b.bases[old_id].fill_(torch.nan)
 
             # double check to fix up log props. should exp-sum to 1-noiseprop
             logsum = self.b.log_proportions.logsumexp(dim=0)
             targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
+            assert torch.isclose(logsum, targsum, atol=1e-6)
             self.b.log_proportions.add_(targsum - logsum)
         else:
             # this case is really only hit in testing. i'm asserting that this is
@@ -2143,6 +2269,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.b.log_proportions.resize_(new_n_units, *self.b.log_proportions.shape[1:])
         if self.signal_rank:
             self.b.bases.resize_(new_n_units, *self.b.bases.shape[1:])
+
+        # final checks (historically easy for me to get this remapping stuff wrong)
+        logsum = self.b.log_proportions.logsumexp(dim=0)
+        targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
+        assert torch.isclose(logsum, targsum, atol=1e-6)
+        assert self.b.means[:, 0].isfinite().all()
+        if self.signal_rank:
+            assert self.b.bases[:, 0, 0].isfinite().all()
 
         return new_remapping
 
@@ -2337,11 +2471,10 @@ def get_truncated_datasets(
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
 
-    # TODO configure neighb overlap?
     # we assume that the core neighborhoods are exactly the same as extract ones
     assert refinement_cfg.core_radius == "extract"
     # TODO clean up stable data constructor, just keep what's needed
-    # don't store full core features...? just extract feats by split.
+    # don't store full core features...? just extract feats by split?
     if stable_data is None:
         vp = refinement_cfg.val_proportion
         stable_data = StableSpikeDataset.from_sorting(
@@ -2399,6 +2532,8 @@ def get_truncated_datasets(
         x=xtrain,
         neighborhoods=stable_data._train_extract_neighborhoods.to(device),
         neighb_cov=neighb_cov,
+        neighb_overlap=refinement_cfg.neighb_overlap,
+        explore_neighb_steps=refinement_cfg.explore_neighb_steps,
         seed=rg,
     )
     val_n_candidates = min(
@@ -2434,24 +2569,18 @@ def get_truncated_datasets(
     else:
         val_data = None
 
-    # TODO skip this if not needed
     assert stable_data.core_features is not None
     assert "key_full" in stable_data._core_neighborhoods
     xfull = stable_data.core_features.view(len(stable_data.core_features), -1)
     xfull = xfull.nan_to_num_()
-    full_data = OnlineSpikeData(
-        n_candidates=val_n_candidates,
-        n_search=n_search,
-        n_explore=n_explore,
-        max_n_candidates=max_val_n_candidates,
-        max_n_search=max_search,
-        max_n_explore=max_explore,
+    full_data = StreamingSpikeData(
+        n_candidates=n_candidates,
+        max_n_candidates=max_candidates,
         x=xfull,
         neighborhoods=stable_data._core_neighborhoods["key_full"],  # type: ignore
         device=device,
         batch_size=refinement_cfg.eval_batch_size,
         neighb_cov=neighb_cov,
-        seed=rg,
     )
     assert torch.equal(
         full_data.neighborhoods.neighborhoods,  # type: ignore
@@ -2473,6 +2602,26 @@ def get_truncated_datasets(
     return neighb_cov, erp, train_data, val_data, full_data, noise
 
 
+def save_tmm_labels(
+    tmm: TruncatedMixtureModel,
+    save_step_labels_format: str | None,
+    full_data: BatchedSpikeData,
+    original_sorting: DARTsortSorting,
+    stepname: str,
+    save_step_labels_dir: Path | None,
+    save_cfg: DARTsortInternalConfig | None,
+):
+    assert save_step_labels_format is not None
+    full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+    sorting = replace(original_sorting, labels=labels_from_scores(full_scores))
+    ds_save_intermediate_labels(
+        save_step_labels_format.format(stepname=stepname),
+        sorting,
+        save_step_labels_dir,
+        save_cfg,
+    )
+
+
 def initialize_parameters_by_unit(
     data: TruncatedSpikeData,
     signal_rank: int,
@@ -2492,6 +2641,8 @@ def initialize_parameters_by_unit(
 
     puff_K = max(K, int(puff * K))
 
+    # do log_softmax in separate tensor (tmp) so that noise_log_prop is not
+    # a view of an element of log_proportions buffer
     log_proportions = torch.zeros((puff_K + 1,), device=counts.device)
     log_proportions = log_proportions.resize_(K)
     tmp = log_proportions.new_empty((K + 1,))
@@ -2920,15 +3071,12 @@ def _pick_search_size(
         assert max_n_explore is None
         max_n_candidates = refinement_cfg.n_candidates
         max_n_search = refinement_cfg.n_search or refinement_cfg.n_candidates
-        max_n_explore = max(max_n_search, max_n_candidates)
+        max_n_explore = refinement_cfg.n_explore
 
     C = min(n_units, max_n_candidates)
-    S = min(C, max_n_search)
-    E = min(C, max_n_explore)
-    remainder = n_units - C
-    S = max(0, min(remainder // C, S))
-    remainder -= C * S
-    E = max(0, min(remainder, E))
+    S = min(n_units, max_n_search)
+    E = min(n_units, max_n_explore)
+
     return C, S, E, max_n_candidates, max_n_search, max_n_explore
 
 
@@ -3181,15 +3329,17 @@ def coincidence_matrix(
 
 
 def candidate_adjacencies(
-    labels: Tensor,
+    labels: Tensor | None,
     neighborhoods: SpikeNeighborhoods,
     neighb_supset: Tensor,
     neighb_adj: Tensor,
     explore_steps: int,
     n_units: int,
     un_adj_lut: NeighborhoodLUT | None,
+    device: torch.device,
 ):
     if un_adj_lut is None:
+        assert labels is not None
         un_adj_lut = lut_from_candidates_and_neighborhoods(
             candidates=labels,
             neighborhoods=neighborhoods,
@@ -3198,13 +3348,13 @@ def candidate_adjacencies(
         )
 
     # lut -> adjacency matrix
-    un_adj = torch.zeros(un_adj_lut.lut.shape, device=labels.device)
+    un_adj = torch.zeros(un_adj_lut.lut.shape, device=device)
     un_adj = torch.lt(un_adj_lut.lut, un_adj_lut.unit_ids.shape[0], out=un_adj)
 
     # constraint for explore candidates is looser
     explore_adj = un_adj
     for _ in range(explore_steps):
-        explore_adj = un_adj @ neighb_adj
+        explore_adj = explore_adj @ neighb_adj
 
     return un_adj_lut, un_adj, explore_adj
 
@@ -3256,6 +3406,24 @@ def candidate_search_sets(
     topunits[:-1].masked_fill_(tops == 0, -1)
 
     return topunits
+
+
+def max_units_per_neighb(lut: NeighborhoodLUT):
+    coverage = lut.lut < lut.unit_ids.shape[0]
+    return int(coverage.sum(dim=0).amax())
+
+
+def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
+    n_neighbs = lut.lut.shape[1]
+    n_lut = lut.unit_ids.shape[0]
+    proposals = torch.full((n_neighbs, max_proposed), -1)
+    for neighb_id in range(n_neighbs):
+        row = lut.lut[:, neighb_id]
+        (row_valid,) = (row < n_lut).nonzero(as_tuple=True)
+        n_row = row_valid.numel()
+        assert n_row <= max_proposed
+        proposals[neighb_id, :n_row] = lut.unit_ids[row[row_valid]]
+    return proposals
 
 
 def _fill_blank_labels(
@@ -3333,7 +3501,10 @@ def _bootstrap_top(
 
 
 def _get_explore_sampling_data(
-    un_adj_lut: NeighborhoodLUT, explore_adj: Tensor, search_sets: Tensor
+    un_adj_lut: NeighborhoodLUT,
+    explore_adj: Tensor,
+    search_sets: Tensor,
+    n_explore: int,
 ):
     # for each lut ix (unit-neighb pair), figure out which units overlap
     # the neighborhood, less the main unit
@@ -3347,11 +3518,11 @@ def _get_explore_sampling_data(
     # candidate set elsewhere, zero out their probs too
     # search sets are indexed by lut bin, same as p, so rows correspond
     ii, jj = (search_sets >= 0).nonzero(as_tuple=True)
-    p[ii[:, None], search_sets[jj]] = 0.0
+    p[ii, search_sets[ii, jj]] = 0.0
 
     # count them in each bin and get the max (max_explore)
     explore_counts = (p > 0).sum(dim=1)
-    max_explore: int = explore_counts.max().cpu().item()  # type: ignore
+    max_explore: int = max(n_explore, explore_counts.max().cpu().item())  # type: ignore
 
     # make p (n_spikes, max_explore) which is ones up to each bin's count,
     # then epsilons. and track the corresponding units. that's a topk.

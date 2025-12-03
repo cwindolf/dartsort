@@ -852,9 +852,10 @@ class SpikeNeighborhoods(BModule):
         return neighborhood_info, n_spikes
 
     def adjacency(self, overlap=0.5):
-        overlaps = self.indicators.T @ self.indicators
-        denom = self.indicators.sum(0)
-        overlaps /= torch.minimum(denom[:, None], denom)
+        overlaps = self.b.indicators.T @ self.b.indicators
+        assert overlaps.shape == (self.n_neighborhoods, self.n_neighborhoods)
+        counts = self.b.indicators.sum(0)
+        overlaps /= torch.minimum(counts[:, None], counts)
         return (overlaps >= overlap - 1e-5).to(torch.float)
 
     def partial_order(self):
