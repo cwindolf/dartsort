@@ -15,7 +15,7 @@ def simulate_moppca(
     M=2,
     n_missing=2,
     K=5,
-    t_mu: Literal["zero", "random"] = "random",
+    t_mu: Literal["zero", "smooth", "random"] = "smooth",
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
     t_w: Literal["zero", "hot", "random"] = "zero",
@@ -248,10 +248,11 @@ def fit_moppcas(
     gmm_kw={},
 ):
     import dartsort
+    from dartsort.cluster.gmm.gaussian_mixture import SpikeMixtureModel
 
     N = data.n_spikes
 
-    mm = dartsort.SpikeMixtureModel(
+    mm = SpikeMixtureModel(
         data,
         noise,
         n_spikes_fit=N,

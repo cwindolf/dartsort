@@ -178,8 +178,8 @@ class SubtractionConfig:
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
-    convexity_threshold: float | None = None
-    convexity_radius: int = 3
+    convexity_threshold: float | None = -50.0
+    convexity_radius: int = 7
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -200,6 +200,36 @@ class SubtractionConfig:
     # for debugging / vis
     save_iteration: bool = False
     save_residnorm_decrease: bool = False
+
+
+@cfg_dataclass
+class ThresholdingConfig:
+    # peeling common
+    chunk_length_samples: int = 30_000
+    n_seconds_fit: int = 100
+    max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 20_000
+    fit_subsampling_random_state: int = 0
+    fit_sampling: str = "random"
+    fit_max_reweighting: float = 4.0
+
+    # thresholding
+    detection_threshold: float = 5.0
+    max_spikes_per_chunk: int | None = None
+    peak_sign: Literal["pos", "neg", "both"] = "both"
+    spatial_dedup_radius: float = 150.0
+    relative_peak_radius_um: float = 35.0
+    relative_peak_radius_samples: int = 5
+    temporal_dedup_radius_samples: int = 11
+    remove_exact_duplicates: bool = True
+    cumulant_order: int | None = None
+    convexity_threshold: float | None = -50.0
+    convexity_radius: int = 7
+
+    thinning: float = 0.0
+    time_jitter: int = 0
+    spatial_jitter_radius: float = 0.0
+    trough_priority: float | None = 2.0
 
 
 @cfg_dataclass
@@ -318,36 +348,6 @@ class MatchingConfig:
     )
     precomputed_templates_npz: str | None = None
     delete_pconv: bool = True
-
-
-@cfg_dataclass
-class ThresholdingConfig:
-    # peeling common
-    chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
-    fit_max_reweighting: float = 4.0
-
-    # thresholding
-    detection_threshold: float = 5.0
-    max_spikes_per_chunk: int | None = None
-    peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
-    relative_peak_radius_um: float = 35.0
-    relative_peak_radius_samples: int = 5
-    dedup_temporal_radius_samples: int = 7
-    remove_exact_duplicates: bool = True
-    cumulant_order: int | None = None
-    convexity_threshold: float | None = None
-    convexity_radius: int = 3
-
-    thinning: float = 0.0
-    time_jitter: int = 0
-    spatial_jitter_radius: float = 0.0
-    trough_priority: float | None = 2.0
 
 
 @cfg_dataclass
@@ -480,7 +480,7 @@ class ClusteringConfig:
 @cfg_dataclass
 class RefinementConfig:
     refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
-        "gmm"
+        "tmm"
     )
 
     # pcmerge
@@ -515,8 +515,8 @@ class RefinementConfig:
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 3
     merge_group_size: int = 6
-    n_search: int | None = 3
-    n_explore: int = 3
+    n_search: int | None = None
+    n_explore: int | None = None
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 0.75
@@ -753,6 +753,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
             cumulant_order=cfg.cumulant_order,
+            convexity_radius=cfg.convexity_radius,
+            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
@@ -760,6 +762,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
+            convexity_radius=cfg.convexity_radius,
+            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "match":
         assert cfg.precomputed_templates_npz is not None

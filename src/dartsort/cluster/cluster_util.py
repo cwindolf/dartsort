@@ -77,7 +77,9 @@ def leafsets(Z, max_distance=np.inf):
     return leaves
 
 
-def maximal_leaf_groups(Z, max_distance=np.inf, max_group_size: int = 100):
+def maximal_leaf_groups(
+    Z, distances: np.ndarray, max_distance=np.inf, max_group_size: int = 100
+):
     """Get largest groups in linkage Z within some max complete dist and group size."""
     n = len(Z) + 1
     covered = set()
@@ -89,17 +91,63 @@ def maximal_leaf_groups(Z, max_distance=np.inf, max_group_size: int = 100):
         if nab > max_group_size:
             continue
         if n + i not in leaves:
+            # this is the distance check, since leafsets covers that.
             continue
         if leaves[n + i].issubset(covered):
             continue
         group_parents.append(n + i)
         covered.update(leaves[n + i])
-    groups = [tuple(sorted(leaves[p])) for p in group_parents]
+
+    groups = [tuple(leaves[p]) for p in group_parents]
+
+    # at this point, some nodes are not covered, but it's possible that they may
+    # still be close enough to a group. this is a greedy algorithm to find all
+    # of those nodes and add them to the best groups starting with the closest
+    # matches first. we'll enforce complete linkage here (the most strict).
+    if len(groups):
+        too_big_penalty = np.array([len(g) >= max_group_size for g in groups])
+        too_big_penalty = np.where(too_big_penalty, np.inf, 0.0)
+        uncovered = [i for i in range(n) if i not in covered]
+        group_distances = [
+            np.array([distances[ui, g].max() for g in groups]) + too_big_penalty
+            for ui in uncovered
+        ]
+        while len(uncovered):
+            min_distances = [gd.min() for gd in group_distances]
+            argmin_leaf = int(np.argmin(min_distances))
+            if min_distances[argmin_leaf] > max_distance:
+                break
+
+            argmin_group = group_distances[argmin_leaf].argmin()
+
+            # add leaf to group and coverage
+            new_leaf = uncovered[argmin_leaf]
+            groups[argmin_group] = (*groups[argmin_group], new_leaf)
+            covered.add(new_leaf)
+
+            # remove leaf from uncovered
+            del uncovered[argmin_leaf]
+            del group_distances[argmin_leaf]
+
+            # update other leaves' dists to this group
+            g = groups[argmin_group]
+            for j, ui in enumerate(uncovered):
+                if len(g) >= max_group_size:
+                    group_distances[j][argmin_group] = np.inf
+                else:
+                    group_distances[j][argmin_group] = distances[ui, g].max()
+
+    # now the true singletons are added
     for i in range(n):
         if i not in covered:
             groups.append((i,))
+
+    assert max(map(len, groups)) <= max_group_size
     assert sum(map(len, groups)) == n
     assert set(gv for g in groups for gv in g) == set(range(n))
+
+    groups = [tuple(sorted(g)) for g in groups]
+
     return groups
 
 

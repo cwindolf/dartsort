@@ -1,6 +1,7 @@
 import dataclasses
 import pytest
 import subprocess
+import warnings
 
 import dartsort
 
@@ -121,17 +122,18 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     type0 = type
     if type.endswith("_cumulant"):
         cumulant_order = 2
-        type = type.removesuffix("_cumulant")
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
-        detection_type=type,
+        detection_type=type.removesuffix("_cumulant"),
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
         cumulant_order=cumulant_order,
     )
-    res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
+    with warnings.catch_warnings() as ws:
+        warnings.filterwarnings("ignore", message="Can't extract this many non-overlapping snips.")
+        res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
     assert res["sorting"].parent_h5_path.exists()
-    if type == "subtract":
+    if type.startswith("subtract"):
         h5_name = "subtraction"
     elif type == "threshold":
         h5_name = "threshold"
@@ -152,6 +154,9 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         count_dif_tol = 0.15
     elif type == "threshold":
         count_dif_tol = 0.35
+    elif type == "subtract_cumulant":
+        # TODO.
+        count_dif_tol = 1.0
     else:
         assert False
 

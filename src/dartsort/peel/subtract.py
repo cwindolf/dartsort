@@ -574,7 +574,7 @@ class SubtractionPeeler(BasePeeler):
             spatial_dedup_channel_index=self.subtract_channel_index,
             relative_peak_radius_samples=self.relative_peak_radius_samples,
             featurization_pipeline=waveform_pipeline,
-            dedup_temporal_radius_samples=self.spike_length_samples,
+            temporal_dedup_radius_samples=self.spike_length_samples,
             thinning=self.first_denoiser_thinning,
             time_jitter=self.first_denoiser_temporal_jitter,
             spatial_jitter_channel_index=spatial_jitter_index,

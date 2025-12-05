@@ -28,10 +28,18 @@ _0 = torch.tensor(0.0)
 
 
 def spawn_torch_rg(
-    seed: int | np.random.Generator = 0, device: str | torch.device | None = "cpu"
+    seed: int | np.random.Generator | torch.Generator = 0,
+    device: str | torch.device | None = "cpu",
 ):
     if device is None:
         device = "cpu"
+    device = torch.device(device)
+    if isinstance(seed, torch.Generator) and seed.device == device:
+        return seed
+    elif isinstance(seed, torch.Generator):
+        generator = torch.Generator(device=device)
+        generator.manual_seed(seed.seed())
+        return generator
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))

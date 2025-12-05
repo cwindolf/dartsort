@@ -139,6 +139,8 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
         pre_refinement_cfg=RefinementConfig(**initrefkw),
         refinement_cfg=RefinementConfig(**refkw),
     )
+    for k in np.unique(res_sorting.labels):
+        logger.warning(f"{k=} {np.unique(sorting.labels[res_sorting.labels==k], return_counts=True)=}")
     with subtests.test(msg="rand score"):
         assert rand_score(sorting.labels, res_sorting.labels) > 0.995
     with subtests.test(msg="unit count"):

@@ -109,9 +109,12 @@ def tmm_demix(
     if pnoid:
         logger.dartsortverbose("Extra TMM asserts are on.")
 
-    # TODO: won't want to do this full data stuff except at the very very end
     neighb_cov, erp, train_data, val_data, full_data, noise = get_truncated_datasets(
-        sorting, motion_est, refinement_cfg, device, rg
+        sorting=sorting,
+        motion_est=motion_est,
+        refinement_cfg=refinement_cfg,
+        device=device,
+        rg=rg,
     )
 
     # bootstrapping phase: tmm needs lut, lut needs distances, distances need tmm...
@@ -139,11 +142,15 @@ def tmm_demix(
         if do_split:
             if val_data is not None:
                 eval_scores = tmm.soft_assign(
-                    val_data, needs_bootstrap=True, show_progress=prog_level
+                    data=val_data,
+                    full_proposal_view=True,
+                    needs_bootstrap=False,
+                    show_progress=prog_level,
                 )
             else:
                 eval_scores = tmm.soft_assign(
-                    train_data,
+                    data=train_data,
+                    full_proposal_view=False,
                     needs_bootstrap=False,
                     max_iter=1,
                     show_progress=prog_level,
@@ -170,11 +177,15 @@ def tmm_demix(
 
         if val_data is not None:
             eval_scores = tmm.soft_assign(
-                val_data, needs_bootstrap=True, show_progress=prog_level
+                data=val_data,
+                full_proposal_view=True,
+                needs_bootstrap=False,
+                show_progress=prog_level,
             )
         else:
             eval_scores = tmm.soft_assign(
-                train_data,
+                data=train_data,
+                full_proposal_view=False,
                 needs_bootstrap=False,
                 max_iter=1,
                 show_progress=prog_level,
@@ -197,7 +208,9 @@ def tmm_demix(
 
     # final assignments
     # TODO output these soft probs somehow
-    full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+    full_scores = tmm.soft_assign(
+        data=full_data, full_proposal_view=True, needs_bootstrap=False
+    )
     extra_features = dict(
         **(sorting.extra_features or {}),
         neighborhood_ids=full_data.neighborhood_ids.numpy(force=True),
@@ -265,11 +278,20 @@ class NeighborhoodCovariance:
         dev: torch.device = noise.device  # type: ignore
         neighborhoods = neighborhoods.to(device=dev)
         nc_obs, obs_ix, miss_near_ix, miss_full_mask = _neighborhood_indices(
-            neighborhoods, noise.zero_radius, prgeom.to(device=dev)
+            neighborhoods=neighborhoods,
+            zero_radius=noise.zero_radius,
+            prgeom=prgeom.to(device=dev),
         )
         logdet, Cooinv, CooinvCom, Linv = _noise_factors(
-            noise, obs_ix, miss_near_ix, cache_prefix=neighborhoods.name
+            noise=noise,
+            obs_ix=obs_ix,
+            miss_near_ix=miss_near_ix,
+            cache_prefix=neighborhoods.name,
         )
+        assert obs_ix.shape[0] == neighborhoods.n_neighborhoods
+        assert obs_ix.shape[0] == miss_near_ix.shape[0] == miss_full_mask.shape[0]
+        assert obs_ix.shape[0] == logdet.shape[0] == Cooinv.shape[0]
+        assert obs_ix.shape[0] == CooinvCom.shape[0] == Linv.shape[0]
         return cls(
             feat_rank=noise.rank,
             max_nc_obs=obs_ix.shape[1],
@@ -297,6 +319,15 @@ class NeighborhoodLUT:
     # everything else is n_lut (not -1)
     lut: Tensor
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, NeighborhoodLUT):
+            return False
+        if not torch.equal(self.unit_ids, other.unit_ids):
+            return False
+        if not torch.equal(self.neighb_ids, other.neighb_ids):
+            return False
+        return torch.equal(self.lut, other.lut)
+
 
 @databag
 class LUTParams:
@@ -313,7 +344,7 @@ class LUTParams:
     constplogdet: Tensor
 
     # signal_rank > 0 only
-    TWoCooinv: Tensor | None
+    TWoCooinvsqrt: Tensor | None
     TWoCooinvmuo: Tensor | None
     # T, zero-padded on inner dim with an extra column
     Tpad: Tensor | None
@@ -359,6 +390,8 @@ class LUTParams:
                 continue
             assert bases is not None
             _update_lut_ppca_batch(self, i0, i1, bases, lut, neighb_cov)
+        if pnoid:
+            self.check()
 
     @classmethod
     def _new_empty(
@@ -388,7 +421,7 @@ class LUTParams:
             Linvmuo=torch.zeros_like(o),
             CmoCooinvmuo=m,
             constplogdet=sc,
-            TWoCooinv=ro,
+            TWoCooinvsqrt=ro,
             TWoCooinvmuo=r,
             Tpad=rh,
             wburyroot=romt,
@@ -400,17 +433,47 @@ class LUTParams:
     def _resize_(self, n_lut_new):
         if n_lut_new == self.n_lut:
             return
+
         self.n_lut = n_lut_new
+
         self.muo.resize_(n_lut_new, *self.muo.shape[1:])
+        self.muo.fill_(0.0)
         self.Linvmuo.resize_(n_lut_new, *self.Linvmuo.shape[1:])
+        self.Linvmuo.fill_(0.0)
         self.CmoCooinvmuo.resize_(n_lut_new, *self.CmoCooinvmuo.shape[1:])
+        self.CmoCooinvmuo.fill_(0.0)
         self.constplogdet.resize_(n_lut_new, *self.constplogdet.shape[1:])
+        self.constplogdet.fill_(0.0)
         if not self.signal_rank:
             return
-        self.TWoCooinv.resize_(n_lut_new, *self.TWoCooinv.shape[1:])  # type: ignore
-        self.TWoCooinvmuo.resize_(n_lut_new, *self.TWoCooinvmuo.shape[1:])  # type: ignore
-        self.Tpad.resize_(n_lut_new, *self.Tpad.shape[1:])  # type: ignore
-        self.wburyroot.resize_(n_lut_new, *self.wburyroot.shape[1:])  # type: ignore
+        assert self.TWoCooinvsqrt is not None
+        assert self.TWoCooinvmuo is not None
+        assert self.Tpad is not None
+        assert self.wburyroot is not None
+        self.TWoCooinvsqrt.resize_(n_lut_new, *self.TWoCooinvsqrt.shape[1:])
+        self.TWoCooinvsqrt.fill_(0.0)
+        self.TWoCooinvmuo.resize_(n_lut_new, *self.TWoCooinvmuo.shape[1:])
+        self.TWoCooinvmuo.fill_(0.0)
+        self.Tpad.resize_(n_lut_new, *self.Tpad.shape[1:])
+        self.Tpad.fill_(0.0)
+        self.wburyroot.resize_(n_lut_new, *self.wburyroot.shape[1:])
+        self.wburyroot.fill_(0.0)
+
+    def check(self):
+        assert self.muo.isfinite().all()
+        assert self.Linvmuo.isfinite().all()
+        assert self.CmoCooinvmuo.isfinite().all()
+        assert self.constplogdet.isfinite().all()
+        if not self.signal_rank:
+            return
+        assert self.TWoCooinvsqrt is not None
+        assert self.TWoCooinvmuo is not None
+        assert self.Tpad is not None
+        assert self.wburyroot is not None
+        assert self.TWoCooinvsqrt.isfinite().all()
+        assert self.TWoCooinvmuo.isfinite().all()
+        assert self.Tpad.isfinite().all()
+        assert self.wburyroot.isfinite().all()
 
 
 # -- messenger classes
@@ -422,7 +485,7 @@ class Scores:
     responsibilities: Tensor | None
     candidates: Tensor
 
-    def slice(self, indices: Tensor) -> "Scores":
+    def slice(self, indices: Tensor | slice) -> "Scores":
         if self.responsibilities is None:
             r = None
         else:
@@ -546,6 +609,7 @@ class SuccessfulGroupMergeResult:
     grouping: GroupPartition
     improvement: float
     train_assignments: Tensor
+    train_indices: Tensor
     means: Tensor
     sub_proportions: Tensor
     bases: Tensor | None
@@ -612,8 +676,7 @@ class DenseSpikeData:
         think of each col as corresponding to a unit.
         """
         unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
-        lut_ixs = lut.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
-        covered = lut_ixs < lut.unit_ids.shape[0]
+        covered = self.lut_coverage(unit_ids, lut)
         candidates = torch.where(covered, unit_ids[None, :], -1)
         return SpikeDataBatch(
             batch=self.indices,
@@ -623,6 +686,31 @@ class DenseSpikeData:
             noise_logliks=self.noise_logliks,
             CmoCooinvx=self.CmoCooinvx,
             candidates=candidates,
+        )
+
+    def lut_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
+        lut_ixs = lut.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
+        covered = lut_ixs < lut.unit_ids.shape[0]
+        return covered
+
+    def slice_by_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
+        unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
+        covered = self.lut_coverage(unit_ids, lut)
+        (covered_inds,) = covered.any(dim=1).nonzero(as_tuple=True)
+        if covered_inds.numel() == covered.shape[0]:
+            return self, slice(None)
+        return self.slice(covered_inds), covered_inds
+
+    def slice(self, indices: Tensor):
+        return DenseSpikeData(
+            indices=self.indices[indices],
+            neighborhoods=self.neighborhoods,
+            neighb_supset=self.neighb_supset,
+            neighborhood_ids=self.neighborhood_ids[indices],
+            x=self.x[indices],
+            whitenedx=self.whitenedx[indices],
+            CmoCooinvx=self.CmoCooinvx[indices],
+            noise_logliks=self.noise_logliks[indices],
         )
 
     def covered_channels(self, min_count=0):
@@ -790,8 +878,20 @@ class BatchedSpikeData:
     def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
         raise NotImplementedError
 
-    def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
+    def update_adjacency(
+        self,
+        n_units: int,
+        un_adj_lut: NeighborhoodLUT | None = None,
+        expand_lut: bool = False,
+    ):
         """Update my adjacency either using my labels or just a fixed LUT."""
+        self._update_sizes_from_n_units(n_units)
+        if expand_lut:
+            assert self.un_adj_lut is not None
+            assert un_adj_lut is None
+            expand_from_lut = self.un_adj_lut
+        else:
+            expand_from_lut = None
         if un_adj_lut is not None:
             assert un_adj_lut.lut.shape[0] == n_units
         if self.candidates is None:
@@ -806,7 +906,9 @@ class BatchedSpikeData:
             n_units=n_units,
             explore_steps=self.explore_neighb_steps,
             neighborhoods=self.neighborhoods,
+            neighborhood_ids=self.neighborhood_ids,
             un_adj_lut=un_adj_lut,
+            expand_from_lut=expand_from_lut,
             device=self.device,
         )
         assert self.un_adj.max().item() == 1.0
@@ -819,7 +921,6 @@ class BatchedSpikeData:
         self, distances: Tensor, un_adj_lut: NeighborhoodLUT | None = None
     ) -> NeighborhoodLUT:
         self.update_adjacency(n_units=distances.shape[0], un_adj_lut=un_adj_lut)
-        self._update_sizes_from_n_units(distances.shape[0])
 
         # fill in missing labels randomly, obeying un_adj
         if self.candidates is not None:
@@ -859,10 +960,25 @@ class BatchedSpikeData:
                 assert (self.candidates[:, 0] >= 0).all()
 
         # call update to fill in search + explore and build lut
-        return self.update(new_top_candidates=None, distances=distances)
+        _, lut = self.update(new_top_candidates=None, distances=distances)
+        return lut
 
-    def update(self, new_top_candidates: Tensor | None, distances: Tensor):
-        """Subclasses do what they need to do to update their candidates."""
+    def update(
+        self,
+        new_top_candidates: Tensor | None,
+        distances: Tensor,
+        expand_lut: bool = False,
+    ) -> tuple[bool, NeighborhoodLUT]:
+        """Subclasses do what they need to do to update their candidates.
+
+        Returns
+        -------
+        lut_changed : bool
+        new_lut : NeighborhoodLUT
+        """
+        raise NotImplementedError
+
+    def full_proposal_view(self, un_adj_lut: NeighborhoodLUT) -> Self:
         raise NotImplementedError
 
 
@@ -920,25 +1036,41 @@ class StreamingSpikeData(BatchedSpikeData):
         self.proposals = None
 
     def update(
-        self, new_top_candidates: Tensor | None, distances: Tensor
-    ) -> NeighborhoodLUT:
-        assert new_top_candidates is None
+        self,
+        new_top_candidates: Tensor | None,
+        distances: Tensor,
+        expand_lut: bool = False,
+    ) -> tuple[bool, NeighborhoodLUT]:
+        # I only do candidates on the fly, so this does nothing.
+        # it is an error to assign candidates which would lead to the LUT
+        # changing, but that error cannot occur, because I would never
+        # propose such candidates!
         assert distances.shape[0] == self.un_adj_lut.lut.shape[0]
+        return False, self.un_adj_lut
+
+    def update_adjacency(
+        self,
+        n_units: int,
+        un_adj_lut: NeighborhoodLUT | None = None,
+        expand_lut: bool = False,
+    ):
+        super().update_adjacency(
+            n_units=n_units, un_adj_lut=un_adj_lut, expand_lut=expand_lut
+        )
+        # my invariant, see __init__
+        assert torch.equal(self.un_adj, self.explore_adj)
+        self.max_n_total = max_units_per_neighb(self.un_adj_lut)
+        self._update_sizes_from_n_units(n_units)
 
         # which units can be proposed for each neighborhood? all of the ones in the LUT
         assert self.max_n_total is not None
         assert self.n_total == self.max_n_total
         proposals = full_proposal_by_neighb(self.un_adj_lut, self.n_total)
         self.proposals = proposals.to(self.device)
-        return self.un_adj_lut
-
-    def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
-        super().update_adjacency(n_units=n_units, un_adj_lut=un_adj_lut)
-        # my invariant, see __init__
-        assert torch.equal(self.un_adj, self.explore_adj)
-        self.max_n_total = max_units_per_neighb(self.un_adj_lut)
 
     def _update_sizes_from_n_units(self, n_units: int):
+        if self.max_n_total is None:
+            self.max_n_total = n_units
         assert self.max_n_total <= n_units
         n_candidates = min(self.max_n_candidates, self.max_n_total)
         n_explore = self.max_n_total - n_candidates
@@ -949,7 +1081,9 @@ class StreamingSpikeData(BatchedSpikeData):
         assert self.proposals is not None
         candidates = self.proposals[neighb_ids]
         x = self.x[spike_indices].to(self.device)
-        wx, noise_loglik = _whiten_and_noise_score_batch(x, neighb_ids, self.neighb_cov)
+        wx, noise_loglik = _whiten_and_noise_score_batch(
+            x=x, neighb_ids=neighb_ids, neighb_cov=self.neighb_cov
+        )
         return SpikeDataBatch(
             batch=spike_indices,
             x=x,
@@ -959,6 +1093,10 @@ class StreamingSpikeData(BatchedSpikeData):
             noise_logliks=noise_loglik,
             CmoCooinvx=None,
         )
+
+    def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
+        self.update_adjacency(n_units=un_adj_lut.lut.shape[0], un_adj_lut=un_adj_lut)
+        return self
 
 
 class TruncatedSpikeData(BatchedSpikeData):
@@ -1058,8 +1196,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         neighb_overlap: float = 0.75,
         batch_size: int = 128,
     ) -> Self:
+        assert len(x) == len(neighborhoods.b.neighborhood_ids)
         whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
-            x, neighborhoods, neighb_cov
+            x=x, neighborhoods=neighborhoods, neighb_cov=neighb_cov
         )
         self = cls(
             n_candidates=n_candidates,
@@ -1083,15 +1222,21 @@ class TruncatedSpikeData(BatchedSpikeData):
         return self
 
     def update(
-        self, new_top_candidates: Tensor | None, distances: Tensor
-    ) -> NeighborhoodLUT:
+        self,
+        new_top_candidates: Tensor | None,
+        distances: Tensor,
+        expand_lut: bool = False,
+    ) -> tuple[bool, NeighborhoodLUT]:
+        self._update_sizes_from_n_units(distances.shape[0])
         # fill in top spots
         if new_top_candidates is not None:
             self.candidates[:, : self.n_candidates] = new_top_candidates
-            self.update_adjacency(distances.shape[0])
+            self.update_adjacency(distances.shape[0], expand_lut=expand_lut)
 
-        # -1s in candidates will get n_lut here, thanks to padding of un_adj_lut
-        top_lut_ixs = self.un_adj_lut.lut[
+        lut_padded = F.pad(
+            self.un_adj_lut.lut, (0, 0, 0, 1), value=self.un_adj_lut.unit_ids.shape[0]
+        )
+        top_lut_ixs = lut_padded[
             self.candidates[:, : self.n_candidates], self.neighborhood_ids[:, None]
         ]
 
@@ -1131,12 +1276,15 @@ class TruncatedSpikeData(BatchedSpikeData):
 
         # update lut for caller
         lut = lut_from_candidates_and_neighborhoods(
-            self.candidates,
-            self.neighborhoods,
+            candidates=self.candidates,
+            neighborhoods=self.neighborhoods,
+            neighborhood_ids=self.neighborhood_ids,
             neighb_supset=self.neighb_supset,
             n_units=distances.shape[0],
         )
-        return lut
+        if expand_lut:
+            lut = combine_luts(self.un_adj_lut, lut)
+        return True, lut
 
     def erase_candidates(self):
         self.candidates.fill_(-1)
@@ -1165,7 +1313,9 @@ class TruncatedSpikeData(BatchedSpikeData):
             noise_logliks=self.noise_logliks[spike_indices],
         )
 
-    def dense_slice_by_unit(self, unit_ids: Tensor | int | None, min_count: int = 0):
+    def dense_slice_by_unit(
+        self, unit_ids: Tensor | int | None, gen: torch.Generator, min_count: int = 0
+    ):
         assert unit_ids is not None
         unit_ids = torch.as_tensor(unit_ids, device=self.candidates.device)
         if unit_ids.ndim == 0:
@@ -1177,7 +1327,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         if min_count and ixs.numel() < min_count:
             return None
         if (nixs := ixs.numel()) > self.dense_slice_size_per_unit:
-            ixs = ixs[torch.randperm(nixs)[: self.dense_slice_size_per_unit]]
+            ixs = ixs[
+                torch.randperm(nixs, generator=gen)[: self.dense_slice_size_per_unit]
+            ]
             ixs = torch.msort(ixs)
 
         return self.dense_slice(ixs)
@@ -1187,6 +1339,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         n_units_orig = remapping.mapping.shape[0]
         assert distances.shape[0] <= n_units_orig
         assert remapping.mapping.max() + 1 == distances.shape[0]
+        self._update_sizes_from_n_units(distances.shape[0])
 
         # extra -1 for the -1 candidates to index into
         mapping = F.pad(remapping.mapping, (0, 1), value=-1)
@@ -1207,7 +1360,8 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         self.candidates[:, self.n_candidates :].fill_(-1)
         self.update_adjacency(distances.shape[0])
-        return self.update(new_top_candidates=None, distances=distances)
+        _, lut = self.update(new_top_candidates=None, distances=distances)
+        return lut
 
     def update_from_split(
         self,
@@ -1266,11 +1420,19 @@ class FullProposalDataView(BatchedSpikeData):
         return self
 
     def update(
-        self, new_top_candidates: Tensor | None, distances: Tensor
-    ) -> NeighborhoodLUT:
+        self,
+        new_top_candidates: Tensor | None,
+        distances: Tensor,
+        expand_lut: bool = False,
+    ) -> tuple[bool, NeighborhoodLUT]:
         raise ValueError("View doesn't update.")
 
-    def update_adjacency(self, n_units: int, un_adj_lut: NeighborhoodLUT | None = None):
+    def update_adjacency(
+        self,
+        n_units: int,
+        un_adj_lut: NeighborhoodLUT | None = None,
+        expand_lut: bool = False,
+    ):
         raise ValueError("View doesn't update.")
 
     def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
@@ -1329,6 +1491,9 @@ class BaseMixtureModel(BModule):
         raise NotImplementedError
 
     def get_params_at(self, indices: Tensor) -> tuple[Tensor, Tensor | None]:
+        raise NotImplementedError
+
+    def get_lut(self) -> NeighborhoodLUT:
         raise NotImplementedError
 
     @property
@@ -1407,7 +1572,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         full_proposal_every: int = 10,
         distance_kind: Literal["cosine"] = "cosine",
         lut_puff: float = 1.5,
-        seed: int | np.random.Generator = 0,
+        seed: int | np.random.Generator | torch.Generator = 0,
         min_channel_count: int = 1,
         elbo_atol: float = 1e-4,
         min_em_iters: int = 1,
@@ -1432,12 +1597,28 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.lut_puff = lut_puff
         self.elbo_atol = elbo_atol
         self.full_proposal_every = full_proposal_every
+        if noise_log_prop is not None:
+            assert (
+                log_proportions.untyped_storage().data_ptr
+                != noise_log_prop.untyped_storage().data_ptr
+            )
         self.register_buffer("log_proportions", log_proportions)
         self.register_buffer_or_none("noise_log_prop", noise_log_prop)
         self.register_buffer("means", means)
         self.register_buffer_or_none("bases", bases)
+        assert self.b.means.is_contiguous()
+        if bases is not None:
+            assert self.b.bases.is_contiguous()
         self.eps = torch.finfo(means.dtype).tiny
         self.min_em_iters = min_em_iters
+
+        # needs to be initialized before doing anything serious
+        # see bootstrapping stage in main function below
+        self.lut = NeighborhoodLUT(
+            unit_ids=torch.arange(0),
+            neighb_ids=torch.arange(0),
+            lut=torch.arange(0)[None],
+        )
 
         if bases is not None:
             assert bases.shape[0] == self.n_units
@@ -1447,15 +1628,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.signal_rank = 0
 
         self.rg = spawn_torch_rg(seed, device=means.device)
-
-        # needs to be initialized before doing anything serious
-        # see bootstrapping stage in main function below
-        self.lut = NeighborhoodLUT(
-            unit_ids=torch.arange(0),
-            neighb_ids=torch.arange(0),
-            lut=torch.arange(0)[None],
-        )
         self.lut_params = None
+
+    def get_lut(self):
+        return self.lut
 
     @classmethod
     def initialize_from_data_with_labels(
@@ -1481,11 +1657,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         elbo_atol: float = 1e-4,
     ) -> Self:
         """Constructor for the full mixture model, called by from_config()"""
+        rg = spawn_torch_rg(seed)
         log_props, noise_log_prop, means, bases = initialize_parameters_by_unit(
             data=data,
             signal_rank=signal_rank,
             noise=noise,
             erp=erp,
+            gen=rg,
             min_channel_count=min_channel_count,
             prior_pseudocount=prior_pseudocount,
             puff=split_k,
@@ -1503,7 +1681,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             noise_log_prop=noise_log_prop,
             min_count=min_count,
             min_channel_count=min_channel_count,
-            seed=seed,
+            seed=rg,
             noise=noise,
             em_iters=em_iters,
             criterion_em_iters=criterion_em_iters,
@@ -1569,7 +1747,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cl_alpha: float,
         elbo_atol: float = 1e-4,
         noise_log_prop: Tensor | float = -torch.inf,
-    ) -> tuple[Self, Tensor]:
+    ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor]:
         """Fit units with fixed label posterior
 
         Used to construct hypothetical models:
@@ -1591,13 +1769,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         initialization = [r for r in initialization if r is not None]
         responsibilities = responsibilities[:, valid]
         K = responsibilities.shape[1]
-
-        # not sure whether to do anything with this spikes x unit array
-        # using it to constrain candidates would mean that lut would only include
-        # spikes whose neighbs are completely covered by chosen chans
-        # and, input resp==0 is already used to restrict candidates according
-        # to pre-existing units' neighb coverage, since they get -inf liks...
-        del chan_coverage
 
         fdim = noise.rank * noise.n_channels
         means = data.x.new_zeros((K, fdim))
@@ -1639,11 +1810,23 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cl_alpha=cl_alpha,
         )
 
+        # subset data to coverage
+        keep_mask = (responsibilities > 0).logical_and_(chan_coverage)
+        (keep_spikes,) = keep_mask.any(dim=1).nonzero(as_tuple=True)
+        any_spikes_discarded = keep_spikes.numel() < responsibilities.shape[0]
+        if any_spikes_discarded:
+            responsibilities = responsibilities[keep_spikes]
+            data = data.slice(keep_spikes)
+
         # get lut, which will never change
         candidates = torch.where(responsibilities > 0, self.unit_ids[None, :], -1)
+        if pnoid:
+            assert (responsibilities > 0).any(dim=1).all()
+            assert (candidates >= 0).any(dim=1).all()
         lut = lut_from_candidates_and_neighborhoods(
-            candidates,
+            candidates=candidates,
             neighborhoods=data.neighborhoods,
+            neighborhood_ids=data.neighborhood_ids,
             neighb_supset=data.neighb_supset,
             n_units=self.n_units,
         )
@@ -1651,15 +1834,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # run some em steps
         self.fixed_weight_em(data=data, responsibilities=responsibilities)
-        return self, valid
+        return self, valid, data, any_spikes_discarded, keep_spikes
 
     def em(self, data: TruncatedSpikeData, show_progress: int = 1):
+        assert self.lut_params is not None
         if show_progress:
             iters = trange(self.em_iters, desc="EM")
         else:
             iters = range(self.em_iters)
         elbos = []
         for j in iters:
+            if pnoid:
+                self.lut_params.check()
             if j and self.full_proposal_every and not j % self.full_proposal_every:
                 step_data = data.full_proposal_view(self.lut)
             else:
@@ -1671,7 +1857,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             if show_progress:
                 iters.set_description(f"EM(elbo={elb:.3f})")  # type: ignore
             self.m_step(eres.stats)
-            self.update_lut(data.update(eres.candidates, self.unit_distance_matrix()))
+            lut_changed, lut = data.update(eres.candidates, self.unit_distance_matrix())
+            del lut_changed  # doesn't matter if it did or not, my parameters changed
+            self.update_lut(lut)
             if j > self.min_em_iters and elbos[-1] - elbos[-2] < self.elbo_atol:
                 break
 
@@ -1732,6 +1920,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             lp = F.log_softmax(lp.log_(), dim=0).clamp_(min=self.LP_MIN)
             self.b.log_proportions.copy_(lp[:-1])
             self.b.noise_log_prop.fill_(lp[-1])
+            if pnoid:
+                assert self.b.log_proportions.isfinite().all()
+                assert self.b.noise_log_prop.isfinite().all()
         else:
             assert stats.noise_N is None
 
@@ -1765,6 +1956,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             candidates=batch.candidates,
         )
         elbos = []
+        j = -1
         for j in range(self.em_iters):
             stats = self.estep_stats_batch(batch, scores)
             _finalize_e_stats(
@@ -1786,6 +1978,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     skip_responsibility=True,
                 )
                 elb = elbo(batch_scores.responsibilities, batch_scores.log_liks)
+                assert elb.isfinite()
                 elbos.append(elb)
             if j >= self.criterion_em_iters + 1:
                 if elbos[-1] - elbos[-2] < self.elbo_atol:
@@ -1796,8 +1989,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             smalldif = np.diff(elbos).min()
             bigdiff = np.diff(elbos).max()
             logger.dartsortdebug(
-                f"Fixed EM elbo end-start={begend:0.3f}, biggest/smallest "
-                f"diffs {bigdiff:0.3f} and {smalldif:0.3f}."
+                f"Fixed fit elbo end-start={begend:0.3f} over {j + 1} iterations, "
+                f"biggest and smallest diffs {bigdiff:0.3f} and {smalldif:0.3f}."
             )
         assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 1e-3)
 
@@ -1841,6 +2034,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
         return _stat_pass_batch(
             x=batch.x,
+            whitenedx=batch.whitenedx,
             CmoCooinvx=batch.CmoCooinvx,
             responsibilities=scores.responsibilities,
             log_liks=scores.log_liks,
@@ -1858,25 +2052,33 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
     def soft_assign(
         self,
+        *,
         data: BatchedSpikeData,
         needs_bootstrap: bool,
+        full_proposal_view: bool,
         max_iter: int = 10,
         show_progress: int = 1,
     ) -> Scores:
         """Run E steps until candidates converge, holding my LUT fixed."""
         # start by telling the data how to search
         distances = self.unit_distance_matrix()
-        if needs_bootstrap:
+        if full_proposal_view:
+            data.update_adjacency(n_units=self.n_units, un_adj_lut=self.lut)
+            target_data = data.full_proposal_view(self.lut)
+        elif needs_bootstrap:
             data.erase_candidates()
             lut = data.bootstrap_candidates(distances=distances, un_adj_lut=self.lut)
-            if not torch.equal(lut.lut, self.lut.lut):
-                self.update_lut(lut)
+            assert lut == self.lut
+            # self.update_lut(lut, no_parameter_changes=True)
+            target_data = data
+        else:
+            target_data = data
 
         # initialize storage for output
         scores = Scores(
-            log_liks=distances.new_empty(data.N, data.n_candidates + 1),
-            responsibilities=distances.new_empty(data.N, data.n_candidates + 1),
-            candidates=torch.full((data.N, data.n_candidates), -1, device=data.device),
+            log_liks=torch.empty((data.N, data.n_candidates + 1)),
+            responsibilities=torch.empty((data.N, data.n_candidates + 1)),
+            candidates=torch.full((data.N, data.n_candidates), -1),
         )
         assert scores.responsibilities is not None
         assert max_iter >= 1
@@ -1887,7 +2089,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             iters = range(max_iter)
             show_batch_progress = False
         for it in iters:
-            for batch in data.batches(show_progress=show_batch_progress):
+            for batch in target_data.batches(show_progress=show_batch_progress):
                 batch_scores = self.score_batch(batch, data.n_candidates)
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
@@ -1895,10 +2097,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 scores.log_liks[bix] = batch_scores.log_liks.cpu()
                 scores.responsibilities[bix] = batch_scores.responsibilities.cpu()
 
+            lut_changed, lut = data.update(
+                scores.candidates, distances, expand_lut=True
+            )
+            if lut_changed:
+                # it can't actually change.
+                assert lut == self.lut
             if data.proposal_is_complete:
                 break
-            is_final = it == max_iter - 1
             assert data.candidates is not None
+            is_final = it == max_iter - 1
             if not is_final and torch.equal(
                 scores.candidates[:, : data.n_candidates],
                 data.candidates[:, : data.n_candidates],
@@ -1910,7 +2118,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return scores
 
-    def update_lut(self, lut: NeighborhoodLUT):
+    def update_lut(self, lut: NeighborhoodLUT, no_parameter_changes: bool = False):
+        if no_parameter_changes and self.lut == lut:
+            return
         self.lut = lut
         if self.lut_params is None:
             self.lut_params = LUTParams.from_lut(
@@ -1928,7 +2138,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
     ) -> UnitSplitResult:
         # get dense train set slice in unit_id
         min_count_split = 2 * self.min_count
-        split_data = train_data.dense_slice_by_unit(unit_id, min_count=min_count_split)
+        split_data = train_data.dense_slice_by_unit(
+            unit_id, gen=self.rg, min_count=min_count_split
+        )
         if split_data is None:
             return None
 
@@ -1948,7 +2160,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert kmeans_responsibliities.shape[1] >= 2
 
         # initialize dense model with fixed resps
-        split_model, _ = (
+        split_model, _, split_data, any_spikes_discarded, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibliities,
@@ -1969,6 +2181,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 noise_log_prop=self.b.noise_log_prop,
             )
         )
+        if any_spikes_discarded:
+            kmeans_responsibliities = kmeans_responsibliities[keep_spikes]
         if split_model.n_units <= 1:
             logger.dartsortverbose(
                 f"Split {unit_id}: only {split_model.n_units} of {kmeans_responsibliities.shape[1]} sub-units."
@@ -1981,7 +2195,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert scores.log_liks.shape[0] == train_data.N
             cur_scores_batch = scores.slice(split_data.indices)
         else:
-            split_eval_data = eval_data.dense_slice_by_unit(unit_id)
+            split_eval_data = eval_data.dense_slice_by_unit(unit_id, gen=self.rg)
             assert split_eval_data is not None
             assert scores.log_liks.shape[0] == eval_data.N
             cur_scores_batch = scores.slice(split_eval_data.indices)
@@ -1995,7 +2209,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(unit_id, device=train_data.x.device),
             responsibilities=kmeans_responsibliities,
             skip_full=False,
-            skip_single=True,
+            skip_single=False,
         )
         if merge_res is not None and merge_res.grouping.n_groups <= 1:
             logger.dartsortverbose(
@@ -2008,25 +2222,35 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
             return None
 
-        if merge_res is None:
+        no_allowed_partitions = not pair_mask.fill_diagonal_(False).any()
+        if no_allowed_partitions:
+            assert merge_res is None
             # units are too separated to merge. just assign by scoring.
             train_scores = split_model.score(split_data)
-            train_assignments = train_scores.candidates.take_along_dim(
-                train_scores.log_liks.argmax(1, keepdim=True), dim=1
-            )[:, 0]
+            n_candidates = train_scores.candidates.shape[1]
+            assert n_candidates > 0
+            cix = train_scores.log_liks[:, :n_candidates].argmax(1, keepdim=True)
+            train_labels = train_scores.candidates.take_along_dim(cix, dim=1)[:, 0]
+            train_indices = split_data.indices
             n_groups = split_model.n_units
             means = split_model.b.means
             bases = split_model.b.bases
             sub_proportions = F.softmax(split_model.b.log_proportions, dim=0)
+        elif merge_res is None:
+            logger.dartsortverbose(
+                f"Split {unit_id}: no split, merge failed with allowed partitions."
+            )
+            return None
         else:
-            train_assignments = merge_res.train_assignments
+            train_labels = merge_res.train_assignments
+            train_indices = merge_res.train_indices
             n_groups = merge_res.grouping.n_groups
             means = merge_res.means
             bases = merge_res.bases
             sub_proportions = merge_res.sub_proportions
 
         if logger.isEnabledFor(DARTSORTVERBOSE):
-            _l, _c = train_assignments.unique(return_counts=True)
+            _l, _c = train_labels.unique(return_counts=True)
             imp = None if merge_res is None else merge_res.improvement
             logger.dartsortverbose(
                 f"Split {unit_id}: {n_groups} parts with improvement {imp}, "
@@ -2036,8 +2260,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return SuccessfulUnitSplitResult(
             unit_id=int(unit_id),
             n_split=n_groups,
-            train_indices=split_data.indices,
-            train_assignments=train_assignments,
+            train_indices=train_indices,
+            train_assignments=train_labels,
             means=means,
             bases=bases,
             sub_proportions=sub_proportions,
@@ -2081,16 +2305,20 @@ class TruncatedMixtureModel(BaseMixtureModel):
         for group in groups:
             if group.numel() == 1:
                 continue
+            assert group.numel() <= self.max_group_size
 
             view = self.unit_slice(group)
-            group_train_data = train_data.dense_slice_by_unit(group)
+            group_train_data = train_data.dense_slice_by_unit(group, gen=self.rg)
             assert group_train_data is not None
+            if pnoid:
+                cov = group_train_data.lut_coverage(view.unit_ids, self.lut)
+                assert cov.any(dim=1).all()
             if eval_data is None:
                 group_eval_data = None
                 assert scores.log_liks.shape[0] == train_data.N
                 group_scores = scores.slice(group_train_data.indices)
             else:
-                group_eval_data = eval_data.dense_slice_by_unit(group)
+                group_eval_data = eval_data.dense_slice_by_unit(group, gen=self.rg)
                 assert group_eval_data is not None
                 assert scores.log_liks.shape[0] == eval_data.N
                 group_scores = scores.slice(group_eval_data.indices)
@@ -2104,6 +2332,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 skip_full=False,
                 skip_single=False,
             )
+            del group_train_data, group_eval_data
 
             # no-merge cases
             if group_res is None:
@@ -2122,11 +2351,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
             any_merged = True
 
             groups = group_res.grouping.group_ids.unique()
+            groups = groups[groups >= 0]
             assert groups.numel() == group_res.grouping.n_groups
 
             # log(new_props = props[group].sum() * sub_props)
             group_log_prop = self.b.log_proportions[group].logsumexp(dim=0)
             new_log_props = group_res.sub_proportions.log().add_(group_log_prop)
+            assert group_res.sub_proportions.shape == (group_res.grouping.n_groups,)
+            assert group_res.means.shape[0] == group_res.grouping.n_groups
 
             for gix, g in enumerate(groups):
                 (in_group,) = (group_res.grouping.group_ids == g).nonzero(as_tuple=True)
@@ -2157,8 +2389,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # fix up my parameters, update the datasets, and update the lut
         flat_map = self.cleanup(result_map)
         distances = self.unit_distance_matrix()
+        if pnoid:
+            assert distances.isfinite().all()
         lut = train_data.remap(remapping=flat_map, distances=distances)
         self.update_lut(lut)
+        assert self.lut_params is not None
+        if pnoid:
+            self.lut_params.check()
 
         return flat_map
 
@@ -2318,6 +2555,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             if res.n_split <= 1:
                 logger.dartsortverbose("Didn't split %s.", res.unit_id)
                 continue
+
+            logger.dartsortverbose("Applying %s split.", res.unit_id)
             unit_id = res.unit_id
             any_split = True
 
@@ -2334,7 +2573,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
             # rest are new ids. these split ids start at 1, so add K-1 rather than K
             # for the first new id to be K (which is the next label).
-            for_other = for_current.logical_not_()
+            for_other = res.train_assignments > 0
             other_labels = res.train_assignments[for_other].add_(cur_max_label)
             train_labels[res.train_indices[for_other]] = other_labels
 
@@ -2349,6 +2588,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
 
             # assign split result first params to unit_id's spot
+            assert res.means.shape[0] == res.n_split
+            assert res.sub_proportions.shape == (res.n_split,)
             self.b.log_proportions[unit_id] = split_log_props[0]
             self.b.means[unit_id] = res.means[0]
             if self.signal_rank:
@@ -2365,11 +2606,17 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         assert cur_max_label + 1 == self.n_units + n_new_units
         assert train_labels.max() <= cur_max_label
-        logger.dartsortdebug(f"Split created {n_new_units} new units.")
+        assert n_new_units == sum(m.shape[0] for m in new_means)
+        assert n_new_units == sum(lp.numel() for lp in new_log_props)
+        if self.signal_rank:
+            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore
 
         # resize params to allow space for the new guys
         Korig = self.n_units
         Knew = Korig + n_new_units
+        logger.dartsortdebug(
+            f"Split created {n_new_units} new units ({Korig} -> {Knew})."
+        )
         self.b.means.resize_(Knew, *self.b.means.shape[1:])
         self.b.log_proportions.resize_(Knew, *self.b.log_proportions.shape[1:])
         if self.signal_rank:
@@ -2389,17 +2636,25 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases[k0 : k0 + newk] = nb
             k0 += newk
         assert k0 == Knew
-        k0 = Korig
         if pnoid:
             _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
             assert torch.isclose(_lp, torch.zeros(()), atol=1e-6)
+            assert self.b.means.isfinite().all()
+            assert self.b.log_proportions.isfinite().all()
+            if self.signal_rank:
+                assert self.b.bases.isfinite().all()
 
         # call data methods for processing splits
         distances = self.unit_distance_matrix()
+        if pnoid:
+            assert distances.isfinite().all()
         lut = train_data.update_from_split(
             train_unit_mask, train_split_mask, train_labels, distances
         )
         self.update_lut(lut)
+        assert self.lut_params is not None
+        if pnoid:
+            self.lut_params.check()
 
         return SplitResult(
             any_split=any_split,
@@ -2442,6 +2697,9 @@ class TMMView(BaseMixtureModel):
             b = None
         return m, b
 
+    def get_lut(self) -> NeighborhoodLUT:
+        return self.tmm.lut
+
     @property
     def centroids(self):
         return self.tmm.b.means[self.unit_ids]
@@ -2466,15 +2724,148 @@ class TMMView(BaseMixtureModel):
 
 
 def get_truncated_datasets(
-    sorting, motion_est, refinement_cfg, device, rg, noise=None, stable_data=None
+    *, sorting, motion_est, refinement_cfg, device, rg, noise=None, stable_data=None
 ):
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
 
     # we assume that the core neighborhoods are exactly the same as extract ones
     assert refinement_cfg.core_radius == "extract"
+    data = get_full_neighborhood_data(
+        sorting=sorting,
+        motion_est=motion_est,
+        rg=rg,
+        refinement_cfg=refinement_cfg,
+        stable_data=stable_data,
+        device=device,
+    )
+    full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
+    del stable_data
+
+    if noise is None:
+        noise = EmbeddedNoise.estimate_from_hdf5(
+            sorting.parent_h5_path,
+            motion_est=motion_est,
+            zero_radius=refinement_cfg.cov_radius,
+            cov_kind=refinement_cfg.cov_kind,
+            glasso_alpha=refinement_cfg.glasso_alpha,
+            interpolation_method=refinement_cfg.interpolation_method,
+            kernel_name=refinement_cfg.kernel_name,
+            sigma=refinement_cfg.interpolation_sigma,
+            rq_alpha=refinement_cfg.rq_alpha,
+            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            device=device,
+            rgeom=prgeom[:-1],
+        )
+    assert isinstance(noise, EmbeddedNoise)
+    neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
+        prgeom=prgeom,
+        noise=noise,
+        neighborhoods=full_neighbs,
+    )
+    n_candidates, n_search, n_explore, max_candidates, max_search, max_explore = (
+        _pick_search_size(n_units=sorting.n_units, refinement_cfg=refinement_cfg)
+    )
+    train_data = TruncatedSpikeData.initialize_from_labels(
+        n_candidates=n_candidates,
+        n_search=n_search,
+        n_explore=n_explore,
+        max_n_candidates=max_candidates,
+        max_n_search=max_search,
+        max_n_explore=max_explore,
+        dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
+        labels=labels[train_ixs],
+        x=full_features[train_ixs],
+        neighborhoods=train_neighbs,
+        neighb_cov=neighb_cov,
+        neighb_overlap=refinement_cfg.neighb_overlap,
+        explore_neighb_steps=refinement_cfg.explore_neighb_steps,
+        seed=rg,
+    )
+    val_n_candidates = min(
+        sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
+    )
+    max_val_n_candidates = max(val_n_candidates, max_candidates)
+    if refinement_cfg.criterion.startswith("heldout"):
+        assert val_ixs is not None
+        assert val_neighbs is not None
+        val_data = TruncatedSpikeData.initialize_from_labels(
+            n_candidates=val_n_candidates,
+            n_search=n_search,
+            n_explore=0,
+            max_n_candidates=max_val_n_candidates,
+            max_n_search=max_search,
+            max_n_explore=0,
+            dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
+            labels=labels[val_ixs],
+            explore_neighb_steps=0,
+            x=full_features[val_ixs],
+            neighborhoods=val_neighbs,
+            neighb_cov=neighb_cov,
+            seed=rg,
+            batch_size=refinement_cfg.eval_batch_size,
+        )
+        assert torch.equal(
+            val_data.neighborhoods.b.neighborhoods,
+            train_data.neighborhoods.b.neighborhoods,
+        )
+    else:
+        val_data = None
+
+    assert torch.equal(full_neighbs.b.neighborhoods, train_neighbs.b.neighborhoods)
+    assert full_neighbs.neighborhood_ids.shape == (full_features.shape[0],)
+    full_data = StreamingSpikeData(
+        n_candidates=n_candidates,
+        max_n_candidates=max_candidates,
+        x=full_features,
+        neighborhoods=full_neighbs,
+        device=device,
+        batch_size=refinement_cfg.eval_batch_size,
+        neighb_cov=neighb_cov,
+    )
+    assert torch.equal(
+        full_data.neighborhoods.b.neighborhoods,
+        train_data.neighborhoods.b.neighborhoods,
+    )
+
+    erp = NeighborhoodInterpolator(
+        prgeom=prgeom,
+        neighborhoods=full_neighbs,
+        method=refinement_cfg.interpolation_method,
+        kernel_name=refinement_cfg.kernel_name,
+        extrap_method=refinement_cfg.extrapolation_method,
+        extrap_kernel_name=refinement_cfg.extrapolation_kernel,
+        sigma=refinement_cfg.interpolation_sigma,
+        rq_alpha=refinement_cfg.rq_alpha,
+        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+    )
+
+    return neighb_cov, erp, train_data, val_data, full_data, noise
+
+
+def get_full_neighborhood_data(
+    *,
+    sorting: DARTsortSorting,
+    motion_est,
+    refinement_cfg: RefinementConfig,
+    device: torch.device | None,
+    rg: np.random.Generator | int,
+    stable_data: StableSpikeDataset | None = None,
+) -> tuple[
+    Tensor,
+    SpikeNeighborhoods,
+    Tensor | slice,
+    SpikeNeighborhoods,
+    Tensor | slice | None,
+    SpikeNeighborhoods | None,
+    Tensor,
+]:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # TODO clean up stable data constructor, just keep what's needed
     # don't store full core features...? just extract feats by split?
+    # or, just get rid of the stable dataset and grab only what's needed.
     if stable_data is None:
         vp = refinement_cfg.val_proportion
         stable_data = StableSpikeDataset.from_sorting(
@@ -2492,114 +2883,37 @@ def get_truncated_datasets(
             random_seed=rg,
             device=device,
         )
-    assert isinstance(stable_data, StableSpikeDataset)
-    if noise is None:
-        noise = EmbeddedNoise.estimate_from_hdf5(
-            sorting.parent_h5_path,
-            motion_est=motion_est,
-            zero_radius=refinement_cfg.cov_radius,
-            cov_kind=refinement_cfg.cov_kind,
-            glasso_alpha=refinement_cfg.glasso_alpha,
-            interpolation_method=refinement_cfg.interpolation_method,
-            kernel_name=refinement_cfg.kernel_name,
-            sigma=refinement_cfg.interpolation_sigma,
-            rq_alpha=refinement_cfg.rq_alpha,
-            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
-            device=device,
-            rgeom=stable_data.prgeom[:-1],  # type: ignore
-        )
-    assert isinstance(noise, EmbeddedNoise)
-    neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
-        prgeom=stable_data.prgeom,  # type: ignore
-        noise=noise,
-        neighborhoods=stable_data._train_extract_neighborhoods,
-    )
-    n_candidates, n_search, n_explore, max_candidates, max_search, max_explore = (
-        _pick_search_size(n_units=sorting.n_units, refinement_cfg=refinement_cfg)
-    )
-    assert "train" in stable_data.split_indices
-    xtrain = stable_data._train_extract_features.to(device)
-    xtrain = xtrain.view(len(xtrain), -1).nan_to_num_()
-    train_data = TruncatedSpikeData.initialize_from_labels(
-        n_candidates=n_candidates,
-        n_search=n_search,
-        n_explore=n_explore,
-        max_n_candidates=max_candidates,
-        max_n_search=max_search,
-        max_n_explore=max_explore,
-        dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
-        labels=labels[stable_data.split_indices["train"]],
-        x=xtrain,
-        neighborhoods=stable_data._train_extract_neighborhoods.to(device),
-        neighb_cov=neighb_cov,
-        neighb_overlap=refinement_cfg.neighb_overlap,
-        explore_neighb_steps=refinement_cfg.explore_neighb_steps,
-        seed=rg,
-    )
-    val_n_candidates = min(
-        sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
-    )
-    max_val_n_candidates = max(val_n_candidates, max_candidates)
-    if refinement_cfg.criterion.startswith("heldout"):
-        assert "val" in stable_data.split_indices
-        assert stable_data.core_features is not None
-        split = stable_data.split_indices["val"]
-        xval = stable_data.core_features[split].to(device)
-        xval = xval.view(len(xval), -1).nan_to_num_()
-        val_data = TruncatedSpikeData.initialize_from_labels(
-            n_candidates=val_n_candidates,
-            n_search=n_search,
-            n_explore=n_explore,
-            max_n_candidates=max_val_n_candidates,
-            max_n_search=max_search,
-            max_n_explore=max_explore,
-            dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
-            labels=labels[split],
-            explore_neighb_steps=0,
-            x=xval,
-            neighborhoods=stable_data._core_neighborhoods["key_val"].to(device),  # type: ignore
-            neighb_cov=neighb_cov,
-            seed=rg,
-            batch_size=refinement_cfg.eval_batch_size,
-        )
-        assert torch.equal(
-            val_data.neighborhoods.neighborhoods,  # type: ignore
-            train_data.neighborhoods.neighborhoods,  # type: ignore
-        )
-    else:
-        val_data = None
 
+    full_neighborhoods = stable_data._core_neighborhoods["key_full"]
+    train_indices = stable_data.split_indices["train"]
+    val_indices = stable_data.split_indices.get("val")
+    assert isinstance(full_neighborhoods, SpikeNeighborhoods)
     assert stable_data.core_features is not None
-    assert "key_full" in stable_data._core_neighborhoods
-    xfull = stable_data.core_features.view(len(stable_data.core_features), -1)
+    xfull = stable_data.core_features
+    prgeom = stable_data.prgeom
+    assert isinstance(prgeom, Tensor)
+    del stable_data  # TODO: just compute above stuff directly.
+
+    assert xfull.shape[2] == full_neighborhoods.b.neighborhoods.shape[1]
+    assert xfull.shape[0] == full_neighborhoods.b.neighborhood_ids.shape[0]
+    xfull = xfull.view(len(xfull), -1)
     xfull = xfull.nan_to_num_()
-    full_data = StreamingSpikeData(
-        n_candidates=n_candidates,
-        max_n_candidates=max_candidates,
-        x=xfull,
-        neighborhoods=stable_data._core_neighborhoods["key_full"],  # type: ignore
-        device=device,
-        batch_size=refinement_cfg.eval_batch_size,
-        neighb_cov=neighb_cov,
-    )
-    assert torch.equal(
-        full_data.neighborhoods.neighborhoods,  # type: ignore
-        train_data.neighborhoods.neighborhoods,  # type: ignore
-    )
 
-    erp = NeighborhoodInterpolator(
-        prgeom=stable_data.prgeom,  # type: ignore
-        neighborhoods=stable_data._train_extract_neighborhoods,
-        method=refinement_cfg.interpolation_method,
-        kernel_name=refinement_cfg.kernel_name,
-        extrap_method=refinement_cfg.extrapolation_method,
-        extrap_kernel_name=refinement_cfg.extrapolation_kernel,
-        sigma=refinement_cfg.interpolation_sigma,
-        rq_alpha=refinement_cfg.rq_alpha,
-        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
-    )
+    train_neighborhoods = full_neighborhoods.slice(train_indices)
+    if val_indices is None:
+        val_neighborhoods = None
+    else:
+        val_neighborhoods = full_neighborhoods.slice(val_indices)
 
-    return neighb_cov, erp, train_data, val_data, full_data, noise
+    return (
+        xfull,
+        full_neighborhoods,
+        train_indices,
+        train_neighborhoods,
+        val_indices,
+        val_neighborhoods,
+        prgeom,
+    )
 
 
 def save_tmm_labels(
@@ -2610,9 +2924,14 @@ def save_tmm_labels(
     stepname: str,
     save_step_labels_dir: Path | None,
     save_cfg: DARTsortInternalConfig | None,
+    full_proposal: bool = True,
 ):
     assert save_step_labels_format is not None
-    full_scores = tmm.soft_assign(full_data, needs_bootstrap=True)
+    full_scores = tmm.soft_assign(
+        data=full_data,
+        full_proposal_view=full_proposal,
+        needs_bootstrap=not full_proposal,
+    )
     sorting = replace(original_sorting, labels=labels_from_scores(full_scores))
     ds_save_intermediate_labels(
         save_step_labels_format.format(stepname=stepname),
@@ -2623,11 +2942,13 @@ def save_tmm_labels(
 
 
 def initialize_parameters_by_unit(
+    *,
     data: TruncatedSpikeData,
     signal_rank: int,
     noise: EmbeddedNoise,
     erp: NeighborhoodInterpolator,
     prior_pseudocount: float,
+    gen: torch.Generator,
     min_channel_count: int = 1,
     puff=1.0,
 ):
@@ -2661,7 +2982,7 @@ def initialize_parameters_by_unit(
     else:
         bases = None
     for k in range(K):
-        kdata = data.dense_slice_by_unit(k)
+        kdata = data.dense_slice_by_unit(k, gen=gen)
         assert kdata is not None
         ((kc, km, ks),), _ = initialize_params_from_dense_data(
             kdata,
@@ -2763,21 +3084,15 @@ def initialize_params_from_dense_data(
 
 def tree_groups(
     distances: Tensor, max_group_size: int, max_distance: float, link="complete"
-) -> Iterable[Tensor]:
+) -> list[Tensor]:
     device = distances.device
     k = distances.shape[0]
-    if k < max_group_size and distances.max() < max_distance:
+    if k <= max_group_size and distances.max() <= max_distance:
         # this would be common when splitting.
-        return (torch.arange(k, device=device),)
-
-    # sometimes numerically negative
-    distances.diagonal(dim1=-2, dim2=-1).fill_(0.0)
+        return [torch.arange(k, device=device)]
 
     # make symmetric
     distances = torch.minimum(distances, distances.T)
-
-    # only need upper tri
-    distances = distances[*torch.triu_indices(*distances.shape, offset=1)]
 
     # make finite
     isfinite = distances.isfinite()
@@ -2785,11 +3100,23 @@ def tree_groups(
         big = distances[isfinite].amax() + max_distance + 16.0
         distances.masked_fill_(isfinite.logical_not_(), big)
 
+    # only need upper tri, and move to numpy from now on
+    distances_np = distances.numpy(force=True)
+    distances_triu = distances[*np.triu_indices_from(distances_np, k=1)]
+
     max_group_size = min(k, max_group_size)
-    Z = linkage(distances.numpy(force=True), method=link)
+    Z = linkage(distances_triu.numpy(force=True), method=link)
     # get tree out to max distance
-    groups = maximal_leaf_groups(Z, max_distance=max_distance)
-    groups = [torch.tensor(g) for g in groups]
+    groups = maximal_leaf_groups(
+        Z,
+        distances=distances_np,
+        max_distance=max_distance,
+        max_group_size=max_group_size,
+    )
+    groups = [torch.atleast_1d(torch.tensor(g)) for g in groups]
+    if pnoid and link == "complete":
+        for g in groups:
+            assert distances[g][:, g].amax() <= max_distance
     return groups
 
 
@@ -2810,9 +3137,12 @@ def brute_merge(
     # score train data with mm to get the full model log liks and the
     # responsibilities that will be used for fitting below
     train_full_scores = mm.score(train_data)
+    if pnoid:
+        cov = train_data.lut_coverage(mm.unit_ids, mm.get_lut())
+        assert torch.equal(cov, train_full_scores.candidates >= 0)
+        assert cov.any(dim=1).all()
     if responsibilities is None:
-        train_lls = train_full_scores.log_liks
-        responsibilities = F.softmax(train_full_scores.log_liks, dim=1)
+        responsibilities = F.softmax(train_full_scores.log_liks, dim=1)[:, : mm.n_units]
 
     # include the full partition to keep code simple
     partitions, subset_to_id, id_to_subset = allowed_partitions(
@@ -2826,7 +3156,7 @@ def brute_merge(
     subset_resps = responsibilities.new_empty((responsibilities.shape[0], n_subsets))
     for s in range(n_subsets):
         subset_resps[:, s] = responsibilities[:, id_to_subset[s]].sum(dim=1)
-    subset_models, valid_subsets = (
+    subset_models, valid_subsets, train_data, any_spikes_discarded, keep_spikes = (
         TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
             data=train_data,
             responsibilities=subset_resps,
@@ -2846,55 +3176,85 @@ def brute_merge(
         )
     )
     assert valid_subsets.all()
+    if any_spikes_discarded:
+        responsibilities = responsibilities[keep_spikes]
+        subset_resps = subset_resps[keep_spikes]
+        if eval_data is None:
+            assert cur_scores.log_liks.shape == train_full_scores.log_liks.shape
+            cur_scores = cur_scores.slice(keep_spikes)
+        train_full_scores = train_full_scores.slice(keep_spikes)
+    del keep_spikes
 
     # score the eval or train set with the all-subsets model
     train_subset_scores = subset_models.score(train_data)
-    if eval_data is not None:
-        crit_subset_scores = subset_models.score(eval_data)
+    assert train_subset_scores.log_liks.shape[1] == subset_models.n_units + 1
+    if eval_data is not None and isinstance(mm, TMMView):
+        # merge case. cur_scores is mm's eval scores.
+        eval_data, kept_spikes = eval_data.slice_by_coverage(
+            subset_models.unit_ids, subset_models.lut
+        )
+        if torch.is_tensor(kept_spikes) and not kept_spikes.numel():
+            return None
+        cur_scores = cur_scores.slice(kept_spikes)
         crit_full_scores = mm.score(eval_data)
+        crit_subset_scores = subset_models.score(eval_data)
+    elif eval_data is not None and isinstance(mm, TruncatedMixtureModel):
+        # split case. recompute scores.
+        cov0 = eval_data.lut_coverage(mm.unit_ids, mm.lut)
+        cov1 = eval_data.lut_coverage(subset_models.unit_ids, subset_models.lut)
+        cov = cov0.any(dim=1).logical_and_(cov1.any(dim=1))
+        if not cov.all():
+            (kept_spikes,) = cov.nonzero(as_tuple=True)
+            if not kept_spikes.numel():
+                return None
+            eval_data = eval_data.slice(kept_spikes)
+            cur_scores = cur_scores.slice(kept_spikes)
+        crit_full_scores = mm.score(eval_data)
+        crit_subset_scores = subset_models.score(eval_data)
     else:
+        assert eval_data is None
         crit_subset_scores = train_subset_scores
         crit_full_scores = train_full_scores
 
     # get scores for unaffected units
-    cur_logliks = cur_scores.log_liks
-    assert cur_logliks.shape[1] == cur_scores.candidates.shape[1] + 1
-    assert cur_logliks.shape[0] == crit_full_scores.log_liks.shape[0]
+    assert cur_scores.log_liks.shape[1] == cur_scores.candidates.shape[1] + 1
+    assert crit_full_scores.log_liks.shape[1] == mm.n_units + 1
+    assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units + 1
+    assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
-    rest_logliks = cur_logliks.clone()
+    rest_logliks = cur_scores.log_liks.clone()
     rest_logliks[:, :-1].masked_fill_(cur_mask, -torch.inf)
 
     # get current model criterion
-    cur_resp = F.softmax(cur_scores.log_liks, dim=1)
+    cur_resp = cur_scores.responsibilities
+    if cur_resp is None:
+        cur_resp = F.softmax(cur_scores.log_liks, dim=1)
+    assert cur_resp.shape == cur_scores.log_liks.shape
     cur_crit = ecl(cur_resp, cur_scores.log_liks, cl_alpha=mm.cl_alpha)
 
     # now, find the best subset. combine subset scores with remainder scores.
     # also need to adjust the log proportions here.
-    k0 = cur_logliks.shape[1]
-    crit_full_logliks = crit_full_scores.log_liks[:, :-1]
-    crit_subset_logliks = crit_subset_scores.log_liks[:, :-1]
-    kfull = crit_full_logliks.shape[1]
-    assert kfull == mm.n_units
-    assert crit_subset_logliks.shape[1] == subset_models.n_units
-    part_logliks_holder = cur_logliks.new_empty((rest_logliks.shape[0], k0 + kfull))
-    part_logliks_holder[:, :k0] = rest_logliks
+    k0 = rest_logliks.shape[1]
+    kfull = mm.n_units
+    part_logliks = F.pad(rest_logliks, (0, kfull), value=-torch.inf)
     best_part = partitions[0]
     best_score = torch.tensor(-torch.inf)
     for part in partitions:
-        ksingle = len(part.single_ixs)
-        k1 = k0 + ksingle
-        ksubset = len(part.subset_ids)
-        k2 = k1 + ksubset
-        part_logliks_holder[:, k0:k1] = crit_full_logliks[:, part.single_ixs]
-        part_logliks_holder[:, k1:k2] = crit_subset_logliks[:, part.subset_ids]
+        k1 = k0 + len(part.single_ixs)
+        k2 = k1 + len(part.subset_ids)
+        part_logliks[:, k0:k1] = crit_full_scores.log_liks[:, part.single_ixs]
+        part_logliks[:, k1:k2] = crit_subset_scores.log_liks[:, part.subset_ids]
 
-        part_logliks = part_logliks_holder[:, :k2]
-        part_resps = F.softmax(part_logliks, dim=1)
-        part_score = ecl(part_resps, part_logliks, cl_alpha=mm.cl_alpha)
+        part_resps = F.softmax(part_logliks[:, :k2], dim=1)
+        part_score = ecl(part_resps, part_logliks[:, :k2], cl_alpha=mm.cl_alpha)
 
         if part_score > best_score:
             best_score = part_score
             best_part = part
+
+    if pnoid:
+        assert math.isfinite(cur_crit)
+        assert math.isfinite(best_score)
 
     # spike assignments
     train_assignments = get_part_assignments(
@@ -2925,6 +3285,7 @@ def brute_merge(
         grouping=best_part,
         improvement=(best_score - cur_crit).cpu().item(),
         train_assignments=train_assignments,
+        train_indices=train_data.indices,
         means=means,
         bases=bases,
         sub_proportions=sub_props,
@@ -3071,7 +3432,7 @@ def _pick_search_size(
         assert max_n_explore is None
         max_n_candidates = refinement_cfg.n_candidates
         max_n_search = refinement_cfg.n_search or refinement_cfg.n_candidates
-        max_n_explore = refinement_cfg.n_explore
+        max_n_explore = refinement_cfg.n_explore or max(max_n_candidates, max_n_search)
 
     C = min(n_units, max_n_candidates)
     S = min(n_units, max_n_search)
@@ -3081,12 +3442,13 @@ def _pick_search_size(
 
 
 def _neighborhood_indices(
-    neighborhoods: SpikeNeighborhoods, zero_radius: float | None, prgeom: Tensor
+    *, neighborhoods: SpikeNeighborhoods, zero_radius: float | None, prgeom: Tensor
 ):
     nc_obs = neighborhoods.b.channel_counts
     obs_ix = neighborhoods.b.neighborhoods
     truncate = zero_radius is not None and zero_radius < float("inf")
     nneighb = neighborhoods.n_neighborhoods
+    assert obs_ix.shape[0] == nneighb
     nc = neighborhoods.n_channels
     dev = prgeom.device
 
@@ -3111,18 +3473,18 @@ def _neighborhood_indices(
     return nc_obs, obs_ix, miss_near_ix, miss_full_masks
 
 
-def _noise_factors(noise, obs_ix, miss_near_ix, cache_prefix):
-    nneighbs = len(obs_ix)
+def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
+    nneighb = obs_ix.shape[0]
     nc_obs = obs_ix.shape[1]
     nc_miss_near = miss_near_ix.shape[1]
     rank = noise.rank
     nc = noise.n_channels
     dev = obs_ix.device
 
-    logdet = torch.zeros((nneighbs,), device=dev)
-    Cooinv = torch.zeros((nneighbs, rank, nc_obs, rank, nc_obs), device=dev)
-    CooinvCom = torch.zeros((nneighbs, rank, nc_obs, rank, nc_miss_near), device=dev)
-    Linv = Cooinv.clone()
+    logdet = torch.zeros((nneighb,), device=dev)
+    Cooinv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+    CooinvCom = torch.zeros((nneighb, rank, nc_obs, rank, nc_miss_near), device=dev)
+    Linv = torch.zeros_like(Cooinv)
 
     for j, (joix, jmnix) in enumerate(zip(obs_ix, miss_near_ix)):
         (joixvix,) = (joix < nc).nonzero(as_tuple=True)
@@ -3159,19 +3521,21 @@ def _noise_factors(noise, obs_ix, miss_near_ix, cache_prefix):
 
     obsdim = rank * nc_obs
     missdim = rank * nc_miss_near
-    Cooinv = Cooinv.view(nneighbs, obsdim, obsdim)
-    CooinvCom = CooinvCom.view(nneighbs, obsdim, missdim)
-    Linv = Linv.view(nneighbs, obsdim, obsdim)
+    Cooinv = Cooinv.view(nneighb, obsdim, obsdim)
+    CooinvCom = CooinvCom.view(nneighb, obsdim, missdim)
+    Linv = Linv.view(nneighb, obsdim, obsdim)
     return logdet, Cooinv, CooinvCom, Linv
 
 
 def _whiten_impute_and_noise_score(
+    *,
     x: Tensor,
     neighborhoods: SpikeNeighborhoods,
     neighb_cov: NeighborhoodCovariance,
     batch_size=1024,
 ):
     wx = torch.empty_like(x)
+    assert neighborhoods.n_neighborhoods == neighb_cov.obs_ix.shape[0]
 
     noise_loglik = wx.new_zeros((len(x),))
     missdim = neighb_cov.feat_rank * neighb_cov.max_nc_miss_near
@@ -3203,7 +3567,7 @@ def _whiten_impute_and_noise_score(
 
 
 def _whiten_and_noise_score_batch(
-    x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
+    *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
     batch_whitener = neighb_cov.Linv[neighb_ids]
     wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
@@ -3307,6 +3671,8 @@ def coincidence_matrix(
     Similar to but faster than stack(x,y).unique(0), especially if you
     need this matrix.
     """
+    assert x.shape[:1] == y.shape
+
     # get rid of -1s in x (labels) and get corresponding y (neighbs)
     xpos = x >= 0
     if x.ndim == 2:
@@ -3331,11 +3697,13 @@ def coincidence_matrix(
 def candidate_adjacencies(
     labels: Tensor | None,
     neighborhoods: SpikeNeighborhoods,
+    neighborhood_ids: Tensor,
     neighb_supset: Tensor,
     neighb_adj: Tensor,
     explore_steps: int,
     n_units: int,
     un_adj_lut: NeighborhoodLUT | None,
+    expand_from_lut: NeighborhoodLUT | None,
     device: torch.device,
 ):
     if un_adj_lut is None:
@@ -3343,13 +3711,17 @@ def candidate_adjacencies(
         un_adj_lut = lut_from_candidates_and_neighborhoods(
             candidates=labels,
             neighborhoods=neighborhoods,
+            neighborhood_ids=neighborhood_ids,
             n_units=n_units,
             neighb_supset=neighb_supset,
         )
+    if expand_from_lut is not None:
+        un_adj_lut = combine_luts(expand_from_lut, un_adj_lut)
 
     # lut -> adjacency matrix
-    un_adj = torch.zeros(un_adj_lut.lut.shape, device=device)
-    un_adj = torch.lt(un_adj_lut.lut, un_adj_lut.unit_ids.shape[0], out=un_adj)
+    un_adj = un_adj_lut.lut < un_adj_lut.unit_ids.shape[0]
+    assert un_adj.any()
+    un_adj = un_adj.float()
 
     # constraint for explore candidates is looser
     explore_adj = un_adj
@@ -3360,16 +3732,20 @@ def candidate_adjacencies(
 
 
 def lut_from_candidates_and_neighborhoods(
+    *,
     candidates: Tensor,
     neighborhoods: SpikeNeighborhoods,
     neighb_supset: Tensor,
     n_units: int,
-    add_extra_unit=False,
+    neighborhood_ids: Tensor,
 ) -> NeighborhoodLUT:
+    if neighborhood_ids is None:
+        neighborhood_ids = neighborhoods.b.neighborhood_ids
+    assert (candidates.shape[0],) == neighborhood_ids.shape
     co = coincidence_matrix(
         x=candidates,
-        y=neighborhoods.b.neighborhood_ids,
-        nx=n_units + add_extra_unit,
+        y=neighborhood_ids,
+        nx=n_units,
         ny=neighborhoods.n_neighborhoods,
     )
     co = co.float() @ neighb_supset
@@ -3380,12 +3756,25 @@ def lut_from_candidates_and_neighborhoods(
     return NeighborhoodLUT(unit_ids=uu, neighb_ids=nn, lut=lut)
 
 
+def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
+    assert len(luts) > 0
+    if len(luts) == 1:
+        return luts[0]
+    adj = luts[0].lut < luts[0].unit_ids.shape[0]
+    for l in luts[1:]:
+        adj.logical_or_(l.lut < l.unit_ids.shape[0])
+    unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
+    lut = torch.full_like(luts[0].lut, unit_ids.shape[0])
+    lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0])
+    return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
+
+
 def candidate_search_sets(
     distances: Tensor, un_adj_lut: NeighborhoodLUT, un_adj: Tensor, n_search: int
 ):
     n_lut = un_adj_lut.unit_ids.shape[0]
 
-    # get lut-indexed version
+    # get lut-indexed version with extra lut index for topk below
     s = distances[un_adj_lut.unit_ids]
 
     # don't want to match with myself
@@ -3399,11 +3788,10 @@ def candidate_search_sets(
     s.mul_(un_adj.T[un_adj_lut.neighb_ids, : distances.shape[0]])
 
     # take topk, and fill invalids (s=0) with -1
+    tops, topunits = torch.topk(s, k=n_search, dim=1)
+    topunits.masked_fill_(tops == 0, -1)
     # pad with row of -1s for the invalid lut ixs (===n_lut)
-    tops = s.new_empty((n_lut, n_search))
-    topunits = s.new_full((n_lut + 1, n_search), -1, dtype=torch.long)
-    torch.topk(s, k=n_search, out=(tops, topunits[:-1]))
-    topunits[:-1].masked_fill_(tops == 0, -1)
+    topunits = F.pad(topunits, (0, 0, 0, 1), value=-1)
 
     return topunits
 
@@ -3624,6 +4012,8 @@ def _update_lut_mean_batch(
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)
     lut_params.constplogdet[i0:i1] += neighb_cov.logdet[nn]
+    if pnoid:
+        assert lut_params.constplogdet[i0:i1].isfinite().all()
 
 
 def _update_lut_ppca_batch(
@@ -3649,46 +4039,51 @@ def _update_lut_ppca_batch(
     nn = lut.neighb_ids[i0:i1]
 
     # to start, we need the observed part of W. grab as for muo above.
-    bpad = bases.new_zeros((n, M, neighb_cov.feat_rank, neighb_cov.n_channels + 1))
-    torch.index_select(
-        bases.view(bases.shape[0], M, neighb_cov.feat_rank, -1),
-        dim=0,
-        index=uu,
-        out=bpad[:, :, :, :-1],
+    bpad = F.pad(
+        bases[uu].view(uu.shape[0], M, neighb_cov.feat_rank, neighb_cov.n_channels),
+        (0, 1),
+        value=0.0,
     )
-    obs_ix = neighb_cov.obs_ix[nn][:, None, None, :]
-    Wo = bpad.take_along_dim(indices=obs_ix, dim=3)
+    Wo = bpad.take_along_dim(indices=neighb_cov.obs_ix[nn][:, None, None, :], dim=3)
     Wo = Wo.view(n, M, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
 
     # next, the capaciatance is I + Wo Cooinv Wo'. always pos def.
-    Cooinv = neighb_cov.Cooinv[nn]
-    WoCooinv = Wo.bmm(Cooinv)
-    cap = WoCooinv.bmm(Wo.mT)
+    WoCooinvsqrt = Wo.bmm(neighb_cov.Linv[nn].mT)
+    cap = WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
     cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+    if pnoid:
+        assert cap.isfinite().all()
+        assert torch.all(cap.diagonal(dim1=-2, dim2=-1) > 0)
 
     # capacitance cholesky, inverse cholesky, inverse
-    L, _ = torch.linalg.cholesky_ex(cap, upper=False)  # cap = LL'
+    # cap = LL'
+    L, info = torch.linalg.cholesky_ex(cap, upper=False, check_errors=pnoid)
+    if pnoid:
+        assert (info == 0).all()
     Linv = torch.zeros_like(L)  # initialize to identity
     Linv.diagonal(dim1=-2, dim2=-1).add_(1.0)
-    # want to find Linv such that Linv' Linv = inv(LL') = inv(cap).
-    # here, we find X to solve XL=I, implies X = L' inv(cap) = L' inv(L)' inv(L).
-    Linv = torch.linalg.solve_triangular(L, Linv, upper=False, left=False, out=Linv)
+    # solve LX=I, so that Linv is upper and inv(cap) = Linv' Linv.
+    Linv = torch.linalg.solve_triangular(L, Linv, upper=False, out=Linv)
     T = Linv.mT.bmm(Linv)
 
     # Tpad, logdet. Tpad was initialized with zeros.
-    lut_params.Tpad[i0:i1, :, :-1] = T  # type: ignore[reportOptionalSubscript]
+    assert lut_params.Tpad is not None
+    lut_params.Tpad[i0:i1, :, :-1] = T
     cap_logdet = L.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
     lut_params.constplogdet[i0:i1] += cap_logdet
+    if pnoid:
+        assert lut_params.constplogdet[i0:i1].isfinite().all()
 
     # precomputed products with T
-    TWoCooinv = torch.bmm(T, WoCooinv, out=lut_params.TWoCooinv[i0:i1])  # type: ignore[reportOptionalSubscript]
-    muo = lut_params.muo[i0:i1, :, None]
-    torch.bmm(TWoCooinv, muo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])  # type: ignore[reportOptionalSubscript]
+    assert lut_params.TWoCooinvsqrt is not None
+    assert lut_params.TWoCooinvmuo is not None
+    TWoCooinvsqrt = torch.bmm(T, WoCooinvsqrt, out=lut_params.TWoCooinvsqrt[i0:i1])
+    Linvmuo = lut_params.Linvmuo[i0:i1, :, None]
+    torch.bmm(TWoCooinvsqrt, Linvmuo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])
 
     # Woodbury root
-    Cooinvsqrt = torch.index_select(neighb_cov.Linv, dim=0, index=nn, out=Cooinv)
-    rt = torch.bmm(Linv, Wo, out=WoCooinv)
-    torch.bmm(Cooinvsqrt, rt.mT, out=lut_params.wburyroot[i0:i1])  # type: ignore[reportOptionalSubscript]
+    assert lut_params.wburyroot is not None
+    torch.bmm(WoCooinvsqrt.mT, Linv.mT, out=lut_params.wburyroot[i0:i1])
 
 
 # -- em math impls
@@ -3788,6 +4183,7 @@ def _calc_loglik(
 def _stat_pass_batch(
     *,
     x: Tensor,
+    whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
     log_liks: Tensor,
@@ -3837,15 +4233,20 @@ def _stat_pass_batch(
     )
 
     # construct U-related stuff
-    xsp = x[spike_ixs]
+    whitenedxsp = whitenedx[spike_ixs]
     if lut_params.signal_rank:
-        TWoCooinv = lut_params.TWoCooinv[lut_ixs]  # type: ignore[reportOptionalSubscript]
-        TWoCooinvmuo = lut_params.TWoCooinvmuo[lut_ixs]  # type: ignore[reportOptionalSubscript]
-        ubar = TWoCooinvmuo[:, :, None].baddbmm_(TWoCooinv, xsp[:, :, None], beta=-1.0)
+        assert lut_params.TWoCooinvsqrt is not None
+        assert lut_params.TWoCooinvmuo is not None
+        assert lut_params.Tpad is not None
+        TWoCooinvsqrt = lut_params.TWoCooinvsqrt[lut_ixs]
+        TWoCooinvmuo = lut_params.TWoCooinvmuo[lut_ixs]
+        ubar = TWoCooinvmuo[:, :, None].baddbmm_(
+            TWoCooinvsqrt, whitenedxsp[:, :, None], beta=-1.0
+        )
         ubar = ubar[:, :, 0]
         del TWoCooinvmuo
         hatubar = F.pad(ubar, (0, 1), value=1.0)
-        hatU = lut_params.Tpad[lut_ixs]  # type: ignore[reportOptionalSubscript]
+        hatU = lut_params.Tpad[lut_ixs]
 
         # not saving the bottom row, Tpad should just be 0padded on inner dim
         hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
@@ -3858,11 +4259,12 @@ def _stat_pass_batch(
         del hatU
     else:
         Ulut = None
+    del whitenedxsp
 
     # construct R-related stuff
     # NB we're saving flops here by skipping the second term and coming
     # back to it later -- it doesn't depend on data so can be had for cheap
-    xc = xsp
+    xc = x[spike_ixs]
     CmoCooinvxc = CmoCooinvx[spike_ixs]
     if lut_params.signal_rank:
         Ro = hatubar[:, :, None] * xc[:, None, :]  # type: ignore[reportPossiblyUnboundVariable]
@@ -4079,3 +4481,7 @@ def ecl(resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0):
     h = entropy(resps, dim=1, reduce_mean=True)
     crit = log_liks.logsumexp(dim=1).mean() - cl_alpha * h
     return crit
+
+
+class TMMException(Exception):
+    pass
