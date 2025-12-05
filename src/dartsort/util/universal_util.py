@@ -16,7 +16,7 @@ def get_singlechan_centroids(
     deduplication_radius=150.0,
     trough_offset_samples=42,
     spike_length_samples=121,
-    dedup_temporal_radius_samples=11,
+    temporal_dedup_radius_samples=11,
     n_kmeanspp_tries=10,
     alignment_padding=20,
     n_centroids=10,
@@ -42,7 +42,7 @@ def get_singlechan_centroids(
             rec,
             detection_threshold=detection_threshold,
             deduplication_radius=deduplication_radius,
-            dedup_temporal_radius_samples=dedup_temporal_radius_samples,
+            temporal_dedup_radius_samples=temporal_dedup_radius_samples,
             n_waveforms_fit=n_waveforms_fit,
             trough_offset_samples=full_trough,
             spike_length_samples=full_length,
@@ -100,7 +100,7 @@ def get_singlechan_waveforms(
     n_waveforms_fit=20_000,
     trough_offset_samples=42,
     spike_length_samples=121,
-    dedup_temporal_radius_samples=11,
+    temporal_dedup_radius_samples=11,
     show_progress=False,
 ):
     from dartsort.peel.threshold import ThresholdAndFeaturize
@@ -122,7 +122,7 @@ def get_singlechan_waveforms(
         featurization_pipeline=WaveformPipeline([wfeat]),
         spatial_dedup_channel_index=deduplication_index,
         detection_threshold=detection_threshold,
-        dedup_temporal_radius_samples=dedup_temporal_radius_samples,
+        temporal_dedup_radius_samples=temporal_dedup_radius_samples,
         n_waveforms_fit=n_waveforms_fit,
     )
 
@@ -130,8 +130,9 @@ def get_singlechan_waveforms(
         tmp_h5 = Path(tdir) / "singlechan_wfs.h5"
         thresh.run_subsampled_peeling(tmp_h5, show_progress=show_progress)
         with h5py.File(tmp_h5) as h5:
-            waveforms = h5[baz][:]
+            waveforms = h5[baz][:]  # type: ignore
 
+    assert isinstance(waveforms, np.ndarray)
     assert waveforms.shape[2] == 1
     waveforms = torch.asarray(waveforms[:, :, 0])
 
