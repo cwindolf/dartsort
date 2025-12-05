@@ -65,22 +65,22 @@ class CompressedPairwiseConv(PconvBase):
         on_device: bool = False,
     ):
         super().__init__()
-        self.register_buffer_or_none("pconv_index", pconv_index, on_device)
-        self.register_buffer_or_none("pconv", pconv, on_device)
+        self.on_device = on_device
+        self.register_buffer_or_none("pconv_index", pconv_index)
+        self.register_buffer_or_none("pconv", pconv, on_device=on_device)
         self.register_buffer_or_none(
-            "shifted_template_index_a", shifted_template_index_a, on_device
+            "shifted_template_index_a", shifted_template_index_a
         )
         self.register_buffer_or_none(
             "upsampled_shifted_template_index_b",
             upsampled_shifted_template_index_b,
-            on_device,
         )
-        self.register_buffer_or_none("shifts_a", shifts_a, on_device)
-        self.register_buffer_or_none("shifts_b", shifts_b, on_device)
+        self.register_buffer_or_none("shifts_a", shifts_a)
+        self.register_buffer_or_none("shifts_b", shifts_b)
 
         # helper bufs
         na = len(self.b.shifted_template_index_a)
-        self.register_buffer_or_none("all_inds_a", torch.arange(na), on_device)
+        self.register_buffer_or_none("all_inds_a", torch.arange(na))
 
         self.not_shifting = self.b.shifts_a is None
         assert self.not_shifting == (self.b.shifts_b is None)
@@ -94,10 +94,10 @@ class CompressedPairwiseConv(PconvBase):
         else:
             shoffset_a = shindex_a = None
             shoffset_b = shindex_b = None
-        self.register_buffer_or_none("shoffset_a", shoffset_a, on_device)
-        self.register_buffer_or_none("shindex_a", shindex_a, on_device)
-        self.register_buffer_or_none("shoffset_b", shoffset_b, on_device)
-        self.register_buffer_or_none("shindex_b", shindex_b, on_device)
+        self.register_buffer_or_none("shoffset_a", shoffset_a)
+        self.register_buffer_or_none("shindex_a", shindex_a)
+        self.register_buffer_or_none("shoffset_b", shoffset_b)
+        self.register_buffer_or_none("shindex_b", shindex_b)
 
     @classmethod
     def from_h5(cls, hdf5_filename, on_device=False):
@@ -198,8 +198,9 @@ class CompressedPairwiseConv(PconvBase):
     ):
         if template_indices_a is None:
             template_indices_a = self.b.all_inds_a
-        template_indices_a = torch.atleast_1d(torch.as_tensor(template_indices_a))
-        template_indices_b = torch.atleast_1d(torch.as_tensor(template_indices_b))
+        dev = self.b.all_inds_a.device
+        template_indices_a = torch.atleast_1d(torch.asarray(template_indices_a, device=dev))
+        template_indices_b = torch.atleast_1d(torch.asarray(template_indices_b, device=dev))
 
         # handle no shifting
         no_shifting = (shifts_a is None) or (shifts_b is None)
@@ -225,7 +226,7 @@ class CompressedPairwiseConv(PconvBase):
             assert self.b.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
-            b_ix = b_ix + (torch.atleast_1d(torch.as_tensor(upsampling_indices_b)),)
+            b_ix = b_ix + (torch.atleast_1d(torch.asarray(upsampling_indices_b, device=dev)),)
 
         # get shifted template indices for A
         shifted_temp_ix_a = shifted_template_index[a_ix]
@@ -242,7 +243,10 @@ class CompressedPairwiseConv(PconvBase):
         template_indices_a = template_indices_a[which_a]
         pconv_indices = pconv_indices[which]
 
-        pconvs = self.b.pconv[pconv_indices]
+        if self.on_device:
+            pconvs = self.b.pconv[pconv_indices]
+        else:
+            pconvs = self.b.pconv[pconv_indices.cpu()]
         if scalings_b is not None:
             pconvs = pconvs.to(scalings_b.device)
             pconvs.mul_(scalings_b[which_b].unsqueeze(1))

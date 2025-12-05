@@ -219,4 +219,5 @@ def _ensure_torch_linalg(computation_cfg):
     if computation_cfg.actual_n_jobs() == 0:
         return
 
+    torch.cuda.synchronize()
     torch.inverse(torch.ones((0, 0), device=device))

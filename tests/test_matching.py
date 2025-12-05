@@ -11,6 +11,7 @@ import dartsort
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.templates import TemplateData, template_util
 from dartsort.peel.matching_util import CompressedUpsampledMatchingTemplates
+from dartsort.util.job_util import ensure_computation_config
 from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
 
@@ -63,6 +64,8 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
 
+    comp_cfg = ensure_computation_config(None)
+
     rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
@@ -94,24 +97,31 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
+        matcher.to(comp_cfg.actual_device())
         res = matcher.peel_chunk(
-            torch.from_numpy(rec.get_traces().copy()),
+            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
             return_residual=True,
             return_conv=True,
         )
         assert matcher.matching_templates is not None
 
+        print(f"{matcher.matching_templates.device=}")
         ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(
-            [0, 1], [0, 1], upsampling_indices_b=[0, 0]
+            torch.tensor([0, 1]),
+            torch.tensor([0, 1]),
+            upsampling_indices_b=torch.tensor([0, 0]),
         )
         maxpc = pconv.max(dim=1).values
         for ia, ib, pc in zip(ixa, ixb, maxpc):
             assert np.isclose(pc, (templates[ia] * templates[ib]).sum())
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"], times)
-        assert np.array_equal(res["labels"], labels)
-        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        assert np.array_equal(res["times_samples"].numpy(force=True), times)
+        assert np.array_equal(res["labels"].numpy(force=True), labels)
+        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
+        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
+        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
+        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
+        matcher.cpu()
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             rec,
@@ -126,18 +136,22 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
+        matcher.to(comp_cfg.actual_device())
         res = matcher.peel_chunk(
-            torch.from_numpy(rec.get_traces().copy()),
+            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
             return_residual=True,
             return_conv=True,
         )
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"], times)
-        assert np.array_equal(res["labels"], labels)
-        assert np.array_equal(res["upsampling_indices"], [0, 0])
-        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        assert np.array_equal(res["times_samples"].numpy(force=True), times)
+        assert np.array_equal(res["labels"].numpy(force=True), labels)
+        assert np.array_equal(res["upsampling_indices"].numpy(force=True), [0, 0])
+        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
+        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
+        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
+        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
         assert torch.all(res["scores"] > 0)
+        matcher.cpu()
 
 
 @pytest.mark.parametrize("up_offset", [0, 1, -1])
@@ -145,6 +159,8 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
+    comp_cfg = ensure_computation_config(None)
+    dev = comp_cfg.actual_device()
     recording_length_samples = 2000
     n_channels = 11
     geom = np.c_[np.zeros(n_channels), np.arange(n_channels)]
@@ -216,6 +232,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
+        matcher.to(dev)
 
         lrt = template_util.svd_compress_templates(
             template_data.templates, rank=matching_cfg.template_svd_compression_rank
@@ -251,62 +268,46 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 # test against a very direct way of computing this convolution
                 # just directly create the actual templates
                 temp_a = torch.as_tensor(templates[ia])
-                print(f"{temp_a.shape=}")
                 ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
-                print(f"{ssb.shape=} {tempupb.shape=}")
                 temp_b = torch.as_tensor(tempupb) @ (torch.as_tensor(ssb))
-                print(f"{temp_b.shape=}")
 
                 pconv2 = F.conv2d(
                     temp_a[None, None],
                     temp_b[None, None],
                     padding=(temp_a.shape[0] - 1, 0),
                 )
-                print(f"{pconv2.shape=}")
-                print(f"{pconv.shape=}")
-                print(f"{pc.shape=}")
                 pconv2 = pconv2[0, 0, :, 0]
-
-                # template_a = torch.as_tensor(templates[ia][None])
-                # ssb = lrt.singular_values[ib][:, None] * lrt.spatial_components[ib]
-                # conv_filt = torch.bmm(torch.as_tensor(ssb[None]), template_a.mT)
-                # conv_filt = conv_filt[:, None]  # (nco, 1, rank, t)
-                # conv_in = torch.as_tensor(tempupb[None]).mT[None]
-                # pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
-                # pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
-                # assert torch.isclose(pcf, pconv_).all()
-
-                # pconv2 = (
-                #     F.conv2d(
-                #         torch.as_tensor(templates[ia])[None, None],
-                #         torch.as_tensor(tupb)[None, None],
-                #     )
-                #     .squeeze()
-                #     .numpy(force=True)
-                # )
                 assert np.allclose(pconv2.numpy()[::-1], pconv)
                 assert np.isclose(pc, tc)
-                # assert np.isclose(pconv1, pc)
 
         res = matcher.peel_chunk(
-            torch.from_numpy(rec.get_traces().copy()),
+            torch.asarray(rec.get_traces(), device=matcher.b.channel_index.device),
             return_residual=True,
             return_conv=True,
         )
 
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"], times)
-        assert np.array_equal(res["labels"], labels)
-        print(f'{torch.square(res["residual"]).mean()=}')
-        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=RES_ATOL)
-        print(f'{torch.square(res["conv"]).mean()=}')
-        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=CONV_ATOL)
+        assert np.array_equal(res["times_samples"].numpy(force=True), times)
+        assert np.array_equal(res["labels"].numpy(force=True), labels)
+        print(f"{res['n_spikes']=} {len(times)=}")
+        print(f"{res['times_samples']=}")
+        print(f"{res['upsampling_indices']=}")
+        assert np.array_equal(
+            res["upsampling_indices"].numpy(force=True), upsampling_indices
+        )
+        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
+        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
+        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
+        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
+        assert torch.all(res["scores"] > 0)
         assert torch.all(res["scores"] > 0)
 
 
 @pytest.mark.parametrize("up_factor", [1, 2, 4, 8])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_static(tmp_path, up_factor, cd_iter):
+    comp_cfg = ensure_computation_config(None)
+    dev = comp_cfg.actual_device()
     recording_length_samples = 40_011
     n_channels = 2
     geom = np.c_[np.zeros(2), np.arange(2)]
@@ -378,6 +379,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
+        matcher.to(dev)
         matchdata = matcher.matching_templates
         assert isinstance(matchdata, CompressedUpsampledMatchingTemplates)
 
@@ -418,7 +420,7 @@ def test_static(tmp_path, up_factor, cd_iter):
                 conv_in = torch.as_tensor(tempupb[None]).mT[None]
                 pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
                 pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
-                assert torch.isclose(pcf, pconv_).all()
+                assert torch.isclose(pcf.cpu(), pconv_).all()
 
                 pconv2 = (
                     F.conv2d(
@@ -429,25 +431,22 @@ def test_static(tmp_path, up_factor, cd_iter):
                     .numpy(force=True)
                 )
                 assert np.isclose(pconv2, tc)
-                assert np.isclose(pc, tc)
-                assert np.isclose(pconv1, pc)
+                assert np.isclose(pc.cpu(), tc)
+                assert np.isclose(pconv1, pc.cpu())
 
         res = matcher.peel_chunk(
-            torch.from_numpy(rec.get_traces().copy()),
+            torch.asarray(rec.get_traces(), device=matcher.b.channel_index.device),
             return_residual=True,
             return_conv=True,
         )
 
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"], times)
-        assert np.array_equal(
-            res["upsampling_indices"], np.zeros_like(res["upsampling_indices"])
-        )
-        assert np.array_equal(res["labels"], labels)
-        assert np.isclose(torch.square(res["residual"]).mean(), 0.0, atol=1e-5)
-        print(f"D {torch.square(res['conv']).mean()=}")
-        assert np.isclose(torch.square(res["conv"]).mean(), 0.0, atol=1e-3)
-        assert torch.all(res["scores"] > 0)
+        assert np.array_equal(res["times_samples"].cpu(), times)
+        assert np.array_equal(res["upsampling_indices"].cpu(), np.zeros(len(times)))
+        assert np.array_equal(res["labels"].cpu(), labels)
+        assert np.isclose(torch.square(res["residual"]).mean().cpu(), 0.0, atol=1e-5)
+        assert np.isclose(torch.square(res["conv"]).mean().cpu(), 0.0, atol=1e-3)
+        assert torch.all(res["scores"].cpu() > 0)
 
 
 def test_fakedata_nonn(tmp_path, threshold=7.0):
