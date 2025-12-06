@@ -33,6 +33,7 @@ def ds_save_intermediate_labels(
 
     step_labels_npy = store_dir / f"{step_name}_labels.npy"
     logger.info(f"Saving {step_name} labels to {step_labels_npy}")
+    logger.info(f"{step_name}: {step_sorting.summary()}.")
     if step_labels is None:
         step_labels = step_sorting.labels
     np.save(step_labels_npy, step_labels, allow_pickle=False)

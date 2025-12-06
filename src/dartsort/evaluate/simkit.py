@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from scipy.signal import sawtooth
-from spikeinterface.core import read_binary_folder
+from spikeinterface.core import read_binary_folder, BaseRecording
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor,
@@ -125,7 +125,8 @@ def generate_simulation(
                 continue
             if msg.startswith("auto_cast_uint"):
                 continue
-            raise w
+            raise ValueError(w)
+    assert isinstance(noise_recording, BaseRecording)
     assert noise_recording.dtype == np.dtype(recording_dtype)
     assert noise_recording.sampling_frequency == sampling_frequency
     assert noise_recording.get_num_frames() == duration_samples

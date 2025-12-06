@@ -186,8 +186,6 @@ def interp_precompute(
         if channel_index is None:
             channel_index = torch.arange(n_source_chans)[None]
             channel_index = channel_index.to(source_geom.device)
-        else:
-            assert len(channel_index) == n_source_chans
         source_pos = source_geom[channel_index]
         valid = channel_index < n_source_chans
     else:
@@ -402,9 +400,9 @@ def kernel_interpolate(
     if extrap_method == "nearest":
         extrap_method = "kernel"
         extrap_kernel_name = "nearest"
-    elif method == "zero":
-        method = "kernel"
-        kernel_name = "zero"
+    elif extrap_method == "zero":
+        extrap_method = "kernel"
+        extrap_kernel_name = "zero"
     extrap_diff = extrap_method != method or extrap_kernel_name != kernel_name
 
     features_out = None
@@ -533,12 +531,15 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     return kernel
 
 
-def get_rsq(source_pos, target_pos=None, sigma=1.0, batch_size=16, nan=0.0):
-    if not isinstance(sigma, (float, int)) or sigma != 1.0:
+def get_rsq(source_pos, target_pos=None, sigma: float | None=1.0, batch_size=16, nan: float | None=0.0):
+    have_sigma = sigma is not None
+    if have_sigma and isinstance(sigma, (float, int)):
+        have_sigma = sigma != 1.0
+    if have_sigma:
         source_pos = source_pos / sigma
     if target_pos is None:
         target_pos = source_pos
-    elif not isinstance(sigma, (float, int)) or sigma != 1.0:
+    elif have_sigma:
         target_pos = target_pos / sigma
     assert source_pos.ndim == target_pos.ndim == 3
     assert source_pos.shape[0] == target_pos.shape[0]
@@ -564,27 +565,20 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
 
     targ_x, targ_y = target_pos[..., 0], target_pos[..., 1]
 
-    # targ_extrap = target_pos[..., 0].clamp(x_low, x_high) != target_pos[..., 0]
+    # algorithm: start with all finite. on each iter, remove some from the set.
     targ_extrap = targ_y.isfinite()
 
     for x in source_x_uniq:
         source_in_col = torch.isclose(source_pos[..., 0], x)
-        targ_in_col = torch.isclose(targ_x, x)
+        targ_not_in_col = torch.isclose(targ_x, x).logical_not_()
 
         source_col_y = torch.where(source_in_col, source_pos[..., 1], torch.nan)
-        targ_col_y = torch.where(targ_in_col, targ_y, torch.nan)
+        source_low = source_col_y.nan_to_num(nan=torch.inf).amin(dim=1).sub_(eps)
+        source_high = source_col_y.nan_to_num(nan=-torch.inf).amax(dim=1).add_(eps)
 
-        source_low = source_col_y.nan_to_num(nan=torch.inf).amin(dim=1) - 1e-3
-        source_high = source_col_y.nan_to_num(nan=-torch.inf).amax(dim=1) + 1e-3
-        assert torch.isfinite(source_low).all()
-        assert torch.isfinite(source_high).all()
+        targ_col_y = targ_y.masked_fill(targ_not_in_col, torch.nan)
+        # this is true for nans, but thats okay.
+        targ_outside = targ_col_y != targ_col_y.clamp(min=source_low[:, None], max=source_high[:, None])
+        targ_extrap.logical_and_(targ_outside)
 
-        col_mask = (targ_col_y > source_high[:, None]).logical_or_(
-            targ_col_y < source_low[:, None]
-        )
-        targ_extrap[targ_in_col] = targ_extrap[targ_in_col].logical_and_(
-            col_mask[targ_in_col]
-        )
-
-    targ_extrap = torch.logical_and(targ_extrap, targ_y.isfinite())
     return targ_extrap

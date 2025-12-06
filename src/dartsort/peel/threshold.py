@@ -30,7 +30,7 @@ class ThresholdAndFeaturize(BasePeeler):
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
         relative_peak_radius_samples=5,
-        dedup_temporal_radius_samples=7,
+        temporal_dedup_radius_samples=7,
         cumulant_order=None,
         convexity_threshold=None,
         convexity_radius=3,
@@ -63,7 +63,7 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
         self.relative_peak_radius_samples = relative_peak_radius_samples
-        self.dedup_temporal_radius_samples = dedup_temporal_radius_samples
+        self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
         self.remove_exact_duplicates = remove_exact_duplicates
         self.peak_sign = peak_sign
         self.trough_priority = trough_priority
@@ -164,7 +164,7 @@ class ThresholdAndFeaturize(BasePeeler):
             relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
-            dedup_temporal_radius_samples=thresholding_cfg.dedup_temporal_radius_samples,
+            temporal_dedup_radius_samples=thresholding_cfg.temporal_dedup_radius_samples,
             remove_exact_duplicates=thresholding_cfg.remove_exact_duplicates,
             cumulant_order=thresholding_cfg.cumulant_order,
             convexity_threshold=thresholding_cfg.convexity_threshold,
@@ -214,7 +214,7 @@ class ThresholdAndFeaturize(BasePeeler):
             left_margin=left_margin,
             right_margin=right_margin,
             relative_peak_channel_index=self.relative_peak_channel_index,
-            dedup_temporal_radius=self.dedup_temporal_radius_samples,
+            temporal_dedup_radius_samples=self.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.remove_exact_duplicates,
             cumulant_order=self.cumulant_order,
             convexity_threshold=self.convexity_threshold,
@@ -272,7 +272,7 @@ def threshold_chunk(
     left_margin=0,
     right_margin=0,
     relative_peak_radius=5,
-    dedup_temporal_radius=7,
+    temporal_dedup_radius_samples=7,
     remove_exact_duplicates=True,
     max_spikes_per_chunk=None,
     thinning=0.0,
@@ -295,7 +295,7 @@ def threshold_chunk(
         dedup_index_inds=spatial_dedup_rel_inds,
         spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
-        dedup_temporal_radius=dedup_temporal_radius,
+        dedup_temporal_radius=temporal_dedup_radius_samples,
         remove_exact_duplicates=remove_exact_duplicates,
         relative_peak_radius=relative_peak_radius,
         return_energies=True,

@@ -1,16 +1,15 @@
-from logging import getLogger
 from dataclasses import dataclass, fields
 
 import numpy as np
 import torch
 from linear_operator.operators import DenseLinearOperator
 
-from ..util import spiketorch
-from ..util.logging_util import DARTSORTVERBOSE, DARTSORTDEBUG
+from ...util import spiketorch
+from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 noise_eps = torch.tensor(1e-3)
 
 
@@ -38,7 +37,7 @@ def __debug_init__(self):
     logger.dartsortverbose("->\n" + msg)
 
 
-@dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
+@dataclass(slots=FRZ, kw_only=True, frozen=FRZ, eq=False, repr=False)
 class TEStepResult:
     obs_elbo: torch.Tensor
     noise_N: torch.Tensor
@@ -58,7 +57,7 @@ class TEStepResult:
     #     __post_init__ = __debug_init__
 
 
-@dataclass(slots=FRZ, kw_only=FRZ, frozen=FRZ)
+@dataclass(slots=FRZ, kw_only=True, frozen=FRZ, eq=False, repr=False)
 class TEBatchResult:
     indices: slice | torch.Tensor
     candidates: torch.Tensor
@@ -560,20 +559,17 @@ def missing_indices(
     missing_chans = []
     full_missing_chans = []
     truncate = zero_radius and np.isfinite(zero_radius)
-    missing_to_full = [] if truncate else None
     for ni in range(neighborhoods.n_neighborhoods):
         mix = neighborhoods.missing_channels(ni)
         full_missing_chans.append(mix)
 
         if truncate:
             assert pgeom is not None
-            assert missing_to_full is not None
             assert zero_radius is not None
             oix = neighborhoods.neighborhood_channels(ni)
             d = torch.cdist(pgeom[mix], pgeom[oix]).min(dim=1).values
             (kept,) = (d < zero_radius).cpu().nonzero(as_tuple=True)
             mix = mix[kept]
-            missing_to_full.append(kept)
         missing_chans.append(mix)
 
     nc_miss = max(map(len, missing_chans))

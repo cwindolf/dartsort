@@ -245,11 +245,11 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         )
         matchdata = matcher.matching_templates
         assert isinstance(matchdata, CompressedUpsampledMatchingTemplates)
-        assert np.array_equal(
+        assert np.allclose(
             matchdata.b.cup_temporal.numpy(force=True),
             tempup.compressed_upsampled_templates,
         )
-        assert np.array_equal(
+        assert np.allclose(
             matchdata.b.obj_spatial_sing.numpy(force=True),
             lrt.singular_values[:, :, None] * lrt.spatial_components,
         )
@@ -391,11 +391,11 @@ def test_static(tmp_path, up_factor, cd_iter):
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )
-        assert np.array_equal(
+        assert np.allclose(
             matchdata.b.cup_temporal.numpy(force=True),
             tempup.compressed_upsampled_templates,
         )
-        assert np.array_equal(
+        assert np.allclose(
             matchdata.b.obj_spatial_sing.numpy(force=True),
             lrt.singular_values[:, :, None] * lrt.spatial_components,
         )

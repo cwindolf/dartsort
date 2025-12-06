@@ -399,7 +399,7 @@ def check_tmm_invariants(
     for j in range(train_neighborhoods.n_neighborhoods):
         for jj in np.flatnonzero(tmm.candidates.neighborhood_subset[j]):
             assert (
-                train_neighborhoods.indicators[jj] <= train_neighborhoods.indicators[j]
+                train_neighborhoods.indicators[jj] >= train_neighborhoods.indicators[j]
             ).all()
 
     # e.i,

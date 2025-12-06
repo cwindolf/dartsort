@@ -77,7 +77,7 @@ class DARTsortUserConfig:
     )
     voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
         default=4.0,
-        doc="Threshold in standardized voltage units for initial detection; "
+        doc="Threshold in standardized (SNR) voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
@@ -167,7 +167,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none"] = "gmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = "tmm"
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -187,7 +187,7 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
     cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
-    convexity_threshold: float | None = argfield(default=-25.0, arg_type=float_or_none)
+    convexity_threshold: float | None = argfield(default=-50.0, arg_type=float_or_none)
     convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching
@@ -260,17 +260,17 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # gausian mixture low level
     n_refinement_iters: int = 1
-    n_em_iters: int = 50
+    n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
     gmm_metric: Literal["kl", "cosine"] = "cosine"
     gmm_search: Literal["topk", "random"] = "topk"
-    gmm_n_candidates: int = 5
+    gmm_n_candidates: int = 3
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
-    prior_pseudocount: float = 25.0
+    prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int | None = argfield(

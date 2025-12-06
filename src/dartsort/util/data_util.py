@@ -136,6 +136,14 @@ class DARTsortSorting:
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
         return self.mask(valid)
+    
+    def flatten(self):
+        assert self.labels is not None
+        valid = np.flatnonzero(self.labels >= 0)
+        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        new_labels = np.full_like(self.labels, -1)
+        new_labels[valid] = flat_labels
+        return replace(self, labels=new_labels)
 
     @classmethod
     def load(cls, sorting_npz, feature_keys=None):
@@ -193,6 +201,19 @@ class DARTsortSorting:
         if self.parent_h5_path:
             h5_str = f" From HDF5 file {self.parent_h5_path}."
         return f"{name}: {ns} spikes, {unit_str}.{feat_str}{h5_str}"
+
+    def summary(self):
+        name = self.__class__.__name__
+        ns = self.n_spikes
+        nu = self.n_units
+        unit_str = f"{nu} unit" + "s" * (nu > 1)
+        if self.labels is not None:
+            noise_prop = (self.labels < 0).mean().item()
+            noise_pct = 100 * noise_prop
+            noise_str = f" ({noise_pct:.2f}% noise)"
+        else:
+            noise_str = ""
+        return f"{name}: {ns} spikes{noise_str}, {nu} units."
 
     def __repr__(self):
         return str(self)

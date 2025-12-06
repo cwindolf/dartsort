@@ -1,47 +1,46 @@
-import numpy as np
-import torch
-from logging import getLogger
-from torch import nn
 import time
-from linear_operator import operators
-from linear_operator.utils.cholesky import psd_safe_cholesky
-import torch.nn.functional as F
-from tqdm.auto import trange, tqdm
 from itertools import repeat
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+from linear_operator import operators
+from linear_operator.utils.cholesky import psd_safe_cholesky
+from torch import nn
+from tqdm.auto import tqdm, trange
 
-from ..util.noise_util import EmbeddedNoise
-from ..util.sparse_util import (
-    integers_without_inner_replacement,
+from ...util import spiketorch
+from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.multiprocessing_util import get_pool
+from ...util.noise_util import EmbeddedNoise
+from ...util.sparse_util import (
     erase_dups,
     fisher_yates_replace,
+    integers_without_inner_replacement,
 )
-from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 from ._truncated_em_helpers import (
-    neighb_lut,
     TEBatchResult,
     TEStepResult,
-    _te_batch_e,
-    _te_batch_m_counts,
-    _te_batch_m_rank0,
-    _te_batch_m_ppca,
-    units_overlapping_neighborhoods,
-    _grad_counts,
-    _grad_mean,
-    _grad_basis,
     _elbo_prior_correction,
-    observed_and_missing_marginals,
-    missing_indices,
-    _processor_update_mean_batch,
-    _processor_update_pca_batch,
     _finalize_missing_full_m,
     _finalize_missing_full_R,
+    _grad_basis,
+    _grad_counts,
+    _grad_mean,
+    _processor_update_mean_batch,
+    _processor_update_pca_batch,
+    _te_batch_e,
+    _te_batch_m_counts,
+    _te_batch_m_ppca,
+    _te_batch_m_rank0,
+    missing_indices,
+    neighb_lut,
+    observed_and_missing_marginals,
+    units_overlapping_neighborhoods,
 )
-from ..util import spiketorch
-from ..util.multiprocessing_util import get_pool
-from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
+from .stable_features import SpikeNeighborhoods, StableSpikeDataset
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SpikeTruncatedMixtureModel(nn.Module):
@@ -82,6 +81,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
         self.noise = noise
         self.device = self.data.device
         train_indices, self.train_neighborhoods = self.data.neighborhoods("extract")
+        self.train_neighborhoods = self.train_neighborhoods.cpu()
 
         if laplace_ard:
             assert alpha0 and alpha0 > 0
@@ -604,7 +604,7 @@ class SpikeTruncatedMixtureModel(nn.Module):
 
         valid = np.flatnonzero(labels >= 0)
         assert neighborhoods.neighborhood_ids.shape == labels.shape
-        vneighbs = neighborhoods.neighborhood_ids[valid]
+        vneighbs = neighborhoods.neighborhood_ids[valid].cpu()
         np.add.at(unit_neighborhood_counts, (labels[valid], vneighbs), 1)
         # nu x nneighb
         neighb_occupancy = unit_neighborhood_counts.astype(float)
@@ -1377,7 +1377,7 @@ class CandidateSet:
             The total size of self.candidates[n] is
                 n_candidates + n_candidates*n_search + n_explore
         """
-        self.neighborhood_ids = neighborhoods.neighborhood_ids
+        self.neighborhood_ids = neighborhoods.neighborhood_ids.cpu()
         self.n_neighborhoods = neighborhoods.n_neighborhoods
         # neighborhoods x channels
         self.neighborhood_indicators = neighborhoods.indicators.T.numpy(force=True)
@@ -1583,6 +1583,7 @@ class CandidateSet:
         assert unit_search_neighbors.ndim == 2
         assert un_adj is not None
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         adj_lut_ixs = un_adj_lut[top, neighb_ids[:, None].broadcast_to(top.shape)]
         assert adj_lut_ixs.shape == top.shape
         cands = unit_search_neighbors[adj_lut_ixs]
@@ -1599,6 +1600,7 @@ class CandidateSet:
         assert self.unit_neighborhood_counts is not None
         assert labels.shape == neighb_ids.shape
         self.unit_neighborhood_counts.fill(0)
+        neighb_ids = neighb_ids.cpu()
         np.add.at(self.unit_neighborhood_counts, (labels, neighb_ids), 1)
 
         if not constrain_searches:
@@ -1661,6 +1663,7 @@ class CandidateSet:
         if un_adj is None:
             return
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         unit_neighb_not_adj = torch.from_numpy(unit_neighb_adj == 0).to(top.device)
         invalid = unit_neighb_not_adj[top, neighb_ids[:, None].broadcast_to(top.shape)]
         top[invalid] = -1
@@ -1673,6 +1676,7 @@ class CandidateSet:
         # -- pick units to fill top at random according to overlaps with neighb_ids
         # construct array of probabilities with tiny prob on non-overlapping units
         adj_uu, adj_nn, unit_neighb_adj, un_adj_lut = un_adj
+        neighb_ids = neighb_ids.cpu()
         probs = unit_neighb_adj[:, neighb_ids[blanks]]
         assert probs.shape == (blanks.numel(), unit_neighb_adj.shape[0])
         eps = 2.0**-30

@@ -13,10 +13,10 @@ import warnings
 
 
 DARTSORTVERBOSE = DEBUG + 4
-addLevelName(DARTSORTVERBOSE, "DARTSORTVERBOSE")
+addLevelName(DARTSORTVERBOSE, "DSVERBOSE")
 
 DARTSORTDEBUG = DEBUG + 5
-addLevelName(DARTSORTDEBUG, "DARTSORTDEBUG")
+addLevelName(DARTSORTDEBUG, "DSDEBUG")
 
 
 DOUBLECHECK = DEBUG + 6
@@ -29,25 +29,26 @@ class DARTsortLogger(getLoggerClass()):
 
     def doublecheck(self, msg, *args, **kwargs):
         if self.isEnabledFor(DOUBLECHECK):
-            self._log(DOUBLECHECK, msg, args, **kwargs)
+            self._log(DOUBLECHECK, msg, args, stacklevel=2, **kwargs)
 
     def dartsortverbose(self, msg, *args, **kwargs):
         if self.isEnabledFor(DARTSORTVERBOSE):
-            self._log(DARTSORTVERBOSE, msg, args, **kwargs)
+            self._log(DARTSORTVERBOSE, msg, args, stacklevel=2, **kwargs)
 
     def dartsortdebug(self, msg, *args, **kwargs):
         if self.isEnabledFor(DARTSORTDEBUG):
-            self._log(DARTSORTDEBUG, msg, args, **kwargs)
+            self._log(DARTSORTDEBUG, msg, args, stacklevel=2, **kwargs)
 
     def dartsortdebugthunk(self, msg, *args, **kwargs):
         if self.isEnabledFor(DARTSORTDEBUG):
-            self._log(DARTSORTDEBUG, msg(), args, **kwargs)
+            self._log(DARTSORTDEBUG, msg(), args, stacklevel=2, **kwargs)
 
 
 setLoggerClass(DARTsortLogger)
 
 
-logger: DARTsortLogger = getLogger(__name__)
+logger = getLogger(__name__)
+assert isinstance(logger, DARTsortLogger)
 
 
 # set to environment-defined log level if present
@@ -65,6 +66,7 @@ if "LOG_LEVEL" in os.environ:
 
 # override warnings to show tracebacks when debugging
 if logger.isEnabledFor(DARTSORTVERBOSE):
+
     def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
         import sys, traceback
 
@@ -81,3 +83,9 @@ def get_logger(*args, **kwargs) -> DARTsortLogger:
     logger = getLogger(*args, **kwargs)
     assert isinstance(logger, DARTsortLogger)
     return logger
+
+
+logger.dartsortdebug(
+    f"Logger is enabled for: DARTSORTDEBUG={logger.isEnabledFor(DARTSORTDEBUG)}, "
+    f"DARTSORTVERBOSE={logger.isEnabledFor(DARTSORTVERBOSE)}."
+)

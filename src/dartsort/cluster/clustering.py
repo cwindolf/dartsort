@@ -7,6 +7,7 @@ from ..util.data_util import chunk_time_ranges
 from ..util.main_util import ds_save_intermediate_labels
 from ..util import job_util
 from . import cluster_util, density, forward_backward, refine_util
+from .gmm import mixture
 
 
 clustering_strategies = {}
@@ -32,13 +33,26 @@ def get_clusterer(
             )
         clus_strategy = clustering_cfg.cluster_strategy
 
+    saving_labels = save_cfg is not None and save_cfg.save_intermediate_labels
+    if saving_labels:
+        shared_save_kw = dict(
+            save_labels_dir=save_labels_dir,
+            save_cfg=save_cfg,
+        )
+    else:
+        shared_save_kw = dict(
+            save_labels_dir=None,
+            save_cfg=None,
+        )
+        
+
     C = clustering_strategies.get(clus_strategy, Clusterer)
+    init_fmt = initial_name if (saving_labels and clustering_cfg is not None) else None
     clusterer = C.from_config(
         clustering_cfg,
-        save_cfg=save_cfg,
-        save_labels_dir=save_labels_dir,
-        labels_fmt=initial_name if clustering_cfg is not None else None,
+        labels_fmt=init_fmt,
         computation_cfg=computation_cfg,
+        **shared_save_kw,
     )
 
     if pre_refinement_cfg is not None:
@@ -49,17 +63,16 @@ def get_clusterer(
                 f"Options are: {', '.join(refinement_strategies.keys())}."
             )
         R = refinement_strategies[pre_refinement_cfg.refinement_strategy]
+        if saving_labels and clustering_cfg is not None:
+            mid_fmt = f"{initial_name}_preref{pr_strategy}"
+        else:
+            mid_fmt = None
         clusterer = R(
             clusterer,
             refinement_cfg=pre_refinement_cfg,
-            save_cfg=save_cfg,
-            save_labels_dir=save_labels_dir,
-            labels_fmt=(
-                f"{initial_name}_preref{pr_strategy}"
-                if initial_name and clustering_cfg is not None
-                else None
-            ),
+            labels_fmt=mid_fmt,
             computation_cfg=computation_cfg,
+            **shared_save_kw,
         )
 
     if refinement_cfg is not None:
@@ -72,10 +85,9 @@ def get_clusterer(
         clusterer = R(
             clusterer,
             refinement_cfg=refinement_cfg,
-            save_cfg=save_cfg,
-            save_labels_dir=save_labels_dir,
-            labels_fmt=refine_labels_fmt,
+            labels_fmt=refine_labels_fmt if saving_labels else None,
             computation_cfg=computation_cfg,
+            **shared_save_kw,
         )
 
     return clusterer
@@ -262,6 +274,8 @@ class DensityPeaksClusterer(Clusterer):
             choices.sort()
             not_choices = np.setdiff1d(np.arange(len(X)), choices)
             X_fit = X[choices]
+        else:
+            not_choices = choices = None
 
         if not self.uhdversion:
             res = density.density_peaks(
@@ -297,6 +311,8 @@ class DensityPeaksClusterer(Clusterer):
 
         labels = res["labels"]
         if subsampling:
+            assert choices is not None
+            assert not_choices is not None
             kdtree = res["kdtree"]
             other_labels = density.nearest_neighbor_assign(
                 kdtree,
@@ -546,15 +562,32 @@ class GMMRefinement(Refinement):
 refinement_strategies["gmm"] = GMMRefinement
 
 
+class TMMRefinement(Refinement):
+    def _refine(self, features, sorting, recording, motion_est=None):
+        sorting = mixture.tmm_demix(
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_cfg=self.refinement_cfg,
+            computation_cfg=self.computation_cfg,
+            save_step_labels_format=self.labels_fmt,
+            save_step_labels_dir=self.save_labels_dir,
+            save_cfg=self.save_cfg,
+        )
+        return sorting
+
+
+refinement_strategies["tmm"] = TMMRefinement
+
+
 class SplitMergeRefinement(Refinement):
     def _refine(self, features, sorting, recording, motion_est=None):
         return refine_util.split_merge(
             recording,
             sorting,
             motion_est=motion_est,
-            split_config=self.refinement_cfg.split_cfg,
-            merge_config=self.refinement_cfg.merge_cfg,
-            merge_template_config=self.refinement_cfg.merge_template_cfg,
+            split_cfg=self.refinement_cfg.split_cfg,
+            merge_cfg=self.refinement_cfg.merge_cfg,
+            merge_template_cfg=self.refinement_cfg.merge_template_cfg,
             computation_cfg=self.computation_cfg,
         )
 

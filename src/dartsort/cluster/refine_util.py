@@ -11,8 +11,8 @@ from ..util.main_util import ds_save_intermediate_labels
 from .cluster_util import agglomerate
 from .split import split_clusters
 from .merge import merge_templates
-from .stable_features import StableSpikeDataset
-from .gaussian_mixture import SpikeMixtureModel
+from .gmm.stable_features import StableSpikeDataset
+from .gmm.gaussian_mixture import SpikeMixtureModel
 
 
 logger = getLogger(__name__)

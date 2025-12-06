@@ -4,6 +4,7 @@ from typing import Literal
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import adjusted_rand_score
 
 
@@ -14,7 +15,7 @@ def simulate_moppca(
     M=2,
     n_missing=2,
     K=5,
-    t_mu: Literal["zero", "random"] = "random",
+    t_mu: Literal["zero", "smooth", "random"] = "smooth",
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
     t_w: Literal["zero", "hot", "random"] = "zero",
@@ -24,7 +25,13 @@ def simulate_moppca(
     rg=0,
     device=None,
 ):
-    import dartsort
+    from dartsort.transform import TemporalPCAFeaturizer
+    from dartsort.util.data_util import DARTsortSorting
+    from dartsort.util.noise_util import EmbeddedNoise
+    from dartsort.cluster.gmm.stable_features import (
+        StableSpikeDataset,
+        SpikeNeighborhoods,
+    )
 
     N = Nper * K
 
@@ -53,6 +60,12 @@ def simulate_moppca(
         mu = np.zeros((K, rank, nc))
     elif t_mu == "random":
         mu = snr * rg.normal(size=(K, rank, nc))
+    elif t_mu == "smooth":
+        phase = rg.uniform(0.0, 2 * np.pi, size=(K, rank, 1))
+        freq = rg.uniform(0.2, 3.0, size=(K, rank, 1))
+        amp = rg.uniform(1.0, 2.0, size=(K, rank, 1))
+        domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
+        mu = snr * amp * np.sin(phase + freq * domain)
     else:
         assert False
     if clus_mask is not None:
@@ -60,7 +73,7 @@ def simulate_moppca(
 
     if t_cov == "eye":
         cov = np.eye(D)
-        noise = dartsort.EmbeddedNoise(
+        noise = EmbeddedNoise(
             rank,
             nc,
             cov_kind="scalar",
@@ -72,7 +85,7 @@ def simulate_moppca(
         full_cov = torch.asarray(cov, dtype=torch.float, device=device).view(
             rank, nc, rank, nc
         )
-        noise = dartsort.EmbeddedNoise(rank, nc, cov_kind="full", full_cov=full_cov)
+        noise = EmbeddedNoise(rank, nc, cov_kind="full", full_cov=full_cov)
     else:
         assert False
 
@@ -150,7 +163,7 @@ def simulate_moppca(
         x = torch.take_along_dim(y, channels.unsqueeze(1), dim=2)
     assert x is not None
 
-    neighbs = dartsort.SpikeNeighborhoods.from_channels(channels, nc, device=device)
+    neighbs = SpikeNeighborhoods.from_channels(channels, nc, device=device)
 
     init_labels = labels.clone()
     if init_label_corruption:
@@ -159,25 +172,29 @@ def simulate_moppca(
             rg.integers(K, size=to_corrupt.sum())
         )
 
-    init_sorting = dartsort.DARTsortSorting(
-        times_samples=torch.arange(N).to(torch.long),
-        channels=torch.zeros(N, dtype=torch.long),
-        labels=init_labels,
+    init_sorting = DARTsortSorting(
+        times_samples=torch.arange(N).to(torch.long),  # type: ignore
+        channels=torch.zeros(N, dtype=torch.long),  # type: ignore
+        labels=init_labels,  # type: ignore
         sampling_frequency=100.0,
-        extra_features=dict(times_seconds=torch.arange(N) / 100.0),
+        extra_features=dict(times_seconds=torch.arange(N) / 100.0),  # type: ignore
     )
 
-    _tpca = dartsort.transform.TemporalPCAFeaturizer(
+    _tpca = TemporalPCAFeaturizer(
         channel_index=torch.zeros(nc, nc - n_missing, dtype=torch.long),
         rank=rank,
     )
     _tpca = _tpca.to(device)
     splits = rg.binomial(1, p=0.3, size=N)
 
-    data = dartsort.StableSpikeDataset(
+    prgeom = 15.0 * torch.arange(nc, dtype=torch.float)
+    prgeom = torch.stack((torch.zeros(nc), prgeom), dim=1)
+    prgeom = F.pad(prgeom, (0, 0, 0, 1), value=torch.nan)
+
+    data = StableSpikeDataset(
         original_sorting=init_sorting,
         kept_indices=np.arange(N),
-        prgeom=torch.arange(nc + 1, dtype=torch.float).unsqueeze(1),
+        prgeom=prgeom,
         tpca=_tpca,
         extract_channels=channels,
         core_channels=channels,
@@ -207,7 +224,9 @@ def simulate_moppca(
         K=K,
         cov=cov,
         x=x,
+        channel_observed_by_unit=clus_mask,
         noise_log_priors=noise_log_priors,
+        n_channels=nc,
     )
 
 
@@ -229,10 +248,11 @@ def fit_moppcas(
     gmm_kw={},
 ):
     import dartsort
+    from dartsort.cluster.gmm.gaussian_mixture import SpikeMixtureModel
 
     N = data.n_spikes
 
-    mm = dartsort.SpikeMixtureModel(
+    mm = SpikeMixtureModel(
         data,
         noise,
         n_spikes_fit=N,

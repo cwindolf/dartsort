@@ -375,7 +375,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         valbatch += 1
                     self.train()
 
-                nbatch = np.ceil(n_examples / self.batch_size)
+                nbatch = max(1.0, np.ceil(n_examples / self.batch_size))
                 loss = total_loss / nbatch
                 mse = total_mse / nbatch
                 val_loss = val_loss / valbatch

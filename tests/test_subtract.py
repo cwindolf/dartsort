@@ -134,21 +134,22 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
             overwrite=True,
         )
+        assert st is not None
         out_h5 = st.parent_h5_path
         ns0 = len(st)
         print(ns0)
         with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert h5["collisioncleaned_tpca_features"].shape == (
+            assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+            assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                 ns0,
                 featconf.tpca_rank,
                 channel_index.shape[1],
             )
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
+            assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
 
         # test that resuming works
         print("resume")
@@ -160,18 +161,19 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
             overwrite=False,
         )
+        assert st is not None
         ns1 = len(st)
         out_h5 = st.parent_h5_path
         assert ns0 == ns1
         print(ns1)
         with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-            assert h5["collisioncleaned_tpca_features"].shape == (
+            assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+            assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+            assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
+            assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                 ns0,
                 featconf.tpca_rank,
                 channel_index.shape[1],
@@ -187,18 +189,19 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
             overwrite=True,
         )
+        assert st is not None
         out_h5 = st.parent_h5_path
         ns2 = len(st)
         print(ns2)
         assert ns0 == ns2
         with h5py.File(out_h5, locking=False) as h5:
-            assert h5["times_samples"].shape == (ns0,)
-            assert h5["channels"].shape == (ns0,)
-            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-            assert np.array_equal(h5["channel_index"][:], channel_index)
-            assert np.array_equal(h5["geom"][()], geom)
-            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-            assert h5["collisioncleaned_tpca_features"].shape == (
+            assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
+            assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
+            assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]´
+            assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]´
+            assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]´
+            assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]´
+            assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]´
                 ns0,
                 featconf.tpca_rank,
                 channel_index.shape[1],
@@ -219,22 +222,23 @@ def test_fakedata_nonn(tmp_path):
                 overwrite=True,
                 computation_cfg=ccfg,
             )
+            assert st is not None
             out_h5 = st.parent_h5_path
             ns0 = len(st)
             print(ns0)
             assert ns2 == ns0
             with h5py.File(out_h5, locking=False) as h5:
-                assert h5["times_samples"].shape == (ns0,)
-                assert h5["channels"].shape == (ns0,)
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-                assert np.array_equal(h5["channel_index"][:], channel_index)
-                assert h5["collisioncleaned_tpca_features"].shape == (
+                assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+                assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                     ns0,
                     featconf.tpca_rank,
                     channel_index.shape[1],
                 )
-                assert np.array_equal(h5["geom"][()], geom)
-                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
+                assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
 
             # test that resuming works
             print("parallel resume")
@@ -247,18 +251,19 @@ def test_fakedata_nonn(tmp_path):
                 overwrite=False,
                 computation_cfg=ccfg,
             )
+            assert st is not None
             out_h5 = st.parent_h5_path
             ns1 = len(st)
             print(ns1)
             assert ns0 == ns1
             with h5py.File(out_h5, locking=False) as h5:
-                assert h5["times_samples"].shape == (ns0,)
-                assert h5["channels"].shape == (ns0,)
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-                assert np.array_equal(h5["channel_index"][:], channel_index)
-                assert np.array_equal(h5["geom"][()], geom)
-                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-                assert h5["collisioncleaned_tpca_features"].shape == (
+                assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+                assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+                assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                     ns0,
                     featconf.tpca_rank,
                     channel_index.shape[1],
@@ -275,18 +280,19 @@ def test_fakedata_nonn(tmp_path):
                 overwrite=True,
                 computation_cfg=ccfg,
             )
+            assert st is not None
             out_h5 = st.parent_h5_path
             ns2 = len(st)
             print(ns2)
             assert ns0 == ns2
             with h5py.File(out_h5, locking=False) as h5:
-                assert h5["times_samples"].shape == (ns0,)
-                assert h5["channels"].shape == (ns0,)
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]
-                assert np.array_equal(h5["channel_index"][:], channel_index)
-                assert np.array_equal(h5["geom"][()], geom)
-                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)
-                assert h5["collisioncleaned_tpca_features"].shape == (
+                assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
+                assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
+                assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
+                assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                     ns0,
                     featconf.tpca_rank,
                     channel_index.shape[1],
@@ -314,6 +320,7 @@ def test_fakedata_nonn(tmp_path):
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
         )
+        assert st0 is not None
         ns0 = len(st0)
         print(ns0)
 
@@ -327,14 +334,16 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
             chunk_starts_samples=np.arange(3) * int(fs),
         )
+        assert sta is not None
         with h5py.File(sta.parent_h5_path, locking=False) as h5:
-            assert h5["last_chunk_start"][()] == int(2 * fs)
+            assert h5["last_chunk_start"][()] == int(2 * fs)   # type: ignore[reportAttributeAccessIssue]
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
         )
+        assert stb is not None
         print(f"{len(sta)=} {len(stb)=}")
         assert len(sta) < ns0
         assert len(stb) == ns0
@@ -382,11 +391,12 @@ def test_small_nonn(tmp_path, nn_localization):
             subtraction_cfg=subconf,
             overwrite=True,
         )
+        assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:
-                    lens.append(h5[k].shape[0])
+                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
 
     print("CPU parallel")
@@ -402,11 +412,12 @@ def test_small_nonn(tmp_path, nn_localization):
             subtraction_cfg=subconf,
             computation_cfg=two_jobs_cfg_cpu,
         )
+        assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:
-                    lens.append(h5[k].shape[0])
+                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
 
     print("Yes parallel")
@@ -422,12 +433,13 @@ def test_small_nonn(tmp_path, nn_localization):
             subtraction_cfg=subconf,
             computation_cfg=two_jobs_cfg,
         )
+        assert st is not None
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:
-                    lens.append(h5[k].shape[0])
+                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
 
 
@@ -456,7 +468,7 @@ def test_small_default_config(tmp_path, extract_radius=100):
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
 
-    cfg = SubtractionConfig(detection_threshold=15.0)
+    cfg = SubtractionConfig(detection_threshold=15.0, convexity_threshold=-100)
     fcfg = FeaturizationConfig(extract_radius=extract_radius, n_residual_snips=8)
 
     with tempfile.TemporaryDirectory(
@@ -471,14 +483,15 @@ def test_small_default_config(tmp_path, extract_radius=100):
             subtraction_cfg=cfg,
             featurization_cfg=fcfg,
         )
+        assert st is not None
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:
-                    lens.append(h5[k].shape[0])
-            assert np.isclose(h5["times_samples"][:], gt_times, atol=3, rtol=0).all()
-            assert np.array_equal(h5["channels"][:], gt_channels)
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
+            assert (np.abs(h5["times_samples"][:] - gt_times) <= 3).all()  # type: ignore
+            assert np.array_equal(h5["channels"][:], gt_channels)  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
             assert lens[0] == len(gt_times)
 
@@ -492,13 +505,14 @@ def test_small_default_config(tmp_path, extract_radius=100):
             subtraction_cfg=cfg,
             featurization_cfg=fcfg,
         )
+        assert st is not None
         out_h5 = st.parent_h5_path
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:
-                    lens.append(h5[k].shape[0])
-            assert np.isclose(h5["times_samples"][:], gt_times, atol=3, rtol=0).all()
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
+            assert (np.abs(h5["times_samples"][:] - gt_times) <= 3).all()  # type: ignore
             assert np.unique(lens).size == 1
-            assert np.array_equal(h5["channels"][:], gt_channels)
+            assert np.array_equal(h5["channels"][:], gt_channels)  # type: ignore[reportAttributeAccessIssue]
             assert lens[0] == len(gt_times)

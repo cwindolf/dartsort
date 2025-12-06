@@ -468,6 +468,7 @@ class EmbeddedNoise(torch.nn.Module):
         self._full_cov = None
         self._full_covinvcov = None
         self._full_inverse = None
+        self._full_whitener = None
         self._logdet = None
         self.register_buffer("mean_full", self.mean_rc().clone().detach())
         self.cache = {}
@@ -481,7 +482,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     @property
     def device(self):
-        return self.global_std.device
+        return self.chans_arange.device
 
     def mean_rc(self):
         """Return noise mean as a rank x channels tensor"""
@@ -506,7 +507,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     def whitener(self, channels=slice(None)):
         cov = self.marginal_covariance(channels=channels)
-        chol = cov.cholesky()
+        chol = cov.cholesky().to_dense()
         chans_eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
         whitener = torch.linalg.solve_triangular(chol, chans_eye, upper=False)
         return whitener.reshape(cov.shape)
@@ -551,7 +552,11 @@ class EmbeddedNoise(torch.nn.Module):
         return self._full_inverse
 
     def marginal_covariance(
-        self, channels=slice(None), cache_prefix=None, cache_key=None, device=None
+        self,
+        channels: torch.Tensor | slice | None = slice(None),
+        cache_prefix=None,
+        cache_key=None,
+        device=None,
     ):
         if device is not None:
             device = torch.device(device)
@@ -1039,7 +1044,7 @@ def interpolate_residual_snippets(
     tpca = data_util.get_tpca(hdf5_path)
     if device is not None:
         tpca = tpca.to(tpca.components.dtype)
-        tpca = tpca.to(device)
+    tpca = tpca.to(device=device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = h5["channel_index"][:]
@@ -1106,7 +1111,7 @@ def interpolate_residual_snippets(
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
         # statistical differences between drifty/no drift versions of the sorter
-        target_geom = torch.asarray(registered_geom).to(snippets)
+        target_geom = torch.asarray(registered_geom).to(device=device)
         assert torch.equal(source_geom, target_geom)
         target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
@@ -1158,8 +1163,8 @@ def interpolate_residual_snippets(
     )
     targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
     assert (targ_inds < kdtree.n).all()
-    target_pos = registered_geom[targ_inds]
-    target_pos_shifted = target_pos - source_shifts_xy
+    target_pos = torch.asarray(registered_geom[targ_inds], device=device)
+    target_pos_shifted = target_pos - torch.asarray(source_shifts_xy).to(target_pos)
     target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
     # allocate output storage with an extra channel of NaN needed later
@@ -1303,7 +1308,7 @@ def fp_control_threshold_from_h5(
     low_rank_templates,
     unit_ids=None,
     spike_counts=None,
-    rg: int | np.random.Generator=0,
+    rg: int | np.random.Generator = 0,
     refractory_radius_frames=10,
     num_frames=0,
     max_fp_per_input_spike=1.0,

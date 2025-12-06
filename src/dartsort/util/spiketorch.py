@@ -14,7 +14,7 @@ from torch.fft import irfft, rfft
 HAVE_CUPY = False
 cp = None
 try:
-    import cupy as cp
+    import cupy as cp  # type: ignore
 
     HAVE_CUPY = True
 except ImportError:
@@ -28,10 +28,18 @@ _0 = torch.tensor(0.0)
 
 
 def spawn_torch_rg(
-    seed: int | np.random.Generator = 0, device: str | torch.device | None = "cpu"
+    seed: int | np.random.Generator | torch.Generator = 0,
+    device: str | torch.device | None = "cpu",
 ):
     if device is None:
         device = "cpu"
+    device = torch.device(device)
+    if isinstance(seed, torch.Generator) and seed.device == device:
+        return seed
+    elif isinstance(seed, torch.Generator):
+        generator = torch.Generator(device=device)
+        generator.manual_seed(seed.seed())
+        return generator
     nprg = np.random.default_rng(seed)
     seeder = nprg.spawn(1)[0]
     seed = int.from_bytes(seeder.bytes(8))
@@ -69,14 +77,22 @@ def nanmean(x, axis=-1):
         return x.numpy()
 
 
-@overload
-def ptp(waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False) -> torch.Tensor:
-    ...
+def sign(x):
+    """torch.sign, but nonzero."""
+    s = torch.sign(x)
+    s.add_(0.1)
+    torch.sign(s, out=s)
+    return s
 
 
 @overload
-def ptp(waveforms: np.ndarray, dim: int = 1, keepdims: bool = False) -> np.ndarray:
-    ...
+def ptp(
+    waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False
+) -> torch.Tensor: ...
+
+
+@overload
+def ptp(waveforms: np.ndarray, dim: int = 1, keepdims: bool = False) -> np.ndarray: ...
 
 
 def ptp(waveforms, dim=1, keepdims=False):
@@ -103,7 +119,7 @@ def elbo(Q, log_liks, reduce_mean=True, dim=1):
     return oelbo
 
 
-def entropy(Q, reduce_mean=True, dim=1):
+def entropy(Q, reduce_mean=True, dim=1) -> torch.Tensor:
     Qpos = Q > 0
     logQ = torch.where(Qpos, Q, _1).log_()
     H = logQ.mul_(Q).sum(dim=dim)
@@ -194,6 +210,7 @@ def torch_add_at_(dest, ix, src, sign=1):
 
 
 def cupy_add_at_(dest, ix, src, sign=1):
+    assert cp is not None
     if torch.is_tensor(dest):
         assert dest.device.type == "cuda"
     dest = cp.asarray(dest)
@@ -370,7 +387,7 @@ def argrelmax(x, radius, threshold, exclude_edge=True):
         stride=1,
     )[0, 0]
     x1[x < x1] = 0
-    F.threshold_(x1, threshold, 0.0)
+    F.threshold_(x1, threshold, 0.0)  # type: ignore
     ix = torch.nonzero(x1)[:, 0]
     if exclude_edge:
         return ix[(ix > 0) & (ix < x.numel() - 1)]
@@ -447,13 +464,13 @@ def nancov(
         if nan_free:
             nobs = weights.sum(0)
         else:
-            nobs = (mask.T * weights) @ mask
+            nobs = (mask.T * weights) @ mask  # type: ignore
     else:
         xtx = x.T @ x
         if nan_free:
             nobs = np.array(len(x), dtype=x.dtype)
         else:
-            nobs = mask.T @ mask
+            nobs = mask.T @ mask  # type: ignore
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
@@ -478,7 +495,7 @@ def nancov(
     return cov
 
 
-def cosine_distance(means, means_b=None):
+def cosine_distance(means, means_b=None, true_distance=True):
     means = means.reshape(means.shape[0], -1)
     sym = means_b is None
     if sym:
@@ -498,6 +515,8 @@ def cosine_distance(means, means_b=None):
     dist = torch.subtract(_1, dot, out=dot)
     if sym:
         dist.diagonal().fill_(0.0)
+    if true_distance:
+        dist.mul_(2.0).sqrt_()
     return dist
 
 
@@ -873,7 +892,7 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
 def isin_sorted(x, y):
     """Like torch.isin(x, y), but faster by assuming both sorted."""
     if not y.numel():
-        return torch.zeros(x.shape, dtype=bool, device=x.device)
+        return torch.zeros(x.shape, dtype=torch.bool, device=x.device)
     ix = torch.searchsorted(y, x, side="right") - 1
     return x == y[ix]
 

@@ -1,10 +1,10 @@
 import gc
-from logging import getLogger
 import threading
-from dataclasses import replace
-from typing import Literal, Optional, Any
-import warnings
 import time
+import warnings
+from dataclasses import replace
+from logging import getLogger
+from typing import Any, Literal, Optional
 
 import numba
 import numpy as np
@@ -13,44 +13,44 @@ import torch.nn.functional as F
 from linear_operator import operators
 from scipy.cluster.hierarchy import linkage
 from scipy.sparse import coo_array, csc_array
-from scipy.special import logsumexp
 from scipy.spatial import KDTree
-from tqdm.auto import tqdm, trange
+from scipy.special import logsumexp
 from sympy.utilities.iterables import multiset_partitions
+from tqdm.auto import tqdm, trange
 
-from ..util import more_operators, noise_util, spiketorch
-from ..util.multiprocessing_util import get_pool
-from ..util.sparse_util import (
-    csc_insert,
-    get_csc_storage,
-    coo_to_torch,
-    coo_to_scipy,
-    csc_sparse_mask_rows,
-    coo_sparse_mask_rows,
-    csc_sparse_getrow,
-    sparse_topk,
-    sparse_reassign,
-    integers_without_inner_replacement,
+from ...util import more_operators, noise_util, spiketorch
+from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, DARTsortLogger
+from ...util.multiprocessing_util import get_pool
+from ...util.sparse_util import (
     allocate_topk,
+    coo_sparse_mask_rows,
+    coo_to_scipy,
+    coo_to_torch,
+    csc_insert,
+    csc_sparse_getrow,
+    csc_sparse_mask_rows,
+    get_csc_storage,
+    integers_without_inner_replacement,
+    sparse_reassign,
+    sparse_topk,
     topk_sparse_insert,
     topk_sparse_tocsc,
 )
-from .cluster_util import (
+from ..cluster_util import (
     agglomerate,
-    leafsets,
     is_largest_set_smaller_than,
+    leafsets,
 )
-from .kmeans import kmeans
-from .modes import smoothed_dipscore_at
-from .ppcalib import ppca_em
+from ..kmeans import kmeans
+from ..modes import smoothed_dipscore_at
+from ..ppcalib import ppca_em
+from . import truncated_mixture
 from .stable_features import (
     SpikeFeatures,
     SpikeNeighborhoods,
     StableSpikeDataset,
     occupied_chans,
 )
-from . import truncated_mixture
-from ..util.logging_util import DARTsortLogger, DARTSORTDEBUG, DARTSORTVERBOSE
 
 logger: DARTsortLogger = getLogger(__name__)
 
@@ -59,7 +59,6 @@ logger: DARTsortLogger = getLogger(__name__)
 
 
 class SpikeMixtureModel(torch.nn.Module):
-
     def __init__(
         self,
         data: StableSpikeDataset,
@@ -117,9 +116,7 @@ class SpikeMixtureModel(torch.nn.Module):
             "ecelbo",
         ] = "heldout_elbo",
         cl_alpha=1.0,
-        merge_decision_algorithm: Literal[
-            "brute", "tree", "complete"
-        ] = "brute",
+        merge_decision_algorithm: Literal["brute", "tree", "complete"] = "brute",
         split_decision_algorithm: Literal["brute", "tree", "complete"] = "tree",
         merge_sym_function: np.ufunc = np.minimum,
         em_converged_prop: float = 0.001,
@@ -900,7 +897,6 @@ class SpikeMixtureModel(torch.nn.Module):
                     ns_unit,
                 ) = spike_neighborhoods.subset_neighborhoods(
                     unit.channels,
-                    add_to_overlaps=None if topk_sparse else core_overlaps,
                     batch_size=self.likelihood_batch_size,
                 )
                 if not topk_sparse:
