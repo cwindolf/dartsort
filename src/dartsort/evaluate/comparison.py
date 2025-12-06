@@ -179,9 +179,14 @@ class DARTsortGroundTruthComparison:
         uids = self.gt_analysis.unit_ids
         match_dt_rms = np.full(len(uids), np.nan)
         for j, uid in enumerate(uids):
-            udt = self.matched_misalignment(uid)
-            if udt.size:
-                match_dt_rms[j] = np.sqrt(np.square(udt).mean())
+            try:
+                udt = self.matched_misalignment(uid)
+                if udt.size:
+                    match_dt_rms[j] = np.sqrt(np.square(udt).mean())
+            except ValueError as e:
+                warnings.warn(
+                    f"ValueError in misalignment. SI matching bug. {e=} {e.message=}"
+                )
         return match_dt_rms
 
     def matched_misalignment(self, gt_unit_id):
