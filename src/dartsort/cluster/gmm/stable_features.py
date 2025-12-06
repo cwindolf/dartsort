@@ -624,7 +624,7 @@ class SpikeNeighborhoods(BModule):
 
         # store neighborhoods as an indicator matrix
         # also store nonzero-d masks
-        indicators = torch.zeros((n_channels, len(neighborhoods)))
+        indicators = torch.zeros((n_channels, len(neighborhoods)), device=device)
         masks = []
         mask_slices = []
         offset = 0
@@ -680,6 +680,7 @@ class SpikeNeighborhoods(BModule):
                     f = f.pin_memory()
                 _features_valid.append(f)
             self._features_valid = _features_valid
+        self.to(device=device)
 
     @classmethod
     def from_channels(

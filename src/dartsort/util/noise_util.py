@@ -15,7 +15,7 @@ from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
 
 from ..util import more_operators, spiketorch
-from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE
+from ..util.logging_util import DARTSORTDEBUG
 
 logger = getLogger(__name__)
 

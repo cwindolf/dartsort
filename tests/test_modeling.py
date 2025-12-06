@@ -158,14 +158,6 @@ def test_truncated_mixture(
             # pick 2 random units and just accept the kmeans proposal
             to_split = rg.choice(K, size=2, replace=False)
             n_pieces = [3, 3]
-            scores = tmm.soft_assign(
-                data=full_data, full_proposal_view=True, needs_bootstrap=False
-            )
-            tmm_labels = torch.asarray(mixture.labels_from_scores(scores))
-            for k in range(K):
-                logger.info(
-                    f"{k=} {tmm_labels[true_labels==k].unique(return_counts=True)=}"
-                )
             assert eval_scores is not None
             print(f"False split: {to_split} into {n_pieces} parts.")
             logger.info(f"False split: {to_split} into {n_pieces} parts.")
@@ -223,20 +215,12 @@ def test_truncated_mixture(
                 eval_scores = tmm.soft_assign(
                     data=val_data, full_proposal_view=True, needs_bootstrap=False
                 )
-                true_eval_labels = true_labels[stable_data.split_indices["val"]]
             else:
                 eval_scores = tmm.soft_assign(
                     data=train_data,
                     full_proposal_view=False,
                     needs_bootstrap=False,
                     max_iter=1,
-                )
-                true_eval_labels = true_labels[stable_data.split_indices["train"]]
-            eval_labels = torch.asarray(mixture.labels_from_scores(eval_scores))
-            logger.info(f"At {it=}, label breakdown before split or merge is:")
-            for k in range(K):
-                logger.info(
-                    f"{k=} {eval_labels[true_eval_labels==k].unique(return_counts=True)=}"
                 )
         else:
             eval_scores = None
@@ -316,7 +300,7 @@ def test_truncated_mixture(
         standard_error = 1.0 / c.sqrt()
         # uhm. what would the bonferroni be?
         z = 10 * (1 + 5 * (t_w != "zero") + 5 * (corruption != 0.0))
-        diff = tmm.b.means.view(K, -1) - mu.view(K, -1)
+        diff = tmm.b.means.view(K, -1).cpu() - mu.view(K, -1)
         if cmask is not None:
             cmask = torch.asarray(cmask).to(diff)
             diff.view(K, -1, nc).mul_(cmask[:, None])
@@ -331,7 +315,7 @@ def test_truncated_mixture(
             assert w0.shape == w_.shape
             wtw0 = w0.mT.bmm(w0)
             wtw_ = w_.mT.bmm(w_)
-            diff = wtw0 - wtw_
+            diff = wtw0 - wtw_.cpu()
             if cmask is not None:
                 diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
                 wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
@@ -579,7 +563,7 @@ def test_original_mixture(
             )
 
             np.add.at(
-                counts2, (candidates[candidates >= 0], neighbs_bc[candidates >= 0]), 1
+                counts2, (candidates[candidates >= 0].cpu(), neighbs_bc[candidates >= 0].cpu()), 1
             )
 
             lut_units = tmm.processor.lut_units.numpy(force=True)
@@ -729,7 +713,7 @@ def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
     # check coverage and no duplicates
     all_ids = torch.concatenate(groups)
     all_ids = all_ids.sort().values
-    assert torch.equal(all_ids, torch.arange(K))
+    assert torch.equal(all_ids, torch.arange(K, device=all_ids.device))
 
     # check group sizes
     assert all(g.numel() <= max_group_size for g in groups)

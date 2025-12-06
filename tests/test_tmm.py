@@ -121,7 +121,7 @@ def check_tmm_invariants(
     n_candidates = tmm.n_candidates
     assert tmm.candidates.n_candidates == n_candidates
     neighb_ids = tmm.candidates.neighborhood_ids
-    assert torch.equal(neighb_ids, train_neighbs.neighborhood_ids)
+    assert torch.equal(neighb_ids.cpu(), train_neighbs.neighborhood_ids.cpu())
     n_units = len(tmm.means)
 
     # test invariants:
@@ -351,7 +351,7 @@ def check_tmm_invariants(
             emp_chans = emp_chans.unique().cpu()
             assert torch.isin(emp_chans, chans_j).all()
             emp_chans_full = torch.concatenate(
-                [emp_chans, rest_channel_sets[j]]
+                [emp_chans, rest_channel_sets[j].cpu()]
             ).unique()
             assert torch.equal(emp_chans_full, chans_j)
 

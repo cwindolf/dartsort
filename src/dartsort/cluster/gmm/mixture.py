@@ -820,23 +820,6 @@ class BatchedSpikeData:
             self.rg = spawn_torch_rg(seed, device=device)
 
     def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
-        logger.dartsortverbose(
-            "%s _update_sizes: candidates %s->%s, search %s->%s, explore "
-            "%s->%s (total %s->%s). Max: %s, %s, %s (total: %s).",
-            self.__class__.__name__,
-            self.n_candidates,
-            n_candidates,
-            self.n_search,
-            n_search,
-            self.n_explore,
-            n_explore,
-            self.n_total,
-            n_candidates * (n_search + 1) + n_explore,
-            self.max_n_candidates,
-            self.max_n_search,
-            self.max_n_explore,
-            self.max_n_total,
-        )
         self.n_candidates = n_candidates
         self.n_search = n_search
         self.n_explore = n_explore
@@ -853,9 +836,6 @@ class BatchedSpikeData:
         )
 
     def _update_sizes_from_n_units(self, n_units: int):
-        logger.dartsortverbose(
-            "%s _update_sizes_from_n_units %s", self.__class__.__name__, n_units
-        )
         n_candidates, n_search, n_explore, *_ = _pick_search_size(
             n_units=n_units,
             max_n_candidates=self.max_n_candidates,
@@ -1327,9 +1307,8 @@ class TruncatedSpikeData(BatchedSpikeData):
         if min_count and ixs.numel() < min_count:
             return None
         if (nixs := ixs.numel()) > self.dense_slice_size_per_unit:
-            ixs = ixs[
-                torch.randperm(nixs, generator=gen)[: self.dense_slice_size_per_unit]
-            ]
+            perm = torch.randperm(nixs, generator=gen, device=ixs.device)
+            ixs = ixs[perm[: self.dense_slice_size_per_unit]]
             ixs = torch.msort(ixs)
 
         return self.dense_slice(ixs)
@@ -1979,20 +1958,26 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 )
                 elb = elbo(batch_scores.responsibilities, batch_scores.log_liks)
                 assert elb.isfinite()
-                elbos.append(elb)
+                elbos.append(elb.cpu().item())
             if j >= self.criterion_em_iters + 1:
                 if elbos[-1] - elbos[-2] < self.elbo_atol:
                     break
 
         if logger.isEnabledFor(DARTSORTVERBOSE) and len(elbos):
             begend = elbos[-1] - elbos[0]
-            smalldif = np.diff(elbos).min()
-            bigdiff = np.diff(elbos).max()
+            delbos = np.diff(elbos)
+            smalldif = delbos.min()
+            bigdiff = delbos.max()
             logger.dartsortdebug(
                 f"Fixed fit elbo end-start={begend:0.3f} over {j + 1} iterations, "
                 f"biggest and smallest diffs {bigdiff:0.3f} and {smalldif:0.3f}."
             )
-        assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 1e-3)
+
+        # Since responsibilities are fixed, it's possible (I think) for the
+        # support of the likelihoods to drift away slightly from the weights',
+        # and this can lead to slightly negative elbo changes. giving a little
+        # more leeway than in em() here for when to panic about it.
+        assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
 
     def score(self, data: DenseSpikeData) -> Scores:
         batch = data.to_batch(self.unit_ids, self.lut)
@@ -2066,6 +2051,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             data.update_adjacency(n_units=self.n_units, un_adj_lut=self.lut)
             target_data = data.full_proposal_view(self.lut)
         elif needs_bootstrap:
+            # TODO cut this?
             data.erase_candidates()
             lut = data.bootstrap_candidates(distances=distances, un_adj_lut=self.lut)
             assert lut == self.lut
@@ -2074,11 +2060,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
         else:
             target_data = data
 
-        # initialize storage for output
+        # initialize storage for output on data's device
+        if data.candidates is None:
+            dev = torch.device("cpu")
+        else:
+            dev = data.candidates.device
         scores = Scores(
-            log_liks=torch.empty((data.N, data.n_candidates + 1)),
-            responsibilities=torch.empty((data.N, data.n_candidates + 1)),
-            candidates=torch.full((data.N, data.n_candidates), -1),
+            log_liks=torch.empty((data.N, data.n_candidates + 1), device=dev),
+            responsibilities=torch.empty((data.N, data.n_candidates + 1), device=dev),
+            candidates=torch.full((data.N, data.n_candidates), -1, device=dev),
         )
         assert scores.responsibilities is not None
         assert max_iter >= 1
@@ -2093,9 +2083,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 batch_scores = self.score_batch(batch, data.n_candidates)
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
-                scores.candidates[bix] = batch_scores.candidates.cpu()
-                scores.log_liks[bix] = batch_scores.log_liks.cpu()
-                scores.responsibilities[bix] = batch_scores.responsibilities.cpu()
+                scores.candidates[bix] = batch_scores.candidates.to(dev)
+                scores.log_liks[bix] = batch_scores.log_liks.to(dev)
+                scores.responsibilities[bix] = batch_scores.responsibilities.to(dev)
 
             lut_changed, lut = data.update(
                 scores.candidates, distances, expand_lut=True
@@ -2103,7 +2093,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             if lut_changed:
                 # it can't actually change.
                 assert lut == self.lut
-            if data.proposal_is_complete:
+            if target_data.proposal_is_complete:
                 break
             assert data.candidates is not None
             is_final = it == max_iter - 1
@@ -2113,8 +2103,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             ):
                 logger.dartsortdebug(f"Soft assign converged at iteration {it}.")
                 break
-            if not is_final:
-                data.update(scores.candidates, distances)
 
         return scores
 
@@ -2582,7 +2570,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
             # divvy up my log proportion
             if pnoid:
-                assert torch.isclose(res.sub_proportions.sum(), torch.ones(1))
+                _lp = res.sub_proportions.sum()
+                assert torch.isclose(_lp, torch.ones_like(_lp))
             split_log_props = (
                 res.sub_proportions.log() + self.b.log_proportions[unit_id]
             )
@@ -2758,6 +2747,7 @@ def get_truncated_datasets(
             rgeom=prgeom[:-1],
         )
     assert isinstance(noise, EmbeddedNoise)
+    noise.to(device=device)
     neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
         prgeom=prgeom,
         noise=noise,
@@ -2774,8 +2764,8 @@ def get_truncated_datasets(
         max_n_search=max_search,
         max_n_explore=max_explore,
         dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
-        labels=labels[train_ixs],
-        x=full_features[train_ixs],
+        labels=labels[train_ixs].to(device=device),
+        x=full_features[train_ixs].to(device=device),
         neighborhoods=train_neighbs,
         neighb_cov=neighb_cov,
         neighb_overlap=refinement_cfg.neighb_overlap,
@@ -2797,9 +2787,9 @@ def get_truncated_datasets(
             max_n_search=max_search,
             max_n_explore=0,
             dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
-            labels=labels[val_ixs],
+            labels=labels[val_ixs].to(device=device),
             explore_neighb_steps=0,
-            x=full_features[val_ixs],
+            x=full_features[val_ixs].to(device=device),
             neighborhoods=val_neighbs,
             neighb_cov=neighb_cov,
             seed=rg,
@@ -2890,7 +2880,7 @@ def get_full_neighborhood_data(
     assert isinstance(full_neighborhoods, SpikeNeighborhoods)
     assert stable_data.core_features is not None
     xfull = stable_data.core_features
-    prgeom = stable_data.prgeom
+    prgeom = stable_data.prgeom.to(device=device)
     assert isinstance(prgeom, Tensor)
     del stable_data  # TODO: just compute above stuff directly.
 
@@ -2899,6 +2889,7 @@ def get_full_neighborhood_data(
     xfull = xfull.view(len(xfull), -1)
     xfull = xfull.nan_to_num_()
 
+    full_neighborhoods = full_neighborhoods.to(device=device)
     train_neighborhoods = full_neighborhoods.slice(train_indices)
     if val_indices is None:
         val_neighborhoods = None
@@ -3500,7 +3491,7 @@ def _noise_factors(*, noise, obs_ix, miss_near_ix, cache_prefix):
         jCom = noise.offdiag_covariance(
             channels_left=joixv, channels_right=jmnixv, device=dev
         )
-        jCom = jCom.to_dense()
+        jCom = jCom.to_dense().to(device=dev)
 
         jL = jCoo.cholesky(upper=False)  # C = LL'
         jLinv = jL.inverse().to_dense()
@@ -3765,7 +3756,7 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
         adj.logical_or_(l.lut < l.unit_ids.shape[0])
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].lut, unit_ids.shape[0])
-    lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0])
+    lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
     return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
 
 

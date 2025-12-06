@@ -227,7 +227,7 @@ def test_drifting_templates(tmp_path):
                 rec,
                 sorting,
                 spike_times_s=t_s,
-                spike_depths_um=[0, 0, 0, 0],
+                spike_depths_um=np.zeros(4),
                 geom=geom,
                 motion_est=me,
                 trough_offset_samples=0,
