@@ -239,11 +239,11 @@ class TemplateConfig:
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
-        "exp_weighted"
+        "t"
     )
     use_raw: bool = True
     use_svd: bool = True
-    use_zero: bool = False
+    use_zero: bool = True
     use_outlier: bool = False
     use_raw_outlier: bool = False
     use_svd_outlier: bool = False
@@ -261,14 +261,14 @@ class TemplateConfig:
     # low rank denoising?
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
-    recompute_tsvd: bool = False
+    recompute_tsvd: bool = True
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
 
     # t denoising
     initial_t_df: float = 3.0
-    fixed_t_df: float | tuple[float, ...] | None = None
+    fixed_t_df: float | tuple[float, ...] | None = (float("inf"), 1.0, 1.0)
     t_iters: int = 1
     svd_inside_t: bool = False
     loot_cov: Literal["diag", "global"] = "global"

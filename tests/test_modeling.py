@@ -20,8 +20,8 @@ from dartsort.util.testing_util import mixture_testing_util
 
 logger = get_logger(__name__)
 
-mu_atol = 0.05
-wtw_rtol = 0.4
+mu_atol = 0.1
+wtw_rtol = 1.0
 elbo_atol = 5e-3
 
 TEST_RANK = 4

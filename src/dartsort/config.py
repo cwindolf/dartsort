@@ -198,16 +198,16 @@ class DeveloperConfig(DARTsortUserConfig):
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
     template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
-        "exp_weighted"
+        "t"
     )
-    template_mix_zero: bool = False
+    template_mix_zero: bool = True
     template_mix_svd: bool = True
     min_template_snr: float = 40.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(
         default=50.0, arg_type=float_or_none
     )
-    always_recompute_tsvd: bool = False
+    always_recompute_tsvd: bool = True
 
     # interpolation for features
     interpolation_method: str = "kriging"

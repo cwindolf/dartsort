@@ -2398,7 +2398,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
             for gix, g in enumerate(groups):
                 (in_group,) = (group_res.grouping.group_ids == g).nonzero(as_tuple=True)
-                ids_in_group = group[in_group]
+                ids_in_group = group[in_group.to(device=group.device)]
                 first = ids_in_group[0]
                 rest = ids_in_group[1:]
 
