@@ -43,5 +43,5 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 [tool.ruff]
 line-length = 88
 
-[tool.jupytext.formats]
-"notebook/" = "ipynb,py:percent"
+[tool.jupytext]
+"formats" = "ipynb,py:percent"

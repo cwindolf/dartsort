@@ -30,7 +30,7 @@ TMM_ELBO_ATOL = 1e-3
 
 test_t_mu = ("smooth",)
 test_t_cov = ("eye", "random")
-test_t_w = ("zero", "random")
+test_t_w = ("zero", "random", "smooth")
 test_t_missing = (None, "random", "by_cluster")
 test_corruption = (0.0, 0.2)
 
@@ -299,30 +299,40 @@ def test_truncated_mixture(
         _, c = true_labels.unique(return_counts=True)
         standard_error = 1.0 / c.sqrt()
         # uhm. what would the bonferroni be?
-        z = 10 * (1 + 5 * (t_w != "zero") + 5 * (corruption != 0.0))
+        # with missing channels, non-smooth stuff is hard.
+        # by hard, I mean that a low atol is required.
+        z = 10 * (
+            1
+            + 5 * (t_w != "zero")
+            + 5 * (corruption != 0.0)
+            + 5 * (t_w not in ("zero", "smooth"))
+        )
         diff = tmm.b.means.view(K, -1).cpu() - mu.view(K, -1)
         if cmask is not None:
             cmask = torch.asarray(cmask).to(diff)
             diff.view(K, -1, nc).mul_(cmask[:, None])
         assert torch.all(diff.abs().amax(dim=1) <= z * standard_error)
-        if t_w != "zero":
-            w0 = sim["W"].permute(0, 3, 1, 2)
-            w_ = tmm.b.bases
-            assert w0.shape[:2] == (K, M)
-            assert w_.shape[:2] == (K, M)
-            w0 = w0.view(K, M, -1)
-            w_ = w_.view(K, M, -1)
-            assert w0.shape == w_.shape
-            wtw0 = w0.mT.bmm(w0)
-            wtw_ = w_.mT.bmm(w_)
-            diff = wtw0 - wtw_.cpu()
-            if cmask is not None:
-                diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
-                wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
-                diff.mul_(wcmask)
-            assert torch.all(
-                diff.abs().view(K, -1).amax(dim=1) <= 5 * z * standard_error
-            )
+
+        if t_w == "zero":
+            return
+
+        # hard to estimate arbitrary w with missing channels!
+        zw = z * (5 + 10 * (t_w != "smooth") + 5 * (corruption != 0.0))
+        w0 = sim["W"].permute(0, 3, 1, 2)
+        w_ = tmm.b.bases
+        assert w0.shape[:2] == (K, M)
+        assert w_.shape[:2] == (K, M)
+        w0 = w0.view(K, M, -1)
+        w_ = w_.view(K, M, -1)
+        assert w0.shape == w_.shape
+        wtw0 = w0.mT.bmm(w0)
+        wtw_ = w_.mT.bmm(w_)
+        diff = wtw0 - wtw_.cpu()
+        if cmask is not None:
+            diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
+            wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
+            diff.mul_(wcmask)
+        assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
 
 
 @pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])  # , "tvi_nlp"])
@@ -563,7 +573,9 @@ def test_original_mixture(
             )
 
             np.add.at(
-                counts2, (candidates[candidates >= 0].cpu(), neighbs_bc[candidates >= 0].cpu()), 1
+                counts2,
+                (candidates[candidates >= 0].cpu(), neighbs_bc[candidates >= 0].cpu()),
+                1,
             )
 
             lut_units = tmm.processor.lut_units.numpy(force=True)

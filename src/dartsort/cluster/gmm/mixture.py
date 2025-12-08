@@ -2828,6 +2828,7 @@ def get_truncated_datasets(
         sigma=refinement_cfg.interpolation_sigma,
         rq_alpha=refinement_cfg.rq_alpha,
         kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+        smoothing_lambda=refinement_cfg.smoothing_lambda,
     )
 
     return neighb_cov, erp, train_data, val_data, full_data, noise
@@ -3569,7 +3570,14 @@ def _whiten_and_noise_score_batch(
 
 
 def _initialize_single(
-    x, chans, noise, rank, prior_pseudocount, weight=None, eps=1e-5, in_place=True
+    x: Tensor,
+    chans: Tensor,
+    noise: EmbeddedNoise,
+    rank: int,
+    prior_pseudocount: float,
+    weight: Tensor | None = None,
+    eps: float = 1e-5,
+    mean: Tensor | None = None,
 ):
     """
     Replaces ppcalib initialize_mean and the branch where SVD was done in ppcalib.
@@ -3595,12 +3603,19 @@ def _initialize_single(
 
     if weight is None:
         nw = None
-        mean = x.mean(dim=0)
-        wsum = torch.ones(())
+        if mean is None:
+            mean = x.mean(dim=0)
+        else:
+            mean = mean.view(d * c)
+        wsum = x.new_tensor(float(n))
     else:
         wsum = weight.sum()
         nw = weight / (wsum + prior_pseudocount)
-        mean = (nw[:, None] * x).sum(0)
+        if mean is None:
+            mean = (nw[:, None] * x).sum(0)
+        else:
+            mean = mean.view(d * c)
+    assert mean is not None
 
     if not rank:
         mean = mean.view(d, c)
@@ -3611,10 +3626,7 @@ def _initialize_single(
     # we want x(C^-0.5)=xU^-1 -- need to use upper factor.
     noise_cov = noise.marginal_covariance(chans)
     U = torch.linalg.cholesky(noise_cov, upper=True).to_dense()
-    if in_place:
-        x -= mean
-    else:
-        x = x - mean
+    x = x - mean
     x = torch.linalg.solve_triangular(U, x, upper=True, left=False, out=x)
 
     # weighting the svd -- needs sqrt!

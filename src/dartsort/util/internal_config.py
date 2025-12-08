@@ -536,7 +536,7 @@ class RefinementConfig:
     n_em_iters: int = 250
     em_converged_prop: float = 0.02
     em_converged_churn: float = 0.01
-    em_converged_atol: float = 1e-3
+    em_converged_atol: float = 5e-3
     n_total_iters: int = 1
     one_split_only: bool = False
     skip_first_split: bool = False
@@ -568,12 +568,13 @@ class RefinementConfig:
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
     interpolation_method: str = "kriging"
-    extrapolation_method: str | None = "kernel"
+    extrapolation_method: str | None = "kriging"
     kernel_name: str = "thinplate"
-    extrapolation_kernel: str | None = "rq"
+    extrapolation_kernel: str | None = "thinplate"
     interpolation_sigma: float = 10.0
     rq_alpha: float = 0.5
     kriging_poly_degree: int = 0
+    smoothing_lambda: float = 1e-3
 
 
 @cfg_dataclass
