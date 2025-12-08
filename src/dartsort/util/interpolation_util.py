@@ -174,6 +174,7 @@ def interp_precompute(
     rq_alpha=1.0,
     kriging_poly_degree=0,
     source_geom_is_padded=True,
+    smoothing_lambda=0.0,
 ):
     if method in ("nearest", "kernel", "normalized", "zero"):
         return None
@@ -198,12 +199,15 @@ def interp_precompute(
 
     ns = len(source_pos)
     neighb_size = source_pos.shape[1]
+    dim = source_pos.shape[2]
     if kriging_poly_degree < 0:
         design_vars = 0
     elif kriging_poly_degree == 0:
         design_vars = 1
     elif kriging_poly_degree == 1:
-        design_vars = 1 + source_pos.shape[2]
+        design_vars = 1 + dim
+    elif kriging_poly_degree == 2:
+        design_vars = 1 + dim + (dim * (dim + 1)) // 2
     else:
         assert False
 
@@ -215,7 +219,11 @@ def interp_precompute(
     design_zeros = source_pos.new_zeros((design_vars, design_vars))
 
     source_kernels = get_kernel(
-        source_pos, kernel_name=kernel_name, sigma=sigma, rq_alpha=rq_alpha
+        source_pos,
+        kernel_name=kernel_name,
+        sigma=sigma,
+        rq_alpha=rq_alpha,
+        smoothing_lambda=smoothing_lambda,
     )
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
@@ -227,8 +235,24 @@ def interp_precompute(
             ix = torch.concatenate((present, design_inds), dim=0)
             if kriging_poly_degree == 0:
                 design = const
-            else:
+            elif kriging_poly_degree == 1:
                 design = torch.cat([pos, const], dim=1)
+            elif kriging_poly_degree == 2:
+                if dim == 1:
+                    design = torch.cat([pos, pos.square(), const], dim=1)
+                elif dim == 2:
+                    p01 = (pos[:, 0] * pos[:, 1]).unsqueeze(1)
+                    design = torch.cat([pos, pos.square(), p01, const], dim=1)
+                elif dim == 3:
+                    p01 = (pos[:, 0] * pos[:, 1]).unsqueeze(1)
+                    p02 = (pos[:, 0] * pos[:, 2]).unsqueeze(1)
+                    p12 = (pos[:, 1] * pos[:, 2]).unsqueeze(1)
+                    design = torch.cat([pos, pos.square(), p01, p02, p12, const], dim=1)
+                else:
+                    assert False
+            else:
+                assert False
+            assert design.shape[1] == design_vars
 
             top = torch.cat([kernel, design], dim=1)
             bot = torch.cat([design.T, design_zeros], dim=1)
@@ -251,6 +275,7 @@ def get_kernel(
     sigma=20.0,
     rq_alpha=1.0,
     normalized=False,
+    smoothing_lambda=0.0,
 ):
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
@@ -287,6 +312,9 @@ def get_kernel(
     if normalized and kernel_name not in ("rbf", "nearest"):
         kernel = kernel.div_(kernel.sum(dim=1, keepdim=True))
 
+    if smoothing_lambda:
+        kernel.diagonal(dim1=-2, dim2=-1).add_(smoothing_lambda)
+
     return kernel
 
 
@@ -309,6 +337,26 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
         const = features.new_ones((n, 1, n_targ))
         xy = (target_pos / sigma).nan_to_num_().mT
         kernels = torch.concatenate([kernels, xy, const], dim=1)
+    elif poly_degree == 2:
+        ddim = 1 + dim + (dim * (dim + 1)) // 2
+        zero = features.new_zeros((n, rank, ddim))
+        y = torch.concatenate([features, zero], dim=2)
+        const = features.new_ones((n, 1, n_targ))
+        xy = (target_pos / sigma).nan_to_num_().mT
+        if dim == 1:
+            xysq = (xy.square(),)
+        elif dim == 2:
+            xysq = (xy.square(), xy[:, 0:1] * xy[:, 1:2])
+        elif dim == 3:
+            xysq = (
+                xy.square(),
+                xy[:, 0:1] * xy[:, 1:2],
+                xy[:, 0:1] * xy[:, 2:3],
+                xy[:, 1:2] * xy[:, 2:3],
+            )
+        else:
+            assert False
+        kernels = torch.concatenate([kernels, xy, *xysq, const], dim=1)
     else:
         assert False
 
@@ -354,6 +402,7 @@ def kernel_interpolate(
     sigma=20.0,
     rq_alpha=1.0,
     kriging_poly_degree=0,
+    smoothing_lambda=0.0,
     precomputed_data=None,
     allow_destroy=False,
     out=None,
@@ -417,6 +466,7 @@ def kernel_interpolate(
             rq_alpha=rq_alpha,
             kriging_poly_degree=kriging_poly_degree,
             precomputed_data=precomputed_data,
+            smoothing_lambda=smoothing_lambda,
         )
 
     if precomputed_data is None:
@@ -428,6 +478,7 @@ def kernel_interpolate(
             sigma=sigma,
             rq_alpha=rq_alpha,
             kriging_poly_degree=kriging_poly_degree,
+            smoothing_lambda=smoothing_lambda,
         )
 
     kernel = get_kernel(
@@ -437,6 +488,7 @@ def kernel_interpolate(
         sigma=sigma,
         rq_alpha=rq_alpha,
         normalized=method.endswith("normalized"),
+        smoothing_lambda=smoothing_lambda,
     )
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
@@ -531,7 +583,13 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     return kernel
 
 
-def get_rsq(source_pos, target_pos=None, sigma: float | None=1.0, batch_size=16, nan: float | None=0.0):
+def get_rsq(
+    source_pos,
+    target_pos=None,
+    sigma: float | None = 1.0,
+    batch_size=16,
+    nan: float | None = 0.0,
+):
     have_sigma = sigma is not None
     if have_sigma and isinstance(sigma, (float, int)):
         have_sigma = sigma != 1.0
@@ -578,7 +636,9 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
 
         targ_col_y = targ_y.masked_fill(targ_not_in_col, torch.nan)
         # this is true for nans, but thats okay.
-        targ_outside = targ_col_y != targ_col_y.clamp(min=source_low[:, None], max=source_high[:, None])
+        targ_outside = targ_col_y != targ_col_y.clamp(
+            min=source_low[:, None], max=source_high[:, None]
+        )
         targ_extrap.logical_and_(targ_outside)
 
     return targ_extrap

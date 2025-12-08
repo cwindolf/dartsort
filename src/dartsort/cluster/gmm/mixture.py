@@ -516,6 +516,7 @@ class SufficientStatistics:
         n_lut: int,
         feature_dim: int,
         signal_rank: int,
+        skip_noise: bool,
         device: torch.device,
         count_dtype=torch.double,
     ) -> Self:
@@ -524,15 +525,30 @@ class SufficientStatistics:
             Ulut = torch.zeros((n_lut, signal_rank, hat_dim), device=device)
         else:
             Ulut = None
+        if skip_noise:
+            noise_N = None
+        else:
+            noise_N = torch.zeros((), device=device, dtype=count_dtype)
         return cls(
             count=0,
-            noise_N=torch.zeros((), device=device, dtype=count_dtype),
+            noise_N=noise_N,
             N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             Nlut=torch.zeros((n_lut,), device=device, dtype=count_dtype),
             R=torch.zeros((n_units, hat_dim, feature_dim), device=device),
             Ulut=Ulut,
             elbo=torch.zeros((), device=device, dtype=count_dtype),
         )
+
+    def zero_(self):
+        self.count = 0.0
+        if self.noise_N is not None:
+            self.noise_N.zero_()
+        self.N.zero_()
+        self.Nlut.zero_()
+        self.R.zero_()
+        if self.Ulut is not None:
+            self.Ulut.zero_()
+        self.elbo.zero_()
 
     def combine(self, other: "SufficientStatistics", eps=1e-10):
         """Welford running means."""
@@ -666,8 +682,11 @@ class DenseSpikeData:
     whitenedx: Tensor
     CmoCooinvx: Tensor
     noise_logliks: Tensor
+    batch_size: int
 
-    def to_batch(self, unit_ids: Tensor, lut: NeighborhoodLUT):
+    def to_batches(
+        self, unit_ids: Tensor, lut: NeighborhoodLUT
+    ) -> list[SpikeDataBatch]:
         """Convert dense data to a batch, which means picking candidates.
 
         The candidates are all of the unit ids, so that each col of the candidates
@@ -678,15 +697,21 @@ class DenseSpikeData:
         unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
         covered = self.lut_coverage(unit_ids, lut)
         candidates = torch.where(covered, unit_ids[None, :], -1)
-        return SpikeDataBatch(
-            batch=self.indices,
-            neighborhood_ids=self.neighborhood_ids,
-            x=self.x,
-            whitenedx=self.whitenedx,
-            noise_logliks=self.noise_logliks,
-            CmoCooinvx=self.CmoCooinvx,
-            candidates=candidates,
-        )
+
+        batches = []
+        for i0 in range(0, self.x.shape[0], self.batch_size):
+            sl = slice(i0, min(self.x.shape[0], i0 + self.batch_size))
+            b = SpikeDataBatch(
+                batch=sl,
+                neighborhood_ids=self.neighborhood_ids[sl],
+                x=self.x[sl],
+                whitenedx=self.whitenedx[sl],
+                noise_logliks=self.noise_logliks[sl],
+                CmoCooinvx=self.CmoCooinvx[sl],
+                candidates=candidates[sl],
+            )
+            batches.append(b)
+        return batches
 
     def lut_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
         lut_ixs = lut.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
@@ -711,6 +736,7 @@ class DenseSpikeData:
             whitenedx=self.whitenedx[indices],
             CmoCooinvx=self.CmoCooinvx[indices],
             noise_logliks=self.noise_logliks[indices],
+            batch_size=self.batch_size,
         )
 
     def covered_channels(self, min_count=0):
@@ -1292,6 +1318,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             whitenedx=self.whitenedx[spike_indices],
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             noise_logliks=self.noise_logliks[spike_indices],
+            batch_size=self.batch_size,
         )
 
     def dense_slice_by_unit(
@@ -1876,6 +1903,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             feature_dim=self.neighb_cov.feat_rank * self.neighb_cov.n_channels,
             signal_rank=self.signal_rank,
             device=self.b.means.device,
+            skip_noise=False,
         )
         for batch in data.batches(show_progress=show_progress, desc="E"):
             batch_scores = self.score_batch(batch, data.n_candidates)
@@ -1929,16 +1957,37 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
     def fixed_weight_em(self, data: DenseSpikeData, responsibilities: Tensor):
         assert self.lut_params is not None
-        batch = data.to_batch(self.unit_ids, self.lut)
-        scores = Scores(
-            log_liks=responsibilities,  # unused, just to fill the field.
-            responsibilities=responsibilities,
-            candidates=batch.candidates,
-        )
+        batches = data.to_batches(self.unit_ids, self.lut)
         elbos = []
         j = -1
+        stats = SufficientStatistics.zeros(
+            n_units=self.n_units,
+            n_lut=self.lut_params.n_lut,
+            feature_dim=self.neighb_cov.feat_rank * self.neighb_cov.n_channels,
+            signal_rank=self.signal_rank,
+            device=self.b.means.device,
+            skip_noise=responsibilities.shape[1] == batches[0].candidates.shape[1],
+        )
         for j in range(self.em_iters):
-            stats = self.estep_stats_batch(batch, scores)
+            for batch in batches:
+                bresp = responsibilities[batch.batch]
+                if j >= self.criterion_em_iters:
+                    # compute log liks for convergence testing below
+                    batch_scores = self.score_batch(
+                        batch=batch,
+                        n_candidates=batch.candidates.shape[1],
+                        fixed_responsibilities=bresp,
+                        skip_responsibility=True,
+                    )
+                else:
+                    # too soon to test convergence, no need for log liks
+                    batch_scores = Scores(
+                        log_liks=bresp,  # unused, just to fill the field.
+                        responsibilities=bresp,
+                        candidates=batch.candidates,
+                    )
+                batch_stats = self.estep_stats_batch(batch, batch_scores)
+                stats.combine(batch_stats, eps=self.eps)
             _finalize_e_stats(
                 means=self.b.means,
                 bases=self.b.bases,
@@ -1951,18 +2000,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.update_lut(self.lut)
 
             if j >= self.criterion_em_iters:
-                batch_scores = self.score_batch(
-                    batch=batch,
-                    n_candidates=batch.candidates.shape[1],
-                    fixed_responsibilities=responsibilities,
-                    skip_responsibility=True,
-                )
-                elb = elbo(batch_scores.responsibilities, batch_scores.log_liks)
+                elb = stats.elbo
                 assert elb.isfinite()
                 elbos.append(elb.cpu().item())
             if j >= self.criterion_em_iters + 1:
                 if elbos[-1] - elbos[-2] < self.elbo_atol:
                     break
+            stats.zero_()
 
         if logger.isEnabledFor(DARTSORTVERBOSE) and len(elbos):
             begend = elbos[-1] - elbos[0]
@@ -1981,12 +2025,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
 
     def score(self, data: DenseSpikeData) -> Scores:
-        batch = data.to_batch(self.unit_ids, self.lut)
-        return self.score_batch(
-            batch=batch,
-            n_candidates=batch.candidates.shape[1],
-            skip_responsibility=True,
-        )
+        scores = []
+        for batch in data.to_batches(self.unit_ids, self.lut):
+            batch_scores = self.score_batch(
+                batch=batch,
+                n_candidates=batch.candidates.shape[1],
+                skip_responsibility=True,
+            )
+            scores.append(batch_scores)
+        return concatenate_scores(scores)
 
     def score_batch(
         self,
@@ -2702,12 +2749,15 @@ class TMMView(BaseMixtureModel):
         return self.tmm.b.noise_log_prop
 
     def score(self, data: DenseSpikeData) -> Scores:
-        batch = data.to_batch(self.unit_ids, self.tmm.lut)
-        return self.tmm.score_batch(
-            batch=batch,
-            n_candidates=batch.candidates.shape[1],
-            skip_responsibility=True,
-        )
+        scores = []
+        for batch in data.to_batches(self.unit_ids, self.tmm.lut):
+            batch_scores = self.tmm.score_batch(
+                batch=batch,
+                n_candidates=batch.candidates.shape[1],
+                skip_responsibility=True,
+            )
+            scores.append(batch_scores)
+        return concatenate_scores(scores)
 
 
 # -- helpers
@@ -2829,6 +2879,7 @@ def get_truncated_datasets(
         sigma=refinement_cfg.interpolation_sigma,
         rq_alpha=refinement_cfg.rq_alpha,
         kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+        smoothing_lambda=refinement_cfg.smoothing_lambda,
     )
 
     return neighb_cov, erp, train_data, val_data, full_data, noise
@@ -3570,7 +3621,14 @@ def _whiten_and_noise_score_batch(
 
 
 def _initialize_single(
-    x, chans, noise, rank, prior_pseudocount, weight=None, eps=1e-5, in_place=True
+    x: Tensor,
+    chans: Tensor,
+    noise: EmbeddedNoise,
+    rank: int,
+    prior_pseudocount: float,
+    weight: Tensor | None = None,
+    eps: float = 1e-5,
+    mean: Tensor | None = None,
 ):
     """
     Replaces ppcalib initialize_mean and the branch where SVD was done in ppcalib.
@@ -3596,12 +3654,19 @@ def _initialize_single(
 
     if weight is None:
         nw = None
-        mean = x.mean(dim=0)
-        wsum = torch.ones(())
+        if mean is None:
+            mean = x.mean(dim=0)
+        else:
+            mean = mean.view(d * c)
+        wsum = x.new_tensor(float(n))
     else:
         wsum = weight.sum()
         nw = weight / (wsum + prior_pseudocount)
-        mean = (nw[:, None] * x).sum(0)
+        if mean is None:
+            mean = (nw[:, None] * x).sum(0)
+        else:
+            mean = mean.view(d * c)
+    assert mean is not None
 
     if not rank:
         mean = mean.view(d, c)
@@ -3612,10 +3677,7 @@ def _initialize_single(
     # we want x(C^-0.5)=xU^-1 -- need to use upper factor.
     noise_cov = noise.marginal_covariance(chans)
     U = torch.linalg.cholesky(noise_cov, upper=True).to_dense()
-    if in_place:
-        x -= mean
-    else:
-        x = x - mean
+    x = x - mean
     x = torch.linalg.solve_triangular(U, x, upper=True, left=False, out=x)
 
     # weighting the svd -- needs sqrt!
@@ -3945,6 +4007,24 @@ def _dedup_candidates(candidates):
     candidates[:, 1:].masked_fill_(dup_mask, -1)
 
 
+def concatenate_scores(scoress: list[Scores]) -> Scores:
+    assert len(scoress) > 0
+    if len(scoress) == 1:
+        return scoress[0]
+    log_liks = torch.concatenate([s.log_liks for s in scoress], dim=0)
+    candidates = torch.concatenate([s.candidates for s in scoress], dim=0)
+    if scoress[0].responsibilities is None:
+        responsibilities = None
+    else:
+        responsibilities = torch.concatenate(
+            [s.responsibilities for s in scoress],  # type: ignore
+            dim=0,
+        )
+    return Scores(
+        log_liks=log_liks, responsibilities=responsibilities, candidates=candidates
+    )
+
+
 # -- precomputing expensive things that depend on parameters and neighborhoods
 
 
@@ -4210,7 +4290,6 @@ def _stat_pass_batch(
     hat_dim = lut_params.signal_rank + 1
     assert len(x) == n
     assert responsibilities.shape[1] in (n_candidates, n_candidates + 1)
-    dense_case = responsibilities.shape[1] == n_candidates
 
     noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
         responsibilities=responsibilities,
@@ -4282,10 +4361,7 @@ def _stat_pass_batch(
     R = R.view(n_units, hat_dim, neighb_cov.feat_rank * neighb_cov.n_channels)
 
     # objective
-    if dense_case:
-        elb = torch.zeros(())
-    else:
-        elb = elbo(responsibilities, log_liks)
+    elb = elbo(responsibilities, log_liks)
 
     return SufficientStatistics(
         count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=Ulut, R=R, elbo=elb

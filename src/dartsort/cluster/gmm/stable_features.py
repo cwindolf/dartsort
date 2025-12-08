@@ -157,7 +157,8 @@ class StableSpikeDataset(torch.nn.Module):
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
             self.not_train_indices = torch.asarray(
-                np.setdiff1d(np.arange(self.n_spikes), train_ixs), dtype=torch.long  # type: ignore
+                np.setdiff1d(np.arange(self.n_spikes), train_ixs),
+                dtype=torch.long,  # type: ignore
             )
 
         if core_radius is not None:
@@ -180,7 +181,8 @@ class StableSpikeDataset(torch.nn.Module):
             }
             if self.core_is_extract and "train" in self.split_indices:
                 assert torch.equal(
-                    core_channels[train_ixs], extract_channels[train_ixs]  # type: ignore
+                    core_channels[train_ixs],
+                    extract_channels[train_ixs],  # type: ignore
                 )
                 _core_neighborhoods["train"] = self._train_extract_neighborhoods
             self._core_neighborhoods = torch.nn.ModuleDict(_core_neighborhoods)
@@ -262,7 +264,7 @@ class StableSpikeDataset(torch.nn.Module):
         store_on_device=False,
         workers=-1,
         device=None,
-        random_seed: int | np.random.Generator=0,
+        random_seed: int | np.random.Generator = 0,
         _core_feature_splits=("train", "kept"),
     ):
         if device is None:
@@ -1021,6 +1023,7 @@ class NeighborhoodInterpolator(BModule):
         sigma=20.0,
         rq_alpha=1.0,
         kriging_poly_degree=0,
+        smoothing_lambda=0.0,
     ):
         super().__init__()
         assert len(prgeom) == neighborhoods.n_channels + 1
@@ -1034,6 +1037,7 @@ class NeighborhoodInterpolator(BModule):
             sigma=sigma,
             rq_alpha=rq_alpha,
             kriging_poly_degree=kriging_poly_degree,
+            smoothing_lambda=smoothing_lambda,
         )
         neighb_data = interpolation_util.interp_precompute(
             source_geom=self.prgeom,

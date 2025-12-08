@@ -18,8 +18,8 @@ def simulate_moppca(
     t_mu: Literal["zero", "smooth", "random"] = "smooth",
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
-    t_w: Literal["zero", "hot", "random"] = "zero",
-    t_missing: Literal[None, "random", "skewed", "by_cluster"] = None,
+    t_w: Literal["zero", "hot", "smooth", "random"] = "zero",
+    t_missing: Literal[None, "random", "random_no_extrap", "skewed", "by_cluster"] = None,
     init_label_corruption: float = 0.0,
     snr: float = 10.0,
     rg=0,
@@ -62,7 +62,8 @@ def simulate_moppca(
         mu = snr * rg.normal(size=(K, rank, nc))
     elif t_mu == "smooth":
         phase = rg.uniform(0.0, 2 * np.pi, size=(K, rank, 1))
-        freq = rg.uniform(0.2, 3.0, size=(K, rank, 1))
+        freq = rg.uniform(0.2, 1.0, size=(K, rank, 1))
+        print(f"{freq=}")
         amp = rg.uniform(1.0, 2.0, size=(K, rank, 1))
         domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
         mu = snr * amp * np.sin(phase + freq * domain)
@@ -96,6 +97,12 @@ def simulate_moppca(
                 W[j, m, j, m] = 10 - m
     elif t_w == "random":
         W = rg.normal(size=(K, rank, nc, M))
+    elif t_w == "smooth":
+        phase = rg.uniform(0.0, 2 * np.pi, size=(K, rank, 1, M))
+        freq = rg.uniform(0.2, 1.0, size=(K, rank, 1, M))
+        amp = rg.uniform(1.0, 2.0, size=(K, rank, 1, M))
+        domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
+        W = amp * np.sin(phase + freq * domain[:, None])
     elif t_w == "zero":
         W = np.zeros((K, rank, nc, M))
     else:
@@ -120,16 +127,18 @@ def simulate_moppca(
     if not t_missing:
         x = y
         channels = torch.arange(nc).unsqueeze(0).broadcast_to(N, nc)
-    elif t_missing == "random":
+    elif t_missing.startswith("random"):
+        assert n_missing == 2
+        no_extrap = int(t_missing == "random_no_extrap")
         possible_neighbs = np.zeros(nc - n_missing, dtype=np.int64)[None]
-        npair = (nc * (nc - 1)) // 2
+        npair = ((nc - 2 * no_extrap) * (nc - 1 - 2 * no_extrap)) // 2
         possible_neighbs = np.broadcast_to(possible_neighbs, (npair, nc - n_missing))
         possible_neighbs = np.ascontiguousarray(possible_neighbs)
         mask = np.ones(nc, dtype=bool)
         ct = 0
-        for i in range(nc):
+        for i in range(no_extrap, nc - no_extrap):
             mask[i] = False
-            for j in range(i + 1, nc):
+            for j in range(i + 1, nc - no_extrap):
                 mask[j] = False
                 possible_neighbs[ct] = np.flatnonzero(mask)
                 mask[j] = True
