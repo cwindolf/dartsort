@@ -818,6 +818,7 @@ class BatchedSpikeData:
             self.rg = None
         else:
             self.rg = spawn_torch_rg(seed, device=device)
+            assert self.rg.device == self.device
 
     def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
         self.n_candidates = n_candidates
@@ -1636,7 +1637,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         elbo_atol: float = 1e-4,
     ) -> Self:
         """Constructor for the full mixture model, called by from_config()"""
-        rg = spawn_torch_rg(seed)
+        rg = spawn_torch_rg(seed, device=neighb_cov.obs_ix.device)
         log_props, noise_log_prop, means, bases = initialize_parameters_by_unit(
             data=data,
             signal_rank=signal_rank,
