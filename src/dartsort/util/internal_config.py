@@ -484,10 +484,10 @@ class RefinementConfig:
     )
 
     # pcmerge
-    pc_merge_threshold: float = 0.025
+    pc_merge_threshold: float = 0.2
     pc_merge_metric: str = "cosine"
     pc_merge_spikes_per_unit: int = 1024
-    pc_merge_linkage: str = "complete"
+    pc_merge_linkage: str = "single"
     pc_merge_rank: int = 5
 
     # -- gmm parameters

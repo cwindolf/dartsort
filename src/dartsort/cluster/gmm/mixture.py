@@ -37,6 +37,7 @@ import math
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Literal, Optional, Self
+import warnings
 
 import numpy as np
 import torch
@@ -560,7 +561,8 @@ class SufficientStatistics:
 
         self.elbo += (other.elbo - self.elbo) * w_count
         self.R += other.R.sub_(self.R).mul_(w_N[:, None, None])
-        assert self.elbo.isfinite()
+        if pnoid:
+            assert self.elbo.isfinite()
 
         if self.noise_N is not None:
             assert other.noise_N is not None
@@ -918,7 +920,8 @@ class BatchedSpikeData:
             expand_from_lut=expand_from_lut,
             device=self.device,
         )
-        assert self.un_adj.max().item() == 1.0
+        if pnoid:
+            assert self.un_adj.max().item() == 1.0
 
     def erase_candidates(self):
         if self.candidates is not None:
@@ -936,20 +939,22 @@ class BatchedSpikeData:
                 labels=self.candidates[:, 0],
                 un_adj=self.un_adj,
                 explore_adj=self.explore_adj,
+                neighb_adj=self.neighb_adj,
                 neighborhood_ids=self.neighborhood_ids,
                 gen=self.rg,
             )
             if not same_adj:
-                logger.dartsortdebug(
+                logger.dartsortverbose(
                     "_fill_blank_labels needed to use explore adjacency."
                 )
                 self.update_adjacency(n_units=distances.shape[0])
             if pnoid:
                 assert (self.candidates[:, 0] >= 0).all()
-        assert torch.equal(
-            self.un_adj,
-            (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
-        )
+        if pnoid:
+            assert torch.equal(
+                self.un_adj,
+                (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
+            )
 
         # fill in candidates[:, 1:n_candidates] at random obeying un_adj
         # choosing not to use distances here, since they get used in search sets
@@ -1938,7 +1943,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if self.signal_rank == 0:
             assert stats.R.shape[1] == 1
             self.b.means.copy_(stats.R[:, 0])
-            assert self.b.means.isfinite().all()
+            if pnoid:
+                assert self.b.means.isfinite().all()
             return
 
         # solve mean and basis together
@@ -1951,7 +1957,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.b.means.copy_(soln[:, -1])
         self.b.bases.copy_(soln[:, :-1])
 
-        assert soln.isfinite().all()
+        if pnoid:
+            assert soln.isfinite().all()
         if not skip_proportions:
             assert lp.isfinite().all()  # type: ignore
 
@@ -2919,9 +2926,13 @@ def get_full_neighborhood_data(
             split_proportions=(1.0 - vp, vp),
             interpolation_method=refinement_cfg.interpolation_method,
             kernel_name=refinement_cfg.kernel_name,
+            extrap_method=refinement_cfg.extrapolation_method,
+            extrap_kernel=refinement_cfg.extrapolation_kernel,
+            smoothing_lambda=refinement_cfg.smoothing_lambda,
             sigma=refinement_cfg.interpolation_sigma,
             rq_alpha=refinement_cfg.rq_alpha,
             kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            min_count=refinement_cfg.min_count,
             random_seed=rg,
             device=device,
         )
@@ -3053,9 +3064,10 @@ def _desparsifiers(unit_ids, candidates):
     ii, jj = (candidates >= 0).nonzero(as_tuple=True)
     uu = candidates[ii, jj]
     unit_ids, order = unit_ids.sort()
-    assert torch.equal(order, torch.arange(len(order), device=unit_ids.device))
     ix_in_unit_ids = torch.searchsorted(unit_ids, uu)
-    assert torch.equal(unit_ids[ix_in_unit_ids], uu)
+    if pnoid:
+        assert torch.equal(order, torch.arange(len(order), device=unit_ids.device))
+        assert torch.equal(unit_ids[ix_in_unit_ids], uu)
     return ii, jj, ix_in_unit_ids
 
 
@@ -3873,6 +3885,7 @@ def _fill_blank_labels(
     un_adj: Tensor,
     explore_adj: Tensor,
     neighborhood_ids: Tensor,
+    neighb_adj: Tensor,
     gen: torch.Generator,
     batch_size: int = 1024,
 ):
@@ -3888,7 +3901,26 @@ def _fill_blank_labels(
         adj = un_adj
     else:
         adj = un_adj + explore_adj * torch.finfo(explore_adj.dtype).tiny
-        assert adj.sum(0).min().cpu().item() > 0
+        uncovered = adj.sum(0).min().cpu().item() == 0
+        if uncovered:
+            uncovered_adj = adj.clone()
+        else:
+            uncovered_adj = adj
+
+        n_steps = 0
+        while adj.sum(0).min().cpu().item() == 0:
+            explore_adj = explore_adj @ neighb_adj
+            adj = un_adj + explore_adj * torch.finfo(explore_adj.dtype).tiny
+            n_steps += 1
+            if n_steps > 5:
+                break
+
+        if uncovered:
+            still_uncovered = adj.sum(0).min().cpu().item() == 0
+            # raise if still_uncovered, warn or log otherwise
+            _log_warn_or_raise_coverage(
+                uncovered_adj, neighborhood_ids, n_steps, still_uncovered
+            )
     for i0 in range(0, Nblank, batch_size):
         i1 = min(Nblank, i0 + batch_size)
         ii = blank[i0:i1]
@@ -3983,12 +4015,17 @@ def _sample_explore_candidates(
     lut_ixs: Tensor,
     n_explore: int,
     gen: torch.Generator,
+    batch_size=1024,
 ):
-    # sample multinomial without replacement for each spike
-    choices = torch.multinomial(p[lut_ixs], n_explore, generator=gen)
-
-    # replace those values with their entries in inds
-    candidates[:, -n_explore:] = inds[lut_ixs[:, None], choices]
+    n = len(p)
+    explore0 = candidates.shape[1] - n_explore
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        batch_lut_ixs = lut_ixs[i0:i1]
+        # sample multinomial without replacement for each spike
+        choices = torch.multinomial(p[batch_lut_ixs], n_explore, generator=gen)
+        # replace those values with their entries in inds
+        candidates[i0:i1, explore0:] = inds[batch_lut_ixs[:, None], choices]
     # there will be duplicates, but that's okay, because we're about to
     # call _dedup_candidates
 
@@ -4553,3 +4590,27 @@ def ecl(resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0):
 
 class TMMException(Exception):
     pass
+
+
+def _log_warn_or_raise_coverage(adj, neighborhood_ids, n_steps, needs_raise):
+    (uncovered_neighbs,) = (adj.sum(0) == 0).cpu().nonzero(as_tuple=True)
+    unique_neighbs, counts = neighborhood_ids.unique(return_counts=True)
+    assert torch.equal(
+        unique_neighbs, torch.arange(len(unique_neighbs), device=unique_neighbs.device)
+    )
+    uncovered_counts = counts[uncovered_neighbs].cpu().tolist()
+    n_uncovered = sum(uncovered_counts)
+    pct_uncovered = 100.0 * (n_uncovered / neighborhood_ids.shape[0])
+    uncovered_neighbs = uncovered_neighbs.tolist()
+    message = (
+        f"Neighborhood coverage was not complete, with {len(uncovered_neighbs)} uncovered "
+        f"neighborhoods and {n_uncovered} uncovered spikes ({pct_uncovered:.3f}% of set). "
+        f"Neighborhoods and counts were: {uncovered_neighbs}, {uncovered_counts}. It took "
+        f"{n_steps} expansion steps to fill out the coverage."
+    )
+    if needs_raise:
+        raise ValueError(message)
+    elif pct_uncovered < 0.05:
+        logger.dartsortverbose(message)
+    else:
+        warnings.warn(message, stacklevel=2)

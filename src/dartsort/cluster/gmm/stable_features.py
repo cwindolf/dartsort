@@ -156,10 +156,13 @@ class StableSpikeDataset(torch.nn.Module):
                 name="extract",
             )
             self._train_extract_channels = extract_channels.cpu()[train_ixs]
+            assert torch.is_tensor(train_ixs)
             self.not_train_indices = torch.asarray(
                 np.setdiff1d(np.arange(self.n_spikes), train_ixs),
-                dtype=torch.long,  # type: ignore
+                dtype=torch.long,
             )
+        else:
+            train_ixs = None
 
         if core_radius is not None:
             _core_neighborhoods = {
@@ -180,9 +183,10 @@ class StableSpikeDataset(torch.nn.Module):
                 if (not self.core_is_extract or k != "train")
             }
             if self.core_is_extract and "train" in self.split_indices:
+                assert torch.is_tensor(train_ixs)
+                assert core_channels is not None
                 assert torch.equal(
-                    core_channels[train_ixs],
-                    extract_channels[train_ixs],  # type: ignore
+                    core_channels[train_ixs], extract_channels[train_ixs]
                 )
                 _core_neighborhoods["train"] = self._train_extract_neighborhoods
             self._core_neighborhoods = torch.nn.ModuleDict(_core_neighborhoods)
@@ -248,7 +252,8 @@ class StableSpikeDataset(torch.nn.Module):
         motion_est=None,
         core_radius: float | Literal["extract"] | None = 35.0,
         max_n_spikes=np.inf,
-        discard_triaged=False,
+        min_count: int = 25,
+        discard_triaged: bool = False,
         interpolation_method="kriging",
         kernel_name="thinplate",
         sigma=10.0,
@@ -256,6 +261,7 @@ class StableSpikeDataset(torch.nn.Module):
         kriging_poly_degree=1,
         extrap_method: str | None = "kernel",
         extrap_kernel: str | None = "rq",
+        smoothing_lambda: float = 0.0,
         features_dataset_name="collisioncleaned_tpca_features",
         motion_depth_mode="channel",
         split_names=("train", "val"),
@@ -270,37 +276,6 @@ class StableSpikeDataset(torch.nn.Module):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         device = torch.device(device)
-
-        # which spikes to keep?
-        if discard_triaged:
-            keep = sorting.labels >= 0
-            keep_select = kept_inds = np.flatnonzero(keep)
-        else:
-            keep = np.ones(len(sorting), dtype=bool)
-            kept_inds = np.arange(len(sorting))
-            keep_select = slice(None)
-        rg = random_seed
-        if kept_inds.size > max_n_spikes:
-            rg = np.random.default_rng(rg)
-            kept_kept = rg.choice(kept_inds.size, size=int(max_n_spikes), replace=False)
-            kept_kept.sort()
-            keep[kept_inds] = 0
-            keep[kept_inds[kept_kept]] = 1
-            keep_select = kept_inds = kept_inds[kept_kept]
-
-        # choose splits
-        split_mask = None
-        train_mask = None
-        if split_names:
-            n_splits = len(split_names)
-            rg = np.random.default_rng(rg)
-            split_mask = torch.full((len(sorting),), -1, dtype=torch.int8)
-            split_choices = rg.choice(
-                n_splits, p=split_proportions, size=len(kept_inds)
-            )
-            split_mask[keep_select] = torch.from_numpy(split_choices).to(split_mask)
-            if "train" in split_names:
-                train_mask = split_mask == split_names.index("train")
 
         # load information not stored directly on the sorting
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
@@ -339,6 +314,75 @@ class StableSpikeDataset(torch.nn.Module):
                 assert core_neighborhoods is not None
                 assert core_neighborhood_ids is not None
 
+            if core_radius == "extract":
+                assert core_neighborhoods is not None
+                assert core_neighborhood_ids is not None
+                assert np.array_equal(extract_neighborhoods, core_neighborhoods)
+                assert np.array_equal(extract_neighborhood_ids, core_neighborhood_ids)
+
+            # want good coverage of all neighborhoods below
+            rg = np.random.default_rng(random_seed)
+            neighb_coverage = []
+            for nid in range(len(extract_neighborhoods)):
+                in_nid = np.flatnonzero(extract_neighborhood_ids == nid)
+                assert in_nid.size > 0
+                if in_nid.size <= min_count:
+                    neighb_coverage.append(in_nid)
+                else:
+                    neighb_coverage.append(
+                        rg.choice(in_nid, size=min_count, replace=False)
+                    )
+            neighb_coverage = np.concatenate(neighb_coverage)
+            neighb_coverage.sort()
+
+            # choose splits. make sure all neighborhoods are covered in the train split.
+            # this can lead to some bias, because the validation set may underrepresent those
+            # neighborhoods that have little coverage, but we wouldn't have made good decisions
+            # there without training on them anyway.
+            assert len(split_names) >= 1
+            assert "train" in split_names
+            if discard_triaged:
+                kept_indices = np.flatnonzero(sorting.labels >= 0)
+                is_coverage = np.zeros(len(kept_indices), dtype=bool)
+            elif len(sorting) <= max_n_spikes:
+                kept_indices = np.arange(len(sorting))
+                is_coverage = np.zeros(len(kept_indices), dtype=bool)
+                is_coverage[neighb_coverage] = True
+            else:
+                uncovered = np.setdiff1d(np.arange(len(sorting)), neighb_coverage)
+                kept_indices = rg.choice(
+                    uncovered,
+                    size=max_n_spikes - neighb_coverage.shape[0],
+                    replace=False,
+                )
+                kept_indices = np.concatenate([neighb_coverage, kept_indices])
+                is_coverage = np.ones(len(kept_indices), dtype=bool)
+                is_coverage[neighb_coverage.shape[0] :] = False
+                order = np.argsort(kept_indices)
+                kept_indices = kept_indices[order]
+                is_coverage = is_coverage[order]
+
+            split_mask = torch.full((len(sorting),), -1, dtype=torch.int8)
+            # train set initialized to everything
+            assert split_names[0] == "train"
+            split_mask[kept_indices] = 0
+            # val takes from uncovered
+            if "val" in split_names:
+                assert "val" == split_names[1]
+                assert split_names == ("train", "val")
+                val_candidates = kept_indices[np.logical_not(is_coverage)]
+                n_val = int(np.ceil(split_proportions[1] * len(kept_indices)))
+                if n_val >= val_candidates.shape[0]:
+                    split_mask[val_candidates] = 1
+                else:
+                    val_candidates = rg.choice(
+                        val_candidates, size=n_val, replace=False
+                    )
+                    split_mask[val_candidates] = 1
+            else:
+                assert split_names == ("train",)
+            train_mask = (split_mask == 0).numpy()
+
             # for all spikes (not just kept), the ID of its shift/chan combo.
             # this determines its channel neighborhood under any registered index.
             # we also get the total counts in each combo, and the indices of
@@ -370,6 +414,7 @@ class StableSpikeDataset(torch.nn.Module):
                 sigma=sigma,
                 rq_alpha=rq_alpha,
                 kriging_poly_degree=kriging_poly_degree,
+                smoothing_lambda=smoothing_lambda,
                 device=device,
                 store_on_device=store_on_device,
                 show_progress=show_progress,
@@ -378,7 +423,7 @@ class StableSpikeDataset(torch.nn.Module):
             core_features = None
             if core_radius is not None:
                 core_features = interpolation_util.interpolate_by_chunk(
-                    np.ones_like(keep),
+                    np.ones(len(sorting), dtype=np.bool),
                     h5[features_dataset_name],
                     geom,
                     extract_channel_index,
@@ -392,6 +437,7 @@ class StableSpikeDataset(torch.nn.Module):
                     sigma=sigma,
                     rq_alpha=rq_alpha,
                     kriging_poly_degree=kriging_poly_degree,
+                    smoothing_lambda=smoothing_lambda,
                     device=device,
                     store_on_device=store_on_device,
                     show_progress=show_progress,
@@ -412,7 +458,7 @@ class StableSpikeDataset(torch.nn.Module):
                 core_radius = max(core_radius, np.sqrt(max_dist))
 
         self = cls(
-            kept_indices=kept_inds,
+            kept_indices=kept_indices,
             prgeom=prgeom,
             tpca=tpca,  # type: ignore
             extract_channels=extract_channels,

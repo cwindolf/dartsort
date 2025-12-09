@@ -230,7 +230,7 @@ class DeveloperConfig(DARTsortUserConfig):
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 100_000
     pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "cosine"
-    pre_refinement_merge_threshold: float = 0.025
+    pre_refinement_merge_threshold: float = 0.2
     use_hellinger: bool = False
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
     component_overlap: float = 0.95

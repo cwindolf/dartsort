@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from spikeinterface.core import BaseRecording
 
 from .cluster import (
+    SimpleMatrixFeatures,
     get_clusterer,
     get_clustering_features,
     postprocess,
@@ -512,18 +513,21 @@ def cluster(
     pre_refinement_cfg: RefinementConfig | None = None,
     refinement_cfg: RefinementConfig | None = None,
     computation_cfg: ComputationConfig | None = None,
+    features: SimpleMatrixFeatures | None = None,
     *,
     _save_cfg: DARTsortInternalConfig | None = None,
     _save_initial_name="initial",
     _save_refined_name_fmt="refined0{stepname}",
     _save_dir=None,
 ):
-    features = get_clustering_features(
-        recording,
-        sorting,
-        motion_est=motion_est,
-        clustering_features_cfg=clustering_features_cfg,
-    )
+    if features is None:
+        features = get_clustering_features(
+            recording,
+            sorting,
+            motion_est=motion_est,
+            clustering_features_cfg=clustering_features_cfg,
+        )
+    assert features is not None
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,

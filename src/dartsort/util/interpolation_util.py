@@ -23,6 +23,7 @@ def interpolate_by_chunk(
     kriging_poly_degree=0,
     sigma=10.0,
     rq_alpha=1.0,
+    smoothing_lambda=0.0,
     device=None,
     store_on_device=False,
     show_progress=True,
@@ -111,6 +112,7 @@ def interpolate_by_chunk(
         sigma=sigma,
         rq_alpha=rq_alpha,
         kriging_poly_degree=kriging_poly_degree,
+        smoothing_lambda=smoothing_lambda,
     )
 
     for ixs, chunk_features in yield_masked_chunks(
@@ -156,6 +158,7 @@ def interpolate_by_chunk(
             sigma=sigma,
             rq_alpha=rq_alpha,
             kriging_poly_degree=kriging_poly_degree,
+            smoothing_lambda=smoothing_lambda,
             precomputed_data=pcomp_batch,
             allow_destroy=True,
         )

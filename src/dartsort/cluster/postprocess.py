@@ -44,7 +44,6 @@ def realign_and_chuck_noisy_template_units(
                 return sorting, TemplateData.from_npz(npz)
 
     if template_data is None:
-        print(f"hi {template_cfg=}")
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,

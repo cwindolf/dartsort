@@ -1,13 +1,14 @@
 from dataclasses import replace
 import gc
-from logging import getLogger
 
 import torch
 import h5py
 
 from ..util.internal_config import default_refinement_cfg
 from ..util import job_util, noise_util, data_util, spiketorch
+from ..util.logging_util import get_logger
 from ..util.main_util import ds_save_intermediate_labels
+from ..transform.temporal_pca import BaseTemporalPCA
 from .cluster_util import agglomerate
 from .split import split_clusters
 from .merge import merge_templates
@@ -15,7 +16,7 @@ from .gmm.stable_features import StableSpikeDataset
 from .gmm.gaussian_mixture import SpikeMixtureModel
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def gmm_refine(
@@ -55,7 +56,7 @@ def gmm_refine(
             res = gmm.tvi(final_split=intermediate_split, lls=gmm.log_liks)
             gmm.log_liks = res["log_liks"]
         else:
-            gmm.log_liks = gmm.em(final_split=intermediate_split)
+            gmm.log_liks = gmm.em(final_split=intermediate_split)  # type: ignore
         gmm.change_rank(refinement_cfg.signal_rank)
 
     for it in range(refinement_cfg.n_total_iters):
@@ -63,7 +64,7 @@ def gmm_refine(
             res = gmm.tvi(lls=gmm.log_liks, final_split=intermediate_split)
             gmm.log_liks = res["log_liks"]
         else:
-            gmm.log_liks = gmm.em(final_split=intermediate_split)
+            gmm.log_liks = gmm.em(final_split=intermediate_split)  # type: ignore
         if return_step_labels:
             step_labels[f"refstep{it}aem"] = gmm.labels.numpy(force=True).copy()
         if saving:
@@ -89,7 +90,7 @@ def gmm_refine(
                 break
         else:
             if refinement_cfg.refit_before_criteria:
-                gmm.log_liks = gmm.em(
+                gmm.log_liks = gmm.em(  # type: ignore
                     n_iter=1, force_refit=True, final_split=intermediate_split
                 )
             gmm.split()
@@ -102,7 +103,7 @@ def gmm_refine(
                 res = gmm.tvi(final_split=intermediate_split)
                 gmm.log_liks = res["log_liks"]
             else:
-                gmm.log_liks = gmm.em(final_split=intermediate_split)
+                gmm.log_liks = gmm.em(final_split=intermediate_split)  # type: ignore
             if return_step_labels:
                 step_labels[f"refstep{it}bsplit"] = gmm.labels.numpy(force=True).copy()
             if saving:
@@ -115,7 +116,7 @@ def gmm_refine(
 
         assert gmm.log_liks is not None
         if refinement_cfg.refit_before_criteria:
-            gmm.log_liks = gmm.em(
+            gmm.log_liks = gmm.em(  # type: ignore
                 n_iter=1, force_refit=True, final_split=intermediate_split
             )
         gmm.merge(gmm.log_liks)
@@ -136,7 +137,8 @@ def gmm_refine(
     else:
         gmm.em(final_split="full")
     sorting = gmm.to_sorting()
-    gmm.tmm.processor.pool.shutdown()
+    if gmm.tmm is not None:
+        gmm.tmm.processor.pool.shutdown()
     del gmm
 
     # this is mainly to mark the TMM's cuda memory as free for torch
@@ -146,12 +148,13 @@ def gmm_refine(
 
 
 def split_merge(
+    *,
     recording,
     sorting,
     motion_est=None,
-    split_cfg=None,
-    merge_cfg=None,
-    merge_template_cfg=None,
+    split_cfg,
+    merge_cfg,
+    merge_template_cfg,
     computation_cfg=None,
 ):
     if computation_cfg is None:
@@ -168,7 +171,7 @@ def split_merge(
         split_sorting,
         recording,
         motion_est=motion_est,
-        template_config=merge_template_cfg,
+        template_cfg=merge_template_cfg,
         merge_distance_threshold=merge_cfg.merge_distance_threshold,
         min_spatial_cosine=merge_cfg.min_spatial_cosine,
         linkage=merge_cfg.linkage,
@@ -196,11 +199,15 @@ def get_noise_log_priors(noise, sorting, refinement_cfg):
             raise ValueError(f"{templates_npz} is not there?")
 
         with h5py.File(h5_name, "r", locking=False) as h5:
-            matching_labels = h5["labels"][:]
+            matching_labels = h5["labels"][:]  # type: ignore
 
         template_data = TemplateData.from_npz(templates_npz)
         tpca = data_util.get_tpca(sorting)
-        temps_tpca = torch.asarray(template_data.templates[:, tpca.temporal_slice])
+        assert isinstance(tpca, BaseTemporalPCA)
+        if (sl := getattr(tpca, "temporal_slice", None)) is not None:
+            temps_tpca = torch.asarray(template_data.templates[:, sl])
+        else:
+            temps_tpca = torch.asarray(template_data.templates)
 
         n, t, c = temps_tpca.shape
         temps_tpca = temps_tpca.permute(0, 2, 1).reshape(n * c, t)
@@ -230,7 +237,7 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
     if not refinement_cfg.pc_merge_threshold:
-        return sortings
+        return sorting
 
     # remove blank labels just in case
     sorting = data_util.subset_sorting_by_spike_count(sorting)
@@ -316,7 +323,7 @@ def initialize_gmm(
         rq_alpha=refinement_cfg.rq_alpha,
         kriging_poly_degree=refinement_cfg.kriging_poly_degree,
         zero_radius=refinement_cfg.cov_radius,
-        rgeom=data.prgeom[:-1].numpy(force=True),
+        rgeom=data.prgeom[:-1].numpy(force=True),  # type: ignore
     )
     initialize_at_rank_0 = (
         refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank
@@ -333,7 +340,7 @@ def initialize_gmm(
         ppca_inner_em_iter=refinement_cfg.ppca_inner_em_iter,
         ppca_initial_em_iter=refinement_cfg.ppca_inner_em_iter,
         n_em_iters=refinement_cfg.n_em_iters,
-        distance_metric=refinement_cfg.distance_metric,
+        distance_metric=refinement_cfg.distance_metric,  # type: ignore
         search_type=refinement_cfg.search_type,
         lls_keep_k=refinement_cfg.n_candidates,
         tvi_n_candidates=refinement_cfg.n_candidates,
@@ -347,8 +354,8 @@ def initialize_gmm(
         em_converged_atol=refinement_cfg.em_converged_atol,
         channels_strategy=refinement_cfg.channels_strategy,
         hard_noise=refinement_cfg.hard_noise,
-        split_decision_algorithm=refinement_cfg.split_decision_algorithm,
-        merge_decision_algorithm=refinement_cfg.merge_decision_algorithm,
+        split_decision_algorithm=refinement_cfg.split_decision_algorithm,  # type: ignore
+        merge_decision_algorithm=refinement_cfg.merge_decision_algorithm,  # type: ignore
         prior_pseudocount=refinement_cfg.prior_pseudocount,
         prior_scales_mean=refinement_cfg.prior_scales_mean,
         laplace_ard=refinement_cfg.laplace_ard,
