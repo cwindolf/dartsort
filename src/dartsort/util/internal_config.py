@@ -517,6 +517,7 @@ class RefinementConfig:
     merge_group_size: int = 6
     n_search: int | None = None
     n_explore: int | None = None
+    train_batch_size: int = 512
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     merge_distance_threshold: float = 0.75

@@ -57,7 +57,14 @@ from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.main_util import ds_save_intermediate_labels
 from ...util.noise_util import EmbeddedNoise
 from ...util.py_util import databag
-from ...util.spiketorch import cosine_distance, elbo, entropy, sign, spawn_torch_rg
+from ...util.spiketorch import (
+    cosine_distance,
+    elbo,
+    entropy,
+    sign,
+    spawn_torch_rg,
+    mean_elbo_dim1,
+)
 from ...util.torch_util import BModule
 from ..cluster_util import linkage, maximal_leaf_groups
 from ..kmeans import kmeans
@@ -92,120 +99,49 @@ def tmm_demix(
 
     TODO output the soft assignments as extra features of the returned sorting.
     """
-    computation_cfg = ensure_computation_config(computation_cfg)
-    device = computation_cfg.actual_device()
-    rg = np.random.default_rng(seed)
-    saving = save_cfg is not None and save_cfg.save_intermediate_labels
-    if saving:
-        assert save_step_labels_format is not None
-    prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
-
-    sorting = subset_sorting_by_spike_count(
-        sorting, min_spikes=refinement_cfg.min_count
-    )
-    sorting = sorting.flatten()
-
     global pnoid
     pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
     if pnoid:
         logger.dartsortverbose("Extra TMM asserts are on.")
+    prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    neighb_cov, erp, train_data, val_data, full_data, noise = get_truncated_datasets(
+    tmm, train_data, val_data, full_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion_est=motion_est,
         refinement_cfg=refinement_cfg,
-        device=device,
-        rg=rg,
+        seed=seed,
+        computation_cfg=computation_cfg,
     )
 
-    # bootstrapping phase: tmm needs lut, lut needs distances, distances need tmm...
-    tmm = TruncatedMixtureModel.from_config(
-        noise=noise,
-        erp=erp,
-        neighb_cov=neighb_cov,
-        train_data=train_data,
-        refinement_cfg=refinement_cfg,
-        seed=rg,
+    saving = save_cfg is not None and save_cfg.save_intermediate_labels
+    save_kw = dict(
+        full_data=full_data,
+        original_sorting=sorting,
+        save_step_labels_dir=save_step_labels_dir,
+        save_cfg=save_cfg,
     )
-    logger.dartsortdebug(f"Initialize TMM with signal_rank={tmm.signal_rank}")
-    D = tmm.unit_distance_matrix()
-    lut = train_data.bootstrap_candidates(D)
-    tmm.update_lut(lut)
+    if saving:
+        assert save_step_labels_format is not None
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
     tmm.em(train_data)
 
     for outer_it in range(refinement_cfg.n_total_iters):
-        # what will we do this iteration?
         do_split = bool(outer_it) or not refinement_cfg.skip_first_split
         break_after_split = refinement_cfg.one_split_only
 
         if do_split:
-            if val_data is not None:
-                eval_scores = tmm.soft_assign(
-                    data=val_data,
-                    full_proposal_view=True,
-                    needs_bootstrap=False,
-                    show_progress=prog_level,
-                )
-            else:
-                eval_scores = tmm.soft_assign(
-                    data=train_data,
-                    full_proposal_view=False,
-                    needs_bootstrap=False,
-                    max_iter=1,
-                    show_progress=prog_level,
-                )
-            split_res = tmm.split(
-                train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
-            )
-            logger.info(f"Split created {split_res.n_new_units} new units.")
+            run_split(tmm, train_data, val_data, prog_level)
             tmm.em(train_data, show_progress=prog_level)
-
         if saving:
-            save_tmm_labels(
-                tmm=tmm,
-                save_step_labels_format=save_step_labels_format,
-                full_data=full_data,
-                original_sorting=sorting,
-                stepname=f"tmm{outer_it}asplit",
-                save_step_labels_dir=save_step_labels_dir,
-                save_cfg=save_cfg,
-            )
-
+            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}asplit", **save_kw)  # type: ignore
         if break_after_split:
             break
 
-        if val_data is not None:
-            eval_scores = tmm.soft_assign(
-                data=val_data,
-                full_proposal_view=True,
-                needs_bootstrap=False,
-                show_progress=prog_level,
-            )
-        else:
-            eval_scores = tmm.soft_assign(
-                data=train_data,
-                full_proposal_view=False,
-                needs_bootstrap=False,
-                max_iter=1,
-                show_progress=prog_level,
-            )
-        merge_map = tmm.merge(
-            train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
-        )
-        logger.info(f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units.")
+        run_merge(tmm, train_data, val_data, prog_level)
         tmm.em(train_data, show_progress=prog_level)
         if saving:
-            save_tmm_labels(
-                tmm=tmm,
-                save_step_labels_format=save_step_labels_format,
-                full_data=full_data,
-                original_sorting=sorting,
-                stepname=f"tmm{outer_it}bmerge",
-                save_step_labels_dir=save_step_labels_dir,
-                save_cfg=save_cfg,
-            )
+            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}bmerge", **save_kw)  # type: ignore
 
     # final assignments
     # TODO output these soft probs somehow
@@ -551,7 +487,7 @@ class SufficientStatistics:
             self.Ulut.zero_()
         self.elbo.zero_()
 
-    def combine(self, other: "SufficientStatistics", eps=1e-10):
+    def combine(self, other: "SufficientStatistics", eps: Tensor):
         """Welford running means."""
         self.count += other.count
         w_count = other.count / max(1, self.count)
@@ -1621,7 +1557,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert self.b.means.is_contiguous()
         if bases is not None:
             assert self.b.bases.is_contiguous()
-        self.eps = torch.finfo(means.dtype).tiny
+        self.eps = torch.tensor(torch.finfo(means.dtype).tiny, device=means.device)
         self.min_em_iters = min_em_iters
 
         # needs to be initialized before doing anything serious
@@ -1875,7 +1811,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             if j > self.min_em_iters and elbos[-1] - elbos[-2] < self.elbo_atol:
                 break
 
-        if logger.isEnabledFor(DARTSORTDEBUG) and len(elbos):
+        if logger.isEnabledFor(DARTSORTDEBUG) and len(elbos) > 1:
             if len(elbos) > 8:
                 a = ", ".join(f"{x:0.4f}" for x in elbos[:4])
                 b = ", ".join(f"{x:0.4f}" for x in elbos[-4:])
@@ -2829,6 +2765,7 @@ def get_truncated_datasets(
         neighb_overlap=refinement_cfg.neighb_overlap,
         explore_neighb_steps=refinement_cfg.explore_neighb_steps,
         seed=rg,
+        batch_size=refinement_cfg.train_batch_size,
     )
     val_n_candidates = min(
         sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
@@ -2968,6 +2905,92 @@ def get_full_neighborhood_data(
         val_neighborhoods,
         prgeom,
     )
+
+
+def instantiate_and_bootstrap_tmm(
+    *,
+    sorting: DARTsortSorting,
+    motion_est,
+    refinement_cfg: RefinementConfig,
+    seed: np.random.Generator | int = 0,
+    computation_cfg: ComputationConfig | None = None,
+):
+    rg = np.random.default_rng(seed)
+    computation_cfg = ensure_computation_config(computation_cfg)
+    device = computation_cfg.actual_device()
+
+    sorting = subset_sorting_by_spike_count(
+        sorting, min_spikes=refinement_cfg.min_count
+    )
+    sorting = sorting.flatten()
+
+    neighb_cov, erp, train_data, val_data, full_data, noise = get_truncated_datasets(
+        sorting=sorting,
+        motion_est=motion_est,
+        refinement_cfg=refinement_cfg,
+        device=device,
+        rg=rg,
+    )
+
+    # bootstrapping phase: tmm needs lut, lut needs distances, distances need tmm...
+    tmm = TruncatedMixtureModel.from_config(
+        noise=noise,
+        erp=erp,
+        neighb_cov=neighb_cov,
+        train_data=train_data,
+        refinement_cfg=refinement_cfg,
+        seed=rg,
+    )
+    logger.dartsortdebug(f"Initialize TMM with signal_rank={tmm.signal_rank}")
+    D = tmm.unit_distance_matrix()
+    lut = train_data.bootstrap_candidates(D)
+    tmm.update_lut(lut)
+
+    return tmm, train_data, val_data, full_data
+
+
+def run_split(tmm, train_data, val_data, prog_level):
+    if val_data is not None:
+        eval_scores = tmm.soft_assign(
+            data=val_data,
+            full_proposal_view=True,
+            needs_bootstrap=False,
+            show_progress=prog_level,
+        )
+    else:
+        eval_scores = tmm.soft_assign(
+            data=train_data,
+            full_proposal_view=False,
+            needs_bootstrap=False,
+            max_iter=1,
+            show_progress=prog_level,
+        )
+    split_res = tmm.split(
+        train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
+    )
+    logger.info(f"Split created {split_res.n_new_units} new units.")
+
+
+def run_merge(tmm, train_data, val_data, prog_level):
+    if val_data is not None:
+        eval_scores = tmm.soft_assign(
+            data=val_data,
+            full_proposal_view=True,
+            needs_bootstrap=False,
+            show_progress=prog_level,
+        )
+    else:
+        eval_scores = tmm.soft_assign(
+            data=train_data,
+            full_proposal_view=False,
+            needs_bootstrap=False,
+            max_iter=1,
+            show_progress=prog_level,
+        )
+    merge_map = tmm.merge(
+        train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
+    )
+    logger.info(f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units.")
 
 
 def save_tmm_labels(
@@ -4305,8 +4328,133 @@ def _stat_pass_batch(
     n_units: int,
     neighb_cov: NeighborhoodCovariance,
     lut_params: LUTParams,
-    eps: float,
+    eps: Tensor,
 ) -> SufficientStatistics:
+    n = responsibilities.shape[0]
+    if lut_params.signal_rank:
+        assert lut_params.TWoCooinvsqrt is not None
+        assert lut_params.TWoCooinvmuo is not None
+        assert lut_params.Tpad is not None
+        noise_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
+            x=x,
+            whitenedx=whitenedx,
+            CmoCooinvx=CmoCooinvx,
+            responsibilities=responsibilities,
+            log_liks=log_liks,
+            spike_ixs=spike_ixs,
+            candidate_ixs=candidate_ixs,
+            unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
+            lut_ixs=lut_ixs,
+            n_candidates=n_candidates,
+            n_units=n_units,
+            neighb_cov_obs_ix=neighb_cov.obs_ix,
+            neighb_cov_miss_near_ix=neighb_cov.miss_near_ix,
+            feat_rank=neighb_cov.feat_rank,
+            n_channels=neighb_cov.n_channels,
+            max_nc_obs=neighb_cov.max_nc_obs,
+            max_nc_miss_near=neighb_cov.max_nc_miss_near,
+            lut_params_TWoCooinvsqrt=lut_params.TWoCooinvsqrt,
+            lut_params_TWoCooinvmuo=lut_params.TWoCooinvmuo,
+            lut_params_Tpad=lut_params.Tpad,
+            hat_dim=lut_params.signal_rank + 1,
+            n_lut=lut_params.n_lut,
+            eps=eps,
+        )
+        stats = SufficientStatistics(
+            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=Ulut, R=R, elbo=elb
+        )
+    else:
+        noise_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
+            x=x,
+            CmoCooinvx=CmoCooinvx,
+            responsibilities=responsibilities,
+            log_liks=log_liks,
+            spike_ixs=spike_ixs,
+            candidate_ixs=candidate_ixs,
+            unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
+            lut_ixs=lut_ixs,
+            neighb_cov_obs_ix=neighb_cov.obs_ix,
+            neighb_cov_miss_near_ix=neighb_cov.miss_near_ix,
+            feat_rank=neighb_cov.feat_rank,
+            n_channels=neighb_cov.n_channels,
+            n_candidates=n_candidates,
+            max_nc_obs=neighb_cov.max_nc_obs,
+            max_nc_miss_near=neighb_cov.max_nc_miss_near,
+            n_units=n_units,
+            n_lut=lut_params.n_lut,
+            eps=eps,
+        )
+        stats = SufficientStatistics(
+            count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=None, R=R, elbo=elb
+        )
+    return stats
+
+
+@torch.jit.script
+def _count_batch(
+    *,
+    responsibilities: Tensor,
+    n_candidates: int,
+    spike_ixs: Tensor,
+    candidate_ixs: Tensor,
+    unit_ixs: Tensor,
+    lut_ixs: Tensor,
+    n_units: int,
+    n_lut: int,
+    eps: Tensor,
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+    have_noise = responsibilities.shape[1] == n_candidates + 1
+    if have_noise:
+        noise_N = responsibilities[:, -1].sum()
+    else:
+        noise_N = None
+
+    Qflat = responsibilities[spike_ixs, candidate_ixs]
+    N = Qflat.new_zeros(n_units)
+    Nlut = Qflat.new_zeros(n_lut)
+
+    N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
+    Nlut.scatter_add_(dim=0, index=lut_ixs, src=Qflat)
+
+    Qnflat = N[unit_ixs].clamp_(min=eps)
+    Qnflat = torch.div(Qflat, Qnflat, out=Qnflat)
+
+    Qnflatlut = Nlut[lut_ixs].clamp_(min=eps)
+    Qnflatlut = torch.div(Qflat, Qnflatlut, out=Qnflatlut)
+
+    return noise_N, N, Nlut, Qnflat, Qnflatlut
+
+
+@torch.jit.script
+def _stat_pass_batch_ppca(
+    *,
+    x: Tensor,
+    whitenedx: Tensor,
+    CmoCooinvx: Tensor,
+    responsibilities: Tensor,
+    log_liks: Tensor,
+    spike_ixs: Tensor,
+    candidate_ixs: Tensor,
+    unit_ixs: Tensor,
+    neighb_ixs: Tensor,
+    lut_ixs: Tensor,
+    n_candidates: int,
+    n_units: int,
+    neighb_cov_obs_ix: Tensor,
+    neighb_cov_miss_near_ix: Tensor,
+    feat_rank: int,
+    n_channels: int,
+    max_nc_obs: int,
+    max_nc_miss_near: int,
+    lut_params_TWoCooinvsqrt: Tensor,
+    lut_params_TWoCooinvmuo: Tensor,
+    lut_params_Tpad: Tensor,
+    hat_dim: int,
+    n_lut: int,
+    eps: Tensor,
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
     neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
     same shape, and are sparse indices of the valid candidates for this batch.
@@ -4322,11 +4470,19 @@ def _stat_pass_batch(
         candidates must appear too. If candidates don't appear, it's not present.
     candidates: None or (n, C)
     """
-    n = responsibilities.shape[0]
     nsp = spike_ixs.shape[0]
-    hat_dim = lut_params.signal_rank + 1
-    assert len(x) == n
-    assert responsibilities.shape[1] in (n_candidates, n_candidates + 1)
+
+    # launch load / init kernels at top
+    whitenedxsp = whitenedx[spike_ixs]
+    xc = x[spike_ixs]
+    CmoCooinvxc = CmoCooinvx[spike_ixs]
+    obs_ix = neighb_cov_obs_ix[neighb_ixs]
+    miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
+    Rf = x.new_zeros((nsp, hat_dim, feat_rank, n_channels + 1))
+    R = x.new_zeros((n_units, hat_dim, feat_rank, n_channels))
+    Ulut = torch.zeros_like(lut_params_Tpad)
+    TWoCooinvsqrt = lut_params_TWoCooinvsqrt[lut_ixs]
+    TWoCooinvmuo = lut_params_TWoCooinvmuo[lut_ixs]
 
     noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
         responsibilities=responsibilities,
@@ -4336,107 +4492,139 @@ def _stat_pass_batch(
         unit_ixs=unit_ixs,
         lut_ixs=lut_ixs,
         n_units=n_units,
-        n_lut=lut_params.n_lut,
+        n_lut=n_lut,
         eps=eps,
     )
 
     # construct U-related stuff
-    whitenedxsp = whitenedx[spike_ixs]
-    if lut_params.signal_rank:
-        assert lut_params.TWoCooinvsqrt is not None
-        assert lut_params.TWoCooinvmuo is not None
-        assert lut_params.Tpad is not None
-        TWoCooinvsqrt = lut_params.TWoCooinvsqrt[lut_ixs]
-        TWoCooinvmuo = lut_params.TWoCooinvmuo[lut_ixs]
-        ubar = TWoCooinvmuo[:, :, None].baddbmm_(
-            TWoCooinvsqrt, whitenedxsp[:, :, None], beta=-1.0
-        )
-        ubar = ubar[:, :, 0]
-        del TWoCooinvmuo
-        hatubar = F.pad(ubar, (0, 1), value=1.0)
-        hatU = lut_params.Tpad[lut_ixs]
+    ubar = TWoCooinvmuo[:, :, None].baddbmm(
+        TWoCooinvsqrt, whitenedxsp[:, :, None], beta=-1.0
+    )
+    ubar = ubar[:, :, 0]
+    hatubar = F.pad(ubar, (0, 1), value=1.0)
+    hatU = lut_params_Tpad[lut_ixs]
 
-        # not saving the bottom row, Tpad should just be 0padded on inner dim
-        hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
+    # not saving the bottom row, Tpad should just be 0padded on inner dim
+    hatU.addcmul_(ubar[:, :, None], hatubar[:, None, :])
 
-        # U sufficient stat (LUT binned)
-        Ulut = torch.zeros_like(lut_params.Tpad)  # type: ignore[reportArgumentType]
-        hatU *= Qnflatlut[:, None, None]
-        ix = lut_ixs[:, None, None].broadcast_to(hatU.shape)
-        Ulut.scatter_add_(dim=0, index=ix, src=hatU)
-        del hatU
-    else:
-        Ulut = None
-    del whitenedxsp
+    # U sufficient stat (LUT binned)
+    hatU *= Qnflatlut[:, None, None]
+    ix = lut_ixs[:, None, None].broadcast_to(hatU.shape)
+    Ulut.scatter_add_(dim=0, index=ix, src=hatU)
 
     # construct R-related stuff
     # NB we're saving flops here by skipping the second term and coming
     # back to it later -- it doesn't depend on data so can be had for cheap
-    xc = x[spike_ixs]
-    CmoCooinvxc = CmoCooinvx[spike_ixs]
-    if lut_params.signal_rank:
-        Ro = hatubar[:, :, None] * xc[:, None, :]  # type: ignore[reportPossiblyUnboundVariable]
-        Rm = hatubar[:, :, None] * CmoCooinvxc[:, None, :]  # type: ignore[reportPossiblyUnboundVariable]
-    else:
-        Ro = xc[:, None, :]
-        Rm = CmoCooinvxc[:, None, :]
+    # we also save work by multiplying hatubar by the weights. then Ro, Rm
+    # below are multiplied by weights, and it propagates through to R.
+    hatubar.mul_(Qnflat[:, None])
+    Ro = hatubar[:, :, None] * xc[:, None, :]
+    Rm = hatubar[:, :, None] * CmoCooinvxc[:, None, :]
 
     # gather (ahem) Ro, Rm onto full channel set
-    Rf = x.new_zeros((nsp, hat_dim, neighb_cov.feat_rank, neighb_cov.n_channels + 1))
-    Ro = Ro.view(nsp, hat_dim, neighb_cov.feat_rank, neighb_cov.max_nc_obs)
-    Rm = Rm.view(nsp, hat_dim, neighb_cov.feat_rank, neighb_cov.max_nc_miss_near)
-    ix = neighb_cov.obs_ix[neighb_ixs][:, None, None, :]
+    Ro = Ro.view(nsp, hat_dim, feat_rank, max_nc_obs)
+    Rm = Rm.view(nsp, hat_dim, feat_rank, max_nc_miss_near)
+    ix = obs_ix[:, None, None, :]
     Rf.scatter_(dim=3, index=ix.broadcast_to(Ro.shape), src=Ro)
-    ix = neighb_cov.miss_near_ix[neighb_ixs][:, None, None, :]
+    ix = miss_near_ix[:, None, None, :]
     Rf.scatter_(dim=3, index=ix.broadcast_to(Rm.shape), src=Rm)
 
     # sufficient stats for R
-    R = x.new_zeros((n_units, hat_dim, neighb_cov.feat_rank, neighb_cov.n_channels))
-    Rf = Rf[:, :, :, :-1].mul_(Qnflat[:, None, None, None])
+    Rf = Rf[:, :, :, :n_channels]
     ix = unit_ixs[:, None, None, None].broadcast_to(Rf.shape)
     R.scatter_add_(dim=0, index=ix, src=Rf)
-    R = R.view(n_units, hat_dim, neighb_cov.feat_rank * neighb_cov.n_channels)
+    R = R.view(n_units, hat_dim, feat_rank * n_channels)
 
     # objective
-    elb = elbo(responsibilities, log_liks)
+    elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    return SufficientStatistics(
-        count=n, noise_N=noise_N, N=N, Nlut=Nlut, Ulut=Ulut, R=R, elbo=elb
+    return noise_N, N, Nlut, Ulut, R, elb
+
+
+@torch.jit.script
+def _stat_pass_batch_rank0(
+    *,
+    x: Tensor,
+    CmoCooinvx: Tensor,
+    responsibilities: Tensor,
+    log_liks: Tensor,
+    spike_ixs: Tensor,
+    candidate_ixs: Tensor,
+    unit_ixs: Tensor,
+    neighb_ixs: Tensor,
+    lut_ixs: Tensor,
+    neighb_cov_obs_ix: Tensor,
+    neighb_cov_miss_near_ix: Tensor,
+    feat_rank: int,
+    n_channels: int,
+    n_candidates: int,
+    max_nc_obs: int,
+    max_nc_miss_near: int,
+    n_units: int,
+    n_lut: int,
+    eps: Tensor,
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
+    """
+    neighb_ixs, lut_ixs, candidate_ixs, unit_ixs, spike_ixs are all the
+    same shape, and are sparse indices of the valid candidates for this batch.
+    I.e., if candidates was (n, C), then `spike_ixs, candidate_ixs` are the
+    tuple result of nonzero; unit_ixs is `candidates[spike_ixs, candidate_ixs]`,
+    lut_ixs are the result of combining those with neighb_ixs and going
+    to the LUT.
+
+    Arguments
+    ---------
+    responsibilities: (n, C or C + 1)
+        Last index is the noise dimension, if present. If it's present,
+        candidates must appear too. If candidates don't appear, it's not present.
+    candidates: None or (n, C)
+    """
+    nsp = spike_ixs.shape[0]
+
+    # launch load / init kernels at top
+    xc = x[spike_ixs]
+    CmoCooinvxc = CmoCooinvx[spike_ixs]
+    obs_ix = neighb_cov_obs_ix[neighb_ixs]
+    miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
+    Rf = x.new_zeros((nsp, 1, feat_rank, n_channels + 1))
+    R = x.new_zeros((n_units, 1, feat_rank, n_channels))
+
+    noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
+        responsibilities=responsibilities,
+        n_candidates=n_candidates,
+        spike_ixs=spike_ixs,
+        candidate_ixs=candidate_ixs,
+        unit_ixs=unit_ixs,
+        lut_ixs=lut_ixs,
+        n_units=n_units,
+        n_lut=n_lut,
+        eps=eps,
     )
 
+    # construct R-related stuff
+    # NB we're saving flops here by skipping the second term and coming
+    # back to it later -- it doesn't depend on data so can be had for cheap
+    Ro = xc[:, None, :]
+    Rm = CmoCooinvxc[:, None, :]
 
-def _count_batch(
-    *,
-    responsibilities,
-    n_candidates,
-    spike_ixs,
-    candidate_ixs,
-    unit_ixs,
-    lut_ixs,
-    n_units,
-    n_lut,
-    eps,
-) -> tuple[Tensor | None, Tensor, Tensor, Tensor, Tensor]:
-    have_noise = responsibilities.shape[1] == n_candidates + 1
-    if have_noise:
-        noise_N = responsibilities[:, -1].sum()
-    else:
-        noise_N = None
+    # gather (ahem) Ro, Rm onto full channel set
+    Ro = Ro.view(nsp, 1, feat_rank, max_nc_obs)
+    Rm = Rm.view(nsp, 1, feat_rank, max_nc_miss_near)
+    ix = obs_ix[:, None, None, :]
+    Rf.scatter_(dim=3, index=ix.broadcast_to(Ro.shape), src=Ro)
+    ix = miss_near_ix[:, None, None, :]
+    Rf.scatter_(dim=3, index=ix.broadcast_to(Rm.shape), src=Rm)
 
-    Qflat = responsibilities[spike_ixs, candidate_ixs]
+    # sufficient stats for R
+    Rf = Rf[:, :, :, :n_channels].mul_(Qnflat[:, None, None, None])
+    ix = unit_ixs[:, None, None, None].broadcast_to(Rf.shape)
+    R.scatter_add_(dim=0, index=ix, src=Rf)
+    R = R.view(n_units, 1, feat_rank * n_channels)
 
-    N = Qflat.new_zeros(n_units)
-    N.scatter_add_(dim=0, index=unit_ixs, src=Qflat)
-    Nlut = Qflat.new_zeros(n_lut)
-    Nlut.scatter_add_(dim=0, index=lut_ixs, src=Qflat)
+    # objective
+    elb = mean_elbo_dim1(responsibilities, log_liks)
 
-    Qnflat = N[unit_ixs].clamp_(min=eps)
-    Qnflat = torch.divide(Qflat, Qnflat, out=Qnflat)
-
-    Qnflatlut = Nlut[lut_ixs].clamp_(min=eps)
-    Qnflatlut = torch.divide(Qflat, Qnflatlut, out=Qnflatlut)
-
-    return noise_N, N, Nlut, Qnflat, Qnflatlut
+    return noise_N, N, Nlut, R, elb
 
 
 def _finalize_e_stats(
@@ -4477,8 +4665,9 @@ def _finalize_e_stats(
 
     # reweighting
     denom = stats.N[lut.unit_ids].clamp_(min=torch.finfo(stats.N.dtype).tiny)
-    Nlut_N = torch.divide(stats.Nlut, denom, out=denom)
-    assert torch.isfinite(Nlut_N).all()
+    Nlut_N = torch.div(stats.Nlut, denom, out=denom)
+    if pnoid:
+        assert torch.isfinite(Nlut_N).all()
 
     # loop because w_wcc is big
     for i0 in range(0, lut_params.n_lut, batch_size):

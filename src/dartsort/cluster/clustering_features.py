@@ -111,7 +111,7 @@ class SimpleMatrixFeatures:
                     mask,
                     h5[clustering_features_cfg.pca_dataset_name],
                     geom,
-                    h5["channel_index"][:],
+                    h5["channel_index"][:],  # type: ignore[reportIndexIssue]
                     sorting.channels,
                     shifts,
                     registered_geom,
