@@ -569,13 +569,13 @@ class RefinementConfig:
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
     interpolation_method: str = "kriging"
-    extrapolation_method: str | None = "kriging"
+    extrapolation_method: str | None = None
     kernel_name: str = "thinplate"
-    extrapolation_kernel: str | None = "thinplate"
+    extrapolation_kernel: str | None = None
     interpolation_sigma: float = 10.0
     rq_alpha: float = 0.5
     kriging_poly_degree: int = 0
-    smoothing_lambda: float = 1e-3
+    smoothing_lambda: float = 0.0
 
 
 @cfg_dataclass

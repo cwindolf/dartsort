@@ -251,7 +251,7 @@ class StableSpikeDataset(torch.nn.Module):
         sorting,
         motion_est=None,
         core_radius: float | Literal["extract"] | None = 35.0,
-        max_n_spikes=np.inf,
+        max_n_spikes: float | int = np.inf,
         min_count: int = 25,
         discard_triaged: bool = False,
         interpolation_method="kriging",
@@ -320,20 +320,7 @@ class StableSpikeDataset(torch.nn.Module):
                 assert np.array_equal(extract_neighborhoods, core_neighborhoods)
                 assert np.array_equal(extract_neighborhood_ids, core_neighborhood_ids)
 
-            # want good coverage of all neighborhoods below
             rg = np.random.default_rng(random_seed)
-            neighb_coverage = []
-            for nid in range(len(extract_neighborhoods)):
-                in_nid = np.flatnonzero(extract_neighborhood_ids == nid)
-                assert in_nid.size > 0
-                if in_nid.size <= min_count:
-                    neighb_coverage.append(in_nid)
-                else:
-                    neighb_coverage.append(
-                        rg.choice(in_nid, size=min_count, replace=False)
-                    )
-            neighb_coverage = np.concatenate(neighb_coverage)
-            neighb_coverage.sort()
 
             # choose splits. make sure all neighborhoods are covered in the train split.
             # this can lead to some bias, because the validation set may underrepresent those
@@ -346,21 +333,10 @@ class StableSpikeDataset(torch.nn.Module):
                 is_coverage = np.zeros(len(kept_indices), dtype=bool)
             elif len(sorting) <= max_n_spikes:
                 kept_indices = np.arange(len(sorting))
-                is_coverage = np.zeros(len(kept_indices), dtype=bool)
-                is_coverage[neighb_coverage] = True
             else:
-                uncovered = np.setdiff1d(np.arange(len(sorting)), neighb_coverage)
-                kept_indices = rg.choice(
-                    uncovered,
-                    size=max_n_spikes - neighb_coverage.shape[0],
-                    replace=False,
-                )
-                kept_indices = np.concatenate([neighb_coverage, kept_indices])
-                is_coverage = np.ones(len(kept_indices), dtype=bool)
-                is_coverage[neighb_coverage.shape[0] :] = False
-                order = np.argsort(kept_indices)
-                kept_indices = kept_indices[order]
-                is_coverage = is_coverage[order]
+                assert isinstance(max_n_spikes, int)
+                kept_indices = rg.choice(len(sorting), size=max_n_spikes, replace=False)
+                kept_indices.sort()
 
             split_mask = torch.full((len(sorting),), -1, dtype=torch.int8)
             # train set initialized to everything
@@ -370,15 +346,10 @@ class StableSpikeDataset(torch.nn.Module):
             if "val" in split_names:
                 assert "val" == split_names[1]
                 assert split_names == ("train", "val")
-                val_candidates = kept_indices[np.logical_not(is_coverage)]
                 n_val = int(np.ceil(split_proportions[1] * len(kept_indices)))
-                if n_val >= val_candidates.shape[0]:
-                    split_mask[val_candidates] = 1
-                else:
-                    val_candidates = rg.choice(
-                        val_candidates, size=n_val, replace=False
-                    )
-                    split_mask[val_candidates] = 1
+                val_candidates = rg.choice(kept_indices, size=n_val, replace=False)
+                val_candidates.sort()
+                split_mask[val_candidates] = 1
             else:
                 assert split_names == ("train",)
             train_mask = (split_mask == 0).numpy()

@@ -60,6 +60,7 @@ from ...util.py_util import databag
 from ...util.spiketorch import (
     cosine_distance,
     elbo,
+    ecl,
     entropy,
     sign,
     spawn_torch_rg,
@@ -466,7 +467,7 @@ class SufficientStatistics:
         else:
             noise_N = torch.zeros((), device=device, dtype=count_dtype)
         return cls(
-            count=0,
+            count=0.0,
             noise_N=noise_N,
             N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             Nlut=torch.zeros((n_lut,), device=device, dtype=count_dtype),
@@ -1415,6 +1416,7 @@ class BaseMixtureModel(BModule):
         criterion_em_iters: int,
         cl_alpha: float,
         min_channel_count: int = 1,
+        elbo_atol: float,
     ):
         super().__init__()
         self.distance_kind = distance_kind
@@ -1431,6 +1433,7 @@ class BaseMixtureModel(BModule):
         self.criterion_em_iters = criterion_em_iters
         self.prior_pseudocount = prior_pseudocount
         self.cl_alpha = cl_alpha
+        self.elbo_atol = elbo_atol
 
     # -- subclasses implement
 
@@ -1521,7 +1524,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         lut_puff: float = 1.5,
         seed: int | np.random.Generator | torch.Generator = 0,
         min_channel_count: int = 1,
-        elbo_atol: float = 1e-4,
+        elbo_atol: float,
         min_em_iters: int = 1,
     ):
         super().__init__(
@@ -1538,11 +1541,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
             criterion_em_iters=criterion_em_iters,
             prior_pseudocount=prior_pseudocount,
             cl_alpha=cl_alpha,
+            elbo_atol=elbo_atol,
         )
         self.min_count = min_count
         self.split_k = split_k
         self.lut_puff = lut_puff
-        self.elbo_atol = elbo_atol
         self.full_proposal_every = full_proposal_every
         if noise_log_prop is not None:
             assert (
@@ -1692,7 +1695,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         total_log_proportion: float,
         prior_pseudocount: float,
         cl_alpha: float,
-        elbo_atol: float = 1e-4,
+        elbo_atol: float,
         noise_log_prop: Tensor | float = -torch.inf,
     ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor]:
         """Fit units with fixed label posterior
@@ -1956,8 +1959,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             smalldif = delbos.min()
             bigdiff = delbos.max()
             logger.dartsortdebug(
-                f"Fixed fit elbo end-start={begend:0.3f} over {j + 1} iterations, "
-                f"biggest and smallest diffs {bigdiff:0.3f} and {smalldif:0.3f}."
+                f"Fixed fit elbo end-start={begend:0.4f} over {j + 1} iterations, "
+                f"biggest and smallest diffs {bigdiff:0.4f} and {smalldif:0.4f}."
             )
 
         # Since responsibilities are fixed, it's possible (I think) for the
@@ -2662,6 +2665,7 @@ class TMMView(BaseMixtureModel):
             criterion_em_iters=tmm.criterion_em_iters,
             prior_pseudocount=tmm.prior_pseudocount,
             cl_alpha=tmm.cl_alpha,
+            elbo_atol=tmm.elbo_atol,
         )
         self.tmm = tmm
 
@@ -3251,6 +3255,7 @@ def brute_merge(
             prior_pseudocount=mm.prior_pseudocount,
             cl_alpha=mm.cl_alpha,
             total_log_proportion=mm.non_noise_log_proportion(),
+            elbo_atol=mm.elbo_atol,
         )
     )
     assert valid_subsets.all()
@@ -3273,6 +3278,7 @@ def brute_merge(
         )
         if torch.is_tensor(kept_spikes) and not kept_spikes.numel():
             return None
+
         cur_scores = cur_scores.slice(kept_spikes)
         crit_full_scores = mm.score(eval_data)
         crit_subset_scores = subset_models.score(eval_data)
@@ -3287,6 +3293,7 @@ def brute_merge(
                 return None
             eval_data = eval_data.slice(kept_spikes)
             cur_scores = cur_scores.slice(kept_spikes)
+
         crit_full_scores = mm.score(eval_data)
         crit_subset_scores = subset_models.score(eval_data)
     else:
@@ -3300,15 +3307,19 @@ def brute_merge(
     assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units + 1
     assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
+    if pnoid:
+        assert cur_mask.any(dim=1).all()
     rest_logliks = cur_scores.log_liks.clone()
     rest_logliks[:, :-1].masked_fill_(cur_mask, -torch.inf)
 
     # get current model criterion
-    cur_resp = cur_scores.responsibilities
-    if cur_resp is None:
+    if cur_scores.responsibilities is None:
         cur_resp = F.softmax(cur_scores.log_liks, dim=1)
+    else:
+        cur_resp = cur_scores.responsibilities
     assert cur_resp.shape == cur_scores.log_liks.shape
     cur_crit = ecl(cur_resp, cur_scores.log_liks, cl_alpha=mm.cl_alpha)
+    del cur_resp
 
     # now, find the best subset. combine subset scores with remainder scores.
     # also need to adjust the log proportions here.
@@ -3325,6 +3336,7 @@ def brute_merge(
 
         part_resps = F.softmax(part_logliks[:, :k2], dim=1)
         part_score = ecl(part_resps, part_logliks[:, :k2], cl_alpha=mm.cl_alpha)
+        del part_resps
 
         if part_score > best_score:
             best_score = part_score
@@ -4473,14 +4485,14 @@ def _stat_pass_batch_ppca(
     nsp = spike_ixs.shape[0]
 
     # launch load / init kernels at top
+    Rf = x.new_zeros((nsp, hat_dim, feat_rank, n_channels + 1))
+    R = x.new_zeros((n_units, hat_dim, feat_rank, n_channels))
+    Ulut = torch.zeros_like(lut_params_Tpad)
     whitenedxsp = whitenedx[spike_ixs]
     xc = x[spike_ixs]
     CmoCooinvxc = CmoCooinvx[spike_ixs]
     obs_ix = neighb_cov_obs_ix[neighb_ixs]
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
-    Rf = x.new_zeros((nsp, hat_dim, feat_rank, n_channels + 1))
-    R = x.new_zeros((n_units, hat_dim, feat_rank, n_channels))
-    Ulut = torch.zeros_like(lut_params_Tpad)
     TWoCooinvsqrt = lut_params_TWoCooinvsqrt[lut_ixs]
     TWoCooinvmuo = lut_params_TWoCooinvmuo[lut_ixs]
 
@@ -4771,23 +4783,19 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_wnu=False
     return term_a.sub_(term_b)
 
 
-def ecl(resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0):
-    h = entropy(resps, dim=1, reduce_mean=True)
-    crit = log_liks.logsumexp(dim=1).mean() - cl_alpha * h
-    return crit
-
-
 class TMMException(Exception):
     pass
 
 
 def _log_warn_or_raise_coverage(adj, neighborhood_ids, n_steps, needs_raise):
     (uncovered_neighbs,) = (adj.sum(0) == 0).cpu().nonzero(as_tuple=True)
-    unique_neighbs, counts = neighborhood_ids.unique(return_counts=True)
-    assert torch.equal(
-        unique_neighbs, torch.arange(len(unique_neighbs), device=unique_neighbs.device)
-    )
-    uncovered_counts = counts[uncovered_neighbs].cpu().tolist()
+    unique_neighbs, ucounts = neighborhood_ids.unique(return_counts=True)
+    unique_neighbs = unique_neighbs.cpu()
+    ucounts = ucounts.cpu()
+    assert unique_neighbs.max() + 1 <= adj.shape[1]
+    counts = torch.zeros(adj.shape[1], dtype=ucounts.dtype)
+    counts[unique_neighbs] = ucounts
+    uncovered_counts = counts[uncovered_neighbs].tolist()
     n_uncovered = sum(uncovered_counts)
     pct_uncovered = 100.0 * (n_uncovered / neighborhood_ids.shape[0])
     uncovered_neighbs = uncovered_neighbs.tolist()

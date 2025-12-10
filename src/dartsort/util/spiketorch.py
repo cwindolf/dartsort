@@ -1,14 +1,15 @@
 import math
-from logging import getLogger
 import warnings
+from logging import getLogger
 from typing import overload
 
 import linear_operator
-from linear_operator.utils.cholesky import psd_safe_cholesky
 import numpy as np
 import torch
 import torch.nn.functional as F
+from linear_operator.utils.cholesky import psd_safe_cholesky
 from scipy.fftpack import next_fast_len
+from torch import Tensor
 from torch.fft import irfft, rfft
 
 HAVE_CUPY = False
@@ -86,9 +87,7 @@ def sign(x):
 
 
 @overload
-def ptp(
-    waveforms: torch.Tensor, dim: int = 1, keepdims: bool = False
-) -> torch.Tensor: ...
+def ptp(waveforms: Tensor, dim: int = 1, keepdims: bool = False) -> Tensor: ...
 
 
 @overload
@@ -110,15 +109,15 @@ def ptp(waveforms, dim=1, keepdims=False):
 
 
 @torch.jit.script
-def mean_elbo_dim1(Q: torch.Tensor, log_liks: torch.Tensor):
-    logQ = Q.log().nan_to_num_(neginf=0.0)
-    logP = log_liks.nan_to_num(neginf=0.0)
+def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
+    logQ = Q.log().nan_to_num_(nan=None, neginf=0.0)
+    logP = log_liks.nan_to_num(nan=None, neginf=0.0)
     oelbo = logP.sub_(logQ).mul_(Q).sum(dim=1)
     oelbo = oelbo.mean()
     return oelbo
 
 
-def elbo(Q, log_liks, reduce_mean=True, dim=1):
+def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     logP = log_liks.nan_to_num(neginf=0.0)
     oelbo = logP.sub_(logQ).mul_(Q).sum(dim=dim)
@@ -127,13 +126,19 @@ def elbo(Q, log_liks, reduce_mean=True, dim=1):
     return oelbo
 
 
-def entropy(Q, reduce_mean=True, dim=1) -> torch.Tensor:
+def entropy(Q, reduce_mean=True, dim=1) -> Tensor:
     Qpos = Q > 0
     logQ = torch.where(Qpos, Q, _1).log_()
     H = logQ.mul_(Q).sum(dim=dim)
     if reduce_mean:
         H = H.mean()
     return H.neg_()
+
+
+def ecl(resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0) -> Tensor:
+    h = entropy(resps, dim=1, reduce_mean=True)
+    crit = log_liks.logsumexp(dim=1).mean() - cl_alpha * h
+    return crit
 
 
 def taper(waveforms, t_start=10, t_end=20, dim=1):
@@ -715,6 +720,7 @@ def real_resample(x, num, dim=0):
 def _calc_oa_lens(s1, s2, block_size=None):
     """Modified from scipy"""
     import math
+
     from scipy.special import lambertw
 
     fallback = (s1 + s2 - 1, None, s1, s2)
