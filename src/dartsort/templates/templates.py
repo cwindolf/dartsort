@@ -3,10 +3,10 @@ import gc
 from logging import getLogger
 from pathlib import Path
 from sys import getrefcount
-from typing import Self
 
 import numpy as np
 import torch
+from tqdm.auto import trange
 
 from ..localize.localize_util import localize_waveforms
 from ..util import data_util, drift_util, job_util
@@ -298,34 +298,16 @@ def _from_config_with_realigned_sorting(
         )
 
     if template_cfg.actual_algorithm() == "by_chunk":
-        from ..peel.running_template import RunningTemplates
-
-        peeler = RunningTemplates.from_config(
+        template_data, realigned_sorting = get_templates_by_chunk(
             sorting=sorting,
             recording=recording,
             tsvd=tsvd,
             motion_est=motion_est,
             waveform_cfg=waveform_cfg,
-            template_cfg=template_cfg,
             computation_cfg=computation_cfg,
+            template_cfg=template_cfg,
             show_progress=show_progress,
         )
-        template_data = peeler.compute_template_data(
-            show_progress=show_progress, computation_cfg=computation_cfg
-        )
-        realigned_sorting = apply_time_shifts(
-            sorting,
-            template_data=template_data,
-            trough_offset_samples=peeler.trough_offset_samples,
-            spike_length_samples=peeler.spike_length_samples,
-            recording_length_samples=recording.get_total_samples(),
-        )
-        assert getrefcount(peeler) == 2, (
-            f"Leaking the template peeler {getrefcount(peeler)=}."
-        )
-        del peeler
-        gc.collect()
-        torch.cuda.empty_cache()
         return template_data, realigned_sorting
 
     if sorting is None:
@@ -535,3 +517,150 @@ def get_chunked_templates(
         )
 
     return chunk_template_data
+
+
+def get_templates_by_chunk(
+    *,
+    sorting: DARTsortSorting,
+    recording,
+    tsvd,
+    motion_est,
+    waveform_cfg,
+    computation_cfg,
+    template_cfg,
+    show_progress: bool,
+    block_size=384,
+    hard_block_size=512,
+):
+    # TODO: smarter chunk size.
+    assert sorting.labels is not None
+    unit_ids = np.unique(sorting.labels)
+    unit_ids = unit_ids[unit_ids >= 0]
+    n_units = unit_ids.shape[0]
+    n_blocks = max(1, n_units // block_size)
+    n_blocks += n_units / n_blocks > hard_block_size
+    assert n_units / n_blocks <= hard_block_size
+    units_per_block = int(np.ceil(n_units / n_blocks).astype(int).item())
+
+    labels_tmp = np.full_like(sorting.labels, -1)
+    realigned_spike_times = sorting.times_samples.copy()
+    template_datas = []
+    for block_start in trange(
+        0, n_units, units_per_block, desc=f"Template blocks [{n_units}:{n_blocks}]"
+    ):
+        block_end = min(block_start + units_per_block, n_units)
+
+        ids_in_block = unit_ids[block_start:block_end]
+        spikes_in_block = np.flatnonzero(np.isin(sorting.labels, ids_in_block))
+        labels_tmp[:] = -1
+        labels_tmp[spikes_in_block] = sorting.labels[spikes_in_block]
+
+        block_sorting = replace(sorting, labels=labels_tmp)
+        block_realigned_sorting, block_realigned_templates = (
+            _get_templates_by_chunk_block(
+                sorting=block_sorting,
+                recording=recording,
+                tsvd=tsvd,
+                motion_est=motion_est,
+                waveform_cfg=waveform_cfg,
+                computation_cfg=computation_cfg,
+                template_cfg=template_cfg,
+                show_progress=show_progress,
+            )
+        )
+        template_datas.append(block_realigned_templates)
+        assert np.array_equal(block_realigned_templates.unit_ids, ids_in_block)
+        assert (
+            block_realigned_sorting.times_samples.shape == realigned_spike_times.shape
+        )
+        if block_realigned_sorting.extra_features is not None:
+            if "mask_indices" in block_realigned_sorting.extra_features:
+                ix = block_realigned_sorting.extra_features["mask_indices"]
+                realigned_spike_times[ix] = block_realigned_sorting.times_samples[ix]
+        else:
+            assert block_realigned_sorting.times_samples.shape == realigned_spike_times.shape
+
+    realigned_sorting = replace(sorting, times_samples=realigned_spike_times)
+    template_data = stack_template_datas(template_datas)
+    assert np.array_equal(template_data.unit_ids, unit_ids)
+    assert template_data.templates.shape[0] == unit_ids.shape[0]
+    return template_data, realigned_sorting
+
+
+def _get_templates_by_chunk_block(
+    sorting: DARTsortSorting,
+    recording,
+    tsvd,
+    motion_est,
+    waveform_cfg,
+    computation_cfg,
+    template_cfg,
+    show_progress: bool,
+):
+    from ..peel.running_template import RunningTemplates
+
+    peeler = RunningTemplates.from_config(
+        sorting=sorting,
+        recording=recording,
+        tsvd=tsvd,
+        motion_est=motion_est,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
+        computation_cfg=computation_cfg,
+        show_progress=show_progress,
+    )
+    template_data = peeler.compute_template_data(
+        show_progress=show_progress, computation_cfg=computation_cfg
+    )
+    realigned_sorting = apply_time_shifts(
+        sorting,
+        template_data=template_data,
+        trough_offset_samples=peeler.trough_offset_samples,
+        spike_length_samples=peeler.spike_length_samples,
+        recording_length_samples=recording.get_total_samples(),
+    )
+    assert getrefcount(peeler) == 2, (
+        f"Leaking the template peeler {getrefcount(peeler)=}."
+    )
+    del peeler
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return realigned_sorting, template_data
+
+
+def stack_template_datas(template_datas):
+    if len(template_datas) == 1:
+        return template_datas[0]
+    assert len(template_datas) > 0
+
+    if template_datas[0].spike_counts_by_channel is not None:
+        spike_counts_by_channel = np.concatenate(
+            [td.spike_counts_by_channel for td in template_datas]
+        )
+    else:
+        spike_counts_by_channel = None
+
+    if template_datas[0].raw_std_dev is not None:
+        raw_std_dev = np.concatenate([td.raw_std_dev for td in template_datas])
+    else:
+        raw_std_dev = None
+
+    if template_datas[0].properties is not None:
+        properties = {
+            k: np.concatenate([td.properties[k] for td in template_datas])
+            for k in template_datas[0].properties
+        }
+    else:
+        properties = None
+
+    return TemplateData(
+        templates=np.concatenate([td.templates for td in template_datas]),
+        unit_ids=np.concatenate([td.unit_ids for td in template_datas]),
+        spike_counts=np.concatenate([td.spike_counts for td in template_datas]),
+        spike_counts_by_channel=spike_counts_by_channel,
+        raw_std_dev=raw_std_dev,
+        registered_geom=template_datas[0].registered_geom,
+        trough_offset_samples=template_datas[0].trough_offset_samples,
+        properties=properties,
+    )

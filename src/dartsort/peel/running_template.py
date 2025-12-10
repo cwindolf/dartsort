@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, replace
 from logging import getLogger
 from typing import Literal
+import warnings
 
 import h5py
 import numpy as np
@@ -30,6 +31,9 @@ from .grab import GrabAndFeaturize
 
 
 logger: DARTsortLogger = getLogger(__name__)  # type: ignore
+
+
+# TODO: don't compute things in the zero subspace.
 
 
 class RunningTemplates(GrabAndFeaturize):
@@ -86,7 +90,7 @@ class RunningTemplates(GrabAndFeaturize):
         assert denoising_method in ("none", "exp_weighted", "loot", "t", "coll")
         denoising = denoising_method != "none"
 
-        self.use_zero = use_zero and denoising
+        self.use_zero = use_zero and denoising and (denoising_method != "exp_weighted")
         self.use_outlier = use_outlier and denoising
         self.use_raw = use_raw
         self.use_raw_outlier = use_raw_outlier and denoising
@@ -159,6 +163,7 @@ class RunningTemplates(GrabAndFeaturize):
         self.motion_est = motion_est
         self.with_raw_std_dev = with_raw_std_dev
         self.n_units = labels.max() + 1
+        logger.dartsortdebug(f"{self.__class__.__name__}: n_units={self.n_units}.")
         self.group_ids = group_ids
         self.n_pitches_shift = n_pitches_shift
         self.short_pipeline = WaveformPipeline([waveform_feature])
@@ -261,6 +266,10 @@ class RunningTemplates(GrabAndFeaturize):
                 labels_flat = np.full_like(sorting.labels, -1)
                 labels_flat[l_valid] = ixs
                 sorting = replace(sorting, labels=labels_flat)
+                assert sorting.labels is not None
+                logger.dartsortverbose(
+                    f"Flatten from {group_ids.max()} to {len(group_ids)}=={sorting.labels.max() + 1}."
+                )
 
         # restrict to max spikes/template
         sorting = subsample_to_max_count(
@@ -960,9 +969,6 @@ class RunningTemplates(GrabAndFeaturize):
         # -- proportions
         self.b.total_resp.log_()
         self.b.log_props.copy_(F.log_softmax(self.total_resp, dim=0))
-        pi = self.b.log_props.exp()
-        # self.b.total_weight.log_()
-        # self.b.log_props.copy_(F.log_softmax(self.total_weight, dim=0))
         assert not self.b.log_props.isnan().any()
         self.b.total_weight.zero_()
         self.b.total_resp.zero_()
@@ -995,7 +1001,6 @@ class RunningTemplates(GrabAndFeaturize):
             trough_offset=self.trough_offset_samples,
             snr_threshold=self.exp_weight_snr_threshold,
         )
-        #
         w = torch.asarray(
             w, dtype=self.b.log_props.dtype, device=self.b.log_props.device
         )
@@ -1406,24 +1411,25 @@ def count_and_mean(
     ix = labels[None, :, None, None].broadcast_to(wr.shape)
     wsum.scatter_add_(dim=1, index=ix, src=wr)
 
-    denom = wsum[:, labels]
-    ww = torch.div(wr, denom, out=denom).nan_to_num_()
-    del denom
-
-    xbar = x.new_zeros((s, k, t, c), dtype=torch.double)
-    wx = ww.mul_(x)
-    del ww
-    xbar.scatter_add_(dim=1, index=ix, src=wx)
+    xbar = x.new_zeros((s, k, t, c))
+    wx = torch.empty_like(x)
+    ix = labels[:, None, None].broadcast_to(wx.shape)
+    for j in range(s):
+        wx.copy_(x)
+        wx.mul_(wr[j] / wsum[j, labels].clamp_(min=1e-10))
+        xbar[j].scatter_add_(dim=0, index=ix, src=wx)
 
     if with_sq:
-        xsqbar = x.new_zeros((s, k, t, c), dtype=torch.double)
-        wx.mul_(x)
-        xsqbar.scatter_add_(dim=1, index=ix, src=wx)
-        xsqbar = xsqbar.float()
+        xsqbar = x.new_zeros((s, k, t, c))
+        xsq = x.square()
+        for j in range(s):
+            wx.copy_(xsq)
+            wx.mul_(wr[j] / wsum[j, labels].clamp_(min=1e-10))
+            xsqbar[j].scatter_add_(dim=0, index=ix, src=wx)
     else:
         xsqbar = None
 
-    return wsum, xbar.float(), xsqbar
+    return wsum, xbar, xsqbar
 
 
 def gamma_count_and_mean(resp, w, labels, k, count_only=False):
@@ -1456,6 +1462,9 @@ def identity(x):
 
 
 def global_std_estimate(sorting, res_ds="residual", q=0.75, eps=1e-6):
+    if sorting.parent_h5_path is None:
+        warnings.warn("Sorting has no residual data, falling back to global std 1.0")
+        return 1.0
     with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
         ds: h5py.Dataset = h5[res_ds]  # pyright: ignore reportAssignmentType
         mads = np.zeros(len(ds))

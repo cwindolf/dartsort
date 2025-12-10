@@ -1,7 +1,9 @@
 from dataclasses import replace
+import gc
 
 import numpy as np
 import sklearn.cluster
+import torch
 
 from ..util.data_util import chunk_time_ranges
 from ..util.main_util import ds_save_intermediate_labels
@@ -44,7 +46,6 @@ def get_clusterer(
             save_labels_dir=None,
             save_cfg=None,
         )
-        
 
     C = clustering_strategies.get(clus_strategy, Clusterer)
     init_fmt = initial_name if (saving_labels and clustering_cfg is not None) else None
@@ -573,6 +574,8 @@ class TMMRefinement(Refinement):
             save_step_labels_dir=self.save_labels_dir,
             save_cfg=self.save_cfg,
         )
+        gc.collect()
+        torch.cuda.empty_cache()
         return sorting
 
 

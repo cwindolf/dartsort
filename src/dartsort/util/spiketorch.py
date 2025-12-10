@@ -111,9 +111,9 @@ def ptp(waveforms, dim=1, keepdims=False):
 
 @torch.jit.script
 def mean_elbo_dim1(Q: torch.Tensor, log_liks: torch.Tensor):
-    logQ = Q.log().nan_to_num(neginf=0.0)
+    logQ = Q.log().nan_to_num_(neginf=0.0)
     logP = log_liks.nan_to_num(neginf=0.0)
-    oelbo = (logP - logQ).mul(Q).sum(dim=1)
+    oelbo = logP.sub_(logQ).mul_(Q).sum(dim=1)
     oelbo = oelbo.mean()
     return oelbo
 

@@ -115,6 +115,7 @@ def tmm_demix(
 
     saving = save_cfg is not None and save_cfg.save_intermediate_labels
     save_kw = dict(
+        save_step_labels_format=save_step_labels_format,
         full_data=full_data,
         original_sorting=sorting,
         save_step_labels_dir=save_step_labels_dir,
@@ -131,30 +132,28 @@ def tmm_demix(
         break_after_split = refinement_cfg.one_split_only
 
         if do_split:
-            run_split(tmm, train_data, val_data, prog_level)
+            run_split(tmm, train_data, val_data, prog_level - 1)
             tmm.em(train_data, show_progress=prog_level)
         if saving:
             save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}asplit", **save_kw)  # type: ignore
         if break_after_split:
             break
 
-        run_merge(tmm, train_data, val_data, prog_level)
+        run_merge(tmm, train_data, val_data, prog_level - 1)
         tmm.em(train_data, show_progress=prog_level)
         if saving:
             save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}bmerge", **save_kw)  # type: ignore
 
     # final assignments
-    # TODO output these soft probs somehow
+    # TODO output the soft probs somehow
     full_scores = tmm.soft_assign(
         data=full_data, full_proposal_view=True, needs_bootstrap=False
     )
-    extra_features = dict(
-        **(sorting.extra_features or {}),
-        neighborhood_ids=full_data.neighborhood_ids.numpy(force=True),
-    )
-    sorting = replace(
-        sorting, labels=labels_from_scores(full_scores), extra_features=extra_features
-    )
+    labels = labels_from_scores(full_scores)
+    neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
+    del tmm, train_data, val_data, full_data, full_scores
+    extra_features = dict(**(sorting.extra_features or {}), neighborhood_ids=neighb_ids)
+    sorting = replace(sorting, labels=labels, extra_features=extra_features)
     return sorting
 
 
@@ -2033,7 +2032,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         needs_bootstrap: bool,
         full_proposal_view: bool,
         max_iter: int = 10,
-        show_progress: int = 1,
+        show_progress: int = 0,
     ) -> Scores:
         """Run E steps until candidates converge, holding my LUT fixed."""
         # start by telling the data how to search
@@ -2063,9 +2062,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         assert scores.responsibilities is not None
         assert max_iter >= 1
-        if show_progress and not data.proposal_is_complete:
+        if show_progress > 1 and not data.proposal_is_complete:
             iters = trange(max_iter, desc="SoftAssign")
-            show_batch_progress = show_progress > 1 or data.proposal_is_complete
+            show_batch_progress = show_progress > 2 or data.proposal_is_complete
         else:
             iters = range(max_iter)
             show_batch_progress = False
@@ -2994,11 +2993,12 @@ def run_merge(tmm, train_data, val_data, prog_level):
 
 
 def save_tmm_labels(
+    *,
     tmm: TruncatedMixtureModel,
+    stepname: str,
     save_step_labels_format: str | None,
     full_data: BatchedSpikeData,
     original_sorting: DARTsortSorting,
-    stepname: str,
     save_step_labels_dir: Path | None,
     save_cfg: DARTsortInternalConfig | None,
     full_proposal: bool = True,
@@ -3011,10 +3011,10 @@ def save_tmm_labels(
     )
     sorting = replace(original_sorting, labels=labels_from_scores(full_scores))
     ds_save_intermediate_labels(
-        save_step_labels_format.format(stepname=stepname),
-        sorting,
-        save_step_labels_dir,
-        save_cfg,
+        step_name=save_step_labels_format.format(stepname=stepname),
+        step_sorting=sorting,
+        output_dir=save_step_labels_dir,
+        cfg=save_cfg,
     )
 
 

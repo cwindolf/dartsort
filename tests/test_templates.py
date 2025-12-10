@@ -56,22 +56,28 @@ def refractory_simulations(tmp_path_factory):
     return simulations
 
 
+@pytest.mark.parametrize("denoising_method", ["none", "t"])
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize("realign_peaks", [False, True])
 @pytest.mark.parametrize("reduction", ["mean", "median"])
 @pytest.mark.parametrize("algorithm", ["by_unit", "by_chunk", "chunk_if_mean"])
 def test_refractory_templates(
-    refractory_simulations, drift, realign_peaks, reduction, algorithm
+    refractory_simulations, drift, realign_peaks, reduction, algorithm, denoising_method
 ):
     sim_name = f"drift{'y' if drift else 'n'}"
     sim = refractory_simulations[sim_name]
+
+    if denoising_method != "none" and reduction == "median":
+        return
+    if denoising_method != "none" and algorithm == "by_unit":
+        return
 
     template_cfg = TemplateConfig(
         registered_templates=drift is not False,
         realign_peaks=realign_peaks,
         reduction=reduction,
         algorithm=algorithm,
-        denoising_method="none",
+        denoising_method=denoising_method,
         with_raw_std_dev=True,
     )
     td = TemplateData.from_config(
@@ -87,9 +93,10 @@ def test_refractory_templates(
     assert td.spike_counts_by_channel is not None
     assert np.array_equal(np.nanmax(td.spike_counts_by_channel, 1), spike_counts)
 
-    assert np.allclose(td.templates, sim["templates"].templates, atol=5e-2)
+    atol = 5e-2 if denoising_method == "none" else 0.5
+    assert np.allclose(td.templates, sim["templates"].templates, atol=atol)
     assert td.raw_std_dev is not None
-    assert np.allclose(td.raw_std_dev, 0.0, atol=5e-2)
+    assert np.allclose(td.raw_std_dev, 0.0, atol=atol)
     assert np.array_equal(td.unit_ids, sim["templates"].unit_ids)
 
 
@@ -136,24 +143,27 @@ def test_refractory_templates_algorithm_agreement(
     assert np.array_equal(td0.spike_counts, td1.spike_counts)
     assert np.array_equal(td0.spike_counts_by_channel, td1.spike_counts_by_channel)
 
-    print(f"{np.abs(td0.templates - td1.templates).max()=}")
     assert np.allclose(td0.templates, td1.templates, atol=1e-5)
     assert np.allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
 
 
+@pytest.mark.parametrize("denoising_method", ("none",))
 @pytest.mark.parametrize("algorithm", ("by_unit", "by_chunk"))
-def test_roundtrip(tmp_path, algorithm):
+def test_roundtrip(tmp_path, algorithm, denoising_method):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
     assert np.array_equal(np.unique(st.labels), np.arange(len(temps)))
+    if algorithm == "by_unit" and denoising_method in ("loot", "t"):
+        return
     template_data = templates.TemplateData.from_config(
         recording=rec,
         sorting=st,
         template_cfg=dartsort.TemplateConfig(
-            denoising_method="none",
+            denoising_method=denoising_method,
             superres_bin_min_spikes=0,
+            use_svd=False,
             realign_peaks=False,
             algorithm=algorithm,
         ),
@@ -162,7 +172,10 @@ def test_roundtrip(tmp_path, algorithm):
         overwrite=True,
     )
     assert np.array_equal(template_data.unit_ids, np.arange(len(temps)))
-    assert np.array_equal(template_data.templates, temps)
+    if denoising_method == "none":
+        assert np.array_equal(template_data.templates, temps)
+    else:
+        assert np.allclose(template_data.templates, temps, atol=0.5)
 
 
 def test_static_templates(tmp_path):
@@ -290,18 +303,19 @@ def test_main_object():
         0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
     )
     sorting = DARTsortSorting(
-        times_samples=[0, 2, 6, 8],
-        labels=[0, 0, 1, 1],
-        channels=[0, 0, 0, 0],
+        times_samples=np.array([0, 2, 6, 8]),
+        labels=np.array([0, 0, 1, 1]),
+        channels=np.array([0, 0, 0, 0]),
         sampling_frequency=1,
         extra_features=dict(
-            point_source_localizations=np.zeros((4, 4)), times_seconds=[0, 2, 6, 8]
+            point_source_localizations=np.zeros((4, 4)), times_seconds=np.array([0, 2, 6, 8])
         ),
     )
     tdata = templates.TemplateData.from_config(
         rec,
         sorting,
         dartsort.TemplateConfig(
+            denoising_method="none",
             realign_peaks=False,
             superres_templates=False,
             denoising_rank=2,
