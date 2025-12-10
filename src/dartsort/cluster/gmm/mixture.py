@@ -9,6 +9,10 @@ Also has some parallel cross validation ideas for merging and splitting units.
 
 Notes for readers on this implementation.
  - The main annoying thing is missing channels. That's why there's so much going on.
+ - ^ More on this: each spike `i` has observed (well, stored) data living on channels called
+   `obs_ix[neighborhood_ids[i]]` below. In other words, there are some unique possible observed
+   channel neighborhoods, and the structure is shared via this `neighborhood_ids` array. The
+   neighborhood ID depends on the spike's main channel and on the drift at that time (if relevant).
  - The covariance is restricted to be zero outside noise.zero_radius. The "near missing ixs"
    below are within that radius. But, some things need to happen on the full probe regardless;
    that's miss_full_masks.
@@ -25,7 +29,7 @@ Notes for readers on this implementation.
    units. The LUT sparsely stores which ones actually happen / are allowed to happen in different
    situations. Keep it small!
 
-To-do items:
+TODO items:
  - Use the usual Kronecker structure of the noise covariance better. We can save a lot of flops
    here by not making CmoCooinv et al dense. A refactor would probably want to maintain the
    dense functionality though, since it's useful for testing and who knows. So, maybe the way
@@ -35,8 +39,9 @@ To-do items:
 
 import math
 from dataclasses import replace
+import gc
 from pathlib import Path
-from typing import Iterable, Literal, Optional, Self
+from typing import Iterable, Literal, Optional, Self, NamedTuple
 import warnings
 
 import numpy as np
@@ -159,6 +164,13 @@ def tmm_demix(
 
 
 # -- shared objects holding precomputed neighborhood-related data
+
+
+class MixtureModelAndDatasets(NamedTuple):
+    tmm: "TruncatedMixtureModel"
+    train_data: "TruncatedSpikeData"
+    val_data: "TruncatedSpikeData | None"
+    full_data: "StreamingSpikeData"
 
 
 @databag
@@ -2332,13 +2344,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
         show_progress: bool = True,
     ) -> SplitResult:
         if show_progress:
-            unit_ids = tqdm(self.unit_ids, desc="Split")
+            unit_ids = tqdm(self.unit_ids, desc="Split", smoothing=0.0)
         else:
             unit_ids = self.unit_ids
         split_results = (
             self.split_unit(unit_id, train_data, eval_data, scores)
             for unit_id in unit_ids
         )
+
+        # split generates a lot of weird small buffers
+        gc.collect()
+        torch.cuda.empty_cache()
+
         return self._apply_unit_splits(
             split_results, train_data=train_data, eval_data=eval_data
         )
@@ -2357,7 +2374,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         groups = self.group_units_for_merge()
         logger.dartsortverbose("Merge groups: %s.", groups)
         if show_progress:
-            groups = tqdm(groups, desc="Merge")
+            groups = tqdm(groups, desc="Merge", smoothing=0.0)
 
         for group in groups:
             if group.numel() == 1:
@@ -2453,6 +2470,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert self.lut_params is not None
         if pnoid:
             self.lut_params.check()
+
+        # merge generates a lot of weird small buffers
+        gc.collect()
+        torch.cuda.empty_cache()
 
         return flat_map
 
@@ -2993,7 +3014,7 @@ def instantiate_and_bootstrap_tmm(
     refinement_cfg: RefinementConfig,
     seed: np.random.Generator | int = 0,
     computation_cfg: ComputationConfig | None = None,
-):
+) -> MixtureModelAndDatasets:
     rg = np.random.default_rng(seed)
     computation_cfg = ensure_computation_config(computation_cfg)
     device = computation_cfg.actual_device()
@@ -3025,7 +3046,7 @@ def instantiate_and_bootstrap_tmm(
     lut = train_data.bootstrap_candidates(D)
     tmm.update_lut(lut)
 
-    return tmm, train_data, val_data, full_data
+    return MixtureModelAndDatasets(tmm, train_data, val_data, full_data)
 
 
 def run_split(tmm, train_data, val_data, prog_level):

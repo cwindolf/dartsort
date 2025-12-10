@@ -585,8 +585,8 @@ refinement_strategies["tmm"] = TMMRefinement
 class SplitMergeRefinement(Refinement):
     def _refine(self, features, sorting, recording, motion_est=None):
         return refine_util.split_merge(
-            recording,
-            sorting,
+            recording=recording,
+            sorting=sorting,
             motion_est=motion_est,
             split_cfg=self.refinement_cfg.split_cfg,
             merge_cfg=self.refinement_cfg.merge_cfg,

@@ -1,9 +1,11 @@
 import traceback
 from dataclasses import asdict, replace
+import gc
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from spikeinterface.core import BaseRecording
+import torch
 
 from .cluster import (
     SimpleMatrixFeatures,
@@ -538,9 +540,15 @@ def cluster(
         initial_name=_save_initial_name,
         refine_labels_fmt=_save_refined_name_fmt,
     )
-    return clusterer.cluster(
+    result = clusterer.cluster(
         recording=recording, sorting=sorting, features=features, motion_est=motion_est
     )
+
+    del features, clusterer
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return result
 
 
 def universal_match(
