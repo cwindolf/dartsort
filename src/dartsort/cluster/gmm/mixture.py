@@ -606,6 +606,7 @@ class SpikeDataBatch:
     whitenedx: Tensor
     noise_logliks: Tensor
     CmoCooinvx: Tensor | None
+    candidate_count: int | None
 
 
 @databag
@@ -635,6 +636,7 @@ class DenseSpikeData:
         unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
         covered = self.lut_coverage(unit_ids, lut)
         candidates = torch.where(covered, unit_ids[None, :], -1)
+        candidate_counts = covered.sum(dim=1).cpu()
 
         batches = []
         for i0 in range(0, self.x.shape[0], self.batch_size):
@@ -647,6 +649,7 @@ class DenseSpikeData:
                 noise_logliks=self.noise_logliks[sl],
                 CmoCooinvx=self.CmoCooinvx[sl],
                 candidates=candidates[sl],
+                candidate_count=int(candidate_counts[sl].sum()),
             )
             batches.append(b)
         return batches
@@ -816,11 +819,13 @@ class BatchedSpikeData:
             batch_starts = trange(0, self.N, self.batch_size, desc=desc)
         else:
             batch_starts = range(0, self.N, self.batch_size)
-        for i0 in batch_starts:
+        for b, i0 in enumerate(batch_starts):
             batch = slice(i0, min(self.N, i0 + self.batch_size))
-            yield self.batch(batch)
+            yield self.batch(batch, batch_index=b)
 
-    def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
+    def batch(
+        self, spike_indices: Tensor | slice, batch_index: int | None = None
+    ) -> SpikeDataBatch:
         raise NotImplementedError
 
     def update_adjacency(
@@ -1024,7 +1029,9 @@ class StreamingSpikeData(BatchedSpikeData):
         n_explore = self.max_n_total - n_candidates
         self._update_sizes(n_candidates, 0, n_explore)
 
-    def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
+    def batch(
+        self, spike_indices: Tensor | slice, batch_index: int | None = None
+    ) -> SpikeDataBatch:
         neighb_ids = self.neighborhood_ids[spike_indices]
         assert self.proposals is not None
         candidates = self.proposals[neighb_ids]
@@ -1040,6 +1047,7 @@ class StreamingSpikeData(BatchedSpikeData):
             whitenedx=wx,
             noise_logliks=noise_loglik,
             CmoCooinvx=None,
+            candidate_count=None,
         )
 
     def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
@@ -1113,6 +1121,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         self.CmoCooinvx = CmoCooinvx
         self.noise_logliks = noise_logliks
         self.dense_slice_size_per_unit = dense_slice_size_per_unit
+
+        n_batches = len(range(0, self.N, self.batch_size))
+        self.batch_candidate_counts = torch.zeros(n_batches, dtype=torch.long)
 
     def _update_sizes(self, n_candidates: int, n_search: int, n_explore: int):
         super()._update_sizes(n_candidates, n_search, n_explore)
@@ -1222,6 +1233,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         # finally replace any duplicates with -1
         _dedup_candidates(self.candidates)
 
+        # update counts
+        _count_candidates(self.candidates, self.batch_candidate_counts, self.batch_size)
+
         # update lut for caller
         lut = lut_from_candidates_and_neighborhoods(
             candidates=self.candidates,
@@ -1236,8 +1250,11 @@ class TruncatedSpikeData(BatchedSpikeData):
 
     def erase_candidates(self):
         self.candidates.fill_(-1)
+        self.batch_candidate_counts.zero_()
 
-    def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
+    def batch(
+        self, spike_indices: Tensor | slice, batch_index: int | None = None
+    ) -> SpikeDataBatch:
         candidates = self.candidates[spike_indices]
         return SpikeDataBatch(
             batch=spike_indices,
@@ -1247,6 +1264,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             whitenedx=self.whitenedx[spike_indices],
             noise_logliks=self.noise_logliks[spike_indices],
+            candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
 
     def dense_slice(self, spike_indices: Tensor) -> DenseSpikeData:
@@ -1383,7 +1401,9 @@ class FullProposalDataView(BatchedSpikeData):
     ):
         raise ValueError("View doesn't update.")
 
-    def batch(self, spike_indices: Tensor | slice) -> SpikeDataBatch:
+    def batch(
+        self, spike_indices: Tensor | slice, batch_index: int | None = None
+    ) -> SpikeDataBatch:
         neighb_ids = self.neighborhood_ids[spike_indices]
         candidates = self.proposals[neighb_ids]
         return SpikeDataBatch(
@@ -1394,6 +1414,7 @@ class FullProposalDataView(BatchedSpikeData):
             CmoCooinvx=self.data.CmoCooinvx[spike_indices],
             whitenedx=self.data.whitenedx[spike_indices],
             noise_logliks=self.data.noise_logliks[spike_indices],
+            candidate_count=None,
         )
 
 
@@ -1913,8 +1934,21 @@ class TruncatedMixtureModel(BaseMixtureModel):
             device=self.b.means.device,
             skip_noise=responsibilities.shape[1] == batches[0].candidates.shape[1],
         )
+        # make use of the fixed sparsity structure, avoiding implicit nonzero()s below
+        batch_sparse_ixs = []
+        for batch in batches:
+            spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
+                batch.candidates,
+                batch.neighborhood_ids,
+                static_size=batch.candidate_count,
+            )
+            lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
+            batch_sparse_ixs.append(
+                (spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs)
+            )
         for j in range(self.em_iters):
-            for batch in batches:
+            for batch, spixs in zip(batches, batch_sparse_ixs):
+                spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs = spixs
                 bresp = responsibilities[batch.batch]
                 if j >= self.criterion_em_iters:
                     # compute log liks for convergence testing below
@@ -1923,6 +1957,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         n_candidates=batch.candidates.shape[1],
                         fixed_responsibilities=bresp,
                         skip_responsibility=True,
+                        spike_ixs=spike_ixs,
+                        candidate_ixs=candidate_ixs,
+                        unit_ixs=unit_ixs,
+                        neighb_ixs=neighb_ixs,
+                        lut_ixs=lut_ixs,
                     )
                 else:
                     # too soon to test convergence, no need for log liks
@@ -1931,7 +1970,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         responsibilities=bresp,
                         candidates=batch.candidates,
                     )
-                batch_stats = self.estep_stats_batch(batch, batch_scores)
+                batch_stats = self.estep_stats_batch(
+                    batch=batch,
+                    scores=batch_scores,
+                    spike_ixs=spike_ixs,
+                    candidate_ixs=candidate_ixs,
+                    unit_ixs=unit_ixs,
+                    neighb_ixs=neighb_ixs,
+                    lut_ixs=lut_ixs,
+                )
                 stats.combine(batch_stats, eps=self.eps)
             _finalize_e_stats(
                 means=self.b.means,
@@ -1986,6 +2033,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         n_candidates: int,
         fixed_responsibilities: Tensor | None = None,
         skip_responsibility: bool = False,
+        *,
+        spike_ixs: Tensor | None = None,
+        candidate_ixs: Tensor | None = None,
+        unit_ixs: Tensor | None = None,
+        neighb_ixs: Tensor | None = None,
+        lut_ixs: Tensor | None = None,
     ) -> Scores:
         assert self.lut_params is not None
         return _score_batch(
@@ -2000,16 +2053,39 @@ class TruncatedMixtureModel(BaseMixtureModel):
             lut=self.lut,
             fixed_responsibilities=fixed_responsibilities,
             skip_responsibility=skip_responsibility,
+            spike_ixs=spike_ixs,
+            candidate_ixs=candidate_ixs,
+            unit_ixs=unit_ixs,
+            neighb_ixs=neighb_ixs,
+            lut_ixs=lut_ixs,
+            static_size=batch.candidate_count,
         )
 
-    def estep_stats_batch(self, batch: SpikeDataBatch, scores: Scores):
+    def estep_stats_batch(
+        self,
+        batch: SpikeDataBatch,
+        scores: Scores,
+        *,
+        spike_ixs: Tensor | None = None,
+        candidate_ixs: Tensor | None = None,
+        unit_ixs: Tensor | None = None,
+        neighb_ixs: Tensor | None = None,
+        lut_ixs: Tensor | None = None,
+        static_size: int | None = None,
+    ):
         assert self.lut_params is not None
         assert batch.CmoCooinvx is not None
         assert scores.responsibilities is not None
-        spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
-            scores.candidates, batch.neighborhood_ids
-        )
-        lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
+        if spike_ixs is None:
+            spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
+                scores.candidates, batch.neighborhood_ids, static_size=static_size
+            )
+            lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
+        else:
+            assert candidate_ixs is not None
+            assert unit_ixs is not None
+            assert neighb_ixs is not None
+            assert lut_ixs is not None
         return _stat_pass_batch(
             x=batch.x,
             whitenedx=batch.whitenedx,
@@ -4079,6 +4155,13 @@ def _dedup_candidates(candidates):
     candidates[:, 1:].masked_fill_(dup_mask, -1)
 
 
+def _count_candidates(candidates, batch_candidate_counts, batch_size):
+    counts = candidates.new_zeros(batch_candidate_counts.shape)
+    for b, i0 in enumerate(range(0, candidates.shape[0], batch_size)):
+        counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
+    batch_candidate_counts.copy_(counts.cpu())
+
+
 def concatenate_scores(scoress: list[Scores]) -> Scores:
     assert len(scoress) > 0
     if len(scoress) == 1:
@@ -4248,6 +4331,7 @@ def _score_batch(
     unit_ixs: Tensor | None = None,
     neighb_ixs: Tensor | None = None,
     lut_ixs: Tensor | None = None,
+    static_size: int | None = None,
     fixed_responsibilities: Tensor | None = None,
     skip_responsibility: bool = False,
 ):
@@ -4259,28 +4343,42 @@ def _score_batch(
 
     if spike_ixs is None:
         spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
-            candidates, neighborhood_ids
+            candidates, neighborhood_ids, static_size=static_size
         )
         lut_ixs = lut.lut[unit_ixs, neighb_ixs]
-        if pnoid:
-            assert (lut_ixs < lut.unit_ids.shape[0]).all()
     else:
         assert candidate_ixs is not None
         assert neighb_ixs is not None
         assert lut_ixs is not None
+    if pnoid:
+        assert (lut_ixs < lut.unit_ids.shape[0]).all()
 
     lls = whitenedx.new_full((n, Ctot + not_fixed), fill_value=-torch.inf)
     if not_fixed:
         lls[:, -1] = noise_logliks
         lls[:, -1].add_(noise_log_prop)
-    lls[spike_ixs, candidate_ixs] = _calc_loglik(
-        whitenedx=whitenedx,
-        log_proportions=log_proportions,
-        spike_ixs=spike_ixs,
-        lut_ixs=lut_ixs,
-        unit_ixs=unit_ixs,
-        lut_params=lut_params,
-    )
+
+    if lut_params.signal_rank:
+        lls[spike_ixs, candidate_ixs] = _calc_loglik_ppca(
+            whitenedx=whitenedx,
+            log_proportions=log_proportions,
+            spike_ixs=spike_ixs,
+            lut_ixs=lut_ixs,
+            unit_ixs=unit_ixs,
+            constplogdet=lut_params.constplogdet,
+            Linvmuo=lut_params.Linvmuo,
+            wburyroot=lut_params.wburyroot,
+        )
+    else:
+        lls[spike_ixs, candidate_ixs] = _calc_loglik_rank0(
+            whitenedx=whitenedx,
+            log_proportions=log_proportions,
+            spike_ixs=spike_ixs,
+            lut_ixs=lut_ixs,
+            unit_ixs=unit_ixs,
+            constplogdet=lut_params.constplogdet,
+            Linvmuo=lut_params.Linvmuo,
+        )
 
     if do_resp:
         toplls, topinds = torch.topk(lls[:, :-1], n_candidates, dim=1)
@@ -4300,25 +4398,83 @@ def _score_batch(
 
 
 def _sparsify_candidates(
-    candidates, neighborhood_ids
+    candidates: Tensor, neighborhood_ids: Tensor, static_size: int | None
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     cpos = candidates >= 0
     if pnoid:
         assert cpos.any(dim=1).all()
-    spike_ixs, candidate_ixs = cpos.nonzero(as_tuple=True)
+    if pnoid and static_size is not None:
+        assert cpos.sum() == static_size
+    if static_size is not None:
+        spike_ixs, candidate_ixs = cpos.nonzero_static(size=static_size).T
+    else:
+        spike_ixs, candidate_ixs = cpos.nonzero(as_tuple=True)
     neighb_ixs = neighborhood_ids[spike_ixs]
     unit_ixs = candidates[spike_ixs, candidate_ixs]
     return spike_ixs, candidate_ixs, unit_ixs, neighb_ixs
 
 
-def _calc_loglik(
-    *, whitenedx, log_proportions, spike_ixs, lut_ixs, unit_ixs, lut_params
+# Faster inv quad term in log likelihoods
+# We want to compute
+#     (x - nu)' [Co + Wo Wo']^-1 (x - nu)
+#         = (x-nu)' [Co^-1 - Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1] (x-nu)
+# Let's say we already have computed...
+#     %  name in code: whitenednu
+#     z  = Co^{-1/2}nu
+#     %  name in code: whitenedx
+#     x' = Co^{-1/2} x
+#     %  name in code: wburyroot
+#     A  = (I_m+Wo'Co^-1Wo)^{-1/2} Wo'Co^{-1/2}
+# Break into terms. First,
+#     (A+)  (x-nu)'Co^-1(x-nu) = |x' - z|^2
+# It doesn't seem helpful to break that down any further.
+# Next up, while we have x' - z computed, notice that
+#     (B-) (x-nu)' Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1 (x-nu)
+#             = | A (x'-z') |^2.
+
+
+@torch.jit.script
+def _calc_loglik_rank0(
+    *,
+    whitenedx: Tensor,
+    log_proportions: Tensor,
+    spike_ixs: Tensor,
+    lut_ixs: Tensor,
+    unit_ixs: Tensor,
+    constplogdet: Tensor,
+    Linvmuo: Tensor,
 ):
-    wburyroot = lut_params.wburyroot[lut_ixs] if lut_params.signal_rank else None
-    ll = woodbury_inv_quad(
-        whitenedx[spike_ixs], lut_params.Linvmuo[lut_ixs], wburyroot, overwrite_wnu=True
-    )
-    ll += lut_params.constplogdet[lut_ixs]
+    wdxz = whitenedx[spike_ixs]
+    wdxz -= Linvmuo[lut_ixs]
+    ll = wdxz.square_().sum(dim=1)
+    ll += constplogdet[lut_ixs]
+    ll *= -0.5
+    ll += log_proportions[unit_ixs]
+    return ll
+
+
+@torch.jit.script
+def _calc_loglik_ppca(
+    *,
+    whitenedx: Tensor,
+    log_proportions: Tensor,
+    spike_ixs: Tensor,
+    lut_ixs: Tensor,
+    unit_ixs: Tensor,
+    constplogdet: Tensor,
+    Linvmuo: Tensor,
+    wburyroot: Tensor,
+):
+    wdxz = whitenedx[spike_ixs]
+    wdxz -= Linvmuo[lut_ixs]
+
+    term_b = wdxz[:, None].bmm(wburyroot[lut_ixs])[:, 0]
+    term_a = wdxz.square_().sum(dim=1)
+    term_b = term_b.square_().sum(dim=1)
+
+    ll = term_a.sub_(term_b)
+
+    ll += constplogdet[lut_ixs]
     ll *= -0.5
     ll += log_proportions[unit_ixs]
     return ll
@@ -4746,45 +4902,6 @@ def _get_u_from_ulut(lut: NeighborhoodLUT, stats: SufficientStatistics):
     U.diagonal(dim1=-2, dim2=-1).add_(Nz[:, None])
 
     return U
-
-
-def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, overwrite_wnu=False):
-    """Faster inv quad term in log likelihoods
-
-    We want to compute
-        (x - nu)' [Co + Wo Wo']^-1 (x - nu)
-          = (x-nu)' [Co^-1 - Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1] (x-nu)
-
-    Let's say we already have computed...
-        %  name in code: whitenednu
-        z  = Co^{-1/2}nu
-        %  name in code: whitenedx
-        x' = Co^{-1/2} x
-        %  name in code: wburyroot
-        A  = (I_m+Wo'Co^-1Wo)^{-1/2} Wo'Co^{-1/2}
-
-    Break into terms. First,
-        (A+)  (x-nu)'Co^-1(x-nu) = |x' - z|^2
-    It doesn't seem helpful to break that down any further.
-
-    Next up, while we have x' - z computed, notice that
-        (B-) (x-nu)' Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1 (x-nu)
-                = | A (x'-z') |^2.
-    """
-    out = whitenednu if overwrite_wnu else None
-    wdxz = torch.subtract(whitenedx, whitenednu, out=out)
-    if wburyroot is None:
-        return wdxz.square_().sum(dim=1)
-
-    # term_b = torch.einsum("nj,njp->np", wdxz, wburyroot)
-    term_b = wdxz[:, None].bmm(wburyroot)[:, 0]
-    term_a = wdxz.square_().sum(dim=1)
-    term_b = term_b.square_().sum(dim=1)
-    return term_a.sub_(term_b)
-
-
-class TMMException(Exception):
-    pass
 
 
 def _log_warn_or_raise_coverage(adj, neighborhood_ids, n_steps, needs_raise):
