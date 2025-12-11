@@ -211,7 +211,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # interpolation for features
     interpolation_method: str = "kriging"
-    extrapolation_method: str | None = argfield(default="kriging", arg_type=str_or_none)
+    extrapolation_method: str | None = argfield(default=None, arg_type=str_or_none)
     interpolation_kernel: str = "thinplate"
     interpolation_rq_alpha: float = 0.5
     interpolation_degree: int = 0
