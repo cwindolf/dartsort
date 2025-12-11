@@ -463,13 +463,15 @@ class SufficientStatistics:
         cls,
         n_units: int,
         n_lut: int,
-        feature_dim: int,
+        n_channels: int,
+        feature_rank: int,
         signal_rank: int,
         skip_noise: bool,
         device: torch.device,
         count_dtype=torch.double,
     ) -> Self:
         hat_dim = signal_rank + 1
+
         if signal_rank:
             Ulut = torch.zeros((n_lut, signal_rank, hat_dim), device=device)
         else:
@@ -483,18 +485,21 @@ class SufficientStatistics:
             noise_N=noise_N,
             N=torch.zeros((n_units,), device=device, dtype=count_dtype),
             Nlut=torch.zeros((n_lut,), device=device, dtype=count_dtype),
-            R=torch.zeros((n_units, hat_dim, feature_dim), device=device),
+            R=torch.zeros((n_units, n_channels, hat_dim, feature_rank), device=device),
             Ulut=Ulut,
             elbo=torch.zeros((), device=device, dtype=count_dtype),
         )
 
-    def zero_(self):
+    def reset_(self, n_units: int, n_channels: int, signal_rank: int, feature_rank: int):
         self.count = 0.0
         if self.noise_N is not None:
             self.noise_N.zero_()
         self.N.zero_()
         self.Nlut.zero_()
         self.R.zero_()
+        hat_dim = signal_rank + 1
+        assert self.R.numel() == n_units * n_channels * hat_dim * feature_rank
+        self.R.resize_(n_units, n_channels, hat_dim, feature_rank)
         if self.Ulut is not None:
             self.Ulut.zero_()
         self.elbo.zero_()
@@ -508,7 +513,7 @@ class SufficientStatistics:
         self.Nlut += other.Nlut
 
         self.elbo += (other.elbo - self.elbo) * w_count
-        self.R += other.R.sub_(self.R).mul_(w_N[:, None, None])
+        self.R += other.R.sub_(self.R).mul_(w_N[:, None, None, None])
         if pnoid:
             assert self.elbo.isfinite()
 
@@ -609,11 +614,14 @@ class EMResult:
 
 @databag
 class SpikeDataBatch:
-    """Yielded by data object .batches()"""
+    """Yielded by data object .batches()
+
+    # x, CmoCooinvx are not needed for soft_assign/score, so they can be None.
+    """
 
     batch: Tensor | slice
     neighborhood_ids: Tensor
-    x: Tensor
+    xt: Tensor | None
     candidates: Tensor
     whitenedx: Tensor
     noise_logliks: Tensor
@@ -630,6 +638,7 @@ class DenseSpikeData:
     neighb_supset: Tensor
     neighborhood_ids: Tensor
     x: Tensor
+    xt: Tensor
     whitenedx: Tensor
     CmoCooinvx: Tensor
     noise_logliks: Tensor
@@ -651,12 +660,12 @@ class DenseSpikeData:
         candidate_counts = covered.sum(dim=1).cpu()
 
         batches = []
-        for i0 in range(0, self.x.shape[0], self.batch_size):
-            sl = slice(i0, min(self.x.shape[0], i0 + self.batch_size))
+        for i0 in range(0, self.xt.shape[0], self.batch_size):
+            sl = slice(i0, min(self.xt.shape[0], i0 + self.batch_size))
             b = SpikeDataBatch(
                 batch=sl,
                 neighborhood_ids=self.neighborhood_ids[sl],
-                x=self.x[sl],
+                xt=self.xt[sl],
                 whitenedx=self.whitenedx[sl],
                 noise_logliks=self.noise_logliks[sl],
                 CmoCooinvx=self.CmoCooinvx[sl],
@@ -686,6 +695,7 @@ class DenseSpikeData:
             neighb_supset=self.neighb_supset,
             neighborhood_ids=self.neighborhood_ids[indices],
             x=self.x[indices],
+            xt=self.xt[indices],
             whitenedx=self.whitenedx[indices],
             CmoCooinvx=self.CmoCooinvx[indices],
             noise_logliks=self.noise_logliks[indices],
@@ -703,7 +713,7 @@ class DenseSpikeData:
     def weighted_covered_channels(
         self, weights: Tensor, within: Tensor | None = None, min_count: int = 0
     ) -> tuple[list[Tensor], Tensor]:
-        assert weights.shape[0] == self.x.shape[0]
+        assert weights.shape[0] == self.xt.shape[0]
         assert weights.ndim == 2
 
         # spike_chan_inds: n_channels x n_spikes
@@ -1051,9 +1061,12 @@ class StreamingSpikeData(BatchedSpikeData):
         wx, noise_loglik = _whiten_and_noise_score_batch(
             x=x, neighb_ids=neighb_ids, neighb_cov=self.neighb_cov
         )
+        # my x is not channels-major as the TruncatedSpikeData's is, and that's
+        # what's assumed in the statistics pass.
+        del x
         return SpikeDataBatch(
             batch=spike_indices,
-            x=x,
+            xt=None,
             candidates=candidates,
             neighborhood_ids=neighb_ids,
             whitenedx=wx,
@@ -1079,6 +1092,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         max_n_explore: int,
         dense_slice_size_per_unit: int,
         x: Tensor,
+        xt: Tensor,
         whitenedx: Tensor,
         CmoCooinvx: Tensor,
         noise_logliks: Tensor,
@@ -1129,6 +1143,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert neighborhoods.neighborhood_ids.shape == (self.N,)
 
         self.x = x
+        self.xt = xt
         self.whitenedx = whitenedx
         self.CmoCooinvx = CmoCooinvx
         self.noise_logliks = noise_logliks
@@ -1168,7 +1183,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         batch_size: int = 128,
     ) -> Self:
         assert len(x) == len(neighborhoods.b.neighborhood_ids)
-        whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
+        xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
             x=x, neighborhoods=neighborhoods, neighb_cov=neighb_cov
         )
         self = cls(
@@ -1180,6 +1195,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             max_n_explore=max_n_explore,
             dense_slice_size_per_unit=dense_slice_size_per_unit,
             x=x,
+            xt=xt,
             whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
             noise_logliks=noise_logliks,
@@ -1271,7 +1287,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
-            x=self.x[spike_indices],
+            xt=self.xt[spike_indices],
             candidates=candidates,
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             whitenedx=self.whitenedx[spike_indices],
@@ -1286,6 +1302,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             neighborhood_ids=self.neighborhood_ids[spike_indices],
             neighb_supset=self.neighb_supset,
             x=self.x[spike_indices],
+            xt=self.xt[spike_indices],
             whitenedx=self.whitenedx[spike_indices],
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             noise_logliks=self.noise_logliks[spike_indices],
@@ -1421,7 +1438,7 @@ class FullProposalDataView(BatchedSpikeData):
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
-            x=self.data.x[spike_indices],
+            xt=self.data.xt[spike_indices],
             candidates=candidates,
             CmoCooinvx=self.data.CmoCooinvx[spike_indices],
             whitenedx=self.data.whitenedx[spike_indices],
@@ -1754,9 +1771,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         K = responsibilities.shape[1]
 
         fdim = noise.rank * noise.n_channels
-        means = data.x.new_zeros((K, fdim))
+        means = data.xt.new_zeros((K, fdim))
         if signal_rank:
-            bases = data.x.new_zeros((K, signal_rank, fdim))
+            bases = data.xt.new_zeros((K, signal_rank, fdim))
         else:
             bases = None
         basis_reshape = signal_rank, noise.rank, noise.n_channels
@@ -1877,7 +1894,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         stats = SufficientStatistics.zeros(
             n_units=self.n_units,
             n_lut=self.lut_params.n_lut,
-            feature_dim=self.neighb_cov.feat_rank * self.neighb_cov.n_channels,
+            n_channels=self.neighb_cov.n_channels,
+            feature_rank=self.neighb_cov.feat_rank,
             signal_rank=self.signal_rank,
             device=self.b.means.device,
             skip_noise=False,
@@ -1943,7 +1961,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         stats = SufficientStatistics.zeros(
             n_units=self.n_units,
             n_lut=self.lut_params.n_lut,
-            feature_dim=self.neighb_cov.feat_rank * self.neighb_cov.n_channels,
+            n_channels=self.neighb_cov.n_channels,
+            feature_rank=self.neighb_cov.feat_rank,
             signal_rank=self.signal_rank,
             device=self.b.means.device,
             skip_noise=True,
@@ -2013,7 +2032,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
             if j >= self.criterion_em_iters + 1:
                 if elbos[-1] - elbos[-2] < self.elbo_atol:
                     break
-            stats.zero_()
+            stats.reset_(
+                n_units=self.n_units,
+                n_channels=self.neighb_cov.n_channels,
+                feature_rank=self.neighb_cov.feat_rank,
+                signal_rank=self.signal_rank,
+            )
 
         if logger.isEnabledFor(DARTSORTVERBOSE) and len(elbos):
             begend = elbos[-1] - elbos[0]
@@ -2093,6 +2117,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     ):
         assert self.lut_params is not None
         assert batch.CmoCooinvx is not None
+        assert batch.xt is not None
         assert scores.responsibilities is not None
         if spike_ixs is None:
             spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
@@ -2105,7 +2130,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert neighb_ixs is not None
             assert lut_ixs is not None
         return _stat_pass_batch(
-            x=batch.x,
+            xt=batch.xt,
             whitenedx=batch.whitenedx,
             CmoCooinvx=batch.CmoCooinvx,
             responsibilities=scores.responsibilities,
@@ -3859,8 +3884,9 @@ def _whiten_impute_and_noise_score(
     assert neighborhoods.n_neighborhoods == neighb_cov.obs_ix.shape[0]
 
     noise_loglik = wx.new_zeros((len(x),))
-    missdim = neighb_cov.feat_rank * neighb_cov.max_nc_miss_near
-    CmoCooinvx = wx.new_empty((len(x), missdim))
+    CmoCooinvx = wx.new_empty(
+        (len(x), neighb_cov.max_nc_miss_near, neighb_cov.feat_rank)
+    )
 
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
@@ -3876,7 +3902,12 @@ def _whiten_impute_and_noise_score(
             wxb = xb @ right_factor
 
             wx[binni] = wxb
-            CmoCooinvx[binni] = xb @ neighb_CooinvCom
+
+            CmoCooinvx_batch = xb @ neighb_CooinvCom
+            CmoCooinvx_batch = CmoCooinvx_batch.view(
+                binni.numel(), neighb_cov.feat_rank, neighb_cov.max_nc_miss_near
+            )
+            CmoCooinvx[binni] = CmoCooinvx_batch.mT
 
             nll = wxb.square_().sum(dim=1)
             nll += nll_const
@@ -3884,7 +3915,10 @@ def _whiten_impute_and_noise_score(
             assert nll.isfinite().all()
             noise_loglik[binni] = nll
 
-    return wx, CmoCooinvx, noise_loglik
+    xt = x.view(x.shape[0], neighb_cov.feat_rank, neighb_cov.max_nc_obs)
+    xt = xt.transpose(1, 2).contiguous()
+
+    return xt, wx, CmoCooinvx, noise_loglik
 
 
 def _whiten_and_noise_score_batch(
@@ -4647,7 +4681,7 @@ def _calc_loglik_ppca(
 
 def _stat_pass_batch(
     *,
-    x: Tensor,
+    xt: Tensor,
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
@@ -4669,7 +4703,7 @@ def _stat_pass_batch(
         assert lut_params.TWoCooinvmuo is not None
         assert lut_params.Tpad is not None
         noise_N, N, Nlut, Ulut, R, elb = _stat_pass_batch_ppca(
-            x=x,
+            xt=xt,
             whitenedx=whitenedx,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
@@ -4699,7 +4733,7 @@ def _stat_pass_batch(
         )
     else:
         noise_N, N, Nlut, R, elb = _stat_pass_batch_rank0(
-            x=x,
+            xt=xt,
             CmoCooinvx=CmoCooinvx,
             responsibilities=responsibilities,
             log_liks=log_liks,
@@ -4763,7 +4797,7 @@ def _count_batch(
 @torch.jit.script
 def _stat_pass_batch_ppca(
     *,
-    x: Tensor,
+    xt: Tensor,
     whitenedx: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
@@ -4806,11 +4840,9 @@ def _stat_pass_batch_ppca(
     nsp = spike_ixs.shape[0]
 
     # launch load / init kernels at top
-    R = x.new_zeros((n_units * (n_channels + 1), hat_dim, feat_rank))
+    R = xt.new_zeros((n_units * (n_channels + 1), hat_dim, feat_rank))
     Ulut = torch.zeros_like(lut_params_Tpad)
     whitenedxsp = whitenedx[spike_ixs]
-    xc = x[spike_ixs]
-    CmoCooinvxc = CmoCooinvx[spike_ixs]
     obs_ix = neighb_cov_obs_ix[neighb_ixs]
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
     TWoCooinvsqrt = lut_params_TWoCooinvsqrt[lut_ixs]
@@ -4850,32 +4882,30 @@ def _stat_pass_batch_ppca(
     # we also save work by multiplying hatubar by the weights. then Ro, Rm
     # below are multiplied by weights, and it propagates through to R.
     hatubar.mul_(Qnflat[:, None])
-    Ro = hatubar[:, :, None] * xc[:, None, :]
-    Rm = hatubar[:, :, None] * CmoCooinvxc[:, None, :]
+    xc = xt[spike_ixs]
+    # nsp, chan, hat dim, feat_rank
+    Ro = hatubar[:, None, :, None] * xc[:, :, None, :]
+
+    CmoCooinvxc = CmoCooinvx[spike_ixs]
+    # nsp, chan, hat dim, feat_rank
+    Rm = hatubar[:, None, :, None] * CmoCooinvxc[:, :, None, :]
 
     # the code below drops Ro, Rm into the right unit-channel indices of R
-    # I used to have this differently with an intermediate nsp x hat x feat x chans
-    # array and two scatters (this survives in rank0 impl below). this is faster
-    # despite the reshapes.
-    # TODO: everything would be faster if the full implementation was more channels-major...
+    # this used to be different, with a (nsp,hat,feat,chans) intermediate, which is slower.
 
     ncuix = (n_channels + 1) * unit_ixs[:, None]
     ixo = ncuix + obs_ix
-    Ro = Ro.view(nsp, hat_dim, feat_rank, max_nc_obs)
-    Ro = Ro.permute(0, 3, 1, 2).reshape(nsp * max_nc_obs, hat_dim, feat_rank)
+    Ro = Ro.view(nsp * max_nc_obs, hat_dim, feat_rank)
     ixo = ixo.view(-1, 1, 1).broadcast_to(Ro.shape)
     R.scatter_add_(dim=0, index=ixo, src=Ro)
 
     ixm = ncuix + miss_near_ix
-    Rm = Rm.view(nsp, hat_dim, feat_rank, max_nc_miss_near)
-    Rm = Rm.permute(0, 3, 1, 2).reshape(nsp * max_nc_miss_near, hat_dim, feat_rank)
+    Rm = Rm.view(nsp * max_nc_miss_near, hat_dim, feat_rank)
     ixm = ixm.view(-1, 1, 1).broadcast_to(Rm.shape)
     R.scatter_add_(dim=0, index=ixm, src=Rm)
 
     R = R.view(n_units, n_channels + 1, hat_dim, feat_rank)
-    R = R[:, :n_channels].permute(0, 2, 3, 1)
-    # alas, reshape
-    R = R.reshape(n_units, hat_dim, feat_rank * n_channels)
+    R = R[:, :n_channels]
 
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
@@ -4886,7 +4916,7 @@ def _stat_pass_batch_ppca(
 @torch.jit.script
 def _stat_pass_batch_rank0(
     *,
-    x: Tensor,
+    xt: Tensor,
     CmoCooinvx: Tensor,
     responsibilities: Tensor,
     log_liks: Tensor,
@@ -4924,12 +4954,11 @@ def _stat_pass_batch_rank0(
     nsp = spike_ixs.shape[0]
 
     # launch load / init kernels at top
-    xc = x[spike_ixs]
+    xc = xt[spike_ixs]
     CmoCooinvxc = CmoCooinvx[spike_ixs]
     obs_ix = neighb_cov_obs_ix[neighb_ixs]
     miss_near_ix = neighb_cov_miss_near_ix[neighb_ixs]
-    Rf = x.new_zeros((nsp, 1, feat_rank, n_channels + 1))
-    R = x.new_zeros((n_units, 1, feat_rank, n_channels))
+    R = xt.new_zeros((n_units * (n_channels + 1), 1, feat_rank))
 
     noise_N, N, Nlut, Qnflat, Qnflatlut = _count_batch(
         responsibilities=responsibilities,
@@ -4946,22 +4975,24 @@ def _stat_pass_batch_rank0(
     # construct R-related stuff
     # NB we're saving flops here by skipping the second term and coming
     # back to it later -- it doesn't depend on data so can be had for cheap
-    Ro = xc[:, None, :]
-    Rm = CmoCooinvxc[:, None, :]
+    # nsp, chan, hat dim, feat_rank
+    Ro = xc[:, :, None, :].mul_(Qnflat[:, None, None, None])
+    Rm = CmoCooinvxc[:, :, None, :].mul_(Qnflat[:, None, None, None])
 
     # gather (ahem) Ro, Rm onto full channel set
-    Ro = Ro.view(nsp, 1, feat_rank, max_nc_obs)
-    Rm = Rm.view(nsp, 1, feat_rank, max_nc_miss_near)
-    ix = obs_ix[:, None, None, :]
-    Rf.scatter_(dim=3, index=ix.broadcast_to(Ro.shape), src=Ro)
-    ix = miss_near_ix[:, None, None, :]
-    Rf.scatter_(dim=3, index=ix.broadcast_to(Rm.shape), src=Rm)
+    ncuix = (n_channels + 1) * unit_ixs[:, None]
+    ixo = ncuix + obs_ix
+    Ro = Ro.view(nsp * max_nc_obs, 1, feat_rank)
+    ixo = ixo.view(-1, 1, 1).broadcast_to(Ro.shape)
+    R.scatter_add_(dim=0, index=ixo, src=Ro)
 
-    # sufficient stats for R
-    Rf = Rf[:, :, :, :n_channels].mul_(Qnflat[:, None, None, None])
-    ix = unit_ixs[:, None, None, None].broadcast_to(Rf.shape)
-    R.scatter_add_(dim=0, index=ix, src=Rf)
-    R = R.view(n_units, 1, feat_rank * n_channels)
+    ixm = ncuix + miss_near_ix
+    Rm = Rm.view(nsp * max_nc_miss_near, 1, feat_rank)
+    ixm = ixm.view(-1, 1, 1).broadcast_to(Rm.shape)
+    R.scatter_add_(dim=0, index=ixm, src=Rm)
+
+    R = R.view(n_units, n_channels + 1, 1, feat_rank)
+    R = R[:, :n_channels]
 
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
@@ -4981,6 +5012,16 @@ def _finalize_e_stats(
     batch_size=64,
 ):
     """Finish the calculation of R in place."""
+
+    # first, transpose R... (this is a bit of baggage from formerly having
+    # features always as feature-rank major, channels minor)
+    n_units = means.shape[0]
+    hat_dim = lut_params.signal_rank + 1
+    frank = neighb_cov.feat_rank
+    nc = neighb_cov.n_channels
+    assert stats.R.shape == (n_units, nc, hat_dim, frank)
+    stats.R = stats.R.permute(0, 2, 3, 1).reshape(n_units, hat_dim, frank * nc)
+
     assert (lut_params.signal_rank == 0) == (bases is None)
     assert means.ndim == 2
 
@@ -4998,9 +5039,6 @@ def _finalize_e_stats(
         stats.elbo += term
 
     # storage
-    hat_dim = lut_params.signal_rank + 1
-    frank = neighb_cov.feat_rank
-    nc = neighb_cov.n_channels
     ncm = neighb_cov.max_nc_miss_near
     What_batch = means.new_zeros((batch_size, hat_dim, frank, nc + 1))
     Uhat_batch = means.new_ones((batch_size, hat_dim, hat_dim))

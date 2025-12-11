@@ -63,7 +63,6 @@ def simulate_moppca(
     elif t_mu == "smooth":
         phase = rg.uniform(0.0, 2 * np.pi, size=(K, rank, 1))
         freq = rg.uniform(0.2, 1.0, size=(K, rank, 1))
-        print(f"{freq=}")
         amp = rg.uniform(1.0, 2.0, size=(K, rank, 1))
         domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
         mu = snr * amp * np.sin(phase + freq * domain)
