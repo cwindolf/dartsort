@@ -198,7 +198,7 @@ class DeveloperConfig(DARTsortUserConfig):
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
     template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
-        "t"
+        "loot"
     )
     template_mix_zero: bool = True
     template_mix_svd: bool = True

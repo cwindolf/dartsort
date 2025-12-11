@@ -1,11 +1,14 @@
 from dataclasses import dataclass, field, replace
+import gc
 from logging import getLogger
+import math
 from typing import Literal
+from sys import getrefcount
 import warnings
 
 import h5py
 import numpy as np
-from scipy.special import ndtri
+from scipy.special import ndtri, gammaln
 from spikeinterface.core import BaseRecording
 import torch
 from torch.distributions import StudentT, Normal
@@ -82,6 +85,7 @@ class RunningTemplates(GrabAndFeaturize):
         spike_length_samples=121,
         chunk_length_samples=30_000,
         n_seconds_fit=600,
+        n_waveforms_fit=25000,
         fit_subsampling_random_state: int | np.random.Generator = 0,
     ):
         n_channels = recording.get_num_channels()
@@ -157,6 +161,7 @@ class RunningTemplates(GrabAndFeaturize):
             chunk_length_samples=chunk_length_samples,
             n_seconds_fit=n_seconds_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
+            n_waveforms_fit=n_waveforms_fit,
         )
 
         self.motion_aware = motion_est is not None
@@ -173,28 +178,35 @@ class RunningTemplates(GrabAndFeaturize):
         self.global_sigma = global_sigma
 
         self.subspace_projectors = []
+        self.subspace_temporal_projectors = []
         self.raw_subspace_ix = int(self.use_zero) + int(self.use_outlier)
         self.svd_subspace_ix = int(self.use_zero) + int(self.use_outlier) + 1
         inlier_mask = []
         if self.use_zero:
             self.subspace_projectors.append(torch.zeros_like)
+            self.subspace_temporal_projectors.append(torch.zeros_like)
             inlier_mask.append(1)
         if self.use_outlier:
             self.subspace_projectors.append(torch.zeros_like)
+            self.subspace_temporal_projectors.append(torch.zeros_like)
             inlier_mask.append(0)
         if self.use_raw:
             self.subspace_projectors.append(identity)
+            self.subspace_temporal_projectors.append(identity)
             inlier_mask.append(1)
         if self.use_svd:
             assert self.tpca is not None
             self.subspace_projectors.append(self.tpca.force_project)
+            self.subspace_temporal_projectors.append(self.tpca._project_in_probe)
             inlier_mask.append(1)
         if self.use_raw_outlier:
             self.subspace_projectors.append(identity)
+            self.subspace_temporal_projectors.append(identity)
             inlier_mask.append(0)
         if self.use_svd_outlier:
             assert self.tpca is not None
             self.subspace_projectors.append(self.tpca.force_project)
+            self.subspace_temporal_projectors.append(self.tpca._project_in_probe)
             inlier_mask.append(0)
         self.inlier_mask = np.array(inlier_mask, dtype=bool)
 
@@ -339,6 +351,7 @@ class RunningTemplates(GrabAndFeaturize):
             global_sigma=global_sigma,
             trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
+            n_waveforms_fit=template_cfg.denoising_spikes_fit,
             fit_subsampling_random_state=random_state,
             properties=properties,
             gamma_df=template_cfg.fixed_t_df,
@@ -709,7 +722,7 @@ class RunningTemplates(GrabAndFeaturize):
             loo=self.tasks.current_step_is_loot,
             loo_N=self.counts,
             global_sigma=self.global_sigma,
-            projectors=self.subspace_projectors,
+            projectors=self.subspace_temporal_projectors,
         )
         wsum, xbar, xsqbar = count_and_mean(
             resp=resp,
@@ -753,7 +766,6 @@ class RunningTemplates(GrabAndFeaturize):
             assert False
 
     def _gather_chunk_basic(self, ch_res):
-        assert self.b.counts is self.counts
         self.counts += ch_res["counts"]
         w = (
             ch_res["counts"]
@@ -769,7 +781,6 @@ class RunningTemplates(GrabAndFeaturize):
             self.meansq += ch_res["meansq"].sub_(self.meansq).mul_(w)
 
     def _gather_chunk_coll(self, ch_res):
-        assert self.b.counts is self.counts
         self.counts += ch_res["counts"]
         self.total_weight += ch_res["weights"]
         w = ch_res["weights"].div_(self.total_weight).nan_to_num_()
@@ -842,8 +853,6 @@ class RunningTemplates(GrabAndFeaturize):
         s = self.n_subspaces
 
         self.register_buffer("counts", torch.zeros((k, c), dtype=torch.double))
-        assert self.b.counts is self.counts
-
         self.register_buffer("means", torch.zeros((s, k, t, c)))
         if self.tasks.needs_meansq:
             self.register_buffer("meansq", torch.zeros((k, t, c)))
@@ -1190,6 +1199,12 @@ def realign_by_running_templates(
         computation_cfg=computation_cfg,
         task_name="Realign",
     )
+    pitch_shifts = peeler.n_pitches_shift
+    assert getrefcount(peeler) == 2
+    del peeler
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     sorting, templates, template_time_shifts = realign_sorting(
         sorting,
@@ -1202,7 +1217,7 @@ def realign_by_running_templates(
         trough_offset_samples=0,
         recording_length_samples=recording.get_total_samples(),
     )
-    return sorting, peeler.n_pitches_shift, template_time_shifts
+    return sorting, pitch_shifts, template_time_shifts
 
 
 def registerize(
@@ -1308,6 +1323,10 @@ def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     return torch.asarray(nu, device=dev, dtype=dtype)
 
 
+LOG_PI = math.log(math.pi)
+LOG_2PI = math.log(math.tau)
+
+
 def smsm_resps_and_latents(
     x,
     labels,
@@ -1323,9 +1342,9 @@ def smsm_resps_and_latents(
 ):
     s = len(lps)
 
-    # TODO: can speed this up. all times same.
-    finite = x.isfinite().nonzero(as_tuple=True)
-    xf = x[finite]
+    ii, cc = x[:, 0, :].isfinite().nonzero(as_tuple=True)
+    xf = x[ii, :, cc]
+    uu = labels[ii]
 
     # log liks for computing resps
     ll = x.new_full((s, *x.shape), -torch.inf)
@@ -1334,8 +1353,8 @@ def smsm_resps_and_latents(
 
     if loo:
         assert loo_N is not None
-        loo_N = loo_N[labels]
-        Nf = loo_N[finite[0], finite[2]]
+        assert loo_N.ndim == 2
+        Nf = loo_N[uu, cc][:, None]
         N_N1 = Nf / (Nf - 1)
     else:
         N_N1 = Nf = None
@@ -1349,45 +1368,56 @@ def smsm_resps_and_latents(
 
     params = zip(lps, nus, mus, sigmas, [meansqs] * s, projectors)
     for j, (lp, nu, mu, sigma, meansq, P) in enumerate(params):
-        lp = lp[labels][finite]
-        loc = mu[labels][finite]
+        lp = lp[uu, :, cc]
+        loc = mu[uu, :, cc]
 
         if loo and global_sigma is not None:
-            Pxf = P(x)[finite]
-            Pxf_N = Pxf / Nf
+            Pxf_N = P(xf).div_(Nf)
             loc.sub_(Pxf_N).mul_(N_N1)
+            del Pxf_N
             assert global_sigma is not None
             scale = global_sigma
         elif loo and meansq is not None:
-            Pxf = P(x)[finite]
-            Pxf_N = Pxf / Nf
+            Pxf = P(xf)
             Pxfsq_N = Pxf.square().div_(Nf)
+            scale = meansq[uu, :, cc].sub_(Pxfsq_N).mul_(N_N1)
+            del Pxfsq_N
+            Pxf_N = Pxf.div_(Nf)
             loc.sub_(Pxf_N).mul_(N_N1)
-            scale = meansq[labels][finite].sub_(Pxfsq_N).mul_(N_N1)
+            del Pxf, Pxf_N
             scale.sub_(loc.square()).clamp_(min=1e-5).sqrt_()
         else:
             assert not loo
             assert sigma is not None
-            scale = sigma[labels][finite]
+            scale = sigma[uu, :, cc]
+
+        zsq = loc.sub(xf).div_(scale).square_()
 
         if s == 1:
             l = 0.0  # doesn't matter at all
+        elif nu == 1.0:
+            # t_1 is Cauchy
+            log_scale = scale.log_() if torch.is_tensor(scale) else torch.tensor(math.log(scale))
+            del scale
+            l = zsq.add(1.0).log_().neg_().sub_(log_scale.add_(LOG_PI))
+            l.add_(lp)
         elif nu < torch.inf:
             l = StudentT(nu, loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
         else:
-            l = Normal(loc=loc, scale=scale, validate_args=False).log_prob(xf)
+            log_scale = scale.log_() if torch.is_tensor(scale) else torch.tensor(math.log(scale))
+            del scale
+            l = zsq.add(log_scale.add_(LOG_2PI)).mul_(-0.5)
             l.add_(lp)
 
-        ll[j, *finite] = l
+        ll[j, ii, :, cc] = l
 
         if nu < torch.inf:
-            z = loc.sub(xf).div_(scale)
-            denom = z.square_().add_(nu)
+            denom = zsq.add_(nu)
             myw = torch.divide(nu + 1.0, denom, out=denom)
-            w[j, *finite] = myw
+            w[j, ii, :, cc] = myw
         else:
-            w[j, *finite] = 1.0
+            w[j, ii, :, cc] = 1.0
 
     resp = F.softmax(ll, dim=0)
     return resp, w
@@ -1458,7 +1488,7 @@ def wsum(shp, w, ix, src, dim=0):
 
 
 def identity(x):
-    return x
+    return x.clone()
 
 
 def global_std_estimate(sorting, res_ds="residual", q=0.75, eps=1e-6):

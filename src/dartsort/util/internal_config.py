@@ -239,7 +239,7 @@ class TemplateConfig:
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
-        "t"
+        "loot"
     )
     use_raw: bool = True
     use_svd: bool = True
@@ -247,6 +247,9 @@ class TemplateConfig:
     use_outlier: bool = False
     use_raw_outlier: bool = False
     use_svd_outlier: bool = False
+    templates_at_once: int = 384
+    max_templates_at_once: int = 512
+    raw_templates_at_once: int = 1024
 
     # -- template construction parameters
     # registered templates?
@@ -262,6 +265,7 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
     recompute_tsvd: bool = True
+    denoising_spikes_fit: int = 25_000
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -276,10 +280,6 @@ class TemplateConfig:
     # realignment
     realign_peaks: bool = True
     realign_shift_ms: float = 1.5
-
-    # track template over time
-    time_tracking: bool = False
-    chunk_size_s: int = 300
 
     # where to find motion data if needed
     localizations_dataset_name: str = "point_source_localizations"
@@ -514,7 +514,7 @@ class RefinementConfig:
     ] = "cosine"
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 3
-    merge_group_size: int = 6
+    merge_group_size: int = 5
     n_search: int | None = None
     n_explore: int | None = None
     train_batch_size: int = 512

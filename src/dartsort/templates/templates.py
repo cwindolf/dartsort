@@ -1,20 +1,25 @@
-from dataclasses import dataclass, replace
 import gc
-from logging import getLogger
+from dataclasses import dataclass, replace
 from pathlib import Path
 from sys import getrefcount
 
 import numpy as np
 import torch
+from spikeinterface.core import BaseRecording
 from tqdm.auto import trange
 
 from ..localize.localize_util import localize_waveforms
 from ..util import data_util, drift_util, job_util
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import default_waveform_cfg
+from ..util.internal_config import (
+    ComputationConfig,
+    TemplateConfig,
+    WaveformConfig,
+    default_waveform_cfg,
+)
+from ..util.logging_util import get_logger
 from ..util.spiketorch import fast_nanmedian, nanmean
-
-from .get_templates import get_templates, apply_time_shifts
+from .get_templates import apply_time_shifts, fit_tsvd, get_templates
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, weighted_average
 
@@ -23,7 +28,7 @@ _motion_error_prefix = (
 )
 _aware_error = "motion_est must be passed to TemplateData.from_config()"
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -263,18 +268,18 @@ class TemplateData:
 
 def _from_config_with_realigned_sorting(
     cls,
-    recording,
-    sorting: DARTsortSorting,  # type: ignore
-    template_cfg,
-    waveform_cfg=default_waveform_cfg,
-    save_folder=None,
-    overwrite=False,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    template_cfg: TemplateConfig,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    save_folder: str | Path | None = None,
+    overwrite: bool = False,
     motion_est=None,
     save_npz_name: str | None = "template_data.npz",
     units_per_job=8,
     tsvd=None,
-    computation_cfg=None,
-    show_progress=True,
+    computation_cfg: ComputationConfig | None = None,
+    show_progress: bool = True,
 ) -> tuple[TemplateData, DARTsortSorting]:
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
@@ -293,9 +298,7 @@ def _from_config_with_realigned_sorting(
         logger.info("Sorting had time_shifts, applying before getting templates.")
         new_times_samples = sorting.times_samples + sorting.time_shifts
         ef = {k: v for k, v in sorting.extra_features.items() if k != "time_shifts"}
-        sorting: DARTsortSorting = replace(
-            sorting, times_samples=new_times_samples, extra_features=ef
-        )
+        sorting = replace(sorting, times_samples=new_times_samples, extra_features=ef)
 
     if template_cfg.actual_algorithm() == "by_chunk":
         template_data, realigned_sorting = get_templates_by_chunk(
@@ -365,7 +368,8 @@ def _from_config_with_realigned_sorting(
             min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
         )
         group_ids = superres_data["group_ids"]
-        sorting: DARTsortSorting = superres_data["sorting"]  # type: ignore
+        assert isinstance(superres_data["sorting"], DARTsortSorting)
+        sorting = superres_data["sorting"]
         properties = superres_data["properties"]
     else:
         group_ids = None
@@ -522,17 +526,24 @@ def get_chunked_templates(
 def get_templates_by_chunk(
     *,
     sorting: DARTsortSorting,
-    recording,
+    recording: BaseRecording,
     tsvd,
     motion_est,
-    waveform_cfg,
-    computation_cfg,
-    template_cfg,
+    waveform_cfg: WaveformConfig,
+    computation_cfg: ComputationConfig,
+    template_cfg: TemplateConfig,
     show_progress: bool,
     block_size=384,
     hard_block_size=512,
+    random_seed=0,
+    dtype=np.float32,
 ):
-    # TODO: smarter chunk size.
+    if template_cfg.denoising_method == "none":
+        block_size = hard_block_size = template_cfg.raw_templates_at_once
+    else:
+        block_size = template_cfg.templates_at_once
+        hard_block_size = template_cfg.max_templates_at_once
+
     assert sorting.labels is not None
     unit_ids = np.unique(sorting.labels)
     unit_ids = unit_ids[unit_ids >= 0]
@@ -541,6 +552,25 @@ def get_templates_by_chunk(
     n_blocks += n_units / n_blocks > hard_block_size
     assert n_units / n_blocks <= hard_block_size
     units_per_block = int(np.ceil(n_units / n_blocks).astype(int).item())
+
+    if tsvd is None:
+        logger.dartsortdebug("Fit or load TSVD...")
+        tsvd = fit_tsvd(
+            recording,
+            sorting,
+            dtype=dtype,
+            denoising_rank=template_cfg.denoising_rank,
+            denoising_fit_radius=template_cfg.denoising_fit_radius,
+            denoising_spikes_fit=template_cfg.denoising_spikes_fit,
+            recompute_tsvd=template_cfg.recompute_tsvd,
+            trough_offset_samples=waveform_cfg.trough_offset_samples(
+                recording.sampling_frequency
+            ),
+            spike_length_samples=waveform_cfg.spike_length_samples(
+                recording.sampling_frequency
+            ),
+            random_seed=random_seed,
+        )
 
     labels_tmp = np.full_like(sorting.labels, -1)
     realigned_spike_times = sorting.times_samples.copy()
@@ -578,7 +608,10 @@ def get_templates_by_chunk(
                 ix = block_realigned_sorting.extra_features["mask_indices"]
                 realigned_spike_times[ix] = block_realigned_sorting.times_samples[ix]
         else:
-            assert block_realigned_sorting.times_samples.shape == realigned_spike_times.shape
+            assert (
+                block_realigned_sorting.times_samples.shape
+                == realigned_spike_times.shape
+            )
 
     realigned_sorting = replace(sorting, times_samples=realigned_spike_times)
     template_data = stack_template_datas(template_datas)
@@ -609,22 +642,26 @@ def _get_templates_by_chunk_block(
         computation_cfg=computation_cfg,
         show_progress=show_progress,
     )
+
     template_data = peeler.compute_template_data(
         show_progress=show_progress, computation_cfg=computation_cfg
     )
-    realigned_sorting = apply_time_shifts(
-        sorting,
-        template_data=template_data,
-        trough_offset_samples=peeler.trough_offset_samples,
-        spike_length_samples=peeler.spike_length_samples,
-        recording_length_samples=recording.get_total_samples(),
-    )
+
     assert getrefcount(peeler) == 2, (
         f"Leaking the template peeler {getrefcount(peeler)=}."
     )
     del peeler
     gc.collect()
     torch.cuda.empty_cache()
+
+    fs = recording.sampling_frequency
+    realigned_sorting = apply_time_shifts(
+        sorting,
+        template_data=template_data,
+        trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
+        spike_length_samples=waveform_cfg.spike_length_samples(fs),
+        recording_length_samples=recording.get_total_samples(),
+    )
 
     return realigned_sorting, template_data
 
