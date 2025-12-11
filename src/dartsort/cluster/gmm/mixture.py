@@ -1487,7 +1487,7 @@ class BaseMixtureModel(BModule):
     def non_noise_log_proportion(self):
         raise NotImplementedError
 
-    def score(self, data: DenseSpikeData) -> Scores:
+    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
         raise NotImplementedError
 
     # -- shared logic
@@ -1939,13 +1939,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         batches = data.to_batches(self.unit_ids, self.lut)
         elbos = []
         j = -1
+        assert responsibilities.shape[1] == batches[0].candidates.shape[1]
         stats = SufficientStatistics.zeros(
             n_units=self.n_units,
             n_lut=self.lut_params.n_lut,
             feature_dim=self.neighb_cov.feat_rank * self.neighb_cov.n_channels,
             signal_rank=self.signal_rank,
             device=self.b.means.device,
-            skip_noise=responsibilities.shape[1] == batches[0].candidates.shape[1],
+            skip_noise=True,
         )
         # make use of the fixed sparsity structure, avoiding implicit nonzero()s below
         batch_sparse_ixs = []
@@ -1970,6 +1971,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         n_candidates=batch.candidates.shape[1],
                         fixed_responsibilities=bresp,
                         skip_responsibility=True,
+                        skip_noise=True,
                         spike_ixs=spike_ixs,
                         candidate_ixs=candidate_ixs,
                         unit_ixs=unit_ixs,
@@ -2029,13 +2031,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # more leeway than in em() here for when to panic about it.
         assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
 
-    def score(self, data: DenseSpikeData) -> Scores:
+    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
         scores = []
         for batch in data.to_batches(self.unit_ids, self.lut):
             batch_scores = self.score_batch(
                 batch=batch,
                 n_candidates=batch.candidates.shape[1],
                 skip_responsibility=True,
+                skip_noise=skip_noise,
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
@@ -2046,6 +2049,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         n_candidates: int,
         fixed_responsibilities: Tensor | None = None,
         skip_responsibility: bool = False,
+        skip_noise: bool = False,
         *,
         spike_ixs: Tensor | None = None,
         candidate_ixs: Tensor | None = None,
@@ -2072,6 +2076,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             neighb_ixs=neighb_ixs,
             lut_ixs=lut_ixs,
             static_size=batch.candidate_count,
+            skip_noise=skip_noise,
         )
 
     def estep_stats_batch(
@@ -2792,13 +2797,14 @@ class TMMView(BaseMixtureModel):
     def noise_log_prop(self) -> Tensor:  # type: ignore
         return self.tmm.b.noise_log_prop
 
-    def score(self, data: DenseSpikeData) -> Scores:
+    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
         scores = []
         for batch in data.to_batches(self.unit_ids, self.tmm.lut):
             batch_scores = self.tmm.score_batch(
                 batch=batch,
                 n_candidates=batch.candidates.shape[1],
                 skip_responsibility=True,
+                skip_noise=skip_noise,
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
@@ -2866,6 +2872,14 @@ class TMMStack(BaseMixtureModel):
         return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
 
     def get_params_at(self, indices: Tensor):
+        if not len(indices):
+            m = torch.empty_like(self.tmms[0].b.means[:0])
+            if self.signal_rank:
+                b = torch.empty_like(self.tmms[0].b.bases[:0])
+            else:
+                b = None
+            return m, b
+
         sub_model_inds = self.sub_model_inds[indices]
         model_rel_inds = self.sub_model_unit_ids[indices]
         means = []
@@ -2883,8 +2897,9 @@ class TMMStack(BaseMixtureModel):
             b = None
         return m, b
 
-    def score(self, data: DenseSpikeData) -> Scores:
-        scores = [tmm.score(data) for tmm in self.tmms]
+    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
+        assert skip_noise
+        scores = [tmm.score(data, skip_noise=skip_noise) for tmm in self.tmms]
 
         # stack the scores with unit ids remapped
         candidates = self.unit_ids[None].broadcast_to(
@@ -2898,7 +2913,7 @@ class TMMStack(BaseMixtureModel):
             assert score.responsibilities is None
             candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
             i0 = i1
-        log_liks = torch.stack([score.log_liks for score in scores], dim=1)
+        log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
         return Scores(log_liks=log_liks, candidates=candidates, responsibilities=None)
 
 
@@ -3485,8 +3500,8 @@ def brute_merge(
     del keep_mask
 
     # score the eval or train set with the all-subsets model
-    train_subset_scores = subset_models.score(train_data)
-    assert train_subset_scores.log_liks.shape[1] == subset_models.n_units + 1
+    train_subset_scores = subset_models.score(train_data, skip_noise=True)
+    assert train_subset_scores.log_liks.shape[1] == subset_models.n_units
     if eval_data is not None and isinstance(mm, TMMView):
         # merge case. cur_scores is mm's eval scores.
         eval_data, kept_spikes = eval_data.slice_by_coverage(
@@ -3496,8 +3511,8 @@ def brute_merge(
             return None
 
         cur_scores = cur_scores.slice(kept_spikes)
-        crit_full_scores = mm.score(eval_data)
-        crit_subset_scores = subset_models.score(eval_data)
+        crit_full_scores = mm.score(eval_data, skip_noise=True)
+        crit_subset_scores = subset_models.score(eval_data, skip_noise=True)
     elif eval_data is not None and isinstance(mm, TruncatedMixtureModel):
         # split case. recompute scores.
         cov0 = eval_data.lut_coverage(mm.unit_ids, mm.lut)
@@ -3510,8 +3525,8 @@ def brute_merge(
             eval_data = eval_data.slice(kept_spikes)
             cur_scores = cur_scores.slice(kept_spikes)
 
-        crit_full_scores = mm.score(eval_data)
-        crit_subset_scores = subset_models.score(eval_data)
+        crit_full_scores = mm.score(eval_data, skip_noise=True)
+        crit_subset_scores = subset_models.score(eval_data, skip_noise=True)
     else:
         assert eval_data is None
         crit_subset_scores = train_subset_scores
@@ -3519,8 +3534,8 @@ def brute_merge(
 
     # get scores for unaffected units
     assert cur_scores.log_liks.shape[1] == cur_scores.candidates.shape[1] + 1
-    assert crit_full_scores.log_liks.shape[1] == mm.n_units + 1
-    assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units + 1
+    assert crit_full_scores.log_liks.shape[1] in (mm.n_units, mm.n_units + 1)
+    assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units
     assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
     if pnoid:
@@ -4481,12 +4496,15 @@ def _score_batch(
     static_size: int | None = None,
     fixed_responsibilities: Tensor | None = None,
     skip_responsibility: bool = False,
+    skip_noise: bool = False,
 ):
     n, Ctot = candidates.shape
     assert whitenedx.shape[0] == n
     assert noise_logliks.shape == (n,)
     not_fixed = fixed_responsibilities is None
     do_resp = not_fixed and not skip_responsibility
+    if not not_fixed:
+        assert skip_noise
 
     if spike_ixs is None:
         spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
@@ -4500,8 +4518,8 @@ def _score_batch(
     if pnoid:
         assert (lut_ixs < lut.unit_ids.shape[0]).all()
 
-    lls = whitenedx.new_full((n, Ctot + not_fixed), fill_value=-torch.inf)
-    if not_fixed:
+    lls = whitenedx.new_full((n, Ctot + int(not skip_noise)), fill_value=-torch.inf)
+    if not skip_noise:
         lls[:, -1] = noise_logliks
         lls[:, -1].add_(noise_log_prop)
 
@@ -4788,8 +4806,7 @@ def _stat_pass_batch_ppca(
     nsp = spike_ixs.shape[0]
 
     # launch load / init kernels at top
-    Rf = x.new_zeros((nsp, hat_dim, feat_rank, n_channels + 1))
-    R = x.new_zeros((n_units, hat_dim, feat_rank, n_channels))
+    R = x.new_zeros((n_units * (n_channels + 1), hat_dim, feat_rank))
     Ulut = torch.zeros_like(lut_params_Tpad)
     whitenedxsp = whitenedx[spike_ixs]
     xc = x[spike_ixs]
@@ -4836,19 +4853,29 @@ def _stat_pass_batch_ppca(
     Ro = hatubar[:, :, None] * xc[:, None, :]
     Rm = hatubar[:, :, None] * CmoCooinvxc[:, None, :]
 
-    # gather (ahem) Ro, Rm onto full channel set
-    Ro = Ro.view(nsp, hat_dim, feat_rank, max_nc_obs)
-    Rm = Rm.view(nsp, hat_dim, feat_rank, max_nc_miss_near)
-    ix = obs_ix[:, None, None, :]
-    Rf.scatter_(dim=3, index=ix.broadcast_to(Ro.shape), src=Ro)
-    ix = miss_near_ix[:, None, None, :]
-    Rf.scatter_(dim=3, index=ix.broadcast_to(Rm.shape), src=Rm)
+    # the code below drops Ro, Rm into the right unit-channel indices of R
+    # I used to have this differently with an intermediate nsp x hat x feat x chans
+    # array and two scatters (this survives in rank0 impl below). this is faster
+    # despite the reshapes.
+    # TODO: everything would be faster if the full implementation was more channels-major...
 
-    # sufficient stats for R
-    Rf = Rf[:, :, :, :n_channels]
-    ix = unit_ixs[:, None, None, None].broadcast_to(Rf.shape)
-    R.scatter_add_(dim=0, index=ix, src=Rf)
-    R = R.view(n_units, hat_dim, feat_rank * n_channels)
+    ncuix = (n_channels + 1) * unit_ixs[:, None]
+    ixo = ncuix + obs_ix
+    Ro = Ro.view(nsp, hat_dim, feat_rank, max_nc_obs)
+    Ro = Ro.permute(0, 3, 1, 2).reshape(nsp * max_nc_obs, hat_dim, feat_rank)
+    ixo = ixo.view(-1, 1, 1).broadcast_to(Ro.shape)
+    R.scatter_add_(dim=0, index=ixo, src=Ro)
+
+    ixm = ncuix + miss_near_ix
+    Rm = Rm.view(nsp, hat_dim, feat_rank, max_nc_miss_near)
+    Rm = Rm.permute(0, 3, 1, 2).reshape(nsp * max_nc_miss_near, hat_dim, feat_rank)
+    ixm = ixm.view(-1, 1, 1).broadcast_to(Rm.shape)
+    R.scatter_add_(dim=0, index=ixm, src=Rm)
+
+    R = R.view(n_units, n_channels + 1, hat_dim, feat_rank)
+    R = R[:, :n_channels].permute(0, 2, 3, 1)
+    # alas, reshape
+    R = R.reshape(n_units, hat_dim, feat_rank * n_channels)
 
     # objective
     elb = mean_elbo_dim1(responsibilities, log_liks)
