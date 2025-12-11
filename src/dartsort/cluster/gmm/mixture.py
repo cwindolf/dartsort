@@ -1730,7 +1730,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cl_alpha: float,
         elbo_atol: float,
         noise_log_prop: Tensor | float = -torch.inf,
-    ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor]:
+    ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor]:
         """Fit units with fixed label posterior
 
         Used to construct hypothetical models:
@@ -1795,7 +1795,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # subset data to coverage
         keep_mask = (responsibilities > 0).logical_and_(chan_coverage)
-        (keep_spikes,) = keep_mask.any(dim=1).nonzero(as_tuple=True)
+        keep_mask = keep_mask.any(dim=1)
+        (keep_spikes,) = keep_mask.nonzero(as_tuple=True)
         any_spikes_discarded = keep_spikes.numel() < responsibilities.shape[0]
         if any_spikes_discarded:
             responsibilities = responsibilities[keep_spikes]
@@ -1817,7 +1818,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # run some em steps
         self.fixed_weight_em(data=data, responsibilities=responsibilities)
-        return self, valid, data, any_spikes_discarded, keep_spikes
+        return self, valid, data, any_spikes_discarded, keep_mask, keep_spikes
 
     def em(self, data: TruncatedSpikeData, show_progress: int = 1):
         assert self.lut_params is not None
@@ -2229,7 +2230,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert kmeans_responsibliities.shape[1] >= 2
 
         # initialize dense model with fixed resps
-        split_model, _, split_data, any_spikes_discarded, keep_spikes = (
+        split_model, _, split_data, any_spikes_discarded, keep_mask, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibliities,
@@ -2352,13 +2353,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
             for unit_id in unit_ids
         )
 
+        split_result = self._apply_unit_splits(
+            split_results, train_data=train_data, eval_data=eval_data
+        )
+
         # split generates a lot of weird small buffers
         gc.collect()
         torch.cuda.empty_cache()
 
-        return self._apply_unit_splits(
-            split_results, train_data=train_data, eval_data=eval_data
-        )
+        return split_result
 
     def merge(
         self,
@@ -2766,10 +2769,8 @@ class TMMView(BaseMixtureModel):
         )
         self.tmm = tmm
 
-    def unit_slice(self, unit_ids: Tensor) -> "TMMView":
-        return TMMView(self.tmm, self.unit_ids[unit_ids])
-
     def get_params_at(self, indices: Tensor):
+        # need this one!
         m = self.tmm.b.means[self.unit_ids[indices]]
         if self.signal_rank:
             b = self.tmm.b.bases[self.unit_ids[indices]]
@@ -2801,6 +2802,104 @@ class TMMView(BaseMixtureModel):
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
+
+
+class TMMStack(BaseMixtureModel):
+    def __init__(self, tmms: list[TruncatedMixtureModel]):
+        assert len(tmms) > 0
+
+        # build a unit id lookup table
+        # it is assumed that input models ids are linear, and this one
+        # makes its own linear space too
+        sub_model_unit_ids = []
+        sub_model_inds = []
+        self.start_ixs = []
+        n_so_far = 0
+        for j, tmm in enumerate(tmms):
+            if pnoid:
+                assert torch.equal(tmm.unit_ids.cpu(), torch.arange(len(tmm.unit_ids)))
+            sub_model_unit_ids.append(tmm.unit_ids)
+            sub_model_inds.append(torch.full_like(tmm.unit_ids, j))
+            self.start_ixs.append(n_so_far)
+            n_so_far += tmm.n_units
+        self.sub_model_unit_ids = torch.concatenate(sub_model_unit_ids)
+        self.sub_model_inds = torch.concatenate(sub_model_inds)
+        self.unit_ids = torch.arange(
+            self.sub_model_unit_ids.shape[0], device=self.sub_model_unit_ids.device
+        )
+
+        super().__init__(
+            max_distance=tmms[0].max_distance,
+            max_group_size=tmms[0].max_group_size,
+            unit_ids=self.unit_ids,
+            distance_kind=tmm.distance_kind,  # type: ignore
+            min_channel_count=tmms[0].min_channel_count,
+            signal_rank=tmms[0].signal_rank,
+            erp=tmms[0].erp,
+            neighb_cov=tmms[0].neighb_cov,
+            noise=tmms[0].noise,
+            em_iters=tmms[0].em_iters,
+            criterion_em_iters=tmms[0].criterion_em_iters,
+            prior_pseudocount=tmms[0].prior_pseudocount,
+            cl_alpha=tmms[0].cl_alpha,
+            elbo_atol=tmms[0].elbo_atol,
+        )
+        self.tmms = tmms
+
+    # this is used intermediately only intermediately in brute_merge,
+    # and only these methods are called
+
+    def get_lut(self):
+        unit_ids = []
+        neighb_ids = []
+        for tmm, start_ix in zip(self.tmms, self.start_ixs):
+            unit_ids.append(tmm.lut.unit_ids + start_ix)
+            neighb_ids.append(tmm.lut.neighb_ids)
+        unit_ids = torch.concatenate(unit_ids)
+        neighb_ids = torch.concatenate(neighb_ids)
+        lut = torch.full(
+            (self.n_units, self.tmms[0].lut.lut.shape[1]),
+            unit_ids.shape[0],
+            device=self.tmms[0].lut.lut.device,
+        )
+        lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
+        return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
+
+    def get_params_at(self, indices: Tensor):
+        sub_model_inds = self.sub_model_inds[indices]
+        model_rel_inds = self.sub_model_unit_ids[indices]
+        means = []
+        bases = []
+        for j in sub_model_inds.unique():
+            (in_j,) = (sub_model_inds == j).nonzero(as_tuple=True)
+            inds_j = model_rel_inds[in_j]
+            means.append(self.tmms[j].b.means[inds_j])
+            if self.signal_rank:
+                bases.append(self.tmms[j].b.bases[inds_j])
+        m = torch.concatenate(means)
+        if self.signal_rank:
+            b = torch.concatenate(bases)
+        else:
+            b = None
+        return m, b
+
+    def score(self, data: DenseSpikeData) -> Scores:
+        scores = [tmm.score(data) for tmm in self.tmms]
+
+        # stack the scores with unit ids remapped
+        candidates = self.unit_ids[None].broadcast_to(
+            scores[0].candidates.shape[0], self.n_units
+        )
+        candidates = candidates.contiguous()
+        i0 = 0
+        for score in scores:
+            i1 = i0 + score.candidates.shape[1]
+            assert score.candidates.shape[1] == score.log_liks.shape[1]
+            assert score.responsibilities is None
+            candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
+            i0 = i1
+        log_liks = torch.stack([score.log_liks for score in scores], dim=1)
+        return Scores(log_liks=log_liks, candidates=candidates, responsibilities=None)
 
 
 # -- helpers
@@ -3309,6 +3408,7 @@ def brute_merge(
     cur_unit_ids: Tensor,
     skip_full: bool,
     skip_single: bool,
+    max_fit_at_once: int = 8,
 ) -> GroupMergeResult:
     if pair_mask is not None and pair_mask.sum() == pair_mask.shape[0]:
         return None
@@ -3335,35 +3435,54 @@ def brute_merge(
     subset_resps = responsibilities.new_empty((responsibilities.shape[0], n_subsets))
     for s in range(n_subsets):
         subset_resps[:, s] = responsibilities[:, id_to_subset[s]].sum(dim=1)
-    subset_models, valid_subsets, train_data, any_spikes_discarded, keep_spikes = (
-        TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
-            data=train_data,
-            responsibilities=subset_resps,
-            signal_rank=mm.signal_rank,
-            erp=mm.erp,
-            min_count=mm.min_channel_count,  # this isn't used from here, shimming
-            min_channel_count=mm.min_channel_count,
-            noise=mm.noise,
-            max_group_size=mm.max_group_size,
-            max_distance=mm.max_distance,
-            neighb_cov=mm.neighb_cov,
-            min_iter=mm.criterion_em_iters,
-            max_iter=mm.em_iters,
-            prior_pseudocount=mm.prior_pseudocount,
-            cl_alpha=mm.cl_alpha,
-            total_log_proportion=mm.non_noise_log_proportion(),
-            elbo_atol=mm.elbo_atol,
+
+    subset_models_lst = []
+    keep_mask = None
+    any_spikes_discarded = False
+    for s0 in range(0, n_subsets, max_fit_at_once):
+        s1 = min(n_subsets, s0 + max_fit_at_once)
+        s0m, s0valid, _, s0discard, s0mask, _ = (
+            TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+                data=train_data,
+                responsibilities=subset_resps[:, s0:s1],
+                signal_rank=mm.signal_rank,
+                erp=mm.erp,
+                min_count=mm.min_channel_count,  # this isn't used from here, shimming
+                min_channel_count=mm.min_channel_count,
+                noise=mm.noise,
+                max_group_size=mm.max_group_size,
+                max_distance=mm.max_distance,
+                neighb_cov=mm.neighb_cov,
+                min_iter=mm.criterion_em_iters,
+                max_iter=mm.em_iters,
+                prior_pseudocount=mm.prior_pseudocount,
+                cl_alpha=mm.cl_alpha,
+                total_log_proportion=mm.non_noise_log_proportion(),
+                elbo_atol=mm.elbo_atol,
+            )
         )
-    )
-    assert valid_subsets.all()
+        subset_models_lst.append(s0m)
+        assert s0valid.all()
+        any_spikes_discarded = any_spikes_discarded or s0discard
+        if s0discard and keep_mask is None:
+            keep_mask = s0mask
+        elif s0discard:
+            assert keep_mask is not None
+            keep_mask.logical_or_(s0mask)
+
+    subset_models = stack_tmms(subset_models_lst)
     if any_spikes_discarded:
+        assert keep_mask is not None
+        (keep_spikes,) = keep_mask.nonzero(as_tuple=True)
         responsibilities = responsibilities[keep_spikes]
         subset_resps = subset_resps[keep_spikes]
+        train_data = train_data.slice(keep_spikes)
         if eval_data is None:
             assert cur_scores.log_liks.shape == train_full_scores.log_liks.shape
             cur_scores = cur_scores.slice(keep_spikes)
         train_full_scores = train_full_scores.slice(keep_spikes)
-    del keep_spikes
+        del keep_spikes
+    del keep_mask
 
     # score the eval or train set with the all-subsets model
     train_subset_scores = subset_models.score(train_data)
@@ -3371,7 +3490,7 @@ def brute_merge(
     if eval_data is not None and isinstance(mm, TMMView):
         # merge case. cur_scores is mm's eval scores.
         eval_data, kept_spikes = eval_data.slice_by_coverage(
-            subset_models.unit_ids, subset_models.lut
+            subset_models.unit_ids, subset_models.get_lut()
         )
         if torch.is_tensor(kept_spikes) and not kept_spikes.numel():
             return None
@@ -3382,7 +3501,7 @@ def brute_merge(
     elif eval_data is not None and isinstance(mm, TruncatedMixtureModel):
         # split case. recompute scores.
         cov0 = eval_data.lut_coverage(mm.unit_ids, mm.lut)
-        cov1 = eval_data.lut_coverage(subset_models.unit_ids, subset_models.lut)
+        cov1 = eval_data.lut_coverage(subset_models.unit_ids, subset_models.get_lut())
         cov = cov0.any(dim=1).logical_and_(cov1.any(dim=1))
         if not cov.all():
             (kept_spikes,) = cov.nonzero(as_tuple=True)
@@ -4199,6 +4318,13 @@ def concatenate_scores(scoress: list[Scores]) -> Scores:
     return Scores(
         log_liks=log_liks, responsibilities=responsibilities, candidates=candidates
     )
+
+
+def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:
+    if len(tmms) == 1:
+        return tmms[0]
+    else:
+        return TMMStack(tmms)
 
 
 # -- precomputing expensive things that depend on parameters and neighborhoods
