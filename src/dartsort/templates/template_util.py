@@ -115,7 +115,10 @@ def get_realigned_sorting(
     )
     sorting = results["sorting"]
     if reassign_channels:
-        max_chans = np.abs(results["templates"]).max(1).argmax(1)
+        assert "templates" in results
+        templates = results["templates"]
+        assert isinstance(templates, np.ndarray)
+        max_chans = np.abs(templates).max(1).argmax(1)
         new_channels = max_chans[sorting.labels]
         sorting = replace(sorting, channels=new_channels)
     return sorting
@@ -292,9 +295,9 @@ def svd_compress_templates(
         vis_templates = torch.as_tensor(templates * vis_mask)
         U, S, Vh = _svd_helper(vis_templates)
         # s is descending.
-        temporal_components = U[:, :, :rank].astype(dtype).numpy(force=True)
-        singular_values = s[:, :rank].astype(dtype).numpy(force=True)
-        spatial_components = Vh[:, :rank, :].astype(dtype).numpy(force=True)
+        temporal_components = U[:, :, :rank].to(dtype).numpy(force=True)
+        singular_values = S[:, :rank].to(dtype).numpy(force=True)
+        spatial_components = Vh[:, :rank, :].to(dtype).numpy(force=True)
     else:
         # channel sparse: only SVD the nonzero channels
         # this encodes the same exact subspace as above, and the reconstruction
@@ -357,9 +360,7 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(
-        t, step=1.0 / temporal_upsampling_factor
-    )  # pyright: ignore[reportCallIssue]
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(
@@ -468,9 +469,9 @@ def compressed_upsampled_templates(
     )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[
-        compressed_upsampling_index < 0
-    ] = current_compressed_index
+    compressed_upsampling_index[compressed_upsampling_index < 0] = (
+        current_compressed_index
+    )
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(
@@ -502,7 +503,7 @@ def _svd_helper(x):
         # torch's cuda results need a certain driver to agree with numpy
         try:
             return torch.linalg.svd(x, full_matrices=False, driver="gesvda")
-        except torch.linalg.LinAlgError:
+        except torch.linalg.LinAlgError:  # type: ignore[reportPrivateImportUsage]
             return torch.linalg.svd(x, full_matrices=False, driver="gesvd")
     else:
         # torch's CPU results are disagreeing with numpy here.
@@ -512,3 +513,63 @@ def _svd_helper(x):
         S = torch.from_numpy(S)
         Vh = torch.from_numpy(Vh)
         return U, S, Vh
+
+
+def get_main_channels_and_alignments(template_data, trough_factor=3.0, templates=None):
+    if templates is None:
+        templates = template_data.templates
+    main_chans = np.ptp(templates, axis=1).argmax(1)
+    mc_traces = np.take_along_axis(templates, main_chans[:, None, None], axis=2)[
+        :, :, 0
+    ]
+    aligner_traces = np.where(mc_traces < 0, trough_factor * mc_traces, -mc_traces)
+    offsets = np.abs(aligner_traces).argmax(1)
+    return main_chans, mc_traces, offsets
+
+
+def estimate_offset(
+    templates,
+    strategy="mainchan_trough_factor",
+    trough_factor=3.0,
+    min_weight=0.75,
+):
+    if strategy == "main_chan_trough_factor":
+        _, _, offsets = get_main_channels_and_alignments(
+            None, trough_factor=trough_factor, templates=templates
+        )
+        return offsets
+
+    if strategy == "normsq_weighted_trough_factor":
+        tmp = np.square(templates)
+        weights = tmp.sum(axis=1)
+        weights /= weights.max(axis=1, keepdims=True)
+        weights[weights < min_weight] = 0.0
+        weights /= weights.sum(axis=1, keepdims=True)
+        print(f"{weights[[25, 19, 32, 29]][:, 20:30]=}")
+        tmp[:] = templates
+        tmp[tmp < 0] *= trough_factor
+        np.abs(tmp, out=tmp)
+        offsets = tmp.argmax(axis=1).astype(np.float64)
+        print(
+            f"{offsets[[25, 19, 32, 29]][:, 20:30]*(weights[[25, 19, 32, 29]][:, 20:30]>0)=}"
+        )
+        offsets = np.sum(offsets * weights, axis=1)
+        offsets = np.rint(offsets).astype(np.int64)
+        return offsets
+
+    if strategy == "ampsq_weighted_trough_factor":
+        weights = np.square(np.ptp(templates, axis=1))
+        weights /= weights.max(axis=1, keepdims=True)
+        weights[weights < min_weight] = 0.0
+        weights /= weights.sum(axis=1, keepdims=True)
+        print(f"{weights[[25, 19, 32, 29]][:, 20:30]=}")
+        tmp = templates.copy()
+        tmp[tmp < 0] *= trough_factor
+        np.abs(tmp, out=tmp)
+        offsets = tmp.argmax(axis=1).astype(np.float64)
+        print(
+            f"{offsets[[25, 19, 32, 29]][:, 20:30]*(weights[[25, 19, 32, 29]][:, 20:30]>0)=}"
+        )
+        offsets = np.sum(offsets * weights, axis=1)
+        offsets = np.rint(offsets).astype(np.int64)
+        return offsets

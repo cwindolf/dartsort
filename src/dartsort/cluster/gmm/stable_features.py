@@ -394,7 +394,7 @@ class StableSpikeDataset(torch.nn.Module):
             core_features = None
             if core_radius is not None:
                 core_features = interpolation_util.interpolate_by_chunk(
-                    np.ones(len(sorting), dtype=np.bool),
+                    np.ones(len(sorting), dtype=np.bool_),
                     h5[features_dataset_name],
                     geom,
                     extract_channel_index,

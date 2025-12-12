@@ -124,10 +124,10 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
 
         try:
             if type_ == bool:
-                parser.add_argument(name, action=FieldBooleanOptionalAction, **kw)
+                parser.add_argument(name, action=FieldBooleanOptionalAction, **kw)  # type: ignore
             else:
                 parser.add_argument(
-                    name, action=FieldStoreAction, type=type_, required=required, **kw
+                    name, action=FieldStoreAction, type=type_, required=required, **kw  # type: ignore
                 )
         except Exception as e:
             ee = ValueError(f"Exception raised while adding {field=} to CLI")

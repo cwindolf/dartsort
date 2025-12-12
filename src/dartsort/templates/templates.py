@@ -553,7 +553,8 @@ def get_templates_by_chunk(
     assert n_units / n_blocks <= hard_block_size
     units_per_block = int(np.ceil(n_units / n_blocks).astype(int).item())
 
-    if tsvd is None:
+    need_tsvd = template_cfg.denoising_method != "none"
+    if need_tsvd and tsvd is None:
         logger.dartsortdebug("Fit or load TSVD...")
         tsvd = fit_tsvd(
             recording,

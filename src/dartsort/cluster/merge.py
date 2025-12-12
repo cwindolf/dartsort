@@ -1,6 +1,4 @@
-from dataclasses import replace
 from typing import Optional
-from logging import getLogger
 import warnings
 
 import numpy as np
@@ -11,6 +9,7 @@ from tqdm.auto import tqdm
 
 
 from ..util.internal_config import TemplateConfig
+from ..util.logging_util import get_logger
 from ..templates import TemplateData, template_util
 from ..peel.matching_util.pairwise_util import (
     construct_shift_indices,
@@ -20,7 +19,7 @@ from ..util.data_util import DARTsortSorting, combine_sortings
 from ..util import job_util
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def merge_templates(
@@ -109,7 +108,7 @@ def merge_templates(
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
-        **dist_matrix_kwargs,
+        **dist_matrix_kwargs,  # type: ignore
     )
 
     # now run hierarchical clustering
@@ -197,7 +196,7 @@ def merge_across_sortings(
             tsvd=denoising_tsvd,
             computation_cfg=computation_cfg,
         )
-        dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(
+        dists, shifts, snrs_a, snrs_b = cross_match_distance_matrix(  # type: ignore
             template_data_a,
             template_data_b,
             superres_linkage=superres_linkage,
@@ -282,8 +281,8 @@ def calculate_merge_distances(
 
         tixa = res.template_indices_a
         tixb = res.template_indices_b
-        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms
-        sup_shifts[tixa, tixb] = res.shifts
+        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms  # type: ignore
+        sup_shifts[tixa, tixb] = res.shifts  # type: ignore
 
     # apply linkage to reduce across superres templates
     units = np.unique(template_data.unit_ids)
@@ -424,13 +423,7 @@ def recluster(
         return sorting, np.arange(dists.shape[0])
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
-    # complete linkage: max dist between all pairs across clusters.
-    if link == "weighted_template":
-        if dist_matrix_kwargs is None:
-            dist_matrix_kwargs = {}
-        Z = weighted_template_linkage(dists, units, template_data, **dist_matrix_kwargs)
-    else:
-        Z = linkage(pdist, method=link)
+    Z = linkage(pdist, method=link)
     # extract flat clustering using our max dist threshold
     new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
     assert new_labels.min() == 1  # start at 1 for some reason
@@ -468,7 +461,9 @@ def recluster(
             # subtracting will move trough of og to the right.
             times_updated[in_orig_unit] -= shift_og_best
 
-    new_sorting = replace(sorting, times_samples=times_updated, labels=labels_updated)
+    new_sorting = sorting.ephemeral_replace(
+        times_samples=times_updated, labels=labels_updated
+    )
     return new_sorting, new_labels
 
 
@@ -523,7 +518,7 @@ def cross_match(
     #     times_b = sorting_b.times_samples - shifts_b
 
     # sorting_a = replace(sorting_a)#, times_samples=times_a)
-    sorting_b = replace(sorting_b, labels=b_labels)  # , times_samples=times_b)
+    sorting_b = sorting_b.ephemeral_replace(labels=b_labels)  # , times_samples=times_b)
     return sorting_a, sorting_b
 
 
@@ -606,7 +601,7 @@ def get_deconv_resid_decrease_iter(
         amplitude_scaling_boundary=amplitude_scaling_boundary,
         ignore_empty_channels=ignore_empty_channels,
         distance_kind=distance_kind,
-        max_shift=max_shift_samples,
+        max_shift=max_shift_samples,  # type: ignore
         conv_batch_size=conv_batch_size,
         units_batch_size=units_batch_size,
         device=device,

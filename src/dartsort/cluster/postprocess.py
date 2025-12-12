@@ -79,7 +79,7 @@ def realign_and_chuck_noisy_template_units(
     new_labels[~valid] = -1
     _, new_labels[valid] = np.unique(new_labels[valid], return_inverse=True)
 
-    new_sorting = replace(sorting, labels=new_labels)
+    new_sorting = sorting.ephemeral_replace(labels=new_labels)
     new_template_data = TemplateData(
         templates=template_data.templates[good_templates],
         unit_ids=new_template_unit_ids,
@@ -110,7 +110,7 @@ def reorder_by_depth(sorting, template_data):
     valid = np.flatnonzero(sorting.labels >= 0)
     labels = np.full_like(sorting.labels, -1)
     labels[valid] = old_to_new[sorting.labels[valid]]
-    sorting = replace(sorting, labels=labels)
+    sorting = sorting.ephemeral_replace(labels=labels)
 
     uids = np.arange(len(new_to_old))
     scbc = template_data.raw_std_dev
@@ -159,7 +159,7 @@ def postprocess(
         logger.info("Sorting had time_shifts, applying before getting templates.")
         new_times_samples = sorting.times_samples + sorting.time_shifts
         ef = {k: v for k, v in sorting.extra_features.items() if k != "time_shifts"}
-        sorting = replace(sorting, times_samples=new_times_samples, extra_features=ef)
+        sorting = sorting.ephemeral_replace(times_samples=new_times_samples, extra_features=ef)
 
     # get tsvd to share across steps
     if tsvd is None and template_cfg.denoising_method not in (None, "none"):
@@ -227,7 +227,7 @@ def postprocess(
     recompute_labels = np.where(
         np.isin(sorting.labels, needs_recompute), sorting.labels, -1
     )
-    recompute_sorting = replace(sorting, labels=recompute_labels)
+    recompute_sorting = sorting.ephemeral_replace(labels=recompute_labels)
     recompute_sorting, recompute_template_data = realign_and_chuck_noisy_template_units(
         recording,
         recompute_sorting,

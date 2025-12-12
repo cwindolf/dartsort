@@ -1,24 +1,23 @@
-import dataclasses
-from logging import getLogger
-from typing import Callable
+from typing import cast
 
 import h5py
 
 try:
     from hdbscan import HDBSCAN
 except ImportError:
-    from sklearn.cluster import HDBSCAN
+    from sklearn.cluster import HDBSCAN  # type: ignore
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
 
-from dartsort.util import data_util, drift_util, waveform_util
+from ..util import data_util, drift_util, waveform_util
+from ..util.logging_util import get_logger
 from dredge.motion_util import IdentityMotionEstimate
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps=1e-5):
@@ -221,7 +220,7 @@ def reorder_by_depth(sorting, motion_est=None):
     # this one is some food for thought, lol.
     labels[kept] = np.argsort(np.argsort(centroids))[kept_labels]
 
-    return dataclasses.replace(sorting, labels=labels)
+    return sorting.ephemeral_replace(labels=labels)
 
 
 def closest_registered_channels(
@@ -352,7 +351,7 @@ def get_main_channel_pcs(
     features = np.empty((mask.sum(), rank), dtype=np.float32)
     with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
         feats_dset = h5[dataset_name]
-        channel_index = h5["channel_index"][:]
+        channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
         for ixs, feats in data_util.yield_masked_chunks(
             mask, feats_dset, show_progress=show_progress, desc_prefix="Main channel"
         ):

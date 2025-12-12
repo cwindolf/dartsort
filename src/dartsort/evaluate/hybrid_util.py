@@ -1,28 +1,28 @@
 import dataclasses
+import time
+import warnings
 from logging import getLogger
 from pathlib import Path
-import time
-from typing import Generator, Any
-import warnings
+from typing import Any, Generator, cast
 
 import numpy as np
+import torch
 from probeinterface import Probe
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.generation.drift_tools import (
-    InjectDriftingTemplatesRecording,
     DriftingTemplates,
+    InjectDriftingTemplatesRecording,
     move_dense_templates,
 )
-import torch
 from tqdm.auto import tqdm
 
+from ..config import DeveloperConfig
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import unshifted_raw_template_cfg, ComputationConfig
-from ..config import DeveloperConfig
-from . import simkit, comparison, analysis
-
+from ..util.internal_config import ComputationConfig, unshifted_raw_template_cfg
+from ..util.py_util import resolve_path
+from . import analysis, comparison, simkit
 
 logger = getLogger(__name__)
 
@@ -110,14 +110,15 @@ def get_drifty_hybrid_recording(
 
 def precompute_displaced_registered_templates(
     template_data: TemplateData,
-    geometry: np.array,
-    displacements: np.array,
+    geometry: np.ndarray,
+    displacements: np.ndarray,
     sampling_frequency: float = 30000,
     template_subset=slice(None),
 ) -> DriftingTemplates:
     """Use spikeinterface tools to turn templates on registered geom into
     precomputed drifting templates on the regular geom.
     """
+    assert template_data.registered_geom is not None
     source_probe = Probe(ndim=template_data.registered_geom.ndim)
     source_probe.set_contacts(positions=template_data.registered_geom)
     target_probe = Probe(ndim=geometry.ndim)
@@ -149,6 +150,7 @@ def closest_clustering(
     gt_pos = gt_st.times_samples[:, None]
     peel_pos = peel_st.times_samples[:, None]
     if match_radius_um:
+        assert isinstance(geom, np.ndarray)
         rescale = rescale + (geom.shape[1] * [match_radius_um])
         gt_pos = np.c_[gt_pos, geom[gt_st.channels]]
         peel_pos = np.c_[peel_pos, geom[peel_st.channels]]
@@ -158,13 +160,13 @@ def closest_clustering(
     gt_pos /= rescale
     peel_pos /= rescale
     peelix2gtix = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
-    labels = peelix2gtix.copy()
+    labels = peelix2gtix.copy()  # type: ignore
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
     extra_features = peel_st.extra_features or {}
     extra_features = extra_features.copy()
     extra_features["match_ix"] = torch.from_numpy(peelix2gtix)
-    return dataclasses.replace(peel_st, labels=labels, extra_features=extra_features)
+    return peel_st.ephemeral_replace(labels=labels, gt_match_ix=peelix2gtix)
 
 
 def greedy_match(
@@ -173,7 +175,7 @@ def greedy_match(
     max_val=1.0,
     dx=1.0 / 30,
     workers=-1,
-    p=2.0,
+    p=2,
     show_progress=True,
 ):
     """Greedily match spikes in a test sorting to those in a GT sorting
@@ -210,10 +212,11 @@ def greedy_match(
         d, i = test_kdtree.query(
             gt_coords[gt_ix],
             k=1,
-            distance_upper_bound=min(thresh, max_val),
+            distance_upper_bound=min(thresh, max_val),  # type: ignore
             workers=workers,
             p=p,
         )
+        i = np.atleast_1d(i)
         # handle multiple gt spikes getting matched to the same peel ix
         thresh_matched = i < test_kdtree.n
         _, ii = np.unique(i, return_index=True)
@@ -286,7 +289,7 @@ def sorting_from_times_labels(
     labels,
     recording=None,
     motion_est=None,
-    sampling_frequency=None,
+    sampling_frequency=30000.0,
     determine_channels=True,
     template_cfg=unshifted_raw_template_cfg,
     n_jobs=0,
@@ -297,16 +300,17 @@ def sorting_from_times_labels(
         if recording is not None:
             sampling_frequency = recording.sampling_frequency
 
-    extra_features = {}
+    efeat = {}
     if recording is not None:
-        extra_features['times_seconds'] = recording.sample_index_to_time(times_samples)
+        efeat['times_seconds'] = recording.sample_index_to_time(times_samples)
 
     sorting = DARTsortSorting(
         times_samples=times_samples,
         channels=channels,
         labels=labels,
         sampling_frequency=sampling_frequency,
-        extra_features=extra_features,
+        parent_h5_path=None,
+        ephemeral_features=efeat,
     )
 
     if not determine_channels:
@@ -315,7 +319,7 @@ def sorting_from_times_labels(
     assert recording is not None
 
     _, labels_flat = np.unique(labels, return_inverse=True)
-    sorting = dataclasses.replace(sorting, labels=labels_flat)
+    sorting = sorting.ephemeral_replace(labels=labels_flat)
     template_cfg = dataclasses.replace(template_cfg, spikes_per_unit=spikes_per_unit)
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
     td = TemplateData.from_config(
@@ -327,6 +331,7 @@ def sorting_from_times_labels(
         from scipy.spatial import KDTree
 
         rgeom = td.registered_geom
+        assert rgeom is not None
         guess_pos = rgeom[channels]
         times_seconds = recording.sample_index_to_time(times_samples)
         # anti-correct these already stable positions so that they start movin
@@ -339,7 +344,8 @@ def sorting_from_times_labels(
         # largest distance that a unit would ever extend, or something, but let's not worry.
         d, channels = gkdt.query(guess_pos, workers=n_jobs)
 
-    sorting = dataclasses.replace(sorting, channels=channels)
+    assert isinstance(channels, np.ndarray)
+    sorting = sorting.ephemeral_replace(channels=channels)
 
     return sorting, td
 
@@ -382,7 +388,7 @@ def load_dartsort_step_sortings(
     recluster_format="recluster{step}",
     mtime_gap_minutes=0,
     name_formatter=None,
-) -> Generator[tuple[str, DARTsortSorting], None, None]:
+) -> Generator[tuple[str, DARTsortSorting] | tuple[None, None], None, None]:
     """Returns list of step names and sortings, ordered.
 
     The mtime thing is trying to prevent reading hdf5 files which are in active
@@ -391,7 +397,7 @@ def load_dartsort_step_sortings(
     mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
-            detection_h5_path = sorting_dir / dh5n
+            detection_h5_path = cast(Path, sorting_dir / dh5n)
             if not detection_h5_path.exists():
                 continue
             if mtime_dt:
@@ -424,6 +430,7 @@ def load_dartsort_step_sortings(
         name_formatter = _same
 
     for step, h5 in enumerate(h5s):
+        h5 = resolve_path(h5)
         if not h5.exists():
             continue
         st0 = DARTsortSorting.from_peeling_hdf5(
@@ -438,7 +445,7 @@ def load_dartsort_step_sortings(
             if npy.exists():
                 yield (
                     name_formatter("initial"),
-                    dataclasses.replace(st0, labels=np.load(npy)),
+                    st0.ephemeral_replace(labels=np.load(npy)),
                 )
             else:
                 warnings.warn(f"Initial {npy} does not exist.")
@@ -450,7 +457,7 @@ def load_dartsort_step_sortings(
                 stem = npy.stem.removesuffix("_labels")
                 yield (
                     name_formatter(stem),
-                    dataclasses.replace(st0, labels=np.load(npy)),
+                    st0.ephemeral_replace(labels=np.load(npy)),
                 )
         else:
             yield (name_formatter(h5.stem), st0)
@@ -461,7 +468,7 @@ def load_dartsort_step_sortings(
         if recluster_npy.exists():
             yield (
                 name_formatter(reclustr),
-                dataclasses.replace(st0, labels=np.load(recluster_npy)),
+                st0.ephemeral_replace(labels=np.load(recluster_npy)),
             )
 
         # refinement steps
@@ -469,7 +476,7 @@ def load_dartsort_step_sortings(
         for npy in sorted(sorting_dir.glob(f"{stepstr}refstep*.npy")):
             yield (
                 name_formatter(npy.stem.removesuffix("_labels")),
-                dataclasses.replace(st0, labels=np.load(npy)),
+                st0.ephemeral_replace(labels=np.load(npy)),
             )
 
         # refinement final
@@ -477,7 +484,7 @@ def load_dartsort_step_sortings(
         if npy.exists():
             yield (
                 name_formatter(stepstr),
-                dataclasses.replace(st0, labels=np.load(npy)),
+                st0.ephemeral_replace(labels=np.load(npy)),
             )
 
 
@@ -502,6 +509,9 @@ def load_dartsort_step_unit_info_dataframes(
         step_format=step_format,
     )
     for step_ix, (step_name, step_sorting) in enumerate(step_sortings):
+        if step_name is None:
+            continue
+        assert step_sorting is not None
         name = f"{sorting_name}: {step_name}" if sorting_name else step_name
         step_analysis = analysis.DARTsortAnalysis(step_sorting, recording, name=name)
         step_comparison = comparison.DARTsortGroundTruthComparison(

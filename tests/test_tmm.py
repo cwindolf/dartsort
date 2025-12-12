@@ -68,18 +68,20 @@ def test_topk_candidates(
     if stepwise < 0:
         for j in range(-stepwise):
             cnew, cnu = gmm.tmm.prepare_step()
-            assert cnew.device.type != 'cpu' or not cnu
+            assert cnew.device.type != "cpu" or not cnu
             check_tmm_invariants(gmm, including_labels=initial_e_step, d=True)
         return
 
     for j in range(stepwise):
         res = gmm.tmm.step(hard_label=True)
-        rlabels = res['labels'].cpu()
+        rlabels = res["labels"].cpu()
         (kept,) = (rlabels >= 0).nonzero(as_tuple=True)
         cands0kept = gmm.tmm.candidates.candidates[kept, 0]
         rlabelskept = rlabels[kept]
         assert torch.equal(rlabelskept, cands0kept)
-        check_tmm_invariants(gmm, including_labels=False, including_adjacency=False, d=True)
+        check_tmm_invariants(
+            gmm, including_labels=False, including_adjacency=False, d=True
+        )
 
     if not stepwise:
         gmm.tvi(lls=lls, final_split=final_split)
@@ -91,7 +93,7 @@ def test_topk_candidates(
         )
 
     cnew, cnu = gmm.tmm.prepare_step()
-    assert cnew.device.type != 'cpu' or not cnu
+    assert cnew.device.type != "cpu" or not cnu
     # last check for adjacency
     check_tmm_invariants(
         gmm, including_labels=not stepwise and final_split == "train", d=True

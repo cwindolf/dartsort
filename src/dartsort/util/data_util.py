@@ -1,8 +1,8 @@
 from collections import namedtuple
-from dataclasses import dataclass, replace
-from logging import getLogger
+from copy import copy
+from dataclasses import replace
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Sequence, cast, Self
 import warnings
 
 import h5py
@@ -12,10 +12,11 @@ from spikeinterface.core import NumpySorting, get_random_data_chunks
 from tqdm.auto import tqdm
 
 from ..detect import detect_and_deduplicate
+from ..util.logging_util import get_logger
 from ..util.py_util import resolve_path
 from .waveform_util import make_channel_index
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
@@ -24,7 +25,6 @@ logger = getLogger(__name__)
 SpikeDataset = namedtuple("SpikeDataset", ["name", "shape_per_spike", "dtype"])
 
 
-@dataclass
 class DARTsortSorting:
     """Class which holds spike times, channels, and labels
 
@@ -40,57 +40,202 @@ class DARTsortSorting:
     `extra_features`, and they will also be available as .properties.
     """
 
-    times_samples: np.ndarray
-    channels: np.ndarray
-    labels: np.ndarray | None = None
-    sampling_frequency: float = 30000.0
-    parent_h5_path: str | Path | None = None
+    def __init__(
+        self,
+        *,
+        times_samples: np.ndarray,
+        channels: np.ndarray,
+        labels: np.ndarray | None,
+        parent_h5_path: str | Path | None = None,
+        sampling_frequency: float | int = 30000.0,
+        persistent_features: dict[str, np.ndarray] | None = None,
+        ephemeral_features: dict[str, np.ndarray] | None = None,
+    ):
+        self.n_spikes = times_samples.shape[0]
+        if parent_h5_path is not None:
+            parent_h5_path = resolve_path(parent_h5_path, strict=True)
+        self.parent_h5_path = parent_h5_path
+        self.sampling_frequency = float(sampling_frequency)
 
-    # entries in this dictionary will also be set as properties
-    extra_features: dict[str, np.ndarray] | None = None
+        self.times_samples = times_samples
+        assert channels.shape == (self.n_spikes,)
+        self.channels = channels
+        if labels is None:
+            labels = np.zeros_like(times_samples)
+        assert labels.shape == (self.n_spikes,)
+        self.labels = labels
+        self.unit_ids = np.unique(labels)
+        self.unit_ids = self.unit_ids[self.unit_ids >= 0]
+        self.n_units = self.unit_ids.shape[0]
 
-    def __post_init__(self):
-        self.times_samples = np.asarray(self.times_samples, dtype=np.int64)
-        n_spikes = self.times_samples.shape[0]
-        assert self.times_samples.ndim == 1
+        self._ephemeral_feature_names = []
+        if ephemeral_features is not None:
+            for k, v in ephemeral_features.items():
+                check_shape = not self._is_geom_related(k)
+                self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
-        if self.labels is None:
-            self.labels = np.zeros_like(self.times_samples)
-        self.labels = np.asarray(self.labels, dtype=np.int64)
-        assert self.labels.shape == (n_spikes,)
-        self._n_units = None
-        if self.parent_h5_path is not None:
-            self.parent_h5_path = Path(self.parent_h5_path).absolute()
+        self._loaded_persistent_features = []
+        if persistent_features is not None:
+            for k, v in persistent_features.items():
+                check_shape = not self._is_geom_related(k)
+                self._register_persistent_feature(k, v, check_shape=check_shape)
 
-        self.channels = np.asarray(self.channels, dtype=np.int64)
-        assert self.times_samples.shape == self.channels.shape
+    def ephemeral_replace(
+        self, *, check_shapes=True, **new_features: np.ndarray
+    ) -> Self:
+        other = copy(self)
+        for k, v in new_features.items():
+            if k in ("times_samples", "channels", "labels"):
+                if check_shapes:
+                    assert v.shape == (other.n_spikes,)
+                setattr(other, k, v)
+            else:
+                other.add_ephemeral_feature(
+                    k, v, check_shape=check_shapes, overwrite=True
+                )
+        return other
 
-        unit_ids = np.unique(self.labels)
-        self.unit_ids = unit_ids[unit_ids >= 0]
+    # interface for setting features
 
-        if self.extra_features:
-            for k in self.extra_features:
-                v = self.extra_features[k] = np.asarray(self.extra_features[k])
-                if k.endswith("channel_index") or k == "geom":
-                    continue
-                if v.shape[0] != n_spikes:
-                    raise ValueError(
-                        f"Feature {k} has strange shape {v.shape}, since {n_spikes=}."
-                    )
+    def add_ephemeral_feature(
+        self, feature_name: str, feature: np.ndarray, check_shape=True, overwrite=False
+    ):
+        """
+        Ephemeral features are accessible as properties and persisted to/from .npz,
+        but not saved in the .h5.
+        """
+        if check_shape:
+            assert feature.shape[0] == self.n_spikes
 
-    def __getattr__(self, name: str):
-        if self.extra_features is not None:
-            if name in self.extra_features:
-                return self.extra_features[name]
+        already_ephemeral = feature_name in self._ephemeral_feature_names
+        already_attr = hasattr(self, feature_name)
+        if already_ephemeral:
+            assert already_attr
+        if already_attr and not overwrite:
+            raise ValueError(
+                f"Can't add feature {feature_name}, since it already exists."
+            )
+        if not already_ephemeral:
+            self._ephemeral_feature_names.append(feature_name)
+        setattr(self, feature_name, feature)
 
-    def to_numpy_sorting(self):
-        return NumpySorting.from_samples_and_labels(
-            samples_list=self.times_samples,
-            labels_list=self.labels,
-            sampling_frequency=self.sampling_frequency,
+    def add_feature(self, feature_name: str, feature: np.ndarray, check_shape=True):
+        """Try to save a feature to h5, else register as ephemeral."""
+        if self.parent_h5_path is None:
+            self.add_ephemeral_feature(feature_name, feature, check_shape)
+        else:
+            self._register_persistent_feature(feature_name, feature, check_shape)
+
+    def _register_persistent_feature(
+        self, feature_name: str, feature: np.ndarray, check_shape=True
+    ):
+        """Persistent features are written to the h5."""
+        if self.parent_h5_path is None:
+            raise ValueError(
+                f"Can't register persistent feature {feature_name}, because "
+                f"there is no .hdf5 file."
+            )
+        if check_shape:
+            assert feature.shape[0] == self.n_spikes
+        self._loaded_persistent_features.append(feature_name)
+        setattr(self, feature_name, feature)
+        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
+            if feature_name not in h5:
+                logger.dartsortdebug(
+                    "Registering persistent feature %s to %s.",
+                    feature_name,
+                    self.parent_h5_path,
+                )
+                h5.create_dataset(feature_name, data=feature)
+
+    # save / load
+
+    @classmethod
+    def from_peeling_hdf5(
+        cls,
+        h5_path: str | Path,
+        *,
+        times_samples_dataset="times_samples",
+        channels_dataset="channels",
+        labels_dataset="labels",
+        load_feature_names: Sequence[str] | None = None,
+        load_simple_features=True,
+        load_all_features=False,
+    ) -> Self:
+        """Load sorting from .hdf5 format saved by peelers
+
+        Arguments
+        ---------
+        load_feature_names : optional list of str
+            Load exactly these features, plus geom/channel index.
+        load_simple_features : bool
+            If load_feature_names unspecified, load all scalar or vector
+            features (per spike), but no matrix-valued features like waveforms
+            or multi-channel PCA features.
+        load_all_features : bool
+        """
+        h5_path = resolve_path(h5_path, strict=True)
+
+        with h5py.File(h5_path, "r", libver="latest", locking=False) as h5:
+            times_samples = cast(h5py.Dataset, h5[times_samples_dataset])[:]
+            n = times_samples.shape[0]
+            channels = cast(h5py.Dataset, h5[channels_dataset])[:]
+            sampling_frequency = float(
+                cast(h5py.Dataset, h5["sampling_frequency"])[()].item()
+            )
+            if labels_dataset in h5:
+                labels = cast(h5py.Dataset, h5[labels_dataset])[:]
+            else:
+                labels = None
+
+            if load_feature_names is None and load_all_features:
+                load_feature_names = list(h5.keys())
+            elif load_feature_names is None and load_simple_features:
+                load_feature_names = []
+                for k in h5.keys():
+                    if cls._is_geom_related(k):
+                        load_feature_names.append(k)
+                        continue
+                    dset = cast(h5py.Dataset, h5[k])
+                    is_simple = dset.ndim <= 2 and dset.shape[0] == n
+                    if is_simple:
+                        load_feature_names.append(k)
+            elif load_feature_names is None:
+                load_feature_names = [k for k in h5.keys() if cls._is_geom_related(k)]
+            assert load_feature_names is not None
+
+            already_loaded = [
+                times_samples_dataset,
+                channels_dataset,
+                labels_dataset,
+                "sampling_frequency",
+            ]
+            load_feature_names = [
+                k for k in load_feature_names if k not in already_loaded
+            ]
+            persistent_features = {
+                k: cast(h5py.Dataset, h5[k])[:] for k in load_feature_names
+            }
+
+        return cls(
+            times_samples=times_samples,
+            channels=channels,
+            labels=labels,
+            sampling_frequency=sampling_frequency,
+            persistent_features=persistent_features,
+            parent_h5_path=h5_path,
         )
 
-    def save(self, sorting_npz):
+    def save(self, sorting_npz: str | Path):
+        """Support persisting myself in non-h5-supportable cases
+
+        Cases:
+         - When there is no h5!
+         - When my labels disagree with the .h5 labels.
+
+        This is done by saving to .npz, with a pointer to the .h5 file if
+        it exists.
+        """
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
@@ -98,56 +243,18 @@ class DARTsortSorting:
         )
         if self.labels is not None:
             data["labels"] = self.labels
-        if self.parent_h5_path:
+
+        have_hdf5 = self.parent_h5_path is not None
+        if have_hdf5:
             data["parent_h5_path"] = np.array(str(self.parent_h5_path))
-            assert self.extra_features is not None
-            data["feature_keys"] = np.array(list(self.extra_features.keys()))
-        elif self.extra_features is not None:
-            data.update(self.extra_features)
-            data["feature_keys"] = np.array(list(self.extra_features.keys()))
+        for k in self._ephemeral_feature_names:
+            data[k] = getattr(self, k)
+        data["ephemeral_feature_names"] = np.array(self._ephemeral_feature_names)
+        data["loaded_persistent_features"] = np.array(self._loaded_persistent_features)
         np.savez(sorting_npz, **data, allow_pickle=False)
 
-    def mask(self, mask):
-        if np.dtype(mask.dtype).kind == "b":
-            mask = mask.nonzero()
-
-        extra_features = dict(mask_indices=mask)
-        if self.extra_features:
-            n = self.n_spikes
-            for k, v in self.extra_features.items():
-                assert k != "mask_indices"  # no recursion...
-                if k == "geom" or k.endswith("channel_index"):
-                    extra_features[k] = v
-                elif v.shape[0] != n:
-                    continue
-                else:
-                    extra_features[k] = v[mask]
-
-        return replace(
-            self,
-            times_samples=self.times_samples[mask],
-            channels=self.channels[mask],
-            labels=self.labels[mask] if self.labels is not None else None,
-            parent_h5_path=self.parent_h5_path,
-            extra_features=extra_features,
-        )
-
-    def drop_missing(self):
-        assert self.labels is not None
-        valid = np.flatnonzero(self.labels >= 0)
-        return self.mask(valid)
-    
-    def flatten(self):
-        assert self.labels is not None
-        valid = np.flatnonzero(self.labels >= 0)
-        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
-        new_labels = np.full_like(self.labels, -1)
-        new_labels[valid] = flat_labels
-        return replace(self, labels=new_labels)
-
     @classmethod
-    def load(cls, sorting_npz, feature_keys=None):
-        extra_features = {}
+    def load(cls, sorting_npz, additional_persistent_features=None):
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -155,21 +262,28 @@ class DARTsortSorting:
             sampling_frequency = data["sampling_frequency"]
             if isinstance(sampling_frequency, np.ndarray):
                 sampling_frequency = sampling_frequency.item()
-            parent_h5_path = None
-            if "parent_h5_path" in data:
-                parent_h5_path = str(data["parent_h5_path"].item())
-                if feature_keys is None:
-                    feature_keys = list(map(str, data["feature_keys"]))
-            elif "feature_keys" in data and feature_keys is None:
-                assert "parent_h5_path" not in data
-                feature_keys = list(map(str, data["feature_keys"]))
-                extra_features = {k: data[k] for k in feature_keys}
-
-        if parent_h5_path:
-            with h5py.File(parent_h5_path, "r", libver="latest", locking=False) as h5:
-                extra_features: dict[str, np.ndarray] = {
-                    k: h5[k][()] for k in feature_keys  # type: ignore
+            parent_h5_path = data.get("parent_h5_path", None)
+            if "ephemeral_feature_names" in data:
+                ephemeral_features = {
+                    k: data[k] for k in data["ephemeral_feature_names"]
                 }
+            else:
+                ephemeral_features = {}
+            loaded_persistent_features = data.get("loaded_persistent_features", [])
+
+        if parent_h5_path is not None:
+            if additional_persistent_features:
+                loaded_persistent_features = set(
+                    loaded_persistent_features + additional_persistent_features
+                )
+            self = cls.from_peeling_hdf5(
+                parent_h5_path,
+                load_feature_names=list(loaded_persistent_features),
+            )
+            return self.ephemeral_replace(
+                times_samples=times_samples, **ephemeral_features
+            )
+        assert not loaded_persistent_features
 
         return cls(
             times_samples=times_samples,
@@ -177,16 +291,45 @@ class DARTsortSorting:
             labels=labels,
             sampling_frequency=sampling_frequency,
             parent_h5_path=parent_h5_path,
-            extra_features=extra_features,
+            ephemeral_features=ephemeral_features,
         )
 
-    @property
-    def n_spikes(self):
-        return self.times_samples.size
+    def to_numpy_sorting(self) -> NumpySorting:
+        return NumpySorting.from_samples_and_labels(
+            samples_list=self.times_samples,
+            labels_list=self.labels,
+            sampling_frequency=self.sampling_frequency,
+        )
 
-    @property
-    def n_units(self):
-        return self.unit_ids.size
+    def mask(self, mask: np.ndarray) -> Self:
+        assert mask.ndim == 1
+        if np.dtype(mask.dtype).kind == "b":
+            assert mask.shape == (self.n_spikes,)
+            mask = np.flatnonzero(mask)
+        assert mask.max() < self.n_spikes
+
+        replace = {}
+        for k in self._ephemeral_feature_names + self._loaded_persistent_features:
+            assert k != "mask_indices"  # no recursion...
+            v = getattr(self, k)
+            if self._is_geom_related(k):
+                continue
+            assert v.shape[0] == self.n_spikes
+            replace[k] = v[mask]
+
+        return self.ephemeral_replace(mask_indices=mask, **replace)
+
+    def drop_missing(self):
+        assert self.labels is not None
+        return self.mask(self.labels >= 0)
+
+    def flatten(self):
+        assert self.labels is not None
+        valid = np.flatnonzero(self.labels >= 0)
+        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        new_labels = np.full_like(self.labels, -1)
+        new_labels[valid] = flat_labels
+        return self.ephemeral_replace(labels=new_labels)
 
     def __str__(self):
         name = self.__class__.__name__
@@ -194,26 +337,22 @@ class DARTsortSorting:
         nu = self.n_units
         unit_str = f"{nu} unit" + "s" * (nu > 1)
         feat_str = ""
-        if self.extra_features:
-            feat_str = ", ".join(self.extra_features.keys())
-            feat_str = f" Extras: {feat_str}."
+        if self._loaded_persistent_features:
+            s = ", ".join(self._loaded_persistent_features)
+            feat_str += f"Loaded HDF5 features: {s}. "
+        if self._ephemeral_feature_names:
+            s = ", ".join(self._ephemeral_feature_names)
+            feat_str += f"Features: {s}. "
         h5_str = ""
         if self.parent_h5_path:
             h5_str = f" From HDF5 file {self.parent_h5_path}."
-        return f"{name}: {ns} spikes, {unit_str}.{feat_str}{h5_str}"
-
-    def summary(self):
-        name = self.__class__.__name__
-        ns = self.n_spikes
-        nu = self.n_units
-        unit_str = f"{nu} unit" + "s" * (nu > 1)
         if self.labels is not None:
             noise_prop = (self.labels < 0).mean().item()
             noise_pct = 100 * noise_prop
             noise_str = f" ({noise_pct:.2f}% noise)"
         else:
             noise_str = ""
-        return f"{name}: {ns} spikes{noise_str}, {nu} units."
+        return f"{name}: {ns} spikes{noise_str}, {unit_str}.{feat_str}{h5_str}"
 
     def __repr__(self):
         return str(self)
@@ -221,112 +360,9 @@ class DARTsortSorting:
     def __len__(self):
         return self.n_spikes
 
-    @classmethod
-    def from_peeling_hdf5(
-        cls,
-        peeling_hdf5_filename,
-        times_samples_dataset="times_samples",
-        channels_dataset="channels",
-        labels_dataset="labels",
-        load_simple_features=True,
-        load_feature_names=None,
-        simple_feature_maxshape=1000,
-        load_all_features=False,
-        labels=None,  # type: ignore
-    ):
-        with h5py.File(
-            peeling_hdf5_filename, "r", libver="latest", locking=False
-        ) as h5:
-            times_samples: np.ndarray = h5[times_samples_dataset][()]  # type: ignore
-            sampling_frequency: float = h5["sampling_frequency"][()]  # type: ignore
-            if channels_dataset in h5:
-                channels: np.ndarray = h5[channels_dataset][()]  # type: ignore
-            else:
-                raise ValueError(f"{channels_dataset} not in {peeling_hdf5_filename}.")
-            if labels_dataset in h5 and labels is None:
-                labels: np.ndarray = h5[labels_dataset][()]  # type: ignore
-
-            n_spikes = len(times_samples)
-            extra_features = None
-            if load_simple_features or load_all_features:
-                extra_features = {}
-                loaded = (times_samples_dataset, channels_dataset, labels_dataset)
-                if load_feature_names is None:
-                    load_feature_names = h5.keys()
-                else:
-                    load_feature_names = list(load_feature_names)
-                    gk = (
-                        k
-                        for k in h5.keys()
-                        if k.endswith("channel_index") or k == "geom"
-                    )
-                    load_feature_names.extend(gk)
-                    load_all_features = True
-                for k in load_feature_names:
-                    if k.endswith("channel_index") or k == "geom":
-                        extra_features[k] = h5[k][:]  # type: ignore
-                        continue
-
-                    is_loadable = (
-                        k not in loaded
-                        and 1 <= h5[k].ndim  # type: ignore
-                        and h5[k].shape[0] == n_spikes  # type: ignore
-                    )
-                    is_simple = (
-                        is_loadable
-                        and h5[k].ndim <= 2  # type: ignore
-                        and h5[k].shape[0] == n_spikes  # type: ignore
-                        and (h5[k].ndim < 2 or h5[k].shape[1] < simple_feature_maxshape)  # type: ignore
-                    )
-                    if (load_all_features and is_loadable) or is_simple:
-                        extra_features[k] = h5[k][()]  # type: ignore
-
-        return cls(
-            times_samples,
-            channels=channels,
-            labels=labels,
-            sampling_frequency=sampling_frequency,
-            parent_h5_path=str(peeling_hdf5_filename),
-            extra_features=extra_features,
-        )
-
-    def _stored_datasets(self):
-        if self.parent_h5_path is None:
-            return []
-        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
-            return list(h5.keys())
-
-    def _masked_load(self, dset, mask=None, indices=None, batch_transition=1000) -> np.ndarray:
-        assert self.parent_h5_path is not None
-        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
-            if indices is not None and len(indices) < batch_transition:
-                return h5[dset][indices]  # type: ignore
-            return batched_h5_read(h5[dset], mask=mask, indices=indices)
-
-    def _chunked_map_with_indices(self, dset, fn):
-        """fn should take args slice_, chunk"""
-        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
-            g = h5[dset]
-            slices_and_chunks = yield_chunks(g)
-
-            # run once on the first chunk to figure out shapes
-            s, c = next(slices_and_chunks)
-            res = fn(s, c)
-            assert len(res) == len(c)
-            shape_per_spike = res.shape[1:]
-
-            # allocate output and save first chunk result
-            N: int = len(g)  # type: ignore
-            total_shape = (N, *shape_per_spike)
-            out = np.empty(total_shape, dtype=res.dtype)
-            out[s] = res
-            del res
-
-            # loop the rest
-            for s, c in slices_and_chunks:
-                out[s] = fn(s, c)
-
-        return out
+    @staticmethod
+    def _is_geom_related(k):
+        return k == "geom" or k.endswith("channel_index")
 
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):

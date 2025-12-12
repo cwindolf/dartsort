@@ -22,6 +22,7 @@ from sklearn.decomposition import PCA
 
 from ..cluster import merge, relocate
 from ..util.internal_config import TemplateConfig
+from ..util.registration_util import try_load_motion_est
 from ..templates import TemplateData
 from ..transform import WaveformPipeline
 from ..util.data_util import (
@@ -197,9 +198,7 @@ class DARTsortAnalysis:
         if template_data is None:
             template_data = TemplateData.from_npz(Path(model_dir) / template_data_npz)
         if motion_est is None:
-            if (hdf5_path.parent / motion_est_pkl).exists():
-                with open(hdf5_path.parent / motion_est_pkl, "rb") as jar:
-                    motion_est = pickle.load(jar)
+            motion_est = try_load_motion_est(hdf5_path.parent, motion_est_pkl)
         pipeline, _ = get_featurization_pipeline(hdf5_path)
         return cls(
             sorting, recording, template_data, hdf5_path, pipeline, motion_est, **kwargs

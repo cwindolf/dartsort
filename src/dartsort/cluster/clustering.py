@@ -1,4 +1,3 @@
-from dataclasses import replace
 import gc
 
 import numpy as np
@@ -128,7 +127,7 @@ class Clusterer:
 
     def cluster(self, features, sorting, recording, motion_est=None):
         labels = self._cluster(features, sorting, recording, motion_est)
-        sorting = replace(sorting, labels=labels)
+        sorting = sorting.ephemeral_replace(labels=labels)
         if self.labels_fmt and self.save_labels_dir is not None:
             assert "{" not in self.labels_fmt
             assert "}" not in self.labels_fmt
@@ -634,7 +633,7 @@ class ForwardBackwardEnsembler(Refinement):
             l = self.clusterer._cluster(f, s, recording, motion_est)
             labels = np.full_like(sorting.labels, -1)
             labels[mask] = l
-            chunk_sortings.append(replace(sorting, labels=labels))
+            chunk_sortings.append(sorting.ephemeral_replace(labels=labels))
 
         labels = forward_backward.forward_backward(
             chunk_time_ranges_s,
@@ -644,7 +643,7 @@ class ForwardBackwardEnsembler(Refinement):
             adaptive_feature_scales=self.refinement_cfg.adaptive_feature_scales,
             motion_est=motion_est,
         )
-        sorting = replace(sorting, labels=labels)
+        sorting = sorting.ephemeral_replace(labels=labels)
         return sorting
 
 

@@ -1,5 +1,5 @@
 import traceback
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import gc
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -269,7 +269,7 @@ def _dartsort_impl(
         orig_h5_path = resolve_path(sorting.parent_h5_path, strict=True)
         final_h5_path = output_dir / orig_h5_path.name
         assert final_h5_path.exists()
-        sorting = replace(sorting, parent_h5_path=final_h5_path)
+        sorting.parent_h5_path = final_h5_path
     ds_handle_delete_intermediate_features(cfg, sorting, output_dir, work_dir)
 
     sorting.save(output_dir / "dartsort_sorting.npz")

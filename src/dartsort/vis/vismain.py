@@ -1,6 +1,6 @@
 from logging import getLogger
-import pickle
 from pathlib import Path
+from typing import Callable
 import warnings
 
 import matplotlib.pyplot as plt
@@ -16,6 +16,7 @@ from ..util.internal_config import (
     ComputationConfig,
 )
 from ..util.job_util import get_global_computation_config
+from ..util.registration_util import try_load_motion_est
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit, gt, unit_comparison, versus
 from .sorting import make_sorting_summary
@@ -206,6 +207,7 @@ def visualize_all_sorting_steps(
     gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
+    step_name_filter: Callable | None=None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     amp_vecs_dataset_name="denoised_ptp_amplitude_vectors",
     motion_est=None,
@@ -227,10 +229,7 @@ def visualize_all_sorting_steps(
     visualizations_dir = Path(visualizations_dir)
 
     if motion_est is None:
-        motion_est_pkl = dartsort_dir / motion_est_pkl
-        if motion_est_pkl.exists():
-            with open(motion_est_pkl, "rb") as jar:
-                motion_est = pickle.load(jar)
+        motion_est = try_load_motion_est(dartsort_dir, motion_est_pkl)
 
     fnames = ["times_seconds"]
     if make_scatterplots or make_sorting_summaries:
@@ -262,6 +261,9 @@ def visualize_all_sorting_steps(
     with tqdm(steps, desc="Sorting steps", mininterval=0, total=nsteps) as prog:
         for j, (step_name, step_sorting) in prog:
             if step_name is None:
+                continue
+            if step_name_filter is not None and not step_name_filter(step_name):
+                print(f"Filter skipped {step_name}.")
                 continue
             if start_from_matching:
                 h5p = step_sorting.parent_h5_path

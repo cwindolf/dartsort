@@ -6,9 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-from dartsort.util.py_util import resolve_path, dartcopy2, dartcopytree
-from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.internal_config import DARTsortInternalConfig
+from ..util.py_util import resolve_path, dartcopy2, dartcopytree
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import DARTsortInternalConfig
+from ..util.registration_util import save_motion_est
 
 logger = getLogger(__name__)
 
@@ -77,13 +78,7 @@ def ds_save_motion_est(
 ):
     if work_dir is None:
         return
-    if motion_est is None:
-        return
-
-    motion_est_pkl = output_dir / "motion_est.pkl"
-    if overwrite or not motion_est_pkl.exists():
-        with open(motion_est_pkl, "wb") as jar:
-            pickle.dump(motion_est, jar)
+    save_motion_est(motion_est, output_dir)
 
 
 def ds_save_features(
