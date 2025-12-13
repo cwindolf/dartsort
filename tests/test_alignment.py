@@ -159,26 +159,24 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert st1.times_samples.shape == gt_st.times_samples.shape
 
     # both have voltage features
-    assert all(st.voltages is not None for st in sts)
+    assert all(getattr(st, "voltages", None) is not None for st in sts)
 
     # they have or don't have shifts
-    assert st0.extra_features is not None
-    assert st1.extra_features is not None
-    assert "time_shifts" not in st0.extra_features
-    assert "time_shifts" in st1.extra_features
+    assert not hasattr(st0, "time_shifts")
+    assert hasattr(st1, "time_shifts")
 
     # st0 is bad
     assert not np.array_equal(st0.times_samples, gt_st.times_samples)
 
     # st1 is perfect
     assert np.array_equal(st0.times_samples, st1.times_samples)
-    assert np.array_equal(st1.times_samples + st1.time_shifts, gt_st.times_samples)
+    assert np.array_equal(st1.times_samples + st1.time_shifts, gt_st.times_samples)  # type: ignore
 
     # -- the template computation handles time_shifts correctly
     # to do this, we need to cluster the detections. we can just cheat and use the sign.
     # unit 0 had positive sign, hence the <
     sts = [
-        replace(st, labels=(st.voltages < 0).astype(int))
+        st.ephemeral_replace(labels=(st.voltages < 0).astype(int))  # type: ignore
         for st in sts
         if st.voltages is not None  # for pyright.
     ]
@@ -303,7 +301,7 @@ def test_template_shifts(
         channels=gt_st.channels,
         labels=labels,
         sampling_frequency=gt_st.sampling_frequency,
-        extra_features=dict(time_shifts=time_shifts),
+        ephemeral_features=dict(time_shifts=time_shifts),
     )
     if align_max < t:
         temps0 = template_makers(rec, st, align=False, align_max=align_max)

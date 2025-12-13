@@ -238,9 +238,7 @@ class TemplateConfig:
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
-        "loot"
-    )
+    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = "loot"
     use_raw: bool = True
     use_svd: bool = True
     use_zero: bool = True

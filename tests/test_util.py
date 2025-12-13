@@ -18,10 +18,10 @@ def no_overlap_recording_sorting(
     times = np.arange(n_templates) * spike_length_samples + trough_offset_samples
     times_seconds = times / fs
     sorting = DARTsortSorting(
-        times + pad,
-        np.zeros(n_templates),
-        np.arange(n_templates),
-        extra_features=dict(
+        times_samples=times + pad,
+        channels=np.zeros(n_templates, dtype=np.int64),
+        labels=np.arange(n_templates),
+        ephemeral_features=dict(
             point_source_localizations=locs, times_seconds=times_seconds
         ),
     )
@@ -42,6 +42,8 @@ def rc2xy(row, col, version=1):
     elif np.floor(version) == 2:
         x = col * 32
         y = row * 15
+    else:
+        assert False
     return {"x": x, "y": y}
 
 

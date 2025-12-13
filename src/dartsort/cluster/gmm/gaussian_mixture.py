@@ -377,7 +377,7 @@ class SpikeMixtureModel(torch.nn.Module):
 
     def to_sorting(self):
         labels = self.labels.numpy(force=False).copy()
-        return replace(self.data.original_sorting, labels=labels)
+        return self.data.original_sorting.ephemeral_replace(labels=labels)
 
     def tvi(
         self,

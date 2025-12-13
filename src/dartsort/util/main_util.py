@@ -1,17 +1,16 @@
-from dataclasses import asdict
-from logging import getLogger
-import pickle
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
-from ..util.py_util import resolve_path, dartcopy2, dartcopytree
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import DARTsortInternalConfig
+from ..util.logging_util import get_logger
+from ..util.py_util import dartcopy2, dartcopytree, resolve_path
 from ..util.registration_util import save_motion_est
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def ds_save_intermediate_labels(
@@ -34,9 +33,11 @@ def ds_save_intermediate_labels(
 
     step_labels_npy = store_dir / f"{step_name}_labels.npy"
     logger.info(f"Saving {step_name} labels to {step_labels_npy}")
-    logger.info(f"{step_name}: {step_sorting.summary()}.")
+    logger.info(f"{step_name}: {step_sorting}.")
     if step_labels is None:
         step_labels = step_sorting.labels
+    if step_labels is None:
+        raise ValueError(f"No step labels to save at step {step_name}.")
     np.save(step_labels_npy, step_labels, allow_pickle=False)
 
     if work_dir is not None:
@@ -177,7 +178,8 @@ def ds_fast_forward(store_dir, cfg):
         cur_labels_npy = store_dir / f"refined{cur_step}_labels.npy"
         if cur_labels_npy.exists():
             labels = np.load(cur_labels_npy)
-            sorting = DARTsortSorting.from_peeling_hdf5(cur_h5, labels=labels)
+            sorting = DARTsortSorting.from_peeling_hdf5(cur_h5)
+            sorting = sorting.ephemeral_replace(labels=labels)
             logger.info(
                 f"Resuming at step {cur_step + 1} with previous sorting from "
                 f"{cur_h5.name} and {cur_labels_npy.name}."
@@ -206,6 +208,8 @@ def ds_fast_forward(store_dir, cfg):
         f"{prev_h5.name} and {prev_labels_npy.name}."
     )
 
-    prev_sorting = DARTsortSorting.from_peeling_hdf5(prev_h5, labels=prev_labels)
+    prev_sorting = DARTsortSorting.from_peeling_hdf5(prev_h5)
+    if prev_labels is not None:
+        prev_sorting = prev_sorting.ephemeral_replace(labels=prev_labels)
 
     return cur_step, prev_sorting

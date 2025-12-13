@@ -845,7 +845,7 @@ class SplitStrategyPlot(UnitPlot):
             split_labels[in_unit] = 0
             unit_ids = 0
             counts = [str(in_unit.size)]
-        split_sorting = replace(sorting_analysis.sorting, labels=split_labels)
+        split_sorting = sorting_analysis.sorting.ephemeral_replace(labels=split_labels)
         split_sorting_analysis = DARTsortAnalysis.from_sorting(
             self.recording,
             split_sorting,

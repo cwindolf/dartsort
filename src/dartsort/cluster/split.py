@@ -109,7 +109,7 @@ def split_clusters(
                 for i in new_units:
                     jobs.append(pool.submit(_split_job, np.flatnonzero(labels == i)))
                 if show_progress:
-                    iterator.total += len(new_units)
+                    iterator.total += len(new_units)  # type: ignore
             elif split_big:
                 new_units = np.unique(new_untriaged_labels)
                 for i in new_units:
@@ -121,9 +121,9 @@ def split_clusters(
                             pool.submit(_split_job, np.flatnonzero(labels == i))
                         )
                         if show_progress:
-                            iterator.total += 1
+                            iterator.total += 1  # type: ignore
 
-    new_sorting = replace(sorting, labels=labels)
+    new_sorting = sorting.ephemeral_replace(labels=labels)
     if depth_order:
         new_sorting = cluster_util.reorder_by_depth(new_sorting, motion_est=motion_est)
     return new_sorting
@@ -1181,7 +1181,7 @@ class ChunkForwardBackwardFeatureSplit(FeatureSplit):
                 ],  # Needed for initialization but not for anything else
                 channels=self.channels[in_unit],
                 labels=new_labels,
-                extra_features={
+                ephemeral_features={
                     "point_source_localizations": self.xyza[in_unit],
                     "denoised_ptp_amplitudes": self.amplitudes[in_unit],
                     "times_seconds": self.t_s[in_unit],

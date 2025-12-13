@@ -1,21 +1,20 @@
 from dataclasses import replace
 from pathlib import Path
-from logging import getLogger
 
 import numpy as np
 
-from ..util.spiketorch import ptp
-from ..util.py_util import resolve_path
-from ..util.internal_config import (
-    default_matching_cfg,
-    default_waveform_cfg,
-    coarse_template_cfg,
-)
 from ..templates import TemplateData
 from ..templates.get_templates import fit_tsvd
+from ..util.internal_config import (
+    coarse_template_cfg,
+    default_matching_cfg,
+    default_waveform_cfg,
+)
+from ..util.logging_util import get_logger
+from ..util.py_util import resolve_path
+from ..util.spiketorch import ptp
 
-
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def realign_and_chuck_noisy_template_units(
@@ -155,11 +154,11 @@ def postprocess(
         raise ValueError("No labels in sorting input to template postprocessing.")
 
     # apply my time shifts only once and remove them so template extractor doesn't do it again
-    if sorting.extra_features and "time_shifts" in sorting.extra_features:
+    if (time_shifts := getattr(sorting, "time_shifts", None)) is not None:
         logger.info("Sorting had time_shifts, applying before getting templates.")
-        new_times_samples = sorting.times_samples + sorting.time_shifts
-        ef = {k: v for k, v in sorting.extra_features.items() if k != "time_shifts"}
-        sorting = sorting.ephemeral_replace(times_samples=new_times_samples, extra_features=ef)
+        new_times_samples = sorting.times_samples + time_shifts
+        sorting = sorting.ephemeral_replace(times_samples=new_times_samples)
+        sorting.remove_feature("time_shifts")
 
     # get tsvd to share across steps
     if tsvd is None and template_cfg.denoising_method not in (None, "none"):

@@ -1,10 +1,11 @@
 # TODO: arg_group to group arguments in the -h.
-from pathlib import Path
-from dataclasses import _MISSING_TYPE, MISSING, fields, field, asdict
-from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
 import typing
+from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
+from dataclasses import _MISSING_TYPE, MISSING, asdict, field, fields
+from pathlib import Path
 from typing import Any, Callable
-from annotated_types import Gt, Ge, Lt, Le
+
+from annotated_types import Ge, Gt, Le, Lt
 
 
 def ensurepath(path: str | Path, strict=True):
@@ -127,7 +128,11 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
                 parser.add_argument(name, action=FieldBooleanOptionalAction, **kw)  # type: ignore
             else:
                 parser.add_argument(
-                    name, action=FieldStoreAction, type=type_, required=required, **kw  # type: ignore
+                    name,
+                    action=FieldStoreAction,
+                    type=type_,
+                    required=required,
+                    **kw,  # type: ignore
                 )
         except Exception as e:
             ee = ValueError(f"Exception raised while adding {field=} to CLI")

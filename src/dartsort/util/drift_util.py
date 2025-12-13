@@ -332,7 +332,7 @@ def get_spike_pitch_shifts(
 
     if depths_um is None:
         assert sorting is not None
-        depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
+        depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
 
     if registered_depths_um is None and motion_est is None:
         return np.zeros(depths_um.shape, dtype=int)
@@ -522,6 +522,7 @@ def get_waveforms_on_static_channels(
     )
     uniq_channels, uniq_n_pitches_shift = uniq_channels_and_shifts.T
     uniq_shifts = np.c_[np.zeros(uniq_channels.shape[0]), uniq_n_pitches_shift * pitch]
+    assert channel_index is not None
     uniq_moving_pos = (
         padded_geom[channel_index[uniq_channels]] + uniq_shifts[:, None, :]
     )
@@ -585,7 +586,7 @@ def get_waveforms_on_static_channels(
         if two_d:
             static_waveforms = static_waveforms[:, 0]
         return static_waveforms
-    
+
     # below, numpy case.
     if out is None:
         static_waveforms = np.full(

@@ -277,7 +277,7 @@ class RunningTemplates(GrabAndFeaturize):
                 assert np.array_equal(group_ids[ixs], sorting.labels[l_valid])
                 labels_flat = np.full_like(sorting.labels, -1)
                 labels_flat[l_valid] = ixs
-                sorting = replace(sorting, labels=labels_flat)
+                sorting = sorting.ephemeral_replace(labels=labels_flat)
                 assert sorting.labels is not None
                 logger.dartsortverbose(
                     f"Flatten from {group_ids.max()} to {len(group_ids)}=={sorting.labels.max() + 1}."

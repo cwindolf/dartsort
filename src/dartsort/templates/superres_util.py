@@ -63,7 +63,7 @@ def superres_sorting(
     # load spike depths
     # TODO: relying on this index feels wrong
     spike_times_s = sorting.times_seconds
-    spike_depths_um = sorting.extra_features[localizations_dataset_name][:, 2]
+    spike_depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
 
     # remove spikes far away from the probe
     if probe_margin_um is not None:
@@ -114,7 +114,7 @@ def superres_sorting(
 
     # back to un-triaged label space
     full_labels[kept] = superres_labels
-    superres_sorting = replace(sorting, labels=full_labels)
+    superres_sorting = sorting.ephemeral_replace(labels=full_labels)
     return dict(
         group_ids=superres_to_original,
         sorting=superres_sorting,

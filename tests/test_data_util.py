@@ -4,6 +4,7 @@ Test conversions among DARTsortSorting, NumpySorting, and HDF5 formats.
 
 import tempfile
 from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -19,10 +20,12 @@ def test_to_numpy_sorting():
     rg = np.random.default_rng(0)
     channels = rg.integers(0, 384, size=(100,))
     labels = rg.integers(0, 10, size=(100,))
-    dsorting = DARTsortSorting(times_samples, channels, labels=labels)
+    dsorting = DARTsortSorting(
+        times_samples=times_samples, channels=channels, labels=labels
+    )
     npsorting = dsorting.to_numpy_sorting()
 
-    si_spiketrain = npsorting.to_spike_vector()
+    si_spiketrain = cast(np.recarray, npsorting.to_spike_vector())
     si_times = si_spiketrain["sample_index"]
     si_labels = si_spiketrain["unit_index"]
     assert np.array_equal(si_times, times_samples)
@@ -46,6 +49,7 @@ def test_from_peeling():
         dsorting = DARTsortSorting.from_peeling_hdf5(peeling_h5)
         assert np.array_equal(dsorting.times_samples, times_samples)
         assert np.array_equal(dsorting.channels, channels)
+        assert dsorting.labels is not None
         assert np.array_equal(dsorting.labels, labels)
 
 
@@ -58,7 +62,7 @@ def test_check_recording():
 
     with pytest.warns(Warning) as warninfo:
         check_recording(rec)
-    warnings = {(w.category, w.message.args[0][:11]) for w in warninfo}
+    warnings = {(w.category, w.message.args[0][:11]) for w in warninfo} # pyright: ignore[reportAttributeAccessIssue]
     expected = {
         (RuntimeWarning, "Detected 50"),
         (RuntimeWarning, "Recording v"),

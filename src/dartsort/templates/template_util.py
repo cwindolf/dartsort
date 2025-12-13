@@ -16,31 +16,6 @@ from .get_templates import get_raw_templates, get_templates
 # -- alternate template constructors
 
 
-def get_single_raw_template(
-    recording,
-    spike_times_samples,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    spikes_per_unit=500,
-    reducer=np.median,
-    random_seed=0,
-):
-    single_sorting = DARTsortSorting(
-        spike_times_samples, channels=np.zeros_like(spike_times_samples)
-    )
-    return get_raw_templates(
-        recording,
-        single_sorting,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        spikes_per_unit=spikes_per_unit,
-        reducer=reducer,
-        random_seed=random_seed,
-        realign_peaks=False,
-        show_progress=False,
-    )
-
-
 def get_registered_templates(
     recording,
     sorting,
@@ -120,7 +95,7 @@ def get_realigned_sorting(
         assert isinstance(templates, np.ndarray)
         max_chans = np.abs(templates).max(1).argmax(1)
         new_channels = max_chans[sorting.labels]
-        sorting = replace(sorting, channels=new_channels)
+        sorting = sorting.ephemeral_replace(channels=new_channels)
     return sorting
 
 

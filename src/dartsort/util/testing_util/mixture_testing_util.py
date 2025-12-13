@@ -19,10 +19,12 @@ def simulate_moppca(
     t_cov: Literal["eye", "random"] = "eye",
     # zero, hot, random,
     t_w: Literal["zero", "hot", "smooth", "random"] = "zero",
-    t_missing: Literal[None, "random", "random_no_extrap", "skewed", "by_cluster"] = None,
+    t_missing: Literal[
+        None, "random", "random_no_extrap", "skewed", "by_cluster"
+    ] = None,
     init_label_corruption: float = 0.0,
     snr: float = 10.0,
-    rg=0,
+    rg: int | np.random.Generator = 0,
     device=None,
 ):
     from dartsort.transform import TemporalPCAFeaturizer
@@ -181,11 +183,11 @@ def simulate_moppca(
         )
 
     init_sorting = DARTsortSorting(
-        times_samples=torch.arange(N).to(torch.long),  # type: ignore
-        channels=torch.zeros(N, dtype=torch.long),  # type: ignore
-        labels=init_labels,  # type: ignore
+        times_samples=np.arange(N),
+        channels=np.zeros(N, dtype=np.int64),
+        labels=init_labels.numpy(force=True),
         sampling_frequency=100.0,
-        extra_features=dict(times_seconds=torch.arange(N) / 100.0),  # type: ignore
+        ephemeral_features=dict(times_seconds=np.arange(N) / 100.0),
     )
 
     _tpca = TemporalPCAFeaturizer(
@@ -274,7 +276,7 @@ def fit_moppcas(
         n_threads=1,
         n_em_iters=n_em_iters,
         with_noise_unit=with_noise_unit,
-        channels_strategy=channels_strategy,
+        channels_strategy=channels_strategy,  # type: ignore
         **gmm_kw,
     )
     torch.manual_seed(0)
@@ -284,7 +286,7 @@ def fit_moppcas(
         return mm, dict(elbos=elbos)
 
     if inference_algorithm == "em":
-        mm.log_liks = mm.em()
+        mm.log_liks = mm.em()  # type: ignore
     elif inference_algorithm in ("tem", "tvi"):
         res = mm.tvi()
         mm.log_liks = res["log_liks"]
@@ -299,8 +301,8 @@ def fit_moppcas(
         mm.split()
 
         if inference_algorithm == "em":
-            mm.log_liks = mm.em()
-        elif inference_algorithmin("tem", "tvi"):
+            mm.log_liks = mm.em()  # type: ignore
+        elif inference_algorithm in ("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
             elbos.append(np.array([r["obs_elbo"] for r in res["records"]]))
@@ -313,8 +315,8 @@ def fit_moppcas(
         mm.merge(mm.log_liks)
 
         if inference_algorithm == "em":
-            mm.log_liks = mm.em()
-        elif inference_algorithmin("tem", "tvi"):
+            mm.log_liks = mm.em()  # type: ignore
+        elif inference_algorithm in ("tem", "tvi"):
             res = mm.tvi()
             mm.log_liks = res["log_liks"]
             elbos.append(np.array([r["obs_elbo"] for r in res["records"]]))
@@ -364,17 +366,19 @@ def fit_ppca(
     return res
 
 
-def compare_subspaces(
-    mu,
-    W,
-    umu=None,
-    uW=None,
-    gmm=None,
-    k=None,
-    make_vis=True,
-    figsize=(4, 3),
-    title=None,
-):
+def visually_compare_means(gmm, mu, figsize=(3, 2)):
+    K = len(mu)
+    import matplotlib.pyplot as plt
+    from dartsort.vis import glasbey1024
+
+    fig, axes = plt.subplots(figsize=figsize)
+    for k in range(K):
+        axes.plot(mu[k].view(-1), color=glasbey1024[k])
+        axes.plot(gmm[k].mean.view(-1), color=glasbey1024[k], ls=":")
+    return fig, axes
+
+
+def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
     if k is not None:
         mu = mu[k]
         W = W[k]
@@ -389,8 +393,8 @@ def compare_subspaces(
 
     if umu is None:
         unit = {}
-        if k in gmm:
-            unit = gmm[k]
+        if k in gmm:  # type: ignore
+            unit = gmm[k]  # type: ignore
         uW = getattr(unit, "W", np.zeros_like(W))
         umu = getattr(unit, "mean", np.zeros_like(mu))
     M = 0
@@ -409,52 +413,7 @@ def compare_subspaces(
         assert umu.shape == mu.shape, f"{umu.shape=} {mu.shape=}"
 
     muerr = mu - umu
-    if not make_vis:
-        return muerr, werr, None
-
-    import matplotlib.pyplot as plt
-    import dartsort.vis as dartvis
-
-    panel = plt.figure(figsize=figsize, layout="constrained")
-    top, bot = panel.subfigures(nrows=2)
-    ax_mu, ax_muerr, ax_werr = top.subplots(ncols=3)
-    ax_w, ax_uw, ax_dw = bot.subplots(ncols=3, sharex=True, sharey=True)
-
-    ax_mu.plot(mu.ravel(), color="k", label="gt")
-    color = dartvis.glasbey1024[k] if k is not None else "b"
-    ax_mu.plot(umu.ravel(), color=color, label="est")
-    ax_mu.legend(title="mean")
-    ax_muerr.hist(muerr.ravel(), bins=32, log=True)
-    ax_muerr.set_xlabel("mean errors")
-
-    if M:
-        ax_werr.hist(werr.ravel(), bins=32, log=True)
-        ax_werr.set_xlabel("subspace errors")
-        vm = max(np.abs(WTW).max(), 0.9 * np.abs(uWTW).max())
-        kw = dict(vmin=-vm, vmax=vm, cmap=plt.cm.seismic, interpolation="none")
-        im = ax_w.imshow(WTW, **kw)
-        ax_w.set_title("gt subspace")
-        ax_uw.imshow(uWTW, **kw)
-        ax_uw.set_title("est subspace")
-        ax_dw.imshow(WTW - uWTW, **kw)
-        ax_dw.set_title("diff")
-        plt.colorbar(im, ax=ax_dw, shrink=0.75, aspect=10)
-    if title:
-        panel.suptitle(title)
-
-    return muerr, werr, panel
-
-
-def visually_compare_means(gmm, mu, figsize=(3, 2)):
-    K = len(mu)
-    import matplotlib.pyplot as plt
-    from dartsort.vis import glasbey1024
-
-    fig, axes = plt.subplots(figsize=figsize)
-    for k in range(K):
-        axes.plot(mu[k].view(-1), color=glasbey1024[k])
-        axes.plot(gmm[k].mean.view(-1), color=glasbey1024[k], ls=":")
-    return fig, axes
+    return muerr, werr
 
 
 def test_ppca(
@@ -514,22 +473,13 @@ def test_ppca(
         laplace_ard=laplace_ard,
     )
 
-    muerr, werr, panel = compare_subspaces(
+    muerr, werr = compare_subspaces(
         mu=sim_res["mu"],
         W=sim_res["W"],
         umu=ppca_res["mu"],
         uW=ppca_res["W"],
-        make_vis=make_vis,
-        figsize=figsize,
-        title=f"{t_mu=} {t_cov=} {t_w=} {t_missing=}",
     )
-    if make_vis and show_vis:
-        import matplotlib.pyplot as plt
-
-        # panel.show()
-        plt.show()
-        plt.close(panel)
-    res = dict(sim_res=sim_res, ppca_res=ppca_res, muerr=muerr, Werr=werr, panel=panel)
+    res = dict(sim_res=sim_res, ppca_res=ppca_res, muerr=muerr, Werr=werr)
     return res
 
 
@@ -548,8 +498,6 @@ def test_moppcas(
     inner_em_iter=100,
     em_converged_atol=1e-3,
     with_noise_unit=True,
-    make_vis=False,
-    figsize=(4, 3),
     return_before_fit=False,
     channels_strategy="count",
     snr=10.0,
@@ -608,32 +556,27 @@ def test_moppcas(
     acc = (mm.labels == sim_res["labels"]).sum() / N
     ari = adjusted_rand_score(sim_res["labels"], mm.labels)
     print(f"accuracy: {acc}, ari: {ari}")
-    ids, means, covs, logdets = mm.stack_units()
+    ids, means, covs, logdets = mm.stack_units()  # type: ignore
 
     muerrs = []
     Werrs = []
     if do_comparison:
         for k in range(K):
-            muerr, werr, panel = compare_subspaces(
+            (
+                muerr,
+                werr,
+            ) = compare_subspaces(
                 sim_res["mu"],
                 sim_res["W"],
                 gmm=mm,
                 k=k,
-                make_vis=make_vis,
-                figsize=figsize,
-                title=f"{t_mu=} {t_cov=} {t_w=} {t_missing=} | {k=}",
             )
             muerrs.append(muerr)
             Werrs.append(werr)
-            if make_vis:
-                import matplotlib.pyplot as plt
-
-                panel.show()
-                plt.close(panel)
         muerrs = np.stack(muerrs, axis=0)
         Werrs = np.stack(Werrs, axis=0)
 
-    ids, means, covs, logdets = mm.stack_units(mean_only=False)
+    ids, means, covs, logdets = mm.stack_units(mean_only=False)  # type: ignore
 
     results = dict(
         sim_res=sim_res,

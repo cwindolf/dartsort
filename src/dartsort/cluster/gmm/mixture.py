@@ -158,8 +158,7 @@ def tmm_demix(
     labels = labels_from_scores(full_scores)
     neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
     del tmm, train_data, val_data, full_data, full_scores
-    extra_features = dict(**(sorting.extra_features or {}), neighborhood_ids=neighb_ids)
-    sorting = replace(sorting, labels=labels, extra_features=extra_features)
+    sorting = sorting.ephemeral_replace(labels=labels, neighborhood_ids=neighb_ids)
     return sorting
 
 
@@ -3249,7 +3248,7 @@ def save_tmm_labels(
         full_proposal_view=full_proposal,
         needs_bootstrap=not full_proposal,
     )
-    sorting = replace(original_sorting, labels=labels_from_scores(full_scores))
+    sorting = original_sorting.ephemeral_replace(labels=labels_from_scores(full_scores))
     ds_save_intermediate_labels(
         step_name=save_step_labels_format.format(stepname=stepname),
         step_sorting=sorting,

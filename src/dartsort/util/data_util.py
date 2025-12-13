@@ -35,9 +35,7 @@ class DARTsortSorting:
     When you instantiate this with from_peeling_hdf5, if the
     flag load_simple_features is True (default), then additional
     features of spikes will be loaded into memory -- like localizations,
-    which you can access like `sorting.point_source_localizations[...]`
-    If you instantiate with __init__(), you can pass these in with
-    `extra_features`, and they will also be available as .properties.
+    which you can access like `sorting.point_source_localizations[...]`.
     """
 
     def __init__(
@@ -53,20 +51,19 @@ class DARTsortSorting:
     ):
         self.n_spikes = times_samples.shape[0]
         if parent_h5_path is not None:
-            parent_h5_path = resolve_path(parent_h5_path, strict=True)
+            parent_h5_path = resolve_path(parent_h5_path)
         self.parent_h5_path = parent_h5_path
         self.sampling_frequency = float(sampling_frequency)
 
+        assert times_samples.dtype.kind == "i"
         self.times_samples = times_samples
+        assert channels.dtype.kind == "i"
         assert channels.shape == (self.n_spikes,)
         self.channels = channels
-        if labels is None:
-            labels = np.zeros_like(times_samples)
-        assert labels.shape == (self.n_spikes,)
+        if labels is not None:
+            assert labels.shape == (self.n_spikes,)
+            assert labels.dtype.kind == "i"
         self.labels = labels
-        self.unit_ids = np.unique(labels)
-        self.unit_ids = self.unit_ids[self.unit_ids >= 0]
-        self.n_units = self.unit_ids.shape[0]
 
         self._ephemeral_feature_names = []
         if ephemeral_features is not None:
@@ -80,14 +77,35 @@ class DARTsortSorting:
                 check_shape = not self._is_geom_related(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
 
+    @property
+    def unit_ids(self) -> np.ndarray:
+        if self.labels is None:
+            return np.array([], dtype=np.int64)
+        u = np.unique(self.labels)
+        return u[u >= 0]
+
+    @property
+    def n_units(self) -> int:
+        return self.unit_ids.shape[0]
+
+    def copy(self) -> Self:
+        """Deep-enough copy."""
+        other = copy(self)
+        other._ephemeral_feature_names = self._ephemeral_feature_names.copy()
+        other._loaded_persistent_features = self._loaded_persistent_features.copy()
+        return other
+
     def ephemeral_replace(
         self, *, check_shapes=True, **new_features: np.ndarray
     ) -> Self:
-        other = copy(self)
+        other = self.copy()
+        logger.warning(
+            f"ephrep {self._ephemeral_feature_names=} {other._ephemeral_feature_names=}"
+        )
         for k, v in new_features.items():
             if k in ("times_samples", "channels", "labels"):
                 if check_shapes:
-                    assert v.shape == (other.n_spikes,)
+                    other._check_shape(k, v)
                 setattr(other, k, v)
             else:
                 other.add_ephemeral_feature(
@@ -105,10 +123,13 @@ class DARTsortSorting:
         but not saved in the .h5.
         """
         if check_shape:
-            assert feature.shape[0] == self.n_spikes
+            self._check_shape(feature_name, feature)
 
         already_ephemeral = feature_name in self._ephemeral_feature_names
         already_attr = hasattr(self, feature_name)
+        logger.warning(
+            f"{feature_name=} {already_ephemeral=} {self._ephemeral_feature_names=} {already_attr=}"
+        )
         if already_ephemeral:
             assert already_attr
         if already_attr and not overwrite:
@@ -119,12 +140,36 @@ class DARTsortSorting:
             self._ephemeral_feature_names.append(feature_name)
         setattr(self, feature_name, feature)
 
+    def remove_ephemeral_feature(self, feature_name: str):
+        assert feature_name in self._ephemeral_feature_names
+        assert hasattr(self, feature_name)
+        self._ephemeral_feature_names = [
+            k for k in self._ephemeral_feature_names if k != feature_name
+        ]
+        delattr(self, feature_name)
+
+    def unload_persistent_feature(self, feature_name: str):
+        assert feature_name in self._loaded_persistent_features
+        assert hasattr(self, feature_name)
+        self._loaded_persistent_features = [
+            k for k in self._loaded_persistent_features if k != feature_name
+        ]
+        delattr(self, feature_name)
+
     def add_feature(self, feature_name: str, feature: np.ndarray, check_shape=True):
         """Try to save a feature to h5, else register as ephemeral."""
         if self.parent_h5_path is None:
             self.add_ephemeral_feature(feature_name, feature, check_shape)
         else:
             self._register_persistent_feature(feature_name, feature, check_shape)
+
+    def remove_feature(self, feature_name: str):
+        if feature_name in self._loaded_persistent_features:
+            self.unload_persistent_feature(feature_name)
+        elif feature_name in self._ephemeral_feature_names:
+            self.remove_ephemeral_feature(feature_name)
+        else:
+            raise ValueError(f"Sorting doesn't have {feature_name}.")
 
     def _register_persistent_feature(
         self, feature_name: str, feature: np.ndarray, check_shape=True
@@ -136,17 +181,26 @@ class DARTsortSorting:
                 f"there is no .hdf5 file."
             )
         if check_shape:
-            assert feature.shape[0] == self.n_spikes
+            self._check_shape(feature_name, feature)
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
-        with h5py.File(self.parent_h5_path, "r", libver="latest", locking=False) as h5:
-            if feature_name not in h5:
-                logger.dartsortdebug(
-                    "Registering persistent feature %s to %s.",
-                    feature_name,
-                    self.parent_h5_path,
-                )
-                h5.create_dataset(feature_name, data=feature)
+        try:
+            with h5py.File(
+                self.parent_h5_path, "r", libver="latest", locking=False
+            ) as h5:
+                if feature_name not in h5:
+                    logger.dartsortdebug(
+                        "Registering persistent feature %s to %s.",
+                        feature_name,
+                        self.parent_h5_path,
+                    )
+                    h5.create_dataset(feature_name, data=feature)
+        except FileNotFoundError:
+            logger.warning(
+                f"Sorting's parent h5 file {self.parent_h5_path} is gone when registering "
+                f"persistent feature {feature_name}. Will continue, but this sorting won't "
+                "persist correctly."
+            )
 
     # save / load
 
@@ -188,28 +242,29 @@ class DARTsortSorting:
             else:
                 labels = None
 
-            if load_feature_names is None and load_all_features:
-                load_feature_names = list(h5.keys())
-            elif load_feature_names is None and load_simple_features:
-                load_feature_names = []
-                for k in h5.keys():
-                    if cls._is_geom_related(k):
-                        load_feature_names.append(k)
-                        continue
-                    dset = cast(h5py.Dataset, h5[k])
-                    is_simple = dset.ndim <= 2 and dset.shape[0] == n
-                    if is_simple:
-                        load_feature_names.append(k)
-            elif load_feature_names is None:
-                load_feature_names = [k for k in h5.keys() if cls._is_geom_related(k)]
-            assert load_feature_names is not None
-
             already_loaded = [
                 times_samples_dataset,
                 channels_dataset,
                 labels_dataset,
                 "sampling_frequency",
             ]
+            if load_feature_names is None and load_all_features:
+                load_feature_names = list(h5.keys())
+            elif load_feature_names is None and load_simple_features:
+                load_feature_names = []
+                for k in h5.keys():
+                    if k in already_loaded:
+                        continue
+                    if cls._is_geom_related(k):
+                        load_feature_names.append(k)
+                        continue
+                    dset = cast(h5py.Dataset, h5[k])
+                    is_simple = 1 <= dset.ndim <= 2 and dset.shape[0] == n
+                    if is_simple:
+                        load_feature_names.append(k)
+            elif load_feature_names is None:
+                load_feature_names = [k for k in h5.keys() if cls._is_geom_related(k)]
+            assert load_feature_names is not None
             load_feature_names = [
                 k for k in load_feature_names if k not in already_loaded
             ]
@@ -308,16 +363,39 @@ class DARTsortSorting:
             mask = np.flatnonzero(mask)
         assert mask.max() < self.n_spikes
 
-        replace = {}
-        for k in self._ephemeral_feature_names + self._loaded_persistent_features:
+        if self.labels is None:
+            labels = None
+        else:
+            labels = self.labels[mask]
+
+        eph = {}
+        for k in self._ephemeral_feature_names:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
             if self._is_geom_related(k):
-                continue
-            assert v.shape[0] == self.n_spikes
-            replace[k] = v[mask]
+                eph[k] = v
+            else:
+                eph[k] = v[mask]
+        eph["mask_indices"] = mask
 
-        return self.ephemeral_replace(mask_indices=mask, **replace)
+        per = {}
+        for k in self._loaded_persistent_features:
+            assert k != "mask_indices"  # no recursion...
+            v = getattr(self, k)
+            if self._is_geom_related(k):
+                per[k] = v
+            else:
+                per[k] = v[mask]
+
+        return self.__class__(
+            times_samples=self.times_samples[mask],
+            channels=self.channels[mask],
+            labels=labels,
+            parent_h5_path=self.parent_h5_path,
+            sampling_frequency=self.sampling_frequency,
+            persistent_features=per,
+            ephemeral_features=eph,
+        )
 
     def drop_missing(self):
         assert self.labels is not None
@@ -363,6 +441,12 @@ class DARTsortSorting:
     @staticmethod
     def _is_geom_related(k):
         return k == "geom" or k.endswith("channel_index")
+
+    def _check_shape(self, feature_name: str, feature: np.ndarray):
+        if feature.shape[0] != self.n_spikes:
+            raise ValueError(
+                f"Feature {feature_name}'s shape {feature.shape} didn't agree with spike count {self.n_spikes}."
+            )
 
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
@@ -462,7 +546,7 @@ def keep_only_most_recent_spikes(
         else:
             idx_k = idx_k[before_time][-n_min_spikes:]
             new_labels[idx_k] = k
-    new_sorting = replace(sorting, labels=new_labels)
+    new_sorting = sorting.ephemeral_replace(labels=new_labels)
     return new_sorting
 
 
@@ -540,10 +624,7 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
 
     new_labels = np.where(np.isin(sorting.labels, bad_units), -1, sorting.labels)
 
-    extra_features = (sorting.extra_features or {}).copy()
-    extra_features["original_labels"] = sorting.labels
-
-    return replace(sorting, labels=new_labels, extra_features=extra_features)
+    return sorting.ephemeral_replace(labels=new_labels)
 
 
 def subsample_to_max_count(
@@ -561,7 +642,7 @@ def subsample_to_max_count(
         in_u = rg.choice(in_u, size=max_spikes, replace=False)
         new_labels[in_u] = u
 
-    return replace(sorting, labels=new_labels)
+    return sorting.ephemeral_replace(labels=new_labels)
 
 
 def restrict_to_valid_times(sorting, recording, waveform_cfg, pad=0):
@@ -572,7 +653,7 @@ def restrict_to_valid_times(sorting, recording, waveform_cfg, pad=0):
     new_labels = sorting.labels.copy()
     new_labels[sorting.times_samples < t_min] = -1
     new_labels[sorting.times_samples > t_max] = -1
-    return replace(sorting, labels=new_labels)
+    return sorting.ephemeral_replace(labels=new_labels)
 
 
 def subset_sorting_by_time_samples(
@@ -587,7 +668,7 @@ def subset_sorting_by_time_samples(
     if reference_to_start_sample:
         new_times -= start_sample
 
-    return replace(sorting, labels=new_labels, times_samples=new_times)
+    return sorting.ephemeral_replace(labels=new_labels, times_samples=new_times)
 
 
 def subset_sorting_by_time_seconds(sorting, t_start=0, t_end=np.inf):
@@ -596,7 +677,7 @@ def subset_sorting_by_time_seconds(sorting, t_start=0, t_end=np.inf):
     in_range = t_s == t_s.clip(t_start, t_end)
     new_labels[~in_range] = -1
 
-    return replace(sorting, labels=new_labels)
+    return sorting.ephemeral_replace(labels=new_labels)
 
 
 def time_chunk_sortings(
@@ -614,7 +695,7 @@ def reindex_sorting_labels(sorting):
     new_labels = sorting.labels.copy()
     kept = np.flatnonzero(new_labels >= 0)
     _, new_labels[kept] = np.unique(new_labels[kept], return_inverse=True)
-    return replace(sorting, labels=new_labels)
+    return sorting.ephemeral_replace(labels=new_labels)
 
 
 def combine_sortings(sortings, dodge=False):
@@ -645,7 +726,7 @@ def combine_sortings(sortings, dodge=False):
             label_to_original_label.append(np.arange(n_new_labels))
         times_samples[kept] = sorting.times_samples[kept]
 
-    sorting = replace(sortings[0], labels=labels, times_samples=times_samples)
+    sorting = sortings[0].ephemeral_replace(labels=labels, times_samples=times_samples)
 
     if dodge:
         assert label_to_sorting_index is not None

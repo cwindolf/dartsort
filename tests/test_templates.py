@@ -187,11 +187,11 @@ def test_static_templates(tmp_path):
     # rec0.set_dummy_probe_from_locations(geom)
 
     sorting = DARTsortSorting(
-        times_samples=[0, 2], labels=[0, 1], channels=[1, 5], sampling_frequency=1
+        times_samples=np.array([0, 2]), labels=np.arange(2), channels=np.array([1, 5]), sampling_frequency=1
     )
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec")
+        rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
             res = get_templates.get_templates(
                 rec,
@@ -202,6 +202,7 @@ def test_static_templates(tmp_path):
                 low_rank_denoising=False,
             )
             temps = res["raw_templates"]
+            assert isinstance(temps, np.ndarray)
             assert temps.shape == (2, 2, 10)
 
             assert temps[0, 0, 1] == 1
@@ -222,16 +223,16 @@ def test_drifting_templates(tmp_path):
     rec0.set_dummy_probe_from_locations(geom)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
-        rec1 = rec0.save_to_folder(Path(tdir) / "rec", n_jobs=1)
+        rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
         for rec in [rec0, rec1]:
             me = get_motion_estimate(
                 0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
             )
 
             sorting = DARTsortSorting(
-                times_samples=[0, 2, 6, 8],
-                labels=[0, 0, 1, 1],
-                channels=[0, 0, 0, 0],
+                times_samples=np.array([0, 2, 6, 8]),
+                labels=np.array([0, 0, 1, 1]),
+                channels=np.array([0, 0, 0, 0]),
                 sampling_frequency=1,
             )
             t_s = [0, 2, 6, 8]
@@ -260,6 +261,7 @@ def test_drifting_templates(tmp_path):
                 registered_geom=registered_geom,
                 motion_est=me,
             )
+            assert isinstance(temps0, np.ndarray)
             assert temps0.shape == (2, 2, 7)
             assert temps0[0, 0, 1] == 1
             assert temps0[1, 0, 2] == 2
@@ -272,6 +274,7 @@ def test_drifting_templates(tmp_path):
                 registered_geom=registered_geom,
                 motion_est=me,
             )
+            assert isinstance(temps6, np.ndarray)
             assert temps6.shape == (2, 2, 7)
             assert temps6[0, 0, 4] == 1
             assert temps6[1, 0, 5] == 2
@@ -284,6 +287,7 @@ def test_drifting_templates(tmp_path):
                 registered_geom=registered_geom,
                 motion_est=me,
             )
+            assert isinstance(temps8, np.ndarray)
             assert temps8.shape == (2, 2, 7)
             assert temps8[0, 0, 5] == 1
             assert temps8[1, 0, 6] == 2
@@ -307,8 +311,9 @@ def test_main_object():
         labels=np.array([0, 0, 1, 1]),
         channels=np.array([0, 0, 0, 0]),
         sampling_frequency=1,
-        extra_features=dict(
-            point_source_localizations=np.zeros((4, 4)), times_seconds=np.array([0, 2, 6, 8])
+        ephemeral_features=dict(
+            point_source_localizations=np.zeros((4, 4)),
+            times_seconds=np.array([0, 2, 6, 8]),
         ),
     )
     tdata = templates.TemplateData.from_config(
@@ -367,7 +372,9 @@ def test_pconv(tmp_path, unit_ids):
     )
 
     for motion_est, chunk_centers in [(None, None), (IdentityMotionEstimate(), [1, 2])]:
-        with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
+        with tempfile.TemporaryDirectory(
+            dir=tmp_path, ignore_cleanup_errors=True
+        ) as tdir:
             pconvdb_path = pairwise_util.compressed_convolve_to_h5(
                 Path(tdir) / "test.h5",
                 geom=geom,
@@ -386,8 +393,13 @@ def test_pconv(tmp_path, unit_ids):
             assert (pconvdb.b.shifts_a == 0).all()
             assert (pconvdb.b.shifts_b == 0).all()
             assert pconvdb.b.shifted_template_index_a.shape[1] == 1
-            assert torch.equal(pconvdb.b.shifted_template_index_a, torch.arange(5)[:, None])
-            assert torch.equal(pconvdb.b.upsampled_shifted_template_index_b, torch.arange(5)[:, None, None])
+            assert torch.equal(
+                pconvdb.b.shifted_template_index_a, torch.arange(5)[:, None]
+            )
+            assert torch.equal(
+                pconvdb.b.upsampled_shifted_template_index_b,
+                torch.arange(5)[:, None, None],
+            )
 
             ixa, pconvs, which_b = pconvdb.query(torch.arange(5), torch.arange(5))
             ixb = torch.arange(5)[which_b]
@@ -429,7 +441,7 @@ def test_pconv(tmp_path, unit_ids):
             low_rank_templates=svd_compressed,
             compressed_upsampled_temporal=ctempup,
             motion_est=motion_est,
-            chunk_time_centers_s=np.array([0., 1, 2]),
+            chunk_time_centers_s=np.array([0.0, 1, 2]),
         )
         pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)
         assert (pconvdb.b.pconv[0] == 0.0).all()

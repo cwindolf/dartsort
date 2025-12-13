@@ -297,7 +297,7 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     )
     logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
 
-    return replace(sorting, labels=labels)
+    return sorting.ephemeral_replace(labels=labels)
 
 
 def initialize_gmm(

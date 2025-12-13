@@ -262,6 +262,7 @@ def visualize_all_sorting_steps(
         for j, (step_name, step_sorting) in prog:
             if step_name is None:
                 continue
+            assert step_sorting is not None
             if step_name_filter is not None and not step_name_filter(step_name):
                 print(f"Filter skipped {step_name}.")
                 continue

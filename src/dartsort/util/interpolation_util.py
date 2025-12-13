@@ -71,7 +71,7 @@ def interpolate_by_chunk(
     if torch.is_tensor(mask):
         mask = mask.numpy(force=True)
     (n_spikes_full,) = mask.shape
-    assert mask.dtype == np.bool_
+    assert mask.dtype.kind == "b"
     n_spikes = mask.sum()
     assert channels.shape == (n_spikes,)
     n_source_chans = channel_index.shape[1]

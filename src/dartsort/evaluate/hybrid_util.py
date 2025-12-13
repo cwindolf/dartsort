@@ -163,9 +163,6 @@ def closest_clustering(
     labels = peelix2gtix.copy()  # type: ignore
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
-    extra_features = peel_st.extra_features or {}
-    extra_features = extra_features.copy()
-    extra_features["match_ix"] = torch.from_numpy(peelix2gtix)
     return peel_st.ephemeral_replace(labels=labels, gt_match_ix=peelix2gtix)
 
 

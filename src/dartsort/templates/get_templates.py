@@ -373,7 +373,7 @@ def apply_time_shifts(
     else:
         labels = sorting.labels
 
-    return replace(sorting, labels=labels, times_samples=new_times)
+    return sorting.ephemeral_replace(labels=labels, times_samples=new_times)
 
 
 def realign_templates(
