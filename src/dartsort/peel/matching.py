@@ -275,7 +275,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def match_chunk(
         self,
-        traces,
+        traces: torch.Tensor,
         chunk_template_data: ChunkTemplateData,
         left_margin=0,
         right_margin=0,
@@ -357,7 +357,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     apply_refrac_mask,
                     chunk_template_data,
                     unit_mask=unit_mask,
-                    skip_fine=coarse_only,
+                    coarse_only=coarse_only,
                 )
                 if new_peaks is None:
                     break
@@ -433,63 +433,45 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def find_peaks(
         self,
-        residual,
-        padded_conv,
-        padded_objective,
-        refrac_mask,
-        chunk_template_data,
+        residual: torch.Tensor,
+        padded_conv: torch.Tensor,
+        padded_objective: torch.Tensor,
+        refrac_mask: torch.Tensor,
+        chunk_template_data: ChunkTemplateData,
         unit_mask=None,
-        skip_fine=False,
+        coarse_only=False,
     ):
         # update the coarse objective
         chunk_template_data.obj_from_conv(padded_conv, out=padded_objective[:-1])
 
-        # first step: coarse peaks. not temporally upsampled or amplitude-scaled.
+        # enforce refractoriness
         objective = (padded_objective + refrac_mask)[
             :-1, self.obj_pad_len : -self.obj_pad_len
         ]
         if unit_mask is not None:
             objective[torch.logical_not(unit_mask)] = -torch.inf
-        # formerly used detect_and_deduplicate, but that was slow.
-        objective_max, max_obj_template = objective.max(dim=0)
-        times = spiketorch.argrelmax(
-            objective_max, self.spike_length_samples, self.thresholdsq
-        )
-        obj_template_indices = max_obj_template[times]
-        # remove peaks inside the padding
-        if not times.numel():
-            return None
 
-        residual_snips = None
-        if chunk_template_data.coarse_objective or chunk_template_data.upsampling:
-            residual_snips = spiketorch.grab_spikes_full(
-                residual,
-                times,
-                trough_offset=0,
-                spike_length_samples=self.spike_length_samples + 1,
-            )
-
-        # second step: high-res peaks (upsampled and/or amp-scaled)
-        fmatch = chunk_template_data.fine_match(
-            convs=padded_conv[obj_template_indices, times + self.obj_pad_len],
-            objs=objective_max[times],
-            residual_snips=residual_snips,
-            objective_template_indices=obj_template_indices,
-            skip=skip_fine,
+        # find peaks in the coarse objective
+        assert self.thresholdsq is not None
+        if coarse_only:
+            # early in cd iters, always do a full coarse pass
+            skip_scaling = False
+        else:
+            # otherwise, coarse scaling is just redundant with the fine pass
+            skip_scaling = chunk_template_data.needs_fine_pass
+        conv = padded_conv[:, self.obj_pad_len : -self.obj_pad_len]
+        coarse_peaks = chunk_template_data.coarse_match(
+            conv, objective, self.thresholdsq, skip_scaling=skip_scaling
         )
-        time_shifts, upsampling_indices, scalings, template_indices, scores = fmatch
-        if time_shifts is not None:
-            times += time_shifts
+        if coarse_only or not coarse_peaks.n_spikes:
+            return coarse_peaks
 
-        return MatchingPeaks(
-            n_spikes=times.numel(),
-            times=times,
-            objective_template_indices=obj_template_indices,
-            template_indices=template_indices,
-            upsampling_indices=upsampling_indices,
-            scalings=scalings,
-            scores=scores,
+        # high-res peaks (upsampled or grouped)
+        fine_peaks = chunk_template_data.fine_match(
+            peaks=coarse_peaks, residual=residual
         )
+
+        return fine_peaks
 
     def pick_threshold(self):
         if isinstance(self.threshold, float):
