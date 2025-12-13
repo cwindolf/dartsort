@@ -281,7 +281,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 assert np.isclose(pc, tc)
 
         res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces(), device=matcher.b.channel_index.device),
+            torch.asarray(rec.get_traces().copy(), device=matcher.b.channel_index.device),
             return_residual=True,
             return_conv=True,
         )
@@ -435,7 +435,7 @@ def test_static(tmp_path, up_factor, cd_iter):
                 assert np.isclose(pconv1, pc.cpu())
 
         res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces(), device=matcher.b.channel_index.device),
+            torch.asarray(rec.get_traces().copy(), device=matcher.b.channel_index.device),
             return_residual=True,
             return_conv=True,
         )

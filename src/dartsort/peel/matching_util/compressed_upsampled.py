@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording
+from torch import Tensor
 
 from ...templates import (
     CompressedUpsampledTemplates,
@@ -19,7 +20,7 @@ from ...templates import (
 )
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
-from ...util.spiketorch import add_at_, convolve_lowrank
+from ...util.spiketorch import add_at_, convolve_lowrank, grab_spikes_full
 from .matching_base import (
     ChunkTemplateData,
     MatchingPeaks,
@@ -294,25 +295,26 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             )
             obj_shifts = torch.asarray(shifts, device=self.device)
             obj_spatial_sing = torch.asarray(obj_spatial_sing, device=self.device)
-            neg_obj_normsq = -obj_spatial_sing.square().sum(dim=(1, 2))
+            obj_normsq = obj_spatial_sing.square().sum(dim=(1, 2))
         else:
             obj_shifts = shifts
             obj_spatial_sing = padded_spatial_sing[..., :-1]
-            neg_obj_normsq = normsq.neg()
+            obj_normsq = normsq
 
         return CompressedUpsampledChunkTemplateData(
             coarse_objective=self.coarse_objective,
             grouping=self.have_groups,
             upsampling=self.upsampling,
             scaling=scaling,
+            needs_fine_pass=self.have_groups or self.upsampling,
             comp_up_max=self.comp_up_max,
             n_templates=self.n_templates,
             obj_n_templates=self.obj_n_templates,
             spike_length_samples=self.spike_length_samples,
-            inv_lambda=inv_lambda,
-            scale_min=scale_min,
-            scale_max=scale_max,
-            neg_obj_normsq=neg_obj_normsq,
+            inv_lambda=torch.tensor(inv_lambda, device=normsq.device),
+            scale_min=torch.tensor(scale_min, device=normsq.device),
+            scale_max=torch.tensor(scale_max, device=normsq.device),
+            obj_normsq=obj_normsq,
             obj_temporal_comps=self.b.obj_temporal_comps,
             obj_spatial_sing=obj_spatial_sing,
             temporal_comps=self.b.temporal_comps,
@@ -345,43 +347,44 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     grouping: bool
     upsampling: bool
     scaling: bool
+    needs_fine_pass: bool
     comp_up_max: int
     n_templates: int
     obj_n_templates: int
     spike_length_samples: int
-    inv_lambda: float
-    scale_min: float
-    scale_max: float
+    inv_lambda: Tensor
+    scale_min: Tensor
+    scale_max: Tensor
 
     # objective props
-    neg_obj_normsq: torch.Tensor
-    obj_temporal_comps: torch.Tensor
-    obj_spatial_sing: torch.Tensor
-    temporal_comps: torch.Tensor
-    spatial_sing: torch.Tensor
-    padded_spatial_sing: torch.Tensor
-    cup_temporal: torch.Tensor
-    normsq: torch.Tensor
+    obj_normsq: Tensor
+    obj_temporal_comps: Tensor
+    obj_spatial_sing: Tensor
+    temporal_comps: Tensor
+    spatial_sing: Tensor
+    padded_spatial_sing: Tensor
+    cup_temporal: Tensor
+    normsq: Tensor
 
     # indexing
-    cup_index: torch.Tensor
-    cup_map: torch.Tensor
-    cup_ix_to_up_ix: torch.Tensor
-    coarse_index: torch.Tensor
-    group_index: torch.Tensor | None
-    unit_ids: torch.Tensor
-    fine_to_coarse: torch.Tensor
-    main_channels: torch.Tensor
-    conv_lags: torch.Tensor
-    refrac_ix: torch.Tensor
-    rank_ix: torch.Tensor
-    time_ix: torch.Tensor
-    chan_ix: torch.Tensor
+    cup_index: Tensor
+    cup_map: Tensor
+    cup_ix_to_up_ix: Tensor
+    coarse_index: Tensor
+    group_index: Tensor | None
+    unit_ids: Tensor
+    fine_to_coarse: Tensor
+    main_channels: Tensor
+    conv_lags: Tensor
+    refrac_ix: Tensor
+    rank_ix: Tensor
+    time_ix: Tensor
+    chan_ix: Tensor
 
     # pconv
     pconv_db: PconvBase
-    shifts_a: torch.Tensor | None
-    shifts_b: torch.Tensor | None
+    shifts_a: Tensor | None
+    shifts_b: Tensor | None
 
     def convolve(self, traces, padding=0, out=None):
         """Convolve the objective templates with traces."""
@@ -413,14 +416,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             ix_time = times_sub[:, None] + (padding + self.conv_lags)[None, :]
             add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
 
-    def fine_match(
-        self,
-        convs,
-        objs,
-        residual_snips,
-        objective_template_indices,
-        skip=False,
-    ):
+    def fine_match(self, *, peaks: MatchingPeaks, residual: Tensor):
         """Determine superres ids, temporal upsampling, and scaling
 
         Given coarse matches (unit ids at times) and the current residual,
@@ -443,16 +439,25 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         template_indices : array
         objs : array
         """
-        if skip or (
-            not self.coarse_objective and not self.upsampling and not self.scaling
-        ):
-            return None, None, None, objective_template_indices, objs
+        if self.needs_fine_pass:
+            return peaks
+
+        if self.coarse_objective or self.upsampling:
+            residual_snips = grab_spikes_full(
+                residual,
+                peaks.times,
+                trough_offset=0,
+                spike_length_samples=self.spike_length_samples + 1,
+            )
+        else:
+            residual_snips = None
 
         if self.coarse_objective:
+            assert residual_snips is not None
             # TODO best I came up with, but it still syncs
             # can refactor with a jagged/nested tensor. not prioritizing since
             # grouped is rare for now.
-            superres_ix = self.coarse_index[objective_template_indices]
+            superres_ix = self.coarse_index[peaks.template_indices]
             dup_ix, column_ix = (superres_ix < self.n_templates).nonzero(as_tuple=True)
             template_indices = superres_ix[dup_ix, column_ix]
             convs = torch.einsum(
@@ -468,20 +473,15 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             row_ix = torch.arange(best_column_ix.numel(), device=best_column_ix.device)
             template_indices = superres_ix[row_ix, best_column_ix]
         else:
-            template_indices = objective_template_indices
+            template_indices = peaks.template_indices
             norms = self.normsq[template_indices]
-            objs = objs
-
-        if not self.upsampling and not self.scaling:
-            return None, None, None, template_indices, objs
+            objs = peaks.scores
 
         if not self.upsampling:
-            # just scaling
-            b = convs + self.inv_lambda
-            a = norms + self.inv_lambda
-            scalings = b.div(a).clip_(self.scale_min, self.scale_max)
-            objs = 2 * scalings * b - torch.square(scalings) * a - self.inv_lambda
-            return None, None, scalings, template_indices, objs
+            peaks.template_indices.copy_(template_indices, non_blocking=True)
+            peaks.scores.copy_(objs, non_blocking=True)
+            return peaks
+        assert residual_snips is not None
 
         # get the objective for snips now and one step back
         # TODO: jagged tensor? no-compression mode?
@@ -529,7 +529,14 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             scalings = scalings.take_along_dim(dim=1, indices=best_column_ix[:, None])
             scalings = scalings[:, 0]
 
-        return time_shifts, upsampling_indices, scalings, template_indices, objs
+        if time_shifts is not None:
+            peaks.times.add_(time_shifts)
+        if scalings is not None:
+            peaks.scalings.copy_(scalings, non_blocking=True)
+        peaks.upsampling_indices.copy_(upsampling_indices, non_blocking=True)
+        peaks.template_indices.copy_(template_indices, non_blocking=True)
+        peaks.scores.copy_(objs, non_blocking=True)
+        return peaks
 
     def subtract(self, traces, peaks, sign=-1):
         """Subtract templates from traces."""
@@ -550,9 +557,9 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     def get_clean_waveforms(
         self,
         peaks: MatchingPeaks,
-        channels: torch.Tensor,
-        channel_index: torch.Tensor,
-        add_into: torch.Tensor | None = None,
+        channels: Tensor,
+        channel_index: Tensor,
+        add_into: Tensor | None = None,
     ):
         spatial = self.padded_spatial_sing[
             peaks.template_indices[:, None, None],

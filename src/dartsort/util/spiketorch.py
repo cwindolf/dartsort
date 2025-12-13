@@ -394,16 +394,14 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
 
 def argrelmax(x, radius, threshold, exclude_edge=True):
     x1 = F.max_pool1d(
-        x[None, None],
-        kernel_size=2 * radius + 1,
-        padding=radius,
-        stride=1,
+        x[None, None], kernel_size=2 * radius + 1, padding=radius, stride=1
     )[0, 0]
-    x1[x < x1] = 0
-    F.threshold_(x1, threshold, 0.0)  # type: ignore
-    ix = torch.nonzero(x1)[:, 0]
+    x1.masked_fill_(x < x1, 0.0)
+    F.threshold(x1, threshold, 0.0, inplace=True)
     if exclude_edge:
-        return ix[(ix > 0) & (ix < x.numel() - 1)]
+        x1[0].zero_()
+        x1[-1].zero_()
+    ix = torch.nonzero(x1)[:, 0]
     return ix
 
 

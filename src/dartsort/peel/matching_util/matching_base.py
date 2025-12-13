@@ -5,10 +5,11 @@ from typing import Literal, Sequence, Self
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording
 import torch
+from torch import Tensor
 
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
-from ...util.spiketorch import grab_spikes, ptp
+from ...util.spiketorch import grab_spikes, ptp, argrelmax
 from ...util.torch_util import BModule
 
 
@@ -109,46 +110,47 @@ class ChunkTemplateData:
     # -- subclasses must assign the following properties that the matcher uses.
     spike_length_samples: int
     # for the full templates
-    unit_ids: torch.Tensor
-    main_channels: torch.Tensor
+    unit_ids: Tensor
+    main_channels: Tensor
     # for obj templates
-    neg_obj_normsq: torch.Tensor
+    obj_normsq: Tensor
     obj_n_templates: int
     coarse_objective: bool
+    upsampling: bool
+    scaling: bool
+    needs_fine_pass: bool
+    inv_lambda: Tensor
+    scale_min: Tensor
+    scale_max: Tensor
 
     # -- subclasses must implement
 
-    def convolve(
-        self,
-        traces: torch.Tensor,
-        padding: int = 0,
-        out: torch.Tensor | None = None,
-    ):
+    def convolve(self, traces: Tensor, padding: int = 0, out: Tensor | None = None):
         raise NotImplementedError
 
-    def subtract(self, traces: torch.Tensor, peaks: "MatchingPeaks", sign: int = -1):
+    def subtract(self, traces: Tensor, peaks: "MatchingPeaks", sign: int = -1):
         raise NotImplementedError
 
     def subtract_conv(
-        self,
-        conv: torch.Tensor,
-        peaks: "MatchingPeaks",
-        padding=0,
-        batch_size=256,
-        sign=-1,
+        self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
     ):
         raise NotImplementedError
 
     def get_clean_waveforms(
         self,
         peaks: "MatchingPeaks",
-        channels: torch.Tensor,
-        channel_index: torch.Tensor,
-        add_into: torch.Tensor | None = None,
+        channels: Tensor,
+        channel_index: Tensor,
+        add_into: Tensor | None = None,
     ):
         raise NotImplementedError
 
     def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+        raise NotImplementedError
+
+    def fine_match(
+        self, *, peaks: "MatchingPeaks", residual: Tensor
+    ) -> "MatchingPeaks":
         raise NotImplementedError
 
     # -- super handles below
@@ -161,23 +163,61 @@ class ChunkTemplateData:
     def forget_refractory(self, *args, **kwargs):
         self.enforce_refractory(*args, **kwargs, value=0.0)
 
-    def unsubtract(self, traces: torch.Tensor, peaks: "MatchingPeaks"):
+    def unsubtract(self, traces: Tensor, peaks: "MatchingPeaks"):
         return self.subtract(traces, peaks, sign=1)
 
     def unsubtract_conv(self, *args, **kwargs):
         return self.subtract_conv(*args, **kwargs, sign=1)
 
-    def obj_from_conv(self, conv: torch.Tensor, out=None):
-        return torch.add(self.neg_obj_normsq[:, None], conv, alpha=2.0, out=out)
+    def obj_from_conv(self, conv: Tensor, out=None) -> Tensor:
+        return torch.add(self.obj_normsq[:, None]._neg_view(), conv, alpha=2.0, out=out)
+        return objs, scalings
+
+    def coarse_match(
+        self,
+        conv: Tensor,
+        objective: Tensor,
+        thresholdsq: float | Tensor,
+        skip_scaling: bool = False,
+    ) -> "MatchingPeaks":
+        objective_max, max_obj_template = objective.max(dim=0)
+        times = argrelmax(objective_max, self.spike_length_samples, thresholdsq)
+        n_spikes = times.numel()
+        if not n_spikes:
+            return empty_matching_peaks
+
+        template_indices = max_obj_template[times]
+        if skip_scaling or not self.scaling:
+            objs = objective_max[times]
+            return MatchingPeaks(
+                n_spikes=n_spikes,
+                times=times,
+                objective_template_indices=template_indices,
+                template_indices=template_indices,
+                scores=objs,
+            )
+
+        b = conv[template_indices, times].add_(self.inv_lambda)
+        a = self.obj_normsq[template_indices].add_(self.inv_lambda)
+        scalings = b.div(a).clamp_(min=self.scale_min, max=self.scale_max)
+        objs = scalings.square().mul_(a._neg_view())
+        objs.addcmul_(scalings, b, value=2.0).sub_(self.inv_lambda)
+        return MatchingPeaks(
+            n_spikes=n_spikes,
+            times=times,
+            objective_template_indices=template_indices,
+            template_indices=template_indices,
+            scores=objs,
+        )
 
     def get_collisioncleaned_waveforms(
         self,
-        residual_padded: torch.Tensor,
+        residual_padded: Tensor,
         peaks: "MatchingPeaks",
-        channels: torch.Tensor | Literal["template", "amplitude"],
-        channel_index: torch.Tensor,
-        channel_selection_index: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        channels: Tensor | Literal["template", "amplitude"],
+        channel_index: Tensor,
+        channel_selection_index: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
         if channels == "template":
             channels = self.main_channels[peaks.template_indices]
             selecting_channels = False
@@ -246,12 +286,12 @@ class MatchingPeaks:
     def __init__(
         self,
         n_spikes: int = 0,
-        times: torch.Tensor | None = None,
-        objective_template_indices: torch.Tensor | None = None,
-        template_indices: torch.Tensor | None = None,
-        upsampling_indices: torch.Tensor | None = None,
-        scalings: torch.Tensor | None = None,
-        scores: torch.Tensor | None = None,
+        times: Tensor | None = None,
+        objective_template_indices: Tensor | None = None,
+        template_indices: Tensor | None = None,
+        upsampling_indices: Tensor | None = None,
+        scalings: Tensor | None = None,
+        scores: Tensor | None = None,
         device: torch.device | None = None,
         buf_size: int | None = None,
     ):
@@ -422,6 +462,9 @@ class MatchingPeaks:
         self._scores[sl_new] = other.scores
 
         self.n_spikes = new_n_spikes
+
+
+empty_matching_peaks = MatchingPeaks()
 
 
 def _grow_buffer(x, old_length, new_size):
