@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import h5py
 import numpy as np
@@ -108,20 +109,15 @@ class SimpleMatrixFeatures:
             mask = np.broadcast_to(mask, len(schan))
             with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
                 pcs = interpolation_util.interpolate_by_chunk(
-                    mask,
-                    h5[clustering_features_cfg.pca_dataset_name],
-                    geom,
-                    h5["channel_index"][:],  # type: ignore[reportIndexIssue]
-                    sorting.channels,
-                    shifts,
-                    registered_geom,
-                    schan,
-                    method=clustering_features_cfg.interpolation_method,
-                    extrap_method=None,
-                    kernel_name=clustering_features_cfg.kernel_name,
-                    sigma=clustering_features_cfg.interpolation_sigma,
-                    rq_alpha=clustering_features_cfg.rq_alpha,
-                    kriging_poly_degree=clustering_features_cfg.kriging_poly_degree,
+                    mask=mask,
+                    dataset=h5[clustering_features_cfg.pca_dataset_name],
+                    geom=geom,
+                    channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+                    channels=sorting.channels,
+                    shifts=shifts,
+                    registered_geom=registered_geom,
+                    target_channels=schan,
+                    params=clustering_features_cfg.interp_params,
                 )
                 pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
 

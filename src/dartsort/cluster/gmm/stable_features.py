@@ -7,9 +7,15 @@ import torch
 
 from ...transform.temporal_pca import TemporalPCAFeaturizer
 from ...util import drift_util, interpolation_util, spiketorch
+from ...util.internal_config import (
+    InterpolationParams,
+    default_interpolation_params,
+    default_extrapolation_params,
+)
 from ...util.data_util import DARTsortSorting, get_tpca
 from ...util.job_util import get_global_computation_config
 from ...util.torch_util import BModule
+
 
 # -- main class
 
@@ -83,14 +89,12 @@ class StableSpikeDataset(torch.nn.Module):
         split_names: Sequence[str] | None = None,
         split_mask: torch.Tensor | None = None,
         core_radius: float | Literal["extract"] | None = 35.0,
+        interp_params: InterpolationParams = default_interpolation_params,
+        extrap_params: InterpolationParams = default_extrapolation_params,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
         core_neighborhoods=None,
         core_neighborhood_ids=None,
-        extrap_method="normalized",
-        kernel_name="rbf",
-        sigma=20.0,
-        rq_alpha=1.0,
         device=None,
         _core_feature_splits=("train", "kept"),
     ):
@@ -117,10 +121,8 @@ class StableSpikeDataset(torch.nn.Module):
         self.n_spikes_train = self.n_spikes_kept = len(kept_indices)
         self.core_radius = core_radius
         # assert extrap_method != "kriging"
-        self.extrap_method = extrap_method
-        self.kernel_name = kernel_name
-        self.sigma = sigma
-        self.rq_alpha = rq_alpha
+        self.interp_params = interp_params.normalize()
+        self.extrap_params = extrap_params.normalize()
 
         # spike collection indices
         self.kept_indices = torch.from_numpy(kept_indices)
@@ -194,7 +196,7 @@ class StableSpikeDataset(torch.nn.Module):
 
         # channel neighborhoods and features
         # if not self.features_on_device, .spike_data() will .to(self.device)
-        times_s = torch.asarray(self.original_sorting.times_seconds)
+        times_s = torch.asarray(self.original_sorting.times_seconds)  # type: ignore[reportAttributeAccessIssue]
         self.core_features = core_features
         if self.features_on_device:
             self.register_buffer("_train_extract_features", train_extract_features)
@@ -230,13 +232,7 @@ class StableSpikeDataset(torch.nn.Module):
             motion_est=motion_est,
             core_radius=refinement_cfg.core_radius,
             max_n_spikes=refinement_cfg.max_n_spikes,
-            interpolation_method=refinement_cfg.interpolation_method,
-            extrap_method=refinement_cfg.extrapolation_method,
-            extrap_kernel=refinement_cfg.extrapolation_kernel,
-            kernel_name=refinement_cfg.kernel_name,
-            sigma=refinement_cfg.interpolation_sigma,
-            rq_alpha=refinement_cfg.rq_alpha,
-            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            interp_params=refinement_cfg.interp_params.normalize(),
             split_proportions=(
                 1.0 - refinement_cfg.val_proportion,
                 refinement_cfg.val_proportion,
@@ -254,14 +250,7 @@ class StableSpikeDataset(torch.nn.Module):
         max_n_spikes: float | int = np.inf,
         min_count: int = 25,
         discard_triaged: bool = False,
-        interpolation_method="kriging",
-        kernel_name="thinplate",
-        sigma=10.0,
-        rq_alpha=0.5,
-        kriging_poly_degree=1,
-        extrap_method: str | None = "kernel",
-        extrap_kernel: str | None = "rq",
-        smoothing_lambda: float = 0.0,
+        interp_params: InterpolationParams = default_interpolation_params,
         features_dataset_name="collisioncleaned_tpca_features",
         motion_depth_mode="channel",
         split_names=("train", "val"),
@@ -379,13 +368,7 @@ class StableSpikeDataset(torch.nn.Module):
                 shifts[train_mask],
                 registered_geom,
                 extract_channels[train_mask],
-                method=interpolation_method,
-                extrap_method=None,
-                kernel_name=kernel_name,
-                sigma=sigma,
-                rq_alpha=rq_alpha,
-                kriging_poly_degree=kriging_poly_degree,
-                smoothing_lambda=smoothing_lambda,
+                params=interp_params,
                 device=device,
                 store_on_device=store_on_device,
                 show_progress=show_progress,
@@ -402,13 +385,7 @@ class StableSpikeDataset(torch.nn.Module):
                     shifts,
                     registered_geom,
                     core_channels,
-                    method=interpolation_method,
-                    extrap_method=None,
-                    kernel_name=kernel_name,
-                    sigma=sigma,
-                    rq_alpha=rq_alpha,
-                    kriging_poly_degree=kriging_poly_degree,
-                    smoothing_lambda=smoothing_lambda,
+                    params=interp_params,
                     device=device,
                     store_on_device=store_on_device,
                     show_progress=show_progress,
@@ -446,10 +423,7 @@ class StableSpikeDataset(torch.nn.Module):
             split_mask=split_mask,
             core_radius=core_radius,
             device=device,
-            extrap_method=extrap_method or interpolation_method,
-            kernel_name=extrap_kernel or kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
+            interp_params=interp_params,
             _core_feature_splits=_core_feature_splits,
         )
         self.to(device)
@@ -539,13 +513,7 @@ class StableSpikeDataset(torch.nn.Module):
 
     def interp_to_chans(self, spike_data, channels):
         return interp_to_chans(
-            spike_data,
-            channels,
-            self.prgeom,
-            method=self.extrap_method,
-            kernel_name=self.kernel_name,
-            sigma=self.sigma,
-            rq_alpha=self.rq_alpha,
+            spike_data, channels, self.prgeom, params=self.extrap_params
         )
 
 
@@ -942,10 +910,7 @@ def interp_to_chans(
     spike_data,
     channels,
     prgeom,
-    method="normalized",
-    kernel_name="rbf",
-    sigma=20.0,
-    rq_alpha=1.0,
+    params,
     batch_size=256,
 ):
     source_pos = prgeom[spike_data.channels]
@@ -964,11 +929,7 @@ def interp_to_chans(
             spike_data.features[sl],
             source_pos[sl],
             target_pos_,
-            method="nearest",
-            extrap_method=method,
-            sigma=sigma,
-            kernel_name=kernel_name,
-            rq_alpha=rq_alpha,
+            params=params,
             allow_destroy=False,
             out=output[sl],
         )
@@ -1026,68 +987,3 @@ def get_channel_reindexer(channels, n_channels):
     (rel_ixs,) = torch.nonzero(channels < n_channels, as_tuple=True)
     reindexer[channels[rel_ixs]] = rel_ixs
     return reindexer
-
-
-class NeighborhoodInterpolator(BModule):
-    def __init__(
-        self,
-        prgeom: torch.Tensor,
-        neighborhoods: SpikeNeighborhoods,
-        method="kernel",
-        kernel_name="rbf",
-        extrap_method=None,
-        extrap_kernel_name=None,
-        sigma=20.0,
-        rq_alpha=1.0,
-        kriging_poly_degree=0,
-        smoothing_lambda=0.0,
-    ):
-        super().__init__()
-        assert len(prgeom) == neighborhoods.n_channels + 1
-
-        self.register_buffer("prgeom", prgeom.clone())
-        self.b.prgeom[-1].fill_(torch.nan)
-
-        self.erpkw = dict(
-            method=method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            smoothing_lambda=smoothing_lambda,
-        )
-        neighb_data = interpolation_util.interp_precompute(
-            source_geom=self.prgeom,
-            channel_index=neighborhoods.neighborhoods,
-            source_geom_is_padded=True,
-            **self.erpkw,  # type: ignore
-        )
-        self.erpkw |= dict(
-            extrap_method=extrap_method,
-            extrap_kernel_name=extrap_kernel_name,
-        )
-        self.register_buffer_or_none("neighb_data", neighb_data)
-        self.register_buffer("neighb_pos", self.b.prgeom[neighborhoods.b.neighborhoods])
-
-    def interp_to_chans(
-        self,
-        waveforms: torch.Tensor,
-        neighborhood_ids: torch.Tensor,
-        target_channels: torch.Tensor | slice | None = None,
-    ):
-        if target_channels is None:
-            targ_pos = self.b.prgeom
-        else:
-            targ_pos = self.b.prgeom[target_channels]
-        targ_pos = targ_pos[None].broadcast_to((len(waveforms), *targ_pos.shape))
-        source_pos = self.b.neighb_pos[neighborhood_ids]
-        neighb_data = self.b.neighb_data
-        if neighb_data is not None:
-            neighb_data = neighb_data[neighborhood_ids]
-        return interpolation_util.kernel_interpolate(
-            waveforms,
-            source_pos=source_pos,
-            target_pos=targ_pos,
-            precomputed_data=neighb_data,
-            **self.erpkw,  # type: ignore
-        )

@@ -4,8 +4,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from ..cluster.gmm.stable_features import SpikeNeighborhoods
 from .data_util import yield_masked_chunks
-from .drift_util import get_spike_pitch_shifts, static_channel_neighborhoods
+from .internal_config import (
+    InterpKernel,
+    InterpMethod,
+    InterpolationParams,
+    default_interpolation_params,
+)
+from .torch_util import BModule
 
 
 def interpolate_by_chunk(
@@ -17,13 +24,7 @@ def interpolate_by_chunk(
     shifts,
     registered_geom,
     target_channels,
-    method="normalized",
-    extrap_method=None,
-    kernel_name="rbf",
-    kriging_poly_degree=0,
-    sigma=10.0,
-    rq_alpha=1.0,
-    smoothing_lambda=0.0,
+    params: InterpolationParams = default_interpolation_params,
     device=None,
     store_on_device=False,
     show_progress=True,
@@ -83,6 +84,8 @@ def interpolate_by_chunk(
     assert len(geom) == len(channel_index)
     feature_dim = dataset.shape[1]
 
+    params = params.normalize()
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -105,14 +108,7 @@ def interpolate_by_chunk(
 
     # if needed, precompute things
     precomputed_data = interp_precompute(
-        source_geom=source_geom,
-        channel_index=channel_index,
-        method=method,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        kriging_poly_degree=kriging_poly_degree,
-        smoothing_lambda=smoothing_lambda,
+        source_geom=source_geom, channel_index=channel_index, params=params
     )
 
     for ixs, chunk_features in yield_masked_chunks(
@@ -152,13 +148,7 @@ def interpolate_by_chunk(
             chunk_features,
             source_pos,
             target_pos,
-            method=method,
-            extrap_method=extrap_method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            smoothing_lambda=smoothing_lambda,
+            params=params,
             precomputed_data=pcomp_batch,
             allow_destroy=True,
         )
@@ -171,17 +161,13 @@ def interp_precompute(
     source_geom=None,
     channel_index=None,
     source_pos=None,
-    method="normalized",
-    kernel_name="rbf",
-    sigma=20.0,
-    rq_alpha=1.0,
-    kriging_poly_degree=0,
+    params: InterpolationParams = default_interpolation_params,
     source_geom_is_padded=True,
-    smoothing_lambda=0.0,
 ):
-    if method in ("nearest", "kernel", "normalized", "zero"):
+    params = params.normalize()
+    if params.method in ("nearest", "kernel", "normalized", "zero"):
         return None
-    assert method in ("kriging", "krigingnormalized")
+    assert params.method in ("kriging", "krigingnormalized")
 
     if source_pos is None:
         assert source_geom is not None
@@ -203,13 +189,13 @@ def interp_precompute(
     ns = len(source_pos)
     neighb_size = source_pos.shape[1]
     dim = source_pos.shape[2]
-    if kriging_poly_degree < 0:
+    if params.kriging_poly_degree < 0:
         design_vars = 0
-    elif kriging_poly_degree == 0:
+    elif params.kriging_poly_degree == 0:
         design_vars = 1
-    elif kriging_poly_degree == 1:
+    elif params.kriging_poly_degree == 1:
         design_vars = 1 + dim
-    elif kriging_poly_degree == 2:
+    elif params.kriging_poly_degree == 2:
         design_vars = 1 + dim + (dim * (dim + 1)) // 2
     else:
         assert False
@@ -223,24 +209,25 @@ def interp_precompute(
 
     source_kernels = get_kernel(
         source_pos,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        smoothing_lambda=smoothing_lambda,
+        kernel_name=params.kernel.removesuffix("normalized"),
+        sigma=params.sigma,
+        rq_alpha=params.rq_alpha,
+        normalized=params.method.endswith("normalized"),
+        smoothing_lambda=params.smoothing_lambda,
     )
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
         kernel = source_kernels[j][present][:, present]
 
         if design_vars:
-            pos = source_pos[j][present] / sigma
+            pos = source_pos[j][present] / params.sigma
             const = pos.new_ones((pos.shape[0], 1))
             ix = torch.concatenate((present, design_inds), dim=0)
-            if kriging_poly_degree == 0:
+            if params.kriging_poly_degree == 0:
                 design = const
-            elif kriging_poly_degree == 1:
+            elif params.kriging_poly_degree == 1:
                 design = torch.cat([pos, const], dim=1)
-            elif kriging_poly_degree == 2:
+            elif params.kriging_poly_degree == 2:
                 if dim == 1:
                     design = torch.cat([pos, pos.square(), const], dim=1)
                 elif dim == 2:
@@ -269,6 +256,144 @@ def interp_precompute(
         solvers[j, ix[:, None], ix[None, :]] = solver.to(solvers.dtype)
 
     return solvers
+
+
+def kernel_interpolate(
+    features,
+    source_pos,
+    target_pos,
+    params: InterpolationParams = default_interpolation_params,
+    precomputed_data=None,
+    allow_destroy=False,
+    out=None,
+):
+    """Kernel interpolation of multi-channel features or waveforms
+
+    Arguments
+    ---------
+    features : torch.Tensor
+        n_spikes, feature_dim, n_source_channels
+        These can be masked, indicated by nans here and in the same
+        places of source_pos
+    source_pos : torch.Tensor
+        n_spikes, n_source_channels, spatial_dim
+    target_pos : torch.Tensor
+        n_spikes, n_target_channels, spatial_dim
+        These can also be masked, indicate with nans and you will
+        get nans in those positions
+    sigma : float
+        Spatial bandwidth of RBF kernels
+    allow_destroy : bool
+        We need to overwrite nans in the features with 0s. If you
+        allow me, I'll do that in-place.
+    out : torch.Tensor
+        Storage for target
+
+    Returns
+    -------
+    features : torch.Tensor
+        n_spikes, feature_dim, n_target_channels
+    """
+    features = torch.asarray(features)
+    source_pos = torch.asarray(source_pos)
+    target_pos = torch.asarray(target_pos)
+
+    params = params.normalize()
+    extrap_diff = params.extrap_diff()
+
+    if extrap_diff:
+        if params.actual_extrap_method == "kriging":
+            # haven't supported different precomputed kriging data
+            assert params.kernel == params.actual_extrap_kernel
+        features_out = _kernel_interpolate(
+            features=features,
+            source_pos=source_pos,
+            target_pos=target_pos,
+            method=params.actual_extrap_method,
+            kernel_name=params.actual_extrap_kernel,
+            sigma=params.sigma,
+            rq_alpha=params.rq_alpha,
+            kriging_poly_degree=params.kriging_poly_degree,
+            smoothing_lambda=params.smoothing_lambda,
+            precomputed_data=precomputed_data,
+        )
+    else:
+        features_out = None
+
+    if precomputed_data is None:
+        # if at all possible, don't hit this branch. it's just here for vis.
+        precomputed_data = interp_precompute(source_pos=source_pos, params=params)
+
+    features = _kernel_interpolate(
+        features=features,
+        source_pos=source_pos,
+        target_pos=target_pos,
+        method=params.method,
+        kernel_name=params.kernel,
+        sigma=params.sigma,
+        rq_alpha=params.rq_alpha,
+        kriging_poly_degree=params.kriging_poly_degree,
+        smoothing_lambda=params.smoothing_lambda,
+        precomputed_data=precomputed_data,
+        allow_destroy=allow_destroy,
+        out=out,
+    )
+
+    if extrap_diff:
+        # control over extrapolation with another method...
+        assert features_out is not None
+        targ_extrap = extrap_mask(source_pos, target_pos)[:, None]
+        features = torch.where(targ_extrap, features_out, features, out=features)
+
+    return features
+
+
+def _kernel_interpolate(
+    *,
+    features: torch.Tensor,
+    source_pos: torch.Tensor,
+    target_pos: torch.Tensor,
+    method: InterpMethod,
+    kernel_name: InterpKernel,
+    sigma: float,
+    rq_alpha: float,
+    kriging_poly_degree: int,
+    smoothing_lambda: float,
+    precomputed_data,
+    allow_destroy=False,
+    out=None,
+):
+    kernel = get_kernel(
+        source_pos=source_pos,
+        target_pos=target_pos,
+        kernel_name=kernel_name.removesuffix("normalized"),
+        sigma=sigma,
+        rq_alpha=rq_alpha,
+        normalized=method.endswith("normalized"),
+        smoothing_lambda=smoothing_lambda,
+    )
+
+    features = torch.nan_to_num(features, out=features if allow_destroy else None)
+    if method == "kriging":
+        assert precomputed_data is not None
+        precomputed_data = precomputed_data.to(features)
+        features = kriging_solve(
+            target_pos,
+            kernel,
+            features,
+            solvers=precomputed_data,
+            sigma=sigma,
+            poly_degree=kriging_poly_degree,
+        )
+    else:
+        features = torch.bmm(features, kernel, out=out)
+
+    # nan-ify nonexistent chans
+    needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
+    needs_nan = needs_nan.broadcast_to(features.shape)
+    features.masked_fill_(needs_nan, torch.nan)
+
+    return features
 
 
 def get_kernel(
@@ -394,137 +519,6 @@ def pad_geom(geom, dtype=torch.float, device=None):
     return geom
 
 
-def kernel_interpolate(
-    features,
-    source_pos,
-    target_pos,
-    method="normalized",
-    extrap_method=None,
-    kernel_name="rbf",
-    extrap_kernel_name=None,
-    sigma=20.0,
-    rq_alpha=1.0,
-    kriging_poly_degree=0,
-    smoothing_lambda=0.0,
-    precomputed_data=None,
-    allow_destroy=False,
-    out=None,
-):
-    """Kernel interpolation of multi-channel features or waveforms
-
-    Arguments
-    ---------
-    features : torch.Tensor
-        n_spikes, feature_dim, n_source_channels
-        These can be masked, indicated by nans here and in the same
-        places of source_pos
-    source_pos : torch.Tensor
-        n_spikes, n_source_channels, spatial_dim
-    target_pos : torch.Tensor
-        n_spikes, n_target_channels, spatial_dim
-        These can also be masked, indicate with nans and you will
-        get nans in those positions
-    sigma : float
-        Spatial bandwidth of RBF kernels
-    allow_destroy : bool
-        We need to overwrite nans in the features with 0s. If you
-        allow me, I'll do that in-place.
-    out : torch.Tensor
-        Storage for target
-
-    Returns
-    -------
-    features : torch.Tensor
-        n_spikes, feature_dim, n_target_channels
-    """
-    features = torch.asarray(features)
-    source_pos = torch.asarray(source_pos)
-    target_pos = torch.asarray(target_pos)
-
-    if method == "nearest":
-        method = "kernel"
-        kernel_name = "nearest"
-    elif method == "zero":
-        method = "kernel"
-        kernel_name = "zero"
-    if extrap_kernel_name is None:
-        extrap_kernel_name = kernel_name
-    if extrap_method == "nearest":
-        extrap_method = "kernel"
-        extrap_kernel_name = "nearest"
-    elif extrap_method == "zero":
-        extrap_method = "kernel"
-        extrap_kernel_name = "zero"
-    extrap_diff = extrap_method != method or extrap_kernel_name != kernel_name
-
-    features_out = None
-    if extrap_method is not None and extrap_diff:
-        features_out = kernel_interpolate(
-            features,
-            source_pos,
-            target_pos,
-            method=extrap_method,
-            kernel_name=extrap_kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            precomputed_data=precomputed_data,
-            smoothing_lambda=smoothing_lambda,
-        )
-
-    if precomputed_data is None:
-        # if at all possible, don't hit this branch. it's just here for vis.
-        precomputed_data = interp_precompute(
-            source_pos=source_pos,
-            method=method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
-            smoothing_lambda=smoothing_lambda,
-        )
-
-    kernel = get_kernel(
-        source_pos=source_pos,
-        target_pos=target_pos,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        normalized=method.endswith("normalized"),
-        smoothing_lambda=smoothing_lambda,
-    )
-
-    features = torch.nan_to_num(features, out=features if allow_destroy else None)
-    if method == "kriging":
-        assert precomputed_data is not None
-        precomputed_data = precomputed_data.to(features)
-        features = kriging_solve(
-            target_pos,
-            kernel,
-            features,
-            solvers=precomputed_data,
-            sigma=sigma,
-            poly_degree=kriging_poly_degree,
-        )
-    else:
-        features = torch.bmm(features, kernel, out=out)
-
-    # nan-ify nonexistent chans
-    needs_nan = torch.isnan(target_pos).all(2).unsqueeze(1)
-    needs_nan = needs_nan.broadcast_to(features.shape)
-    features[needs_nan] = torch.nan
-
-    if extrap_method is not None and extrap_diff:
-        # control over extrapolation with another method...
-        assert features_out is not None
-        targ_extrap = extrap_mask(source_pos, target_pos)
-        features = torch.where(
-            targ_extrap[:, None], features_out, features, out=features
-        )
-
-    return features
-
-
 def idw_kernel(source_pos, target_pos=None):
     d = get_rsq(source_pos, target_pos, nan=None)
     kernel = d.sqrt_().reciprocal_()
@@ -645,3 +639,48 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
         targ_extrap.logical_and_(targ_outside)
 
     return targ_extrap
+
+
+class NeighborhoodInterpolator(BModule):
+    def __init__(
+        self,
+        prgeom: torch.Tensor,
+        neighborhoods: SpikeNeighborhoods,
+        params: InterpolationParams = default_interpolation_params,
+    ):
+        super().__init__()
+        assert len(prgeom) == neighborhoods.n_channels + 1
+        self.params = params.normalize()
+        self.register_buffer("prgeom", prgeom.clone())
+        self.b.prgeom[-1].fill_(torch.nan)
+        neighb_data = interp_precompute(
+            source_geom=self.prgeom,
+            channel_index=neighborhoods.neighborhoods,
+            source_geom_is_padded=True,
+            params=self.params,
+        )
+        self.register_buffer_or_none("neighb_data", neighb_data)
+        self.register_buffer("neighb_pos", self.b.prgeom[neighborhoods.b.neighborhoods])
+
+    def interp_to_chans(
+        self,
+        waveforms: torch.Tensor,
+        neighborhood_ids: torch.Tensor,
+        target_channels: torch.Tensor | slice | None = None,
+    ):
+        if target_channels is None:
+            targ_pos = self.b.prgeom
+        else:
+            targ_pos = self.b.prgeom[target_channels]
+        targ_pos = targ_pos[None].broadcast_to((len(waveforms), *targ_pos.shape))
+        source_pos = self.b.neighb_pos[neighborhood_ids]
+        neighb_data = self.b.neighb_data
+        if neighb_data is not None:
+            neighb_data = neighb_data[neighborhood_ids]
+        return kernel_interpolate(
+            features=waveforms,
+            source_pos=source_pos,
+            target_pos=targ_pos,
+            precomputed_data=neighb_data,
+            params=self.params,
+        )

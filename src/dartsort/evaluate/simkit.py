@@ -1,6 +1,6 @@
-from logging import getLogger
 from pathlib import Path
 import pickle
+from typing import cast
 import warnings
 
 from dredge import motion_util
@@ -26,15 +26,16 @@ from ..util.data_util import (
 )
 from ..util.multiprocessing_util import get_pool
 from ..util.drift_util import registered_geometry
+from ..util.logging_util import get_logger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
 from .simlib import simulate_sorting, add_features, default_sim_featurization_cfg
 from .simlib import default_temporal_kernel_npy
 from .noise_recording_tools import get_background_recording
-from .sim_template_tools import get_template_simulator
+from .sim_template_tools import get_template_simulator, TemplateSimulator
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def generate_simulation(
@@ -59,7 +60,8 @@ def generate_simulation(
     # template args
     templates_kind="3exp",
     template_library=None,
-    template_simulator_kwargs: dict | None=None,
+    template_simulator_kwargs: dict | None = None,
+    template_simulator: TemplateSimulator | None = None,
     # general parameters
     drift_type="triangle",
     drift_speed=0.0,
@@ -138,17 +140,18 @@ def generate_simulation(
     else:
         assert no_save
 
-    template_simulator = get_template_simulator(
-        n_units=n_units,
-        templates_kind=templates_kind,
-        template_library=template_library,
-        geom=noise_recording.get_channel_locations(),
-        sampling_frequency=sampling_frequency,
-        common_reference=common_reference,
-        random_seed=random_seed,
-        temporal_jitter=temporal_jitter,
-        **(template_simulator_kwargs or {}),
-    )
+    if template_simulator is None:
+        template_simulator = get_template_simulator(
+            n_units=n_units,
+            templates_kind=templates_kind,
+            template_library=template_library,
+            geom=noise_recording.get_channel_locations(),
+            sampling_frequency=sampling_frequency,
+            common_reference=common_reference,
+            random_seed=random_seed,
+            temporal_jitter=temporal_jitter,
+            **(template_simulator_kwargs or {}),
+        )
     sim_recording = InjectSpikesPreprocessor(
         noise_recording,
         firing_kind=firing_kind,
@@ -234,7 +237,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 **simulation_kwargs,
             )
         )
-        self.segment: InjectSpikesPreprocessorSegment = self._recording_segments[0]
+        self.segment = cast(
+            InjectSpikesPreprocessorSegment, self._recording_segments[0]
+        )
 
     def basic_sorting(self) -> DARTsortSorting:
         return self.segment.basic_sorting()
@@ -327,7 +332,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         else:
             assert not hdf5_path.exists()
 
-        n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")
+        n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")  # type: ignore
         with Executor(max_workers=n_jobs, mp_context=context) as pool:
             nt = self.get_num_frames()
             bs = int(self.sampling_frequency * chunk_len_s)
@@ -367,11 +372,20 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     "collisioncleaned_waveforms": (self.segment.inj_wf_shape, f_dt),
                 }
                 if save_injected_waveforms:
-                    dataset_shapes["injected_waveforms"] = (self.segment.inj_wf_shape, f_dt)
+                    dataset_shapes["injected_waveforms"] = (
+                        self.segment.inj_wf_shape,
+                        f_dt,
+                    )
                 if save_noise_waveforms:
-                    dataset_shapes["noise_waveforms"] = (self.segment.inj_wf_shape, f_dt)
+                    dataset_shapes["noise_waveforms"] = (
+                        self.segment.inj_wf_shape,
+                        f_dt,
+                    )
                 if save_collision_waveforms:
-                    dataset_shapes["collision_waveforms"] = (self.segment.inj_wf_shape, f_dt)
+                    dataset_shapes["collision_waveforms"] = (
+                        self.segment.inj_wf_shape,
+                        f_dt,
+                    )
                 if save_collidedness:
                     dataset_shapes["collidedness"] = ((), f_dt)
                 datasets = {
@@ -405,7 +419,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert res is not None
                     _, s = res
                     del res, _
-                    i0, i1 = s["i0"], s["i1"]
+                    i0 = cast(int, s["i0"])
+                    i1 = cast(int, s["i1"])
                     assert i0 == i1_prev
                     i1_prev = i1
                     n_injected += i1 - i0
@@ -445,7 +460,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         with warnings.catch_warnings(record=True) as ws:
             recording = self.save_to_folder(
                 folder=recording_dir,
-                overwrite=overwrite,
+                overwrite=overwrite,  # type: ignore
                 n_jobs=n_jobs,
                 pool_engine="thread",
                 chunk_duration=chunk_len_s,
@@ -456,7 +471,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     continue
                 if msg.startswith("auto_cast_uint"):
                     continue
-                raise w
+                raise w.category(w.message)
         n_residual_snips = (
             0 if featurization_cfg is None else featurization_cfg.n_residual_snips
         )
@@ -566,7 +581,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             refractory_samples=self.refractory_samples,
             globally_refractory=globally_refractory,
         )
-        sv: np.recarray = self.sorting.to_spike_vector()
+        sv = cast(np.recarray, self.sorting.to_spike_vector())
         self.times_samples = sv["sample_index"]
         self.labels = sv["unit_index"]
         self.n_spikes = self.sorting.count_total_num_spikes()
@@ -704,6 +719,8 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             noise_with_margin, [(0, 0), (0, 1)], constant_values=np.nan
         )
         echans = self.extract_channel_index[c]
+        if torch.is_tensor(echans):
+            echans = echans.numpy(force=True)
         noise_waveforms = noise_padded[tix[:, :, None], echans[:, None, :]]
         # the actual injected waveforms...
         injected_waveforms = np.take_along_axis(temps, echans[:, None, :], axis=2)
@@ -748,19 +765,16 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         if not inject and not self.compute_collision_waveforms:
             return traces, spikes
 
-        waveforms = spikes["waveforms"].astype(traces.dtype, copy=False)
+        waveforms = cast(np.ndarray, spikes["waveforms"])
+        tix = cast(np.ndarray, spikes["tix"])
+        waveforms = waveforms.astype(traces.dtype, copy=False)
         traces = traces.copy()
-        np.add.at(
-            traces,
-            (spikes["tix"][:, :, None], self.chans_arange[None, None]),
-            waveforms,
-        )
+        np.add.at(traces, (tix[:, :, None], self.chans_arange[None, None]), waveforms)
 
         if self.compute_collision_waveforms and not inject:
-            traces_pad = np.pad(
-                traces, [(0, 0), (0, 1)], constant_values=np.nan
-            )
-            cwfs = traces_pad[spikes["tix"][:, :, None], spikes["echans"][:, None, :]]
+            echans = cast(np.ndarray, spikes["echans"])
+            traces_pad = np.pad(traces, [(0, 0), (0, 1)], constant_values=np.nan)
+            cwfs = traces_pad[tix[:, :, None], echans[:, None, :]]
             cwfs -= spikes["collisioncleaned_waveforms"]
             spikes["collision_waveforms"] = cwfs
             cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)

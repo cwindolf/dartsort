@@ -35,6 +35,7 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
         return cls._registry[matching_cfg.template_type]._from_config(
@@ -44,6 +45,7 @@ class MatchingTemplates(BModule):
             matching_cfg=matching_cfg,
             computation_cfg=computation_cfg,
             motion_est=motion_est,
+            overwrite=overwrite,
             dtype=dtype,
         )
 
@@ -56,6 +58,7 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
         raise NotImplementedError
@@ -89,7 +92,7 @@ class MatchingTemplatesBuilder:
     dtype: torch.dtype = torch.float
 
     def build(
-        self, save_folder: Path, computation_cfg: ComputationConfig | None
+        self, save_folder: Path, computation_cfg: ComputationConfig | None, overwrite: bool = False
     ) -> MatchingTemplates:
         return MatchingTemplates.from_config(
             save_folder=save_folder,
@@ -99,6 +102,7 @@ class MatchingTemplatesBuilder:
             computation_cfg=computation_cfg,
             motion_est=self.motion_est,
             dtype=self.dtype,
+            overwrite=overwrite,
         )
 
     @property

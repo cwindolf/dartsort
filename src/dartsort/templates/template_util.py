@@ -8,10 +8,9 @@ import torch
 import torch.nn.functional as F
 
 from ..util import drift_util, waveform_util
-from ..util.data_util import DARTsortSorting
-from ..util.job_util import get_global_computation_config
+from ..util.job_util import ensure_computation_config
 from ..util.spiketorch import fast_nanmedian, ptp
-from .get_templates import get_raw_templates, get_templates
+from .get_templates import get_templates
 
 # -- alternate template constructors
 
@@ -241,10 +240,8 @@ def svd_compress_templates(
     singular_values: n_units, rank
     spatial_components: n_units, rank, n_channels
     """
-    if computation_cfg is None:
-        computation_cfg = get_global_computation_config()
+    computation_cfg = ensure_computation_config(computation_cfg)
     dev = computation_cfg.actual_device()
-
     if hasattr(template_data, "templates"):
         unit_ids = template_data.unit_ids
         templates = template_data.templates
@@ -324,6 +321,62 @@ def svd_compress_templates(
         temporal_components=temporal_components,
         singular_values=singular_values,
         spatial_components=spatial_components,
+        spike_counts_by_channel=counts,
+    )
+
+
+@dataclass
+class SharedBasisTemplates:
+    unit_ids: np.ndarray
+    temporal_components: np.ndarray
+    spatial_singular: np.ndarray
+    spike_counts_by_channel: np.ndarray | None
+
+
+def shared_basis_compress_templates(
+    template_data, min_channel_amplitude=1.0, rank=5, computation_cfg=None
+):
+    computation_cfg = ensure_computation_config(computation_cfg)
+    dev = computation_cfg.actual_device()
+    if hasattr(template_data, "templates"):
+        unit_ids = template_data.unit_ids
+        templates = template_data.templates
+        counts = template_data.spike_counts_by_channel
+    else:
+        templates = template_data
+        counts = None
+        unit_ids = np.arange(len(templates))
+    n, t, c = templates.shape
+    rank = min(rank, *templates.shape[1:])
+    amp_vecs = ptp(templates, dim=1, keepdims=True)
+    assert np.isfinite(amp_vecs).all()
+    visible = amp_vecs > min_channel_amplitude
+    uu, cc = np.nonzero(visible)
+    nvis = uu.shape[0]
+
+    # put time on the first axis
+    if nvis == visible.size:
+        to_compress = templates.transpose(1, 0, 2)
+        to_compress = to_compress.reshape(t, n * c)
+    else:
+        to_compress = templates[uu, :, cc]
+        assert to_compress.shape == (nvis, t)
+        to_compress = to_compress.T
+
+    # get the temporal basis
+    to_compress = torch.asarray(to_compress, device=dev)
+    U, S, Vh = _svd_helper(to_compress)
+    del S, Vh
+    assert U.shape == (t, nvis)
+    temporal_comps = U[:, :rank].numpy(force=True)
+
+    # project templates onto temporal comps (no sparsity here.)
+    spatial_sing = np.einsum("ntc,tr->nrc", templates, temporal_comps)
+
+    return SharedBasisTemplates(
+        unit_ids=unit_ids,
+        temporal_components=temporal_comps,
+        spatial_singular=spatial_sing,
         spike_counts_by_channel=counts,
     )
 

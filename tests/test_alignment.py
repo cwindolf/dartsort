@@ -178,7 +178,6 @@ def test_denoiser_alignment(align_sim, align_templates):
     sts = [
         st.ephemeral_replace(labels=(st.voltages < 0).astype(int))  # type: ignore
         for st in sts
-        if st.voltages is not None  # for pyright.
     ]
     assert len(sts) == 2
 

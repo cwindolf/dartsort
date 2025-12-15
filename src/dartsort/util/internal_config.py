@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import field, fields
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import numpy as np
 import torch
@@ -330,13 +330,14 @@ class MatchingConfig:
     amplitude_scaling_variance: float = 0.1**2
     amplitude_scaling_boundary: float = 1.0
     max_iter: int = 1000
-    conv_ignore_threshold: float = 5.0
+    conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
     channel_selection_radius: float | None = 50.0
     template_type: Literal["individual_compressed_upsampled"] = (
         "individual_compressed_upsampled"
     )
+    up_method: Literal["interpolation", "direct"] = "direct"
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -391,6 +392,81 @@ class MotionEstimationConfig:
     rigid: bool = False
 
 
+InterpMethod = Literal[
+    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest"
+]
+InterpKernel = Literal[
+    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate"
+]
+
+
+@cfg_dataclass
+class InterpolationParams:
+    method: InterpMethod = "kriging"
+    kernel: InterpKernel = "thinplate"
+    extrap_method: InterpMethod | None = None
+    extrap_kernel: InterpKernel | None = None
+    kriging_poly_degree: int = 1
+    sigma: float = 10.0
+    rq_alpha: float = 0.5
+    smoothing_lambda: float = 0.0
+
+    @property
+    def actual_extrap_method(self):
+        if self.extrap_method is None:
+            return self.method
+        return self.extrap_method
+
+    @property
+    def actual_extrap_kernel(self):
+        if self.extrap_kernel is None:
+            return self.kernel
+        return self.extrap_kernel
+
+    def extrap_diff(self):
+        if self.actual_extrap_method != self.method:
+            return True
+        if self.actual_extrap_kernel != self.kernel:
+            return True
+        return False
+
+    def normalize(self) -> Self:
+        method = self.method
+        kernel = self.kernel
+        if method == "nearest":
+            method = "kernel"
+            kernel = "nearest"
+        elif method == "zero":
+            method = "kernel"
+            kernel = "zero"
+
+        extrap_method = self.extrap_method
+        extrap_kernel = self.extrap_kernel
+        if extrap_method == "nearest":
+            extrap_method = "kernel"
+            extrap_kernel = "nearest"
+        elif extrap_method == "zero":
+            extrap_method = "kernel"
+            extrap_kernel = "zero"
+
+        return self.__class__(
+            method=method,
+            kernel=kernel,
+            extrap_method=extrap_method,
+            extrap_kernel=extrap_kernel,
+            kriging_poly_degree=self.kriging_poly_degree,
+            sigma=self.sigma,
+            rq_alpha=self.rq_alpha,
+            smoothing_lambda=self.smoothing_lambda,
+        )
+
+
+default_interpolation_params = InterpolationParams()
+default_extrapolation_params = InterpolationParams(
+    method="kernel", kernel="rq", sigma=10.0
+)
+
+
 @cfg_dataclass
 class SplitConfig:
     split_strategy: str = "FeatureSplit"
@@ -423,11 +499,7 @@ class ClusteringFeaturesConfig:
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
 
-    interpolation_method: str = "kriging"
-    kernel_name: str = "thinplate"
-    interpolation_sigma: float = 10.0
-    rq_alpha: float = 0.5
-    kriging_poly_degree: int = 0
+    interp_params: InterpolationParams = default_interpolation_params
 
 
 @cfg_dataclass
@@ -566,14 +638,8 @@ class RefinementConfig:
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
-    interpolation_method: str = "kriging"
-    extrapolation_method: str | None = None
-    kernel_name: str = "thinplate"
-    extrapolation_kernel: str | None = None
-    interpolation_sigma: float = 10.0
-    rq_alpha: float = 0.5
-    kriging_poly_degree: int = 0
-    smoothing_lambda: float = 0.0
+    interp_params: InterpolationParams = default_interpolation_params
+    noise_interp_params: InterpolationParams = default_interpolation_params
 
 
 @cfg_dataclass
@@ -828,6 +894,16 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dist_thresh = cfg.gmm_euclidean_threshold
     else:
         assert False
+    interp_params = InterpolationParams(
+        method=cfg.interp_method,
+        kernel=cfg.interp_kernel,
+        extrap_method=cfg.extrap_method,
+        extrap_kernel=cfg.extrap_kernel,
+        kriging_poly_degree=cfg.kriging_poly_degree,
+        sigma=cfg.interp_sigma,
+        rq_alpha=cfg.rq_alpha,
+        smoothing_lambda=cfg.smoothing_lambda,
+    ).normalize()
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
@@ -852,12 +928,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
         core_radius=cfg.core_radius,
-        interpolation_method=cfg.interpolation_method,
-        extrapolation_method=cfg.extrapolation_method,
-        kernel_name=cfg.interpolation_kernel,
-        interpolation_sigma=cfg.interpolation_bandwidth,
-        rq_alpha=cfg.interpolation_rq_alpha,
-        kriging_poly_degree=cfg.interpolation_degree,
+        interp_params=interp_params,
         skip_first_split=cfg.later_steps in ("neither", "merge"),
         one_split_only=cfg.later_steps == "split",
         kmeansk=cfg.kmeansk,

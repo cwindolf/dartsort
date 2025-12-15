@@ -1,5 +1,5 @@
 import warnings
-from logging import getLogger
+from typing import cast
 
 import h5py
 import linear_operator
@@ -15,9 +15,10 @@ from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
 
 from ..util import more_operators, spiketorch
-from ..util.logging_util import DARTSORTDEBUG
+from ..util.interpolation_util import InterpolationParams, default_interpolation_params
+from ..util.logging_util import DARTSORTDEBUG, get_logger
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FullNoise(torch.nn.Module):
@@ -34,7 +35,7 @@ class FullNoise(torch.nn.Module):
         return (self.vt.T * self.std.square()) @ self.vt
 
     def simulate(self, size=1, t=None, generator=None):
-        device = self.spatial_std.device
+        device = cast(torch.device, self.spatial_std.device)
         assert t == self.nt
         samples = torch.randn(size, t * self.nc, generator=generator, device=device)
         samples = torch.einsum(
@@ -61,7 +62,7 @@ class FullNoise(torch.nn.Module):
         std = eigvals.sqrt()
         vt = v.T.contiguous()
 
-        return cls(std, vt)
+        return cls(std, vt, nt=t, nc=c)
 
 
 class FactorizedNoise(torch.nn.Module):
@@ -369,7 +370,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
             assert obj.isfinite().all()
 
             # find peaks...
-            peak_times, peak_units, peak_energies = detect_and_deduplicate(
+            peak_times, peak_units, peak_energies = detect_and_deduplicate(  # type: ignore
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
@@ -922,11 +923,7 @@ class EmbeddedNoise(torch.nn.Module):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion_est=None,
-        interpolation_method="kriging",
-        kernel_name="thinplate",
-        sigma=10.0,
-        rq_alpha=0.5,
-        kriging_poly_degree=0,
+        interp_params: InterpolationParams = default_interpolation_params,
         device=None,
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
@@ -950,11 +947,7 @@ class EmbeddedNoise(torch.nn.Module):
             hdf5_path,
             geom,
             rgeom,
-            method=interpolation_method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
+            interp_params=interp_params,
             device=device,
         )
         return cls.estimate(
@@ -1024,11 +1017,7 @@ def interpolate_residual_snippets(
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    method="kriging",
-    kernel_name="thinplate",
-    sigma=10.0,
-    rq_alpha=0.5,
-    kriging_poly_degree=0,
+    interp_params: InterpolationParams = default_interpolation_params,
     workers=None,
     device=None,
     batch_size=16,
@@ -1043,13 +1032,13 @@ def interpolate_residual_snippets(
 
     tpca = data_util.get_tpca(hdf5_path)
     if device is not None:
-        tpca = tpca.to(tpca.components.dtype)
+        tpca = tpca.to(tpca.b.components.dtype)
     tpca = tpca.to(device=device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
-        channel_index = h5["channel_index"][:]
-        snippets = h5[residual_dataset_name][:]
-        times_s = h5[residual_times_s_dataset_name][:]
+        channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
+        snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
+        times_s = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index).to(tpca.components.device)
     snippets = torch.from_numpy(snippets)
     times_s = torch.from_numpy(times_s).to(tpca.components)
@@ -1071,14 +1060,11 @@ def interpolate_residual_snippets(
     source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
     # - precompute
+    interp_params = interp_params.normalize()
     precomputed_data = interpolation_util.interp_precompute(
-        interpolation_util.pad_geom(source_geom),
+        source_geom=interpolation_util.pad_geom(source_geom),
         channel_index=channel_index,
-        method=method,
-        kernel_name=kernel_name,
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        kriging_poly_degree=kriging_poly_degree,
+        params=interp_params,
         source_geom_is_padded=True,
     )
     if precomputed_data is not None:
@@ -1121,11 +1107,7 @@ def interpolate_residual_snippets(
                 snippets[sl],
                 source_pos[sl],
                 target_pos[sl],
-                method=method,
-                kernel_name=kernel_name,
-                sigma=sigma,
-                rq_alpha=rq_alpha,
-                kriging_poly_degree=kriging_poly_degree,
+                params=interp_params,
                 precomputed_data=precomputed_data,
                 allow_destroy=True,
             )
@@ -1174,11 +1156,7 @@ def interpolate_residual_snippets(
             snippets[sl],
             source_pos[sl],
             target_pos_shifted[sl],
-            method=method,
-            kernel_name=kernel_name,
-            sigma=sigma,
-            rq_alpha=rq_alpha,
-            kriging_poly_degree=kriging_poly_degree,
+            params=interp_params,
             precomputed_data=precomputed_data,
             allow_destroy=True,
         )

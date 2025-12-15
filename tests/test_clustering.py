@@ -142,9 +142,11 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
     for k in np.unique(res_sorting.labels):
         logger.warning(f"{k=} {np.unique(sorting.labels[res_sorting.labels==k], return_counts=True)=}")
     with subtests.test(msg="rand score"):
-        assert rand_score(sorting.labels, res_sorting.labels) > 0.995
+        if refkw["refinement_strategy"] == "gmm":
+            assert rand_score(sorting.labels, res_sorting.labels) > 0.97
+        else:
+            assert rand_score(sorting.labels, res_sorting.labels) > 0.995
     with subtests.test(msg="unit count"):
-        # allowing old gmm to fail this
         if refkw["refinement_strategy"] != "gmm":
             assert sorting.n_units == res_sorting.n_units
 

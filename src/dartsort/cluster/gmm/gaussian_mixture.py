@@ -3,7 +3,6 @@ import threading
 import time
 import warnings
 from dataclasses import replace
-from logging import getLogger
 from typing import Any, Literal, Optional
 
 import numba
@@ -19,7 +18,7 @@ from sympy.utilities.iterables import multiset_partitions
 from tqdm.auto import tqdm, trange
 
 from ...util import more_operators, noise_util, spiketorch
-from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, DARTsortLogger
+from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.multiprocessing_util import get_pool
 from ...util.sparse_util import (
     allocate_topk,
@@ -52,7 +51,7 @@ from .stable_features import (
     occupied_chans,
 )
 
-logger: DARTsortLogger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # -- main class
@@ -1718,8 +1717,12 @@ class SpikeMixtureModel(torch.nn.Module):
             return result
 
         Xo = X = self.data.interp_to_chans(sp, unit.channels)
+        if logger.isEnabledFor(DARTSORTVERBOSE):
+            assert X.isfinite().all()
         if self.split_whiten:
             X = self.noise.whiten(X, channels=unit.channels)
+        if logger.isEnabledFor(DARTSORTVERBOSE):
+            assert X.isfinite().all()
 
         if debug:
             result.update(indices_full=indices_full, sp=sp, X=Xo, Xw=X)

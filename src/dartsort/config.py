@@ -4,7 +4,11 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from .util.cli_util import argfield
-from .util.internal_config import default_pretrained_path
+from .util.internal_config import (
+    default_pretrained_path,
+    InterpMethod,
+    InterpKernel,
+)
 from .util.py_util import (
     cfg_dataclass,
     float_or_none,
@@ -167,7 +171,9 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = "tmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = (
+        "tmm"
+    )
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -197,9 +203,7 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
-        "loot"
-    )
+    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = "loot"
     template_mix_zero: bool = True
     template_mix_svd: bool = True
     min_template_snr: float = 40.0
@@ -210,12 +214,14 @@ class DeveloperConfig(DARTsortUserConfig):
     always_recompute_tsvd: bool = True
 
     # interpolation for features
-    interpolation_method: str = "kriging"
-    extrapolation_method: str | None = argfield(default=None, arg_type=str_or_none)
-    interpolation_kernel: str = "thinplate"
-    interpolation_rq_alpha: float = 0.5
-    interpolation_degree: int = 0
-    interpolation_bandwidth: Annotated[float, Field(gt=0)] = 10.0
+    interp_method: InterpMethod = "kriging"
+    interp_kernel: InterpKernel = "thinplate"
+    extrap_method: InterpMethod | None = None
+    extrap_kernel: InterpKernel | None = None
+    kriging_poly_degree: int = 1
+    interp_sigma: float = 10.0
+    rq_alpha: float = 0.5
+    smoothing_lambda: float = 0.0
 
     # initial clustering
     initial_euclidean_complete_only: bool = False

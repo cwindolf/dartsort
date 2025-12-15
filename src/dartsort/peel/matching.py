@@ -137,7 +137,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if self.matching_templates is None:
             assert self.matching_templates_builder is not None
             self.matching_templates = self.matching_templates_builder.build(
-                save_folder, computation_cfg
+                save_folder, computation_cfg=computation_cfg, overwrite=overwrite
             )
         self.pick_threshold()
 

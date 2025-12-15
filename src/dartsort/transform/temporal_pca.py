@@ -64,11 +64,11 @@ class BaseTemporalPCA(BaseWaveformModule):
             self._temporal_ix = None
         else:
             self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
-            nt = self._temporal_ix.numel()
+            nt = self.b._temporal_ix.numel()
         self.register_buffer("mean", torch.zeros(nt))
         self.register_buffer("components", torch.zeros(self.rank, nt))
         self.register_buffer("whitener", torch.zeros(self.rank))
-        self.to(self.channel_index.device)
+        self.to(self.b.channel_index.device)
 
     def fit(
         self,
@@ -95,7 +95,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             channels = channels[choices]
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         self.dtype = waveforms.dtype
-        train_channel_index = self.channel_index
+        train_channel_index = self.b.channel_index
         if waveforms.device != train_channel_index.device:
             waveforms = waveforms.to(train_channel_index.device)
             channels = channels.to(train_channel_index.device)
@@ -134,16 +134,16 @@ class BaseTemporalPCA(BaseWaveformModule):
         explained_variance = (S**2) / (n_samples - 1)
         whitener = torch.sqrt(explained_variance)
 
-        self.mean[:] = mean
-        self.components[:] = components
-        self.whitener[:] = whitener
+        self.b.mean.copy_(mean)
+        self.b.components.copy_(components)
+        self.b.whitener.copy_(whitener)
 
         self._needs_fit = False
 
     def needs_fit(self):
         return self._needs_fit
 
-    def _temporal_slice(self, waveforms, time_shifts=None):
+    def _temporal_slice(self, waveforms: torch.Tensor, time_shifts=None) -> torch.Tensor:
         if self.temporal_slice is None:
             return waveforms
 
@@ -166,26 +166,26 @@ class BaseTemporalPCA(BaseWaveformModule):
             x = x - self.mean
         W = self.components
         if self.whiten:
-            W = self.components / self.whitener
+            W = self.b.components / self.b.whitener
         x = x @ W.T
         return x
 
     def _inverse_transform_in_probe(self, features):
-        W = self.components
+        W = self.b.components
         if self.whiten:
-            W = W * self.whitener
+            W = W * self.b.whitener
         if self.centered:
-            return torch.addmm(self.mean, features, W)
+            return torch.addmm(self.b.mean, features, W)
         return torch.mm(features, W)
 
     def _project_in_probe(self, waveforms_in_probe):
         if self.centered:
             return torch.addmm(
-                self.mean,
+                self.b.mean,
                 waveforms_in_probe - self.mean,
-                self.components.T @ self.components,
+                self.b.components.T @ self.b.components,
             )
-        return torch.mm(waveforms_in_probe, self.components.T @ self.components)
+        return torch.mm(waveforms_in_probe, self.b.components.T @ self.b.components)
 
     def force_reconstruct(self, features):
         ndim = features.ndim
@@ -214,26 +214,26 @@ class BaseTemporalPCA(BaseWaveformModule):
     def to_sklearn(self) -> PCA:
         pca = PCA(
             n_components=self.rank,
-            random_state=self.random_state,
+            random_state=self.random_state,  # type: ignore
             whiten=self.whiten,
         )
-        pca.mean_ = self.mean.numpy(force=True)
-        pca.components_ = self.components.numpy(force=True)
-        pca.explained_variance_ = np.square(self.whitener.numpy(force=True))
-        pca.temporal_slice = self.temporal_slice  # this is not standard
+        pca.mean_ = self.b.mean.numpy(force=True)
+        pca.components_ = self.b.components.numpy(force=True)
+        pca.explained_variance_ = np.square(self.b.whitener.numpy(force=True))
+        pca.temporal_slice = self.temporal_slice  # this is not standard  # type: ignore
         return pca
 
     @classmethod
     def from_sklearn(cls, channel_index, pca: PCA | TruncatedSVD, temporal_slice=None):
         if isinstance(pca, PCA):
-            whiten = pca.whiten
+            whiten = pca.whiten  # type: ignore
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
             assert False
         self = cls(
             channel_index,
-            rank=pca.n_components,
+            rank=pca.n_components,  # type: ignore
             whiten=whiten,
             temporal_slice=temporal_slice,
         )
@@ -254,9 +254,9 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.spike_length_samples = other.spike_length_samples
         self.initialize_spike_length_dependent_params()
         self.to(other.channel_index.device)
-        self.mean.copy_(other.mean)
-        self.components.copy_(other.components)
-        self.whitener.copy_(other.whitener)
+        self.b.mean.copy_(other.mean)
+        self.b.components.copy_(other.components)
+        self.b.whitener.copy_(other.whitener)
         return self
 
     def initialize_from_sklearn(self, pca):
@@ -269,13 +269,13 @@ class BaseTemporalPCA(BaseWaveformModule):
             )
         self.initialize_spike_length_dependent_params()
         if hasattr(pca, "mean_"):
-            self.mean.copy_(torch.from_numpy(pca.mean_))
-            self.center = not (self.mean == 0.0).all()
+            self.b.mean.copy_(torch.from_numpy(pca.mean_))
+            self.center = not (self.b.mean == 0.0).all()
         else:
-            self.mean.zero_()
+            self.b.mean.zero_()
             self.center = False
-        self.components.copy_(torch.from_numpy(pca.components_))
-        self.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
+        self.b.components.copy_(torch.from_numpy(pca.components_))
+        self.b.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
         self._needs_fit = False
 
 
@@ -307,7 +307,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
 
         if channel_index is None:
-            channel_index = self.channel_index
+            channel_index = self.b.channel_index
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
             waveforms, channels, channel_index
         )
@@ -335,12 +335,12 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
     def inverse_transform(self, features, channels, channel_index=None):
         if channel_index is None:
-            channel_index = self.channel_index
+            channel_index = self.b.channel_index
         channels_in_probe, features_in_probe = get_channels_in_probe(
             features, channels, channel_index
         )
         reconstructions_in_probe = self._inverse_transform_in_probe(features_in_probe)
-        recshp = (features.shape[0], self.components.shape[1], channel_index.shape[1])
+        recshp = (features.shape[0], self.b.components.shape[1], channel_index.shape[1])
         reconstructions = torch.full(
             recshp,
             torch.nan,

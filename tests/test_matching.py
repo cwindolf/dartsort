@@ -281,7 +281,9 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                 assert np.isclose(pc, tc)
 
         res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=matcher.b.channel_index.device),
+            torch.asarray(
+                rec.get_traces().copy(), device=matcher.b.channel_index.device
+            ),
             return_residual=True,
             return_conv=True,
         )
@@ -435,7 +437,9 @@ def test_static(tmp_path, up_factor, cd_iter):
                 assert np.isclose(pconv1, pc.cpu())
 
         res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=matcher.b.channel_index.device),
+            torch.asarray(
+                rec.get_traces().copy(), device=matcher.b.channel_index.device
+            ),
             return_residual=True,
             return_conv=True,
         )
@@ -552,8 +556,8 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             featurization_cfg=featconf,
             matching_cfg=matchconf,
         )
-        assert st.scores is not None
-        assert np.all(st.scores > 0)
+        assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]
+        assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
 
         (tmp_path / "match2").mkdir()
         st2 = dartsort.match(
@@ -565,7 +569,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             featurization_cfg=featconf,
             matching_cfg=matchconf_fp,
         )
-        assert np.all(st.scores > 0)
+        assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
 
         print(f"{st=}")
         print(f"{st2=}")

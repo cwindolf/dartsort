@@ -37,12 +37,12 @@ TODO items:
    this. (I think probably best not to store linear_operator.LinearOperators, right?)
 """
 
-import math
-from dataclasses import replace
 import gc
-from pathlib import Path
-from typing import Iterable, Literal, Optional, Self, NamedTuple
+import math
 import warnings
+from dataclasses import replace
+from pathlib import Path
+from typing import Iterable, Literal, NamedTuple, Optional, Self
 
 import numpy as np
 import torch
@@ -57,6 +57,7 @@ from ...util.internal_config import (
     DARTsortInternalConfig,
     RefinementConfig,
 )
+from ...util.interpolation_util import NeighborhoodInterpolator
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.main_util import ds_save_intermediate_labels
@@ -64,18 +65,17 @@ from ...util.noise_util import EmbeddedNoise
 from ...util.py_util import databag
 from ...util.spiketorch import (
     cosine_distance,
-    elbo,
     ecl,
+    elbo,
     entropy,
+    mean_elbo_dim1,
     sign,
     spawn_torch_rg,
-    mean_elbo_dim1,
 )
 from ...util.torch_util import BModule
 from ..cluster_util import linkage, maximal_leaf_groups
 from ..kmeans import kmeans
 from .stable_features import (
-    NeighborhoodInterpolator,
     SpikeNeighborhoods,
     StableSpikeDataset,
 )
@@ -2970,11 +2970,7 @@ def get_truncated_datasets(
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
             glasso_alpha=refinement_cfg.glasso_alpha,
-            interpolation_method=refinement_cfg.interpolation_method,
-            kernel_name=refinement_cfg.kernel_name,
-            sigma=refinement_cfg.interpolation_sigma,
-            rq_alpha=refinement_cfg.rq_alpha,
-            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            interp_params=refinement_cfg.noise_interp_params,
             device=device,
             rgeom=prgeom[:-1],
         )
@@ -3054,14 +3050,7 @@ def get_truncated_datasets(
     erp = NeighborhoodInterpolator(
         prgeom=prgeom,
         neighborhoods=full_neighbs,
-        method=refinement_cfg.interpolation_method,
-        kernel_name=refinement_cfg.kernel_name,
-        extrap_method=refinement_cfg.extrapolation_method,
-        extrap_kernel_name=refinement_cfg.extrapolation_kernel,
-        sigma=refinement_cfg.interpolation_sigma,
-        rq_alpha=refinement_cfg.rq_alpha,
-        kriging_poly_degree=refinement_cfg.kriging_poly_degree,
-        smoothing_lambda=refinement_cfg.smoothing_lambda,
+        params=refinement_cfg.interp_params,
     )
 
     return neighb_cov, erp, train_data, val_data, full_data, noise
@@ -3099,14 +3088,7 @@ def get_full_neighborhood_data(
             core_radius="extract",
             max_n_spikes=refinement_cfg.max_n_spikes,
             split_proportions=(1.0 - vp, vp),
-            interpolation_method=refinement_cfg.interpolation_method,
-            kernel_name=refinement_cfg.kernel_name,
-            extrap_method=refinement_cfg.extrapolation_method,
-            extrap_kernel=refinement_cfg.extrapolation_kernel,
-            smoothing_lambda=refinement_cfg.smoothing_lambda,
-            sigma=refinement_cfg.interpolation_sigma,
-            rq_alpha=refinement_cfg.rq_alpha,
-            kriging_poly_degree=refinement_cfg.kriging_poly_degree,
+            interp_params=refinement_cfg.interp_params.normalize(),
             min_count=refinement_cfg.min_count,
             random_seed=rg,
             device=device,

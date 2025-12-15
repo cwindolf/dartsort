@@ -178,8 +178,10 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        overwrite: bool = False,
         dtype: torch.dtype = torch.float,
     ) -> Self:
+        assert matching_cfg.up_method == "direct"
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
@@ -235,6 +237,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             motion_est=motion_est if drifting else None,
             geom=geom,
             computation_cfg=computation_cfg,
+            overwrite=overwrite,
         )
         return cls(
             low_rank_templates=lrt,
@@ -439,7 +442,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         template_indices : array
         objs : array
         """
-        if self.needs_fine_pass:
+        if not self.needs_fine_pass:
             return peaks
 
         if self.coarse_objective or self.upsampling:
@@ -529,8 +532,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             scalings = scalings.take_along_dim(dim=1, indices=best_column_ix[:, None])
             scalings = scalings[:, 0]
 
-        if time_shifts is not None:
-            peaks.times.add_(time_shifts)
+        peaks.times.add_(time_shifts)
         if scalings is not None:
             peaks.scalings.copy_(scalings, non_blocking=True)
         peaks.upsampling_indices.copy_(upsampling_indices, non_blocking=True)

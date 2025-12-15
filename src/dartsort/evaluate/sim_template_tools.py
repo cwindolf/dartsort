@@ -1,18 +1,25 @@
+from typing import Literal, Union
+
 import numpy as np
-from scipy.spatial.distance import cdist
-from scipy.spatial import KDTree
-from scipy.interpolate import griddata
 import torch
 import torch.nn.functional as F
+from scipy.interpolate import griddata
+from scipy.spatial import KDTree
+from scipy.spatial.distance import cdist
 
-from ..util.waveform_util import (
-    upsample_singlechan,
-    upsample_multichan,
-    make_channel_index,
-)
-from ..util.interpolation_util import interp_precompute, kernel_interpolate
 from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
+from ..util.interpolation_util import (
+    InterpolationParams,
+    default_interpolation_params,
+    interp_precompute,
+    kernel_interpolate,
+)
+from ..util.waveform_util import (
+    make_channel_index,
+    upsample_multichan,
+    upsample_singlechan,
+)
 
 
 def get_template_simulator(
@@ -25,7 +32,7 @@ def get_template_simulator(
     common_reference=False,
     temporal_jitter=1,
     **template_simulator_kwargs,
-):
+) -> "TemplateSimulator":
     if templates_kind == "3exp":
         return PointSource3ExpSimulator(
             geom=geom,
@@ -143,6 +150,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         n_units,
         common_reference=False,
         temporal_jitter=1,
+        temporal_jitter_kind: Literal["exact", "cubic"] = "exact",
         min_rms_distance=0.0,
         # timing params
         tip_before_min=0.1,
@@ -223,9 +231,32 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.depth_order = depth_order
 
         pos, alpha = self.simulate_location(size=n_units)
+        assert pos.shape == (n_units, self.geom3.shape[1])
         self.template_pos = pos
         self.template_alpha = alpha
-        _, self.singlechan_templates = self.simulate_singlechan(size=n_units)
+        if temporal_jitter_kind == "exact":
+            _, sct_full = self.simulate_singlechan(size=n_units, up=True)
+            assert sct_full.shape == (
+                n_units,
+                self.spike_length_samples() * temporal_jitter,
+            )
+            assert np.all(
+                sct_full.argmin(1) == self.trough_offset_samples() * temporal_jitter
+            )
+            sct_full = sct_full.reshape(
+                n_units, self.spike_length_samples(), temporal_jitter
+            )
+            self.singlechan_templates = sct_full[:, :, 0]
+            self.singlechan_templates_up = sct_full
+        elif temporal_jitter_kind == "cubic":
+            _, sct = self.simulate_singlechan(size=n_units, up=False)
+            sct_up = upsample_singlechan(
+                sct, time_domain=self.time_domain_ms, temporal_jitter=temporal_jitter
+            )
+            self.singlechan_templates = sct
+            self.singlechan_templates_up = sct_up
+        else:
+            assert False
         self.min_rms_distance = min_rms_distance
         min_dist = min_rms_distance + 0.0
         n_checks = 0
@@ -236,12 +267,6 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
                 raise ValueError(
                     f"Couldn't reach min distance {min_rms_distance}, got to {min_dist}."
                 )
-        # n, temporal_jitter, t
-        self.singlechan_templates_up = upsample_singlechan(
-            self.singlechan_templates,
-            self.time_domain_ms(),
-            temporal_jitter=temporal_jitter,
-        )
 
     def templates(self, drift=0, up=False, padded=False, pad_value=np.nan):
         pos = self.template_pos
@@ -300,13 +325,18 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         length = 2 * (length // 2) + 1
         return length
 
-    def time_domain_ms(self):
-        t = np.arange(self.spike_length_samples(), dtype=self.dtype)
+    def time_domain_ms(self, up=False):
+        t1 = self.spike_length_samples()
+        if up:
+            nt = t1 * self.temporal_jitter
+        else:
+            nt = t1
+        t = np.linspace(0.0, t1, dtype=self.dtype, endpoint=False, num=nt)
         t -= self.trough_offset_samples()
         t /= self.sampling_frequency / 1000
         return t
 
-    def expand_size(self, size=None):
+    def expand_size(self, size) -> tuple[int, ...]:
         if size is not None:
             if isinstance(size, int):
                 size = (size,)
@@ -316,9 +346,9 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             size = (*size, 1)
         return size
 
-    def simulate_singlechan(self, size=None):
+    def simulate_singlechan(self, size: int | tuple[int, ...], up=False):
         """Simulate a trough-normalized 3-exp action potential."""
-        t = self.time_domain_ms()
+        t = self.time_domain_ms(up=up)
         size = self.expand_size(size)
 
         tip = self.rg.uniform(-self.tip_before_max, -self.tip_before_min, size=size)
@@ -342,7 +372,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
 
         return t, waveforms.astype(self.dtype)
 
-    def simulate_location(self, size=None):
+    def simulate_location(self, size: int | tuple[int, ...]):
         size = self.expand_size(size)
         x_low = self.geom[:, 0].min() - self.pos_margin_um_x
         x_high = self.geom[:, 0].max() + self.pos_margin_um_x
@@ -369,9 +399,9 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         alpha = alpha.astype(self.dtype)
         return pos, alpha
 
-    def simulate_template(self, size=None):
-        pos, alpha = self.simulate_location(size=size)
-        t, waveforms = self.simulate_singlechan(size=size)
+    def simulate_template(self, size: int | None):
+        pos, alpha = self.simulate_location(size=size or 1)
+        t, waveforms = self.simulate_singlechan(size=size or 1)
         templates = singlechan_to_probe(
             pos, alpha, waveforms, self.geom3, decay_model=self.decay_model
         )
@@ -390,35 +420,28 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         radius=250.0,
         temporal_jitter=1,
         common_reference=False,
-        interp_method="kriging",
-        interp_kernel_name="thinplate",
-        extrap_method="kernel",
-        extrap_kernel_name="rbf",
-        kriging_poly_degree=0,
         trough_offset_samples=42,
+        interp_method: Literal["griddata", "dart"] = "dart",
+        griddata_method: str = "cubic",
+        interp_params: InterpolationParams = default_interpolation_params,
     ):
         self.geom = geom
         self.geom_kdt = KDTree(geom)
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
         self.radius = radius
+        self.interp_params = interp_params.normalize()
+        self.griddata_method = griddata_method
         self.channel_index = make_channel_index(
             geom=geom, radius=radius, to_torch=False
         )
         self._trough_offset_samples = trough_offset_samples
 
-        self.interp_method = interp_method
-        self.interp_kernel_name = interp_kernel_name
-        self.extrap_method = extrap_method
-        self.extrap_kernel_name = extrap_kernel_name
-        self.kriging_poly_degree = kriging_poly_degree
-
         self.n_units = len(templates_local)
         self.templates_local = templates_local
         self.low_rank_templates = svd_compress_templates(templates_local, allow_na=True)
         self.temporal_up = upsample_multichan(
-            self.low_rank_templates.temporal_components,
-            temporal_jitter=temporal_jitter,
+            self.low_rank_templates.temporal_components, temporal_jitter=temporal_jitter
         )
         self.spatial_singular = (
             self.low_rank_templates.spatial_components
@@ -438,16 +461,13 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         self.pos_local = pos_local
 
         # precompute interpolation data
+        self.interp_method = interp_method
         if interp_method != "griddata":
             self.precomputed_data = interp_precompute(
-                source_pos=pos_local,
-                method=interp_method,
-                kernel_name=interp_kernel_name,
-                kriging_poly_degree=kriging_poly_degree,
+                source_pos=pos_local, params=self.interp_params
             )
         else:
             self.precomputed_data = None
-            assert interp_kernel_name in ("nearest", "linear", "cubic")
 
     def trough_offset_samples(self):
         return self._trough_offset_samples
@@ -470,6 +490,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         pos_margin_um_z=25.0,
         seed=0,
         dtype="float32",
+        interp_params: InterpolationParams = default_interpolation_params,
         **kwargs,
     ):
         rg = np.random.default_rng(seed)
@@ -505,23 +526,20 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
             common_reference=common_reference,
             trough_offset_samples=trough_offset_samples,
             radius=inject_radius,
+            interp_params=interp_params,
             **kwargs,
         )
 
     def interpolate_templates(self, source_pos, target_pos, unit_ids, up=False):
         # interpolate spatial components
         spatial_singular = self.spatial_singular[unit_ids]
-        if self.interp_method == "kriging":
+        if self.interp_method == "dart":
             assert self.precomputed_data is not None
             out = kernel_interpolate(
                 spatial_singular,
                 source_pos,
                 target_pos,
-                method=self.interp_method,
-                kernel_name=self.interp_kernel_name,
-                extrap_method=self.extrap_method,
-                extrap_kernel_name=self.extrap_kernel_name,
-                kriging_poly_degree=self.kriging_poly_degree,
+                params=self.interp_params,
                 precomputed_data=self.precomputed_data[unit_ids],
             ).numpy(force=True)
         elif self.interp_method == "griddata":
@@ -542,7 +560,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
                 source_pos,
                 target_pos,
                 out,
-                method=self.interp_kernel_name,
+                method=self.griddata_method,
             )
         else:
             assert False
@@ -574,9 +592,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         _, target_chans = self.geom_kdt.query(true_template_pos[:, [0, 2]])
         tgeom = np.pad(tgeom, [(0, 1), (0, 0)], constant_values=np.nan)
         target_chans = self.channel_index[target_chans]
-        # target_chans = torch.arange(len(tgeom)).broadcast_to(len(source_pos), len(tgeom))
         target_pos = torch.asarray(tgeom[target_chans])
-        # target_chans = target_chans.numpy()
 
         templates = self.interpolate_templates(source_pos, target_pos, unit_ids, up=up)
 
@@ -586,7 +602,6 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         up_factor = self.temporal_jitter if up else 1
         out = np.zeros((nu, up_factor * nt, nc_out), dtype=self.templates_local.dtype)
         np.put_along_axis(out, target_chans[:, None, :], templates, axis=2)
-        # out[np.arange(nu)[:, None, None], np.arange(up_factor * nt)[None, :, None], target_chans[:, None, :]] = templates
 
         if up:
             out = out.reshape(nu, up_factor, nt, nc_out)
@@ -617,3 +632,8 @@ def griddata_interp(templates, source_pos, target_pos, out, method):
             fill_value=0.0,
         )
     return out
+
+
+TemplateSimulator = Union[
+    StaticTemplateSimulator, PointSource3ExpSimulator, TemplateLibrarySimulator
+]
