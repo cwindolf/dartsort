@@ -9,8 +9,13 @@ from torch import Tensor
 
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
+from ...util.logging_util import get_logger, DARTSORTVERBOSE
 from ...util.spiketorch import grab_spikes, ptp, argrelmax
 from ...util.torch_util import BModule
+
+
+logger = get_logger(__name__)
+_extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
 
 
 class MatchingTemplates(BModule):
@@ -38,6 +43,10 @@ class MatchingTemplates(BModule):
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
+        global _extra_checks
+        _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
+        if _extra_checks:
+            logger.dartsortverbose(f"Extra checks enabled in matching.")
         return cls._registry[matching_cfg.template_type]._from_config(
             save_folder=save_folder,
             recording=recording,
@@ -161,6 +170,9 @@ class ChunkTemplateData:
     ) -> "MatchingPeaks":
         raise NotImplementedError
 
+    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
+        raise NotImplementedError
+
     # -- super handles below
 
     def enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
@@ -194,6 +206,8 @@ class ChunkTemplateData:
             return empty_matching_peaks
 
         template_indices = max_obj_template[times]
+        if _extra_checks:
+            assert (objective_max[times] >= thresholdsq).all()
         if skip_scaling or not self.scaling:
             objs = objective_max[times]
             return MatchingPeaks(
@@ -212,6 +226,13 @@ class ChunkTemplateData:
             scale_min=self.scale_min,
             scale_max=self.scale_max,
         )
+        if _extra_checks:
+            assert (objs >= thresholdsq).all()
+            assert (scalings >= self.scale_min).all()
+            assert (scalings <= self.scale_max).all()
+        if _extra_checks and self.scaling:
+            assert self.inv_lambda < float("inf")
+            assert scalings.numel() < 3 or (scalings != 1.0).any()
         return MatchingPeaks(
             n_spikes=n_spikes,
             times=times,
@@ -364,22 +385,24 @@ class MatchingPeaks:
         upsampling_indices = scalings = scores = None
 
         n_spikes = sum(p.n_spikes for p in peaks)
+        if not n_spikes:
+            return cls(n_spikes=0, buf_size=0)
 
-        if n_spikes and peaks[0].times is not None:
+        if peaks[0].times is not None:
             times = torch.concatenate([p.times for p in peaks])
-        if n_spikes and peaks[0].objective_template_indices is not None:
+        if peaks[0].objective_template_indices is not None:
             objective_template_indices = torch.concatenate(
                 [p.objective_template_indices for p in peaks]
             )
-        if n_spikes and peaks[0].template_indices is not None:
+        if peaks[0].template_indices is not None:
             template_indices = torch.concatenate([p.template_indices for p in peaks])
-        if n_spikes and peaks[0].upsampling_indices is not None:
+        if peaks[0].upsampling_indices is not None:
             upsampling_indices = torch.concatenate(
                 [p.upsampling_indices for p in peaks]
             )
-        if n_spikes and peaks[0].scalings is not None:
+        if peaks[0].scalings is not None:
             scalings = torch.concatenate([p.scalings for p in peaks])
-        if n_spikes and peaks[0].scores is not None:
+        if peaks[0].scores is not None:
             scores = torch.concatenate([p.scores for p in peaks])
 
         return cls(
@@ -475,7 +498,7 @@ class MatchingPeaks:
         self.n_spikes = new_n_spikes
 
 
-empty_matching_peaks = MatchingPeaks()
+empty_matching_peaks = MatchingPeaks(buf_size=0)
 
 
 def _grow_buffer(x, old_length, new_size):
@@ -494,8 +517,8 @@ def _coarse_match_scaled(
     scale_min: Tensor,
     scale_max: Tensor,
 ):
-    b = conv[template_indices, times].add_(inv_lambda)
-    a = obj_normsq[template_indices].add_(inv_lambda)
+    b = conv[template_indices, times] + inv_lambda
+    a = obj_normsq[template_indices] + inv_lambda
     scalings = b.div(a).clamp_(min=scale_min, max=scale_max)
     objs = scalings.square().mul_(-a)
     objs.addcmul_(scalings, b, value=2.0).sub_(inv_lambda)

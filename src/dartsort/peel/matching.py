@@ -255,17 +255,16 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return_conv=False,
     ) -> PeelingBatchResult:
         assert self.matching_templates is not None
-        # get current template set
+        # get chunk center time and template info at that time
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
-
         segment = self.recording._recording_segments[0]
         chunk_center_seconds = segment.sample_index_to_time(chunk_center_samples)
         chunk_template_data = self.matching_templates.data_at_time(
-            chunk_center_seconds,
-            self.is_scaling,
-            self.inv_lambda,
-            self.amp_scale_min,
-            self.amp_scale_max,
+            t_s=chunk_center_seconds,
+            scaling=self.is_scaling,
+            inv_lambda=self.inv_lambda,
+            scale_min=self.amp_scale_min,
+            scale_max=self.amp_scale_max,
         )
 
         # deconvolve
@@ -307,8 +306,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         residual = residual_padded[:, :-1]
 
         # name objective variables so that we can update them in-place later
-        conv_len = traces.shape[0] - self.spike_length_samples + 1
-        padded_obj_len = conv_len + 2 * self.obj_pad_len
+        # padded objective has an extra unit (for group_index) and refractory
+        # padding (for easier implementation of enforce_refractory)
+        valid_len = traces.shape[0] - self.spike_length_samples + 1
+        padded_obj_len = valid_len + 2 * self.obj_pad_len
         padded_conv: torch.Tensor = traces.new_zeros(
             chunk_template_data.obj_n_templates, padded_obj_len
         )
@@ -316,8 +317,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
         refrac_mask = torch.zeros_like(padded_objective)
-        # padded objective has an extra unit (for group_index) and refractory
-        # padding (for easier implementation of enforce_refractory)
 
         # initialize convolution
         chunk_template_data.convolve(
@@ -332,15 +331,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             coarse_only = self.coarse_cd and cd_it < self.cd_iter
 
             # we always need to update the residual in the final iteration
-            # in "cd iterations", we don't need to update the residual if:
-            # cd is coarse and there is no grouping happening
-            update_residual = chunk_template_data.coarse_objective or not coarse_only
+            # in "cd iterations", we may not need to update the residual.
+            update_residual = not coarse_only
 
             if not initializing_cd:
                 refrac_mask = torch.zeros_like(refrac_mask)
 
             current_peaks = []
-            for _ in range(self.max_iter):
+            for match_it in range(self.max_iter):
                 if not initializing_cd:
                     assert previous_peaks is not None
                 if (
@@ -374,7 +372,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     unit_mask=unit_mask,
                     coarse_only=coarse_only,
                 )
-                if new_peaks is None:
+                if new_peaks is None or not new_peaks.n_spikes:
                     break
 
                 # enforce refractoriness
@@ -427,9 +425,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         times_samples = peaks.times.add_(self.trough_offset_samples)
         labels = chunk_template_data.unit_ids[peaks.template_indices]
         if chunk_template_data.upsampling:
-            time_shifts = -(
-                peaks.upsampling_indices > chunk_template_data.up_factor // 2
-            ).to(dtype=torch.int8)
+            time_shifts = chunk_template_data.trough_shifts(peaks)
             times_samples += time_shifts
             time_shifts_dict = {"time_shifts": time_shifts}
         else:

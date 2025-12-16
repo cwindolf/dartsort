@@ -127,6 +127,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
         cumulant_order=cumulant_order,
+        matching_threshold=10.0,
         # amplitude_scaling_stddev=0.0,
         # temporal_upsamples=8,
     )
@@ -163,4 +164,8 @@ def test_initial_detection_swap(tmp_path, simulations, type):
 
     c0 = len(sim["sorting"])
     c1 = len(res["sorting"])
+    st = res["sorting"]
+    import numpy as np
+    for u in range(20):
+        print(f"{np.diff(st.times_samples[st.labels==u]).min()=}")
     assert abs(c0 - c1) < count_dif_tol * c0

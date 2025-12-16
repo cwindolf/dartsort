@@ -7,6 +7,8 @@ from scipy.spatial import KDTree
 import torch
 import torch.nn.functional as F
 
+from dartsort.cluster.cluster_util import get_main_channel_pcs
+
 from ..util import drift_util, waveform_util
 from ..util.job_util import ensure_computation_config
 from ..util.spiketorch import fast_nanmedian, ptp
@@ -413,6 +415,7 @@ class CompressedUpsampledTemplates:
     compressed_upsampling_index: np.ndarray
     compressed_index_to_template_index: np.ndarray
     compressed_index_to_upsampling_index: np.ndarray
+    trough_shifts: np.ndarray
 
 
 def default_n_upsamples_map(ptps, max_upsample=8):
@@ -427,6 +430,8 @@ def default_n_upsamples_map(ptps, max_upsample=8):
 
 def compressed_upsampled_templates(
     templates,
+    *,
+    trough_offset_samples,
     ptps=None,
     max_upsample=8,
     n_upsamples_map=default_n_upsamples_map,
@@ -459,6 +464,7 @@ def compressed_upsampled_templates(
             np.arange(n_templates)[:, None],
             np.arange(n_templates),
             np.zeros(n_templates, dtype=np.int64),
+            np.zeros(n_templates, dtype=np.int32),
         )
 
     # how many copies should each unit get?
@@ -521,6 +527,8 @@ def compressed_upsampled_templates(
         n_templates * max_upsample, templates.shape[1], templates.shape[2]
     )
     compressed_upsampled_templates = all_upsampled_templates[rix]
+    _, _, trough_shifts = get_main_channels_and_alignments(templates=compressed_upsampled_templates)
+    trough_shifts = trough_shifts - trough_offset_samples
 
     return CompressedUpsampledTemplates(
         current_compressed_index,
@@ -529,6 +537,7 @@ def compressed_upsampled_templates(
         compressed_upsampling_index,
         template_indices,
         upsampling_indices,
+        trough_shifts,
     )
 
 

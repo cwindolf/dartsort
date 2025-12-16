@@ -176,6 +176,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     print("-- cupts")
     cupts = template_util.compressed_upsampled_templates(
         templates,
+        trough_offset_samples=trough_offset_samples,
         ptps=np.ptp(templates, 1).max(1),
         max_upsample=up_factor,
     )
@@ -189,16 +190,19 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     tclu = [50, 0, 0, min(up_factor - 1, up_offset if up_offset >= 0 else up_factor + up_offset)]
     # fmt: on
     times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
+    trough_shifts = []
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l, u in zip(times, labels, upsampling_indices):
+    for t, l, u, c in zip(times, labels, upsampling_indices, channels):
         temp = cupts.compressed_upsampled_templates[
             cupts.compressed_upsampling_map[l, u]
         ]
+        trough_shifts.append(np.abs(temp[:, c]).argmax() - trough_offset_samples)
         rec0[
             t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
         ] += temp
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
+    trough_shifts = np.array(trough_shifts)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
@@ -240,6 +244,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         print("-- tempup")
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
+            trough_offset_samples=trough_offset_samples,
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )
@@ -289,7 +294,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         )
 
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times)
+        assert np.array_equal(res["times_samples"].numpy(force=True), times + trough_shifts)
         assert np.array_equal(res["labels"].numpy(force=True), labels)
         print(f"{res['n_spikes']=} {len(times)=}")
         print(f"{res['times_samples']=}")
@@ -390,6 +395,7 @@ def test_static(tmp_path, up_factor, cd_iter):
         )
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
+            trough_offset_samples=trough_offset_samples,
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )

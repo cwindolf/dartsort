@@ -353,7 +353,7 @@ def test_matching_alignment_basic(align_sim, align_templates):
     assert np.array_equal(st.labels, gt_st.labels)
 
 
-@pytest.mark.parametrize("up_factor", (1, 4, 8))
+@pytest.mark.parametrize("up_factor", (1, 2, 4, 8))
 def test_matching_alignment_upsampled(up_factor):
     # we'll have to use a smoother template library here
     # here is a nice smooth basic shape
@@ -364,6 +364,7 @@ def test_matching_alignment_upsampled(up_factor):
     assert tt.shape == (121,)
     tshape = np.exp(-np.square(tt / 0.3)).astype(np.float32)
     tshape = snr * taper(torch.tensor(tshape), dim=0).numpy()
+    assert tshape.argmax() == 42
 
     # again, we'll create positive and negative versions
     # I want to look at 4 different time shifts and I want the time shift

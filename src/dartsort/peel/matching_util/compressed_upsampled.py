@@ -129,10 +129,12 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         cup_index = torch.asarray(cupt.compressed_upsampling_index)
         cup_ix_to_up_ix = torch.asarray(cupt.compressed_index_to_upsampling_index)
         cup_temporal = torch.asarray(cupt.compressed_upsampled_templates)
+        cup_trough_shifts = torch.asarray(cupt.trough_shifts)
         self.register_buffer("cup_map", cup_map)
         self.register_buffer("cup_index", cup_index)
         self.register_buffer("cup_ix_to_up_ix", cup_ix_to_up_ix)
         self.register_buffer("cup_temporal", cup_temporal)
+        self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
         # -- template grouping and coarse objective indexing
         gres = handle_template_groups(
@@ -196,6 +198,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         )
         cupt = compressed_upsampled_templates(
             lrt.temporal_components,
+            trough_offset_samples=template_data.trough_offset_samples,
             ptps=np.ptp(template_data.templates, axis=1).max(1),
             max_upsample=matching_cfg.template_temporal_upsampling_factor,
         )
@@ -328,6 +331,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             normsq=normsq,
             cup_index=self.b.cup_index,
             cup_map=self.b.cup_map,
+            cup_trough_shifts=self.b.cup_trough_shifts,
             cup_ix_to_up_ix=self.b.cup_ix_to_up_ix,
             coarse_index=self.b.coarse_index,
             group_index=self.b.group_index,
@@ -376,6 +380,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     cup_map: Tensor
     cup_ix_to_up_ix: Tensor
     coarse_index: Tensor
+    cup_trough_shifts: Tensor
     group_index: Tensor | None
     unit_ids: Tensor
     fine_to_coarse: Tensor
@@ -420,6 +425,9 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             ix_template = template_indices_a[:, None]
             ix_time = times_sub[:, None] + (padding + self.conv_lags)[None, :]
             add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
+
+    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
+        return self.cup_trough_shifts[self.cup_map[peaks.template_indices, peaks.upsampling_indices]]
 
     def fine_match(self, *, peaks: MatchingPeaks, residual: Tensor):
         """Determine superres ids, temporal upsampling, and scaling
@@ -483,8 +491,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             objs = peaks.scores
 
         if not self.upsampling:
-            peaks.template_indices.copy_(template_indices, non_blocking=True)
-            peaks.scores.copy_(objs, non_blocking=True)
+            peaks.template_indices.copy_(template_indices)
+            peaks.scores.copy_(objs)
             return peaks
         assert residual_snips is not None
 
@@ -499,11 +507,11 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         convs = torch.einsum("ndct,ntr,nrc->nd", snips_dup_dt, temps_t, temps_s)
         norms = norms[dup_ix]
         if self.scaling:
-            b = convs.add_(self.inv_lambda)
+            b = convs + self.inv_lambda
             a = norms[:, None] + self.inv_lambda
             scalings = b.div(a).clip_(self.scale_min, self.scale_max)
             # 2sb - s^2a - 1/l
-            scalingsqa = scalings.square().mul_(a._neg_view())
+            scalingsqa = scalings.square().mul_(-a)
             objs = scalingsqa.addcmul_(scalings, b, value=2.0).sub_(self.inv_lambda)
             del convs, scalingsqa
         else:
@@ -536,10 +544,10 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
 
         peaks.times.add_(time_shifts)
         if scalings is not None:
-            peaks.scalings.copy_(scalings, non_blocking=True)
-        peaks.upsampling_indices.copy_(upsampling_indices, non_blocking=True)
-        peaks.template_indices.copy_(template_indices, non_blocking=True)
-        peaks.scores.copy_(objs, non_blocking=True)
+            peaks.scalings.copy_(scalings)
+        peaks.upsampling_indices.copy_(upsampling_indices)
+        peaks.template_indices.copy_(template_indices)
+        peaks.scores.copy_(objs)
         return peaks
 
     def subtract(self, traces, peaks, sign=-1):

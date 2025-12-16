@@ -127,12 +127,12 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
         _, _, a0 = get_main_channels_and_alignments(template_data)
         self.offsets = a0 - template_data.trough_offset_samples
         assert self.templates_up.shape[:2] == (self.n_units, temporal_jitter)
-        _, mct, a1 = get_main_channels_and_alignments(
+        _, _, a1 = get_main_channels_and_alignments(
             templates=self.templates_up.reshape(
                 self.n_units * temporal_jitter, *self.templates_up.shape[2:]
             )
         )
-        # assert (a1 == template_data.trough_offset_samples).all()
+        print(f"{a1=}")
         self.offsets_up = (a1 - template_data.trough_offset_samples).reshape(
             self.n_units, temporal_jitter
         )
@@ -274,7 +274,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             self.singlechan_templates = sct
             self.singlechan_templates_up = sct_up
             self.offsets = sct.argmin(1) - self.trough_offset_samples()
-            self.offsets_up = self.sct_up.argmin(2) - self.trough_offset_samples()
+            self.offsets_up = sct_up.argmin(2) - self.trough_offset_samples()
         else:
             assert False
         assert np.all(

@@ -281,7 +281,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             )
 
         rgeom, matches = self.registered_geom()
-        _, templates = self.templates()
+        _, templates, _ = self.templates()
         rtemplates = np.zeros(
             (*templates.shape[:-1], len(rgeom)), dtype=templates.dtype
         )
@@ -296,7 +296,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
     def gt_unit_information(self):
         ids = np.arange(self.segment.n_units)
-        pos, templates = self.templates()
+        pos, templates, _ = self.templates()
         x, y, z = pos.T
         counts = np.zeros(self.segment.n_units, dtype=np.int64)
         u, c = np.unique(self.segment.labels, return_counts=True)
@@ -604,14 +604,16 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         if self.temporal_jitter > 1 and temporal_jitter_family == "uniform":
             self.jitter_ix = rg.integers(self.temporal_jitter, size=self.n_spikes)
         elif self.temporal_jitter > 1 and temporal_jitter_family == "by_unit":
-            self.jitter_ix = self.labels % self.n_units
+            self.jitter_ix = self.labels % self.temporal_jitter
         else:
             self.jitter_ix = np.zeros(1, dtype=np.int64)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
         if temporal_jitter == 1:
             self.upsampling_offsets = np.zeros_like(self.times_samples)
         else:
-            self.upsampling_offsets = template_simulator.offsets_up[self.labels, self.jitter_ix]
+            self.upsampling_offsets = template_simulator.offsets_up[
+                self.labels, self.jitter_ix
+            ]
 
     def basic_sorting(self) -> DARTsortSorting:
         assert isinstance(self.sampling_frequency, (int, float))

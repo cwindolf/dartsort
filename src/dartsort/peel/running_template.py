@@ -8,7 +8,7 @@ import warnings
 
 import h5py
 import numpy as np
-from scipy.special import ndtri, gammaln
+from scipy.special import ndtri
 from spikeinterface.core import BaseRecording
 import torch
 from torch.distributions import StudentT, Normal
@@ -291,15 +291,17 @@ class RunningTemplates(GrabAndFeaturize):
         # realign to empirical trough if necessary
         n_pitches_shift = template_time_shifts = None
         if template_cfg.realign_peaks and realign_samples:
-            sorting, n_pitches_shift, template_time_shifts = (
-                realign_by_running_templates(
-                    sorting,
-                    recording,
-                    motion_est=motion_est,
-                    realign_samples=realign_samples,
-                    show_progress=show_progress,
-                    computation_cfg=computation_cfg,
-                )
+            (
+                sorting,
+                n_pitches_shift,
+                template_time_shifts,
+            ) = realign_by_running_templates(
+                sorting,
+                recording,
+                motion_est=motion_est,
+                realign_samples=realign_samples,
+                show_progress=show_progress,
+                computation_cfg=computation_cfg,
             )
 
         loot_or_t = template_cfg.denoising_method in ("loot", "t")
@@ -672,15 +674,11 @@ class RunningTemplates(GrabAndFeaturize):
         weights = waveforms[:, 0].isfinite().to(waveforms)
         ix = labels[:, None].broadcast_to(weights.shape)
         counts.scatter_add_(dim=0, index=ix, src=weights)
-        minds = self.mask_indices[  # pyright: ignore
-            (
-                self.times_samples
-                == self.times_samples.clip(  # pyright: ignore
-                    chunk_start_samples,  # pyright: ignore
-                    chunk_start_samples + chunk_length_samples - 1,  # pyright: ignore
-                )
-            ).numpy(force=True)  # pyright: ignore
-        ]  # pyright: ignore
+        valid = self.times_samples == self.times_samples.clip(  # type: ignore
+            chunk_start_samples,
+            chunk_start_samples + chunk_length_samples - 1,
+        )
+        minds = self.mask_indices[valid.numpy(force=True)]  # type: ignore
         weights = coll_weights(
             times_samples,
             waveforms,
@@ -1397,7 +1395,11 @@ def smsm_resps_and_latents(
             l = 0.0  # doesn't matter at all
         elif nu == 1.0:
             # t_1 is Cauchy
-            log_scale = scale.log_() if torch.is_tensor(scale) else torch.tensor(math.log(scale))
+            log_scale = (
+                scale.log_()
+                if torch.is_tensor(scale)
+                else torch.tensor(math.log(scale))
+            )
             del scale
             l = zsq.add(1.0).log_().neg_().sub_(log_scale.add_(LOG_PI))
             l.add_(lp)
@@ -1405,7 +1407,11 @@ def smsm_resps_and_latents(
             l = StudentT(nu, loc=loc, scale=scale, validate_args=False).log_prob(xf)
             l.add_(lp)
         else:
-            log_scale = scale.log_() if torch.is_tensor(scale) else torch.tensor(math.log(scale))
+            log_scale = (
+                scale.log_()
+                if torch.is_tensor(scale)
+                else torch.tensor(math.log(scale))
+            )
             del scale
             l = zsq.add(log_scale.add_(LOG_2PI)).mul_(-0.5)
             l.add_(lp)

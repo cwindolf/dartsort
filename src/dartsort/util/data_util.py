@@ -99,9 +99,6 @@ class DARTsortSorting:
         self, *, check_shapes=True, **new_features: np.ndarray
     ) -> Self:
         other = self.copy()
-        logger.warning(
-            f"ephrep {self._ephemeral_feature_names=} {other._ephemeral_feature_names=}"
-        )
         for k, v in new_features.items():
             if k in ("times_samples", "channels", "labels"):
                 if check_shapes:
@@ -127,9 +124,6 @@ class DARTsortSorting:
 
         already_ephemeral = feature_name in self._ephemeral_feature_names
         already_attr = hasattr(self, feature_name)
-        logger.warning(
-            f"{feature_name=} {already_ephemeral=} {self._ephemeral_feature_names=} {already_attr=}"
-        )
         if already_ephemeral:
             assert already_attr
         if already_attr and not overwrite:

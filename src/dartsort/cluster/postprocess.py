@@ -73,6 +73,7 @@ def realign_and_chuck_noisy_template_units(
         good_unit_ids, return_inverse=True
     )
 
+    assert sorting.labels is not None
     new_labels = sorting.labels.copy()
     valid = np.isin(new_labels, unique_good_unit_ids)
     new_labels[~valid] = -1
