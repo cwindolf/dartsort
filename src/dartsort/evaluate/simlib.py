@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import cast
+from dataclasses import replace
 
 
 import h5py
@@ -12,7 +14,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files
+        from importlib_resources import files  # pyright: ignore
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -218,11 +220,12 @@ default_sim_featurization_cfg = FeaturizationConfig(
 
 def add_features(h5_path, recording, featurization_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
-        geom = h5["geom"][:]
-        channel_index = h5["channel_index"][:]
+        geom = cast(h5py.Dataset, h5["geom"])[:]
+        channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
         waveforms, fixed_properties = subsample_waveforms(h5=h5)
         if not len(waveforms):
             return
+        featurization_cfg = replace(featurization_cfg, do_localization=len(geom) > 1)
         gt_pipeline = WaveformPipeline.from_config(
             featurization_cfg,
             WaveformConfig(),

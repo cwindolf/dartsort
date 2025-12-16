@@ -307,7 +307,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             geom3,
             decay_model=self.decay_model,
         )
-        if self.common_reference:
+        if self.common_reference and geom3.shape[0] > 1:
             tunpad = templates[..., :-1] if padded else templates
             tunpad -= np.median(tunpad, axis=-1, keepdims=True)
         if padded:

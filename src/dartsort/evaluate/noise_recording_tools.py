@@ -30,8 +30,10 @@ def get_background_recording(
     in_memory=False,
     overwrite=False,
 ):
-    if noise_recording_folder is not None and (noise_recording_folder / "binary.json").exists():
-        return read_binary_folder(noise_recording_folder)
+    if not overwrite and noise_recording_folder is not None:
+        if (noise_recording_folder / "binary.json").exists():
+            return read_binary_folder(noise_recording_folder)
+
 
     if geom is None:
         geom = generate_geom(**probe_kwargs or {})
@@ -54,7 +56,7 @@ def get_background_recording(
         return recording.save_to_memory(n_jobs=1)
     if noise_kind == "white":
         assert noise_recording_folder is not None
-        return recording.save_to_folder(noise_recording_folder, n_jobs=1)
+        return recording.save_to_folder(noise_recording_folder, n_jobs=1, overwrite=overwrite)
 
     assert noise_kind == "stationary_factorized_rbf"
     if not isinstance(noise_temporal_kernel, np.ndarray):

@@ -32,9 +32,10 @@ class EnforceDecrease(BaseWaveformDenoiser):
             channel_index=channel_index,
         )
         self.batch_size = batch_size
+        self.n_channels = self.b.geom.shape[0]
 
     def needs_precompute(self):
-        return not hasattr(self, "parents_index")
+        return self.n_channels > 1 and not hasattr(self, "parents_index")
 
     def precompute(self):
         self.register_buffer(
@@ -54,6 +55,8 @@ class EnforceDecrease(BaseWaveformDenoiser):
         ...
         dec_wfs, dec_ptps = enfdec(waveforms, maxchans)
         """
+        if self.n_channels == 1:
+            return waveforms
         n = waveforms.shape[0]
         assert (n,) == channels.shape
         assert waveforms.shape[2] == self.parents_index.shape[1]

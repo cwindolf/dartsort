@@ -121,7 +121,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
                 device=device,
             )
         else:
-            assert up_method == "direct"
             self.up_data = None
 
         up_temporal_comps = upsample_singlechan_torch(
@@ -554,7 +553,7 @@ def convolve_lowrank_shared(
     return out
 
 
-# @torch.jit.script
+@torch.jit.script
 def subtract_precomputed_pconv(
     conv: Tensor,
     pconv: Tensor,
@@ -575,7 +574,7 @@ def subtract_precomputed_pconv(
         batch.mul_(scalings[None, :, None])
         ix = ix_time.broadcast_to(batch.shape)
         batch = batch.reshape(i1 - i0, -1)
-        ix = ix.reshape(*batch.shape)
+        ix = ix.reshape(i1 - i0, batch.shape[1])
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 

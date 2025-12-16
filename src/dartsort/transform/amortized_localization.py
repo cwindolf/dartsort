@@ -87,16 +87,19 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.val_split_p = val_split_p
         self.random_seed = random_seed
         self.inference_batch_size = inference_batch_size
-        self.nc = len(self.geom)
+        self.nc = self.b.geom.shape[0]
 
-        self.register_buffer(
-            "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
-        )
-        mci = make_regular_channel_index(geom=self.geom, radius=radius, to_torch=True)
-        self.register_buffer("model_channel_index", mci)
-        ri = get_relative_index(self.channel_index, self.model_channel_index)
-        self.register_buffer("relative_index", ri)
-        self._needs_fit = True
+        if self.nc > 1:
+            self.register_buffer(
+                "padded_geom", F.pad(self.geom.to(torch.float), (0, 0, 0, 1))
+            )
+            mci = make_regular_channel_index(geom=self.geom, radius=radius, to_torch=True)
+            self.register_buffer("model_channel_index", mci)
+            ri = get_relative_index(self.channel_index, self.model_channel_index)
+            self.register_buffer("relative_index", ri)
+            self._needs_fit = True
+        else:
+            self._needs_fit = False
 
     def needs_fit(self):
         return self._needs_fit
@@ -110,6 +113,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
     def initialize_spike_length_dependent_params(self):
         if self.encoder is not None:
+            return
+        if self.nc == 1:
             return
 
         n_latent = self.latent_dim
@@ -447,6 +452,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
     def transform(self, waveforms, *, channels, show_progress=False, **unused):
         n = len(waveforms)
+        if self.nc == 1:
+            return {self.name: waveforms.new_zeros((n, 3))}
         with torch.no_grad():
             if n > self.inference_batch_size:
                 locs = waveforms.new_empty((n, 3))

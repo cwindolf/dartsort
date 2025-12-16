@@ -18,6 +18,7 @@ from ...templates import (
     svd_compress_templates,
     templates_at_time,
 )
+from ...templates.template_util import singlechan_alignments
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
 from ...util.spiketorch import add_at_, convolve_lowrank, grab_spikes_full
@@ -51,6 +52,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         low_rank_templates: LowRankTemplates,
         pconv_db: PconvBase,
         compressed_upsampled_temporal: CompressedUpsampledTemplates,
+        trough_offset_samples: int,
         obj_low_rank_templates: LowRankTemplates | None = None,
         geom: np.ndarray | None = None,
         registered_geom: np.ndarray | None = None,
@@ -129,11 +131,22 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         cup_index = torch.asarray(cupt.compressed_upsampling_index)
         cup_ix_to_up_ix = torch.asarray(cupt.compressed_index_to_upsampling_index)
         cup_temporal = torch.asarray(cupt.compressed_upsampled_templates)
-        cup_trough_shifts = torch.asarray(cupt.trough_shifts)
         self.register_buffer("cup_map", cup_map)
         self.register_buffer("cup_index", cup_index)
         self.register_buffer("cup_ix_to_up_ix", cup_ix_to_up_ix)
         self.register_buffer("cup_temporal", cup_temporal)
+
+        main_chans = self.b.spatial_sing.square().sum(dim=1).argmax(1)
+        main_sv = self.b.spatial_sing.take_along_dim(
+            dim=2, indices=main_chans[:, None, None]
+        )
+        cup_main_traces = torch.einsum(
+            "ntr,nr->nt",
+            cup_temporal,
+            main_sv[cupt.compressed_index_to_template_index, :, 0],
+        )
+        cup_trough_shifts = singlechan_alignments(cup_main_traces)
+        cup_trough_shifts = cup_trough_shifts - trough_offset_samples
         self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
         # -- template grouping and coarse objective indexing
@@ -246,6 +259,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             low_rank_templates=lrt,
             compressed_upsampled_temporal=cupt,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            trough_offset_samples=template_data.trough_offset_samples,
             geom=geom,
             registered_geom=template_data.registered_geom,
             registered_template_depths_um=template_data.registered_depths_um(),
