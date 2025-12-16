@@ -198,7 +198,7 @@ class SubtractionPeeler(BasePeeler):
         if self.save_iteration:
             datasets.append(SpikeDataset("iteration", (), "int32"))
         if self.realign_to_denoiser:
-            datasets.append(SpikeDataset("time_shifts", (), "int32"))
+            datasets.append(SpikeDataset("time_shifts", (), "int16"))
         if self.save_residnorm_decrease:
             datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
 
@@ -687,7 +687,7 @@ def subtract_chunk(
             left_margin=left_margin,
             right_margin=right_margin,
             relative_peak_radius=relative_peak_radius,
-            dedup_temporal_radius=dedup_temporal_radius,
+            temporal_dedup_radius_samples=dedup_temporal_radius,
             dedup_batch_size=dedup_batch_size,
             remove_exact_duplicates=remove_exact_duplicates,
             cumulant_order=cumulant_order,
@@ -977,6 +977,10 @@ def subtract_chunk(
     # offset spike times_samples according to margin
     spike_times -= left_margin
 
+    # apply time shifts
+    if "time_shifts" in spike_features:
+        spike_times += spike_features["time_shifts"]
+
     # strip margin and padding channel off the residual
     residual = residual[left_margin : traces.shape[0] - right_margin, :-1].cpu()
 
@@ -1046,5 +1050,5 @@ def denoiser_time_shifts(
 
     # find shifts just by argmax
     peaks = snips.argmax(dim=1)
-    dt = peaks.sub_(denoiser_realignment_shift)
+    dt = peaks.sub_(denoiser_realignment_shift).to(dtype=torch.int16)
     return dt

@@ -370,6 +370,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     "ptp_amplitudes": ((), f_dt),
                     "channels": ((), np.int32),
                     "collisioncleaned_waveforms": (self.segment.inj_wf_shape, f_dt),
+                    "time_shifts": ((), np.int16),
                 }
                 if save_injected_waveforms:
                     dataset_shapes["injected_waveforms"] = (
@@ -570,7 +571,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         else:
             assert False
         self.random_seed = random_seed
-        self.sorting = simulate_sorting(
+        sorting = simulate_sorting(
             self.n_units,
             self.get_num_samples(),
             firing_rates=firing_rates,
@@ -581,10 +582,10 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             refractory_samples=self.refractory_samples,
             globally_refractory=globally_refractory,
         )
-        sv = cast(np.recarray, self.sorting.to_spike_vector())
+        sv = cast(np.recarray, sorting.to_spike_vector())
         self.times_samples = sv["sample_index"]
         self.labels = sv["unit_index"]
-        self.n_spikes = self.sorting.count_total_num_spikes()
+        self.n_spikes = sorting.count_total_num_spikes()
         assert self.times_samples.shape == self.labels.shape == (self.n_spikes,)
 
         if amplitude_jitter and amp_jitter_family == "gamma":
@@ -607,14 +608,19 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         else:
             self.jitter_ix = np.zeros(1, dtype=np.int64)
             self.jitter_ix = np.broadcast_to(self.jitter_ix, (self.n_spikes,))
+        if temporal_jitter == 1:
+            self.upsampling_offsets = np.zeros_like(self.times_samples)
+        else:
+            self.upsampling_offsets = template_simulator.offsets_up[self.labels, self.jitter_ix]
 
     def basic_sorting(self) -> DARTsortSorting:
         assert isinstance(self.sampling_frequency, (int, float))
         return DARTsortSorting(
-            times_samples=self.times_samples,
+            times_samples=self.times_samples + self.upsampling_offsets,
             labels=self.labels,
             channels=np.zeros_like(self.times_samples),
             sampling_frequency=self.sampling_frequency,
+            ephemeral_features=dict(time_shifts=self.upsampling_offsets),
         )
 
     def drift(self, t_samples):
@@ -637,7 +643,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
 
     def templates(self, t_samples=None, up=False, padded=False, pad_value=np.nan):
         drift = 0 if t_samples is None else self.drift(t_samples)
-        pos, templates = self.template_simulator.templates(
+        pos, templates, offsets = self.template_simulator.templates(
             drift=drift, up=up, padded=padded, pad_value=pad_value
         )
         templates = templates.astype(self.features_dtype)
@@ -647,7 +653,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         else:
             assert tunpad.shape == self.template_shape
 
-        return pos, templates
+        return pos, templates, offsets
 
     def get_spikes(
         self,
@@ -675,15 +681,17 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         t_rel = t - (start_frame - self.margin)
         tix = t_rel[:, None] + self.snippet_time_ix
         tc = (start_frame + end_frame) / 2
-        pos, temps = self.templates(t_samples=tc, up=True, padded=extract)
+        pos, temps, offsets = self.templates(t_samples=tc, up=True, padded=extract)
         temps = temps[l, u]
         temps *= s[:, None, None]
         temps_unpad = temps[..., :-1] if extract else temps
+        offsets = offsets[l, u]
 
         spikes = dict(
             i0=i0,
             i1=i1,
-            times_samples=t,
+            times_samples=t + offsets,
+            time_shifts=offsets.astype(np.int16),
             labels=l,
             scalings=s,
             jitter_ix=u,

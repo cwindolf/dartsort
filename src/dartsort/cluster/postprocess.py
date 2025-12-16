@@ -153,13 +153,6 @@ def postprocess(
     if (sorting.labels < 0).all():
         raise ValueError("No labels in sorting input to template postprocessing.")
 
-    # apply my time shifts only once and remove them so template extractor doesn't do it again
-    if (time_shifts := getattr(sorting, "time_shifts", None)) is not None:
-        logger.info("Sorting had time_shifts, applying before getting templates.")
-        new_times_samples = sorting.times_samples + time_shifts
-        sorting = sorting.ephemeral_replace(times_samples=new_times_samples)
-        sorting.remove_feature("time_shifts")
-
     # get tsvd to share across steps
     if tsvd is None and template_cfg.denoising_method not in (None, "none"):
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)

@@ -314,6 +314,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             n_templates=self.n_templates,
             obj_n_templates=self.obj_n_templates,
             spike_length_samples=self.spike_length_samples,
+            up_factor=self.b.cup_index.shape[1],
             inv_lambda=torch.tensor(inv_lambda, device=normsq.device),
             scale_min=torch.tensor(scale_min, device=normsq.device),
             scale_max=torch.tensor(scale_max, device=normsq.device),
@@ -355,6 +356,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     n_templates: int
     obj_n_templates: int
     spike_length_samples: int
+    up_factor: int
     inv_lambda: Tensor
     scale_min: Tensor
     scale_max: Tensor
@@ -493,7 +495,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         comp_up_indices = comp_up_ix[dup_ix, column_ix]
         temps_t = self.cup_temporal[comp_up_indices]
         temps_s = self.spatial_sing[template_indices[dup_ix]]
-        snips_dup_dt = residual_snips[dup_ix].unfold(1, residual_snips.shape[1] - 1, 1)
+        snips_dup_dt = residual_snips[dup_ix].unfold(1, self.spike_length_samples, 1)
         convs = torch.einsum("ndct,ntr,nrc->nd", snips_dup_dt, temps_t, temps_s)
         norms = norms[dup_ix]
         if self.scaling:

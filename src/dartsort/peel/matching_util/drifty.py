@@ -70,7 +70,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
         up_interp_params=default_upsampling_params,
-        drift_interp_params: InterpolationParams = default_upsampling_params,
+        drift_interp_params: InterpolationParams = default_interpolation_params,
         interp_neighborhood_radius: float = 150.0,
         refractory_radius_frames: int = 10,
         device: torch.device,

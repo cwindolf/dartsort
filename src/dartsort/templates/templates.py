@@ -294,12 +294,6 @@ def _from_config_with_realigned_sorting(
         if npz_path.exists() and not overwrite:
             return cls.from_npz(npz_path), sorting
 
-    if (time_shifts := getattr(sorting, "time_shifts", None)) is not None:
-        logger.info("Sorting had time_shifts, applying before getting templates.")
-        new_times_samples = sorting.times_samples + time_shifts
-        sorting = sorting.ephemeral_replace(times_samples=new_times_samples)
-        sorting.remove_feature("time_shifts")
-
     if template_cfg.actual_algorithm() == "by_chunk":
         template_data, realigned_sorting = get_templates_by_chunk(
             sorting=sorting,

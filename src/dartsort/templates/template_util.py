@@ -393,7 +393,9 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
+    tup = np.arange(
+        t, step=1.0 / temporal_upsampling_factor
+    )  # pyright: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(
@@ -502,9 +504,9 @@ def compressed_upsampled_templates(
     )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[compressed_upsampling_index < 0] = (
-        current_compressed_index
-    )
+    compressed_upsampling_index[
+        compressed_upsampling_index < 0
+    ] = current_compressed_index
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(
@@ -548,8 +550,11 @@ def _svd_helper(x):
         return U, S, Vh
 
 
-def get_main_channels_and_alignments(template_data, trough_factor=3.0, templates=None):
+def get_main_channels_and_alignments(
+    template_data=None, trough_factor=3.0, templates=None
+):
     if templates is None:
+        assert template_data is not None
         templates = template_data.templates
     main_chans = np.ptp(templates, axis=1).argmax(1)
     mc_traces = np.take_along_axis(templates, main_chans[:, None, None], axis=2)[

@@ -126,6 +126,7 @@ class ChunkTemplateData:
     upsampling: bool
     scaling: bool
     needs_fine_pass: bool
+    up_factor: int
     inv_lambda: Tensor
     scale_min: Tensor
     scale_max: Tensor
@@ -202,7 +203,6 @@ class ChunkTemplateData:
                 template_indices=template_indices,
                 scores=objs,
             )
-
         scalings, objs = _coarse_match_scaled(
             conv=conv,
             template_indices=template_indices,

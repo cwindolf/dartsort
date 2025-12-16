@@ -1,7 +1,6 @@
 """A simple residual updating template matcher."""
 
 from typing import Self, Literal
-from logging import getLogger
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +10,6 @@ import torch.nn.functional as F
 
 from ..templates import TemplateData, LowRankTemplates
 from ..transform import WaveformPipeline
-from ..util import spiketorch
 from ..util.data_util import SpikeDataset
 from ..util.internal_config import (
     ComputationConfig,
@@ -19,6 +17,7 @@ from ..util.internal_config import (
     WaveformConfig,
     MatchingConfig,
 )
+from ..util.logging_util import get_logger
 from ..util.waveform_util import make_channel_index
 
 from .matching_util import (
@@ -30,7 +29,7 @@ from .matching_util import (
 from .peel_base import BasePeeler, PeelingBatchResult
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
@@ -47,6 +46,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         amplitude_scaling_variance=0.0,
         amplitude_scaling_boundary=0.5,
         margin_factor=2,
+        up_factor: int = 1,
         trough_offset_samples=42,
         threshold: float | Literal["fp_control"] = 100.0,
         obj_spike_counts=None,
@@ -115,6 +115,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             self.register_buffer("channel_selection_index", channel_selection_index)
         self.picking_channels = self.channel_selection != "template"
 
+        self.up_factor = up_factor
+        self.is_upsampling = up_factor > 1
+
         # amplitude scaling properties
         self.is_scaling = bool(amplitude_scaling_variance)
         self.amplitude_scaling_variance = amplitude_scaling_variance
@@ -143,13 +146,24 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        return datasets + [
-            SpikeDataset(name="template_indices", shape_per_spike=(), dtype=np.int64),
-            SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
-            SpikeDataset(name="upsampling_indices", shape_per_spike=(), dtype=np.int64),
-            SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
-            SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
-        ]
+        datasets.extend(
+            [
+                SpikeDataset(
+                    name="template_indices", shape_per_spike=(), dtype=np.int64
+                ),
+                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
+                SpikeDataset(
+                    name="upsampling_indices", shape_per_spike=(), dtype=np.int64
+                ),
+                SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
+                SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
+            ]
+        )
+        if self.is_upsampling:
+            datasets.append(
+                SpikeDataset(name="time_shifts", shape_per_spike=(), dtype=np.int8),
+            )
+        return datasets
 
     @classmethod
     def from_config(
@@ -217,6 +231,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_subsampling_random_state=matching_cfg.fit_subsampling_random_state,
             n_waveforms_fit=matching_cfg.n_waveforms_fit,
             fit_sampling=matching_cfg.fit_sampling,
+            up_factor=matching_cfg.template_temporal_upsampling_factor,
             fit_max_reweighting=matching_cfg.fit_max_reweighting,
             max_iter=matching_cfg.max_iter,
             max_spikes_per_second=matching_cfg.max_spikes_per_second,
@@ -411,6 +426,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         times_samples = peaks.times.add_(self.trough_offset_samples)
         labels = chunk_template_data.unit_ids[peaks.template_indices]
+        if chunk_template_data.upsampling:
+            time_shifts = -(
+                peaks.upsampling_indices > chunk_template_data.up_factor // 2
+            ).to(dtype=torch.int8)
+            times_samples += time_shifts
+            time_shifts_dict = {"time_shifts": time_shifts}
+        else:
+            time_shifts_dict = {}
         res = PeelingBatchResult(
             n_spikes=peaks.n_spikes,
             times_samples=times_samples,
@@ -420,6 +443,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             upsampling_indices=peaks.upsampling_indices,
             scalings=peaks.scalings,
             scores=peaks.scores,
+            **time_shifts_dict,
         )
         if return_collisioncleaned_waveforms:
             assert waveforms is not None

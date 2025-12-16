@@ -1,3 +1,4 @@
+from tempfile import tempdir
 from typing import Literal, Union
 
 import numpy as np
@@ -7,7 +8,10 @@ from scipy.interpolate import griddata
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
-from ..templates.template_util import svd_compress_templates
+from ..templates.template_util import (
+    svd_compress_templates,
+    get_main_channels_and_alignments,
+)
 from ..templates.templates import TemplateData
 from ..util.interpolation_util import (
     InterpolationParams,
@@ -103,8 +107,8 @@ class BaseTemplateSimulator:
         up: bool = False,
         padded: bool = False,
         pad_value: float = float("nan"),
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Returns (pos, templates) which are (K, 3) and (K, t, C)."""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Returns (pos, templates, trough_offsets) which are (K, 3), (K, t, C), (K,) with optional up dim after K."""
         raise NotImplementedError
 
 
@@ -119,6 +123,18 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
         self.temporal_jitter = temporal_jitter
         self.templates_up = upsample_multichan(
             self.template_data.templates, temporal_jitter=temporal_jitter
+        )
+        _, _, a0 = get_main_channels_and_alignments(template_data)
+        self.offsets = a0 - template_data.trough_offset_samples
+        assert self.templates_up.shape[:2] == (self.n_units, temporal_jitter)
+        _, mct, a1 = get_main_channels_and_alignments(
+            templates=self.templates_up.reshape(
+                self.n_units * temporal_jitter, *self.templates_up.shape[2:]
+            )
+        )
+        # assert (a1 == template_data.trough_offset_samples).all()
+        self.offsets_up = (a1 - template_data.trough_offset_samples).reshape(
+            self.n_units, temporal_jitter
         )
 
     def trough_offset_samples(self) -> int:
@@ -140,7 +156,8 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
         if padded:
             zpads = [(0, 0)] * (temps.ndim - 1)
             temps = np.pad(temps, [*zpads, (0, 1)], constant_values=pad_value)
-        return loc, temps
+        off = self.offsets_up if up else self.offsets
+        return loc, temps, off
 
 
 class PointSource3ExpSimulator(BaseTemplateSimulator):
@@ -247,6 +264,8 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             )
             self.singlechan_templates_up = sct_full.transpose(0, 2, 1)
             self.singlechan_templates = sct_full[:, :, 0]
+            self.offsets_up = sct_full.argmin(1) - self.trough_offset_samples()
+            self.offsets = self.singlechan_templates.argmin(1) - self.trough_offset_samples()
         elif temporal_jitter_kind == "cubic":
             _, sct = self.simulate_singlechan(size=n_units, up=False)
             sct_up = upsample_singlechan(
@@ -254,9 +273,13 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             )
             self.singlechan_templates = sct
             self.singlechan_templates_up = sct_up
+            self.offsets = sct.argmin(1) - self.trough_offset_samples()
+            self.offsets_up = self.sct_up.argmin(2) - self.trough_offset_samples()
         else:
             assert False
-        assert np.all(self.singlechan_templates.argmin(1) == self.trough_offset_samples())
+        assert np.all(
+            self.singlechan_templates.argmin(1) == self.trough_offset_samples()
+        )
         self.min_rms_distance = min_rms_distance
         min_dist = min_rms_distance + 0.0
         n_checks = 0
@@ -289,7 +312,8 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             tunpad -= np.median(tunpad, axis=-1, keepdims=True)
         if padded:
             templates[..., -1] = pad_value
-        return pos, templates
+        off = self.offsets_up if up else self.offsets
+        return pos, templates, off
 
     def check_and_fix_distances(self):
         # make rms distance matrix, check templates that are too close, re-sample
@@ -619,7 +643,12 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         if not padded:
             out = out[..., :-1]
 
-        return true_template_pos, out
+        out_flat = out.reshape(nu * up_factor, nt, nc_out) if up else out
+        _, _, offsets = get_main_channels_and_alignments(templates=out_flat)
+        if up:
+            offsets = offsets.reshape(nu, up_factor)
+
+        return true_template_pos, out, offsets
 
 
 def griddata_interp(templates, source_pos, target_pos, out, method):

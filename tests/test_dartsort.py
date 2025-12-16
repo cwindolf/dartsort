@@ -119,7 +119,6 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
     cumulant_order = None
-    type0 = type
     if type.endswith("_cumulant"):
         cumulant_order = 2
     cfg = dartsort.DeveloperConfig(
@@ -128,6 +127,8 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
         cumulant_order=cumulant_order,
+        # amplitude_scaling_stddev=0.0,
+        # temporal_upsamples=8,
     )
     with warnings.catch_warnings() as ws:
         warnings.filterwarnings("ignore", message="Can't extract this many non-overlapping snips.")

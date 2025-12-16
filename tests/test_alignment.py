@@ -33,7 +33,6 @@ Need to also test per-template shifts.
 """
 
 import tempfile
-from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -43,16 +42,13 @@ import dartsort
 from dartsort.util.spiketorch import taper
 
 # constants
-fs = 1000  # implies 1 sample per millisecond
+fs = 1000
 t = 7
 trough = 3
 snr = 20.0
 bump = 0.2
 
-waveform_cfg = dartsort.WaveformConfig(
-    ms_before=trough,
-    ms_after=t - trough,
-)
+waveform_cfg = dartsort.WaveformConfig(ms_before=trough, ms_after=t - trough)
 
 
 @pytest.fixture(scope="module")
@@ -169,8 +165,8 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert not np.array_equal(st0.times_samples, gt_st.times_samples)
 
     # st1 is perfect
-    assert np.array_equal(st0.times_samples, st1.times_samples)
-    assert np.array_equal(st1.times_samples + st1.time_shifts, gt_st.times_samples)  # type: ignore
+    assert np.array_equal(st0.times_samples, st1.times_samples - st1.time_shifts)  # type: ignore
+    assert np.array_equal(st1.times_samples, gt_st.times_samples)
 
     # -- the template computation handles time_shifts correctly
     # to do this, we need to cluster the detections. we can just cheat and use the sign.
@@ -296,7 +292,7 @@ def test_template_shifts(
         ushifts = np.zeros(2, dtype=np.int64)
 
     st = dartsort.DARTsortSorting(
-        times_samples=times,
+        times_samples=times + time_shifts,
         channels=gt_st.channels,
         labels=labels,
         sampling_frequency=gt_st.sampling_frequency,
