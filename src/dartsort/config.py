@@ -171,9 +171,9 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = (
-        "tmm"
-    )
+    refinement_strategy: Literal[
+        "gmm", "pcmerge", "forwardbackward", "none", "tmm"
+    ] = "tmm"
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -197,6 +197,10 @@ class DeveloperConfig(DARTsortUserConfig):
     convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching
+    matching_template_type: Literal[
+        "individual_compressed_upsampled", "drifty"
+    ] = "individual_compressed_upsampled"
+    matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.025
@@ -212,6 +216,7 @@ class DeveloperConfig(DARTsortUserConfig):
         default=50.0, arg_type=float_or_none
     )
     always_recompute_tsvd: bool = True
+    matching_template_min_amplitude: float = 1.0
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"

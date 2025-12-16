@@ -29,6 +29,7 @@ class MatchingTemplates(BModule):
     pconv_db: "PconvBase"
 
     def __init_subclass__(cls):
+        logger.info("Register matching templates type: %s", cls.template_type)
         cls._registry[cls.template_type] = cls
 
     @classmethod
@@ -47,6 +48,7 @@ class MatchingTemplates(BModule):
         _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
         if _extra_checks:
             logger.dartsortverbose(f"Extra checks enabled in matching.")
+            logger.dartsortverbose("Matching template registry: %s.", cls._registry.keys())
         return cls._registry[matching_cfg.template_type]._from_config(
             save_folder=save_folder,
             recording=recording,
@@ -166,7 +168,12 @@ class ChunkTemplateData:
         raise NotImplementedError
 
     def fine_match(
-        self, *, peaks: "MatchingPeaks", residual: Tensor
+        self,
+        *,
+        peaks: "MatchingPeaks",
+        residual: Tensor,
+        conv: Tensor,
+        padding: int = 0,
     ) -> "MatchingPeaks":
         raise NotImplementedError
 

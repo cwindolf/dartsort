@@ -146,6 +146,81 @@ class FeaturizationConfig:
     output_waveforms_name: str = "denoised"
 
 
+InterpMethod = Literal[
+    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest"
+]
+InterpKernel = Literal[
+    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate"
+]
+
+
+@cfg_dataclass
+class InterpolationParams:
+    method: InterpMethod = "kriging"
+    kernel: InterpKernel = "thinplate"
+    extrap_method: InterpMethod | None = None
+    extrap_kernel: InterpKernel | None = None
+    kriging_poly_degree: int = 1
+    sigma: float = 10.0
+    rq_alpha: float = 0.5
+    smoothing_lambda: float = 0.0
+
+    @property
+    def actual_extrap_method(self):
+        if self.extrap_method is None:
+            return self.method
+        return self.extrap_method
+
+    @property
+    def actual_extrap_kernel(self):
+        if self.extrap_kernel is None:
+            return self.kernel
+        return self.extrap_kernel
+
+    def extrap_diff(self):
+        if self.actual_extrap_method != self.method:
+            return True
+        if self.actual_extrap_kernel != self.kernel:
+            return True
+        return False
+
+    def normalize(self) -> Self:
+        method = self.method
+        kernel = self.kernel
+        if method == "nearest":
+            method = "kernel"
+            kernel = "nearest"
+        elif method == "zero":
+            method = "kernel"
+            kernel = "zero"
+
+        extrap_method = self.extrap_method
+        extrap_kernel = self.extrap_kernel
+        if extrap_method == "nearest":
+            extrap_method = "kernel"
+            extrap_kernel = "nearest"
+        elif extrap_method == "zero":
+            extrap_method = "kernel"
+            extrap_kernel = "zero"
+
+        return self.__class__(
+            method=method,
+            kernel=kernel,
+            extrap_method=extrap_method,
+            extrap_kernel=extrap_kernel,
+            kriging_poly_degree=self.kriging_poly_degree,
+            sigma=self.sigma,
+            rq_alpha=self.rq_alpha,
+            smoothing_lambda=self.smoothing_lambda,
+        )
+
+
+default_interpolation_params = InterpolationParams()
+default_extrapolation_params = InterpolationParams(
+    method="kernel", kernel="rq", sigma=10.0
+)
+
+
 @cfg_dataclass
 class SubtractionConfig:
     # peeling common
@@ -325,6 +400,7 @@ class MatchingConfig:
     threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 4
+    upsampling_radius: int = 8
     template_min_channel_amplitude: float = 0.0
     refractory_radius_frames: int = 10
     amplitude_scaling_variance: float = 0.1**2
@@ -334,10 +410,12 @@ class MatchingConfig:
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
     channel_selection_radius: float | None = 50.0
-    template_type: Literal["individual_compressed_upsampled"] = (
-        "individual_compressed_upsampled"
-    )
-    up_method: Literal["interpolation", "direct"] = "direct"
+    template_type: Literal[
+        "individual_compressed_upsampled", "drifty"
+    ] = "individual_compressed_upsampled"
+    up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
+    drift_interp_neighborhood_radius: float = 200.0
+    drift_interp_params: InterpolationParams = default_interpolation_params
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -390,81 +468,6 @@ class MotionEstimationConfig:
     correlation_threshold: float = 0.1
     min_amplitude: float | None = argfield(default=None, arg_type=float)
     rigid: bool = False
-
-
-InterpMethod = Literal[
-    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest"
-]
-InterpKernel = Literal[
-    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate"
-]
-
-
-@cfg_dataclass
-class InterpolationParams:
-    method: InterpMethod = "kriging"
-    kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = None
-    extrap_kernel: InterpKernel | None = None
-    kriging_poly_degree: int = 1
-    sigma: float = 10.0
-    rq_alpha: float = 0.5
-    smoothing_lambda: float = 0.0
-
-    @property
-    def actual_extrap_method(self):
-        if self.extrap_method is None:
-            return self.method
-        return self.extrap_method
-
-    @property
-    def actual_extrap_kernel(self):
-        if self.extrap_kernel is None:
-            return self.kernel
-        return self.extrap_kernel
-
-    def extrap_diff(self):
-        if self.actual_extrap_method != self.method:
-            return True
-        if self.actual_extrap_kernel != self.kernel:
-            return True
-        return False
-
-    def normalize(self) -> Self:
-        method = self.method
-        kernel = self.kernel
-        if method == "nearest":
-            method = "kernel"
-            kernel = "nearest"
-        elif method == "zero":
-            method = "kernel"
-            kernel = "zero"
-
-        extrap_method = self.extrap_method
-        extrap_kernel = self.extrap_kernel
-        if extrap_method == "nearest":
-            extrap_method = "kernel"
-            extrap_kernel = "nearest"
-        elif extrap_method == "zero":
-            extrap_method = "kernel"
-            extrap_kernel = "zero"
-
-        return self.__class__(
-            method=method,
-            kernel=kernel,
-            extrap_method=extrap_method,
-            extrap_kernel=extrap_kernel,
-            kriging_poly_degree=self.kriging_poly_degree,
-            sigma=self.sigma,
-            rq_alpha=self.rq_alpha,
-            smoothing_lambda=self.smoothing_lambda,
-        )
-
-
-default_interpolation_params = InterpolationParams()
-default_extrapolation_params = InterpolationParams(
-    method="kernel", kernel="rq", sigma=10.0
-)
 
 
 @cfg_dataclass
@@ -549,9 +552,9 @@ class ClusteringConfig:
 
 @cfg_dataclass
 class RefinementConfig:
-    refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
-        "tmm"
-    )
+    refinement_strategy: Literal[
+        "tmm", "gmm", "pcmerge", "forwardbackward", "none"
+    ] = "tmm"
 
     # pcmerge
     pc_merge_threshold: float = 0.2
@@ -841,6 +844,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
             channel_selection_radius=cfg.channel_selection_radius,
+            template_type=cfg.matching_template_type,
+            up_method=cfg.matching_up_method,
+            template_min_channel_amplitude=cfg.matching_template_min_amplitude,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -991,6 +997,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
         channel_selection_radius=cfg.channel_selection_radius,
+        template_type=cfg.matching_template_type,
+        up_method=cfg.matching_up_method,
+        template_min_channel_amplitude=cfg.matching_template_min_amplitude,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,

@@ -345,7 +345,9 @@ def test_matching_alignment_basic(align_sim, align_templates):
             template_data=align_templates,
             waveform_cfg=waveform_cfg,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
-            matching_cfg=dartsort.MatchingConfig(refractory_radius_frames=1),
+            matching_cfg=dartsort.MatchingConfig(
+                refractory_radius_frames=1, template_temporal_upsampling_factor=1
+            ),
         )
     gt_st = align_sim["sorting"]
     assert np.array_equal(st.times_samples, gt_st.times_samples)

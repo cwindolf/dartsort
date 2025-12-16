@@ -427,9 +427,13 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
 
     def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        return self.cup_trough_shifts[self.cup_map[peaks.template_indices, peaks.upsampling_indices]]
+        return self.cup_trough_shifts[
+            self.cup_map[peaks.template_indices, peaks.upsampling_indices]
+        ]
 
-    def fine_match(self, *, peaks: MatchingPeaks, residual: Tensor):
+    def fine_match(
+        self, *, peaks: MatchingPeaks, residual: Tensor, conv: Tensor, padding: int = 0
+    ):
         """Determine superres ids, temporal upsampling, and scaling
 
         Given coarse matches (unit ids at times) and the current residual,
@@ -454,6 +458,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         """
         if not self.needs_fine_pass:
             return peaks
+        del conv, padding  # unused
 
         if self.coarse_objective or self.upsampling:
             residual_snips = grab_spikes_full(

@@ -352,7 +352,7 @@ def shared_basis_compress_templates(
         unit_ids = np.arange(len(templates))
     n, t, c = templates.shape
     rank = min(rank, *templates.shape[1:])
-    amp_vecs = ptp(templates, dim=1, keepdims=True)
+    amp_vecs = ptp(templates, dim=1)
     assert np.isfinite(amp_vecs).all()
     visible = amp_vecs > min_channel_amplitude
     uu, cc = np.nonzero(visible)
@@ -371,7 +371,7 @@ def shared_basis_compress_templates(
     to_compress = torch.asarray(to_compress, device=dev)
     U, S, Vh = _svd_helper(to_compress)
     del S, Vh
-    assert U.shape == (t, nvis)
+    assert U.shape == (t, min(t, nvis))
     temporal_comps = U[:, :rank]
     # to rank-major
     temporal_comps = temporal_comps.T.contiguous()
@@ -527,7 +527,9 @@ def compressed_upsampled_templates(
         n_templates * max_upsample, templates.shape[1], templates.shape[2]
     )
     compressed_upsampled_templates = all_upsampled_templates[rix]
-    _, _, trough_shifts = get_main_channels_and_alignments(templates=compressed_upsampled_templates)
+    _, _, trough_shifts = get_main_channels_and_alignments(
+        templates=compressed_upsampled_templates
+    )
     trough_shifts = trough_shifts - trough_offset_samples
 
     return CompressedUpsampledTemplates(
@@ -557,6 +559,15 @@ def _svd_helper(x):
         S = torch.from_numpy(S)
         Vh = torch.from_numpy(Vh)
         return U, S, Vh
+
+
+@torch.jit.script
+def singlechan_alignments(
+    traces: torch.Tensor, trough_factor: float = 3.0, dim: int = 1
+) -> torch.Tensor:
+    aligner_traces = torch.where(traces < 0, trough_factor * traces, -traces)
+    offsets = torch.abs(aligner_traces).argmax(dim=dim)
+    return offsets
 
 
 def get_main_channels_and_alignments(

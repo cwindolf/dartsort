@@ -1,3 +1,4 @@
+from tempfile import tempdir
 from typing import Optional
 import warnings
 
@@ -549,6 +550,7 @@ def get_deconv_resid_decrease_iter(
     )
     compressed_upsampled_temporal = template_util.compressed_upsampled_templates(
         low_rank_templates_b.temporal_components,
+        trough_offset_samples=template_data.trough_offset_samples,
         ptps=np.ptp(template_data.templates, 1).max(1),
         max_upsample=temporal_upsampling_factor,
     )

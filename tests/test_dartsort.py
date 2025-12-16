@@ -113,23 +113,28 @@ def test_cli_help():
 
 
 @pytest.mark.parametrize(
-    "type", ["subtract", "threshold", "match", "subtract_cumulant"]
+    "type", ["subtract", "threshold", "match", "subtract_cumulant", "drifty_match"]
 )
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
-    cumulant_order = None
+
+    cfg_add = {}
     if type.endswith("_cumulant"):
-        cumulant_order = 2
+        cfg_add["cumulant_order"] = 2
+    if type == "drifty_match":
+        type = "match"
+        cfg_add["matching_template_type"] = "drifty"
+        cfg_add["matching_up_method"] = "keys4"
+        cfg_add["matching_template_min_amplitude"] = 1.0
+
+
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
         detection_type=type.removesuffix("_cumulant"),
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
-        cumulant_order=cumulant_order,
-        matching_threshold=10.0,
-        # amplitude_scaling_stddev=0.0,
-        # temporal_upsamples=8,
+        **cfg_add,
     )
     with warnings.catch_warnings() as ws:
         warnings.filterwarnings("ignore", message="Can't extract this many non-overlapping snips.")
@@ -164,8 +169,4 @@ def test_initial_detection_swap(tmp_path, simulations, type):
 
     c0 = len(sim["sorting"])
     c1 = len(res["sorting"])
-    st = res["sorting"]
-    import numpy as np
-    for u in range(20):
-        print(f"{np.diff(st.times_samples[st.labels==u]).min()=}")
     assert abs(c0 - c1) < count_dif_tol * c0

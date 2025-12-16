@@ -29,27 +29,31 @@ Coarse-to-fine approach
 
 TODO: MatchingPeaks may need to be tweaked or abstracted?
 """
-
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Self
 
 import torch
 import torch.nn.functional as F
+from spikeinterface.core import BaseRecording
 from torch import Tensor
 
+from ...templates import TemplateData
+from ...templates.template_util import (
+    shared_basis_compress_templates,
+    singlechan_alignments,
+)
+from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.interpolation_util import (
-    InterpolationParams,
     FullProbeInterpolator,
+    InterpolationParams,
     bake_interpolation_1d,
     default_interpolation_params,
 )
+from ...util.job_util import ensure_computation_config
 from ...util.py_util import databag
 from ...util.spiketorch import add_at_
 from ...util.waveform_util import upsample_singlechan_torch
-from .matching_base import (
-    ChunkTemplateData,
-    MatchingPeaks,
-    MatchingTemplates,
-)
+from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
 
 default_upsampling_params = InterpolationParams(sigma=1.0)
 
@@ -64,6 +68,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         spatial_sing: Tensor,
         motion_est,
         geom: Tensor,
+        trough_offset_samples: int,
         unit_ids: Tensor | None = None,
         rgeom: Tensor | None = None,
         up_factor: int = 1,
@@ -81,16 +86,19 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_method:
             How to pick the upsampling index? If we have a coarse match at time t,
         """
+        super().__init__()
         self.upsampling = up_factor > 1
         self.up_method = up_method
         self.interpolating = motion_est is not None
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
-        assert self.interpolating == motion_est is not None
+        assert self.interpolating == (motion_est is not None)
         self.n_units, rank, n_channels = spatial_sing.shape
         assert rank == temporal_comps.shape[0]
-        self.spike_length_samples = temporal_comps.shape[0]
+        self.spike_length_samples = temporal_comps.shape[1]
+        assert trough_offset_samples <= self.spike_length_samples
+        self.trough_offset_samples = trough_offset_samples
 
         if self.interpolating:
             assert rgeom is not None
@@ -113,6 +121,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
                 device=device,
             )
         else:
+            assert up_method == "direct"
             self.up_data = None
 
         up_temporal_comps = upsample_singlechan_torch(
@@ -120,7 +129,9 @@ class DriftyMatchingTemplates(MatchingTemplates):
         )
         temporal_pconv = shared_temporal_pconv(temporal_comps, up_temporal_comps)
 
+        assert temporal_comps.shape == (rank, self.spike_length_samples)
         self.register_buffer("temporal_comps", temporal_comps)
+        assert up_temporal_comps.shape == (rank, up_factor, self.spike_length_samples)
         self.register_buffer_or_none("up_temporal_comps", up_temporal_comps)
         if up_temporal_comps is not None:
             up_major_temporal_comps = up_temporal_comps.permute(1, 0, 2).contiguous()
@@ -146,7 +157,57 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.register_buffer("refrac_ix", torch.arange(-rr, rr + 1, device=device))
         self.register_buffer("time_ix", torch.arange(t, device=device))
         self.register_buffer("chan_ix", torch.arange(n_channels, device=device))
+        self.register_buffer("rank_ix", torch.arange(rank, device=device))
         self.register_buffer("conv_lags", torch.arange(-t + 1, t, device=device))
+
+    @classmethod
+    def _from_config(
+        cls,
+        save_folder: Path,
+        recording: BaseRecording,
+        template_data: TemplateData,
+        matching_cfg: MatchingConfig,
+        computation_cfg: ComputationConfig | None = None,
+        motion_est=None,
+        overwrite: bool = False,
+        dtype=torch.float,
+    ) -> Self:
+        del overwrite, save_folder  # I don't save anything.
+
+        computation_cfg = ensure_computation_config(computation_cfg)
+        device = computation_cfg.actual_device()
+
+        unit_ids = torch.asarray(template_data.unit_ids, device=device)
+        geom = torch.asarray(recording.get_channel_locations())
+        geom = geom.to(device=device, dtype=dtype)
+        rgeom = torch.asarray(template_data.registered_geom)
+        rgeom = rgeom.to(device=device, dtype=dtype)
+
+        shared_basis_temps = shared_basis_compress_templates(
+            template_data,
+            min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
+            rank=matching_cfg.template_svd_compression_rank,
+            computation_cfg=computation_cfg,
+        )
+        temporal_comps = torch.asarray(shared_basis_temps.temporal_components)
+        spatial_sing = torch.asarray(shared_basis_temps.spatial_singular)
+
+        return cls(
+            temporal_comps=temporal_comps.to(device=device, dtype=dtype),
+            spatial_sing=spatial_sing.to(device=device, dtype=dtype),
+            motion_est=motion_est,
+            geom=geom,
+            trough_offset_samples=template_data.trough_offset_samples,
+            unit_ids=unit_ids,
+            rgeom=rgeom,
+            up_factor=matching_cfg.template_temporal_upsampling_factor,
+            up_method=matching_cfg.up_method,
+            interp_up_radius=matching_cfg.upsampling_radius,
+            drift_interp_params=matching_cfg.drift_interp_params,
+            interp_neighborhood_radius=matching_cfg.drift_interp_neighborhood_radius,
+            refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            device=device,
+        )
 
     def spatial_sing_at_time(self, t_s: float) -> Tensor:
         if not self.interpolating:
@@ -171,6 +232,14 @@ class DriftyMatchingTemplates(MatchingTemplates):
         else:
             pconv = self.b.pconv
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
+        main_sing = spatial_sing.take_along_dim(
+            dim=2, indices=main_channels[:, None, None]
+        )[:, :, 0]
+        main_traces_up = torch.einsum(
+            "nr,rut->nut", main_sing, self.b.up_temporal_comps
+        )
+        trough_shifts = singlechan_alignments(main_traces_up, dim=2)
+        trough_shifts = trough_shifts - self.trough_offset_samples
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
             unit_ids=self.b.unit_ids,
@@ -193,6 +262,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
             conv_lags=self.b.conv_lags,
             refrac_ix=self.b.refrac_ix,
             padded_spatial_sing=padded_spatial_sing,
+            up_data=self.up_data,
+            up_trough_shifts=trough_shifts,
         )
 
 
@@ -223,6 +294,8 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     rank_ix: Tensor
     refrac_ix: Tensor
     conv_lags: Tensor
+    up_data: "UpsamplingData | None"
+    up_trough_shifts: Tensor
 
     # template grouping is not implemented, so this is always false.
     coarse_objective: bool = False
@@ -284,20 +357,56 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         temporal = self.temporal_comps_up[peaks.upsampling_indices]
         temporal.mul_(peaks.scalings[:, None, None])
         if add_into is None:
-            return temporal.bmm(spatial)
+            return temporal.mT.bmm(spatial)
         else:
-            return add_into.baddbmm_(temporal, spatial)
+            return add_into.baddbmm_(temporal.mT, spatial)
 
     def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
         time_ix = peaks.times[:, None] + (self.refrac_ix[None, :] + offset)
         row_ix = peaks.objective_template_indices[:, None]
         mask[row_ix, time_ix] = value
 
+    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
+        return self.up_trough_shifts[peaks.template_indices, peaks.upsampling_indices]
+
     def fine_match(
-        self, *, peaks: "MatchingPeaks", residual: Tensor
+        self,
+        *,
+        peaks: "MatchingPeaks",
+        residual: Tensor,
+        conv: Tensor,
+        padding: int = 0,
     ) -> "MatchingPeaks":
         if not self.needs_fine_pass:
             return peaks
+        if self.up_data is not None:
+            scalings, upsampling_indices, time_shifts, objs = _upsampling_fine_match(
+                conv=conv,
+                template_indices=peaks.template_indices,
+                times=peaks.times,
+                padding=padding,
+                normsq=self.obj_normsq,
+                scaling=self.scaling,
+                inv_lambda=self.inv_lambda,
+                scale_min=self.scale_min,
+                scale_max=self.scale_max,
+                up_zpad=self.up_data.zpad,
+                objective_window=self.up_data.objective_window,
+                up_ix=self.up_data.up_ix,
+                interpolator=self.up_data.interpolator,
+                up_time_shift=self.up_data.up_time_shift,
+            )
+        else:
+            del residual
+            raise NotImplementedError
+            # scalings, upsampling_indices, time_shifts, objs = _direct_fine_match()
+        assert self.scaling == (scalings is not None)
+        if scalings is not None:
+            peaks.scalings.copy_(scalings)
+        peaks.upsampling_indices.copy_(upsampling_indices)
+        peaks.scores.copy_(objs)
+        peaks.times.add_(time_shifts)
+        return peaks
 
 
 # -- helpers
@@ -323,14 +432,14 @@ def get_interp_upsampling_indices(
 
     # which upsampled template would correspond to a match at each upsampled time?
     uarange = torch.arange(up_factor, device=device)
-    up_template_ix = torch.concatenate([uarange[-up_half:], uarange[: up_half + 1]])
+    up_ix = torch.concatenate([uarange[-up_half:], uarange[: up_half + 1]])
 
     # tricky part: at which time should we then subtract the upsampled template?
     # if matched up_tt < 0, it's still the current time.
     # at up_tt == 0, same (actually it's just the coarse template!)
     # at up_tt > 0, you actually want to shift the time by + 1.
     up_time_shift = (up_tt > 0).to(dtype=torch.long)
-    return objective_window, objective_tt, up_tt, up_template_ix, up_time_shift
+    return objective_window, objective_tt, up_tt, up_ix, up_time_shift
 
 
 @databag
@@ -338,7 +447,7 @@ class UpsamplingData:
     objective_window: Tensor
     objective_tt: Tensor
     up_tt: Tensor
-    up_template_ix: Tensor
+    up_ix: Tensor
     up_time_shift: Tensor
     interpolator: Tensor
     zpad: int
@@ -379,7 +488,7 @@ def get_interp_upsampling_data(
         objective_window=objective_window,
         objective_tt=objective_tt,
         up_tt=up_tt,
-        up_template_ix=up_template_ix,
+        up_ix=up_template_ix,
         up_time_shift=up_time_shift,
         interpolator=kernel,
         zpad=zpad,
@@ -445,7 +554,7 @@ def convolve_lowrank_shared(
     return out
 
 
-@torch.jit.script
+# @torch.jit.script
 def subtract_precomputed_pconv(
     conv: Tensor,
     pconv: Tensor,
@@ -465,7 +574,61 @@ def subtract_precomputed_pconv(
         batch = pconv[i0:i1, template_indices, upsampling_indices]
         batch.mul_(scalings[None, :, None])
         ix = ix_time.broadcast_to(batch.shape)
+        batch = batch.reshape(i1 - i0, -1)
+        ix = ix.reshape(*batch.shape)
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
+
+
+# -- fine matching
+
+
+@torch.jit.script
+def _upsampling_fine_match(
+    *,
+    conv: Tensor,
+    template_indices: Tensor,
+    times: Tensor,
+    padding: int,
+    normsq: Tensor,
+    scaling: bool,
+    inv_lambda: Tensor,
+    scale_min: Tensor,
+    scale_max: Tensor,
+    up_zpad: int,
+    objective_window: Tensor,
+    up_ix: Tensor,
+    interpolator: Tensor,
+    up_time_shift: Tensor,
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor]:
+    # extract conv snippets
+    conv_snips = conv[
+        template_indices[:, None], times[:, None] + objective_window + padding
+    ]
+
+    # upsample conv
+    if up_zpad:
+        conv_snips = F.pad(conv_snips, (0, up_zpad))
+    conv_up = conv_snips @ interpolator
+
+    # compute objective
+    if scaling:
+        b = conv_up + inv_lambda
+        a = normsq[template_indices] + inv_lambda
+        scalings = (b / a[:, None]).clamp_(scale_min, scale_max)
+        obj_up = 2.0 * scalings * b - scalings.square() * a[:, None] - inv_lambda
+    else:
+        scalings = None
+        obj_up = 2.0 * conv_up - normsq[template_indices, None]
+
+    # get best match and figure out what to do
+    objs, up_best = obj_up.max(dim=1)
+    upsampling_ixs = up_ix[up_best]
+    time_shifts = up_time_shift[up_best]
+
+    if scalings is not None:
+        scalings = scalings.take_along_dim(dim=1, indices=up_best[:, None])[:, 0]
+
+    return scalings, upsampling_ixs, time_shifts, objs
 
 
 # -- Keys' piecewise cubic interpolation impl (order 3 and 4)
@@ -533,7 +696,9 @@ def _keys4_u(s: Tensor):
     case2 = (s_abs < 3).logical_and_(case0.logical_or(case1).logical_not())
     case0_val = (4 / 3) * s_abs**3 - (7 / 3) * s_abs**2 + 1.0
     case1_val = (-7 / 12) * s_abs**3 + 3 * s_abs**2 - (59 / 12) * s_abs + (15 / 6)
-    case2_val = (1 / 12) * s_abs**3 - (2 / 3) * s_abs**2 + (21 / 12) * s_abs - (3 / 2)
+    case2_val = (
+        (1 / 12) * s_abs**3 - (2 / 3) * s_abs**2 + (21 / 12) * s_abs - (3 / 2)
+    )
     out = torch.zeros_like(s)
     out = torch.where(case0, case0_val, out)
     out = torch.where(case1, case1_val, out)

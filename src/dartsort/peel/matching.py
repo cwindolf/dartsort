@@ -488,7 +488,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # high-res peaks (upsampled or grouped)
         fine_peaks = chunk_template_data.fine_match(
-            peaks=coarse_peaks, residual=residual
+            peaks=coarse_peaks,
+            residual=residual,
+            conv=padded_conv,
+            padding=self.obj_pad_len,
         )
 
         return fine_peaks
