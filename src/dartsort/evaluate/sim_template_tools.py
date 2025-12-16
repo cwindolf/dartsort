@@ -150,7 +150,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         n_units,
         common_reference=False,
         temporal_jitter=1,
-        temporal_jitter_kind: Literal["exact", "cubic"] = "exact",
+        temporal_jitter_kind: Literal["exact", "cubic"] = "cubic",
         min_rms_distance=0.0,
         # timing params
         tip_before_min=0.1,
@@ -240,23 +240,23 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
                 n_units,
                 self.spike_length_samples() * temporal_jitter,
             )
-            assert np.all(
-                sct_full.argmin(1) == self.trough_offset_samples() * temporal_jitter
-            )
+            offset = sct_full.argmin(1) - self.trough_offset_samples() * temporal_jitter
+            assert np.all(np.abs(offset) < temporal_jitter // 2)
             sct_full = sct_full.reshape(
                 n_units, self.spike_length_samples(), temporal_jitter
             )
+            self.singlechan_templates_up = sct_full.transpose(0, 2, 1)
             self.singlechan_templates = sct_full[:, :, 0]
-            self.singlechan_templates_up = sct_full
         elif temporal_jitter_kind == "cubic":
             _, sct = self.simulate_singlechan(size=n_units, up=False)
             sct_up = upsample_singlechan(
-                sct, time_domain=self.time_domain_ms, temporal_jitter=temporal_jitter
+                sct, time_domain=self.time_domain_ms(), temporal_jitter=temporal_jitter
             )
             self.singlechan_templates = sct
             self.singlechan_templates_up = sct_up
         else:
             assert False
+        assert np.all(self.singlechan_templates.argmin(1) == self.trough_offset_samples())
         self.min_rms_distance = min_rms_distance
         min_dist = min_rms_distance + 0.0
         n_checks = 0
@@ -368,7 +368,10 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         peak = np.exp(-np.square(t - peak) / (2 * peak_width))
 
         waveforms = trough + tip_height * tip + peak_height * peak
-        waveforms /= -waveforms[..., self.trough_offset_samples(), None]
+        center = self.trough_offset_samples()
+        if up:
+            center = center * self.temporal_jitter
+        waveforms /= -waveforms[..., center, None]
 
         return t, waveforms.astype(self.dtype)
 

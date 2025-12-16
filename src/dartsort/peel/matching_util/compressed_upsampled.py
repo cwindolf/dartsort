@@ -568,6 +568,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             self.rank_ix[None, :, None],
             channel_index[channels][:, None, :],
         ]
+        spatial.mul_(peaks.scalings[:, None, None])
         comp_up_ix = self.cup_map[peaks.template_indices, peaks.upsampling_indices]
         temporal = self.cup_temporal[comp_up_ix]
         if add_into is None:

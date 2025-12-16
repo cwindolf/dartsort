@@ -280,7 +280,7 @@ def get_channel_index_rel_inds(channel_index: torch.Tensor):
     return index_inds
 
 
-def make_filled_channel_index(geom, radius, p=2, pad_val=None, to_torch=False):
+def make_filled_channel_index(geom, radius, p: int | float=2, pad_val=None, to_torch=False):
     C = geom.shape[0]
     if not radius:
         return single_channel_index(C, to_torch=to_torch)
@@ -554,7 +554,7 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
 
     if is_tensor:
         subset = torch.zeros(
-            size=channel_index.shape, device=channel_index.device, dtype=bool
+            size=channel_index.shape, device=channel_index.device, dtype=torch.bool
         )
         pgeom = F.pad(geom, (0, 0, 0, 1), value=torch.nan)
     else:
@@ -603,7 +603,7 @@ def mask_to_relative(channel_index_mask):
             nz = np.flatnonzero(mask)
             nnz = nz.size
         if nnz:
-            rel_sub_channel_index[i, :nnz] = nz
+            rel_sub_channel_index[i, :nnz] = nz  # type: ignore
 
     return rel_sub_channel_index
 
@@ -699,8 +699,8 @@ def get_channel_subset(
     else:
         waveforms = np.pad(waveforms, [*pads, (0, 1)], constant_values=fill_value)
 
-        def take_along_dim(x, ix, dim, out=None):
-            res = np.take_along_axis(x, ix, axis=dim)
+        def take_along_dim(input, indices, dim, *, out=None):
+            res = np.take_along_axis(input, indices, axis=dim)
             if out is not None:
                 out[:] = res
                 res = out
@@ -711,8 +711,8 @@ def get_channel_subset(
         inds = inds[:, None, :]
 
     return take_along_dim(
-        waveforms,
-        inds,
+        input=waveforms,  # type: ignore
+        indices=inds,  # type: ignore
         dim=waveforms.ndim - 1,
         out=out,
     )
@@ -757,6 +757,15 @@ def grab_main_channels_torch(waveforms, channels, channel_index):
 
 
 # -- temporal processing
+
+
+def upsample_singlechan_torch(
+    singlechan_waveforms: torch.Tensor, temporal_jitter: int
+) -> torch.Tensor:
+    up = upsample_singlechan(
+        singlechan_waveforms.numpy(force=True), temporal_jitter=temporal_jitter
+    )
+    return torch.asarray(up).to(singlechan_waveforms)
 
 
 def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=1):

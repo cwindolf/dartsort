@@ -1,5 +1,7 @@
 """Library for flavors of kernel interpolation and data interp utilities"""
 
+from typing import cast
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -13,6 +15,7 @@ from .internal_config import (
     default_interpolation_params,
 )
 from .torch_util import BModule
+from .waveform_util import make_channel_index
 
 
 def interpolate_by_chunk(
@@ -258,6 +261,58 @@ def interp_precompute(
     return solvers
 
 
+def full_probe_precompute(
+    source_geom: torch.Tensor, channel_index: torch.Tensor, params: InterpolationParams
+):
+    """When kriging on the full probe, numerical problems arise due to solving huge systems
+
+    This breaks up the problem into neighborhoods, so that each output depends only on
+    a neighborhood of inputs. Same trick that numpy doees in RBFInterpolator if you ask
+    it nicely.
+
+    Usually, precomputed data shape is (nneighbs, nc_neighb + design, nc_neighb + design).
+    This one makes a shape (1, nc, nc + design, nc + design), and it hits a special case
+    in kriging_solve triggered by the shape. Sorry!
+
+    TODO can this be simplified?
+    """
+    precomputed_data = interp_precompute(
+        source_geom=pad_geom(source_geom),
+        channel_index=channel_index,
+        params=params,
+        source_geom_is_padded=True,
+    )
+    if precomputed_data is None:
+        return None
+
+    nc, nc_pc, nc_pc_ = precomputed_data.shape
+    assert nc_pc == nc_pc_
+    assert nc_pc >= channel_index.shape[1]
+    extra_dim = nc_pc - channel_index.shape[1]
+    assert extra_dim >= 0
+    # embed into full probe...
+    pc_full = precomputed_data.new_zeros((nc, nc + extra_dim, nc + extra_dim))
+    for j in range(nc):
+        chans = channel_index[j]
+        (valid,) = (chans < nc).nonzero(as_tuple=True)
+        cvalid = chans[valid]
+        pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[
+            j, valid[:, None], valid[None, :]
+        ]
+        if extra_dim > 0:
+            pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[
+                j, -extra_dim:, -extra_dim:
+            ]
+            pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[
+                j, -extra_dim:, valid[None, :]
+            ]
+            pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[
+                j, valid[:, None], -extra_dim:
+            ]
+    precomputed_data = pc_full[None]
+    return precomputed_data
+
+
 def kernel_interpolate(
     features,
     source_pos,
@@ -496,7 +551,7 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
     # per-channel case (each output chan has its own local neighb)
     # this is meant to mimic the "neighbors" option to scipy's RBFInterpolator,
     # but the implementation here is obscure. the rest of the logic is only shown
-    # once, and that's in the residual interpolation in noise_util.
+    # once, and that's in full_probe_precompute.
     # assumes that output channels and input channels are the same, and that all
     # inputs share the same neighborhood-solver per channel.
     solvers = solvers[0]
@@ -511,6 +566,40 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
         out[:, :, cc] = torch.einsum("ntp,pq,nq->nt", y, solvers[cc], kernels[:, :, cc])
     # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
     return out
+
+
+def bake_interpolation_1d(
+    xx: torch.Tensor, xx_: torch.Tensor, params: InterpolationParams
+) -> tuple[torch.Tensor, int]:
+    params = params.normalize()
+
+    k = get_kernel(
+        source_pos=xx[None, :, None],
+        target_pos=xx_[None, :, None],
+        kernel_name=params.kernel,
+        normalized=params.method.endswith("normalized"),
+        sigma=params.sigma,
+        rq_alpha=params.rq_alpha,
+        smoothing_lambda=params.smoothing_lambda,
+    )
+    nsrc = xx.shape[0]
+    assert k.shape == (1, nsrc, xx_.shape[0])
+    k = k[0]
+    # add design matrix terms on source dim, ie first dim...
+    need_design = params.method.startswith("kriging")
+    if need_design and params.kriging_poly_degree == 0:
+        k = torch.concatenate([k, torch.ones_like(xx_[None])], dim=0)
+    elif need_design and params.kriging_poly_degree == 1:
+        k = torch.concatenate([k, xx_[None], torch.ones_like(xx_[None])], dim=0)
+    elif need_design:
+        assert False
+
+    pdata = interp_precompute(source_pos=xx[None, :, None], params=params)
+    if pdata is not None:
+        assert pdata.shape == (1, k.shape[0], k.shape[0])
+        k = pdata[0] @ k
+    zpad = int(need_design) * (1 + params.kriging_poly_degree)
+    return k, zpad
 
 
 def pad_geom(geom, dtype=torch.float, device=None):
@@ -683,4 +772,53 @@ class NeighborhoodInterpolator(BModule):
             target_pos=targ_pos,
             precomputed_data=neighb_data,
             params=self.params,
+        )
+
+
+class FullProbeInterpolator(BModule):
+    """Interpolate from the registered geom to appropriate drifting geom channels."""
+
+    def __init__(
+        self,
+        *,
+        geom: torch.Tensor,
+        rgeom: torch.Tensor,
+        neighborhood_radius: float,
+        motion_est,
+        params: InterpolationParams,
+    ):
+        super().__init__()
+
+        params = params.normalize()
+        rchannel_index = cast(
+            torch.Tensor, make_channel_index(rgeom, radius=neighborhood_radius)
+        )
+        self.motion_est = motion_est
+        rchannel_index = rchannel_index.to(device=rgeom.device)
+        self.register_buffer_or_none(
+            "data", full_probe_precompute(rgeom, rchannel_index, params)
+        )
+        self.g_depths = geom[:, 1].numpy(force=True)
+        self.register_buffer("geom", geom)
+        self.register_buffer("rgeom", rgeom)
+        self.c_src = rgeom.shape[0]
+        self.c_targ = geom.shape[0]
+        self.dim = rgeom.shape[1]
+
+    def interp_at_time(self, t_s: float, waveforms: torch.Tensor) -> torch.Tensor:
+        assert waveforms.shape[2] == self.c_src
+        # move geom to its position at time t_s
+        shift = torch.zeros_like(self.b.geom)
+        if self.motion_est is not None:
+            disp = self.motion_est.disp_at_s(t_s=np.array([t_s]), depths_um=self.g_depths, grid=True)
+            assert disp.shape[0] == 1
+            shift[:, 1].copy_(torch.from_numpy(disp[0]), non_blocking=True)
+
+        # interpolate from static geom to shifted geom
+        n = waveforms.shape[0]
+        return kernel_interpolate(
+            features=waveforms,
+            source_pos=self.b.rgeom[None].broadcast_to(n, self.c_src, self.dim),
+            target_pos=(self.b.geom + shift).broadcast_to(n, self.c_targ, self.dim),
+            precomputed_data=self.b.data,
         )

@@ -328,7 +328,9 @@ def svd_compress_templates(
 @dataclass
 class SharedBasisTemplates:
     unit_ids: np.ndarray
+    # rank, time
     temporal_components: np.ndarray
+    # n, rank, chans
     spatial_singular: np.ndarray
     spike_counts_by_channel: np.ndarray | None
 
@@ -368,10 +370,13 @@ def shared_basis_compress_templates(
     U, S, Vh = _svd_helper(to_compress)
     del S, Vh
     assert U.shape == (t, nvis)
-    temporal_comps = U[:, :rank].numpy(force=True)
+    temporal_comps = U[:, :rank]
+    # to rank-major
+    temporal_comps = temporal_comps.T.contiguous()
+    temporal_comps = temporal_comps.numpy(force=True)
 
     # project templates onto temporal comps (no sparsity here.)
-    spatial_sing = np.einsum("ntc,tr->nrc", templates, temporal_comps)
+    spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
 
     return SharedBasisTemplates(
         unit_ids=unit_ids,

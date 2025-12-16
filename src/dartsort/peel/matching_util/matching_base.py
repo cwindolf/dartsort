@@ -92,7 +92,10 @@ class MatchingTemplatesBuilder:
     dtype: torch.dtype = torch.float
 
     def build(
-        self, save_folder: Path, computation_cfg: ComputationConfig | None, overwrite: bool = False
+        self,
+        save_folder: Path,
+        computation_cfg: ComputationConfig | None,
+        overwrite: bool = False,
     ) -> MatchingTemplates:
         return MatchingTemplates.from_config(
             save_folder=save_folder,
@@ -175,7 +178,6 @@ class ChunkTemplateData:
 
     def obj_from_conv(self, conv: Tensor, out=None) -> Tensor:
         return torch.add(self.obj_normsq[:, None]._neg_view(), conv, alpha=2.0, out=out)
-        return objs, scalings
 
     def coarse_match(
         self,
@@ -201,16 +203,21 @@ class ChunkTemplateData:
                 scores=objs,
             )
 
-        b = conv[template_indices, times].add_(self.inv_lambda)
-        a = self.obj_normsq[template_indices].add_(self.inv_lambda)
-        scalings = b.div(a).clamp_(min=self.scale_min, max=self.scale_max)
-        objs = scalings.square().mul_(a._neg_view())
-        objs.addcmul_(scalings, b, value=2.0).sub_(self.inv_lambda)
+        scalings, objs = _coarse_match_scaled(
+            conv=conv,
+            template_indices=template_indices,
+            times=times,
+            obj_normsq=self.obj_normsq,
+            inv_lambda=self.inv_lambda,
+            scale_min=self.scale_min,
+            scale_max=self.scale_max,
+        )
         return MatchingPeaks(
             n_spikes=n_spikes,
             times=times,
             objective_template_indices=template_indices,
             template_indices=template_indices,
+            scalings=scalings,
             scores=objs,
         )
 
@@ -475,3 +482,21 @@ def _grow_buffer(x, old_length, new_size):
     new = torch.empty(new_size, dtype=x.dtype, device=x.device)
     new[:old_length] = x[:old_length]
     return new
+
+
+@torch.jit.script
+def _coarse_match_scaled(
+    conv: Tensor,
+    template_indices: Tensor,
+    times: Tensor,
+    obj_normsq: Tensor,
+    inv_lambda: Tensor,
+    scale_min: Tensor,
+    scale_max: Tensor,
+):
+    b = conv[template_indices, times].add_(inv_lambda)
+    a = obj_normsq[template_indices].add_(inv_lambda)
+    scalings = b.div(a).clamp_(min=scale_min, max=scale_max)
+    objs = scalings.square().mul_(-a)
+    objs.addcmul_(scalings, b, value=2.0).sub_(inv_lambda)
+    return scalings, objs

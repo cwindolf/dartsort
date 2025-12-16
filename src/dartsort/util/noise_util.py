@@ -1061,39 +1061,9 @@ def interpolate_residual_snippets(
 
     # - precompute
     interp_params = interp_params.normalize()
-    precomputed_data = interpolation_util.interp_precompute(
-        source_geom=interpolation_util.pad_geom(source_geom),
-        channel_index=channel_index,
-        params=interp_params,
-        source_geom_is_padded=True,
+    precomputed_data = interpolation_util.full_probe_precompute(
+        source_geom=source_geom, channel_index=channel_index, params=interp_params
     )
-    if precomputed_data is not None:
-        nc, nc_pc, nc_pc_ = precomputed_data.shape
-        assert nc_pc == nc_pc_
-        assert nc == c
-        extra_dim = nc_pc - channel_index.shape[1]
-        assert extra_dim >= 0
-        # embed into full probe...
-        pc_full = precomputed_data.new_zeros((c, c + extra_dim, c + extra_dim))
-        for j in range(c):
-            chans = channel_index[j]
-            (valid,) = (chans < c).nonzero(as_tuple=True)
-            cvalid = chans[valid]
-            pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[
-                j, valid[:, None], valid[None, :]
-            ]
-            if extra_dim > 0:
-                pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[
-                    j, -extra_dim:, -extra_dim:
-                ]
-                pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[
-                    j, -extra_dim:, valid[None, :]
-                ]
-                pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[
-                    j, valid[:, None], -extra_dim:
-                ]
-        precomputed_data = pc_full[None]
-
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
         # statistical differences between drifty/no drift versions of the sorter
@@ -1130,7 +1100,7 @@ def interpolate_residual_snippets(
     source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
     assert np.isfinite(source_shifts).all()
     source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
-    source_pos_shifted = source_pos.numpy(force=True) + source_shifts_xy
+    source_pos_shifted = source_pos.numpy(force=True) - source_shifts_xy
 
     # query the target geom for the closest source pos, within reason
     rg_np = registered_geom
@@ -1146,7 +1116,7 @@ def interpolate_residual_snippets(
     targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
     assert (targ_inds < kdtree.n).all()
     target_pos = torch.asarray(registered_geom[targ_inds], device=device)
-    target_pos_shifted = target_pos - torch.asarray(source_shifts_xy).to(target_pos)
+    target_pos_shifted = target_pos + torch.asarray(source_shifts_xy).to(target_pos)
     target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
 
     # allocate output storage with an extra channel of NaN needed later
