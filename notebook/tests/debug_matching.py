@@ -7,9 +7,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: Python [conda env:dartsort]
+#     display_name: Python [conda env:dart]
 #     language: python
-#     name: conda-env-dartsort-py
+#     name: conda-env-dart-py
 # ---
 
 # %%
@@ -27,7 +27,7 @@ from dartsort.evaluate import simkit
 import dartsort.vis as dartvis
 
 # %%
-test_dir = dartsort.resolve_path("~/data/test")
+test_dir = dartsort.resolve_path("~/scratch/test")
 
 # %%
 # make a single channel recording
@@ -43,10 +43,10 @@ res = simkit.generate_simulation(
     white_noise_scale=0.0,
     # amplitude_jitter=0.0,
     # temporal_jitter=1,
-    # refractory_ms=4.6,
+    refractory_ms=4.6,
     # refractory_ms=1.0,
     drift_speed=0.0,
-    # globally_refractory=True,
+    globally_refractory=True,
     # noise_kind="zero",
     # noise_in_memory=True,
     overwrite=True,
@@ -70,21 +70,25 @@ plt.plot(traces[:1000])
 res["sorting"]
 
 # %%
-
-# %%
 matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
     rec,
     waveform_cfg=dartsort.default_waveform_cfg,
     featurization_cfg=dartsort.default_featurization_cfg,
     matching_cfg=dartsort.MatchingConfig(
-       threshold=5.2,
-       # template_type="drifty",
-       # up_method="keys4",
-       template_temporal_upsampling_factor=16,
-       amplitude_scaling_variance=0.1,
-       template_svd_compression_rank=121,
-       cd_iter=5,
-        # cd_iter=0,
+        threshold=5.2,
+        template_type="drifty",
+        up_method="keys4",
+
+        
+        # template_temporal_upsampling_factor=1,
+        # amplitude_scaling_variance=0.0,
+        
+        template_temporal_upsampling_factor=16,
+        amplitude_scaling_variance=0.1,
+
+        template_svd_compression_rank=121,
+        # cd_iter=5,
+        cd_iter=0,
     ),
     template_data=res["templates"],
 )
@@ -97,17 +101,19 @@ matcher.precompute_models(test_dir / 'tmp', overwrite=True)
 ctd = matcher.matching_templates.data_at_time(0.0, scaling=True, inv_lambda=100.0, scale_min=0.5, scale_max=1.5)
 
 # %%
-matcher.max_iter=200
-
-# %%
 res["sorting"].times_samples[:10] - 42
 
 # %%
 ctd.temporal_comps.shape, ctd.spatial_sing.shape
 
 # %%
+matcher.to(ctd.spatial_sing.device)
+
+# %%
 matcher.max_iter = 100
-chk = matcher.match_chunk(torch.asarray(traces.copy()).float(), ctd, return_conv=True, return_residual=True)
+chk = matcher.match_chunk(
+    torch.asarray(traces.copy()).float().to(ctd.spatial_sing),
+    ctd, return_conv=True, return_residual=True)
 
 # %%
 chk.keys()
@@ -169,14 +175,14 @@ fig, ax = plt.subplots(figsize=(15, 4), layout='constrained')
 t0 = 0
 t1 = 1000
 ax.plot(traces[t0:t1])
-ax.plot(chk['residual'][t0:t1])
+ax.plot(chk['residual'][t0:t1].numpy(force=True))
 for t, l in zip(res["sorting"].times_samples, res["sorting"].labels):
     if t < t0:
         continue
     if t > t1:
         break
     ax.axvline(t - t0, c=dartvis.glasbey1024[l])
-for t, l in zip(chk['times_samples'], chk['labels']):
+for t, l in zip(chk['times_samples'].numpy(force=True), chk['labels'].numpy(force=True)):
     if t < t0:
         continue
     if t > t1:

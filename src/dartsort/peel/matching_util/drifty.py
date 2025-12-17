@@ -29,6 +29,7 @@ Coarse-to-fine approach
 
 TODO: MatchingPeaks may need to be tweaked or abstracted?
 """
+
 from pathlib import Path
 from typing import Literal, Self
 
@@ -50,11 +51,15 @@ from ...util.interpolation_util import (
     bake_interpolation_1d,
     default_interpolation_params,
 )
+from ...util.logging_util import get_logger
 from ...util.job_util import ensure_computation_config
 from ...util.py_util import databag
 from ...util.spiketorch import add_at_
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
+
+
+logger = get_logger(__name__)
 
 default_upsampling_params = InterpolationParams(sigma=1.0)
 
@@ -99,10 +104,13 @@ class DriftyMatchingTemplates(MatchingTemplates):
         assert rank == temporal_comps.shape[0]
         self.spike_length_samples = temporal_comps.shape[1]
         assert trough_offset_samples <= self.spike_length_samples
-        self.trough_offset_samples = trough_offset_samples
+        self.register_buffer(
+            "trough_offset_samples", torch.asarray(trough_offset_samples)
+        )
 
         if self.interpolating:
             assert rgeom is not None
+            logger.dartsortdebug("Drifty matching will interpolate.")
             self.erp = FullProbeInterpolator(
                 geom=geom,
                 rgeom=rgeom,
@@ -111,6 +119,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
                 params=drift_interp_params,
             )
         else:
+            logger.dartsortdebug("No interpolation in matching.")
             self.erp = None
 
         if self.upsampling and up_method != "direct":
@@ -130,9 +139,11 @@ class DriftyMatchingTemplates(MatchingTemplates):
         temporal_pconv = shared_temporal_pconv(temporal_comps, up_temporal_comps)
 
         assert temporal_comps.shape == (rank, self.spike_length_samples)
-        self.register_buffer("temporal_comps", temporal_comps)
+        self.register_buffer("temporal_comps", temporal_comps.contiguous())
         assert up_temporal_comps.shape == (rank, up_factor, self.spike_length_samples)
-        self.register_buffer_or_none("up_temporal_comps", up_temporal_comps)
+        self.register_buffer_or_none(
+            "up_temporal_comps", up_temporal_comps.contiguous()
+        )
         if up_temporal_comps is not None:
             up_major_temporal_comps = up_temporal_comps.permute(1, 0, 2).contiguous()
         else:
@@ -232,14 +243,12 @@ class DriftyMatchingTemplates(MatchingTemplates):
         else:
             pconv = self.b.pconv
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
-        main_sing = spatial_sing.take_along_dim(
-            dim=2, indices=main_channels[:, None, None]
-        )[:, :, 0]
-        main_traces_up = torch.einsum(
-            "nr,rut->nut", main_sing, self.b.up_temporal_comps
+        trough_shifts = _calc_trough_shifts(
+            spatial_sing=spatial_sing,
+            main_channels=main_channels,
+            up_temporal_comps=self.b.up_temporal_comps,
+            trough_offset_samples=self.trough_offset_samples,
         )
-        trough_shifts = singlechan_alignments(main_traces_up, dim=2)
-        trough_shifts = trough_shifts - self.trough_offset_samples
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
             unit_ids=self.b.unit_ids,
@@ -412,6 +421,25 @@ class DriftyChunkTemplateData(ChunkTemplateData):
 # -- helpers
 
 
+@torch.jit.script
+def _calc_trough_shifts(
+    spatial_sing: Tensor,
+    main_channels: Tensor,
+    up_temporal_comps: Tensor,
+    trough_offset_samples: Tensor,
+) -> Tensor:
+    main_sing = spatial_sing.take_along_dim(
+        dim=2, indices=main_channels[:, None, None]
+    )[:, :, 0]
+    rank, up, t = up_temporal_comps.shape
+    tcomps = up_temporal_comps.view(rank, up * t)
+    main_traces_up = main_sing @ tcomps
+    main_traces_up = main_traces_up.view(main_channels.shape[0], up, t)
+    trough_shifts = singlechan_alignments(main_traces_up, dim=2)
+    trough_shifts = trough_shifts.sub(trough_offset_samples)
+    return trough_shifts
+
+
 def get_interp_upsampling_indices(
     *, up_factor: int, up_radius: int, device: torch.device
 ):
@@ -516,13 +544,29 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
     return pconv
 
 
-def full_shared_pconv(temporal_pconv: Tensor, spatial_sing: Tensor):
+@torch.jit.script
+def full_shared_pconv(
+    temporal_pconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
+) -> Tensor:
     rank, rank_, up, conv_len = temporal_pconv.shape
     n_units, rank__, chans = spatial_sing.shape
     assert rank == rank_ == rank__
-    return torch.einsum(
-        "ipc,pqul,jqc->ijul", spatial_sing, temporal_pconv, spatial_sing
-    )
+    out = spatial_sing.new_empty((n_units, n_units, up, conv_len))
+    spatial_sing_flat = spatial_sing.view(n_units * rank, chans)
+    temporal_pconv_flat = temporal_pconv.view(rank * rank, up * conv_len)
+    for i0 in range(0, n_units, batch_size):
+        i1 = min(n_units, i0 + batch_size)
+        chunksz = (i1 - i0) * n_units
+        spatial_left = spatial_sing[i0:i1]
+        spatial_outer = spatial_left.view((i1 - i0) * rank, chans) @ spatial_sing_flat.T
+        spatial_outer = spatial_outer.view(i1 - i0, rank, n_units, rank)
+        spatial_outer = spatial_outer.permute(0, 2, 1, 3).reshape(chunksz, rank * rank)
+        torch.mm(
+            spatial_outer,
+            temporal_pconv_flat,
+            out=out[i0:i1].view(chunksz, up * conv_len),
+        )
+    return out
 
 
 # -- convolution
@@ -695,9 +739,7 @@ def _keys4_u(s: Tensor):
     case2 = (s_abs < 3).logical_and_(case0.logical_or(case1).logical_not())
     case0_val = (4 / 3) * s_abs**3 - (7 / 3) * s_abs**2 + 1.0
     case1_val = (-7 / 12) * s_abs**3 + 3 * s_abs**2 - (59 / 12) * s_abs + (15 / 6)
-    case2_val = (
-        (1 / 12) * s_abs**3 - (2 / 3) * s_abs**2 + (21 / 12) * s_abs - (3 / 2)
-    )
+    case2_val = (1 / 12) * s_abs**3 - (2 / 3) * s_abs**2 + (21 / 12) * s_abs - (3 / 2)
     out = torch.zeros_like(s)
     out = torch.where(case0, case0_val, out)
     out = torch.where(case1, case1_val, out)

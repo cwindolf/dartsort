@@ -99,7 +99,7 @@ class MatchingTemplatesBuilder:
     recording: BaseRecording
     template_data: TemplateData
     matching_cfg: MatchingConfig
-    motion_est: MotionEstimate | None = None  # type: ignore
+    motion_est: MotionEstimate | None = None
     dtype: torch.dtype = torch.float
 
     def build(
