@@ -165,7 +165,7 @@ def _dartsort_impl(
     store_dir = output_dir if work_dir is None else work_dir
 
     # if there are previous results stored, resume where they leave off
-    next_step, sorting = ds_fast_forward(store_dir, cfg)
+    next_step, sorting, motion_est = ds_fast_forward(store_dir, cfg)
 
     if next_step == 0:
         # first step: initial detection and motion estimation

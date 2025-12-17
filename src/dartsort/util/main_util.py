@@ -8,7 +8,7 @@ from ..util.data_util import DARTsortSorting
 from ..util.internal_config import DARTsortInternalConfig
 from ..util.logging_util import get_logger
 from ..util.py_util import dartcopy2, dartcopytree, resolve_path
-from ..util.registration_util import save_motion_est
+from ..util.registration_util import save_motion_est, try_load_motion_est
 
 logger = get_logger(__name__)
 
@@ -161,7 +161,10 @@ def ds_fast_forward(store_dir, cfg):
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"
     cur_step = 0
     if not sub_h5.exists():
-        return cur_step, None
+        return cur_step, None, None
+    
+    # if subtraction is finished, we can try to load a motion estimate
+    motion_est = try_load_motion_est(store_dir)
 
     matching_h5s = sorted(store_dir.glob("matching*.h5"))
     for cur_step, cur_h5 in enumerate(matching_h5s, start=1):
@@ -184,7 +187,7 @@ def ds_fast_forward(store_dir, cfg):
                 f"Resuming at step {cur_step + 1} with previous sorting from "
                 f"{cur_h5.name} and {cur_labels_npy.name}."
             )
-            return cur_step + 1, sorting
+            return cur_step + 1, sorting, motion_est
 
     # at this point, either the last round of peeling finished, or it
     # didn't. we need to run peeler_is_done to check. but that's something
@@ -192,7 +195,7 @@ def ds_fast_forward(store_dir, cfg):
     # sorting for the PREVIOUS step which is the one we need to resume at
     # the CURRENT step aka cur_step.
     if cur_step == 0:
-        return cur_step, None
+        return cur_step, None, motion_est
 
     prev_labels_npy = store_dir / f"refined{cur_step - 1}_labels.npy"
     prev_labels = None
@@ -212,4 +215,4 @@ def ds_fast_forward(store_dir, cfg):
     if prev_labels is not None:
         prev_sorting = prev_sorting.ephemeral_replace(labels=prev_labels)
 
-    return cur_step, prev_sorting
+    return cur_step, prev_sorting, motion_est
