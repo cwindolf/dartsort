@@ -426,7 +426,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         labels = chunk_template_data.unit_ids[peaks.template_indices]
         if chunk_template_data.upsampling:
             time_shifts = chunk_template_data.trough_shifts(peaks)
-            times_samples += time_shifts
             time_shifts_dict = {"time_shifts": time_shifts}
         else:
             time_shifts_dict = {}

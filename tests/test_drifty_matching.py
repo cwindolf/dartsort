@@ -48,7 +48,7 @@ def test_interp_upsampling(up_method, up, radius, deg):
     assert torch.equal(up_data.objective_tt.cpu(), torch.arange(-radius, radius + 1))
     assert torch.equal(up_data.up_tt.cpu(), torch.arange(-up // 2, up // 2 + 1) / up)
     assert torch.allclose(up_data.up_tt.diff(), torch.tensor(1.0 / up))
-    assert up_data.up_template_ix.shape == up_data.up_tt.shape
+    assert up_data.up_ix.shape == up_data.up_tt.shape
 
     # test fns
     zz = up_data.objective_tt

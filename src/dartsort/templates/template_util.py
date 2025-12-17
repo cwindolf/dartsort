@@ -351,7 +351,7 @@ def shared_basis_compress_templates(
         counts = None
         unit_ids = np.arange(len(templates))
     n, t, c = templates.shape
-    rank = min(rank, *templates.shape[1:])
+    rank = min(rank, t)
     amp_vecs = ptp(templates, dim=1)
     assert np.isfinite(amp_vecs).all()
     visible = amp_vecs > min_channel_amplitude

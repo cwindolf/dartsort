@@ -32,6 +32,7 @@ TODO: MatchingPeaks may need to be tweaked or abstracted?
 from pathlib import Path
 from typing import Literal, Self
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from spikeinterface.core import BaseRecording
@@ -430,13 +431,11 @@ def get_interp_upsampling_indices(
     up_tt = torch.linspace(-0.5, 0.5, steps=2 * up_half + 1, device=device)
 
     # which upsampled template would correspond to a match at each upsampled time?
-    uarange = torch.arange(up_factor, device=device)
-    up_ix = torch.concatenate([uarange[-up_half:], uarange[: up_half + 1]])
+    uarange = np.arange(up_factor)
+    up_ix = np.concatenate([uarange[: up_half + 1][::-1], uarange[-up_half:][::-1]])
+    up_ix = torch.asarray(up_ix, device=device)
 
     # tricky part: at which time should we then subtract the upsampled template?
-    # if matched up_tt < 0, it's still the current time.
-    # at up_tt == 0, same (actually it's just the coarse template!)
-    # at up_tt > 0, you actually want to shift the time by + 1.
     up_time_shift = (up_tt > 0).to(dtype=torch.long)
     return objective_window, objective_tt, up_tt, up_ix, up_time_shift
 
@@ -512,6 +511,7 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
     pconv = F.conv1d(input=inp, weight=fil, padding=t - 1)
     assert pconv.shape == (rank, rank * up, 2 * t - 1)
     pconv = pconv.view(rank, rank, up, 2 * t - 1)
+    pconv = torch.flip(pconv, dims=(3,))
 
     return pconv
 
