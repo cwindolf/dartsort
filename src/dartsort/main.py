@@ -218,7 +218,9 @@ def _dartsort_impl(
 
         # be sure to start matching at step 1
         next_step += 1
+
     assert sorting is not None
+    assert (motion_est is not None) == cfg.motion_estimation_cfg.do_motion_estimation
     assert next_step > 0  # matching starts at 1
 
     for step in range(next_step, cfg.matching_iterations + 1):

@@ -247,6 +247,8 @@ def make_channel_index(
         )
 
     # get neighbors matrix
+    if torch.is_tensor(geom):
+        geom = geom.numpy(force=True)
     neighbors = squareform(pdist(geom, metric="minkowski", p=p)) <= radius
 
     # max number of neighbors for all channels

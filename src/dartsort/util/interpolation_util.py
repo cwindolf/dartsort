@@ -790,8 +790,8 @@ class FullProbeInterpolator(BModule):
         super().__init__()
 
         params = params.normalize()
-        rchannel_index = cast(
-            torch.Tensor, make_channel_index(rgeom, radius=neighborhood_radius)
+        rchannel_index = make_channel_index(
+            rgeom, radius=neighborhood_radius, to_torch=True
         )
         self.motion_est = motion_est
         rchannel_index = rchannel_index.to(device=rgeom.device)
@@ -810,9 +810,11 @@ class FullProbeInterpolator(BModule):
         # move geom to its position at time t_s
         shift = torch.zeros_like(self.b.geom)
         if self.motion_est is not None:
-            disp = self.motion_est.disp_at_s(t_s=np.array([t_s]), depths_um=self.g_depths, grid=True)
-            assert disp.shape[0] == 1
-            shift[:, 1].copy_(torch.from_numpy(disp[0]), non_blocking=True)
+            disp = self.motion_est.disp_at_s(
+                t_s=np.array([t_s]), depth_um=self.g_depths, grid=True
+            )
+            assert disp.shape[1] == 1
+            shift[:, 1].copy_(torch.from_numpy(disp[:, 0]), non_blocking=True)
 
         # interpolate from static geom to shifted geom
         n = waveforms.shape[0]
