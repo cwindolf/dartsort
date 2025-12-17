@@ -162,9 +162,10 @@ def ds_fast_forward(store_dir, cfg):
     cur_step = 0
     if not sub_h5.exists():
         return cur_step, None, None
-    
+
     # if subtraction is finished, we can try to load a motion estimate
     motion_est = try_load_motion_est(store_dir)
+    mstr = ", and a loaded motion estimate" if motion_est is not None else ""
 
     matching_h5s = sorted(store_dir.glob("matching*.h5"))
     for cur_step, cur_h5 in enumerate(matching_h5s, start=1):
@@ -185,7 +186,7 @@ def ds_fast_forward(store_dir, cfg):
             sorting = sorting.ephemeral_replace(labels=labels)
             logger.info(
                 f"Resuming at step {cur_step + 1} with previous sorting from "
-                f"{cur_h5.name} and {cur_labels_npy.name}."
+                f"{cur_h5.name} and {cur_labels_npy.name}{mstr}."
             )
             return cur_step + 1, sorting, motion_est
 
@@ -208,7 +209,7 @@ def ds_fast_forward(store_dir, cfg):
 
     logger.info(
         f"Resuming at step {cur_step} with previous sorting from "
-        f"{prev_h5.name} and {prev_labels_npy.name}."
+        f"{prev_h5.name} and {prev_labels_npy.name}{mstr}."
     )
 
     prev_sorting = DARTsortSorting.from_peeling_hdf5(prev_h5)
