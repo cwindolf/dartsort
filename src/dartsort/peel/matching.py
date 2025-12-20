@@ -59,7 +59,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         channel_selection: Literal["template", "amplitude"] = "template",
         channel_selection_index: torch.Tensor | None = None,
         fit_subsampling_random_state=0,
-        fit_sampling="random",
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         max_iter=1000,
         max_spikes_per_second=16384,
         cd_iter=0,
@@ -213,6 +213,16 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             motion_est=motion_est,
         )
 
+        logger.info(
+            "Constructing a matcher with template kind %s, drift %senabled, "
+            "scaling variance %s, compression rank %s, and upsampling factor %s.",
+            matching_cfg.template_type,
+            "not " if motion_est is None else "",
+            matching_cfg.amplitude_scaling_variance,
+            matching_cfg.template_svd_compression_rank,
+            matching_cfg.template_temporal_upsampling_factor,
+        )
+
         return cls(
             recording=recording,
             matching_templates_builder=builder,
@@ -297,8 +307,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return_residual=False,
         return_conv=False,
         unit_mask=None,
+        max_iter: int | None = None,
     ) -> PeelingBatchResult:
         """Core peeling routine for subtraction"""
+        if max_iter is None:
+            max_iter = self.max_iter
         # initialize residual, it needs to be padded to support our channel
         # indexing convention (used later to extract small channel
         # neighborhoods). this copies the input.
@@ -338,7 +351,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 refrac_mask = torch.zeros_like(refrac_mask)
 
             current_peaks = []
-            for match_it in range(self.max_iter):
+            for match_it in range(max_iter):
                 if not initializing_cd:
                     assert previous_peaks is not None
                 if (
@@ -447,7 +460,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             residual = residual[left_margin : traces.shape[0] - right_margin]
             res["residual"] = residual
         if return_conv:
-            res["conv"]: torch.Tensor = padded_conv  # type: ignore
+            res["conv"] = padded_conv
         return res
 
     def find_peaks(

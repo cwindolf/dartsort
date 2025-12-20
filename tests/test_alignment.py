@@ -207,6 +207,8 @@ def test_denoiser_alignment(align_sim, align_templates):
     peaks = np.abs(t0.templates[:, trough, 0])
     assert np.all(peaks > 1.4 * np.abs(t0.templates[:, :trough, 0]).max(1))
     assert np.all(peaks > 1.4 * np.abs(t0.templates[:, trough + 1 :, 0]).max(1))
+    # test alignment of cc waveforms w time shift
+    assert False
 
 
 def template_makers(rec, st, align=True, align_max=0):
@@ -337,7 +339,8 @@ def test_template_shifts(
         assert (np.abs(tt.templates[:, :, 0]).argmax(1) == trough - ushifts).all()
 
 
-def test_matching_alignment_basic(align_sim, align_templates):
+@pytest.mark.parametrize("matchtype", ["individual_compressed_upsampled", "drifty"])
+def test_matching_alignment_basic(align_sim, align_templates, matchtype):
     with tempfile.TemporaryDirectory() as tdir:
         st = dartsort.match(
             tdir,
@@ -346,7 +349,9 @@ def test_matching_alignment_basic(align_sim, align_templates):
             waveform_cfg=waveform_cfg,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
             matching_cfg=dartsort.MatchingConfig(
-                refractory_radius_frames=1, template_temporal_upsampling_factor=1
+                refractory_radius_frames=1,
+                template_temporal_upsampling_factor=1,
+                template_type=matchtype,
             ),
         )
     gt_st = align_sim["sorting"]
@@ -355,18 +360,33 @@ def test_matching_alignment_basic(align_sim, align_templates):
     assert np.array_equal(st.labels, gt_st.labels)
 
 
+@pytest.mark.parametrize("tempkind", ["exp", "parabola"])
+@pytest.mark.parametrize("matchtype", ["individual_compressed_upsampled", "drifty"])
 @pytest.mark.parametrize("up_factor", (1, 2, 4, 8))
-def test_matching_alignment_upsampled(up_factor):
+def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     # we'll have to use a smoother template library here
-    # here is a nice smooth basic shape
-    tleft = np.linspace(1.0, 0.0, num=42, endpoint=False)
-    tright = np.linspace(0.0, 1.0, num=79)
-    tt = np.concatenate([tleft, tright])
-    assert tt.argmin() == 42
-    assert tt.shape == (121,)
-    tshape = np.exp(-np.square(tt / 0.3)).astype(np.float32)
-    tshape = snr * taper(torch.tensor(tshape), dim=0).numpy()
-    assert tshape.argmax() == 42
+    if tempkind == "exp":
+        trough_offset = 42
+        # here is a nice smooth basic shape
+        tleft = np.linspace(1.0, 0.0, num=42, endpoint=False)
+        tright = np.linspace(0.0, 1.0, num=79)
+        tt = np.concatenate([tleft, tright])
+        assert tt.argmin() == trough_offset
+        assert tt.shape == (121,)
+        tshape = np.exp(-np.square(tt / 0.3)).astype(np.float32)
+        tshape = snr * taper(torch.tensor(tshape), dim=0).numpy()
+    elif tempkind == "parabola":
+        # very smooth, reconstructed perfectly by cubic interpolators
+        # have to put trough in the center bc parabola.
+        trough_offset = 60
+        tt = np.linspace(-1.0, 1.0, num=121, endpoint=True)
+        tshape = -(tt**2)
+        tshape -= tshape.min()
+        assert tt.shape == tshape.shape == (121,)
+    else:
+        assert False
+
+    assert tshape.argmax() == trough_offset
 
     # again, we'll create positive and negative versions
     # I want to look at 4 different time shifts and I want the time shift
@@ -382,7 +402,7 @@ def test_matching_alignment_upsampled(up_factor):
         templates=templates,
         unit_ids=np.arange(4),
         spike_counts=np.ones(4),
-        trough_offset_samples=42,
+        trough_offset_samples=trough_offset,
         registered_geom=np.c_[np.zeros(2), np.arange(2.0)],
     )
 
@@ -420,15 +440,40 @@ def test_matching_alignment_upsampled(up_factor):
             sim_recording,
             template_data=gt_td,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
+            waveform_cfg=dartsort.WaveformConfig.from_samples(
+                trough_offset, 121 - trough_offset
+            ),
             matching_cfg=dartsort.MatchingConfig(
                 amplitude_scaling_variance=0.0,
                 template_temporal_upsampling_factor=up_factor,
+                upsampling_compression_map="none",
+                template_type=matchtype,
+                up_method="keys4" if matchtype == "drifty" else "direct",
             ),
         )
 
-    assert np.array_equal(gt_st.times_samples, st.times_samples)
+    mismatch = np.flatnonzero(gt_st.times_samples != st.times_samples)
+    print(
+        f"{np.unique((gt_st.times_samples-st.times_samples)[mismatch], return_counts=True)=}"
+    )
+    print(f"{np.unique(gt_st.labels[mismatch], return_counts=True)=}")
+    print(f"{np.unique(st.labels[mismatch], return_counts=True)=}")
+    print(f"{np.unique(gt_st.jitter_ix[mismatch], return_counts=True)=}")
+    print(f"{np.unique(st.upsampling_indices[mismatch], return_counts=True)=}")
+    print(f"{np.unique(gt_st.time_shifts[mismatch], return_counts=True)=}")
+    print(f"{np.unique(st.time_shifts[mismatch], return_counts=True)=}")
+
     assert gt_st.labels is not None
     assert st.labels is not None
     assert np.array_equal(gt_st.labels, st.labels)
+    gt_up = getattr(gt_st, "jitter_ix", None)
+    match_up = getattr(st, "upsampling_indices", None)
+    assert gt_up is not None
+    assert match_up is not None
+    assert np.array_equal(gt_up, match_up)
+    assert np.array_equal(gt_st.times_samples, st.times_samples)
     mcs = np.abs(templates).sum(axis=1).argmax(axis=1)
     assert np.array_equal(st.channels, mcs[gt_st.labels])
+
+    # test alignment of cc waveforms w time shift
+    assert False

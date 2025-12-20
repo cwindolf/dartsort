@@ -133,9 +133,9 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
             )
         )
         print(f"{a1=}")
-        self.offsets_up = (a1 - template_data.trough_offset_samples).reshape(
-            self.n_units, temporal_jitter
-        )
+        a1 = a1 - template_data.trough_offset_samples
+        self.offsets_up = a1.reshape(self.n_units, temporal_jitter)
+        print(f"{self.offsets_up=}")
 
     def trough_offset_samples(self) -> int:
         return self.template_data.trough_offset_samples
@@ -169,6 +169,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         temporal_jitter=1,
         temporal_jitter_kind: Literal["exact", "cubic"] = "cubic",
         min_rms_distance=0.0,
+        snr_adjustment=1.0,
         # timing params
         tip_before_min=0.1,
         tip_before_max=0.5,
@@ -208,6 +209,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.n_units = n_units
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
+        self.snr_adjustment = snr_adjustment
 
         self.geom = geom
         self.geom3 = geom
@@ -265,12 +267,12 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             self.singlechan_templates_up = sct_full.transpose(0, 2, 1)
             self.singlechan_templates = sct_full[:, :, 0]
             self.offsets_up = sct_full.argmin(1) - self.trough_offset_samples()
-            self.offsets = self.singlechan_templates.argmin(1) - self.trough_offset_samples()
+            self.offsets = (
+                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
+            )
         elif temporal_jitter_kind == "cubic":
             _, sct = self.simulate_singlechan(size=n_units, up=False)
-            sct_up = upsample_singlechan(
-                sct, time_domain=self.time_domain_ms(), temporal_jitter=temporal_jitter
-            )
+            sct_up = upsample_singlechan(sct, temporal_jitter=temporal_jitter)
             self.singlechan_templates = sct
             self.singlechan_templates_up = sct_up
             self.offsets = sct.argmin(1) - self.trough_offset_samples()
@@ -396,6 +398,8 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         if up:
             center = center * self.temporal_jitter
         waveforms /= -waveforms[..., center, None]
+
+        waveforms = waveforms * self.snr_adjustment
 
         return t, waveforms.astype(self.dtype)
 

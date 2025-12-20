@@ -71,7 +71,7 @@ def generate_simulation(
     amplitude_jitter=0.05,
     amp_jitter_family="uniform",
     common_reference=True,
-    sampling_frequency=30_000.0,
+    sampling_frequency=30000.0,
     refractory_ms=1.0,
     globally_refractory=False,
     extract_radius=100.0,
@@ -361,6 +361,10 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 h5.create_dataset("labels", data=self.segment.labels)
                 h5.create_dataset("scalings", data=self.segment.scalings)
                 h5.create_dataset("jitter_ix", data=self.segment.jitter_ix)
+                pos, temp, off = self.segment.template_simulator.templates(up=True)
+                h5.create_dataset("unit_positions", data=pos)
+                h5.create_dataset("up_offsets", data=off)
+                h5.create_dataset("templates_up", data=temp)
 
                 # arrays discovered in batches below
                 f_dt = self.segment.features_dtype
@@ -622,7 +626,11 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             labels=self.labels,
             channels=np.zeros_like(self.times_samples),
             sampling_frequency=self.sampling_frequency,
-            ephemeral_features=dict(time_shifts=self.upsampling_offsets),
+            ephemeral_features=dict(
+                time_shifts=self.upsampling_offsets,
+                jitter_ix=self.jitter_ix,
+                scalings=self.scalings,
+            ),
         )
 
     def drift(self, t_samples):

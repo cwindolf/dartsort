@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from dataclasses import replace
 
 
@@ -174,11 +174,22 @@ def generate_geom(
     ypitch=40,
     x_start=59,
     y_start=20,
-    y_shift_per_column=(20, 0, 20, 0),
+    y_shift_per_column: Literal["stagger", "flat"] | tuple[float] | list[float] = "stagger",
+    stagger: float = 20.0,
     sort=True,
     sort_x_down=True,
 ):
     """Defaults match NP1 geometry as returned by ibl-neuropixel."""
+    if y_shift_per_column == "stagger" and num_columns == 1:
+        y_shift_per_column = [0.0]
+    elif y_shift_per_column == "stagger":
+        num_columns_even_half = 1 + (num_columns // 2)
+        y_shift_per_column = [stagger, 0.0] * num_columns_even_half
+        y_shift_per_column = y_shift_per_column[:num_columns]
+    elif y_shift_per_column == "flat":
+        y_shift_per_column = [0.0] * num_columns
+    else:
+        assert isinstance(y_shift_per_column, (tuple, list))
     p = probeinterface.generate_multi_columns_probe(
         num_columns=num_columns,
         num_contact_per_column=num_contact_per_column,
@@ -237,7 +248,7 @@ def add_features(h5_path, recording, featurization_cfg):
         models_dir.mkdir(exist_ok=True)
         torch.save(gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt")
 
-        wf_dset = h5["collisioncleaned_waveforms"]
+        wf_dset = cast(h5py.Dataset, h5["collisioncleaned_waveforms"])
         n = wf_dset.shape[0]
         f_dsets = {
             sd.name: h5.create_dataset(
@@ -248,6 +259,6 @@ def add_features(h5_path, recording, featurization_cfg):
         for sli, chunk in yield_chunks(
             h5["collisioncleaned_waveforms"], desc_prefix="Featurize"
         ):
-            _, feats = gt_pipeline(chunk, channels=h5["channels"][sli])
+            _, feats = gt_pipeline(chunk, channels=cast(h5py.Dataset, h5["channels"])[sli])
             for k, v in feats.items():
                 f_dsets[k][sli] = v.numpy(force=True)

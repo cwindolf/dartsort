@@ -1,19 +1,29 @@
+from itertools import product
 import shutil
 import tempfile
+from typing import Any
 
 import numpy as np
 import pytest
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
-
-import dartsort
-from dartsort.localize.localize_torch import point_source_amplitude_at
-from dartsort.templates import TemplateData, template_util
-from dartsort.peel.matching_util import CompressedUpsampledMatchingTemplates
-from dartsort.util.job_util import ensure_computation_config
 from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
+
+import dartsort
+from dartsort.evaluate import simkit
+from dartsort.localize.localize_torch import point_source_amplitude_at
+from dartsort.peel.matching import ObjectiveUpdateTemplateMatchingPeeler
+from dartsort.peel.matching_util import CompressedUpsampledMatchingTemplates
+from dartsort.templates import TemplateData, template_util
+from dartsort.util.internal_config import MatchingConfig
+from dartsort.util.job_util import ensure_computation_config
+from dartsort.util.logging_util import get_logger
+from dartsort.util.waveform_util import upsample_multichan
+
+
+logger = get_logger(__name__)
 
 nofeatcfg = dartsort.FeaturizationConfig(
     do_nn_denoise=False,
@@ -29,6 +39,214 @@ trough_offset_samples = 42
 RES_ATOL = 1e-10
 CONV_ATOL = 1e-4
 
+
+@pytest.fixture
+def refractory_sim(request, tmp_path_factory):
+    """Globally refractory sims can be matched perfectly"""
+    upsampling, scaling, nc = request.param
+
+    p = tmp_path_factory.mktemp(f"refsim_{upsampling}_{scaling}_{nc}")
+    p = dartsort.resolve_path(p)
+    sim = simkit.generate_simulation(
+        p / "sim",
+        p / "noise",
+        n_units=10,
+        duration_seconds=3.0,
+        noise_kind="zero",
+        min_fr_hz=50.0,
+        max_fr_hz=100.0,
+        globally_refractory=True,
+        probe_kwargs=dict(num_columns=1, num_contact_per_column=nc),
+        template_simulator_kwargs=dict(snr_adjustment=10.0),
+        refractory_ms=5.0,
+        white_noise_scale=0.0,
+        recording_dtype="float32",
+        temporal_jitter=upsampling,
+        amplitude_jitter=scaling,
+        featurization_cfg=dartsort.skip_featurization_cfg,
+    )
+    yield (sim, upsampling, scaling, nc, p / "matchtmp")
+    shutil.rmtree(p, ignore_errors=True)
+
+
+crumbs_test_upsampling = [1, 2, 4]
+crumbs_test_scaling = [0.0, 0.1]
+crumbs_test_chans = [1, 5]
+
+
+@pytest.mark.parametrize("cd_iter", [0, 3])
+@pytest.mark.parametrize("method", ["drifty_keys4"])#, "upcomp"])
+# @pytest.mark.parametrize("method", ["upcomp"])#, "upcomp"])
+@pytest.mark.parametrize(
+    "refractory_sim",
+    product(crumbs_test_upsampling, crumbs_test_scaling, crumbs_test_chans),
+    indirect=True,
+)
+def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    sim, upsampling, scaling, nc, tmpdir = refractory_sim
+    logger.info("Crumbs test: upsampling=%s scaling=%s nc=%s", upsampling, scaling, nc)
+    recording = sim["recording"]
+    template_data = sim["templates"]
+    gt_sorting = sim["sorting"]
+
+    # threshold should be min template norm less epsilon, or a bit less
+    # if svd compression is bad. but we use full rank here.
+    threshold = np.linalg.norm(template_data.templates, axis=(1, 2)).min().item()
+    if scaling:
+        threshold = 0.9 * threshold
+    else:
+        threshold = 0.99 * threshold
+
+    # instantiate matcher
+    cfg_kw: dict[str, Any] = dict(
+        template_temporal_upsampling_factor=upsampling,
+        # free scaling here.
+        amplitude_scaling_variance=100.0 if scaling else 0.0,
+        template_svd_compression_rank=121,
+        threshold=threshold,
+        cd_iter=cd_iter,
+    )
+    if method == "upcomp":
+        cfg_kw["template_type"] = "individual_compressed_upsampled"
+    elif method == "drifty_keys4":
+        cfg_kw["template_type"] = "drifty"
+        cfg_kw["up_method"] = "keys4"
+    else:
+        assert False
+    matching_cfg = MatchingConfig(**cfg_kw)
+    matcher = ObjectiveUpdateTemplateMatchingPeeler.from_config(
+        recording=recording,
+        template_data=template_data,
+        matching_cfg=matching_cfg,
+        waveform_cfg=dartsort.default_waveform_cfg,
+        featurization_cfg=dartsort.skip_featurization_cfg,
+    )
+    matcher = matcher.to(device=device)
+    matcher.precompute_peeling_data(tmpdir, overwrite=True)
+    matcher = matcher.to(device=device)
+
+    # grab recording chunk and run matching
+    chunk = recording.get_traces(0, 30_000 - 242, 60_000 + 242)
+    chunk = torch.asarray(chunk.copy(), device=device, dtype=torch.float)
+    res = matcher.peel_chunk(
+        traces=chunk,
+        chunk_start_samples=30_000,
+        left_margin=242,
+        right_margin=242,
+        return_residual=True,
+        return_conv=True,
+    )
+    assert matcher.matching_templates is not None
+    chunk_temp_data = matcher.matching_templates.data_at_time(
+        1.5,
+        scaling=matcher.is_scaling,
+        inv_lambda=matcher.inv_lambda,
+        scale_min=matcher.amp_scale_min,
+        scale_max=matcher.amp_scale_max,
+    )
+    conv = res["conv"].numpy(force=True)
+    residual = res["residual"].numpy(force=True)
+    times_samples = res["times_samples"].numpy(force=True)
+    labels = res["labels"].numpy(force=True)
+
+    # testing tolerance depends on whether the method is "exact" and on how
+    # well the (upsampled) templates were reconstructed in the first place
+    # first, figure out the template reconstruction error...
+    gt_up_templates = upsample_multichan(
+        template_data.templates, temporal_jitter=upsampling
+    )
+    assert gt_up_templates.shape[1] == upsampling
+    match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
+    np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=1e-4)
+
+    # difference between upsampling before going to multichan or after...
+    true_temps_up = gt_sorting._load_dataset("templates_up")
+    np.testing.assert_allclose(gt_up_templates, true_temps_up, atol=1e-4)
+    up_err = np.abs(gt_up_templates - true_temps_up).max()
+
+    abs_err = np.abs(gt_up_templates - match_up_templates).max().item()
+    l2_err = np.linalg.norm(gt_up_templates - match_up_templates, axis=(1, 2)).max().item()
+    conv_min_atol = l2_err ** 2 + abs_err
+
+    if matching_cfg.up_method == "direct":
+        conv_atol = conv_min_atol + 1e-5
+        atol = abs_err + 1e-5
+    else:
+        conv_atol = conv_min_atol + 1e-5
+        atol = abs_err + 1e-5
+    gt_in_chunk = gt_sorting.times_samples == gt_sorting.times_samples.clip(
+        30_000, 60_000 - 1
+    )
+    gt_n_spikes = np.sum(gt_in_chunk)
+    gt_up = getattr(gt_sorting, "jitter_ix", None)
+    assert gt_up is not None
+    gt_up = gt_up[gt_in_chunk]
+    gt_scale = getattr(gt_sorting, "scalings", None)
+    assert gt_scale is not None
+    gt_scale = gt_scale[gt_in_chunk]
+    times_rel = gt_sorting.times_samples[gt_in_chunk] - 30_000 + 242
+    gt_shift = getattr(gt_sorting, "time_shifts", None)
+    assert gt_shift is not None
+    gt_shift = gt_shift[gt_in_chunk]
+
+    with subtests.test(msg="crumbs_sorting"):
+        assert res["n_spikes"] == gt_n_spikes
+        np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
+        np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
+
+        match_up = res["upsampling_indices"].numpy(force=True)
+        np.testing.assert_array_equal(gt_up, match_up)
+
+        match_scale = res["scalings"].numpy(force=True)
+        np.testing.assert_allclose(gt_scale, match_scale, atol=1e-6)
+
+        if "time_shifts" in res:
+            match_shift = res["time_shifts"].numpy(force=True)
+            np.testing.assert_array_equal(match_shift, gt_shift)
+        else:
+            assert (gt_shift == 0).all()
+
+    with subtests.test(msg="crumbs_peaks"):
+        logger.info("Crumbs test: upsampling=%s scaling=%s nc=%s", upsampling, scaling, nc)
+        # check that they match the templates
+        toff = template_data.trough_offset_samples
+        slen = template_data.templates.shape[1]
+        chk_labels = gt_sorting.labels[gt_in_chunk]
+        for pkt, pkl, pku, pks, pksh in zip(times_rel, chk_labels, gt_up, gt_scale, gt_shift):
+            pk = chunk[pkt - toff : pkt - toff + slen].numpy(force=True)
+            if upsampling > 1:
+                np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku], atol=up_err)
+            elif scaling:
+                np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku])
+            else:
+                np.testing.assert_equal(pk, gt_up_templates[pkl, pku])
+            np.testing.assert_allclose(pk, pks * match_up_templates[pkl, pku], atol=1e-4)
+
+        # check peaks are in the right places of the chunk
+        chunk_time_proj = chunk.abs().amax(dim=1)
+        assert chunk_time_proj.shape == (30_000 + 2 * 242,)
+        assert torch.all(chunk_time_proj[times_rel] > 0)
+        for j in range(1, 20):
+            print(f"{j=}")
+            assert torch.all(chunk_time_proj[times_rel] > chunk_time_proj[times_rel + j])
+            assert torch.all(chunk_time_proj[times_rel] > chunk_time_proj[times_rel - j])
+
+    # with subtests.test(msg="crumbs_conv"):
+    #     conv_zero = np.zeros_like(conv)
+    #     np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
+
+    with subtests.test(msg="crumbs_residual"):
+        resid_zero = np.zeros_like(residual)
+        if scaling:
+            residual_atol = atol + 1e-6 * np.abs(gt_up_templates).max().item()
+        else:
+            residual_atol = atol
+        np.testing.assert_allclose(residual, resid_zero, atol=residual_atol)
+
+    # # test alignment of cc waveforms w time shift
+    # with subtests.test(msg="crumbs_ccwf"):
+    #     assert False
 
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
 @pytest.mark.parametrize("coarse_cd", [False, True])
@@ -176,7 +394,6 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     print("-- cupts")
     cupts = template_util.compressed_upsampled_templates(
         templates,
-        trough_offset_samples=trough_offset_samples,
         ptps=np.ptp(templates, 1).max(1),
         max_upsample=up_factor,
     )
@@ -244,7 +461,6 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         print("-- tempup")
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
-            trough_offset_samples=trough_offset_samples,
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )
@@ -294,7 +510,9 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         )
 
         assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times + trough_shifts)
+        assert np.array_equal(
+            res["times_samples"].numpy(force=True), times + trough_shifts
+        )
         assert np.array_equal(res["labels"].numpy(force=True), labels)
         print(f"{res['n_spikes']=} {len(times)=}")
         print(f"{res['times_samples']=}")
@@ -395,7 +613,6 @@ def test_static(tmp_path, up_factor, cd_iter):
         )
         tempup = template_util.compressed_upsampled_templates(
             lrt.temporal_components,
-            trough_offset_samples=trough_offset_samples,
             ptps=np.ptp(template_data.templates, 1).max(1),
             max_upsample=up_factor,
         )

@@ -32,16 +32,26 @@ def test_shared_temporal_pconv(K, up):
 
 @pytest.mark.parametrize("t", [11])
 @pytest.mark.parametrize("rank", [1, 5])
-@pytest.mark.parametrize("nc", [1, 5])
+@pytest.mark.parametrize("nc", [1, 5, -1])
 @pytest.mark.parametrize("up", [1, 2, 4, 16])
 @pytest.mark.parametrize("K", [1, 2, 5])
 def test_full_shared_pconv(K, up, nc, rank, t):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rg = np.random.default_rng(0)
 
+    ortho = nc == -1
+    if ortho:
+        # orthogonal mode, each template on its own channel
+        nc = K
+
     conv_len = 2 * t - 1
 
-    spatial_sing = rg.normal(size=(K, rank, nc)).astype(np.float32)
+    if ortho:
+        spatial_sing = np.zeros((K, rank, nc), dtype=np.float32)
+        ix = np.arange(K)
+        spatial_sing[ix, :, ix] = rg.normal(size=(K, rank))
+    else:
+        spatial_sing = rg.normal(size=(K, rank, nc)).astype(np.float32)
     temporal = rg.normal(size=(rank, t)).astype(np.float32)
     temporal_up = rg.normal(size=(rank, up, t)).astype(np.float32)
 
@@ -50,27 +60,71 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     temporal_up_ = torch.asarray(temporal_up, device=device)
 
     tconv0 = np.zeros((rank, rank, up, conv_len), dtype=np.float32)
+    tconv00 = np.zeros((rank, rank, up, conv_len), dtype=np.float32)
     for p in range(rank):
         for q in range(rank):
             for u in range(up):
                 tconv0[p, q, u] = correlate(
                     temporal[p], temporal_up[q, u], mode="full", method="direct"
                 )[::-1]
+                tconv00[p, q, u] = correlate(
+                    temporal[p][::-1],
+                    temporal_up[q, u][::-1],
+                    mode="full",
+                    method="direct",
+                )
+
+    # different order in sums helps figure out what numerical tolerance is appropriate
+    tconv_atol = np.abs(tconv0 - tconv00).max() + np.finfo(np.float32).tiny
+    assert tconv_atol < 1e-5
+    np.testing.assert_allclose(tconv0, tconv00, atol=tconv_atol)
 
     tconv1_ = drifty.shared_temporal_pconv(temporal_, temporal_up_)
     tconv1 = tconv1_.numpy(force=True)
 
-    np.testing.assert_allclose(tconv0, tconv1, strict=True, atol=1e-3)
+    # doubling tolerance because GPUs are GPUs
+    np.testing.assert_allclose(tconv0, tconv1, strict=True, atol=2 * tconv_atol)
 
+    # similarly pick a rounding error here
     full_pconv0 = np.einsum("ipc,pqul,jqc->ijul", spatial_sing, tconv0, spatial_sing)
-    full_pconv1_ = torch.einsum("ipc,pqul,jqc->ijul", spatial_sing_, tconv1_, spatial_sing_)
+    full_pconv00 = np.einsum(
+        "ipc,pqul,jqc->ijul", spatial_sing[::-1], tconv00, spatial_sing
+    )
+    full_pconv00 = full_pconv00[::-1]
+    pconv_atol = np.abs(full_pconv0 - full_pconv00).max() + np.finfo(np.float32).tiny
+    assert pconv_atol < 1e-4
+    np.testing.assert_allclose(full_pconv0, full_pconv00, atol=pconv_atol)
+
+    tconv0_ = torch.asarray(tconv0, device=device)
+    full_pconv000_ = torch.einsum(
+        "ipc,pqul,jqc->ijul", torch.flip(spatial_sing_, (0,)), tconv0_, spatial_sing_
+    )
+    full_pconv000 = full_pconv000_.numpy(force=True)[::-1]
+    gpu_pconv_atol = (
+        np.abs(full_pconv000 - full_pconv0).max() + np.finfo(np.float32).tiny
+    )
+    assert gpu_pconv_atol < 1e-4
+    np.testing.assert_allclose(full_pconv000, full_pconv0, atol=gpu_pconv_atol)
+
+    full_pconv1_ = torch.einsum(
+        "ipc,pqul,jqc->ijul", spatial_sing_, tconv1_, spatial_sing_
+    )
     full_pconv1 = full_pconv1_.numpy(force=True)
-    full_pconv2_ = drifty.full_shared_pconv(tconv1_, spatial_sing_, batch_size=max(2, K // 2))
+    full_pconv2_ = drifty.full_shared_pconv(
+        tconv1_, spatial_sing_, batch_size=max(2, K // 2)
+    )
     full_pconv2 = full_pconv2_.numpy(force=True)
 
-    np.testing.assert_allclose(full_pconv0, full_pconv1, strict=True, atol=1e-3)
-    np.testing.assert_allclose(full_pconv0, full_pconv2, strict=True, atol=1e-3)
-
+    if ortho:
+        targ = np.eye(K, dtype=np.bool_)[:, :, None, None]
+        targ = np.broadcast_to(targ, full_pconv0.shape)
+        np.testing.assert_array_equal(full_pconv0 != 0, targ)
+    np.testing.assert_allclose(
+        full_pconv0, full_pconv1, strict=True, atol=2 * max(pconv_atol, gpu_pconv_atol)
+    )
+    np.testing.assert_allclose(
+        full_pconv0, full_pconv2, strict=True, atol=2 * max(pconv_atol, gpu_pconv_atol)
+    )
 
 
 @pytest.mark.parametrize("deg", [1, 2])
@@ -123,6 +177,11 @@ def test_interp_upsampling(up_method, up, radius, deg):
         assert False
 
     assert torch.allclose(yy_, yy_hat, atol=atol)
+
+
+def test_direct_vs_keys():
+    # should agree when templates are parabolas, yea?
+    pass
 
 
 @pytest.mark.parametrize("up", [1, 2, 4])

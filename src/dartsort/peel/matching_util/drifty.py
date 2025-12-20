@@ -54,7 +54,6 @@ from ...util.interpolation_util import (
 from ...util.logging_util import get_logger
 from ...util.job_util import ensure_computation_config
 from ...util.py_util import databag
-from ...util.spiketorch import add_at_
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
 
@@ -104,9 +103,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         assert rank == temporal_comps.shape[0]
         self.spike_length_samples = temporal_comps.shape[1]
         assert trough_offset_samples <= self.spike_length_samples
-        self.register_buffer(
-            "trough_offset_samples", torch.asarray(trough_offset_samples)
-        )
 
         if self.interpolating:
             assert rgeom is not None
@@ -170,6 +166,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.register_buffer("chan_ix", torch.arange(n_channels, device=device))
         self.register_buffer("rank_ix", torch.arange(rank, device=device))
         self.register_buffer("conv_lags", torch.arange(-t + 1, t, device=device))
+        offset = torch.asarray(trough_offset_samples, device=device)
+        self.register_buffer("trough_offset_samples", offset)
 
     @classmethod
     def _from_config(
@@ -262,7 +260,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             scale_min=torch.asarray(scale_min).to(normsq, non_blocking=True),
             scale_max=torch.asarray(scale_max).to(normsq, non_blocking=True),
             temporal_comps=self.b.temporal_comps,
-            temporal_comps_up=self.b.up_major_temporal_comps,
+            up_major_temporal_comps=self.b.up_major_temporal_comps,
             spatial_sing=spatial_sing,
             pconv=pconv,
             time_ix=self.b.time_ix,
@@ -293,7 +291,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     scale_max: Tensor
 
     temporal_comps: Tensor
-    temporal_comps_up: Tensor
+    up_major_temporal_comps: Tensor
     spatial_sing: Tensor
     padded_spatial_sing: Tensor
     pconv: Tensor
@@ -326,12 +324,19 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             "n,nrc,nrt->ntc",
             peaks.scalings,
             self.spatial_sing[peaks.template_indices],
-            self.temporal_comps_up[peaks.upsampling_indices],
+            self.up_major_temporal_comps[peaks.upsampling_indices],
         )
-        time_ix = peaks.times[:, None, None] + self.time_ix[None, :, None]
-        add_at_(
-            traces, (time_ix, self.chan_ix[None, None, :]), batch_templates, sign=sign
-        )
+        n, t, c = batch_templates.shape
+        time_ix = peaks.times[:, None] + self.time_ix[None, :]
+        assert time_ix.shape == (n, t)
+        batch_templates = batch_templates.view(n * t, c)
+        time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
+        if sign == -1:
+            traces.scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
+        elif sign == 1:
+            traces.scatter_add_(dim=0, src=batch_templates, index=time_ix)
+        else:
+            assert False
 
     def subtract_conv(
         self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
@@ -363,7 +368,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             self.rank_ix[None, :, None],
             channel_index[channels, None, :],
         ]
-        temporal = self.temporal_comps_up[peaks.upsampling_indices]
+        temporal = self.up_major_temporal_comps[peaks.upsampling_indices]
         temporal.mul_(peaks.scalings[:, None, None])
         if add_into is None:
             return temporal.mT.bmm(spatial)
@@ -416,6 +421,11 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         peaks.scores.copy_(objs)
         peaks.times.add_(time_shifts)
         return peaks
+
+    def reconstruct_up_templates(self):
+        return torch.einsum(
+            "nrc,urt->nutc", self.spatial_sing.cpu(), self.up_major_temporal_comps.cpu()
+        )
 
 
 # -- helpers

@@ -29,7 +29,7 @@ class MatchingTemplates(BModule):
     pconv_db: "PconvBase"
 
     def __init_subclass__(cls):
-        logger.info("Register matching templates type: %s", cls.template_type)
+        logger.dartsortverbose("Register templates type: %s", cls.template_type)
         cls._registry[cls.template_type] = cls
 
     @classmethod
@@ -48,7 +48,6 @@ class MatchingTemplates(BModule):
         _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
         if _extra_checks:
             logger.dartsortverbose(f"Extra checks enabled in matching.")
-            logger.dartsortverbose("Matching template registry: %s.", cls._registry.keys())
         return cls._registry[matching_cfg.template_type]._from_config(
             save_folder=save_folder,
             recording=recording,
@@ -180,6 +179,10 @@ class ChunkTemplateData:
     def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
         raise NotImplementedError
 
+    # this one is just for debugging / unit testing
+    def reconstruct_up_templates(self):
+        raise NotImplementedError
+
     # -- super handles below
 
     def enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
@@ -210,7 +213,7 @@ class ChunkTemplateData:
         times = argrelmax(objective_max, self.spike_length_samples, thresholdsq)
         n_spikes = times.numel()
         if not n_spikes:
-            return empty_matching_peaks
+            return MatchingPeaks(n_spikes=0, buf_size=0, device=conv.device)
 
         template_indices = max_obj_template[times]
         if _extra_checks:
@@ -503,9 +506,6 @@ class MatchingPeaks:
         self._scores[sl_new] = other.scores
 
         self.n_spikes = new_n_spikes
-
-
-empty_matching_peaks = MatchingPeaks(buf_size=0)
 
 
 def _grow_buffer(x, old_length, new_size):
