@@ -134,17 +134,21 @@ def tmm_demix(
     tmm.em(train_data)
 
     for outer_it in range(refinement_cfg.n_total_iters):
+        # split, maybe, then em.
         do_split = bool(outer_it) or not refinement_cfg.skip_first_split
         break_after_split = refinement_cfg.one_split_only
-
         if do_split:
             run_split(tmm, train_data, val_data, prog_level - 1)
             tmm.em(train_data, show_progress=prog_level)
+            stepname = f"tmm{outer_it}asplit"
+        else:
+            stepname = f"tmm{outer_it}aem"
         if saving:
-            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}asplit", **save_kw)  # type: ignore
+            save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
         if break_after_split:
             break
 
+        # merge, then em.
         run_merge(tmm, train_data, val_data, prog_level - 1)
         tmm.em(train_data, show_progress=prog_level)
         if saving:

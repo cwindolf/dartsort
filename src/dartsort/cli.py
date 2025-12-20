@@ -16,6 +16,7 @@ def dartsort_cli():
     I am figuring out how to do preprocessing still. It may be configured?
     """
     # -- define CLI
+    assert dartsort_cli.__doc__ is not None
     ap = argparse.ArgumentParser(
         prog="dartsort",
         epilog=dartsort_cli.__doc__.split("---")[1],
@@ -87,6 +88,7 @@ def dartsort_cli():
     # TODO: preprocessing management
     try:
         rec = sc.load(cli_util.ensurepath(args.recording))
+        assert isinstance(rec, sc.BaseRecording)
     except FileNotFoundError as e:
         ee = FileNotFoundError(
             f"The recording path passed to {ap.prog}, '{args.recording}', doesn't exist."
@@ -100,9 +102,4 @@ def dartsort_cli():
 
     # -- run
     # TODO: maybe this script should dump to Phy?
-    ret = main.dartsort(
-        rec,
-        output_dir,
-        cfg=cfg,
-        overwrite=args.overwrite,
-    )
+    ret = main.dartsort(rec, output_dir, cfg=cfg, overwrite=args.overwrite)

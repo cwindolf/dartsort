@@ -1,3 +1,4 @@
+from typing import Literal
 import warnings
 
 import numpy as np
@@ -25,7 +26,7 @@ class ThresholdAndFeaturize(BasePeeler):
         chunk_length_samples=30_000,
         max_spikes_per_chunk=None,
         peak_sign="both",
-        fit_sampling="random",
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_max_reweighting=4.0,
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
@@ -411,7 +412,7 @@ def threshold_chunk(
 def perturb_detections(
     times_rel,
     channels,
-    thinning: float=0,
+    thinning: float = 0,
     time_jitter=0,
     spatial_jitter_channel_index=None,
     rg: np.random.Generator | None = None,

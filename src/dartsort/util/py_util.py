@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from importlib.metadata import Distribution
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import dataclass_transform
 
@@ -156,9 +157,11 @@ def str_or_none(s):
 # files and paths
 
 
-def resolve_path(p: str | Path | None, strict=False) -> Path:
+def resolve_path(p: str | Path | Traversable | None, strict=False) -> Path:
     if p is None:
         raise ValueError("Can't resolve path None.")
+    if isinstance(p, Traversable):
+        assert isinstance(p, Path)
     p = Path(p)
     p = p.expanduser()
     p = p.absolute()

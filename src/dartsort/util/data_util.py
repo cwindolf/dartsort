@@ -2,7 +2,7 @@ from collections import namedtuple
 from copy import copy
 from dataclasses import replace
 from pathlib import Path
-from typing import Generator, Sequence, cast, Self
+from typing import Generator, Sequence, cast, Self, Literal
 import warnings
 
 import h5py
@@ -442,6 +442,13 @@ class DARTsortSorting:
                 f"Feature {feature_name}'s shape {feature.shape} didn't agree with spike count {self.n_spikes}."
             )
 
+    def _load_dataset(self, dataset_name: str):
+        assert self.parent_h5_path is not None
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            dset = h5[dataset_name]
+            assert isinstance(dset, h5py.Dataset)
+            return dset[:]
+
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     """Look for the pipeline in the usual place."""
@@ -855,7 +862,7 @@ def extract_random_snips(rg, chunk, n, sniplen):
 
 def subsample_waveforms(
     hdf5_filename: str | Path | None = None,
-    fit_sampling="random",
+    fit_sampling: Literal["random", "amp_reweighted"] = "random",
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
     voltages_dataset_name="collisioncleaned_voltages",
@@ -933,7 +940,7 @@ def fit_reweighting(
     h5=None,
     hdf5_path=None,
     log_voltages=True,
-    fit_sampling="random",
+    fit_sampling: Literal["random", "amp_reweighted"] = "random",
     fit_max_reweighting=4.0,
     voltages_dataset_name="voltages",
 ):

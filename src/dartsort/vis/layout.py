@@ -1,3 +1,5 @@
+from typing import Iterable, cast
+
 from collections import namedtuple
 
 import matplotlib.pyplot as plt
@@ -19,8 +21,7 @@ class BasePlot:
 
 
 class BaseMultiPlot:
-    def plots(self):
-        # return [BasePlot()]
+    def plots(self, *args, **kwargs) -> list[BasePlot]:
         raise NotImplementedError
 
     def notify_global_params(self, **params):
@@ -33,7 +34,7 @@ Card = namedtuple("Card", ["kind", "width", "height", "plots"])
 
 
 def flow_layout(
-    plots,
+    plots: Iterable[BasePlot | BaseMultiPlot],
     same_width_flow=True,
     max_height=4,
     figsize=(8.5, 11),
@@ -95,20 +96,20 @@ def flow_layout(
     return figure
 
 
-def flow_layout_columns(plots, max_height=4, same_width_flow=True, **plot_kwargs):
-    all_plots = []
+def flow_layout_columns(plots: Iterable[BasePlot | BaseMultiPlot], max_height=4, same_width_flow=True, **plot_kwargs):
+    all_plots: list[BasePlot] = []
     for plot in plots:
         # duck typing this since isinstance() can be weird with autoreload
+        # pyright is not duck-friendly.
         if callable(getattr(plot, "plots", None)):
-            all_plots.extend(plot.plots(**plot_kwargs))
+            all_plots.extend(plot.plots(**plot_kwargs))  # type: ignore
         elif callable(getattr(plot, "draw", None)):
-            all_plots.append(plot)
+            all_plots.append(plot)  # type: ignore
         else:
             raise ValueError(f"Not sure what to do with {plot=}")
-    plots = all_plots
 
-    plots_by_kind = {}
-    for plot in plots:
+    plots_by_kind: dict[str, list[BasePlot]] = {}
+    for plot in all_plots:
         if plot.kind not in plots_by_kind:
             plots_by_kind[plot.kind] = []
         plots_by_kind[plot.kind].append(plot)

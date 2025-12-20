@@ -300,7 +300,7 @@ def truncated_kmeans(
                 # or cupy. scipy is a big slowdown here, so cupy if possible.
                 if is_gpu and HAVE_CUPY:
                     resps_cupy = coo_to_cupy(resps).tocsc()
-                    batch_labels = resps_cupy.argmax(axis=1).squeeze()
+                    batch_labels = torch.asarray(resps_cupy.argmax(axis=1)).squeeze()
                 else:
                     resps_scipy = coo_to_scipy(resps)
                     batch_labels = resps_scipy.argmax(axis=1, explicit=True)

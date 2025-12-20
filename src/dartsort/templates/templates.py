@@ -570,10 +570,16 @@ def get_templates_by_chunk(
     labels_tmp = np.full_like(sorting.labels, -1)
     realigned_spike_times = sorting.times_samples.copy()
     template_datas = []
-    for block_start in trange(
-        0, n_units, units_per_block, desc=f"Template blocks [{n_units}:{n_blocks}]"
-    ):
+    if n_blocks > 1:
+        block_iter = trange(
+            0, n_units, units_per_block, desc=f"Template blocks [{n_units}:{n_blocks}]"
+        )
+    else:
+        block_iter = range(0, n_units, units_per_block)
+    for block_start in block_iter:
         block_end = min(block_start + units_per_block, n_units)
+        if n_blocks == 1:
+            assert block_end - block_start == n_units
 
         ids_in_block = unit_ids[block_start:block_end]
         spikes_in_block = np.flatnonzero(np.isin(sorting.labels, ids_in_block))

@@ -470,9 +470,12 @@ def load_dartsort_step_sortings(
 
         # refinement steps
         stepstr = step_format.format(step=step)
-        for npy in sorted(sorting_dir.glob(f"{stepstr}refstep*.npy")):
+        for npy in sorted(sorting_dir.glob(f"{stepstr}*.npy")):
+            stem = npy.stem.removesuffix("_labels")
+            if stem == stepstr:
+                continue
             yield (
-                name_formatter(npy.stem.removesuffix("_labels")),
+                name_formatter(stem),
                 st0.ephemeral_replace(labels=np.load(npy)),
             )
 

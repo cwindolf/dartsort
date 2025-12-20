@@ -226,19 +226,17 @@ def registered_average(
         fill_value=np.nan,
     )
 
+    # take the mean
+    average = reducer(static_waveforms, axis=0)
+    if not np.isnan(pad_value):
+        average = np.nan_to_num(average, copy=False, nan=pad_value)
+
     if return_n_samples:
         # remove time dim if any
         c = static_waveforms
         if static_waveforms.ndim == 3:
             c = static_waveforms[:, 0, :]
         n_samples = np.isfinite(c).sum(axis=0)
-
-    # take the mean and return
-    average = reducer(static_waveforms, axis=0)
-    if not np.isnan(pad_value):
-        average = np.nan_to_num(average, copy=False, nan=pad_value)
-
-    if return_n_samples:
         return average, n_samples
 
     return average
@@ -278,6 +276,7 @@ def registered_template(
     for i, u in enumerate(uniq_shifts):
         drifty_templates[i] = reducer(waveforms[n_pitches_shift == u], axis=0)
     if is_tensor:
+        assert torch.is_tensor(drifty_templates)
         drifty_templates = drifty_templates.numpy(force=True)
 
     static_templates = get_waveforms_on_static_channels(

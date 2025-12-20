@@ -42,7 +42,7 @@ def ds_save_intermediate_labels(
 
     if work_dir is not None:
         targ_labels_npy = output_dir / step_labels_npy.name
-        logger.dartsortdebug(f"Copy {step_labels_npy} -> {targ_labels_npy}.")
+        logger.info(f"Copy {step_labels_npy} -> {targ_labels_npy}.")
         dartcopy2(cfg, step_labels_npy, targ_labels_npy)
 
 
@@ -52,7 +52,7 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
     json_path = output_dir / "_dartsort_internal_config.json"
     with open(json_path, "w") as jsonf:
         json.dump(asdict(internal_cfg), jsonf)
-    logger.dartsortdebug(f"Recorded config to {json_path}.")
+    logger.info(f"Recorded config to {json_path}.")
 
 
 def ds_all_to_workdir(
@@ -64,7 +64,7 @@ def ds_all_to_workdir(
     if work_dir is None:
         return
     if overwrite:
-        logger.dartsortdebug(f"Working in {work_dir}. No copy since {overwrite=}.")
+        logger.info(f"Working in {work_dir}. No copy since {overwrite=}.")
         return
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
     logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
@@ -149,6 +149,8 @@ def ds_handle_delete_intermediate_features(
 
 def ds_fast_forward(store_dir, cfg):
     """Fast-forward to the where sorting left off
+
+    # TODO: error if there is a saved cfg which differs? Maybe just optionally?
 
     Returns
     -------

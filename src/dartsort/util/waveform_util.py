@@ -282,7 +282,9 @@ def get_channel_index_rel_inds(channel_index: torch.Tensor):
     return index_inds
 
 
-def make_filled_channel_index(geom, radius, p: int | float=2, pad_val=None, to_torch=False):
+def make_filled_channel_index(
+    geom, radius, p: int | float = 2, pad_val=None, to_torch=False
+):
     C = geom.shape[0]
     if not radius:
         return single_channel_index(C, to_torch=to_torch)
@@ -770,14 +772,13 @@ def upsample_singlechan_torch(
     return torch.asarray(up).to(singlechan_waveforms)
 
 
-def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=1):
+def upsample_singlechan(singlechan_waveforms, temporal_jitter=1):
     """nt -> nut"""
     if temporal_jitter == 1:
         return singlechan_waveforms[:, None]
 
     n, t = singlechan_waveforms.shape
-    if time_domain is None:
-        time_domain = np.linspace(0.0, t, num=t)
+    time_domain = np.linspace(0.0, float(t), num=t)
     erp = CubicSpline(time_domain, singlechan_waveforms, axis=-1)
     dt_ms = np.diff(time_domain).mean()
     t_up = np.stack(
@@ -791,7 +792,7 @@ def upsample_singlechan(singlechan_waveforms, time_domain=None, temporal_jitter=
     return singlechan_waveforms_up
 
 
-def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
+def upsample_multichan(waveforms, temporal_jitter=1):
     """ntc -> nutc"""
     if temporal_jitter == 1:
         return waveforms[:, None]
@@ -800,9 +801,7 @@ def upsample_multichan(waveforms, time_domain=None, temporal_jitter=1):
     waveforms = waveforms.transpose(0, 2, 1).reshape((n * c, t))
     invalid = np.flatnonzero(np.isnan(waveforms[:, 0]))
     waveforms = np.nan_to_num(waveforms, copy=False)
-    waveforms = upsample_singlechan(
-        waveforms, time_domain=time_domain, temporal_jitter=temporal_jitter
-    )
+    waveforms = upsample_singlechan(waveforms, temporal_jitter=temporal_jitter)
     waveforms[invalid] = np.nan
     waveforms = waveforms.reshape(n, c, temporal_jitter, t)
     waveforms = waveforms.transpose(0, 2, 3, 1)

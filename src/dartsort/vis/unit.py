@@ -143,6 +143,7 @@ class XZScatter(UnitPlot):
 
         unit_id = np.atleast_1d(unit_id)
         multi_unit = unit_id.size > 1
+        s = None
         for uid in unit_id:
             in_unit = sorting_analysis.in_unit(uid)
             x = sorting_analysis.x(which=in_unit)
@@ -203,6 +204,7 @@ class PCAScatter(UnitPlot):
             relocated=self.relocated,
             pca_radius_um=self.pca_radius_um,
         )
+        s = None
         if which is not None:
             for uid in unit_id:
                 if multi_unit:
@@ -259,6 +261,7 @@ class TimeZScatter(UnitPlot):
         multi_unit = unit_id.size > 1
         axis = panel.subplots()
 
+        s = None
         for uid in unit_id:
             in_unit = sorting_analysis.in_unit(uid)
             t = sorting_analysis.times_seconds(which=in_unit)
@@ -372,6 +375,9 @@ class WaveformPlot(UnitPlot):
     height = 2
     can_sharey = False
 
+    # for my subclasses
+    wfs_kind = ""
+
     def __init__(
         self,
         trough_offset_samples=42,
@@ -430,7 +436,7 @@ class WaveformPlot(UnitPlot):
         if self.template_index is None and show_template:
             templates = sorting_analysis.coarse_template_data.unit_templates(unit_id)
             show_template = bool(templates.size)
-        if self.template_index is not None and show_template:
+        elif self.template_index is not None and show_template:
             templates = sorting_analysis.template_data.templates[self.template_index]
             templates = templates[None]
             show_template = bool(templates.size)
@@ -439,7 +445,10 @@ class WaveformPlot(UnitPlot):
                 np.linspace(0, 1, num=sup_temp_ids.size)
             )
             template_color = template_color[sup_temp_ids == self.template_index]
+        else:
+            templates = None
         if show_template:
+            assert templates is not None
             templates = trim_waveforms(
                 templates,
                 old_offset=sorting_analysis.coarse_template_data.trough_offset_samples,
@@ -454,7 +463,10 @@ class WaveformPlot(UnitPlot):
         if show_superres_templates:
             suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
             show_superres_templates = bool(suptemplates.size)
+        else:
+            suptemplates = None
         if show_superres_templates:
+            assert suptemplates is not None
             suptemplates = trim_waveforms(
                 suptemplates,
                 old_offset=sorting_analysis.template_data.trough_offset_samples,
@@ -488,6 +500,7 @@ class WaveformPlot(UnitPlot):
             handles["waveforms"] = ls
 
         if show_superres_templates:
+            assert suptemplates is not None
             showchans = ci[max_chan]
             showchans = showchans[showchans < len(geom)]
             colors = self.superres_template_cmap(
@@ -510,6 +523,7 @@ class WaveformPlot(UnitPlot):
             handles["superres templates"] = tuple(suphandles)
 
         if show_template:
+            assert templates is not None
             showchans = ci[max_chan]
             showchans = showchans[showchans < len(geom)]
             ls = geomplot(
@@ -843,7 +857,7 @@ class SplitStrategyPlot(UnitPlot):
             print(f"{counts=}")
         else:
             split_labels[in_unit] = 0
-            unit_ids = 0
+            unit_ids = np.atleast_1d(0)
             counts = [str(in_unit.size)]
         split_sorting = sorting_analysis.sorting.ephemeral_replace(labels=split_labels)
         split_sorting_analysis = DARTsortAnalysis.from_sorting(
@@ -892,7 +906,7 @@ class SuperresWaveformMultiPlot(UnitMultiPlot):
         color="k",
         alpha=0.1,
         show_superres_templates=True,
-        superres_template_cmap=plt.cm.winter,
+        superres_template_cmap="winter",
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.35,
@@ -1033,8 +1047,13 @@ def make_all_summaries(
     if n_units is not None and n_units < len(unit_ids):
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
+        unit_ids.sort()
     if not overwrite and all_summaries_done(
-        unit_ids, save_folder, sorting_analysis=sorting_analysis, namebyamp=namebyamp, ext=image_ext
+        unit_ids,
+        save_folder,
+        sorting_analysis=sorting_analysis,
+        namebyamp=namebyamp,
+        ext=image_ext,
     ):
         return
 
@@ -1063,7 +1082,7 @@ def make_all_summaries(
         n_jobs = get_global_computation_config().n_jobs_cpu
     if n_jobs:
         initargs = (cloudpickle.dumps(initargs),)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
     with Executor(
         max_workers=n_jobs,
         mp_context=context,
@@ -1104,12 +1123,15 @@ def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
     return f"amp{amp}_unit{unit_id:04d}.{ext}"
 
 
-def all_summaries_done(unit_ids, save_folder, sorting_analysis=None, namebyamp=False, ext="png"):
+def all_summaries_done(
+    unit_ids, save_folder, sorting_analysis=None, namebyamp=False, ext="png"
+):
     if not save_folder.exists():
         return False
     return all(
         (
-            save_folder / pngname(
+            save_folder
+            / pngname(
                 unit_id, sorting_analysis=sorting_analysis, namebyamp=namebyamp, ext=ext
             )
         ).exists()
@@ -1160,6 +1182,7 @@ def _summary_init(*args):
 
 def _summary_job(unit_id):
     # handle resuming/overwriting
+    assert _summary_job_context is not None
     ext = _summary_job_context.image_ext
     tmp_out = _summary_job_context.save_folder / f"tmp_unit{unit_id:04d}.{ext}"
     imfn = pngname(

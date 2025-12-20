@@ -30,7 +30,7 @@ class ThreadPoolExecutor(_ThreadPoolExecutor):
         max_workers=None,
         mp_context=None,
         initializer=None,
-        initargs=None,
+        initargs=(),
         context=None,
     ):
         super().__init__(
@@ -57,7 +57,7 @@ class MockPoolExecutor:
         max_workers=None,
         mp_context=None,
         initializer=None,
-        initargs=None,
+        initargs=(),
         context=None,
     ):
         self.initargs = initargs
@@ -126,7 +126,7 @@ class CloudpicklePoolExecutor(ProcessPoolExecutor):
 
 
 def rank_init(queue):
-    rank_init.rank = queue.get()
+    rank_init.rank = queue.get()  # type: ignore
 
 
 def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=False):

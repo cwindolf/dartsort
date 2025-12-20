@@ -7,12 +7,13 @@ from scipy.spatial import KDTree
 import torch
 import torch.nn.functional as F
 
-from dartsort.cluster.cluster_util import get_main_channel_pcs
-
 from ..util import drift_util, waveform_util
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.spiketorch import fast_nanmedian, ptp
 from .get_templates import get_templates
+
+logger = get_logger(__name__)
 
 # -- alternate template constructors
 
@@ -368,17 +369,28 @@ def shared_basis_compress_templates(
         to_compress = to_compress.T
 
     # get the temporal basis
-    to_compress = torch.asarray(to_compress, device=dev)
-    U, S, Vh = _svd_helper(to_compress)
-    del S, Vh
-    assert U.shape == (t, min(t, nvis))
+    # we'll use cov->eigh here since we'd project onto U anyway
+    to_compress = torch.asarray(to_compress, device=dev, dtype=torch.double)
+    # U, S, Vh = _svd_helper(to_compress)
+    # assert U.shape == (t, min(t, nvis))
+    cov = torch.cov(to_compress, correction=0)
+    m = to_compress.mean(dim=1, keepdim=True)
+    cov += m * m.T
+    if nvis < t:
+        logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
+        cov.diagonal().add_(1e-5)
+    vals, U = torch.linalg.eigh(cov)
     temporal_comps = U[:, :rank]
     # to rank-major
     temporal_comps = temporal_comps.T.contiguous()
     temporal_comps = temporal_comps.numpy(force=True)
+    temporal_comps = temporal_comps.astype(templates.dtype)
 
     # project templates onto temporal comps (no sparsity here.)
     spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
+
+    assert np.isfinite(temporal_comps).all()
+    assert np.isfinite(spatial_sing).all()
 
     return SharedBasisTemplates(
         unit_ids=unit_ids,
@@ -395,9 +407,7 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(
-        t, step=1.0 / temporal_upsampling_factor
-    )  # pyright: ignore[reportCallIssue]
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(
@@ -430,7 +440,6 @@ def default_n_upsamples_map(ptps, max_upsample=8):
 def compressed_upsampled_templates(
     templates,
     *,
-    trough_offset_samples,
     ptps=None,
     max_upsample=8,
     n_upsamples_map=default_n_upsamples_map,
@@ -471,6 +480,12 @@ def compressed_upsampled_templates(
     if ptps is None:
         ptps = np.ptp(templates, 1).max(1)
     assert ptps.shape == (n_templates,)
+
+    if n_upsamples_map == "yass":
+        n_upsamples_map = default_n_upsamples_map
+    elif n_upsamples_map == "none":
+        n_upsamples_map = None
+
     if n_upsamples_map is None:
         n_upsamples = np.full(n_templates, max_upsample)
     else:
@@ -508,9 +523,9 @@ def compressed_upsampled_templates(
     )
     template_indices = np.array(template_indices)
     upsampling_indices = np.array(upsampling_indices)
-    compressed_upsampling_index[
-        compressed_upsampling_index < 0
-    ] = current_compressed_index
+    compressed_upsampling_index[compressed_upsampling_index < 0] = (
+        current_compressed_index
+    )
 
     # get the upsampled templates
     all_upsampled_templates = temporally_upsample_templates(
@@ -541,7 +556,8 @@ def _svd_helper(x):
     if x.device.type == "cuda":
         # torch's cuda results need a certain driver to agree with numpy
         try:
-            return torch.linalg.svd(x, full_matrices=False, driver="gesvda")
+            U, S, Vh = torch.linalg.svd(x, full_matrices=False, driver="gesvda")
+            return U, S, Vh
         except torch.linalg.LinAlgError:  # type: ignore[reportPrivateImportUsage]
             return torch.linalg.svd(x, full_matrices=False, driver="gesvd")
     else:

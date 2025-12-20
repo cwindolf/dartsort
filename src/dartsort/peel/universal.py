@@ -1,3 +1,4 @@
+from typing import Literal
 import numpy as np
 import torch
 
@@ -49,7 +50,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
-        fit_sampling="random",
+        fit_sampling: Literal["random", "amp_reweighted"]="random",
         fit_max_reweighting=4.0,
         refractory_radius_frames=10,
         max_iter=1000,
@@ -108,6 +109,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         # which is general enough that it works, but for this separable
         # basis there is a faster algorithm.
         matching_templates = CompressedUpsampledMatchingTemplates(
+            trough_offset_samples=trough_offset_samples,
             low_rank_templates=low_rank_templates,
             pconv_db=pairwise_conv_db,
             compressed_upsampled_temporal=cupt,

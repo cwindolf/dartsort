@@ -30,12 +30,18 @@ class WaveformConfig:
     ms_after: float = 2.6 + 0.1 / 3
 
     @classmethod
-    def from_samples(cls, samples_before, samples_after, sampling_frequency=30_000.0):
+    def from_samples(
+        cls, samples_before: int, samples_after: int, sampling_frequency=30_000.0
+    ) -> Self:
         samples_per_ms = sampling_frequency / 1000
-        return cls(
+        self = cls(
             ms_before=samples_before / samples_per_ms,
             ms_after=samples_after / samples_per_ms,
         )
+        assert self.trough_offset_samples(sampling_frequency) == samples_before
+        samples_total = samples_before + samples_after
+        assert self.spike_length_samples(sampling_frequency) == samples_total
+        return self
 
     @staticmethod
     def ms_to_samples(ms, sampling_frequency=30_000.0):
@@ -53,7 +59,7 @@ class WaveformConfig:
         length = 2 * (length // 2) + 1
         return length
 
-    def relative_slice(self, other, sampling_frequency=30_000):
+    def relative_slice(self, other: Self, sampling_frequency=30_000.0) -> slice:
         """My trough-aligned subset of samples in other, which contains me."""
         assert other.ms_before >= self.ms_before
         assert other.ms_after >= self.ms_after
@@ -220,6 +226,8 @@ default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
 
+FitSamplingMethod = Literal["random", "amp_reweighted"]
+
 
 @cfg_dataclass
 class SubtractionConfig:
@@ -229,7 +237,7 @@ class SubtractionConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: str = "amp_reweighted"
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = 4.0
     fit_only: bool = False
 
@@ -285,7 +293,7 @@ class ThresholdingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
+    fit_sampling: FitSamplingMethod = "random"
     fit_max_reweighting: float = 4.0
 
     # thresholding
@@ -390,7 +398,7 @@ class MatchingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
+    fit_sampling: FitSamplingMethod = "random"
     fit_max_reweighting: float = 4.0
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
@@ -410,12 +418,13 @@ class MatchingConfig:
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
     channel_selection_radius: float | None = 50.0
-    template_type: Literal[
-        "individual_compressed_upsampled", "drifty"
-    ] = "individual_compressed_upsampled"
+    template_type: Literal["individual_compressed_upsampled", "drifty"] = (
+        "individual_compressed_upsampled"
+    )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
+    upsampling_compression_map: Literal["yass", "none"] = "yass"
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -435,7 +444,7 @@ class UniversalMatchingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: str = "random"
+    fit_sampling: FitSamplingMethod = "random"
     fit_max_reweighting: float = 4.0
 
     n_sigmas: int = 5
@@ -552,9 +561,9 @@ class ClusteringConfig:
 
 @cfg_dataclass
 class RefinementConfig:
-    refinement_strategy: Literal[
-        "tmm", "gmm", "pcmerge", "forwardbackward", "none"
-    ] = "tmm"
+    refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
+        "tmm"
+    )
 
     # pcmerge
     pc_merge_threshold: float = 0.2
@@ -1065,3 +1074,4 @@ waveforms_only_featurization_cfg = FeaturizationConfig(
     save_input_voltages=True,
     save_input_waveforms=True,
 )
+skip_featurization_cfg = FeaturizationConfig(skip=True, n_residual_snips=0)

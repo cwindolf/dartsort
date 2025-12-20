@@ -1,4 +1,5 @@
 import tempfile
+from typing import Literal
 import warnings
 from collections import namedtuple
 from pathlib import Path
@@ -61,7 +62,7 @@ class SubtractionPeeler(BasePeeler):
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
-        fit_sampling="random",
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_max_reweighting=4.0,
         residnorm_decrease_threshold=3.162,
         growth_tolerance=0.1,
@@ -345,6 +346,7 @@ class SubtractionPeeler(BasePeeler):
         extract_index = None if self.extract_subtract_same else self.channel_index
         traces = traces.to(self.dtype)
         if self.have_singlechan_templates:
+            assert self.featurization_pipeline is not None
             sc_feat = self.featurization_pipeline.transformers[0]
             assert isinstance(sc_feat, SingleChannelTemplates)
             singlechan_kw = dict(

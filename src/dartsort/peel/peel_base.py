@@ -7,7 +7,7 @@ from sys import getrefcount
 import tempfile
 from threading import local, Lock
 from types import MappingProxyType
-from typing import TypedDict, Literal, overload
+from typing import TypedDict, Literal, overload, Any
 
 import h5py
 import numpy as np
@@ -48,14 +48,14 @@ class BasePeeler(BModule):
         self,
         recording,
         channel_index,
-        featurization_pipeline=None,
+        featurization_pipeline: WaveformPipeline | None=None,
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
         n_seconds_fit=40,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
-        fit_sampling="random",
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_subsampling_random_state: int | np.random.Generator = 0,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -66,29 +66,29 @@ class BasePeeler(BModule):
             raise ValueError("Peeling does not yet support multi-segment recordings.")
         super().__init__()
         self.recording = recording
-        self.chunk_length_samples = chunk_length_samples
-        self.chunk_margin_samples = chunk_margin_samples
-        self.n_seconds_fit = n_seconds_fit
-        self.max_waveforms_fit = max_waveforms_fit
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
-        self.fit_subsampling_random_state = np.random.default_rng(
+        self.chunk_length_samples: int = chunk_length_samples
+        self.chunk_margin_samples: int = chunk_margin_samples
+        self.n_seconds_fit: int = n_seconds_fit
+        self.max_waveforms_fit: int = max_waveforms_fit
+        self.n_waveforms_fit: int = n_waveforms_fit
+        self.trough_offset_samples: int = trough_offset_samples
+        self.spike_length_samples: int = spike_length_samples
+        self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
             fit_subsampling_random_state
         )
-        self.dtype = dtype
+        self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
-        self.n_waveforms_fit = n_waveforms_fit
-        self.fit_sampling = fit_sampling
-        self.fit_max_reweighting = fit_max_reweighting
-        self.featurization_pipeline = featurization_pipeline
-        self.fixed_property_keys = fixed_property_keys
+        self.fit_sampling: Literal["random", "amp_reweighted"] = fit_sampling
+        self.fit_max_reweighting: float = fit_max_reweighting
+        self.featurization_pipeline: WaveformPipeline | None = featurization_pipeline
+        self.fixed_property_keys: tuple[str] | list[str] = fixed_property_keys
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
-        self.fixed_output_data = [
+        self.fixed_output_data: list[tuple[str, Any]] = [
             ("sampling_frequency", self.recording.get_sampling_frequency()),
             ("geom", self.recording.get_channel_locations()),
         ]
@@ -97,7 +97,7 @@ class BasePeeler(BModule):
                 ("channel_index", self.b.channel_index.numpy(force=True).copy()),
             )
 
-        self._rgs = local()
+        self._rgs: local = local()
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in
