@@ -56,6 +56,7 @@ from ...util.job_util import ensure_computation_config
 from ...util.py_util import databag
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
+from .matchlib import subtract_precomputed_pconv
 
 
 logger = get_logger(__name__)
@@ -328,6 +329,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         )
         n, t, c = batch_templates.shape
         time_ix = peaks.times[:, None] + self.time_ix[None, :]
+        assert traces.shape[1] == c
         assert time_ix.shape == (n, t)
         batch_templates = batch_templates.view(n * t, c)
         time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
@@ -606,30 +608,6 @@ def convolve_lowrank_shared(
 
     return out
 
-
-@torch.jit.script
-def subtract_precomputed_pconv(
-    conv: Tensor,
-    pconv: Tensor,
-    template_indices: Tensor,
-    upsampling_indices: Tensor,
-    scalings: Tensor,
-    times: Tensor,
-    padded_conv_lags: Tensor,
-    neg: bool,
-    batch_size: int = 128,
-):
-    ix_time = times[:, None] + padded_conv_lags[None, :]
-    if neg:
-        scalings = -scalings
-    for i0 in range(0, conv.shape[0], batch_size):
-        i1 = min(conv.shape[0], i0 + batch_size)
-        batch = pconv[i0:i1, template_indices, upsampling_indices]
-        batch.mul_(scalings[None, :, None])
-        ix = ix_time.broadcast_to(batch.shape)
-        batch = batch.reshape(i1 - i0, -1)
-        ix = ix.reshape(i1 - i0, batch.shape[1])
-        conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
 # -- fine matching

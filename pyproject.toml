@@ -45,3 +45,6 @@ line-length = 88
 
 [tool.jupytext]
 "formats" = "ipynb,py:percent"
+
+[tool.pyright]
+"include" = ["src"]

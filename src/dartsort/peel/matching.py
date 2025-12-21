@@ -418,7 +418,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         max_time = traces.shape[0] - right_margin - 1
         times_offset = peaks.times + self.trough_offset_samples
         valid = times_offset == times_offset.clamp(left_margin, max_time)
-        peaks.subset(*torch.nonzero(valid, as_tuple=True), sort=True)
+        (valid,) = valid.nonzero(as_tuple=True)
+        peaks.subset(valid, sort=True)
 
         # extract collision-cleaned waveforms on small neighborhoods
         if return_collisioncleaned_waveforms or self.picking_channels:

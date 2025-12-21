@@ -739,7 +739,7 @@ class NeighborhoodInterpolator(BModule):
     ):
         super().__init__()
         assert len(prgeom) == neighborhoods.n_channels + 1
-        self.params = params.normalize()
+        self.params: InterpolationParams = params.normalize()
         self.register_buffer("prgeom", prgeom.clone())
         self.b.prgeom[-1].fill_(torch.nan)
         neighb_data = interp_precompute(
@@ -801,9 +801,9 @@ class FullProbeInterpolator(BModule):
         self.g_depths = geom[:, 1].numpy(force=True)
         self.register_buffer("geom", geom)
         self.register_buffer("rgeom", rgeom)
-        self.c_src = rgeom.shape[0]
-        self.c_targ = geom.shape[0]
-        self.dim = rgeom.shape[1]
+        self.c_src: int = rgeom.shape[0]
+        self.c_targ: int = geom.shape[0]
+        self.dim: int = rgeom.shape[1]
 
     def interp_at_time(self, t_s: float, waveforms: torch.Tensor) -> torch.Tensor:
         assert waveforms.shape[2] == self.c_src

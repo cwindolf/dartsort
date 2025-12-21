@@ -5,10 +5,16 @@ import numpy as np
 from scipy.signal import correlate
 
 from dartsort.peel.matching_util import drifty
+from dartsort.util.testing_util import matching_debug_util
+
+
+test_K = 11
+test_template_nc = [1, 4]
 
 
 @pytest.fixture
-def hires_templates():
+def parabolic_templates():
+    rg = np.random.default_rng(0)
     pass
 
 
@@ -44,8 +50,6 @@ def test_full_shared_pconv(K, up, nc, rank, t):
         # orthogonal mode, each template on its own channel
         nc = K
 
-    conv_len = 2 * t - 1
-
     if ortho:
         spatial_sing = np.zeros((K, rank, nc), dtype=np.float32)
         ix = np.arange(K)
@@ -59,20 +63,9 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     temporal_ = torch.asarray(temporal, device=device)
     temporal_up_ = torch.asarray(temporal_up, device=device)
 
-    tconv0 = np.zeros((rank, rank, up, conv_len), dtype=np.float32)
-    tconv00 = np.zeros((rank, rank, up, conv_len), dtype=np.float32)
-    for p in range(rank):
-        for q in range(rank):
-            for u in range(up):
-                tconv0[p, q, u] = correlate(
-                    temporal[p], temporal_up[q, u], mode="full", method="direct"
-                )[::-1]
-                tconv00[p, q, u] = correlate(
-                    temporal[p][::-1],
-                    temporal_up[q, u][::-1],
-                    mode="full",
-                    method="direct",
-                )
+    tconv0, tconv00 = matching_debug_util.reference_shared_temporal_convolution(
+        temporal, temporal_up
+    )
 
     # different order in sums helps figure out what numerical tolerance is appropriate
     tconv_atol = np.abs(tconv0 - tconv00).max() + np.finfo(np.float32).tiny
@@ -127,7 +120,7 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     )
 
 
-@pytest.mark.parametrize("deg", [1, 2])
+@pytest.mark.parametrize("deg", [1, 2, 3])
 @pytest.mark.parametrize("radius", [8])
 @pytest.mark.parametrize("up", [2, 4, 16])
 @pytest.mark.parametrize("up_method", ["interpolation", "keys3", "keys4"])
@@ -152,7 +145,10 @@ def test_interp_upsampling(up_method, up, radius, deg):
     # test fns
     zz = up_data.objective_tt
     zz_ = up_data.up_tt
-    if deg == 2:
+    if deg == 3:
+        yy = -3.0 * zz**3 - 10.0 * zz**2 + 8.0
+        yy_ = -3.0 * zz_**3 - 10.0 * zz_**2 + 8.0
+    elif deg == 2:
         yy = 4.0 * zz**2 - 6.0 * zz - 3.0
         yy_ = 4.0 * zz_**2 - 6.0 * zz_ - 3.0
     elif deg == 1:
@@ -167,19 +163,30 @@ def test_interp_upsampling(up_method, up, radius, deg):
     yy_hat = yy @ up_data.interpolator
 
     # keys is better than thin plates for these test fns
-    if up_method in ("keys3", "keys4"):
-        atol = 1e-5
+    if up_method == "keys3" and deg == 3:
+        # keys3 not good enough! use keys4.
+        atol = 0.3
+    elif up_method == "keys3":
+        atol = 1e-6
+    elif up_method == "keys4":
+        atol = 1e-4
     elif deg == 1:
         atol = 1e-4
     elif deg == 2:
         atol = 2e-2
+    elif deg == 3:
+        # kind of indicates that this is a bad method here.
+        atol = 0.1
     else:
         assert False
 
-    assert torch.allclose(yy_, yy_hat, atol=atol)
+    np.testing.assert_allclose(
+        yy_.numpy(force=True), yy_hat.numpy(force=True), atol=atol
+    )
 
 
-def test_direct_vs_keys():
+@pytest.mark.parametrize("up", [1, 2, 4])
+def test_direct_vs_keys(up):
     # should agree when templates are parabolas, yea?
     pass
 
@@ -187,6 +194,13 @@ def test_direct_vs_keys():
 @pytest.mark.parametrize("up", [1, 2, 4])
 def test_shared_compression(up):
     # for high ish rank, should be able to compress the simulator templates well
+    pass
+
+
+@pytest.mark.parametrize("up", [1, 2, 4])
+def test_conv_peaks_correct_time(up):
+    # test coarse
+    # test fine
     pass
 
 

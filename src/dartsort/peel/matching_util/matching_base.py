@@ -26,7 +26,6 @@ class MatchingTemplates(BModule):
 
     # these should be assigned in __init__. adding here for typing.
     spike_length_samples: int
-    pconv_db: "PconvBase"
 
     def __init_subclass__(cls):
         logger.dartsortverbose("Register templates type: %s", cls.template_type)
@@ -185,19 +184,25 @@ class ChunkTemplateData:
 
     # -- super handles below
 
-    def enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+    def enforce_refractory(self, mask, peaks, offset=0):
         if not peaks.n_spikes:
             return
-        self._enforce_refractory(mask, peaks, offset=offset, value=value)
+        self._enforce_refractory(mask, peaks, offset=offset, value=-torch.inf)
 
-    def forget_refractory(self, *args, **kwargs):
-        self.enforce_refractory(*args, **kwargs, value=0.0)
+    def forget_refractory(self, mask, peaks, offset=0):
+        if not peaks.n_spikes:
+            return
+        self._enforce_refractory(mask, peaks, offset=offset, value=0.0)
 
     def unsubtract(self, traces: Tensor, peaks: "MatchingPeaks"):
         return self.subtract(traces, peaks, sign=1)
 
-    def unsubtract_conv(self, *args, **kwargs):
-        return self.subtract_conv(*args, **kwargs, sign=1)
+    def unsubtract_conv(
+        self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256
+    ):
+        return self.subtract_conv(
+            conv=conv, peaks=peaks, padding=padding, batch_size=batch_size, sign=1
+        )
 
     def obj_from_conv(self, conv: Tensor, out=None) -> Tensor:
         return torch.add(self.obj_normsq[:, None]._neg_view(), conv, alpha=2.0, out=out)

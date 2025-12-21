@@ -418,7 +418,7 @@ class MatchingConfig:
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
     channel_selection_radius: float | None = 50.0
-    template_type: Literal["individual_compressed_upsampled", "drifty"] = (
+    template_type: Literal["individual_compressed_upsampled", "drifty", "debug"] = (
         "individual_compressed_upsampled"
     )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"

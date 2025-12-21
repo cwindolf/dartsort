@@ -407,7 +407,7 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # pyright: ignore[reportCallIssue]
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # type: ignore[reportCallIssue]
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(

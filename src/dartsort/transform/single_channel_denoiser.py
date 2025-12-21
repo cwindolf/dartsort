@@ -1,14 +1,15 @@
 import torch
-from dartsort.util.waveform_util import get_channels_in_probe, set_channels_in_probe
 from torch import nn
 
+from ..util.py_util import resolve_path
+from ..util.waveform_util import get_channels_in_probe, set_channels_in_probe
 from .transform_base import BaseWaveformDenoiser
 
 try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files
+        from importlib_resources import files  # type: ignore
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -105,6 +106,7 @@ class SingleChannelDenoiser(nn.Module):
         return self.out(x)
 
     def load(self, pretrained_path=default_pretrained_path):
+        pretrained_path = resolve_path(pretrained_path)
         checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint)
         self.eval()

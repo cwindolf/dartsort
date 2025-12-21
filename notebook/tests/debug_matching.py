@@ -7,9 +7,9 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: Python [conda env:dart]
+#     display_name: Python [conda env:dartsort]
 #     language: python
-#     name: conda-env-dart-py
+#     name: conda-env-dartsort-py
 # ---
 
 # %%
@@ -33,11 +33,15 @@ from dartsort.evaluate import simkit
 import dartsort.vis as dartvis
 from dartsort.util.testing_util import matching_debug_util
 
+from cycler import cycler
+plt.rc('axes', prop_cycle=cycler(color=list(map(tuple, dartvis.glasbey1024))))
+
 
 # %%
-test_dir = dartsort.resolve_path("~/scratch/test")
+# test_dir = dartsort.resolve_path("~/scratch/test")
+test_dir = dartsort.resolve_path("~/data/test")
 
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+# %% [markdown]
 # # Sim
 
 # %%
@@ -53,8 +57,8 @@ res = simkit.generate_simulation(
     noise_kind="white",
     white_noise_scale=0.0,
     # amplitude_jitter=0.0,
-    # temporal_jitter=1,
-    amplitude_jitter=0.1,
+    temporal_jitter=1,
+    amplitude_jitter=0.0,
     globally_refractory=True,
     # refractory_ms=1.0,
     refractory_ms=5.0,
@@ -69,15 +73,14 @@ traces = rec.get_traces()
 np.linalg.norm(res["templates"].templates, axis=(1, 2))
 
 # %%
-plt.plot(res["templates"].templates[:, :, 0].T)
-
-# %%
-plt.plot(traces[:1000])
+fig, axes = plt.subplots(ncols=2, figsize=(5, 2.5))
+axes[0].plot(res["templates"].templates[:, :, 0].T);
+axes[1].plot(traces[:1000])
 
 # %%
 res["sorting"]
 
-# %% [markdown] jp-MarkdownHeadingCollapsed=true
+# %% [markdown]
 # # Lo
 
 # %%
@@ -89,13 +92,12 @@ matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
         threshold=5.,
         template_type="drifty",
         up_method="keys4",
-
         
-        # template_temporal_upsampling_factor=1,
-        # amplitude_scaling_variance=0.0,
+        template_temporal_upsampling_factor=1,
+        amplitude_scaling_variance=0.0,
         
-        template_temporal_upsampling_factor=16,
-        amplitude_scaling_variance=0.1,
+        # template_temporal_upsampling_factor=16,
+        # amplitude_scaling_variance=0.1,
 
         template_svd_compression_rank=121,
         # cd_iter=5,
@@ -104,7 +106,8 @@ matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
     template_data=res["templates"],
 )
 matcher.precompute_models(test_dir / 'tmp', overwrite=True)
-matcher = matcher.cuda()
+if torch.cuda.is_available():
+    matcher = matcher.cuda()
 
 # %%
 # ctd = matcher.matching_templates.data_at_time(0.0, scaling=False, inv_lambda=float('inf'), scale_min=1.0, scale_max=1.0)
@@ -117,7 +120,7 @@ res["sorting"].times_samples[:10] - 42
 ctd.temporal_comps.shape, ctd.spatial_sing.shape
 
 # %%
-matcher.to(ctd.spatial_sing.device)
+matcher.to(ctd.spatial_sing.device);
 
 # %%
 matcher.max_iter = 100
@@ -145,62 +148,37 @@ ctd.temporal_comps.shape, ctd.temporal_comps_up.shape, ctd.spatial_sing.shape
 # )
 
 # %%
-(2 * chk['conv'].T - ctd.obj_normsq).max()
+chk['conv'].shape
 
 # %%
-chk['times_samples'][:10] - 42
-
-# %%
-chk["scalings"][:10]
-
-# %%
-chk["time_shifts"][:10]
-
-# %%
-chk["upsampling_indices"][:5]
-
-# %%
-chk["template_indices"][:5]
-
-# %%
-chk["labels"][:5]
-
-# %%
-res["sorting"].labels[:5]
-
-# %%
-res["sorting"].times_samples[:5] - 42
-
-# %%
-res["sorting"].jitter_ix[:5]
-
-# %%
-res["sorting"].scalings[:5]
-
-# %%
-res["sorting"].time_shifts[:5]
-
-# %%
-fig, ax = plt.subplots(figsize=(15, 4), layout='constrained')
+fig, (aa, ab, ac) = plt.subplots(figsize=(15, 4), sharex=True, nrows=3, layout='constrained')
 t0 = 0
 t1 = 1000
-ax.plot(traces[t0:t1])
-ax.plot(chk['residual'][t0:t1].numpy(force=True))
-for t, l in zip(res["sorting"].times_samples, res["sorting"].labels):
-    if t < t0:
-        continue
-    if t > t1:
-        break
-    ax.axvline(t - t0, c=dartvis.glasbey1024[l])
-for t, l in zip(chk['times_samples'].numpy(force=True), chk['labels'].numpy(force=True)):
-    if t < t0:
-        continue
-    if t > t1:
-        break
-    ax.axvline(t - t0, c='k', ls="--")
-    ax.axvline(t - t0, c=dartvis.glasbey1024[l], ls=":")
-plt.xticks(np.arange(t0, t1, 100))
-plt.grid();
+aa.plot(traces[t0:t1])
+aa.plot(chk['residual'][t0:t1].numpy(force=True))
+ab.plot(chk['conv'].T[t0:t1].numpy(force=True))
+ac.plot(chk['residual'][t0:t1].numpy(force=True))
+
+for ax, sh in zip((aa, ab, ac), (0, 42, 0)):
+    ax.grid();
+    ax.set_xticks(np.arange(t0, t1, 100))
+    for t, l in zip(res["sorting"].times_samples, res["sorting"].labels):
+        if t < t0:
+            continue
+        if t > t1:
+            break
+        ax.axvline(t - t0 + sh, c=dartvis.glasbey1024[l])
+    for t, l in zip(chk['times_samples'].numpy(force=True), chk['labels'].numpy(force=True)):
+        if t < t0:
+            continue
+        if t > t1:
+            break
+        ax.axvline(t - t0 + sh, c='k', ls="--")
+        ax.axvline(t - t0 + sh, c=dartvis.glasbey1024[l], ls=":")
+
+# %%
+
+# %%
 
 # %%
 fig, ax = plt.subplots(figsize=(15, 4), layout='constrained')

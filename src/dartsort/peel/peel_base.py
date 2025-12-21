@@ -922,7 +922,7 @@ except TypeError:
     PeelingBatchResult = dict  # type: ignore
 
 
-peeling_empty_result: PeelingBatchResult = MappingProxyType(dict(n_spikes=0))  # type: ignore
+peeling_empty_result = PeelingBatchResult(n_spikes=0)
 
 
 # -- helper functions and objects for parallelism

@@ -1,4 +1,7 @@
+from typing import cast
+
 import torch
+
 from dartsort.localize.localize_torch import localize_amplitude_vectors
 from dartsort.util.spiketorch import ptp
 
@@ -63,7 +66,7 @@ class Localization(BaseWaveformFeaturizer):
                     radius=self.radius,
                     n_channels_subset=self.n_channels_subset,
                     logbarrier=self.logbarrier,
-                    dtype=self.dtype,
+                    dtype=cast(torch.dtype, self.dtype),
                     model=self.localization_model,
                 )
                 localizations[sl, 0] = loc_result["x"]

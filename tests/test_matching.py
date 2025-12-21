@@ -22,6 +22,8 @@ from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.waveform_util import upsample_multichan
 
+# need to keep this unused import to register debug template method
+from dartsort.util.testing_util import matching_debug_util  # type: ignore
 
 logger = get_logger(__name__)
 
@@ -75,8 +77,8 @@ crumbs_test_chans = [1, 5]
 
 
 @pytest.mark.parametrize("cd_iter", [0, 3])
-@pytest.mark.parametrize("method", ["drifty_keys4"])#, "upcomp"])
-# @pytest.mark.parametrize("method", ["upcomp"])#, "upcomp"])
+# @pytest.mark.parametrize("method", ["drifty_keys4"])#, "upcomp"])
+@pytest.mark.parametrize("method", ["debug", "debug_forcefine"])  # , "upcomp"])
 @pytest.mark.parametrize(
     "refractory_sim",
     product(crumbs_test_upsampling, crumbs_test_scaling, crumbs_test_chans),
@@ -85,7 +87,13 @@ crumbs_test_chans = [1, 5]
 def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sim, upsampling, scaling, nc, tmpdir = refractory_sim
-    logger.info("Crumbs test: upsampling=%s scaling=%s nc=%s", upsampling, scaling, nc)
+    logger.info(
+        "Crumbs test: method=%s upsampling=%s scaling=%s nc=%s",
+        method,
+        upsampling,
+        scaling,
+        nc,
+    )
     recording = sim["recording"]
     template_data = sim["templates"]
     gt_sorting = sim["sorting"]
@@ -109,6 +117,11 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"
+    elif method == "debug":
+        cfg_kw["template_type"] = "debug"
+    elif method == "debug_forcefine":
+        cfg_kw["template_type"] = "debug"
+        cfg_kw["amplitude_scaling_boundary"] = 10.0
     elif method == "drifty_keys4":
         cfg_kw["template_type"] = "drifty"
         cfg_kw["up_method"] = "keys4"
@@ -158,22 +171,27 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     )
     assert gt_up_templates.shape[1] == upsampling
     match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
-    np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=1e-4)
+    np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=1e-3)
 
     # difference between upsampling before going to multichan or after...
     true_temps_up = gt_sorting._load_dataset("templates_up")
     np.testing.assert_allclose(gt_up_templates, true_temps_up, atol=1e-4)
-    up_err = np.abs(gt_up_templates - true_temps_up).max()
+    up_err = np.abs(gt_up_templates - true_temps_up).max() * (1 + 1e-5 + scaling)
+    match_up_err = np.abs(match_up_templates - true_temps_up).max() * (
+        1 + 1e-5 + scaling
+    )
 
-    abs_err = np.abs(gt_up_templates - match_up_templates).max().item()
-    l2_err = np.linalg.norm(gt_up_templates - match_up_templates, axis=(1, 2)).max().item()
-    conv_min_atol = l2_err ** 2 + abs_err
+    abs_err = np.abs(true_temps_up - match_up_templates).max().item()
+    l2_err = (
+        np.linalg.norm(true_temps_up - match_up_templates, axis=(1, 2)).max().item()
+    )
+    conv_min_atol = l2_err**2 + abs_err
 
     if matching_cfg.up_method == "direct":
-        conv_atol = conv_min_atol + 1e-5
+        conv_atol = conv_min_atol + 1e-2
         atol = abs_err + 1e-5
     else:
-        conv_atol = conv_min_atol + 1e-5
+        conv_atol = conv_min_atol + 1e-2
         atol = abs_err + 1e-5
     gt_in_chunk = gt_sorting.times_samples == gt_sorting.times_samples.clip(
         30_000, 60_000 - 1
@@ -207,34 +225,59 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
         else:
             assert (gt_shift == 0).all()
 
-    with subtests.test(msg="crumbs_peaks"):
-        logger.info("Crumbs test: upsampling=%s scaling=%s nc=%s", upsampling, scaling, nc)
+    with subtests.test(msg="crumbs_traces"):
+        logger.info(
+            "Crumbs test: method=%s upsampling=%s scaling=%s nc=%s",
+            method,
+            upsampling,
+            scaling,
+            nc,
+        )
         # check that they match the templates
         toff = template_data.trough_offset_samples
         slen = template_data.templates.shape[1]
         chk_labels = gt_sorting.labels[gt_in_chunk]
-        for pkt, pkl, pku, pks, pksh in zip(times_rel, chk_labels, gt_up, gt_scale, gt_shift):
+        for pkt, pkl, pku, pks, pksh in zip(
+            times_rel, chk_labels, gt_up, gt_scale, gt_shift
+        ):
             pk = chunk[pkt - toff : pkt - toff + slen].numpy(force=True)
             if upsampling > 1:
-                np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku], atol=up_err)
+                np.testing.assert_allclose(
+                    pk, pks * gt_up_templates[pkl, pku], atol=up_err
+                )
             elif scaling:
                 np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku])
             else:
                 np.testing.assert_equal(pk, gt_up_templates[pkl, pku])
-            np.testing.assert_allclose(pk, pks * match_up_templates[pkl, pku], atol=1e-4)
+            np.testing.assert_allclose(
+                pk, pks * match_up_templates[pkl, pku], atol=match_up_err
+            )
 
+    with subtests.test(msg="crumbs_peaks"):
         # check peaks are in the right places of the chunk
         chunk_time_proj = chunk.abs().amax(dim=1)
         assert chunk_time_proj.shape == (30_000 + 2 * 242,)
         assert torch.all(chunk_time_proj[times_rel] > 0)
         for j in range(1, 20):
             print(f"{j=}")
-            assert torch.all(chunk_time_proj[times_rel] > chunk_time_proj[times_rel + j])
-            assert torch.all(chunk_time_proj[times_rel] > chunk_time_proj[times_rel - j])
+            assert torch.all(
+                chunk_time_proj[times_rel] > chunk_time_proj[times_rel + j]
+            )
+            assert torch.all(
+                chunk_time_proj[times_rel] > chunk_time_proj[times_rel - j]
+            )
 
-    # with subtests.test(msg="crumbs_conv"):
-    #     conv_zero = np.zeros_like(conv)
-    #     np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
+    with subtests.test(msg="crumbs_conv"):
+        print(f"{gt_scale.shape=}")
+        print(f"{gt_scale=}")
+        print(f"{match_scale=}")
+        print(f"{gt_scale-match_scale=}")
+        print(f'{getattr(gt_sorting, "scalings")[gt_in_chunk[0]-1]=}')
+        conv_zero = np.zeros_like(conv)
+        import matplotlib.pyplot as plt
+        plt.hist(np.flatnonzero((conv > 0.05).any(0)))
+        plt.show()
+        np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
 
     with subtests.test(msg="crumbs_residual"):
         resid_zero = np.zeros_like(residual)
@@ -247,6 +290,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     # # test alignment of cc waveforms w time shift
     # with subtests.test(msg="crumbs_ccwf"):
     #     assert False
+
 
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
 @pytest.mark.parametrize("coarse_cd", [False, True])

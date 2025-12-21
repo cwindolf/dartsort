@@ -485,15 +485,17 @@ class EmbeddedNoise(torch.nn.Module):
     def device(self):
         return self.chans_arange.device
 
-    def mean_rc(self):
+    def mean_rc(self) -> torch.Tensor:
         """Return noise mean as a rank x channels tensor"""
         shape = self.rank, self.n_channels
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         elif self.mean_kind == "by_rank":
-            return self.mean[:, None].broadcast_to(shape).contiguous()
+            return cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         elif self.mean_kind == "full":
-            return self.mean
+            return cast(torch.Tensor, self.mean)
+        else:
+            assert False
 
     def marginal_mean(self):
         """Return noise mean as a rank x channels tensor"""
@@ -501,7 +503,7 @@ class EmbeddedNoise(torch.nn.Module):
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         if self.mean_kind == "by_rank":
-            return self.mean[:, None].broadcast_to(shape).contiguous()
+            return cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         if self.mean_kind == "full":
             return self.mean
         assert False
@@ -537,6 +539,7 @@ class EmbeddedNoise(torch.nn.Module):
     def full_covinvcov(self, device=None):
         if self._full_cov is None:
             self.marginal_covariance(device=device)
+        assert self._full_cov is not None
         if self._full_covinvcov is None:
             self._full_covinvcov = self._full_cov.solve(self.full_dense_cov())
         if device is not None:
@@ -546,6 +549,7 @@ class EmbeddedNoise(torch.nn.Module):
     def full_inverse(self, device=None):
         if self._full_cov is None:
             self.marginal_covariance(device=device)
+        assert self._full_cov is not None
         if self._full_inverse is None:
             self._full_inverse = self._full_cov.inverse().to_dense()
         if device is not None:

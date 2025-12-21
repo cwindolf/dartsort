@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 from dartsort.util import waveform_util
@@ -52,6 +53,7 @@ class SingleChannelTemplates(BaseWaveformModule):
         return self._needs_fit
 
     def initialize_spike_length_dependent_params(self):
+        assert self.spike_length_samples is not None
         self.template_trough = self.trough_offset_samples - self.alignment_padding
         self.template_length = self.spike_length_samples - 2 * self.alignment_padding
         self.register_buffer(
@@ -67,6 +69,7 @@ class SingleChannelTemplates(BaseWaveformModule):
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
             choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
+            choices = np.atleast_1d(choices)
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
@@ -77,8 +80,6 @@ class SingleChannelTemplates(BaseWaveformModule):
         assert singlechan_waveforms.ndim == 3
         assert singlechan_waveforms.shape[2] == 1
         singlechan_waveforms = singlechan_waveforms[:, :, 0]
-        print(f"{waveforms.requires_grad=}")
-        print(f"{singlechan_waveforms.requires_grad=}")
         templates = get_singlechan_centroids(
             singlechan_waveforms=singlechan_waveforms,
             trough_offset_samples=self.template_trough,
@@ -92,5 +93,5 @@ class SingleChannelTemplates(BaseWaveformModule):
             kmeanspp_initial=self.kmeanspp_initial,
             random_seed=self.random_state,
         )
-        self.templates[:] = templates
+        self.b.templates[:] = templates
         self._needs_fit = False

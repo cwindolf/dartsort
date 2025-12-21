@@ -197,7 +197,7 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     assert ((np.abs(reg_depths - pitch_reg_depths) // pitch) == 0).all()
     pitch_reg_pos = np.c_[drifted_pos[:, 0], pitch_reg_depths]
     d_pitch, i_pitch = kdt.query(
-        pitch_reg_pos, distance_upper_bound=max_distance, workers=-1
+        pitch_reg_pos, distance_upper_bound=max_distance, workers=-1  # type: ignore
     )
     assert (i_pitch < kdt.n).all()
     i_pitch: npt.NDArray[np.intp] = i_pitch
