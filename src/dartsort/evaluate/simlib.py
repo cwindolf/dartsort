@@ -201,12 +201,13 @@ def generate_geom(
     assert geom is not None
     geom[:, 0] += x_start
     geom[:, 1] += y_start
-    if sort:
-        if sort_x_down:
-            order = np.lexsort((geom * [-1, 1]).T)
-        else:
-            order = np.lexsort(geom.T)
-        geom = geom[order]
+    if sort_x_down:
+        order = np.lexsort((geom * [-1, 1]).T)
+    elif sort:
+        order = np.lexsort(geom.T)
+    else:
+        order = slice(None)
+    geom = geom[order]
     return geom
 
 

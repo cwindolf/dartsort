@@ -354,9 +354,13 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     "channel_index", data=self.segment.extract_channel_index
                 )
                 h5.create_dataset("times_samples", data=self.segment.times_samples)
+                times_samples = (
+                    self.segment.times_samples + self.segment.upsampling_offsets
+                )
+                h5.create_dataset("times_samples", data=times_samples)
                 h5.create_dataset(
                     "times_seconds",
-                    data=self.sample_index_to_time(self.segment.times_samples),
+                    data=self.sample_index_to_time(times_samples),
                 )
                 h5.create_dataset("labels", data=self.segment.labels)
                 h5.create_dataset("scalings", data=self.segment.scalings)
@@ -368,29 +372,21 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 # arrays discovered in batches below
                 f_dt = self.segment.features_dtype
+                inj_wf_shape = self.segment.inj_wf_shape
                 dataset_shapes = {
                     "localizations": ((3,), f_dt),
                     "displacements": ((), f_dt),
                     "ptp_amplitudes": ((), f_dt),
                     "channels": ((), np.int32),
-                    "collisioncleaned_waveforms": (self.segment.inj_wf_shape, f_dt),
+                    "collisioncleaned_waveforms": (inj_wf_shape, f_dt),
                     "time_shifts": ((), np.int16),
                 }
                 if save_injected_waveforms:
-                    dataset_shapes["injected_waveforms"] = (
-                        self.segment.inj_wf_shape,
-                        f_dt,
-                    )
+                    dataset_shapes["injected_waveforms"] = (inj_wf_shape, f_dt)
                 if save_noise_waveforms:
-                    dataset_shapes["noise_waveforms"] = (
-                        self.segment.inj_wf_shape,
-                        f_dt,
-                    )
+                    dataset_shapes["noise_waveforms"] = (inj_wf_shape, f_dt)
                 if save_collision_waveforms:
-                    dataset_shapes["collision_waveforms"] = (
-                        self.segment.inj_wf_shape,
-                        f_dt,
-                    )
+                    dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
                 if save_collidedness:
                     dataset_shapes["collidedness"] = ((), f_dt)
                 datasets = {

@@ -55,8 +55,12 @@ from ...util.logging_util import get_logger
 from ...util.job_util import ensure_computation_config
 from ...util.py_util import databag
 from ...util.waveform_util import upsample_singlechan_torch
-from .matching_base import ChunkTemplateData, MatchingPeaks, MatchingTemplates
-from .matchlib import subtract_precomputed_pconv
+from .matching_base import (
+    ChunkTemplateData,
+    MatchingPeaks,
+    MatchingTemplates,
+    subtract_precomputed_pconv,
+)
 
 
 logger = get_logger(__name__)
@@ -321,40 +325,47 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         )
 
     def subtract(self, traces: Tensor, peaks: "MatchingPeaks", sign: int = -1):
-        batch_templates = torch.einsum(
-            "n,nrc,nrt->ntc",
-            peaks.scalings,
-            self.spatial_sing[peaks.template_indices],
-            self.up_major_temporal_comps[peaks.upsampling_indices],
-        )
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
+        assert peaks.template_inds is not None
+        if peaks.up_inds is not None:
+            tempc = self.up_major_temporal_comps[peaks.up_inds]
+        else:
+            tempc = self.temporal_comps
+            tempc = tempc[None].broadcast_to(peaks.n_spikes, *tempc.shape)
+        if peaks.scalings is None:
+            batch_templates = torch.bmm(
+                tempc.mT, self.spatial_sing[peaks.template_inds]
+            )
+        else:
+            tempc = tempc * peaks.scalings[:, None, None]
+            batch_templates = torch.bmm(
+                tempc.mT, self.spatial_sing[peaks.template_inds]
+            )
         n, t, c = batch_templates.shape
         time_ix = peaks.times[:, None] + self.time_ix[None, :]
-        assert traces.shape[1] == c
+        assert traces.shape[1] in (c, c + 1)
         assert time_ix.shape == (n, t)
         batch_templates = batch_templates.view(n * t, c)
         time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
         if sign == -1:
-            traces.scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
+            traces[:, :c].scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
         elif sign == 1:
-            traces.scatter_add_(dim=0, src=batch_templates, index=time_ix)
+            traces[:, :c].scatter_add_(dim=0, src=batch_templates, index=time_ix)
         else:
             assert False
 
     def subtract_conv(
         self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
     ):
-        assert conv.shape[0] == self.pconv.shape[0]
-        assert sign in (-1, 1)
-        padded_lags = padding + self.conv_lags
         subtract_precomputed_pconv(
             conv=conv,
             pconv=self.pconv,
-            template_indices=peaks.template_indices,
-            upsampling_indices=peaks.upsampling_indices,
-            scalings=peaks.scalings,
-            times=peaks.times,
-            padded_conv_lags=padded_lags,
-            neg=sign == -1,
+            peaks=peaks,
+            padding=padding,
+            conv_lags=self.conv_lags,
+            sign=sign,
             batch_size=batch_size,
         )
 
@@ -365,25 +376,42 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         channel_index: Tensor,
         add_into: Tensor | None = None,
     ):
+        if not peaks.n_spikes:
+            return add_into
+        assert peaks.times is not None
+        assert peaks.template_inds is not None
         spatial = self.padded_spatial_sing[
-            peaks.template_indices[:, None, None],
+            peaks.template_inds[:, None, None],
             self.rank_ix[None, :, None],
             channel_index[channels, None, :],
         ]
-        temporal = self.up_major_temporal_comps[peaks.upsampling_indices]
-        temporal.mul_(peaks.scalings[:, None, None])
-        if add_into is None:
-            return temporal.mT.bmm(spatial)
+        if peaks.scalings is not None:
+            spatial.mul_(peaks.scalings[:, None, None])
+        if peaks.up_inds is not None:
+            tempc = self.up_major_temporal_comps[peaks.up_inds]
         else:
-            return add_into.baddbmm_(temporal.mT, spatial)
+            tempc = self.temporal_comps
+            tempc = tempc[None].broadcast_to(peaks.n_spikes, *tempc.shape)
+        if add_into is None:
+            return tempc.mT.bmm(spatial)
+        else:
+            return add_into.baddbmm_(tempc.mT, spatial)
 
     def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
+        assert peaks.obj_template_inds is not None
         time_ix = peaks.times[:, None] + (self.refrac_ix[None, :] + offset)
-        row_ix = peaks.objective_template_indices[:, None]
+        row_ix = peaks.obj_template_inds[:, None]
         mask[row_ix, time_ix] = value
 
     def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        return self.up_trough_shifts[peaks.template_indices, peaks.upsampling_indices]
+        if peaks.up_inds is None:
+            assert self.up_trough_shifts.shape[1] == 1
+            return self.up_trough_shifts[peaks.template_inds][:, 0]
+        else:
+            return self.up_trough_shifts[peaks.template_inds, peaks.up_inds]
 
     def fine_match(
         self,
@@ -395,10 +423,12 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     ) -> "MatchingPeaks":
         if not self.needs_fine_pass:
             return peaks
+        if not peaks.n_spikes:
+            return peaks
         if self.up_data is not None:
-            scalings, upsampling_indices, time_shifts, objs = _upsampling_fine_match(
+            scalings, up_inds, time_shifts, objs = _upsampling_fine_match(
                 conv=conv,
-                template_indices=peaks.template_indices,
+                template_inds=peaks.template_inds,
                 times=peaks.times,
                 padding=padding,
                 normsq=self.obj_normsq,
@@ -415,14 +445,16 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         else:
             del residual
             raise NotImplementedError
-            # scalings, upsampling_indices, time_shifts, objs = _direct_fine_match()
+            # scalings, up_inds, time_shifts, objs = _direct_fine_match()
         assert self.scaling == (scalings is not None)
-        if scalings is not None:
-            peaks.scalings.copy_(scalings)
-        peaks.upsampling_indices.copy_(upsampling_indices)
-        peaks.scores.copy_(objs)
-        peaks.times.add_(time_shifts)
-        return peaks
+        return MatchingPeaks(
+            times=peaks.times + time_shifts,
+            obj_template_inds=peaks.obj_template_inds,
+            template_inds=peaks.template_inds,
+            up_inds=up_inds,
+            scalings=scalings,
+            scores=objs,
+        )
 
     def reconstruct_up_templates(self):
         return torch.einsum(
@@ -609,7 +641,6 @@ def convolve_lowrank_shared(
     return out
 
 
-
 # -- fine matching
 
 
@@ -617,7 +648,7 @@ def convolve_lowrank_shared(
 def _upsampling_fine_match(
     *,
     conv: Tensor,
-    template_indices: Tensor,
+    template_inds: Tensor,
     times: Tensor,
     padding: int,
     normsq: Tensor,
@@ -633,7 +664,7 @@ def _upsampling_fine_match(
 ) -> tuple[Tensor | None, Tensor, Tensor, Tensor]:
     # extract conv snippets
     conv_snips = conv[
-        template_indices[:, None], times[:, None] + objective_window + padding
+        template_inds[:, None], times[:, None] + objective_window + padding
     ]
 
     # upsample conv
@@ -644,12 +675,12 @@ def _upsampling_fine_match(
     # compute objective
     if scaling:
         b = conv_up + inv_lambda
-        a = normsq[template_indices] + inv_lambda
+        a = normsq[template_inds] + inv_lambda
         scalings = (b / a[:, None]).clamp_(scale_min, scale_max)
         obj_up = 2.0 * scalings * b - scalings.square() * a[:, None] - inv_lambda
     else:
         scalings = None
-        obj_up = 2.0 * conv_up - normsq[template_indices, None]
+        obj_up = 2.0 * conv_up - normsq[template_inds, None]
 
     # get best match and figure out what to do
     objs, up_best = obj_up.max(dim=1)

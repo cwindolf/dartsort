@@ -42,8 +42,8 @@ class EnforceDecrease(BaseWaveformDenoiser):
             "parents_index",
             torch.tensor(
                 make_parents_index(
-                    self.geom.numpy(force=True),
-                    self.channel_index.numpy(force=True),
+                    self.b.geom.numpy(force=True),
+                    self.b.channel_index.numpy(force=True),
                 )
             ),
             persistent=False,
@@ -59,7 +59,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
             return waveforms
         n = waveforms.shape[0]
         assert (n,) == channels.shape
-        assert waveforms.shape[2] == self.parents_index.shape[1]
+        assert waveforms.shape[2] == self.b.parents_index.shape[1]
 
         # get peak to peak amplitudes -- (N, c) shaped
         ptps = spiketorch.ptp(waveforms)
@@ -79,7 +79,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
             be = min(n, bs + self.batch_size)
             parent_ptps = pad_ptps[
                 torch.arange(bs, be)[:, None, None],
-                self.parents_index[channels[bs:be]],
+                self.b.parents_index[channels[bs:be]],
             ]
             torch.amin(parent_ptps, dim=2, out=parent_min_ptps[bs:be])
 

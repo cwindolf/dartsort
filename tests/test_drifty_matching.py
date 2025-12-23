@@ -12,17 +12,6 @@ test_K = 11
 test_template_nc = [1, 4]
 
 
-@pytest.fixture
-def parabolic_templates():
-    rg = np.random.default_rng(0)
-    pass
-
-
-@pytest.fixture
-def hires_pconv(hires_templates):
-    pass
-
-
 @pytest.mark.parametrize("up", [1, 2, 4, 16])
 @pytest.mark.parametrize("K", [1, 2, 5])
 def test_shared_temporal_pconv(K, up):
@@ -183,35 +172,6 @@ def test_interp_upsampling(up_method, up, radius, deg):
     np.testing.assert_allclose(
         yy_.numpy(force=True), yy_hat.numpy(force=True), atol=atol
     )
-
-
-@pytest.mark.parametrize("up", [1, 2, 4])
-def test_direct_vs_keys(up):
-    # should agree when templates are parabolas, yea?
-    pass
-
-
-@pytest.mark.parametrize("up", [1, 2, 4])
-def test_shared_compression(up):
-    # for high ish rank, should be able to compress the simulator templates well
-    pass
-
-
-@pytest.mark.parametrize("up", [1, 2, 4])
-def test_conv_peaks_correct_time(up):
-    # test coarse
-    # test fine
-    pass
-
-
-@pytest.mark.parametrize("up", [1, 2, 4])
-def test_drift_interpolation(up):
-    pass
-
-
-@pytest.mark.parametrize("up", [1, 2, 4])
-def test_static_pconv(up):
-    pass
 
 
 @pytest.mark.parametrize("up", [1, 2, 4])

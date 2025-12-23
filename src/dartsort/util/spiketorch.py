@@ -392,15 +392,26 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
     )
 
 
-def argrelmax(x, radius, threshold, exclude_edge=True):
-    x1 = F.max_pool1d(
-        x[None, None], kernel_size=2 * radius + 1, padding=radius, stride=1
-    )[0, 0]
-    x1.masked_fill_(x < x1, 0.0)
+@torch.jit.script
+def argrelmax(
+    *,
+    x: Tensor,
+    radius: int,
+    threshold: float,
+    arange: Tensor,
+):
+    x1, inds = F.max_pool1d_with_indices(
+        x[None, None], kernel_size=(2 * radius + 1,), padding=(radius,), stride=(1,)
+    )
+    x1 = x1[0, 0]
+    inds = inds[0, 0]
+    # exclude non-maxima and exact duplicates
+    mask = torch.logical_or(x < x1, inds != arange)
+    x1.masked_fill_(mask, 0.0)
     F.threshold(x1, threshold, 0.0, inplace=True)
-    if exclude_edge:
-        x1[0].zero_()
-        x1[-1].zero_()
+    # exclude edge
+    x1[0].zero_()
+    x1[-1].zero_()
     ix = torch.nonzero(x1)[:, 0]
     return ix
 

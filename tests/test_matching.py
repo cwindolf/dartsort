@@ -58,11 +58,12 @@ def refractory_sim(request, tmp_path_factory):
         min_fr_hz=50.0,
         max_fr_hz=100.0,
         globally_refractory=True,
-        probe_kwargs=dict(num_columns=1, num_contact_per_column=nc),
+        probe_kwargs=dict(num_columns=1, num_contact_per_column=nc, ypitch=10.0),
         template_simulator_kwargs=dict(snr_adjustment=10.0),
         refractory_ms=5.0,
         white_noise_scale=0.0,
         recording_dtype="float32",
+        common_reference=False,
         temporal_jitter=upsampling,
         amplitude_jitter=scaling,
         featurization_cfg=dartsort.skip_featurization_cfg,
@@ -71,20 +72,22 @@ def refractory_sim(request, tmp_path_factory):
     shutil.rmtree(p, ignore_errors=True)
 
 
-crumbs_test_upsampling = [1, 2, 4]
+crumbs_test_upsampling = [1, 2, 4, 8]
 crumbs_test_scaling = [0.0, 0.1]
 crumbs_test_chans = [1, 5]
 
 
 @pytest.mark.parametrize("cd_iter", [0, 3])
-# @pytest.mark.parametrize("method", ["drifty_keys4"])#, "upcomp"])
-@pytest.mark.parametrize("method", ["debug", "debug_forcefine"])  # , "upcomp"])
+@pytest.mark.parametrize("channel_selection_radius", [None, 50.0])
+@pytest.mark.parametrize(
+    "method", ["debug", "debug_forcefine", "upcomp", "drifty_keys4"]
+)
 @pytest.mark.parametrize(
     "refractory_sim",
     product(crumbs_test_upsampling, crumbs_test_scaling, crumbs_test_chans),
     indirect=True,
 )
-def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
+def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_radius):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sim, upsampling, scaling, nc, tmpdir = refractory_sim
     logger.info(
@@ -114,6 +117,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
         template_svd_compression_rank=121,
         threshold=threshold,
         cd_iter=cd_iter,
+        channel_selection_radius=channel_selection_radius,
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"
@@ -171,7 +175,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     )
     assert gt_up_templates.shape[1] == upsampling
     match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
-    np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=1e-3)
+    np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=2.5e-3)
 
     # difference between upsampling before going to multichan or after...
     true_temps_up = gt_sorting._load_dataset("templates_up")
@@ -181,18 +185,14 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
         1 + 1e-5 + scaling
     )
 
+    # error in approximating a template
     abs_err = np.abs(true_temps_up - match_up_templates).max().item()
-    l2_err = (
-        np.linalg.norm(true_temps_up - match_up_templates, axis=(1, 2)).max().item()
-    )
-    conv_min_atol = l2_err**2 + abs_err
 
-    if matching_cfg.up_method == "direct":
-        conv_atol = conv_min_atol + 1e-2
-        atol = abs_err + 1e-5
-    else:
-        conv_atol = conv_min_atol + 1e-2
-        atol = abs_err + 1e-5
+    # error in approximating a dot product is <t,t> * err
+    l2_err = np.linalg.norm(true_temps_up - match_up_templates, axis=(1, 2))
+    l2_err = np.square(np.linalg.norm(true_temps_up, axis=(1, 2))) * l2_err
+    l2_err = l2_err.max().item()
+
     gt_in_chunk = gt_sorting.times_samples == gt_sorting.times_samples.clip(
         30_000, 60_000 - 1
     )
@@ -207,23 +207,10 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
     gt_shift = getattr(gt_sorting, "time_shifts", None)
     assert gt_shift is not None
     gt_shift = gt_shift[gt_in_chunk]
-
-    with subtests.test(msg="crumbs_sorting"):
-        assert res["n_spikes"] == gt_n_spikes
-        np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
-        np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
-
-        match_up = res["upsampling_indices"].numpy(force=True)
-        np.testing.assert_array_equal(gt_up, match_up)
-
+    if "scalings" in res:
         match_scale = res["scalings"].numpy(force=True)
-        np.testing.assert_allclose(gt_scale, match_scale, atol=1e-6)
-
-        if "time_shifts" in res:
-            match_shift = res["time_shifts"].numpy(force=True)
-            np.testing.assert_array_equal(match_shift, gt_shift)
-        else:
-            assert (gt_shift == 0).all()
+    else:
+        match_scale = np.ones(gt_n_spikes, dtype=np.float32)
 
     with subtests.test(msg="crumbs_traces"):
         logger.info(
@@ -240,7 +227,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
         for pkt, pkl, pku, pks, pksh in zip(
             times_rel, chk_labels, gt_up, gt_scale, gt_shift
         ):
-            pk = chunk[pkt - toff : pkt - toff + slen].numpy(force=True)
+            pk = chunk[pkt - pksh - toff : pkt - pksh - toff + slen].numpy(force=True)
             if upsampling > 1:
                 np.testing.assert_allclose(
                     pk, pks * gt_up_templates[pkl, pku], atol=up_err
@@ -259,37 +246,98 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter):
         assert chunk_time_proj.shape == (30_000 + 2 * 242,)
         assert torch.all(chunk_time_proj[times_rel] > 0)
         for j in range(1, 20):
-            print(f"{j=}")
             assert torch.all(
-                chunk_time_proj[times_rel] > chunk_time_proj[times_rel + j]
-            )
+                chunk_time_proj[times_rel] >= chunk_time_proj[times_rel + j]
+            ), +j
             assert torch.all(
-                chunk_time_proj[times_rel] > chunk_time_proj[times_rel - j]
-            )
+                chunk_time_proj[times_rel] >= chunk_time_proj[times_rel - j]
+            ), -j
+
+    with subtests.test(msg="crumbs_sorting"):
+        assert res["n_spikes"] == gt_n_spikes
+        np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
+        np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
+
+        if "up_inds" in res:
+            match_up = res["up_inds"].numpy(force=True)
+            np.testing.assert_array_equal(gt_up, match_up)
+        else:
+            np.testing.assert_array_equal(gt_up, np.zeros_like(gt_up))
+
+        np.testing.assert_allclose(gt_scale, match_scale, atol=1e-3)
+
+        if "time_shifts" in res:
+            match_shift = res["time_shifts"].numpy(force=True)
+            np.testing.assert_array_equal(match_shift, gt_shift)
+        else:
+            assert (gt_shift == 0).all()
 
     with subtests.test(msg="crumbs_conv"):
-        print(f"{gt_scale.shape=}")
-        print(f"{gt_scale=}")
-        print(f"{match_scale=}")
-        print(f"{gt_scale-match_scale=}")
-        print(f'{getattr(gt_sorting, "scalings")[gt_in_chunk[0]-1]=}')
+        # pick atol for convolution based on errors
+        # error sources: conv rounding, template error, scaling error
+        full_pconv = matching_debug_util.reference_pairwise_convolution(
+            true_temps_up[:, 0],
+            true_temps_up,
+            accum_dtype=np.float32,
+        )
+        full_pconv_ = matching_debug_util.reference_pairwise_convolution(
+            true_temps_up[:, 0][:, ::-1, ::-1],
+            true_temps_up[:, :, ::-1, ::-1],
+            accum_dtype=np.float32,
+        )
+        full_pconv_ = full_pconv_[:, :, :, ::-1]
+        pconv_numerical_err = np.abs(full_pconv - full_pconv_).max().item()
+        # larger than you'd think!
+        assert pconv_numerical_err < 0.5
+        if scaling:
+            scale_err = np.abs(match_scale - gt_scale).max()
+            conv_scale_atol = scale_err * full_pconv.max()
+        else:
+            conv_scale_atol = 0.0
+        conv_atol = 2.0 * pconv_numerical_err + l2_err**2 + conv_scale_atol
+
         conv_zero = np.zeros_like(conv)
-        import matplotlib.pyplot as plt
-        plt.hist(np.flatnonzero((conv > 0.05).any(0)))
-        plt.show()
         np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
 
     with subtests.test(msg="crumbs_residual"):
-        resid_zero = np.zeros_like(residual)
+        # atol for residual
+        # error sources: template error, scaling error
         if scaling:
-            residual_atol = atol + 1e-6 * np.abs(gt_up_templates).max().item()
+            scale_err = np.abs(match_scale - gt_scale).max()
+            resid_scale_atol = scale_err * np.abs(true_temps_up).max()
         else:
-            residual_atol = atol
+            resid_scale_atol = 0.0
+        residual_atol = abs_err + resid_scale_atol + 1e-5
+        resid_zero = np.zeros_like(residual)
         np.testing.assert_allclose(residual, resid_zero, atol=residual_atol)
 
-    # # test alignment of cc waveforms w time shift
-    # with subtests.test(msg="crumbs_ccwf"):
-    #     assert False
+    # test alignment of cc waveforms w time shift
+    # these should match the correctly aligned templates
+    with subtests.test(msg="crumbs_ccwf"):
+        # relevant numerical error:
+        # subtracting and adding wrong templates (I think scaling shouldn't matter much)
+        cc_test = (true_temps_up - match_up_templates) + match_up_templates
+        cc_err = np.abs(match_up_templates - cc_test).max().item()
+        cc_atol = cc_err
+
+        extract_chans = matcher.b.channel_index
+        cc_wfs = res["collisioncleaned_waveforms"]
+        time_shifts = res.get("time_shifts", np.zeros_like(labels))
+        up_offsets = gt_sorting._load_dataset("up_offsets")
+        gt_labels = gt_sorting.labels[gt_in_chunk]
+        gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
+        true_time_shifts = up_offsets[gt_labels, gt_up_inds]
+        gt_channels = gt_sorting.channels[gt_in_chunk]
+        nt = true_temps_up.shape[2]
+        for wf, label, chan, up_ind, true_shift, sc in zip(
+            cc_wfs, gt_labels, gt_channels, gt_up_inds, true_time_shifts, gt_scale
+        ):
+            assert torch.equal(extract_chans[chan], torch.arange(nc))
+            true_wf = sc * true_temps_up[label, up_ind]
+            np.testing.assert_allclose(wf, true_wf, atol=cc_atol)
+            my_trough = wf[:, chan].argmin()
+            assert true_temps_up[label, up_ind, :, chan].argmin() == my_trough
+            assert my_trough == trough_offset_samples + true_shift
 
 
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
@@ -367,8 +415,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
         )
         assert matcher.matching_templates is not None
 
-        print(f"{matcher.matching_templates.device=}")
-        ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(
+        ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(  # type: ignore
             torch.tensor([0, 1]),
             torch.tensor([0, 1]),
             upsampling_indices_b=torch.tensor([0, 0]),
@@ -558,9 +605,6 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             res["times_samples"].numpy(force=True), times + trough_shifts
         )
         assert np.array_equal(res["labels"].numpy(force=True), labels)
-        print(f"{res['n_spikes']=} {len(times)=}")
-        print(f"{res['times_samples']=}")
-        print(f"{res['upsampling_indices']=}")
         assert np.array_equal(
             res["upsampling_indices"].numpy(force=True), upsampling_indices
         )

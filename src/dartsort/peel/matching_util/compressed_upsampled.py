@@ -320,7 +320,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             obj_shifts = shifts
             obj_spatial_sing = padded_spatial_sing[..., :-1]
             obj_normsq = normsq
-        print(f"{self.b.cup_trough_shifts=}")
 
         return CompressedUpsampledChunkTemplateData(
             coarse_objective=self.coarse_objective,
@@ -422,18 +421,30 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         )
 
     def subtract_conv(self, conv, peaks, padding=0, batch_size=256, sign=-1):
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
+        assert peaks.template_inds is not None
         for batch_start in range(0, peaks.n_spikes, batch_size):
             batch_end = min(batch_start + batch_size, peaks.n_spikes)
-            temp_inds_b = peaks.template_indices[batch_start:batch_end]
+            temp_inds_b = peaks.template_inds[batch_start:batch_end]
+            if peaks.up_inds is None:
+                up_inds = torch.zeros_like(temp_inds_b)
+            else:
+                up_inds = peaks.up_inds[batch_start:batch_end]
+            if peaks.scalings is None:
+                scalings = None
+            else:
+                scalings = peaks.scalings[batch_start:batch_end]
             template_indices_a, pconvs, which_b = self.pconv_db.query(
                 template_indices_a=None,
                 template_indices_b=temp_inds_b,
-                upsampling_indices_b=peaks.upsampling_indices[batch_start:batch_end],
+                upsampling_indices_b=up_inds,
                 shifts_a=self.shifts_a,
                 shifts_b=self.shifts_b[temp_inds_b]
                 if self.shifts_b is not None
                 else None,
-                scalings_b=peaks.scalings[batch_start:batch_end],
+                scalings_b=scalings,
             )
             pconvs = pconvs.to(conv.device)
             times_sub = peaks.times[batch_start:batch_end][which_b]
@@ -442,21 +453,36 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
 
     def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        return self.cup_trough_shifts[
-            self.cup_map[peaks.template_indices, peaks.upsampling_indices]
-        ]
+        if peaks.up_inds is None:
+            assert self.cup_map.shape[1] == 1
+            compressed_up_inds = self.cup_map[peaks.template_inds][:, 0]
+        else:
+            compressed_up_inds = self.cup_map[peaks.template_inds, peaks.up_inds]
+        return self.cup_trough_shifts[compressed_up_inds]
 
     def subtract(self, traces, peaks, sign=-1):
         """Subtract templates from traces."""
-        compressed_up_inds = self.cup_map[
-            peaks.template_indices, peaks.upsampling_indices
-        ]
-        batch_templates = torch.einsum(
-            "n,nrc,ntr->ntc",
-            peaks.scalings,
-            self.spatial_sing[peaks.template_indices],
-            self.cup_temporal[compressed_up_inds],
-        )
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
+        assert peaks.template_inds is not None
+        if peaks.up_inds is None:
+            assert self.cup_map.shape[1] == 1
+            compressed_up_inds = self.cup_map[peaks.template_inds][:, 0]
+        else:
+            compressed_up_inds = self.cup_map[peaks.template_inds, peaks.up_inds]
+        if peaks.scalings is not None:
+            batch_templates = torch.einsum(
+                "n,nrc,ntr->ntc",
+                peaks.scalings,
+                self.spatial_sing[peaks.template_inds],
+                self.cup_temporal[compressed_up_inds],
+            )
+        else:
+            batch_templates = torch.bmm(
+                self.cup_temporal[compressed_up_inds],
+                self.spatial_sing[peaks.template_inds],
+            )
         time_ix = peaks.times[:, None, None] + self.time_ix[None, :, None]
         add_at_(
             traces, (time_ix, self.chan_ix[None, None, :]), batch_templates, sign=sign
@@ -482,14 +508,14 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         Returns
         -------
         time_shifts : Optional[array]
-        upsampling_indices : Optional[array]
+        up_inds : Optional[array]
         scalings : Optional[array]
-        template_indices : array
+        template_inds : array
         objs : array
         """
-        print(f"{self.needs_fine_pass=}")
-        print(f"{self.trough_shifts(peaks)=}")
         if not self.needs_fine_pass:
+            return peaks
+        if not peaks.n_spikes:
             return peaks
         del conv, padding  # unused
 
@@ -508,39 +534,44 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             # TODO best I came up with, but it still syncs
             # can refactor with a jagged/nested tensor. not prioritizing since
             # grouped is rare for now.
-            superres_ix = self.coarse_index[peaks.template_indices]
+            superres_ix = self.coarse_index[peaks.template_inds]
             dup_ix, column_ix = (superres_ix < self.n_templates).nonzero(as_tuple=True)
-            template_indices = superres_ix[dup_ix, column_ix]
+            template_inds = superres_ix[dup_ix, column_ix]
             convs = torch.einsum(
                 "ntr,ntc,nrc->n",
-                self.temporal_comps[template_indices],
+                self.temporal_comps[template_inds],
                 residual_snips[dup_ix],
-                self.spatial_sing[template_indices],
+                self.spatial_sing[template_inds],
             )
-            norms = self.normsq[template_indices]
+            norms = self.normsq[template_inds]
             objs = convs.new_full(superres_ix.shape, -torch.inf)
             objs[dup_ix, column_ix] = torch.add(norms._neg_view(), convs, alpha=2.0)
             objs, best_column_ix = objs.max(dim=1)
             row_ix = torch.arange(best_column_ix.numel(), device=best_column_ix.device)
-            template_indices = superres_ix[row_ix, best_column_ix]
+            template_inds = superres_ix[row_ix, best_column_ix]
         else:
-            template_indices = peaks.template_indices
-            norms = self.normsq[template_indices]
+            template_inds = peaks.template_inds
+            norms = self.normsq[template_inds]
             objs = peaks.scores
 
         if not self.upsampling:
-            peaks.template_indices.copy_(template_indices)
-            peaks.scores.copy_(objs)
-            return peaks
+            return MatchingPeaks(
+                times=peaks.times,
+                obj_template_inds=peaks.obj_template_inds,
+                template_inds=template_inds,
+                scalings=peaks.scalings,
+                scores=objs
+            )
         assert residual_snips is not None
+        assert template_inds is not None
 
         # get the objective for snips now and one step back
         # TODO: jagged tensor? no-compression mode?
-        comp_up_ix = self.cup_index[template_indices]
+        comp_up_ix = self.cup_index[template_inds]
         dup_ix, column_ix = (comp_up_ix < self.comp_up_max).nonzero(as_tuple=True)
         comp_up_indices = comp_up_ix[dup_ix, column_ix]
         temps_t = self.cup_temporal[comp_up_indices]
-        temps_s = self.spatial_sing[template_indices[dup_ix]]
+        temps_s = self.spatial_sing[template_inds[dup_ix]]
         snips_dup_dt = residual_snips[dup_ix].unfold(1, self.spike_length_samples, 1)
         convs = torch.einsum("ndct,ntr,nrc->nd", snips_dup_dt, temps_t, temps_s)
         norms = norms[dup_ix]
@@ -565,15 +596,13 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             dim=1, indices=best_column_ix[:, None]
         )
         comp_up_indices = comp_up_indices[:, 0]
-        upsampling_indices = self.cup_ix_to_up_ix[comp_up_indices]
+        up_inds = self.cup_ix_to_up_ix[comp_up_indices]
 
         # prev convs were one step earlier
         time_shifts = comp_up_ix.new_full(comp_up_ix.shape, 0)
         time_shifts[dup_ix, column_ix] += better_dt.long()
         time_shifts = time_shifts.take_along_dim(dim=1, indices=best_column_ix[:, None])
         time_shifts = time_shifts[:, 0]
-        print(f"{time_shifts=}")
-        print(f"{self.trough_shifts(peaks)=}")
         if self.scaling:
             assert scalings is not None
             scalings_ = scalings.take_along_dim(indices=better_dt[:, None], dim=1)[:, 0]
@@ -581,14 +610,17 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             scalings[dup_ix, column_ix] = scalings_
             scalings = scalings.take_along_dim(dim=1, indices=best_column_ix[:, None])
             scalings = scalings[:, 0]
-
-        peaks.times.add_(time_shifts)
-        if scalings is not None:
-            peaks.scalings.copy_(scalings)
-        peaks.upsampling_indices.copy_(upsampling_indices)
-        peaks.template_indices.copy_(template_indices)
-        peaks.scores.copy_(objs)
-        return peaks
+        
+        assert peaks.times is not None
+        times = peaks.times + time_shifts
+        return MatchingPeaks(
+            times=times,
+            obj_template_inds=peaks.obj_template_inds,
+            template_inds=template_inds,
+            up_inds=up_inds,
+            scalings=scalings,
+            scores=objs,
+        )
 
     def get_clean_waveforms(
         self,
@@ -597,13 +629,21 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         channel_index: Tensor,
         add_into: Tensor | None = None,
     ):
+        if not peaks.n_spikes:
+            return add_into
+        assert peaks.template_inds is not None
         spatial = self.padded_spatial_sing[
-            peaks.template_indices[:, None, None],
+            peaks.template_inds[:, None, None],
             self.rank_ix[None, :, None],
             channel_index[channels][:, None, :],
         ]
-        spatial.mul_(peaks.scalings[:, None, None])
-        comp_up_ix = self.cup_map[peaks.template_indices, peaks.upsampling_indices]
+        if peaks.scalings is not None:
+            spatial.mul_(peaks.scalings[:, None, None])
+        if peaks.up_inds is None:
+            assert self.cup_map.shape[1] == 1
+            comp_up_ix = self.cup_map[peaks.template_inds][:, 0]
+        else:
+            comp_up_ix = self.cup_map[peaks.template_inds, peaks.up_inds]
         temporal = self.cup_temporal[comp_up_ix]
         if add_into is None:
             return temporal.bmm(spatial)
@@ -611,16 +651,22 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             return add_into.baddbmm_(temporal, spatial)
 
     def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
         time_ix = peaks.times[:, None] + (self.refrac_ix[None, :] + offset)
         if self.coarse_objective:
-            row_ix = peaks.objective_template_indices[:, None]
+            assert peaks.obj_template_inds is not None
+            row_ix = peaks.obj_template_inds[:, None]
         elif self.grouping:
+            assert peaks.template_inds is not None
             assert self.group_index is not None
-            row_ix = self.group_index[peaks.template_indices]
+            row_ix = self.group_index[peaks.template_inds]
             row_ix = row_ix[:, :, None]
             time_ix = time_ix[:, None, :]
         else:
-            row_ix = peaks.template_indices[:, None]
+            assert peaks.template_inds is not None
+            row_ix = peaks.template_inds[:, None]
         mask[row_ix, time_ix] = value
 
     def reconstruct_up_templates(self):

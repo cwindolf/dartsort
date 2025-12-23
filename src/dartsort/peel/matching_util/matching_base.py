@@ -1,18 +1,18 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence, Self
+from typing import Literal, Self, Sequence, cast
 
+import torch
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording
-import torch
 from torch import Tensor
 
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
-from ...util.logging_util import get_logger, DARTSORTVERBOSE
-from ...util.spiketorch import grab_spikes, ptp, argrelmax
+from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.py_util import databag
+from ...util.spiketorch import argrelmax, grab_spikes, ptp
 from ...util.torch_util import BModule
-
 
 logger = get_logger(__name__)
 _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -162,7 +162,9 @@ class ChunkTemplateData:
     ):
         raise NotImplementedError
 
-    def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+    def _enforce_refractory(
+        self, mask: Tensor, peaks: "MatchingPeaks", offset: int = 0, value=-torch.inf
+    ):
         raise NotImplementedError
 
     def fine_match(
@@ -211,30 +213,35 @@ class ChunkTemplateData:
         self,
         conv: Tensor,
         objective: Tensor,
-        thresholdsq: float | Tensor,
+        thresholdsq: float,
+        obj_arange: Tensor,
         skip_scaling: bool = False,
     ) -> "MatchingPeaks":
         objective_max, max_obj_template = objective.max(dim=0)
-        times = argrelmax(objective_max, self.spike_length_samples, thresholdsq)
+        times = argrelmax(
+            x=objective_max,
+            radius=self.spike_length_samples,
+            threshold=thresholdsq,
+            arange=obj_arange[: objective_max.numel()],
+        )
         n_spikes = times.numel()
         if not n_spikes:
-            return MatchingPeaks(n_spikes=0, buf_size=0, device=conv.device)
+            return MatchingPeaks()
 
-        template_indices = max_obj_template[times]
+        template_inds = max_obj_template[times]
         if _extra_checks:
             assert (objective_max[times] >= thresholdsq).all()
         if skip_scaling or not self.scaling:
             objs = objective_max[times]
             return MatchingPeaks(
-                n_spikes=n_spikes,
                 times=times,
-                objective_template_indices=template_indices,
-                template_indices=template_indices,
+                obj_template_inds=template_inds,
+                template_inds=template_inds,
                 scores=objs,
             )
         scalings, objs = _coarse_match_scaled(
             conv=conv,
-            template_indices=template_indices,
+            template_inds=template_inds,
             times=times,
             obj_normsq=self.obj_normsq,
             inv_lambda=self.inv_lambda,
@@ -249,10 +256,9 @@ class ChunkTemplateData:
             assert self.inv_lambda < float("inf")
             assert scalings.numel() < 3 or (scalings != 1.0).any()
         return MatchingPeaks(
-            n_spikes=n_spikes,
             times=times,
-            objective_template_indices=template_indices,
-            template_indices=template_indices,
+            obj_template_inds=template_inds,
+            template_inds=template_inds,
             scalings=scalings,
             scores=objs,
         )
@@ -265,8 +271,13 @@ class ChunkTemplateData:
         channel_index: Tensor,
         channel_selection_index: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
+        if not peaks.n_spikes:
+            empty_channels = residual_padded.new_zeros(size=(0,), dtype=torch.long)
+            empty_waveforms = residual_padded.new_zeros(size=())
+            return empty_channels, empty_waveforms
+
         if channels == "template":
-            channels = self.main_channels[peaks.template_indices]
+            channels = self.main_channels[peaks.template_inds]
             selecting_channels = False
             active_channel_index = channel_index
         elif torch.is_tensor(channels):
@@ -276,14 +287,17 @@ class ChunkTemplateData:
             selecting_channels = True
             assert channel_selection_index is not None
             active_channel_index = channel_selection_index
-            channels = self.main_channels[peaks.template_indices]
+            channels = self.main_channels[peaks.template_inds]
         else:
             assert False
+
+        times = peaks.times
+        assert times is not None
 
         # get noise
         waveforms = grab_spikes(
             residual_padded,
-            peaks.times,
+            times,
             channels,
             active_channel_index,
             trough_offset=0,
@@ -306,8 +320,8 @@ class ChunkTemplateData:
         sel = channel_selection_index[channels]
         channels = sel.take_along_dim(cix[:, None], dim=1)[:, 0]
         return self.get_collisioncleaned_waveforms(
-            residual_padded,
-            peaks,
+            residual_padded=residual_padded,
+            peaks=peaks,
             channel_index=channel_index,
             channels=channels,
         )
@@ -326,211 +340,218 @@ class PconvBase(BModule):
         raise NotImplementedError
 
 
+@databag
 class MatchingPeaks:
-    BUFFER_INIT: int = 1000
-    BUFFER_GROWTH: float = 13.0 / 8.0
+    times: Tensor | None = None
+    obj_template_inds: Tensor | None = None
+    template_inds: Tensor | None = None
+    up_inds: Tensor | None = None
+    scalings: Tensor | None = None
+    scores: Tensor | None = None
 
-    def __init__(
-        self,
-        n_spikes: int = 0,
-        times: Tensor | None = None,
-        objective_template_indices: Tensor | None = None,
-        template_indices: Tensor | None = None,
-        upsampling_indices: Tensor | None = None,
-        scalings: Tensor | None = None,
-        scores: Tensor | None = None,
-        device: torch.device | None = None,
-        buf_size: int | None = None,
-    ):
-        self.n_spikes: int = n_spikes
+    if _extra_checks:
 
-        if times is not None:
-            self.cur_buf_size = len(times)
-        elif buf_size is None:
-            self.cur_buf_size = self.BUFFER_INIT
+        def __post_init__(self):
+            if self.times is None:
+                assert self.obj_template_inds is None
+                assert self.template_inds is None
+                assert self.up_inds is None
+                assert self.scalings is None
+                assert self.scores is None
+            else:
+                assert self.times.ndim == 1
+                assert self.obj_template_inds is not None
+                assert self.times.shape == self.obj_template_inds.shape
+                assert self.template_inds is not None
+                assert self.times.shape == self.template_inds.shape
+                assert (self.up_inds is None) or (
+                    self.times.shape == self.up_inds.shape
+                )
+                assert (self.scalings is None) or (
+                    self.times.shape == self.scalings.shape
+                )
+                assert self.scores is not None
+                assert self.times.shape == self.scores.shape
+
+    @property
+    def n_spikes(self):
+        if self.times is None:
+            return 0
         else:
-            self.cur_buf_size = buf_size
+            return self.times.numel()
 
-        if device is None and times is not None:
-            device = times.device
+    def subset_by_time(
+        self, min_time: int, max_time: int, offset: int, sort: bool = True
+    ) -> Self:
+        if not self.n_spikes:
+            return self
+        assert self.times is not None
+        t = self.times + offset
+        mask = t == t.clamp(min_time, max_time)
+        return self.subset(mask=mask, sort=sort)
 
-        if times is None:
-            self._times = torch.zeros(
-                self.cur_buf_size, dtype=torch.long, device=device
-            )
+    def subset(self, mask: Tensor, sort: bool = True) -> Self:
+        if not self.n_spikes:
+            assert not mask.numel()
+            return self
+        if mask.dtype == torch.bool:
+            (mask,) = mask.nonzero(as_tuple=True)
+        if sort:
+            assert self.times is not None
+            times = self.times[mask]
+            times, order = torch.sort(times)
+            mask = mask[order]
         else:
-            assert self.cur_buf_size == n_spikes
-            self._times = times
-
-        if template_indices is None:
-            self._template_indices = torch.zeros(
-                self.cur_buf_size, dtype=torch.long, device=device
-            )
-        else:
-            self._template_indices = template_indices
-
-        if objective_template_indices is None:
-            self._objective_template_indices = torch.zeros(
-                self.cur_buf_size, dtype=torch.long, device=device
-            )
-        else:
-            self._objective_template_indices = objective_template_indices
-
-        if scalings is None:
-            self._scalings = torch.ones(self.cur_buf_size, device=device)
-        else:
-            self._scalings = scalings
-
-        if upsampling_indices is None:
-            self._upsampling_indices = torch.zeros(
-                self.cur_buf_size, dtype=torch.long, device=device
-            )
-        else:
-            self._upsampling_indices = upsampling_indices
-
-        if scores is None:
-            self._scores = torch.zeros(self.cur_buf_size, device=device)
-        else:
-            self._scores = scores
+            times = _mask_or_none(self.times, mask)
+        return self.__class__(
+            times=times,
+            obj_template_inds=_mask_or_none(self.obj_template_inds, mask),
+            template_inds=_mask_or_none(self.template_inds, mask),
+            up_inds=_mask_or_none(self.up_inds, mask),
+            scalings=_mask_or_none(self.scalings, mask),
+            scores=_mask_or_none(self.scores, mask),
+        )
 
     @classmethod
-    def concatenate(cls, peaks: Sequence[Self]) -> Self:
-        peaks = list(peaks)
-        times = objective_template_indices = template_indices = None
-        upsampling_indices = scalings = scores = None
-
-        n_spikes = sum(p.n_spikes for p in peaks)
-        if not n_spikes:
-            return cls(n_spikes=0, buf_size=0)
-
-        if peaks[0].times is not None:
-            times = torch.concatenate([p.times for p in peaks])
-        if peaks[0].objective_template_indices is not None:
-            objective_template_indices = torch.concatenate(
-                [p.objective_template_indices for p in peaks]
-            )
-        if peaks[0].template_indices is not None:
-            template_indices = torch.concatenate([p.template_indices for p in peaks])
-        if peaks[0].upsampling_indices is not None:
-            upsampling_indices = torch.concatenate(
-                [p.upsampling_indices for p in peaks]
-            )
-        if peaks[0].scalings is not None:
-            scalings = torch.concatenate([p.scalings for p in peaks])
-        if peaks[0].scores is not None:
-            scores = torch.concatenate([p.scores for p in peaks])
-
+    def concatenate(cls, peaks: list[Self]) -> Self:
+        if len(peaks) == 0:
+            return cls()
+        elif len(peaks) == 1:
+            return peaks[0]
         return cls(
-            n_spikes=n_spikes,
+            times=_cat_or_none([p.times for p in peaks]),
+            obj_template_inds=_cat_or_none([p.obj_template_inds for p in peaks]),
+            template_inds=_cat_or_none([p.template_inds for p in peaks]),
+            up_inds=_cat_or_none([p.up_inds for p in peaks]),
+            scalings=_cat_or_none([p.scalings for p in peaks]),
+            scores=_cat_or_none([p.scores for p in peaks]),
+        )
+
+
+def _mask_or_none(x: Tensor | None, mask: Tensor) -> Tensor | None:
+    if x is None:
+        return None
+    else:
+        return x[mask]
+
+
+def _cat_or_none(xs: list[Tensor | None]) -> Tensor | None:
+    if xs[0] is None:
+        return None
+    else:
+        return torch.concatenate(cast(list[Tensor], xs))
+
+
+# -- matching helper fn library
+
+
+def subtract_precomputed_pconv(
+    *,
+    conv: Tensor,
+    pconv: Tensor,
+    peaks: MatchingPeaks,
+    conv_lags: Tensor,
+    sign: int,
+    padding: int,
+    batch_size: int = 128,
+):
+    assert conv.shape[0] == pconv.shape[0]
+    assert sign in (-1, 1)
+    if not peaks.n_spikes:
+        return
+    padded_lags = padding + conv_lags
+    times = peaks.times
+    assert times is not None
+    assert peaks.template_inds is not None
+    up_inds = peaks.up_inds
+    if up_inds is None:
+        up_inds = torch.zeros_like(peaks.template_inds)
+    if peaks.scalings is None:
+        _subtract_precomputed_pconv_unscaled(
+            conv=conv,
+            pconv=pconv,
+            template_indices=peaks.template_inds,
+            upsampling_indices=up_inds,
             times=times,
-            objective_template_indices=objective_template_indices,
-            template_indices=template_indices,
-            upsampling_indices=upsampling_indices,
-            scalings=scalings,
-            scores=scores,
-            buf_size=n_spikes,
+            padded_conv_lags=padded_lags,
+            neg=sign == -1,
+            batch_size=batch_size,
+        )
+    else:
+        _subtract_precomputed_pconv_scaled(
+            conv=conv,
+            pconv=pconv,
+            template_indices=peaks.template_inds,
+            upsampling_indices=up_inds,
+            scalings=peaks.scalings,
+            times=times,
+            padded_conv_lags=padded_lags,
+            neg=sign == -1,
+            batch_size=batch_size,
         )
 
-    def __str__(self):
-        return f"{self.__class__.__name__}(n_spikes={self.n_spikes})"
 
-    @property
-    def times(self):
-        return self._times[: self.n_spikes]
-
-    @property
-    def template_indices(self):
-        return self._template_indices[: self.n_spikes]
-
-    @property
-    def objective_template_indices(self):
-        return self._objective_template_indices[: self.n_spikes]
-
-    @property
-    def upsampling_indices(self):
-        return self._upsampling_indices[: self.n_spikes]
-
-    @property
-    def scalings(self):
-        return self._scalings[: self.n_spikes]
-
-    @property
-    def scores(self):
-        return self._scores[: self.n_spikes]
-
-    def subset(self, which, sort=False):
-        self._times = self.times[which]
-        if sort:
-            self._times, order = torch.sort(self._times, stable=True)
-            which = which[order]
-        self._template_indices = self.template_indices[which]
-        self._objective_template_indices = self.objective_template_indices[which]
-        self._upsampling_indices = self.upsampling_indices[which]
-        self._scalings = self.scalings[which]
-        self._scores = self.scores[which]
-        self.n_spikes = self._times.numel()
-
-    def grow_buffers(self, min_size=0):
-        sz = max(min_size, int(self.cur_buf_size * self.BUFFER_GROWTH))
-        k = self.n_spikes
-        self._times = _grow_buffer(self._times, k, sz)
-        self._template_indices = _grow_buffer(self._template_indices, k, sz)
-        self._objective_template_indices = _grow_buffer(
-            self._objective_template_indices, k, sz
-        )
-        self._upsampling_indices = _grow_buffer(self._upsampling_indices, k, sz)
-        self._scalings = _grow_buffer(self._scalings, k, sz)
-        self._scores = _grow_buffer(self._scores, k, sz)
-        self.cur_buf_size = sz
-
-    def sort(self):
-        sl = slice(0, self.n_spikes)
-
-        times = self._times[sl]
-        order = torch.argsort(times, stable=True)
-
-        self._times[sl] = times[order]
-        self._template_indices[sl] = self.template_indices[order]
-        self._objective_template_indices[sl] = self.objective_template_indices[order]
-        self._upsampling_indices[sl] = self.upsampling_indices[order]
-        self._scalings[sl] = self.scalings[order]
-        self._scores[sl] = self.scores[order]
-
-    def extend(self, other):
-        new_n_spikes = other.n_spikes + self.n_spikes
-        sl_new = slice(self.n_spikes, new_n_spikes)
-
-        if new_n_spikes > self.cur_buf_size:
-            self.grow_buffers(min_size=new_n_spikes)
-
-        self._times[sl_new] = other.times
-        self._template_indices[sl_new] = other.template_indices
-        self._objective_template_indices[sl_new] = other.objective_template_indices
-        self._upsampling_indices[sl_new] = other.upsampling_indices
-        self._scalings[sl_new] = other.scalings
-        self._scores[sl_new] = other.scores
-
-        self.n_spikes = new_n_spikes
+@torch.jit.script
+def _subtract_precomputed_pconv_unscaled(
+    conv: Tensor,
+    pconv: Tensor,
+    template_indices: Tensor,
+    upsampling_indices: Tensor,
+    times: Tensor,
+    padded_conv_lags: Tensor,
+    neg: bool,
+    batch_size: int = 128,
+):
+    ix_time = times[:, None] + padded_conv_lags[None, :]
+    for i0 in range(0, conv.shape[0], batch_size):
+        i1 = min(conv.shape[0], i0 + batch_size)
+        batch = pconv[i0:i1, template_indices, upsampling_indices]
+        ix = ix_time.broadcast_to(batch.shape)
+        batch = batch.reshape(i1 - i0, -1)
+        ix = ix.reshape(i1 - i0, batch.shape[1])
+        if neg:
+            batch = batch._neg_view()
+        conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
-def _grow_buffer(x, old_length, new_size):
-    new = torch.empty(new_size, dtype=x.dtype, device=x.device)
-    new[:old_length] = x[:old_length]
-    return new
+@torch.jit.script
+def _subtract_precomputed_pconv_scaled(
+    conv: Tensor,
+    pconv: Tensor,
+    template_indices: Tensor,
+    upsampling_indices: Tensor,
+    scalings: Tensor,
+    times: Tensor,
+    padded_conv_lags: Tensor,
+    neg: bool,
+    batch_size: int = 128,
+):
+    ix_time = times[:, None] + padded_conv_lags[None, :]
+    scalings = scalings[None, :, None]
+    for i0 in range(0, conv.shape[0], batch_size):
+        i1 = min(conv.shape[0], i0 + batch_size)
+        batch = pconv[i0:i1, template_indices, upsampling_indices]
+        batch.mul_(scalings)
+        ix = ix_time.broadcast_to(batch.shape)
+        batch = batch.reshape(i1 - i0, -1)
+        ix = ix.reshape(i1 - i0, batch.shape[1])
+        if neg:
+            batch = batch._neg_view()
+        conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
 @torch.jit.script
 def _coarse_match_scaled(
     conv: Tensor,
-    template_indices: Tensor,
+    template_inds: Tensor,
     times: Tensor,
     obj_normsq: Tensor,
     inv_lambda: Tensor,
     scale_min: Tensor,
     scale_max: Tensor,
 ):
-    b = conv[template_indices, times] + inv_lambda
-    a = obj_normsq[template_indices] + inv_lambda
+    b = conv[template_inds, times] + inv_lambda
+    a = obj_normsq[template_inds] + inv_lambda
     scalings = b.div(a).clamp_(min=scale_min, max=scale_max)
     objs = scalings.square().mul_(-a)
     objs.addcmul_(scalings, b, value=2.0).sub_(inv_lambda)

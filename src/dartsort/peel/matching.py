@@ -7,6 +7,7 @@ import numpy as np
 from spikeinterface.core import BaseRecording
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
 from ..templates import TemplateData, LowRankTemplates
 from ..transform import WaveformPipeline
@@ -57,7 +58,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         n_waveforms_fit=20_000,
         fit_max_reweighting=4.0,
         channel_selection: Literal["template", "amplitude"] = "template",
-        channel_selection_index: torch.Tensor | None = None,
+        channel_selection_index: Tensor | None = None,
         fit_subsampling_random_state=0,
         fit_sampling: Literal["random", "amp_reweighted"] = "random",
         max_iter=1000,
@@ -128,6 +129,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.amp_scale_min = 1.0 / self.amp_scale_max
         self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples - 1)
 
+        conv_len = (
+            self.chunk_length_samples
+            + 2 * self.chunk_margin_samples
+            + 2 * self.obj_pad_len
+        )
+        self.register_buffer("obj_arange", torch.arange(conv_len))
+
     def peeling_needs_precompute(self):
         return self.matching_templates is None or self.thresholdsq is None
 
@@ -148,13 +156,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         datasets = super().out_datasets()
         datasets.extend(
             [
-                SpikeDataset(
-                    name="template_indices", shape_per_spike=(), dtype=np.int64
-                ),
+                SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
                 SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(
-                    name="upsampling_indices", shape_per_spike=(), dtype=np.int64
-                ),
+                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int64),
                 SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
                 SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
             ]
@@ -299,7 +303,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def match_chunk(
         self,
-        traces: torch.Tensor,
+        traces: Tensor,
         chunk_template_data: ChunkTemplateData,
         left_margin=0,
         right_margin=0,
@@ -323,10 +327,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # padding (for easier implementation of enforce_refractory)
         valid_len = traces.shape[0] - self.spike_length_samples + 1
         padded_obj_len = valid_len + 2 * self.obj_pad_len
-        padded_conv: torch.Tensor = traces.new_zeros(
+        padded_conv = traces.new_zeros(
             chunk_template_data.obj_n_templates, padded_obj_len
         )
-        padded_objective: torch.Tensor = traces.new_zeros(
+        padded_objective = traces.new_zeros(
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
         refrac_mask = torch.zeros_like(padded_objective)
@@ -413,14 +417,30 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # peaks are then the final current_peaks
         assert current_peaks is not None
         peaks = MatchingPeaks.concatenate(current_peaks)
+        if not peaks.n_spikes:
+            res = PeelingBatchResult(n_spikes=0)
+            if return_residual:
+                residual = residual[left_margin : traces.shape[0] - right_margin]
+                res["residual"] = residual
+            if return_conv:
+                res["conv"] = padded_conv
+            return res
 
         # subset to peaks inside the margin and sort for the caller
         max_time = traces.shape[0] - right_margin - 1
-        times_offset = peaks.times + self.trough_offset_samples
-        valid = times_offset == times_offset.clamp(left_margin, max_time)
-        (valid,) = valid.nonzero(as_tuple=True)
-        peaks.subset(valid, sort=True)
+        peaks = peaks.subset_by_time(
+            left_margin, max_time, offset=self.trough_offset_samples
+        )
+        assert peaks.times is not None
+        assert peaks.template_inds is not None
 
+        # construct return value
+        res = peaks_to_batch_result(
+            peaks=peaks,
+            trough_offset_samples=self.trough_offset_samples,
+            unit_ids=chunk_template_data.unit_ids,
+            trough_shifts=chunk_template_data.trough_shifts(peaks),
+        )
         # extract collision-cleaned waveforms on small neighborhoods
         if return_collisioncleaned_waveforms or self.picking_channels:
             cc = chunk_template_data.get_collisioncleaned_waveforms(
@@ -433,27 +453,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channels, waveforms = cc
         else:
             assert self.channel_selection == "template"
-            channels = chunk_template_data.main_channels[peaks.template_indices]
+            channels = chunk_template_data.main_channels[peaks.template_inds]
             waveforms = None
-
-        times_samples = peaks.times.add_(self.trough_offset_samples)
-        labels = chunk_template_data.unit_ids[peaks.template_indices]
-        if chunk_template_data.upsampling:
-            time_shifts = chunk_template_data.trough_shifts(peaks)
-            time_shifts_dict = {"time_shifts": time_shifts}
-        else:
-            time_shifts_dict = {}
-        res = PeelingBatchResult(
-            n_spikes=peaks.n_spikes,
-            times_samples=times_samples,
-            channels=channels,
-            labels=labels,
-            template_indices=peaks.template_indices,
-            upsampling_indices=peaks.upsampling_indices,
-            scalings=peaks.scalings,
-            scores=peaks.scores,
-            **time_shifts_dict,
-        )
+        res["channels"] = channels
         if return_collisioncleaned_waveforms:
             assert waveforms is not None
             res["collisioncleaned_waveforms"] = waveforms
@@ -466,10 +468,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def find_peaks(
         self,
-        residual: torch.Tensor,
-        padded_conv: torch.Tensor,
-        padded_objective: torch.Tensor,
-        refrac_mask: torch.Tensor,
+        residual: Tensor,
+        padded_conv: Tensor,
+        padded_objective: Tensor,
+        refrac_mask: Tensor,
         chunk_template_data: ChunkTemplateData,
         unit_mask=None,
         coarse_only=False,
@@ -494,7 +496,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             skip_scaling = chunk_template_data.needs_fine_pass
         conv = padded_conv[:, self.obj_pad_len : -self.obj_pad_len]
         coarse_peaks = chunk_template_data.coarse_match(
-            conv, objective, self.thresholdsq, skip_scaling=skip_scaling
+            conv=conv,
+            objective=objective,
+            thresholdsq=self.thresholdsq,
+            obj_arange=self.b.obj_arange,
+            skip_scaling=skip_scaling,
         )
         if coarse_only or not coarse_peaks.n_spikes:
             return coarse_peaks
@@ -536,3 +542,34 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         logger.info(
             f"Matcher picked threshold^2 {self.thresholdsq} for strategy fp_control."
         )
+
+
+def peaks_to_batch_result(
+    peaks: MatchingPeaks,
+    trough_offset_samples: int,
+    unit_ids: Tensor,
+    trough_shifts: Tensor | None,
+) -> PeelingBatchResult:
+    if not peaks.n_spikes:
+        return PeelingBatchResult(n_spikes=0)
+
+    assert peaks.times is not None
+    assert peaks.template_inds is not None
+    times_samples = peaks.times + trough_offset_samples
+    if trough_shifts is not None:
+        times_samples += trough_shifts
+    res = PeelingBatchResult(
+        n_spikes=peaks.n_spikes,
+        times_samples=times_samples,
+        labels=unit_ids[peaks.template_inds],
+        template_inds=peaks.template_inds,
+    )
+    if peaks.up_inds is not None:
+        res["up_inds"] = peaks.up_inds
+    if trough_shifts is not None:
+        res["time_shifts"] = trough_shifts
+    if peaks.scalings is not None:
+        res["scalings"] = peaks.scalings
+    if peaks.scores is not None:
+        res["scores"] = peaks.scores
+    return res

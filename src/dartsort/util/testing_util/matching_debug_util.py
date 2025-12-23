@@ -14,13 +14,13 @@ from ...peel.matching import (
     MatchingTemplates,
     ObjectiveUpdateTemplateMatchingPeeler,
 )
+from ...peel.matching_util.matching_base import subtract_precomputed_pconv
 from ...templates.template_util import get_main_channels_and_alignments
 from ...templates.templates import TemplateData
 from ..internal_config import ComputationConfig, MatchingConfig
 from ..job_util import ensure_computation_config
 from ..py_util import databag
 from ..waveform_util import upsample_multichan
-from ...peel.matching_util.matchlib import subtract_precomputed_pconv
 
 
 def reference_shared_temporal_convolution(
@@ -48,20 +48,24 @@ def reference_shared_temporal_convolution(
     return tconv0, tconv00
 
 
-def reference_pairwise_convolution(templates: np.ndarray, templates_up: np.ndarray):
+def reference_pairwise_convolution(
+    templates: np.ndarray,
+    templates_up: np.ndarray,
+    accum_dtype: np.typing.DTypeLike = np.float32,
+):
     K, up, t, nc = templates_up.shape
     assert templates.shape == (K, t, nc)
     conv_len = 2 * t - 1
     pconv = np.zeros((K, K, up, conv_len), dtype=np.float32)
-    tmp = np.zeros(conv_len, dtype=np.float64)
+    tmp = np.zeros(conv_len, dtype=accum_dtype)
     for i in range(K):
         for j in range(K):
             for u in range(up):
                 tmp[:] = 0.0
                 for c in range(nc):
                     tmp += correlate(
-                        templates[i, :, c].astype(np.float64)[::-1],
-                        templates_up[j, u, :, c].astype(np.float64)[::-1],
+                        templates[i, :, c].astype(accum_dtype)[::-1],
+                        templates_up[j, u, :, c].astype(accum_dtype)[::-1],
                         mode="full",
                         method="direct",
                     )
@@ -356,10 +360,19 @@ class DebugChunkTemplateData(ChunkTemplateData):
         return out
 
     def subtract(self, traces: Tensor, peaks: "MatchingPeaks", sign: int = -1):
-        wfs = self.templates_up[peaks.template_indices, peaks.upsampling_indices]
-        wfs = wfs * peaks.scalings[:, None, None]
+        if not peaks.n_spikes:
+            return
+
+        assert peaks.template_inds is not None
+        assert peaks.up_inds is not None
+        wfs = self.templates_up[peaks.template_inds, peaks.up_inds]
+        if peaks.scalings is not None:
+            wfs = wfs * peaks.scalings[:, None, None]
+
         time_ix = torch.arange(wfs.shape[1], device=wfs.device)
-        for t, wf in zip(peaks.times, wfs):
+        times = peaks.times
+        assert times is not None
+        for t, wf in zip(times, wfs):
             if sign == -1:
                 traces[t + time_ix, :-1] -= wf
             elif sign == 1:
@@ -370,18 +383,13 @@ class DebugChunkTemplateData(ChunkTemplateData):
     def subtract_conv(
         self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
     ):
-        assert conv.shape[0] == self.pconv.shape[0]
-        assert sign in (-1, 1)
-        padded_lags = padding + self.conv_lags
         subtract_precomputed_pconv(
             conv=conv,
             pconv=self.pconv,
-            template_indices=peaks.template_indices,
-            upsampling_indices=peaks.upsampling_indices,
-            scalings=peaks.scalings,
-            times=peaks.times,
-            padded_conv_lags=padded_lags,
-            neg=sign == -1,
+            peaks=peaks,
+            padding=padding,
+            conv_lags=self.conv_lags,
+            sign=sign,
             batch_size=batch_size,
         )
 
@@ -392,60 +400,94 @@ class DebugChunkTemplateData(ChunkTemplateData):
         channel_index: Tensor,
         add_into: Tensor | None = None,
     ):
-        wfs = self.templates_up[peaks.template_indices, peaks.upsampling_indices]
+        if not peaks.n_spikes:
+            return add_into
+        assert peaks.template_inds is not None
+        assert peaks.up_inds is not None
+        wfs = self.templates_up[peaks.template_inds, peaks.up_inds]
         wfs = F.pad(wfs, (0, 1))
         chan_ix = channel_index[channels][:, None, :]
         wfs = wfs.take_along_dim(dim=2, indices=chan_ix)
-        wfs = wfs * peaks.scalings[:, None, None]
+        if peaks.scalings is not None:
+            wfs = wfs * peaks.scalings[:, None, None]
         if add_into is None:
             return wfs
         else:
             return add_into.add_(wfs)
 
-    def _enforce_refractory(self, mask, peaks, offset=0, value=-torch.inf):
+    def _enforce_refractory(
+        self, mask: Tensor, peaks: MatchingPeaks, offset: int = 0, value=-torch.inf
+    ):
+        if not peaks.n_spikes:
+            return
+        assert peaks.times is not None
+        assert peaks.obj_template_inds is not None
         time_ix = peaks.times[:, None] + (self.refrac_ix[None, :] + offset)
-        row_ix = peaks.objective_template_indices[:, None]
+        row_ix = peaks.obj_template_inds[:, None]
         mask[row_ix, time_ix] = value
 
     def fine_match(
         self, *, peaks: MatchingPeaks, residual: Tensor, conv: Tensor, padding: int = 0
     ) -> MatchingPeaks:
         nt = self.templates_up.shape[2]
-        for n, (t, l) in enumerate(zip(peaks.times, peaks.template_indices)):
+        if not peaks.n_spikes:
+            return peaks
+
+        times = peaks.times
+        template_inds = peaks.template_inds
+        assert times is not None
+        assert template_inds is not None
+        if self.scaling:
+            scalings = conv.new_ones(times.shape)
+        else:
+            scalings = None
+        up_inds = torch.zeros_like(template_inds)
+        scores = conv.new_zeros(times.shape)
+
+        for n, (t, l) in enumerate(zip(times, template_inds)):
             bank = self.templates_up[l]
-            resid_chunk = residual[t : t + nt + 1]
-            snips = torch.stack(
-                [
-                    resid_chunk[t0 : t0 + nt]
-                    for t0 in range(resid_chunk.shape[0] - nt + 1)
-                ],
-                dim=0,
-            )
+            resid_chunk = residual[t: t + nt + 1]
+            T = resid_chunk.shape[0]
+            snips = [resid_chunk[t0 : t0 + nt] for t0 in range(T - nt + 1)]
+            snips = torch.stack(snips, dim=0)
             assert snips.shape[1] == nt
             dots = torch.einsum("utc,stc->us", bank, snips)
             if self.scaling:
                 b = dots + self.inv_lambda
-                a = self.normsq_up[l, None] + self.inv_lambda
+                a = self.normsq_up[l, :, None] + self.inv_lambda
                 sc = (b / a).clamp(min=self.scale_min, max=self.scale_max)
                 objs = -a * sc * sc + 2.0 * b * sc - self.inv_lambda
             else:
                 sc = None
-                objs = 2.0 * dots - self.normsq_up[l, None]
+                objs = 2.0 * dots - self.normsq_up[l, :, None]
             best_val, best_flat = objs.view(-1).max(dim=0)
             best_u = best_flat // dots.shape[1]
             best_s = best_flat % dots.shape[1]
             assert objs[best_u, best_s] == best_val
 
             if self.scaling:
+                assert scalings is not None
                 assert sc is not None
-                peaks.scalings[n] = sc[best_u, best_s]
-            peaks.upsampling_indices[n] = best_u
-            peaks.times[n] += best_s
+                scalings[n] = sc[best_u, best_s]
+            up_inds[n] = best_u
+            times[n] += best_s
+            scores[n] = best_val
 
-        return peaks
+        return MatchingPeaks(
+            times=times,
+            obj_template_inds=peaks.obj_template_inds,
+            template_inds=template_inds,
+            scalings=scalings,
+            up_inds=up_inds,
+            scores=scores,
+        )
 
     def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        return self.trough_shifts_up[peaks.template_indices, peaks.upsampling_indices]
+        if not peaks.n_spikes:
+            return torch.zeros(size=(), dtype=torch.long)
+        assert peaks.template_inds is not None
+        assert peaks.up_inds is not None
+        return self.trough_shifts_up[peaks.template_inds, peaks.up_inds]
 
     def reconstruct_up_templates(self):
         return self.templates_up
