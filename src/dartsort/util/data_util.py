@@ -172,7 +172,7 @@ class DARTsortSorting:
         if self.parent_h5_path is None:
             raise ValueError(
                 f"Can't register persistent feature {feature_name}, because "
-                f"there is no .hdf5 file."
+                f"there is no .hdf5 file.",
             )
         if check_shape:
             self._check_shape(feature_name, feature)
@@ -193,7 +193,8 @@ class DARTsortSorting:
             logger.warning(
                 f"Sorting's parent h5 file {self.parent_h5_path} is gone when registering "
                 f"persistent feature {feature_name}. Will continue, but this sorting won't "
-                "persist correctly."
+                "persist correctly.",
+                stacklevel=3,
             )
 
     # save / load

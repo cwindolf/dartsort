@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 common_params = dict(
     probe_kwargs=dict(
-        num_columns=2, num_contact_per_column=12, y_shift_per_column=None
+        num_columns=2, num_contact_per_column=12, y_shift_per_column="flat"
     ),
     temporal_jitter=4,
     noise_kind="white",

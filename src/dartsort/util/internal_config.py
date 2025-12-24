@@ -535,8 +535,8 @@ class ClusteringConfig:
     kdtree_subsample_max_size: int = 100_000
 
     # gmm density peaks additional parameters
-    kmeanspp_initializations: int = 5
-    kmeans_iter: int = 50
+    kmeanspp_initializations: int = 10
+    kmeans_iter: int = 100
     components_per_channel: int = 20
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0

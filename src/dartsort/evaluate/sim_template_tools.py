@@ -132,10 +132,8 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
                 self.n_units * temporal_jitter, *self.templates_up.shape[2:]
             )
         )
-        print(f"{a1=}")
         a1 = a1 - template_data.trough_offset_samples
         self.offsets_up = a1.reshape(self.n_units, temporal_jitter)
-        print(f"{self.offsets_up=}")
 
     def trough_offset_samples(self) -> int:
         return self.template_data.trough_offset_samples
@@ -152,6 +150,8 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
     ):
         assert not drift
         loc = self.template_data.template_locations()
+        assert loc.shape[1] == 2
+        loc = np.c_[loc[:, 0], np.zeros_like(loc[:, 0]), loc[:, 1]]
         temps = self.templates_up if up else self.template_data.templates
         if padded:
             zpads = [(0, 0)] * (temps.ndim - 1)

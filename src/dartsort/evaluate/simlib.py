@@ -189,7 +189,7 @@ def generate_geom(
     elif y_shift_per_column == "flat":
         y_shift_per_column = [0.0] * num_columns
     else:
-        assert isinstance(y_shift_per_column, (tuple, list))
+        assert isinstance(y_shift_per_column, (tuple, list, np.ndarray))
     p = probeinterface.generate_multi_columns_probe(
         num_columns=num_columns,
         num_contact_per_column=num_contact_per_column,

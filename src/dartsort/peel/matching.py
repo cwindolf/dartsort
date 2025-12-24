@@ -158,12 +158,17 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             [
                 SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
                 SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
                 SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
             ]
         )
+        if self.is_scaling:
+            datasets.append(
+                SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
+            )
         if self.is_upsampling:
+            datasets.append(
+                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int64)
+            )
             datasets.append(
                 SpikeDataset(name="time_shifts", shape_per_spike=(), dtype=np.int8),
             )
@@ -293,7 +298,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # process spike times and create return result
-        match_results["times_samples"] += chunk_start_samples - left_margin  # type: ignore
+        if match_results["n_spikes"]:
+            match_results["times_samples"] += chunk_start_samples - left_margin  # type: ignore
         if match_results["n_spikes"] > self.max_spikes_per_second:  # type: ignore
             raise ValueError(
                 f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}."

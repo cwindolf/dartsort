@@ -353,7 +353,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 h5.create_dataset(
                     "channel_index", data=self.segment.extract_channel_index
                 )
-                h5.create_dataset("times_samples", data=self.segment.times_samples)
                 times_samples = (
                     self.segment.times_samples + self.segment.upsampling_offsets
                 )

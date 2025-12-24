@@ -33,6 +33,7 @@ Need to also test per-template shifts.
 """
 
 import tempfile
+from typing import cast
 
 import numpy as np
 import pytest
@@ -40,6 +41,7 @@ import torch
 
 import dartsort
 from dartsort.util.spiketorch import taper
+from dartsort.util.testing_util import matching_debug_util
 
 # constants
 fs = 1000
@@ -69,11 +71,11 @@ def align_templates():
 
 
 @pytest.fixture(scope="module")
-def align_sim(align_templates):
+def align_sim(tmp_path_factory, align_templates):
     res = dartsort.simkit.generate_simulation(
         n_units=2,
-        folder=None,
-        noise_recording_folder=None,
+        folder=tmp_path_factory.mktemp("ds_align_sim"),
+        noise_recording_folder=tmp_path_factory.mktemp("ds_align_sim_noise"),
         noise_kind="white",
         templates_kind="static",
         template_simulator_kwargs=dict(template_data=align_templates),
@@ -81,8 +83,8 @@ def align_sim(align_templates):
         amplitude_jitter=0.0,
         duration_seconds=100.0,
         min_fr_hz=50.0,
+        featurization_cfg=dartsort.skip_featurization_cfg,
         max_fr_hz=55.0,
-        no_save=True,
         noise_in_memory=True,
         recording_dtype="float32",
         sampling_frequency=fs,
@@ -90,26 +92,26 @@ def align_sim(align_templates):
         refractory_ms=t,
         geom=align_templates.registered_geom,
         common_reference=False,
+        save_noise_waveforms=True,
     )
-    sim_recording, template_simulator = res  # type: ignore
-    sim_recording: dartsort.simkit.InjectSpikesPreprocessor
-    sorting: dartsort.DARTsortSorting = sim_recording.basic_sorting()
+    res = cast(dict, res)
 
     # for the analysis below to work with high probability, we need
     # standard error in both units small relative to bump. (that way
     # the sample means will have accurate extrema.)
-    assert sorting.labels is not None
-    se = 1.0 / np.sqrt(np.unique(sorting.labels, return_counts=True)[1])
+    assert res["sorting"].labels is not None
+    se = 1.0 / np.sqrt(np.unique(res["sorting"].labels, return_counts=True)[1])
     assert (se < 0.1 * bump).all()
 
-    return dict(rec=sim_recording, sorting=sorting)
+    return res
 
 
 def test_denoiser_alignment(align_sim, align_templates):
     t0 = align_templates.templates[0, :, 0]
     ci = dartsort.util.waveform_util.full_channel_index(1, to_torch=True)
-    rec = align_sim["rec"]
+    rec = align_sim["recording"]
     gt_st = align_sim["sorting"]
+    noise_wfs = gt_st._load_dataset("noise_waveforms")
 
     # an optimal linear denoiser
     rolls = (-1, 0, 1)
@@ -122,7 +124,15 @@ def test_denoiser_alignment(align_sim, align_templates):
 
     # run subtraction
     denoiser = dartsort.WaveformPipeline([pca])
-    featurizer = dartsort.WaveformPipeline([dartsort.transform.Voltage()])
+    transformers = [
+        dartsort.transform.Waveform(
+            name_prefix="collisioncleaned",
+            channel_index=ci,
+            spike_length_samples=t0.shape[0],
+        ),
+        dartsort.transform.Voltage(),
+    ]
+    featurizer = dartsort.WaveformPipeline(transformers)
     peelers = [
         dartsort.SubtractionPeeler(
             recording=rec,
@@ -148,6 +158,8 @@ def test_denoiser_alignment(align_sim, align_templates):
             )
             for p in peelers
         ]
+        wf0 = st0._load_dataset("collisioncleaned_waveforms")
+        wf1 = st1._load_dataset("collisioncleaned_waveforms")
 
     # -- denoiser does alignment right
     # both have right count
@@ -178,7 +190,7 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert len(sts) == 2
 
     # get templates
-    (pst0, t0), (pst1, t1) = [
+    (pst0, tr0), (pst1, tr1) = [
         dartsort.postprocess(
             rec, st, template_cfg=dartsort.raw_template_cfg, waveform_cfg=waveform_cfg
         )
@@ -190,12 +202,12 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert np.array_equal(pst1.times_samples, gt_st.times_samples)
 
     # st1 templates are aligned
-    assert np.all(np.abs(t1.templates[:, :, 0]).argmax(1) == trough)
+    assert np.all(np.abs(tr1.templates[:, :, 0]).argmax(1) == trough)
 
     # st0 templates are worse than st1. they could still be aligned
     # so wont test that but they should be noisier.
-    d0 = np.sqrt(np.square(align_templates.templates - t0.templates).mean())
-    d1 = np.sqrt(np.square(align_templates.templates - t1.templates).mean())
+    d0 = np.sqrt(np.square(align_templates.templates - tr0.templates).mean())
+    d1 = np.sqrt(np.square(align_templates.templates - tr1.templates).mean())
     assert d0 > d1
     # d1 should match based on standard error bound whp
     assert d1 < 3 * 0.1 * bump
@@ -204,11 +216,21 @@ def test_denoiser_alignment(align_sim, align_templates):
     # the noisier the more so. worth testing to make sure the noise
     # is aggro enough relative to bump. here 1.4 means the triangle
     # is quite steep
-    peaks = np.abs(t0.templates[:, trough, 0])
-    assert np.all(peaks > 1.4 * np.abs(t0.templates[:, :trough, 0]).max(1))
-    assert np.all(peaks > 1.4 * np.abs(t0.templates[:, trough + 1 :, 0]).max(1))
-    # test alignment of cc waveforms w time shift
-    assert False
+    peaks = np.abs(tr0.templates[:, trough, 0])
+    assert np.all(peaks > 1.4 * np.abs(tr0.templates[:, :trough, 0]).max(1))
+    assert np.all(peaks > 1.4 * np.abs(tr0.templates[:, trough + 1 :, 0]).max(1))
+
+    # test alignment of cc waveforms w and w/o time shift
+    assert wf0.shape == wf1.shape == (gt_st.n_spikes, t0.shape[0], 1)
+    true_wfs = align_templates.templates[gt_st.labels, 1:-1]
+    assert np.all(np.abs(true_wfs[:, :, 0]).argmax(1) == trough - 1)
+    time_ixs = np.arange(1, t0.shape[0] - 1) + st1.time_shifts[:, None]  # type: ignore
+    time_ixs = time_ixs[:, :, None]
+    wf1_sliced = np.take_along_axis(wf1, indices=time_ixs, axis=1)
+    np.testing.assert_allclose(wf1_sliced, true_wfs, atol=snr / 2)
+    true_cc_wfs = true_wfs + noise_wfs[:, 1:-1]
+    np.testing.assert_allclose(wf1_sliced, true_cc_wfs)
+    assert not np.allclose(wf0[:, 1:-1], true_wfs, atol=snr / 2)
 
 
 def template_makers(rec, st, align=True, align_max=0):
@@ -269,7 +291,7 @@ def template_makers(rec, st, align=True, align_max=0):
 def test_template_shifts(
     align_sim, align_templates, with_spike_shifts, with_unit_shifts, seed, align_max
 ):
-    rec = align_sim["rec"]
+    rec = align_sim["recording"]
     gt_st = align_sim["sorting"]
     rg = np.random.default_rng(seed)
 
@@ -344,7 +366,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
     with tempfile.TemporaryDirectory() as tdir:
         st = dartsort.match(
             tdir,
-            align_sim["rec"],
+            align_sim["recording"],
             template_data=align_templates,
             waveform_cfg=waveform_cfg,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
@@ -361,7 +383,9 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
 
 
 @pytest.mark.parametrize("tempkind", ["exp", "parabola"])
-@pytest.mark.parametrize("matchtype", ["individual_compressed_upsampled", "drifty"])
+@pytest.mark.parametrize(
+    "matchtype", ["debug", "individual_compressed_upsampled", "drifty"]
+)
 @pytest.mark.parametrize("up_factor", (1, 2, 4, 8))
 def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     # we'll have to use a smoother template library here
@@ -397,6 +421,7 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     templates[1, :, 0] = -tshape
     templates[2, :, 1] = tshape
     templates[3, :, 1] = -tshape
+    print(f"{np.linalg.norm(templates, axis=(1, 2))=}")
 
     gt_td = dartsort.TemplateData(
         templates=templates,
@@ -444,6 +469,7 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
                 trough_offset, 121 - trough_offset
             ),
             matching_cfg=dartsort.MatchingConfig(
+                threshold=1.0,
                 amplitude_scaling_variance=0.0,
                 template_temporal_upsampling_factor=up_factor,
                 upsampling_compression_map="none",
@@ -452,28 +478,15 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
             ),
         )
 
-    mismatch = np.flatnonzero(gt_st.times_samples != st.times_samples)
-    print(
-        f"{np.unique((gt_st.times_samples-st.times_samples)[mismatch], return_counts=True)=}"
-    )
-    print(f"{np.unique(gt_st.labels[mismatch], return_counts=True)=}")
-    print(f"{np.unique(st.labels[mismatch], return_counts=True)=}")
-    print(f"{np.unique(gt_st.jitter_ix[mismatch], return_counts=True)=}")
-    print(f"{np.unique(st.upsampling_indices[mismatch], return_counts=True)=}")
-    print(f"{np.unique(gt_st.time_shifts[mismatch], return_counts=True)=}")
-    print(f"{np.unique(st.time_shifts[mismatch], return_counts=True)=}")
-
     assert gt_st.labels is not None
     assert st.labels is not None
     assert np.array_equal(gt_st.labels, st.labels)
     gt_up = getattr(gt_st, "jitter_ix", None)
-    match_up = getattr(st, "upsampling_indices", None)
+    match_up = getattr(st, "up_inds", None)
     assert gt_up is not None
-    assert match_up is not None
-    assert np.array_equal(gt_up, match_up)
+    if up_factor > 1:
+        assert match_up is not None
+        assert np.array_equal(gt_up, match_up)
     assert np.array_equal(gt_st.times_samples, st.times_samples)
     mcs = np.abs(templates).sum(axis=1).argmax(axis=1)
     assert np.array_equal(st.channels, mcs[gt_st.labels])
-
-    # test alignment of cc waveforms w time shift
-    assert False
