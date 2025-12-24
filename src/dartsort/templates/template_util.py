@@ -380,14 +380,19 @@ def shared_basis_compress_templates(
         logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
         cov.diagonal().add_(1e-5)
     vals, U = torch.linalg.eigh(cov)
-    temporal_comps = U[:, :rank]
+    temporal_comps = U[:, -rank:]
     # to rank-major
     temporal_comps = temporal_comps.T.contiguous()
     temporal_comps = temporal_comps.numpy(force=True)
-    temporal_comps = temporal_comps.astype(templates.dtype)
+    temporal_comps = temporal_comps[::-1]
+    temporal_comps = np.ascontiguousarray(temporal_comps, dtype=templates.dtype)
 
     # project templates onto temporal comps (no sparsity here.)
-    spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
+    # spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
+    templates = templates.transpose(0, 2, 1).reshape(n * c, t)
+    spatial_sing = templates @ (temporal_comps).T
+    spatial_sing = spatial_sing.reshape(n, c, rank).transpose(0, 2, 1)
+    spatial_sing = np.ascontiguousarray(spatial_sing)
 
     assert np.isfinite(temporal_comps).all()
     assert np.isfinite(spatial_sing).all()
@@ -612,14 +617,10 @@ def estimate_offset(
         weights /= weights.max(axis=1, keepdims=True)
         weights[weights < min_weight] = 0.0
         weights /= weights.sum(axis=1, keepdims=True)
-        print(f"{weights[[25, 19, 32, 29]][:, 20:30]=}")
         tmp[:] = templates
         tmp[tmp < 0] *= trough_factor
         np.abs(tmp, out=tmp)
         offsets = tmp.argmax(axis=1).astype(np.float64)
-        print(
-            f"{offsets[[25, 19, 32, 29]][:, 20:30]*(weights[[25, 19, 32, 29]][:, 20:30]>0)=}"
-        )
         offsets = np.sum(offsets * weights, axis=1)
         offsets = np.rint(offsets).astype(np.int64)
         return offsets
@@ -629,14 +630,10 @@ def estimate_offset(
         weights /= weights.max(axis=1, keepdims=True)
         weights[weights < min_weight] = 0.0
         weights /= weights.sum(axis=1, keepdims=True)
-        print(f"{weights[[25, 19, 32, 29]][:, 20:30]=}")
         tmp = templates.copy()
         tmp[tmp < 0] *= trough_factor
         np.abs(tmp, out=tmp)
         offsets = tmp.argmax(axis=1).astype(np.float64)
-        print(
-            f"{offsets[[25, 19, 32, 29]][:, 20:30]*(weights[[25, 19, 32, 29]][:, 20:30]>0)=}"
-        )
         offsets = np.sum(offsets * weights, axis=1)
         offsets = np.rint(offsets).astype(np.int64)
         return offsets
