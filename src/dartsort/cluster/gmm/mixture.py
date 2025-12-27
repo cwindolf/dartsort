@@ -47,6 +47,7 @@ from typing import Iterable, Literal, NamedTuple, Optional, Self
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.sparse.csgraph import connected_components
 from sympy.utilities.iterables import multiset_partitions
 from torch import Tensor
 from tqdm.auto import tqdm, trange
@@ -493,7 +494,9 @@ class SufficientStatistics:
             elbo=torch.zeros((), device=device, dtype=count_dtype),
         )
 
-    def reset_(self, n_units: int, n_channels: int, signal_rank: int, feature_rank: int):
+    def reset_(
+        self, n_units: int, n_channels: int, signal_rank: int, feature_rank: int
+    ):
         self.count = 0.0
         if self.noise_N is not None:
             self.noise_N.zero_()
@@ -855,11 +858,15 @@ class BatchedSpikeData:
 
     def update_adjacency(
         self,
-        n_units: int,
+        n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
         expand_lut: bool = False,
     ):
         """Update my adjacency either using my labels or just a fixed LUT."""
+        if n_units is None:
+            assert self.candidates is not None
+            n_units = int(self.candidates.amax()) + 1
+            assert n_units > 0
         self._update_sizes_from_n_units(n_units)
         if expand_lut:
             assert self.un_adj_lut is not None
@@ -889,6 +896,21 @@ class BatchedSpikeData:
         if pnoid:
             assert self.un_adj.max().item() == 1.0
 
+    def ensure_coverage(self):
+        self.update_adjacency(n_units=None)
+        assert self.candidates is not None
+        assert self.rg is not None
+        res = _fill_blank_labels(
+            labels=self.candidates[:, 0],
+            un_adj=self.un_adj,
+            explore_adj=self.explore_adj,
+            neighb_adj=self.neighb_adj,
+            neighborhood_ids=self.neighborhood_ids,
+            gen=self.rg,
+            ensure_coverage_only=True,
+        )
+        assert res is None
+
     def erase_candidates(self):
         if self.candidates is not None:
             self.candidates.fill_(-1)
@@ -909,9 +931,10 @@ class BatchedSpikeData:
                 neighborhood_ids=self.neighborhood_ids,
                 gen=self.rg,
             )
+            assert same_adj is not None
             if not same_adj:
                 logger.dartsortverbose(
-                    "_fill_blank_labels needed to use explore adjacency."
+                    "_fill_blank_labels used explore adjacency in bootstrap_candidates."
                 )
                 self.update_adjacency(n_units=distances.shape[0])
             if pnoid:
@@ -1028,7 +1051,7 @@ class StreamingSpikeData(BatchedSpikeData):
 
     def update_adjacency(
         self,
-        n_units: int,
+        n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
         expand_lut: bool = False,
     ):
@@ -1038,6 +1061,7 @@ class StreamingSpikeData(BatchedSpikeData):
         # my invariant, see __init__
         assert torch.equal(self.un_adj, self.explore_adj)
         self.max_n_total = max_units_per_neighb(self.un_adj_lut)
+        assert n_units is not None
         self._update_sizes_from_n_units(n_units)
 
         # which units can be proposed for each neighborhood? all of the ones in the LUT
@@ -1427,7 +1451,7 @@ class FullProposalDataView(BatchedSpikeData):
 
     def update_adjacency(
         self,
-        n_units: int,
+        n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
         expand_lut: bool = False,
     ):
@@ -2083,6 +2107,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         unit_ixs: Tensor | None = None,
         neighb_ixs: Tensor | None = None,
         lut_ixs: Tensor | None = None,
+        allow_blanks: bool = False,
     ) -> Scores:
         assert self.lut_params is not None
         return _score_batch(
@@ -2103,6 +2128,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             neighb_ixs=neighb_ixs,
             lut_ixs=lut_ixs,
             static_size=batch.candidate_count,
+            allow_blanks=allow_blanks,
             skip_noise=skip_noise,
         )
 
@@ -2195,7 +2221,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             show_batch_progress = False
         for it in iters:
             for batch in target_data.batches(show_progress=show_batch_progress):
-                batch_scores = self.score_batch(batch, data.n_candidates)
+                batch_scores = self.score_batch(
+                    batch, data.n_candidates, allow_blanks=True
+                )
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
                 scores.candidates[bix] = batch_scores.candidates.to(dev)
@@ -3156,6 +3184,13 @@ def instantiate_and_bootstrap_tmm(
         rg=rg,
     )
 
+    # every spike's feature subset needs to be covered by that of a mixture component,
+    # or in other words, at least one spike from each neighborhood id needs to be within
+    # the exploration set. that's a hard assumption: otherwise we get all-neginf columns
+    # of the likelihood and things break. i'm not sure if the right way to fix that is
+    # to handle that case, or to enforce full coverage here, but i'm doing the latter.
+    train_data.ensure_coverage()
+
     # bootstrapping phase: tmm needs lut, lut needs distances, distances need tmm...
     tmm = TruncatedMixtureModel.from_config(
         noise=noise,
@@ -4002,6 +4037,10 @@ def _initialize_single(
 
     mean = mean.view(d, c)
     # TODO build this the other way
+    assert W.shape[1] <= rank
+    assert W.shape[0] == d * c
+    if W.shape[1] < rank:
+        W = F.pad(W, (0, rank - W.shape[1]))
     assert W.shape[1] == rank
     W = W.T.reshape(rank, d, c)
 
@@ -4173,15 +4212,25 @@ def _fill_blank_labels(
     neighb_adj: Tensor,
     gen: torch.Generator,
     batch_size: int = 1024,
+    ensure_coverage_only: bool = False,
+    max_steps=2,
 ):
+    assert neighborhood_ids.shape == labels.shape
+    assert un_adj.shape == explore_adj.shape
+    assert un_adj.shape[1] == neighb_adj.shape[0]
+    assert un_adj.shape[1] == neighb_adj.shape[1]
+
     (blank,) = (labels < 0).nonzero(as_tuple=True)
     Nblank = blank.numel()
-    if not Nblank:
+    if not Nblank and ensure_coverage_only:
+        return None
+    elif not Nblank:
         return True
 
     # need full coverage of neighborhoods here. would prefer only to branch out with
     # explore as needed, so make those probs tiny.
     keep_same_adj = un_adj.sum(0).min().cpu().item() > 0
+    n_new_units = 0
     if keep_same_adj:
         adj = un_adj
     else:
@@ -4192,20 +4241,53 @@ def _fill_blank_labels(
         else:
             uncovered_adj = adj
 
-        n_steps = 0
-        while adj.sum(0).min().cpu().item() == 0:
+        n_steps = -1
+        for n_steps in range(min(int(uncovered), max_steps)):
             explore_adj = explore_adj @ neighb_adj
             adj = un_adj + explore_adj * torch.finfo(explore_adj.dtype).tiny
-            n_steps += 1
-            if n_steps > 5:
+            if adj.sum(0).min().cpu().item() > 0:
                 break
 
-        if uncovered:
-            still_uncovered = adj.sum(0).min().cpu().item() == 0
-            # raise if still_uncovered, warn or log otherwise
-            _log_warn_or_raise_coverage(
-                uncovered_adj, neighborhood_ids, n_steps, still_uncovered
+        still_uncovered = adj.sum(0).min().cpu().item() == 0
+        if still_uncovered and ensure_coverage_only:
+            n_units = un_adj.shape[0]
+            # make new units by getting connected components of the uncovered
+            # neighborhood graph
+            neighb_counts = _flat_count(neighborhood_ids, top=adj.shape[1] - 1)
+            (uncovered_neighbs,) = (adj.sum(0) == 0).nonzero(as_tuple=True)
+            uncovered_neighbs = uncovered_neighbs[neighb_counts[uncovered_neighbs] > 0]
+            uncovered_graph = neighb_adj[uncovered_neighbs][:, uncovered_neighbs]
+            uncovered_graph = uncovered_graph.numpy(force=True)
+            n_new_units, neighb_component_ids = connected_components(uncovered_graph)
+            neighb_component_ids = torch.asarray(neighb_component_ids).to(labels)
+            if pnoid:
+                assert (neighb_component_ids >= 0).all()
+            neighb_component_ids = neighb_component_ids - neighb_component_ids.amin()
+            n_spikes = 0
+            if pnoid:
+                Kold = labels.max() + 1 + int((labels < 0).any())
+                assert labels.unique().shape == (Kold,)
+            for j, nid in enumerate(uncovered_neighbs):
+                (in_nid,) = (neighborhood_ids == nid).nonzero(as_tuple=True)
+                n_spikes += in_nid.numel()
+                if pnoid:
+                    assert (labels[in_nid] < 0).all()
+                labels[in_nid] = n_units + neighb_component_ids[j]
+            if pnoid:
+                Knew = labels.max() + 1 + int((labels < 0).any())
+                assert labels.unique().shape == (Knew,)
+            logger.dartsortverbose(
+                f"_fill_blank_labels made {n_new_units} new units for {n_spikes} spikes."
             )
+            return None
+
+        if uncovered:
+            # raise if still_uncovered, warn or log otherwise
+            _log_warn_or_raise_coverage(uncovered_adj, neighborhood_ids, n_steps, adj)
+
+    if ensure_coverage_only:
+        return None
+
     for i0 in range(0, Nblank, batch_size):
         i1 = min(Nblank, i0 + batch_size)
         ii = blank[i0:i1]
@@ -4516,6 +4598,7 @@ def _score_batch(
     fixed_responsibilities: Tensor | None = None,
     skip_responsibility: bool = False,
     skip_noise: bool = False,
+    allow_blanks: bool = False,
 ):
     n, Ctot = candidates.shape
     assert whitenedx.shape[0] == n
@@ -4527,7 +4610,10 @@ def _score_batch(
 
     if spike_ixs is None:
         spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
-            candidates, neighborhood_ids, static_size=static_size
+            candidates,
+            neighborhood_ids,
+            static_size=static_size,
+            allow_blanks=allow_blanks,
         )
         lut_ixs = lut.lut[unit_ixs, neighb_ixs]
     else:
@@ -4582,10 +4668,13 @@ def _score_batch(
 
 
 def _sparsify_candidates(
-    candidates: Tensor, neighborhood_ids: Tensor, static_size: int | None
+    candidates: Tensor,
+    neighborhood_ids: Tensor,
+    static_size: int | None,
+    allow_blanks: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     cpos = candidates >= 0
-    if pnoid:
+    if pnoid and not allow_blanks:
         assert cpos.any(dim=1).all()
     if pnoid and static_size is not None:
         assert cpos.sum() == static_size
@@ -5101,7 +5190,30 @@ def _get_u_from_ulut(lut: NeighborhoodLUT, stats: SufficientStatistics):
     return U
 
 
-def _log_warn_or_raise_coverage(adj, neighborhood_ids, n_steps, needs_raise):
+def _log_warn_or_raise_coverage(orig_adj, neighborhood_ids, n_steps, final_adj):
+    n_orig_uncov, orig_uncov_neighbs, pct_orig_uncov, orig_uncov_counts = (
+        _check_coverage_stats(orig_adj, neighborhood_ids)
+    )
+    n_new_uncov, new_uncov_neighbs, pct_new_uncov, new_uncov_counts = (
+        _check_coverage_stats(final_adj, neighborhood_ids)
+    )
+    message = (
+        f"Neighborhood coverage was not complete, with {len(orig_uncov_neighbs)} uncovered "
+        f"neighborhoods and {n_orig_uncov} uncovered spikes ({pct_orig_uncov:.3f}% of set). "
+        f"Neighborhoods and counts were: {orig_uncov_neighbs}, {orig_uncov_counts}. It took "
+        f"{n_steps} expansion steps to fill out the coverage with final uncovered fraction "
+        f"{pct_new_uncov:.3f}% ({n_new_uncov} spikes)."
+    )
+    needs_raise = n_new_uncov > 0
+    if needs_raise:
+        raise ValueError(message)
+    elif pct_orig_uncov < 0.05:
+        logger.dartsortverbose(message)
+    else:
+        warnings.warn(message, stacklevel=2)
+
+
+def _check_coverage_stats(adj, neighborhood_ids):
     (uncovered_neighbs,) = (adj.sum(0) == 0).cpu().nonzero(as_tuple=True)
     unique_neighbs, ucounts = neighborhood_ids.unique(return_counts=True)
     unique_neighbs = unique_neighbs.cpu()
@@ -5113,15 +5225,15 @@ def _log_warn_or_raise_coverage(adj, neighborhood_ids, n_steps, needs_raise):
     n_uncovered = sum(uncovered_counts)
     pct_uncovered = 100.0 * (n_uncovered / neighborhood_ids.shape[0])
     uncovered_neighbs = uncovered_neighbs.tolist()
-    message = (
-        f"Neighborhood coverage was not complete, with {len(uncovered_neighbs)} uncovered "
-        f"neighborhoods and {n_uncovered} uncovered spikes ({pct_uncovered:.3f}% of set). "
-        f"Neighborhoods and counts were: {uncovered_neighbs}, {uncovered_counts}. It took "
-        f"{n_steps} expansion steps to fill out the coverage."
-    )
-    if needs_raise:
-        raise ValueError(message)
-    elif pct_uncovered < 0.05:
-        logger.dartsortverbose(message)
-    else:
-        warnings.warn(message, stacklevel=2)
+    return n_uncovered, uncovered_neighbs, pct_uncovered, uncovered_counts
+
+
+def _flat_count(x, top=None):
+    u, c = x.unique(return_counts=True)
+    assert (u >= 0).all()
+    if top is None:
+        top = u[-1]
+    assert top >= u[-1]
+    flatc = c.new_zeros(top + 1)
+    flatc[u] = c
+    return flatc
