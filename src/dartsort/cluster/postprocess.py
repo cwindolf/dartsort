@@ -165,6 +165,7 @@ def postprocess(
             denoising_fit_radius=template_cfg.denoising_fit_radius,
             trough_offset_samples=trough,
             spike_length_samples=full,
+            recompute_tsvd=template_cfg.recompute_tsvd,
         )
     h5_path = sorting.parent_h5_path
 

@@ -213,10 +213,16 @@ class DeveloperConfig(DARTsortUserConfig):
     min_template_snr: float = 40.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(
-        default=50.0, arg_type=float_or_none
+        default=None, arg_type=float_or_none
     )
     always_recompute_tsvd: bool = True
     matching_template_min_amplitude: float = 1.0
+    realign_strategy: Literal[
+        "mainchan_trough_factor",
+        "normsq_weighted_trough_factor",
+        "ampsq_weighted_trough_factor",
+    ] = "normsq_weighted_trough_factor"
+    trough_factor: float = 3.0
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"

@@ -5,6 +5,7 @@ where you can get templates using the TemplateConfig in config.py.
 """
 
 from dataclasses import replace
+from typing import Literal
 
 import numpy as np
 import torch
@@ -32,7 +33,8 @@ def get_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
-    realign_to="max",
+    realign_strategy="normsq_weighted_trough_factor",
+    trough_factor=3.0,
     low_rank_denoising=True,
     denoising_tsvd=None,
     denoising_rank=5,
@@ -109,7 +111,7 @@ def get_templates(
 
     # estimate peak sample times and realign spike train
     if realign_peaks:
-        if raw_only:
+        if raw_only or realign_strategy != "mainchan_trough_factor":
             # pad the trough_offset_samples and spike_length_samples so that
             # if the user did not request denoising we can just return the
             # raw templates right away
@@ -145,7 +147,8 @@ def get_templates(
             raw_results["raw_templates"],
             raw_results["snrs_by_channel"],
             raw_results["unit_ids"],
-            realign_to=realign_to,
+            realign_strategy=realign_strategy,
+            trough_factor=trough_factor,
             max_shift=realign_max_sample_shift,
             trough_offset_samples=trough_offset_align,
             recording_length_samples=recording.get_num_samples(),
@@ -299,7 +302,11 @@ def realign_sorting(
     templates,
     snrs_by_channel,
     unit_ids,
-    realign_to="trough_factor",
+    realign_strategy: Literal[
+        "mainchan_trough_factor",
+        "normsq_weighted_trough_factor",
+        "ampsq_weighted_trough_factor",
+    ] = "mainchan_trough_factor",
     trough_factor=3.0,
     max_shift=20,
     trough_offset_samples=42,
@@ -316,7 +323,7 @@ def realign_sorting(
         main_channels=template_maxchans,
         trough_offset_samples=trough_offset_samples,
         max_shift=max_shift,
-        realign_to=realign_to,
+        realign_strategy=realign_strategy,
         trough_factor=trough_factor,
     )
 
@@ -382,36 +389,30 @@ def realign_templates(
     main_channels=None,
     trough_offset_samples=42,
     max_shift=20,
-    realign_to="trough_factor",
-    trough_factor=2.0,
+    realign_strategy: Literal[
+        "mainchan_trough_factor",
+        "normsq_weighted_trough_factor",
+        "ampsq_weighted_trough_factor",
+    ] = "normsq_weighted_trough_factor",
+    trough_factor=3.0,
 ):
-    n, t, c = templates.shape
+    from .template_util import estimate_offset
+
     if main_channels is None:
-        if realign_to == "max":
-            main_channels = np.abs(templates).max(1).argmax(1)
-        elif realign_to == "trough":
-            main_channels = templates.min(1).argmin(1)
-        elif realign_to == "trough_factor":
-            align = np.abs(templates)
-            align[templates < 0] *= trough_factor
-            main_channels = align.max(1).argmax(1)
+        if realign_strategy == "mainchan_trough_factor":
+            main_channels = np.ptp(templates).max(1).argmax(1)
+        elif realign_strategy == "normsq_weighted_trough_factor":
+            main_channels = np.square(templates).sum(1).argmax(1)
+        elif realign_strategy == "ampsq_weighted_trough_factor":
+            main_channels = np.ptp(templates).max(1).argmax(1)
         else:
             assert False
     assert main_channels is not None
 
     # find template peak time
-    template_maxchan_traces = templates[np.arange(n), :, main_channels]
-    if realign_to == "max":
-        template_peak_times = np.abs(template_maxchan_traces).argmax(1)
-    elif realign_to == "trough":
-        template_peak_times = template_maxchan_traces.argmin(1)
-    elif realign_to == "trough_factor":
-        neg = template_maxchan_traces < 0
-        template_maxchan_traces = np.abs(template_maxchan_traces)
-        template_maxchan_traces[neg] *= trough_factor
-        template_peak_times = template_maxchan_traces.argmax(1)
-    else:
-        assert False
+    template_peak_times = estimate_offset(
+        templates, strategy=realign_strategy, trough_factor=trough_factor
+    )
 
     # find unit sample time shifts
     template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
@@ -541,6 +542,8 @@ def denoising_weights(
         snc[snc >= 1.0] = np.inf
     elif edge_behavior == "raw":
         snc = snrs
+    else:
+        assert False
 
     # pass it through a hand picked squashing function
     wntc = 1.0 / (1.0 + np.exp(d + a * vt[None, :, None] - b * snc[:, None, :]))
@@ -571,7 +574,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     dtype=np.float32,
     device=None,
 ):
-    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
+    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)  # type: ignore
     unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)
     spike_counts = spike_counts[unit_ids >= 0]
     unit_ids = unit_ids[unit_ids >= 0]

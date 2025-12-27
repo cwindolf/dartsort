@@ -580,7 +580,7 @@ def singlechan_alignments(
     traces: torch.Tensor, trough_factor: float = 3.0, dim: int = 1
 ) -> torch.Tensor:
     aligner_traces = torch.where(traces < 0, trough_factor * traces, -traces)
-    offsets = torch.abs(aligner_traces).argmax(dim=dim)
+    offsets = aligner_traces.argmin(dim=dim)
     return offsets
 
 
@@ -605,7 +605,7 @@ def estimate_offset(
     trough_factor=3.0,
     min_weight=0.75,
 ):
-    if strategy == "main_chan_trough_factor":
+    if strategy == "mainchan_trough_factor":
         _, _, offsets = get_main_channels_and_alignments(
             None, trough_factor=trough_factor, templates=templates
         )
@@ -637,3 +637,5 @@ def estimate_offset(
         offsets = np.sum(offsets * weights, axis=1)
         offsets = np.rint(offsets).astype(np.int64)
         return offsets
+
+    assert False

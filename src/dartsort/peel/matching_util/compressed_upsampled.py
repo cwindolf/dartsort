@@ -18,7 +18,7 @@ from ...templates import (
     svd_compress_templates,
     templates_at_time,
 )
-from ...templates.template_util import singlechan_alignments
+from ...templates.template_util import estimate_offset
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
 from ...util.spiketorch import add_at_, convolve_lowrank, grab_spikes_full
@@ -58,6 +58,8 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         registered_geom: np.ndarray | None = None,
         registered_template_depths_um: np.ndarray | None = None,
         refractory_radius_frames: int = 10,
+        realign_strategy: str = "mainchan_trough_factor",
+        trough_factor: float = 3.0,
         motion_est=None,
         dtype=torch.float,
     ):
@@ -136,16 +138,14 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.register_buffer("cup_ix_to_up_ix", cup_ix_to_up_ix)
         self.register_buffer("cup_temporal", cup_temporal)
 
-        main_chans = self.b.spatial_sing.square().sum(dim=1).argmax(1)
-        main_sv = self.b.spatial_sing.take_along_dim(
-            dim=2, indices=main_chans[:, None, None]
-        )
-        cup_main_traces = torch.einsum(
-            "ntr,nr->nt",
+        cup_temps = torch.einsum(
+            "ntr,nrc->ntc",
             cup_temporal,
-            main_sv[cupt.compressed_index_to_template_index, :, 0],
+            self.b.spatial_sing[cupt.compressed_index_to_template_index],
         )
-        cup_trough_shifts = singlechan_alignments(cup_main_traces)
+        cup_trough_shifts = estimate_offset(
+            cup_temps, strategy=realign_strategy, trough_factor=trough_factor
+        )
         cup_trough_shifts = cup_trough_shifts - int(trough_offset_samples)
         self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
@@ -265,6 +265,8 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             registered_template_depths_um=template_data.registered_depths_um(),
             pconv_db=pairwise_conv_db,
             motion_est=motion_est,
+            realign_strategy=matching_cfg.realign_strategy,
+            trough_factor=matching_cfg.trough_factor,
             dtype=dtype,
         )
 

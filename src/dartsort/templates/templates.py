@@ -375,6 +375,8 @@ def _from_config_with_realigned_sorting(
         sorting=sorting,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
+        realign_strategy=template_cfg.realign_strategy,
+        trough_factor=template_cfg.trough_factor,
         spikes_per_unit=template_cfg.spikes_per_unit,
         denoising_rank=template_cfg.denoising_rank,
         recompute_tsvd=template_cfg.recompute_tsvd,
@@ -462,6 +464,8 @@ def get_chunked_templates(
             spikes_per_unit=template_cfg.spikes_per_unit,
             realign_max_sample_shift=template_cfg.realign_max_sample_shift,
             n_jobs=computation_cfg.actual_n_jobs(),
+            realign_strategy=template_cfg.realign_strategy,
+            trough_factor=template_cfg.trough_factor,
             random_seed=rg,
         )
         template_cfg = replace(template_cfg, realign_peaks=False)

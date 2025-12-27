@@ -88,6 +88,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         drift_interp_params: InterpolationParams = default_interpolation_params,
         interp_neighborhood_radius: float = 150.0,
         refractory_radius_frames: int = 10,
+        realign_strategy="normsq_weighted_trough_factor",
+        trough_factor=3.0,
         device: torch.device,
     ):
         """
@@ -100,6 +102,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.upsampling = up_factor > 1
         self.up_method = up_method
         self.interpolating = motion_est is not None
+        self.realign_strategy = realign_strategy
+        self.trough_factor = trough_factor
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
@@ -220,6 +224,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
             drift_interp_params=matching_cfg.drift_interp_params,
             interp_neighborhood_radius=matching_cfg.drift_interp_neighborhood_radius,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            realign_strategy=matching_cfg.realign_strategy,
+            trough_factor=matching_cfg.trough_factor,
             device=device,
         )
 
@@ -250,7 +256,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
             spatial_sing=spatial_sing,
             main_channels=main_channels,
             up_temporal_comps=self.b.up_temporal_comps,
-            trough_offset_samples=self.trough_offset_samples,
+            trough_offset_samples=self.b.trough_offset_samples,
+            normsq_by_chan=normsq_by_chan,
+            strategy=self.realign_strategy,
+            trough_factor=self.trough_factor,
         )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
@@ -350,7 +359,9 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         batch_templates = batch_templates.view(n * t, c)
         time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
         if sign == -1:
-            traces[:, :c].scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
+            traces[:, :c].scatter_add_(
+                dim=0, src=batch_templates._neg_view(), index=time_ix
+            )
         elif sign == 1:
             traces[:, :c].scatter_add_(dim=0, src=batch_templates, index=time_ix)
         else:
@@ -465,23 +476,57 @@ class DriftyChunkTemplateData(ChunkTemplateData):
 # -- helpers
 
 
-@torch.jit.script
 def _calc_trough_shifts(
     spatial_sing: Tensor,
     main_channels: Tensor,
     up_temporal_comps: Tensor,
     trough_offset_samples: Tensor,
+    normsq_by_chan: Tensor,
+    strategy: str,
+    trough_factor: float,
+    min_weight=0.75,
 ) -> Tensor:
-    main_sing = spatial_sing.take_along_dim(
-        dim=2, indices=main_channels[:, None, None]
-    )[:, :, 0]
+    # pick alignments of the temporal components
     rank, up, t = up_temporal_comps.shape
-    tcomps = up_temporal_comps.view(rank, up * t)
-    main_traces_up = main_sing @ tcomps
-    main_traces_up = main_traces_up.view(main_channels.shape[0], up, t)
-    trough_shifts = singlechan_alignments(main_traces_up, dim=2)
-    trough_shifts = trough_shifts.sub(trough_offset_samples)
-    return trough_shifts
+    assert spatial_sing.shape[1] == rank
+
+    if strategy == "mainchan_trough_factor":
+        main_sing = spatial_sing.take_along_dim(
+            dim=2, indices=main_channels[:, None, None]
+        )[:, :, 0]
+        tcomps = up_temporal_comps.view(rank, up * t)
+        main_traces_up = main_sing @ tcomps
+        main_traces_up = main_traces_up.view(main_channels.shape[0], up, t)
+        trough_shifts = singlechan_alignments(
+            main_traces_up, dim=2, trough_factor=trough_factor
+        )
+        trough_shifts = trough_shifts.sub(trough_offset_samples)
+        return trough_shifts
+
+    if strategy == "normsq_weighted_trough_factor":
+        weights = normsq_by_chan
+        weights_mask = weights >= min_weight * weights.amax(dim=1, keepdim=True)
+        weights = weights.masked_fill(torch.logical_not(weights_mask), 0.0)
+        wtotal = weights.sum(dim=1)
+        units, chans = weights_mask.nonzero(as_tuple=True)
+        weights = weights[units, chans] / wtotal[units]
+    elif strategy == "ampsq_weighted_trough_factor":
+        raise NotImplementedError
+    else:
+        assert False
+
+    nnz = units.shape[0]
+    spatial = spatial_sing[units, :, chans]
+    traces = spatial @ up_temporal_comps.view(rank, up * t)
+    traces_up = traces.view(nnz, up, t)
+    offsets_nz = singlechan_alignments(traces_up, dim=2, trough_factor=trough_factor)
+    offsets = traces.new_zeros((len(spatial_sing), up))
+    ix = units[:, None].broadcast_to(offsets_nz.shape)
+    src = offsets_nz * weights[:, None]
+    offsets.scatter_add_(dim=0, index=ix, src=src)
+    offsets = offsets.round().long() - trough_offset_samples
+
+    return offsets
 
 
 def get_interp_upsampling_indices(
