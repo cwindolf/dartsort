@@ -171,9 +171,9 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
     cluster_strategy: str = "gmmdpc"
-    refinement_strategy: Literal[
-        "gmm", "pcmerge", "forwardbackward", "none", "tmm"
-    ] = "tmm"
+    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = (
+        "tmm"
+    )
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -197,9 +197,9 @@ class DeveloperConfig(DARTsortUserConfig):
     convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching
-    matching_template_type: Literal[
-        "individual_compressed_upsampled", "drifty"
-    ] = "individual_compressed_upsampled"
+    matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
+        "individual_compressed_upsampled"
+    )
     matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
@@ -207,8 +207,10 @@ class DeveloperConfig(DARTsortUserConfig):
     overwrite_matching: bool = False
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = "loot"
-    template_mix_zero: bool = True
+    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
+        "exp_weighted"
+    )
+    template_mix_zero: bool = False
     template_mix_svd: bool = True
     min_template_snr: float = 40.0
     min_template_count: int = 50
