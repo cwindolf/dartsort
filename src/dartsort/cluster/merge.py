@@ -9,7 +9,11 @@ from scipy.sparse.csgraph import maximum_bipartite_matching
 from tqdm.auto import tqdm
 
 
-from ..util.internal_config import TemplateConfig
+from ..util.internal_config import (
+    TemplateConfig,
+    TemplateMergeConfig,
+    ComputationConfig,
+)
 from ..util.logging_util import get_logger
 from ..templates import TemplateData, template_util
 from ..peel.matching_util.pairwise_util import (
@@ -29,7 +33,7 @@ def merge_templates(
     template_data: Optional[TemplateData] = None,
     template_cfg: Optional[TemplateConfig] = None,
     motion_est=None,
-    max_shift_samples=20,
+    max_shift_samples=40,
     superres_linkage=np.max,
     linkage="complete",
     distance_kind="rms",
@@ -128,6 +132,35 @@ def merge_templates(
     return dict(sorting=merged_sorting, new_unit_ids=new_unit_ids)
 
 
+def get_merge_distances(
+    template_data: TemplateData,
+    template_merge_cfg: TemplateMergeConfig,
+    computation_cfg: ComputationConfig | None = None,
+    cooccurrence_mask=None,
+    show_progress=True,
+    conv_batch_size=128,
+    units_batch_size=8,
+):
+    computation_cfg = job_util.ensure_computation_config(computation_cfg)
+    units, dists, shifts, template_snrs = calculate_merge_distances(
+        template_data=template_data,
+        max_shift_samples=template_merge_cfg.max_shift_samples,
+        temporal_upsampling_factor=template_merge_cfg.temporal_upsampling_factor,
+        amplitude_scaling_variance=template_merge_cfg.amplitude_scaling_variance,
+        amplitude_scaling_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        svd_compression_rank=template_merge_cfg.svd_compression_rank,
+        min_spatial_cosine=template_merge_cfg.min_spatial_cosine,
+        cooccurrence_mask=cooccurrence_mask,
+        conv_batch_size=conv_batch_size,
+        units_batch_size=units_batch_size,
+        device=computation_cfg.actual_device(),
+        n_jobs=computation_cfg.actual_n_jobs(),
+        show_progress=show_progress,
+        distance_kind=template_merge_cfg.distance_kind,
+    )
+    return units, dists, shifts, template_snrs
+
+
 def merge_across_sortings(
     sortings,
     recording,
@@ -137,7 +170,7 @@ def merge_across_sortings(
     within_merge_distance_threshold=0.5,
     superres_linkage=np.max,
     sym_function=np.minimum,
-    max_shift_samples=20,
+    max_shift_samples=40,
     temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
@@ -235,7 +268,7 @@ def calculate_merge_distances(
     template_data,
     superres_linkage=np.max,
     sym_function=np.minimum,
-    max_shift_samples=20,
+    max_shift_samples=40,
     temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
@@ -321,7 +354,7 @@ def cross_match_distance_matrix(
     template_data_b,
     superres_linkage=np.max,
     sym_function=np.minimum,
-    max_shift_samples=20,
+    max_shift_samples=40,
     temporal_upsampling_factor=1,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,
@@ -525,7 +558,7 @@ def cross_match(
 
 def get_deconv_resid_decrease_iter(
     template_data,
-    max_shift_samples=20,
+    max_shift_samples=40,
     temporal_upsampling_factor=8,
     amplitude_scaling_variance=0.001,
     amplitude_scaling_boundary=0.1,

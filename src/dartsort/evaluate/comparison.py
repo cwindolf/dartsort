@@ -69,6 +69,8 @@ class DARTsortGroundTruthComparison:
             tested_rg = tested_td.registered_geom
             if gt_rg is None:
                 assert tested_rg is None
+            assert gt_rg is not None
+            assert tested_rg is not None
             if not np.array_equal(gt_rg, tested_rg):
                 raise ValueError(
                     f"Template data had different registered geoms: "
@@ -85,11 +87,11 @@ class DARTsortGroundTruthComparison:
 
     @property
     def unit_ids(self):
-        return self.gt_analysis.unit_ids
+        return self.gt_analysis.sorting.unit_ids
 
     @property
     def n_gt_units(self):
-        return len(self.gt_analysis.unit_ids)
+        return len(self.gt_analysis.sorting.unit_ids)
 
     @property
     def agreement_scores(self):
@@ -97,25 +99,28 @@ class DARTsortGroundTruthComparison:
         if self._agreement_scores is not None:
             return self._agreement_scores
         a = self.comparison.agreement_scores.copy()
-        gtids = np.arange(self.gt_analysis.unit_ids.max() + 1)
-        tids = np.arange(self.tested_analysis.unit_ids.max() + 1)
+        gtids = np.arange(self.gt_analysis.sorting.unit_ids.max() + 1)
+        tids = np.arange(self.tested_analysis.sorting.unit_ids.max() + 1)
         a = a.reindex(index=gtids, columns=tids, fill_value=0.0)
         self._agreement_scores = a
         return a
 
-    def unit_amplitudes(self, unit_ids=None):
-        return self.gt_analysis.unit_amplitudes(unit_ids=unit_ids)
+    def unit_amplitudes(self):
+        return self.gt_analysis.unit_amplitudes()
 
     def get_match(self, gt_unit):
+        assert self.comparison.hungarian_match_12 is not None
         return int(self.comparison.hungarian_match_12[gt_unit])
 
     def get_best_match(self, gt_unit):
+        assert self.comparison.best_match_12 is not None
         return int(self.comparison.best_match_12[gt_unit])
 
     def unit_info_dataframe(self, force_distances=False):
         amplitudes = self.gt_analysis.unit_amplitudes()
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
+        assert isinstance(df, pd.DataFrame)
         df = df.astype(float)  # not sure what the problem was...
         df["gt_ptp_amplitude"] = amplitudes
         df["gt_firing_rate"] = firing_rates
@@ -130,6 +135,7 @@ class DARTsortGroundTruthComparison:
             df["min_temp_dist"] = dist
         rec = []
         for uid in df.index:
+            assert self.unsorted_detection is not None
             rec.append(self.unsorted_detection[self.gt_analysis.in_unit(uid)].mean())
         df["unsorted_recall"] = rec
         return df
@@ -155,15 +161,15 @@ class DARTsortGroundTruthComparison:
         return self._greedy_iou
 
     def unit_collidedness(self):
-        uids = self.gt_analysis.unit_ids
+        uids = self.gt_analysis.sorting.unit_ids
         c = np.full(len(uids), np.nan)
         matched_c = c.copy()
         missed_c = c.copy()
 
-        if not hasattr(self.gt_analysis.sorting, "collidedness"):
+        collidedness = getattr(self.gt_analysis.sorting, "collidedness", None)
+        if collidedness is None:
             return c, matched_c, missed_c
 
-        collidedness = self.gt_analysis.sorting.collidedness
         for j, uid in enumerate(uids):
             inu, matchu, missu = self.matched_and_missed(uid)
             if inu.size:
@@ -176,7 +182,7 @@ class DARTsortGroundTruthComparison:
         return c, matched_c, missed_c
 
     def unit_matched_misalignment_rms(self):
-        uids = self.gt_analysis.unit_ids
+        uids = self.gt_analysis.sorting.unit_ids
         match_dt_rms = np.full(len(uids), np.nan)
         for j, uid in enumerate(uids):
             try:
@@ -185,16 +191,18 @@ class DARTsortGroundTruthComparison:
                     match_dt_rms[j] = np.sqrt(np.square(udt).mean())
             except ValueError as e:
                 warnings.warn(
-                    f"ValueError in misalignment. SI matching bug. {e=} {e.message=}"
+                    f"ValueError in misalignment. SI matching bug. {e=} {e.message=}"  # type: ignore
                 )
         return match_dt_rms
 
     def matched_misalignment(self, gt_unit_id):
         spikes = self.get_spikes_by_category(gt_unit_id)
-        gt_matched_t = self.gt_analysis.times_samples(spikes["matched_gt_indices"])
-        test_matched_t = self.tested_analysis.times_samples(
+        gt_matched_t = self.gt_analysis.sorting.times_samples[
+            spikes["matched_gt_indices"]
+        ]
+        test_matched_t = self.tested_analysis.sorting.times_samples[
             spikes["matched_tested_indices"]
-        )
+        ]
         match_dt = test_matched_t - gt_matched_t
         return match_dt
 
@@ -206,6 +214,8 @@ class DARTsortGroundTruthComparison:
     def nearby_tested_templates(self, gt_unit_id, n_neighbors=5):
         gt_td = self.gt_analysis.coarse_template_data
         tested_td = self.tested_analysis.coarse_template_data
+        assert gt_td is not None
+        assert tested_td is not None
 
         gt_unit_ix = np.searchsorted(gt_td.unit_ids, gt_unit_id)
         assert gt_td.unit_ids[gt_unit_ix] == gt_unit_id
@@ -257,7 +267,7 @@ class DARTsortGroundTruthComparison:
         greedy_res = greedy_match_counts(
             self.gt_analysis.sorting,
             self.tested_analysis.sorting,
-            radius_frames=delta_frames,
+            radius_frames=int(delta_frames),
             show_progress=self.verbose,
         )
         c = greedy_res["counts"]
@@ -319,8 +329,10 @@ class DARTsortGroundTruthComparison:
             only_tested_indices=only_tested_indices,
             unsorted_tp_indices=unsorted_tp_indices,
             unsorted_fn_indices=unsorted_fn_indices,
-            fn_times_samples=self.gt_analysis.times_samples(only_gt_indices),
-            fp_times_samples=self.tested_analysis.times_samples(only_tested_indices),
+            fn_times_samples=self.gt_analysis.sorting.times_samples[only_gt_indices],
+            fp_times_samples=self.tested_analysis.sorting.times_samples[
+                only_tested_indices
+            ],
         )
 
     def get_raw_waveforms_by_category(
@@ -355,55 +367,65 @@ class DARTsortGroundTruthComparison:
 
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        (
-            w["which_tp"],
-            w["tp"],
-            _,
-            w["geom"],
-            w["channel_index"],
-        ) = self.gt_analysis.unit_raw_waveforms(
-            gt_unit,
-            which=ind_groups["matched_gt_indices"],
-            **waveform_kw,
+        tp_waves = self.gt_analysis.unit_raw_waveforms(
+            which=ind_groups["matched_gt_indices"],  # type: ignore
+            **waveform_kw,  # type: ignore
         )
+        assert tp_waves is not None
+        w["which_tp"] = tp_waves.which
+        w["tp"] = tp_waves.waveforms
+        w["geom"] = tp_waves.geom
+        w["channel_index"] = tp_waves.channel_index
 
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w["which_fn"], w["fn"], *_ = self.gt_analysis.unit_raw_waveforms(
-            gt_unit,
-            which=ind_groups["only_gt_indices"],
-            **waveform_kw,
+        fn_waves = self.gt_analysis.unit_raw_waveforms(
+            which=ind_groups["only_gt_indices"],  # type: ignore
+            **waveform_kw,  # type: ignore
         )
+        if fn_waves is None:
+            w["which_fn"] = None
+            w["fn"] = None
+        else:
+            w["which_fn"] = fn_waves.which
+            w["fn"] = fn_waves.waveforms
 
         # load FP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        w["which_fp"], w["fp"], *_ = self.tested_analysis.unit_raw_waveforms(
-            tested_unit,
-            which=ind_groups["only_tested_indices"],
-            **waveform_kw,
+        fp_waves = self.tested_analysis.unit_raw_waveforms(
+            which=ind_groups["only_tested_indices"],  # type: ignore
+            **waveform_kw,  # type: ignore
         )
+        if fp_waves is None:
+            w["which_fp"] = None
+            w["fp"] = None
+        else:
+            w["which_fp"] = fp_waves.which
+            w["fp"] = fp_waves.waveforms
 
         if self.unsorted_detection is None:
             w["unsorted_tp"] = w["unsorted_fn"] = None
         else:
-            (
-                w["which_unsorted_tp"],
-                w["unsorted_tp"],
-                *_,
-            ) = self.gt_analysis.unit_raw_waveforms(
-                gt_unit,
-                which=ind_groups["unsorted_tp_indices"],
-                **waveform_kw,
+            utp_waves = self.gt_analysis.unit_raw_waveforms(
+                which=ind_groups["unsorted_tp_indices"],  # type: ignore
+                **waveform_kw,  # type: ignore
             )
-            (
-                w["which_unsorted_fn"],
-                w["unsorted_fn"],
-                *_,
-            ) = self.gt_analysis.unit_raw_waveforms(
-                gt_unit,
-                which=ind_groups["unsorted_fn_indices"],
-                **waveform_kw,
+            if utp_waves is None:
+                w["which_unsorted_tp"] = None
+                w["unsorted_tp"] = None
+            else:
+                w["which_unsorted_tp"] = utp_waves.which
+                w["unsorted_tp"] = utp_waves.waveforms
+            ufn_waves = self.gt_analysis.unit_raw_waveforms(
+                which=ind_groups["unsorted_fn_indices"],  # type: ignore
+                **waveform_kw,  # type: ignore
             )
+            if ufn_waves is None:
+                w["which_unsorted_fn"] = None
+                w["unsorted_fn"] = None
+            else:
+                w["which_unsorted_fn"] = ufn_waves.which
+                w["unsorted_fn"] = ufn_waves.waveforms
 
         return w
 
@@ -473,4 +495,5 @@ class DARTsortGTVersus:
         return self._unit_vs_df.copy(deep=True)
 
     def tagname(self):
+        vsstr = "vs_" + ",".join(oa.name or str(j) for j, oa in enumerate(self.other_analyses))
         return f"{self.gt_name}_{vsstr}"

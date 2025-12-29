@@ -162,6 +162,9 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         scale_min=matcher.amp_scale_min,
         scale_max=matcher.amp_scale_max,
     )
+
+    assert res["n_spikes"] > 0
+
     conv = res["conv"].numpy(force=True)
     residual = res["residual"].numpy(force=True)
     times_samples = res["times_samples"].numpy(force=True)
@@ -321,7 +324,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         cc_atol = cc_err
 
         extract_chans = matcher.b.channel_index
-        cc_wfs = res["collisioncleaned_waveforms"]
+        cc_wfs = res["collisioncleaned_waveforms"].cpu()
         time_shifts = res.get("time_shifts", np.zeros_like(labels))
         up_offsets = gt_sorting._load_dataset("up_offsets")
         gt_labels = gt_sorting.labels[gt_in_chunk]
@@ -332,7 +335,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         for wf, label, chan, up_ind, true_shift, sc in zip(
             cc_wfs, gt_labels, gt_channels, gt_up_inds, true_time_shifts, gt_scale
         ):
-            assert torch.equal(extract_chans[chan], torch.arange(nc))
+            assert torch.equal(extract_chans[chan].cpu(), torch.arange(nc))
             true_wf = sc * true_temps_up[label, up_ind]
             np.testing.assert_allclose(wf, true_wf, atol=cc_atol)
             my_trough = wf[:, chan].argmin()

@@ -321,7 +321,9 @@ class TemplateConfig:
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
     algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
-    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = "exp_weighted"
+    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
+        "exp_weighted"
+    )
     use_raw: bool = True
     use_svd: bool = True
     use_zero: bool = False
@@ -386,6 +388,7 @@ class TemplateConfig:
 
 @cfg_dataclass
 class TemplateMergeConfig:
+    distance_kind: str = "rms"
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
@@ -394,6 +397,7 @@ class TemplateMergeConfig:
     amplitude_scaling_variance: float = 0.1**2
     amplitude_scaling_boundary: float = 1.0
     svd_compression_rank: int = 20
+    max_shift_samples: int = 50
 
 
 @cfg_dataclass
@@ -520,6 +524,7 @@ class ClusteringFeaturesConfig:
     workers: int = 5
 
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
+    amplitude_vectors_dataset_name: str = "denoised_ptp_amplitude_vectors"
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
 

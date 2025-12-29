@@ -247,19 +247,23 @@ def greedy_match_counts(
     gt_t = gt_sorting.times_samples / radius_frames
     tested_t = tested_sorting.times_samples / radius_frames
 
-    geom = getattr(gt_sorting, 'geom', getattr(tested_sorting, 'geom', None))
+    geom = getattr(gt_sorting, "geom", getattr(tested_sorting, "geom", None))
     assert geom is not None
     gt_x = geom[gt_sorting.channels] / radius_um
     tested_x = geom[tested_sorting.channels] / radius_um
 
     step = min(1.0 / radius_frames, pdist(geom).min() / radius_um) / 2
 
-    test2gt_spike, gt_unmatched = greedy_match(np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step)
+    test2gt_spike, gt_unmatched = greedy_match(
+        np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step
+    )
     counts = np.zeros(
         (gt_sorting.unit_ids.max() + 1, tested_sorting.unit_ids.max() + 1),
         dtype=np.int32,
     )
-    test_matched_spike = np.flatnonzero(np.logical_and(test2gt_spike >= 0, tested_sorting.labels >= 0))
+    test_matched_spike = np.flatnonzero(
+        np.logical_and(test2gt_spike >= 0, tested_sorting.labels >= 0)
+    )
 
     matched_gt_labels = gt_sorting.labels[test2gt_spike[test_matched_spike]]
     matched_test_labels = tested_sorting.labels[test_matched_spike]
@@ -299,7 +303,7 @@ def sorting_from_times_labels(
 
     efeat = {}
     if recording is not None:
-        efeat['times_seconds'] = recording.sample_index_to_time(times_samples)
+        efeat["times_seconds"] = recording.sample_index_to_time(times_samples)
 
     sorting = DARTsortSorting(
         times_samples=times_samples,
@@ -373,7 +377,7 @@ def _same(x):
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
-    load_feature_names=("times_seconds",),
+    load_feature_names=("times_seconds", "geom", "channel_index"),
     detection_h5_names=(
         "subtraction.h5",
         "threshold.h5",
@@ -513,7 +517,14 @@ def load_dartsort_step_unit_info_dataframes(
             continue
         assert step_sorting is not None
         name = f"{sorting_name}: {step_name}" if sorting_name else step_name
-        step_analysis = analysis.DARTsortAnalysis(step_sorting, recording, name=name)
+        step_analysis = analysis.DARTsortAnalysis.from_sorting(
+            recording=recording,
+            sorting=step_sorting,
+            motion_est=None,
+            name=name,
+            template_cfg=None,
+            vis_radius=0,
+        )
         step_comparison = comparison.DARTsortGroundTruthComparison(
             gt_analysis, step_analysis
         )

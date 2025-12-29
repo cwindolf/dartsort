@@ -110,6 +110,14 @@ class DARTsortSorting:
                 )
         return other
 
+    def has_persistent_labels(self):
+        """Are my .labels from the hdf5 file?"""
+        if self.parent_h5_path is None:
+            return False
+        if self.labels is None:
+            return False
+        return np.array_equal(self.labels, self._load_dataset("labels"))
+
     # interface for setting features
 
     def add_ephemeral_feature(
@@ -409,7 +417,7 @@ class DARTsortSorting:
         ns = self.n_spikes
         nu = self.n_units
         unit_str = f"{nu} unit" + "s" * (nu > 1)
-        feat_str = ""
+        feat_str = " "
         if self._loaded_persistent_features:
             s = ", ".join(self._loaded_persistent_features)
             feat_str += f"Loaded HDF5 features: {s}. "
@@ -418,7 +426,7 @@ class DARTsortSorting:
             feat_str += f"Features: {s}. "
         h5_str = ""
         if self.parent_h5_path:
-            h5_str = f" From HDF5 file {self.parent_h5_path}."
+            h5_str = f"From HDF5 file {self.parent_h5_path}."
         if self.labels is not None:
             noise_prop = (self.labels < 0).mean().item()
             noise_pct = 100 * noise_prop
@@ -449,6 +457,53 @@ class DARTsortSorting:
             dset = h5[dataset_name]
             assert isinstance(dset, h5py.Dataset)
             return dset[:]
+
+    def slice_feature_by_name(
+        self, dataset_name: str, mask: np.ndarray | slice = slice(None)
+    ):
+        if hasattr(self, dataset_name):
+            return getattr(self, dataset_name)[mask]
+
+        # otherwise, we don't have it loaded
+        assert dataset_name not in self._ephemeral_feature_names
+        assert dataset_name not in self._loaded_persistent_features
+
+        # but we can try to load it
+        if self.parent_h5_path is None:
+            raise ValueError(f"Can't load feature {dataset_name} with no HDF5.")
+        if isinstance(mask, slice) and mask == slice(None):
+            return self._load_dataset(dataset_name)
+
+        # h5 direct read is fine for a few indices
+        if isinstance(mask, np.ndarray) and mask.dtype.kind != "b":
+            if mask.size <= 768:
+                with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+                    return cast(h5py.Dataset, h5[dataset_name])[mask]
+
+        # mask needs to be boolean for _read_by_chunk
+        if not isinstance(mask, np.ndarray) or mask.dtype.kind != "b":
+            h5_mask = np.zeros(self.n_spikes, dtype=np.bool_)
+            h5_mask[mask] = True
+        else:
+            h5_mask = mask
+
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            dset = h5[dataset_name]
+            assert isinstance(dset, h5py.Dataset)
+            assert dset.shape[0] == self.n_spikes == h5_mask.shape[0]
+            return _read_by_chunk(mask, dset, show_progress=False)
+
+
+def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
+    if sorting.parent_h5_path is None:
+        return None
+    h5_path = resolve_path(sorting.parent_h5_path)
+    model_dir = h5_path.parent / f"{h5_path.stem}_models"
+    if model_dir.exists():
+        assert model_dir.is_dir()
+        return model_dir
+    else:
+        return None
 
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
@@ -785,7 +840,6 @@ def _read_by_chunk(mask, dataset, show_progress=True):
         if not nm:
             continue
         x = dsli[m]
-        # x = dataset[np.arange(sli.start, sli.stop)[m]]
         out[n : n + nm] = x
         n += nm
     return out

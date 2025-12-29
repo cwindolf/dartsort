@@ -98,7 +98,8 @@ def ptp(waveforms, dim=1, keepdims=False):
     is_tensor = torch.is_tensor(waveforms)
     waveforms = torch.asarray(waveforms)
     if waveforms.shape[dim] > 1:
-        v = waveforms.amax(dim=dim).sub_(waveforms.amin(dim=dim))
+        amin, amax = torch.aminmax(waveforms, dim=dim)
+        v = amax.sub_(amin)
     else:
         v = waveforms.abs().amax(dim=dim)
     if keepdims:

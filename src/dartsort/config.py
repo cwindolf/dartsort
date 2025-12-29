@@ -218,7 +218,7 @@ class DeveloperConfig(DARTsortUserConfig):
         default=None, arg_type=float_or_none
     )
     always_recompute_tsvd: bool = True
-    matching_template_min_amplitude: float = 1.0
+    matching_template_min_amplitude: float = 0.0
     realign_strategy: Literal[
         "mainchan_trough_factor",
         "normsq_weighted_trough_factor",

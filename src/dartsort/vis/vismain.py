@@ -231,7 +231,7 @@ def visualize_all_sorting_steps(
     if motion_est is None:
         motion_est = try_load_motion_est(dartsort_dir, motion_est_pkl)
 
-    fnames = ["times_seconds"]
+    fnames = ["times_seconds", "geom", "channel_index"]
     if make_scatterplots or make_sorting_summaries:
         fnames += [
             "point_source_localizations",
@@ -463,9 +463,7 @@ def _plan_vis(
             motion_est=motion_est,
             name=sorting_name,
             template_cfg=template_cfg,
-            allow_template_reload="match" in output_directory.stem,
             computation_cfg=computation_cfg,
-            compute_distances=True,
         )
 
     if need_comparison:

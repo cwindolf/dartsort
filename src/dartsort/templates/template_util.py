@@ -611,31 +611,33 @@ def estimate_offset(
         )
         return offsets
 
+    templates = torch.asarray(templates)
+
     if strategy == "normsq_weighted_trough_factor":
-        tmp = np.square(templates)
-        weights = tmp.sum(axis=1)
-        weights /= weights.max(axis=1, keepdims=True)
+        tmp = templates.square()
+        weights = tmp.sum(dim=1)
+        weights /= weights.amax(dim=1, keepdim=True)
         weights[weights < min_weight] = 0.0
-        weights /= weights.sum(axis=1, keepdims=True)
+        weights /= weights.sum(dim=1, keepdim=True)
         tmp[:] = templates
         tmp[tmp < 0] *= trough_factor
-        np.abs(tmp, out=tmp)
-        offsets = tmp.argmax(axis=1).astype(np.float64)
-        offsets = np.sum(offsets * weights, axis=1)
-        offsets = np.rint(offsets).astype(np.int64)
+        tmp.abs_()
+        offsets = tmp.argmax(dim=1).double()
+        offsets = torch.sum(offsets * weights, dim=1)
+        offsets = torch.round(offsets).long()
         return offsets
 
     if strategy == "ampsq_weighted_trough_factor":
-        weights = np.square(np.ptp(templates, axis=1))
-        weights /= weights.max(axis=1, keepdims=True)
+        weights = ptp(templates).square()
+        weights /= weights.amax(dim=1, keepdim=True)
         weights[weights < min_weight] = 0.0
-        weights /= weights.sum(axis=1, keepdims=True)
-        tmp = templates.copy()
+        weights /= weights.sum(dim=1, keepdim=True)
+        tmp = templates.clone()
         tmp[tmp < 0] *= trough_factor
-        np.abs(tmp, out=tmp)
-        offsets = tmp.argmax(axis=1).astype(np.float64)
-        offsets = np.sum(offsets * weights, axis=1)
-        offsets = np.rint(offsets).astype(np.int64)
+        tmp.abs_()
+        offsets = tmp.argmax(dim=1).double()
+        offsets = torch.sum(offsets * weights, dim=1)
+        offsets = torch.round(offsets).long()
         return offsets
 
     assert False

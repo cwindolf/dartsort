@@ -203,17 +203,17 @@ class TemplateData:
     @classmethod
     def from_config(
         cls,
-        recording,
-        sorting,
-        template_cfg,
-        waveform_cfg=default_waveform_cfg,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        template_cfg: TemplateConfig,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_folder: Path | None = None,
         overwrite=False,
         motion_est=None,
         save_npz_name: str | None = "template_data.npz",
         units_per_job=8,
         tsvd=None,
-        computation_cfg=None,
+        computation_cfg: ComputationConfig | None = None,
     ):
         self, _ = cls.from_config_with_realigned_sorting(
             recording=recording,
@@ -228,26 +228,22 @@ class TemplateData:
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
-
-        gc.collect()
-        torch.cuda.empty_cache()
-
         return self
 
     @classmethod
     def from_config_with_realigned_sorting(
         cls,
-        recording,
-        sorting,
-        template_cfg,
-        waveform_cfg=default_waveform_cfg,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        template_cfg: TemplateConfig,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_folder=None,
         overwrite=False,
         motion_est=None,
         save_npz_name: str | None = "template_data.npz",
         units_per_job=8,
         tsvd=None,
-        computation_cfg=None,
+        computation_cfg: ComputationConfig | None = None,
     ) -> tuple["TemplateData", DARTsortSorting]:
         self, realigned_sorting = _from_config_with_realigned_sorting(
             cls,
@@ -263,6 +259,8 @@ class TemplateData:
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
+        gc.collect()
+        torch.cuda.empty_cache()
         return self, realigned_sorting
 
 

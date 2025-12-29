@@ -300,6 +300,8 @@ class RunningTemplates(GrabAndFeaturize):
                 recording,
                 motion_est=motion_est,
                 realign_samples=realign_samples,
+                realign_strategy=template_cfg.realign_strategy,
+                trough_factor=template_cfg.trough_factor,
                 show_progress=show_progress,
                 computation_cfg=computation_cfg,
             )
@@ -1168,7 +1170,11 @@ def realign_by_running_templates(
     recording,
     motion_est=None,
     realign_samples=0,
-    realign_to="trough_factor",
+    realign_strategy: Literal[
+        "mainchan_trough_factor",
+        "normsq_weighted_trough_factor",
+        "ampsq_weighted_trough_factor",
+    ] = "mainchan_trough_factor",
     trough_factor=3.0,
     show_progress=True,
     computation_cfg=None,
@@ -1211,7 +1217,7 @@ def realign_by_running_templates(
         unit_ids=template_data.unit_ids,
         max_shift=realign_samples,
         trough_factor=trough_factor,
-        realign_to=realign_to,
+        realign_strategy=realign_strategy,
         trough_offset_samples=0,
         recording_length_samples=recording.get_total_samples(),
     )

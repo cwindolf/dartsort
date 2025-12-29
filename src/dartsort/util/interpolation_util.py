@@ -109,53 +109,26 @@ def interpolate_by_chunk(
     channel_index = torch.as_tensor(channel_index, device=device)
     channels = torch.as_tensor(channels)
 
-    # if needed, precompute things
-    precomputed_data = interp_precompute(
-        source_geom=source_geom, channel_index=channel_index, params=params
+    # make interpolator
+    erp = StableFeaturesInterpolator(
+        source_geom=source_geom,
+        target_geom=target_geom,
+        channel_index=channel_index,
+        params=params,
     )
 
     for ixs, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
     ):
-        # where are the spikes?
-        source_channels = channel_index[channels[ixs]].to(device)
-        source_shifts = shifts[ixs].to(device)
-        if source_shifts.ndim == 1:
-            # allows per-channel shifts
-            source_shifts = source_shifts.unsqueeze(1)
-        if shift_dim == 0:
-            source_shifts = torch.stack(
-                [source_shifts, torch.zeros_like(source_shifts)], dim=-1
-            )
-        elif shift_dim == 1:
-            source_shifts = torch.stack(
-                [torch.zeros_like(source_shifts), source_shifts], dim=-1
-            )
-        else:
-            assert False
-
-        # used to shift the source, but for kriging it's better to shift targets
-        # so that we can cache source kernel choleskys
-        source_pos = source_geom[source_channels]  # + source_shifts
-
-        # where are they going?
-        target_pos = target_geom[target_channels[ixs]] - source_shifts
-
-        pcomp_batch = None
-        if precomputed_data is not None:
-            pcomp_batch = precomputed_data[channels[ixs]]
-
         # interpolate, store
         chunk_features = torch.from_numpy(chunk_features).to(device)
-        chunk_res = kernel_interpolate(
-            chunk_features,
-            source_pos,
-            target_pos,
-            params=params,
-            precomputed_data=pcomp_batch,
+        out[ixs] = erp.interp(
+            features=chunk_features,
+            source_main_channels=channels[ixs].to(device),
+            target_channels=target_channels[ixs],
+            source_shifts=shifts[ixs].to(device),
             allow_destroy=True,
-        )
-        out[ixs] = chunk_res.to(out)
+        ).to(out)
 
     return out
 
@@ -728,6 +701,82 @@ def extrap_mask(source_pos, target_pos, eps=1e-3):
         targ_extrap.logical_and_(targ_outside)
 
     return targ_extrap
+
+
+class StableFeaturesInterpolator(BModule):
+    def __init__(
+        self,
+        *,
+        source_geom: torch.Tensor,
+        target_geom: torch.Tensor,
+        channel_index: torch.Tensor,
+        params: InterpolationParams,
+        shift_dim: int = 1,
+        dtype=torch.float,
+    ):
+        super().__init__()
+        self.params = params.normalize()
+        self.shift_dim = shift_dim
+        assert source_geom.shape[0] == 1 + channel_index.shape[0]
+        assert source_geom.ndim == target_geom.ndim == 2
+        assert source_geom.shape[1] == target_geom.shape[1] == 2
+        self.register_buffer("source_geom", source_geom.to(dtype=dtype))
+        self.register_buffer("target_geom", target_geom.to(dtype=dtype))
+        self.register_buffer("channel_index", channel_index)
+        neighb_data = interp_precompute(
+            source_geom=self.b.source_geom,
+            channel_index=channel_index,
+            params=self.params,
+        )
+        self.has_neighb_data = neighb_data is not None
+        self.register_buffer_or_none("neighb_data", neighb_data)
+
+    def interp(
+        self,
+        features: torch.Tensor,
+        source_main_channels: torch.Tensor,
+        target_channels: torch.Tensor,
+        source_shifts: torch.Tensor,
+        allow_destroy: bool = False,
+    ) -> torch.Tensor:
+        assert target_channels.ndim == 2
+        assert target_channels.shape[0] == source_main_channels.shape[0]
+
+        # allows per-channel shifts with 2d input
+        if source_shifts.ndim == 1:
+            source_shifts = source_shifts.unsqueeze(1)
+        if self.shift_dim == 0:
+            source_shifts = torch.stack(
+                [source_shifts, torch.zeros_like(source_shifts)], dim=-1
+            )
+        elif self.shift_dim == 1:
+            source_shifts = torch.stack(
+                [torch.zeros_like(source_shifts), source_shifts], dim=-1
+            )
+        else:
+            assert False
+
+        # used to shift the source, but for kriging it's better to shift targets
+        # so that we can cache source kernel choleskys (i.e., my neighb_data)
+        source_channels = self.b.channel_index[source_main_channels]
+        source_pos = self.b.source_geom[source_channels]  # + source_shifts
+
+        # where are they going?
+        target_pos = self.b.target_geom[target_channels] - source_shifts
+
+        if self.has_neighb_data:
+            pcomp = self.b.neighb_data[source_main_channels]
+        else:
+            pcomp = None
+
+        return kernel_interpolate(
+            features=features,
+            source_pos=source_pos,
+            target_pos=target_pos,
+            params=self.params,
+            precomputed_data=pcomp,
+            allow_destroy=allow_destroy,
+        )
 
 
 class NeighborhoodInterpolator(BModule):

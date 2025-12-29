@@ -20,7 +20,7 @@ from matplotlib.legend_handler import HandlerTuple
 from ..cluster import split
 from ..util.internal_config import raw_template_cfg
 from ..util.job_util import get_global_computation_config
-from ..evaluate.analysis import DARTsortAnalysis
+from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
 from . import layout
 from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
@@ -33,12 +33,12 @@ from .waveforms import geomplot
 class UnitPlot(layout.BasePlot):
     can_sharey = True
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         raise NotImplementedError
 
 
 class UnitMultiPlot(layout.BaseMultiPlot):
-    def plots(self, sorting_analysis, unit_id):
+    def plots(self, sorting_analysis: DARTsortAnalysis, unit_id: int):
         # return [UnitPlot()]
         raise NotImplementedError
 
@@ -47,29 +47,34 @@ class UnitTextInfo(UnitPlot):
     kind = "text"
     height = 0.5
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
         axis.axis("off")
         msg = f"unit {unit_id}\n"
 
-        if getattr(sorting_analysis, "hdf5_path", None):
-            msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
+        h5_path = sorting_analysis.sorting.parent_h5_path
+        if h5_path:
+            msg += f"feature source: {h5_path.name}\n"
 
-        nspikes = sorting_analysis.spike_counts[
-            sorting_analysis.unit_ids == unit_id
-        ].sum()
+        nspikes = (sorting_analysis.sorting.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
 
+        assert sorting_analysis.template_data is not None
         temps = sorting_analysis.template_data.unit_templates(unit_id)
-        if temps.size:
+        if not temps.size:
+            msg += "no template (too few spikes)"
+        elif temps.shape[0] == 1:
+            ptp = np.ptp(temps, 1).max(1)[0]
+            msg += f"maxptp: {ptp:0.2f} su\n"
+            snr = ptp * np.sqrt(nspikes)
+            msg += f"template snr: {snr:.1f}"
+        else:
             ptp = np.ptp(temps, 1).max(1).mean()
             msg += f"mean superres maxptp: {ptp:0.1f}su\n"
             in_unit = sorting_analysis.template_data.unit_mask(unit_id)
             counts = sorting_analysis.template_data.spike_counts[in_unit]
             snrs = np.ptp(temps, 1).max(1) * np.sqrt(counts)
             msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
-        else:
-            msg += "no template (too few spikes)"
 
         axis.text(0, 0, msg, fontsize=6.5)
 
@@ -85,11 +90,10 @@ class ACG(UnitPlot):
         super().__init__()
         self.max_lag = max_lag
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
-        times_samples = sorting_analysis.times_samples(
-            which=sorting_analysis.in_unit(unit_id)
-        )
+        which = sorting_analysis.in_unit(unit_id)
+        times_samples = sorting_analysis.sorting.times_samples[which]
         plot_correlogram(axis, times_samples, max_lag=self.max_lag)
         axis.set_ylabel("acg")
 
@@ -103,12 +107,19 @@ class ISIHistogram(UnitPlot):
         self.bin_ms = bin_ms
         self.max_ms = max_ms
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None, color="k", label=None):
+    def draw(
+        self,
+        panel,
+        sorting_analysis: DARTsortAnalysis,
+        unit_id,
+        axis=None,
+        color="k",
+        label=None,
+    ):
         if axis is None:
             axis = panel.subplots()
-        times_s = sorting_analysis.times_seconds(
-            which=sorting_analysis.in_unit(unit_id)
-        )
+        which = sorting_analysis.in_unit(unit_id)
+        times_s = sorting_analysis.times_seconds[which]
         isi_hist(
             times_s,
             axis,
@@ -124,55 +135,46 @@ class XZScatter(UnitPlot):
 
     def __init__(
         self,
-        relocate_amplitudes=False,
         registered=True,
         amplitude_color_cutoff=15,
         probe_margin_um=100,
         colorbar=False,
     ):
         super().__init__()
-        self.relocate_amplitudes = relocate_amplitudes
         self.registered = registered
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.probe_margin_um = probe_margin_um
         self.colorbar = colorbar
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
 
-        unit_id = np.atleast_1d(unit_id)
-        multi_unit = unit_id.size > 1
-        s = None
-        for uid in unit_id:
-            in_unit = sorting_analysis.in_unit(uid)
-            x = sorting_analysis.x(which=in_unit)
-            z = sorting_analysis.z(which=in_unit, registered=self.registered)
-            geomx, geomz = sorting_analysis.geom.T
-            pad = self.probe_margin_um
-            valid = x == np.clip(x, geomx.min() - pad, geomx.max() + pad)
-            valid &= z == np.clip(z, geomz.min() - pad, geomz.max() + pad)
-            if multi_unit:
-                c = dict(color=glasbey1024[uid % len(glasbey1024)])
-            else:
-                amps = sorting_analysis.amplitudes(
-                    which=in_unit[valid], relocated=self.relocate_amplitudes
-                )
-                c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
-            s = axis.scatter(
-                x[valid],
-                z[valid],
-                lw=0,
-                s=3,
-                **c,
-                rasterized=True,
-            )
+        in_unit = sorting_analysis.in_unit(unit_id)
+        x = sorting_analysis.x[in_unit]
+        if self.registered:
+            z = sorting_analysis.registered_z[in_unit]
+        else:
+            z = sorting_analysis.z[in_unit]
+        geomx, geomz = sorting_analysis.geom.T
+        pad = self.probe_margin_um
+        valid = x == np.clip(x, geomx.min() - pad, geomx.max() + pad)
+        valid &= z == np.clip(z, geomz.min() - pad, geomz.max() + pad)
+        amps = sorting_analysis.amplitudes[in_unit]
+        c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
+        s = axis.scatter(
+            x[valid],
+            z[valid],
+            lw=0,
+            s=3,
+            **c,
+            rasterized=True,
+        )
         axis.set_xlabel("x (um)")
         reg_str = "reg " * self.registered
         axis.set_ylabel(reg_str + "z (um)")
-        reloc_str = "reloc " * self.relocate_amplitudes
-        if not multi_unit and self.colorbar:
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label="amp (su)")
 
 
 class PCAScatter(UnitPlot):
@@ -180,58 +182,36 @@ class PCAScatter(UnitPlot):
 
     def __init__(
         self,
-        relocate_amplitudes=False,
-        relocated=True,
         amplitude_color_cutoff=15,
         pca_radius_um=75.0,
         colorbar=False,
     ):
         super().__init__()
-        self.relocated = relocated
-        self.relocate_amplitudes = relocate_amplitudes
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.colorbar = colorbar
         self.pca_radius_um = pca_radius_um
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
 
-        unit_id = np.atleast_1d(unit_id)
-        multi_unit = unit_id.size > 1
-        which, loadings = sorting_analysis.unit_pca_features(
-            unit_id=unit_id,
-            relocated=self.relocated,
-            pca_radius_um=self.pca_radius_um,
+        which, loadings = sorting_analysis.unit_pca_features(unit_id=unit_id)
+        if which is None:
+            return
+        assert loadings is not None
+        amps = sorting_analysis.amplitudes[which]
+        c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
+        s = axis.scatter(
+            *loadings.T,
+            lw=0,
+            s=3,
+            rasterized=True,
+            **c,
         )
-        s = None
-        if which is not None:
-            for uid in unit_id:
-                if multi_unit:
-                    c = dict(color=glasbey1024[uid % len(glasbey1024)])
-                    thisu = np.flatnonzero(
-                        sorting_analysis.sorting.labels[which] == uid
-                    )
-                else:
-                    amps = sorting_analysis.amplitudes(
-                        which=which, relocated=self.relocate_amplitudes
-                    )
-                    c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
-                    thisu = slice(None)
-                s = axis.scatter(
-                    *loadings[thisu].T,
-                    lw=0,
-                    s=3,
-                    **c,
-                    rasterized=True,
-                )
-        reloc_str = "reloc " * self.relocated
-        axis.set_xlabel(reloc_str + "PC1")
-        axis.set_ylabel(reloc_str + "PC2")
-        if not multi_unit:
-            reloc_amp_str = "reloc " * self.relocate_amplitudes
-            if which is not None and self.colorbar:
-                plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_amp_str + "amp (su)")
+        axis.set_xlabel("PC1")
+        axis.set_ylabel("PC2")
+        if self.colorbar:
+            plt.colorbar(s, ax=axis, shrink=0.5, label="amp (su)")
 
         return axis
 
@@ -239,61 +219,7 @@ class PCAScatter(UnitPlot):
 # -- wide scatter plots
 
 
-class TimeZScatter(UnitPlot):
-    kind = "widescatter"
-    width = 2
-
-    def __init__(
-        self,
-        relocate_amplitudes=False,
-        registered=True,
-        amplitude_color_cutoff=15,
-        probe_margin_um=100,
-    ):
-        super().__init__()
-        self.relocate_amplitudes = relocate_amplitudes
-        self.registered = registered
-        self.amplitude_color_cutoff = amplitude_color_cutoff
-        self.probe_margin_um = probe_margin_um
-
-    def draw(self, panel, sorting_analysis, unit_id):
-        unit_id = np.atleast_1d(unit_id)
-        multi_unit = unit_id.size > 1
-        axis = panel.subplots()
-
-        s = None
-        for uid in unit_id:
-            in_unit = sorting_analysis.in_unit(uid)
-            t = sorting_analysis.times_seconds(which=in_unit)
-            z = sorting_analysis.z(which=in_unit, registered=self.registered)
-            geomx, geomz = sorting_analysis.geom.T
-            pad = self.probe_margin_um
-            valid = z == np.clip(z, geomz.min() - pad, geomz.max() + pad)
-            if multi_unit:
-                c = dict(color=glasbey1024[uid % len(glasbey1024)])
-            else:
-                amps = sorting_analysis.amplitudes(
-                    which=in_unit[valid], relocated=self.relocate_amplitudes
-                )
-                c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
-
-            s = axis.scatter(
-                t[valid],
-                z[valid],
-                lw=0,
-                s=3,
-                **c,
-                rasterized=True,
-            )
-        axis.set_xlabel("time (s)")
-        reg_str = "reg " * self.registered
-        axis.set_ylabel(reg_str + "z (um)")
-        reloc_str = "reloc " * self.relocate_amplitudes
-        if not multi_unit:
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
-
-
-class TFeatScatter(UnitPlot):
+class TimeFeatScatter(UnitPlot):
     kind = "widescatter"
     width = 2
 
@@ -301,69 +227,46 @@ class TFeatScatter(UnitPlot):
         self,
         feat_name,
         color_by_amplitude=True,
-        relocate_amplitudes=False,
         amplitude_color_cutoff=15,
-        alpha=0.1,
+        alpha=1.0,
+        label=None,
     ):
         super().__init__()
-        self.relocate_amplitudes = relocate_amplitudes
         self.feat_name = feat_name
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.color_by_amplitude = color_by_amplitude
         self.alpha = alpha
+        self.label = label or feat_name
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
         in_unit = sorting_analysis.in_unit(unit_id)
-        t = sorting_analysis.times_seconds(which=in_unit)
+        t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None
         if self.color_by_amplitude:
-            amps = sorting_analysis.amplitudes(
-                which=in_unit, relocated=self.relocate_amplitudes
-            )
+            amps = sorting_analysis.amplitudes[in_unit]
             c = np.minimum(amps, self.amplitude_color_cutoff)
         s = axis.scatter(t, feat, c=c, lw=0, s=3, alpha=self.alpha, rasterized=True)
         axis.set_xlabel("time (s)")
-        axis.set_ylabel(self.feat_name)
+        axis.set_ylabel(self.label)
         if self.color_by_amplitude:
-            reloc_str = "reloc " * self.relocate_amplitudes
-            plt.colorbar(s, ax=axis, shrink=0.5, label=reloc_str + "amp (su)")
+            plt.colorbar(s, ax=axis, shrink=0.5, label="amp (su)")
 
 
-class TimeAmpScatter(UnitPlot):
-    kind = "widescatter"
-    width = 2
+class TimeZScatter(TimeFeatScatter):
+    def __init__(self, **kwargs):
+        super().__init__(feat_name="z", label="z (um)", **kwargs)
 
-    def __init__(
-        self, relocate_amplitudes=False, amplitude_color_cutoff=15, alpha=0.05
-    ):
-        super().__init__()
-        self.relocate_amplitudes = relocate_amplitudes
-        self.amplitude_color_cutoff = amplitude_color_cutoff
-        self.alpha = alpha
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
-        if axis is None:
-            axis = panel.subplots()
+class TimeRegZScatter(TimeFeatScatter):
+    def __init__(self, **kwargs):
+        super().__init__(feat_name="registered_z", label="reg. z (um)", **kwargs)
 
-        unit_id = np.atleast_1d(unit_id)
-        multi_unit = unit_id.size > 1
 
-        for uid in unit_id:
-            in_unit = sorting_analysis.in_unit(uid)
-            t = sorting_analysis.times_seconds(which=in_unit)
-            amps = sorting_analysis.amplitudes(
-                which=in_unit, relocated=self.relocate_amplitudes
-            )
-            c = dict(
-                color=glasbey1024[uid % len(glasbey1024)] if multi_unit else "k",
-                alpha=1 if multi_unit else self.alpha,
-            )
-            axis.scatter(t, amps, lw=0, s=3, rasterized=True, **c)
-        axis.set_xlabel("time (s)")
-        reloc_str = "reloc " * self.relocate_amplitudes
-        axis.set_ylabel(reloc_str + "amp (su)")
+class TimeAmpScatter(TimeFeatScatter):
+    def __init__(self, **kwargs):
+        super().__init__(feat_name="amplitudes", label="amp (su)", **kwargs)
 
 
 # -- waveform plots
@@ -380,73 +283,56 @@ class WaveformPlot(UnitPlot):
 
     def __init__(
         self,
-        trough_offset_samples=42,
-        spike_length_samples=121,
         count=100,
-        channel_show_radius_um=50,
-        relocated=False,
         color="k",
         alpha=0.1,
-        show_superres_templates=True,
-        superres_template_cmap="winter",
         show_template=True,
         template_color="orange",
         max_abs_template_scale=1.5,
         legend=True,
-        template_index=None,
         title=None,
     ):
         super().__init__()
         self.count = count
-        self.channel_show_radius_um = channel_show_radius_um
-        self.relocated = relocated
         self.color = color
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
         self.alpha = alpha
         self.show_template = show_template
         self.template_color = template_color
-        self.show_superres_templates = show_superres_templates
-        self.superres_template_cmap = plt.get_cmap(superres_template_cmap)
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
-        self.template_index = template_index
         self.title = title
 
-    def get_waveforms(self, sorting_analysis, unit_id):
+    def get_waveforms(
+        self, sorting_analysis: DARTsortAnalysis, unit_id: int
+    ) -> WaveformsBag | None:
         raise NotImplementedError
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
-        tslice, which, waveforms, max_chan, geom, ci = self.get_waveforms(
-            sorting_analysis, unit_id
-        )
-        trough_offset_samples = self.trough_offset_samples
-        spike_length_samples = self.spike_length_samples
+
+        waves = self.get_waveforms(sorting_analysis, unit_id)
+        tslice = None if waves is None else waves.temporal_slice 
+        trough_offset_samples = sorting_analysis.trough_offset_samples
+        spike_length_samples = sorting_analysis.spike_length_samples
         if tslice is not None and tslice.start is not None:
-            trough_offset_samples = self.trough_offset_samples - tslice.start
-            spike_length_samples = self.spike_length_samples - tslice.start
+            trough_offset_samples = (
+                sorting_analysis.trough_offset_samples - tslice.start
+            )
+            spike_length_samples = sorting_analysis.spike_length_samples - tslice.start
         if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
 
         max_abs_amp = None
         show_template = self.show_template
         template_color = self.template_color
-        if self.template_index is None and show_template:
+        assert sorting_analysis.coarse_template_data is not None
+        if show_template:
             templates = sorting_analysis.coarse_template_data.unit_templates(unit_id)
             show_template = bool(templates.size)
-        elif self.template_index is not None and show_template:
-            templates = sorting_analysis.template_data.templates[self.template_index]
-            templates = templates[None]
-            show_template = bool(templates.size)
-            sup_temp_ids = sorting_analysis.unit_template_indices(unit_id)
-            template_color = self.superres_template_cmap(
-                np.linspace(0, 1, num=sup_temp_ids.size)
-            )
-            template_color = template_color[sup_temp_ids == self.template_index]
         else:
             templates = None
+
         if show_template:
             assert templates is not None
             templates = trim_waveforms(
@@ -457,36 +343,17 @@ class WaveformPlot(UnitPlot):
             )
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
 
-        show_superres_templates = (
-            self.show_superres_templates and self.template_index is None
-        )
-        if show_superres_templates:
-            suptemplates = sorting_analysis.template_data.unit_templates(unit_id)
-            show_superres_templates = bool(suptemplates.size)
-        else:
-            suptemplates = None
-        if show_superres_templates:
-            assert suptemplates is not None
-            suptemplates = trim_waveforms(
-                suptemplates,
-                old_offset=sorting_analysis.template_data.trough_offset_samples,
-                new_offset=trough_offset_samples,
-                new_length=spike_length_samples,
-            )
-            show_superres_templates = suptemplates.shape[0] > 1
-            max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(suptemplates))
-
         handles = {}
-        if waveforms is not None:
-            if np.isfinite(waveforms[:, 0, :]).any():
+        if waves is not None:
+            if np.isfinite(waves.waveforms[:, 0, :]).any():
                 max_abs_amp = self.max_abs_template_scale * np.nanpercentile(
-                    np.abs(waveforms), 99
+                    np.abs(waves.waveforms), 99
                 )
             ls = geomplot(
-                waveforms,
-                max_channels=np.full(len(waveforms), max_chan),
-                channel_index=ci,
-                geom=geom,
+                waves.waveforms,
+                max_channels=np.full(len(waves.waveforms), waves.main_channel),
+                channel_index=waves.channel_index,
+                geom=waves.geom,
                 ax=axis,
                 show_zero=False,
                 subar=True,
@@ -499,32 +366,14 @@ class WaveformPlot(UnitPlot):
             )
             handles["waveforms"] = ls
 
-        if show_superres_templates:
-            assert suptemplates is not None
-            showchans = ci[max_chan]
-            showchans = showchans[showchans < len(geom)]
-            colors = self.superres_template_cmap(
-                np.linspace(0, 1, num=suptemplates.shape[0])
-            )
-            suphandles = []
-            for i in range(suptemplates.shape[0]):
-                ls = geomplot(
-                    suptemplates[i][:, showchans],
-                    geom=geom[showchans],
-                    ax=axis,
-                    show_zero=False,
-                    zlim="tight",
-                    color=colors[i],
-                    alpha=1,
-                    max_abs_amp=max_abs_amp,
-                    lw=1,
-                )
-                suphandles.append(ls)
-            handles["superres templates"] = tuple(suphandles)
-
         if show_template:
             assert templates is not None
-            showchans = ci[max_chan]
+            if waves is None:
+                showchans = sorting_analysis.vis_channel_index[sorting_analysis.unit_max_channel(unit_id)]
+                geom = sorting_analysis.registered_geom
+            else:
+                showchans = waves.channel_index[waves.main_channel]
+                geom = waves.geom
             showchans = showchans[showchans < len(geom)]
             ls = geomplot(
                 templates[:, :, showchans],
@@ -539,10 +388,9 @@ class WaveformPlot(UnitPlot):
             )
             handles["mean"] = ls
 
-        reloc_str = "reloc. " * self.relocated
         shift_str = "shifted " * sorting_analysis.shifting
         if self.title is None:
-            axis.set_title(reloc_str + shift_str + self.wfs_kind)
+            axis.set_title(shift_str + self.wfs_kind)
         else:
             axis.set_title(self.title)
         axis.set_xticks([])
@@ -561,34 +409,19 @@ class WaveformPlot(UnitPlot):
 class RawWaveformPlot(WaveformPlot):
     wfs_kind = "raw wfs"
 
-    def get_waveforms(self, sorting_analysis, unit_id):
-        return slice(None), *sorting_analysis.unit_raw_waveforms(
-            unit_id,
-            template_index=self.template_index,
-            max_count=self.count,
-            channel_show_radius_um=self.channel_show_radius_um,
-            trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
-            relocated=self.relocated,
-        )
+    def get_waveforms(
+        self, sorting_analysis: DARTsortAnalysis, unit_id: int
+    ) -> WaveformsBag | None:
+        return sorting_analysis.unit_raw_waveforms(unit_id, max_count=self.count)
 
 
 class TPCAWaveformPlot(WaveformPlot):
     wfs_kind = "coll.-cl. tpca wfs"
 
-    def get_waveforms(self, sorting_analysis, unit_id):
-        temporal_slice = getattr(
-            sorting_analysis.sklearn_tpca,
-            "temporal_slice",
-            slice(None),
-        )
-        return temporal_slice, *sorting_analysis.unit_tpca_waveforms(
-            unit_id,
-            template_index=self.template_index,
-            max_count=self.count,
-            channel_show_radius_um=self.channel_show_radius_um,
-            relocated=self.relocated,
-        )
+    def get_waveforms(
+        self, sorting_analysis: DARTsortAnalysis, unit_id: int
+    ) -> WaveformsBag | None:
+        return sorting_analysis.unit_tpca_waveforms(unit_id, max_count=self.count)
 
 
 # -- merge-focused plots
@@ -601,13 +434,12 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
     height = 2
     can_sharey = False
 
-    def __init__(self, channel_show_radius_um=50, n_neighbors=5, legend=True):
+    def __init__(self, n_neighbors=5, legend=True):
         super().__init__()
-        self.channel_show_radius_um = channel_show_radius_um
         self.n_neighbors = n_neighbors
         self.legend = legend
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id, axis=None):
         if axis is None:
             axis = panel.subplots()
         if np.asarray(unit_id).size > 1:
@@ -625,7 +457,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             return
         assert neighbor_ids[0] == unit_id
         chan = np.ptp(neighbor_coarse_templates[0], 0).argmax()
-        ci = sorting_analysis.show_channel_index(self.channel_show_radius_um)
+        ci = sorting_analysis.vis_channel_index
         channels = ci[chan]
         neighbor_coarse_templates = np.pad(
             neighbor_coarse_templates,
@@ -644,7 +476,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
                 template[None],
                 max_channels=[chan],
                 channel_index=ci,
-                geom=sorting_analysis.show_geom,
+                geom=sorting_analysis.registered_geom,
                 ax=axis,
                 show_zero=False,
                 max_abs_amp=maxamp,
@@ -681,7 +513,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         self.dist_vmax = dist_vmax
         self.show_values = show_values
 
-    def draw(self, panel, sorting_analysis, unit_id, axis=None):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id, axis=None):
         if np.asarray(unit_id).size > 1:
             unit_id = unit_id[0]
         if axis is None:
@@ -731,7 +563,7 @@ class NeighborCCGPlot(UnitPlot):
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
 
-    def draw(self, panel, sorting_analysis, unit_id):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
             neighbor_ids,
             neighbor_dists,
@@ -743,9 +575,9 @@ class NeighborCCGPlot(UnitPlot):
         neighbor_ids = neighbor_ids[1:]
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
-        my_st = sorting_analysis.times_samples(which=sorting_analysis.in_unit(unit_id))
+        my_st = sorting_analysis.sorting.times_samples[sorting_analysis.in_unit(unit_id)]
         neighb_sts = [
-            sorting_analysis.times_samples(which=sorting_analysis.in_unit(nid))
+            sorting_analysis.sorting.times_samples[sorting_analysis.in_unit(nid)]
             for nid in neighbor_ids
         ]
 
@@ -766,198 +598,6 @@ class NeighborCCGPlot(UnitPlot):
         axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
 
 
-# -- evaluation plots
-
-
-class SplitStrategyPlot(UnitPlot):
-    kind = "spliteval"
-    width = 5.5
-    height = 4
-
-    def __init__(
-        self,
-        split_name,
-        split_strategy,
-        peeling_hdf5_filename,
-        recording,
-        channel_show_radius_um=50.0,
-        amplitude_color_cutoff=15.0,
-        pca_radius_um=75.0,
-        split_strategy_kwargs=None,
-        motion_est=None,
-    ):
-        super().__init__()
-        if split_strategy_kwargs is None:
-            split_strategy_kwargs = {}
-        if motion_est is not None:
-            split_strategy_kwargs["motion_est"] = motion_est
-        split_strategy_kwargs["peeling_hdf5_filename"] = peeling_hdf5_filename
-
-        self.split_name = split_name
-        print(split_name)
-        self.split_strategy = split_strategy
-        self.split_strategy_kwargs = split_strategy_kwargs
-        self.motion_est = motion_est
-        self.recording = recording
-        self.channel_show_radius_um = channel_show_radius_um
-        self.amplitude_color_cutoff = amplitude_color_cutoff
-        self.pca_radius_um = pca_radius_um
-
-        self.no_split_plots = [
-            XZScatter(),
-            TimeAmpScatter(),
-            TimeAmpScatter(relocate_amplitudes=True),
-            PCAScatter(),
-            TimeZScatter(),
-        ]
-
-        self.plots = [
-            XZScatter(),
-            TimeAmpScatter(),
-            TimeAmpScatter(relocate_amplitudes=True),
-            PCAScatter(),
-            TimeZScatter(),
-            # may need to update n neighbors for these
-            NearbyCoarseTemplatesPlot(),
-            CoarseTemplateDistancePlot(),
-        ]
-
-    def draw(self, panel, sorting_analysis, unit_id):
-        """
-        - x vs reg z
-        - time vs amp
-        - time vs reloc amp
-        - reloc PC scatter
-        - time vs z
-        - time vs z reg?
-        - templates
-        - template dist
-        """
-        # run the split
-        print("split", self.split_name, self.split_strategy_kwargs)
-        split_strategy = split.split_strategies_by_class_name[self.split_strategy](
-            **self.split_strategy_kwargs
-        )
-        in_unit = sorting_analysis.in_unit(unit_id)
-        split_result = split_strategy.split_cluster(in_unit)
-        print("draw", self.split_name)
-
-        # re-make the sorting analysis
-        split_labels = np.full_like(sorting_analysis.sorting.labels, -1)
-        if split_result.is_split:
-            split_labels[in_unit] = split_result.new_labels
-            unit_ids, counts = np.unique(split_result.new_labels, return_counts=True)
-            counts = counts[unit_ids >= 0]
-            unit_ids = unit_ids[unit_ids >= 0]
-            order = np.argsort(counts)[::-1]
-            counts = counts[order]
-            unit_ids = unit_ids[order]
-            counts = list(map(str, counts))
-            print(f"{unit_ids=}")
-            print(f"{counts=}")
-        else:
-            split_labels[in_unit] = 0
-            unit_ids = np.atleast_1d(0)
-            counts = [str(in_unit.size)]
-        split_sorting = sorting_analysis.sorting.ephemeral_replace(labels=split_labels)
-        split_sorting_analysis = DARTsortAnalysis.from_sorting(
-            self.recording,
-            split_sorting,
-            motion_est=self.motion_est,
-            name=f"{self.split_name} {unit_id}",
-            template_cfg=raw_template_cfg,
-            allow_template_reload=False,
-            n_jobs_templates=0,
-        )
-
-        # make a new flow layout here
-        make_unit_summary(
-            split_sorting_analysis,
-            unit_id=unit_ids,
-            channel_show_radius_um=self.channel_show_radius_um,
-            amplitude_color_cutoff=self.amplitude_color_cutoff,
-            pca_radius_um=self.pca_radius_um,
-            plots=self.plots if split_result.is_split else self.no_split_plots,
-            max_height=self.height,
-            figsize=(self.width, self.height),
-            figure=panel,
-        )
-        desc = f"not split. {in_unit.size} total spikes."
-        if split_result.is_split:
-            cs = ", ".join(counts)
-            desc = f"split into {unit_ids.size} units with counts:\n{cs}"
-        panel.suptitle(f"{self.split_name}, unit {unit_id}. {desc}")
-
-
-# -- multi plots
-# these have multiple plots per unit, and we don't know in advance how many
-# for instance, making separate plots of spikes belonging to each superres template
-
-
-class SuperresWaveformMultiPlot(UnitMultiPlot):
-    def __init__(
-        self,
-        kind="raw",
-        trough_offset_samples=42,
-        spike_length_samples=121,
-        count=250,
-        channel_show_radius_um=50,
-        relocated=False,
-        color="k",
-        alpha=0.1,
-        show_superres_templates=True,
-        superres_template_cmap="winter",
-        show_template=True,
-        template_color="orange",
-        max_abs_template_scale=1.35,
-        legend=True,
-    ):
-        super().__init__()
-        self.kind = kind
-        self.count = count
-        self.channel_show_radius_um = channel_show_radius_um
-        self.relocated = relocated
-        self.color = color
-        self.trough_offset_samples = trough_offset_samples
-        self.spike_length_samples = spike_length_samples
-        self.alpha = alpha
-        self.show_template = show_template
-        self.template_color = template_color
-        self.show_superres_templates = show_superres_templates
-        self.superres_template_cmap = superres_template_cmap
-        self.legend = legend
-        self.max_abs_template_scale = max_abs_template_scale
-
-    def plots(self, sorting_analysis, unit_id):
-        if self.kind == "raw":
-            plot_cls = RawWaveformPlot
-        elif self.kind == "tpca":
-            plot_cls = TPCAWaveformPlot
-        else:
-            assert False
-
-        return [
-            plot_cls(
-                count=self.count,
-                channel_show_radius_um=self.channel_show_radius_um,
-                relocated=self.relocated,
-                color=self.color,
-                trough_offset_samples=self.trough_offset_samples,
-                spike_length_samples=self.spike_length_samples,
-                alpha=self.alpha,
-                show_template=self.show_template,
-                template_color=self.template_color,
-                show_superres_templates=self.show_superres_templates,
-                superres_template_cmap=self.superres_template_cmap,
-                legend=self.legend,
-                max_abs_template_scale=self.max_abs_template_scale,
-                template_index=template_index,
-                title=f"{sorting_analysis.template_data.spike_counts[template_index]} spikes assigned",
-            )
-            for template_index in sorting_analysis.unit_template_indices(unit_id)
-        ]
-
-
 # -- main routines
 
 default_plots = (
@@ -967,11 +607,10 @@ default_plots = (
     XZScatter(),
     PCAScatter(),
     TimeZScatter(),
-    TimeZScatter(registered=False),
+    TimeRegZScatter(),
     TimeAmpScatter(),
-    TimeAmpScatter(relocate_amplitudes=True),
     RawWaveformPlot(),
-    TPCAWaveformPlot(relocated=True),
+    TPCAWaveformPlot(),
     NearbyCoarseTemplatesPlot(),
     CoarseTemplateDistancePlot(),
     NeighborCCGPlot(),
@@ -981,14 +620,12 @@ default_plots = (
 template_assignment_plots = (
     UnitTextInfo(),
     RawWaveformPlot(),
-    SuperresWaveformMultiPlot(),
 )
 
 
 def make_unit_summary(
-    sorting_analysis,
+    sorting_analysis: DARTsortAnalysis,
     unit_id,
-    channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     plots=default_plots,
@@ -1001,7 +638,6 @@ def make_unit_summary(
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
-            channel_show_radius_um=channel_show_radius_um,
             amplitude_color_cutoff=amplitude_color_cutoff,
             pca_radius_um=pca_radius_um,
             **other_global_params,
@@ -1013,17 +649,16 @@ def make_unit_summary(
         figsize=figsize,
         figure=figure,
         unit_id=unit_id,
-        **{gizmo_name: sorting_analysis},
+        **{gizmo_name: sorting_analysis},  # type: ignore
     )
 
     return figure
 
 
 def make_all_summaries(
-    sorting_analysis,
+    sorting_analysis: DARTsortAnalysis,
     save_folder,
     plots=default_plots,
-    channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
@@ -1043,7 +678,7 @@ def make_all_summaries(
 ):
     save_folder = Path(save_folder)
     if unit_ids is None:
-        unit_ids = sorting_analysis.unit_ids
+        unit_ids = sorting_analysis.sorting.unit_ids
     if n_units is not None and n_units < len(unit_ids):
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
@@ -1060,7 +695,6 @@ def make_all_summaries(
     save_folder.mkdir(exist_ok=True, parents=True)
 
     global_params = dict(
-        channel_show_radius_um=channel_show_radius_um,
         amplitude_color_cutoff=amplitude_color_cutoff,
         pca_radius_um=pca_radius_um,
         **other_global_params,
@@ -1145,7 +779,7 @@ def all_summaries_done(
 class SummaryJobContext:
     def __init__(
         self,
-        sorting_analysis,
+        sorting_analysis: DARTsortAnalysis,
         plots,
         max_height,
         figsize,
@@ -1180,7 +814,7 @@ def _summary_init(*args):
     _summary_job_context = SummaryJobContext(*args)
 
 
-def _summary_job(unit_id):
+def _summary_job(unit_id: int):
     # handle resuming/overwriting
     assert _summary_job_context is not None
     ext = _summary_job_context.image_ext

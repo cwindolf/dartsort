@@ -1,5 +1,6 @@
 import numpy as np
 
+from ..evaluate.analysis import DARTsortAnalysis
 from . import analysis_plots
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
@@ -18,7 +19,7 @@ class SortingTextInfo(OverviewPlot):
     kind = "text"
     height = 0.5
 
-    def draw(self, panel, sorting_analysis):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
         axis = panel.subplots()
         axis.axis("off")
         msg = ""
@@ -26,11 +27,15 @@ class SortingTextInfo(OverviewPlot):
         if sorting_analysis.name:
             msg += f"Sorting: {sorting_analysis.name}\n"
 
-        if sorting_analysis.hdf5_path is not None:
-            msg += f"feature source: {sorting_analysis.hdf5_path.name}\n"
+        h5_path = sorting_analysis.sorting.parent_h5_path
+        if h5_path is not None:
+            msg += f"feature source: {h5_path.name}\n"
 
-        nspikes = sorting_analysis.sorting.labels.size
-        triaged = np.sum(sorting_analysis.sorting.labels < 0)
+        nspikes = sorting_analysis.sorting.times_samples.size
+        if sorting_analysis.sorting.labels is None:
+            triaged = 0
+        else:
+            triaged = np.sum(sorting_analysis.sorting.labels < 0)
         msg += f"{nspikes} total spikes\n"
         if triaged:
             tpct = 100 * triaged / nspikes
@@ -48,7 +53,7 @@ class CoarseTemplateMaxChannelsPlot(OverviewPlot):
     kind = "scatter"
     height = 3.5
 
-    def draw(self, panel, sorting_analysis):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
         axis = panel.subplots()
         analysis_plots.scatter_max_channel_waveforms(
             axis,
@@ -68,7 +73,8 @@ class SpikeCountHistogram(OverviewPlot):
         self.n_bins = n_bins
         self.log = log
 
-    def draw(self, panel, sorting_analysis):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
+        assert sorting_analysis.coarse_template_data is not None
         axis = panel.subplots()
         axis.hist(
             sorting_analysis.coarse_template_data.spike_counts,
@@ -92,10 +98,11 @@ class MergeDistanceMatrix(OverviewPlot):
         self.show_unit_labels = show_unit_labels
         self.dendrogram_threshold = dendrogram_threshold
 
-    def draw(self, panel, sorting_analysis):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
+        assert sorting_analysis.coarse_template_data is not None
         analysis_plots.distance_matrix_dendro(
             panel,
-            sorting_analysis.merge_dist,
+            sorting_analysis.merge_distances,
             unit_ids=sorting_analysis.coarse_template_data.unit_ids,
             dendrogram_linkage=self.dendrogram_linkage,
             dendrogram_threshold=self.dendrogram_threshold,
@@ -111,10 +118,11 @@ class RasterPlot(OverviewPlot):
         self.colors = colors
         self.scatter_kwargs = dict(s=3, lw=0) | scatter_kwargs
 
-    def draw(self, panel, sorting_analysis):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
+        assert sorting_analysis.sorting.labels is not None
         axis = panel.subplots()
         axis.scatter(
-            sorting_analysis.sorting.times_seconds,
+            sorting_analysis.times_seconds,
             sorting_analysis.sorting.labels,
             c=self.colors[sorting_analysis.sorting.labels % len(self.colors)],
             **self.scatter_kwargs,
