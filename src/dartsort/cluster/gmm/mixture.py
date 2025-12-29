@@ -683,6 +683,7 @@ class DenseSpikeData:
 
     def lut_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
         lut_ixs = lut.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
+        assert lut_ixs.shape == (len(self.x), unit_ids.shape[0])
         covered = lut_ixs < lut.unit_ids.shape[0]
         return covered
 
@@ -1531,7 +1532,13 @@ class BaseMixtureModel(BModule):
     def non_noise_log_proportion(self):
         raise NotImplementedError
 
-    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
+    def score(
+        self,
+        data: DenseSpikeData,
+        *,
+        skip_noise: bool = False,
+        allow_blanks: bool = False,
+    ) -> Scores:
         raise NotImplementedError
 
     # -- shared logic
@@ -2082,7 +2089,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # more leeway than in em() here for when to panic about it.
         assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
 
-    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
+    def score(
+        self,
+        data: DenseSpikeData,
+        *,
+        skip_noise: bool = False,
+        allow_blanks: bool = False,
+    ) -> Scores:
         scores = []
         for batch in data.to_batches(self.unit_ids, self.lut):
             batch_scores = self.score_batch(
@@ -2090,6 +2103,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 n_candidates=batch.candidates.shape[1],
                 skip_responsibility=True,
                 skip_noise=skip_noise,
+                allow_blanks=allow_blanks,
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
@@ -2853,7 +2867,13 @@ class TMMView(BaseMixtureModel):
     def noise_log_prop(self) -> Tensor:  # type: ignore
         return self.tmm.b.noise_log_prop
 
-    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
+    def score(
+        self,
+        data: DenseSpikeData,
+        *,
+        skip_noise: bool = False,
+        allow_blanks: bool = False,
+    ) -> Scores:
         scores = []
         for batch in data.to_batches(self.unit_ids, self.tmm.lut):
             batch_scores = self.tmm.score_batch(
@@ -2861,6 +2881,7 @@ class TMMView(BaseMixtureModel):
                 n_candidates=batch.candidates.shape[1],
                 skip_responsibility=True,
                 skip_noise=skip_noise,
+                allow_blanks=allow_blanks,
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
@@ -2907,6 +2928,9 @@ class TMMStack(BaseMixtureModel):
             elbo_atol=tmms[0].elbo_atol,
         )
         self.tmms = tmms
+        if pnoid:
+            nb = self.tmms[0].lut.lut.shape[1]
+            assert all(t.lut.lut.shape[1] == nb for t in self.tmms)
 
     # this is used intermediately only intermediately in brute_merge,
     # and only these methods are called
@@ -2919,6 +2943,9 @@ class TMMStack(BaseMixtureModel):
             neighb_ids.append(tmm.lut.neighb_ids)
         unit_ids = torch.concatenate(unit_ids)
         neighb_ids = torch.concatenate(neighb_ids)
+        assert unit_ids.shape == neighb_ids.shape
+        if pnoid:
+            assert torch.equal(unit_ids.unique().cpu(), torch.arange(self.n_units))
         lut = torch.full(
             (self.n_units, self.tmms[0].lut.lut.shape[1]),
             unit_ids.shape[0],
@@ -2953,9 +2980,19 @@ class TMMStack(BaseMixtureModel):
             b = None
         return m, b
 
-    def score(self, data: DenseSpikeData, *, skip_noise: bool = False) -> Scores:
+    def score(
+        self,
+        data: DenseSpikeData,
+        *,
+        skip_noise: bool = False,
+        allow_blanks: bool = False,
+    ) -> Scores:
         assert skip_noise
-        scores = [tmm.score(data, skip_noise=skip_noise) for tmm in self.tmms]
+        # need allow_blanks: even if the whole stack covers the data, the constituents may not
+        scores = [
+            tmm.score(data, skip_noise=skip_noise, allow_blanks=True)
+            for tmm in self.tmms
+        ]
 
         # stack the scores with unit ids remapped
         candidates = self.unit_ids[None].broadcast_to(
@@ -2970,6 +3007,8 @@ class TMMStack(BaseMixtureModel):
             candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
             i0 = i1
         log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
+        if pnoid and not allow_blanks:
+            assert log_liks.isfinite().any(dim=1).all()
         return Scores(log_liks=log_liks, candidates=candidates, responsibilities=None)
 
 
