@@ -261,7 +261,7 @@ class SubtractionConfig:
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
-    convexity_threshold: float | None = -50.0
+    convexity_threshold: float | None = -75.0
     convexity_radius: int = 7
 
     # how will waveforms be denoised before subtraction?

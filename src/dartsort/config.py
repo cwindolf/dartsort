@@ -193,7 +193,7 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
     cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
-    convexity_threshold: float | None = argfield(default=-50.0, arg_type=float_or_none)
+    convexity_threshold: float | None = argfield(default=-75.0, arg_type=float_or_none)
     convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching

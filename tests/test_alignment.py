@@ -421,7 +421,6 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     templates[1, :, 0] = -tshape
     templates[2, :, 1] = tshape
     templates[3, :, 1] = -tshape
-    print(f"{np.linalg.norm(templates, axis=(1, 2))=}")
 
     gt_td = dartsort.TemplateData(
         templates=templates,

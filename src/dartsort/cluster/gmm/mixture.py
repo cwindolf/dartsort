@@ -42,7 +42,7 @@ import math
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Literal, NamedTuple, Optional, Self
+from typing import Iterable, Literal, NamedTuple, Optional, Self, cast
 
 import numpy as np
 import torch
@@ -188,6 +188,8 @@ class NeighborhoodCovariance:
     max_nc_miss_near: int
     # total n channels
     n_channels: int
+    # not really used, but helpful to keep it here for vis
+    prgeom: Tensor
 
     # -- indexing
     # number of observed features (rank*chans) by neighborhood
@@ -228,12 +230,13 @@ class NeighborhoodCovariance:
     def from_noise_and_neighborhoods(
         cls, prgeom: Tensor, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods
     ) -> Self:
-        dev: torch.device = noise.device  # type: ignore
+        dev = cast(torch.device, noise.device)
         neighborhoods = neighborhoods.to(device=dev)
+        prgeom = prgeom.to(device=dev)
         nc_obs, obs_ix, miss_near_ix, miss_full_mask = _neighborhood_indices(
             neighborhoods=neighborhoods,
             zero_radius=noise.zero_radius,
-            prgeom=prgeom.to(device=dev),
+            prgeom=prgeom,
         )
         logdet, Cooinv, CooinvCom, Linv = _noise_factors(
             noise=noise,
@@ -250,6 +253,7 @@ class NeighborhoodCovariance:
             max_nc_obs=obs_ix.shape[1],
             max_nc_miss_near=miss_near_ix.shape[1],
             n_channels=neighborhoods.n_channels,
+            prgeom=prgeom,
             nobs=noise.rank * nc_obs,
             obs_ix=obs_ix,
             miss_near_ix=miss_near_ix,

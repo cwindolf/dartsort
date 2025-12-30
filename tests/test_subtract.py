@@ -116,6 +116,7 @@ def test_fakedata_nonn(tmp_path):
         first_denoiser_thinning=0.0,
         first_denoiser_spatial_jitter=0,
         first_denoiser_temporal_jitter=0,
+        convexity_threshold=-100.0,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)

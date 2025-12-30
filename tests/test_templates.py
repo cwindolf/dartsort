@@ -58,7 +58,9 @@ def refractory_simulations(tmp_path_factory):
 
 @pytest.mark.parametrize("denoising_method", ["none", "t"])
 @pytest.mark.parametrize("drift", [False, 0, True])
-@pytest.mark.parametrize("realign_peaks", [False, True])
+@pytest.mark.parametrize(
+    "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
+)
 @pytest.mark.parametrize("reduction", ["mean", "median"])
 @pytest.mark.parametrize("algorithm", ["by_unit", "by_chunk", "chunk_if_mean"])
 def test_refractory_templates(
@@ -74,11 +76,13 @@ def test_refractory_templates(
 
     template_cfg = TemplateConfig(
         registered_templates=drift is not False,
-        realign_peaks=realign_peaks,
+        realign_peaks=bool(realign_peaks),
+        realign_strategy=realign_peaks if realign_peaks else "mainchan_trough_factor",
         reduction=reduction,
         algorithm=algorithm,
         denoising_method=denoising_method,
         with_raw_std_dev=True,
+        use_zero=denoising_method == "t",
     )
     td = TemplateData.from_config(
         recording=sim["recording"],
@@ -88,20 +92,24 @@ def test_refractory_templates(
     )
 
     unit_ids, spike_counts = np.unique(sim["sorting"].labels, return_counts=True)
-    assert np.array_equal(td.unit_ids, unit_ids)
-    assert np.array_equal(td.spike_counts, spike_counts)
+    np.testing.assert_array_equal(td.unit_ids, unit_ids)
+    np.testing.assert_array_equal(td.spike_counts, spike_counts)
     assert td.spike_counts_by_channel is not None
-    assert np.array_equal(np.nanmax(td.spike_counts_by_channel, 1), spike_counts)
+    np.testing.assert_array_equal(
+        np.nanmax(td.spike_counts_by_channel, 1), spike_counts
+    )
 
     atol = 5e-2 if denoising_method == "none" else 0.5
-    assert np.allclose(td.templates, sim["templates"].templates, atol=atol)
+    np.testing.assert_allclose(td.templates, sim["templates"].templates, atol=atol)
     assert td.raw_std_dev is not None
-    assert np.allclose(td.raw_std_dev, 0.0, atol=atol)
-    assert np.array_equal(td.unit_ids, sim["templates"].unit_ids)
+    np.testing.assert_allclose(td.raw_std_dev, 0.0, atol=atol)
+    np.testing.assert_array_equal(td.unit_ids, sim["templates"].unit_ids)
 
 
 @pytest.mark.parametrize("drift", [False, 0, True])
-@pytest.mark.parametrize("realign_peaks", [False, True])
+@pytest.mark.parametrize(
+    "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
+)
 @pytest.mark.parametrize("denoising_method", ["none", "exp_weighted", "t", "loot"])
 def test_refractory_templates_algorithm_agreement(
     refractory_simulations, drift, realign_peaks, denoising_method
@@ -119,7 +127,10 @@ def test_refractory_templates_algorithm_agreement(
             continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
-            realign_peaks=realign_peaks,
+            realign_peaks=bool(realign_peaks),
+            realign_strategy=realign_peaks
+            if realign_peaks
+            else "mainchan_trough_factor",
             reduction="mean",
             algorithm=algorithm,
             denoising_method=denoising_method,
@@ -139,12 +150,14 @@ def test_refractory_templates_algorithm_agreement(
 
     td0, td1 = tds
 
-    assert np.array_equal(td0.unit_ids, td1.unit_ids)
-    assert np.array_equal(td0.spike_counts, td1.spike_counts)
-    assert np.array_equal(td0.spike_counts_by_channel, td1.spike_counts_by_channel)
+    np.testing.assert_array_equal(td0.unit_ids, td1.unit_ids)
+    np.testing.assert_array_equal(td0.spike_counts, td1.spike_counts)
+    np.testing.assert_array_equal(
+        td0.spike_counts_by_channel, td1.spike_counts_by_channel
+    )
 
-    assert np.allclose(td0.templates, td1.templates, atol=1e-5)
-    assert np.allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
+    np.testing.assert_allclose(td0.templates, td1.templates, atol=1e-5)
+    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
@@ -154,7 +167,7 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
-    assert np.array_equal(np.unique(st.labels), np.arange(len(temps)))
+    np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
     if algorithm == "by_unit" and denoising_method in ("loot", "t"):
         return
     template_data = templates.TemplateData.from_config(
@@ -171,11 +184,11 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
         save_folder=tmp_path,
         overwrite=True,
     )
-    assert np.array_equal(template_data.unit_ids, np.arange(len(temps)))
+    np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
     if denoising_method == "none":
-        assert np.array_equal(template_data.templates, temps)
+        np.testing.assert_array_equal(template_data.templates, temps)
     else:
-        assert np.allclose(template_data.templates, temps, atol=0.5)
+        np.testing.assert_allclose(template_data.templates, temps, atol=0.5)
 
 
 def test_static_templates(tmp_path):
@@ -187,7 +200,10 @@ def test_static_templates(tmp_path):
     # rec0.set_dummy_probe_from_locations(geom)
 
     sorting = DARTsortSorting(
-        times_samples=np.array([0, 2]), labels=np.arange(2), channels=np.array([1, 5]), sampling_frequency=1
+        times_samples=np.array([0, 2]),
+        labels=np.arange(2),
+        channels=np.array([1, 5]),
+        sampling_frequency=1,
     )
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:

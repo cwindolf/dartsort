@@ -415,6 +415,8 @@ def realign_templates(
     )
 
     # find unit sample time shifts
+    if torch.is_tensor(template_peak_times):
+        template_peak_times = template_peak_times.numpy(force=True)
     template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
     template_shifts_[np.abs(template_shifts_) > max_shift] = 0
     if unit_ids is None:
@@ -467,6 +469,7 @@ def fit_tsvd(
     recompute_tsvd=False,
     dtype=np.float32,
     random_seed=0,
+    n_iter=15,
 ):
     tsvd = None
     if not recompute_tsvd:
@@ -510,7 +513,9 @@ def fit_tsvd(
     waveforms = waveforms.reshape(len(times) * tsvd_channel_index.shape[1], -1)
 
     # reshape, fit tsvd, and done
-    tsvd = TruncatedSVD(n_components=denoising_rank, random_state=random_seed)
+    tsvd = TruncatedSVD(
+        n_components=denoising_rank, random_state=random_seed, n_iter=n_iter
+    )
     tsvd.fit(waveforms)
 
     return tsvd

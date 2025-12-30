@@ -58,7 +58,7 @@ class SubtractionPeeler(BasePeeler):
         trough_priority=2.0,
         convexity_threshold=None,
         convexity_radius=3,
-        n_seconds_fit=40,
+        n_seconds_fit=100,
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
@@ -169,7 +169,10 @@ class SubtractionPeeler(BasePeeler):
 
         # first denoiser fitting parameters
         self.first_denoiser_max_waveforms_fit = first_denoiser_max_waveforms_fit
-        self.first_denoiser_thinning = first_denoiser_thinning
+        thinning_length_cond = recording.get_total_duration() >= 2 * n_seconds_fit
+        self.first_denoiser_thinning = (
+            first_denoiser_thinning if thinning_length_cond else 1.0
+        )
         self.first_denoiser_temporal_jitter = first_denoiser_temporal_jitter
         self.first_denoiser_spatial_jitter = first_denoiser_spatial_jitter
 

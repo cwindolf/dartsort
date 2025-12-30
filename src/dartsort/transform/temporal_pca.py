@@ -34,6 +34,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         n_oversamples=10,
         niter=21,
         max_waveforms=20_000,
+        fit_dtype=torch.double,
     ):
         if fit_radius is not None:
             if geom is None or channel_index is None:
@@ -54,6 +55,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.random_state = random_state
         self.n_oversamples = n_oversamples
         self.niter = niter
+        self.fit_dtype = fit_dtype
         self.max_waveforms = max_waveforms
 
         # gizmo
@@ -127,6 +129,8 @@ class BaseTemporalPCA(BaseWaveformModule):
             M = mean[None].broadcast_to(waveforms_fit.shape)
 
         # niter=7 is sklearn's auto choice. but that's usually double...
+        orig_dtype = waveforms_fit.dtype
+        waveforms_fit = waveforms_fit.to(dtype=self.fit_dtype)
         U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=self.niter)
         U = U[..., : self.rank]
         S = S[..., : self.rank]
@@ -135,12 +139,12 @@ class BaseTemporalPCA(BaseWaveformModule):
 
         # fix sign ambiguity for better reproducibility in unit tests
         U, Vt = svd_flip(U.numpy(force=True), Vt.numpy(force=True))
-        U = torch.asarray(U).to(S).contiguous()
-        Vt = torch.asarray(Vt).to(S).contiguous()
+        U = torch.asarray(U, dtype=orig_dtype, device=S.device).contiguous()
+        Vt = torch.asarray(Vt, dtype=orig_dtype, device=S.device).contiguous()
 
         # loadings = U * S[..., None, :]
         components = Vt
-        explained_variance = (S**2) / (n_samples - 1)
+        explained_variance = S.square() / (n_samples - 1)
         whitener = torch.sqrt(explained_variance)
 
         self.b.mean.copy_(mean)

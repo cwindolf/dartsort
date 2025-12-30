@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from ..util import drift_util, waveform_util
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, DARTSORTVERBOSE
 from ..util.spiketorch import fast_nanmedian, ptp
 from .get_templates import get_templates
 
@@ -311,9 +311,25 @@ def svd_compress_templates(
                     :, :, :rankj
                 ].numpy(force=True)
                 singular_values[binds, :rankj] = S[:, :rankj].numpy(force=True)
+                assert np.isfinite(singular_values[binds, :rankj]).all()
                 temporal_components[binds, :, :rankj] = Vh[:, :rankj, :].mT.numpy(
                     force=True
                 )
+                assert np.isfinite(temporal_components[binds, :, :rankj]).all()
+
+    if logger.isEnabledFor(DARTSORTVERBOSE):
+        assert np.isfinite(temporal_components).all()
+        assert np.isfinite(singular_values).all()
+        assert np.isfinite(spatial_components).all()
+        recon = np.einsum("ntr,nr,nrc->ntc", temporal_components, singular_values, spatial_components)
+        tp = templates.numpy(force=True)
+        err = np.square(recon - tp).sum(axis=(1, 2))
+        ss = np.square(tp).sum(axis=(1, 2))
+        r2 = 1.0 - err / ss
+        logger.dartsortverbose(
+            "Individual basis reconstructed templates with min, mean, max R^2s: "
+            f"{r2.min().item():0.3f}, {r2.mean().item():0.3f}, {r2.max().item():0.3f}."
+        )
 
     if allow_na:
         isna = np.broadcast_to(isna, spatial_components.shape)
@@ -389,13 +405,24 @@ def shared_basis_compress_templates(
 
     # project templates onto temporal comps (no sparsity here.)
     # spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
-    templates = templates.transpose(0, 2, 1).reshape(n * c, t)
-    spatial_sing = templates @ (temporal_comps).T
+    templates_t = templates.transpose(0, 2, 1).reshape(n * c, t)
+    spatial_sing = templates_t @ (temporal_comps).T
     spatial_sing = spatial_sing.reshape(n, c, rank).transpose(0, 2, 1)
     spatial_sing = np.ascontiguousarray(spatial_sing)
 
     assert np.isfinite(temporal_comps).all()
     assert np.isfinite(spatial_sing).all()
+
+    if logger.isEnabledFor(DARTSORTVERBOSE):
+        recon = torch.asarray(np.einsum("rt,nrc->ntc", temporal_comps, spatial_sing))
+        templates = torch.asarray(templates)
+        err = recon.sub_(templates).square_().sum(dim=(1, 2)).cpu()
+        ss = templates.square().sum(dim=(1, 2)).cpu()
+        r2 = 1.0 - err / ss
+        logger.dartsortverbose(
+            "Shared basis reconstructed templates with min, mean, max R^2s: "
+            f"{r2.min().item():0.3f}, {r2.mean().item():0.3f}, {r2.max().item():0.3f}."
+        )
 
     return SharedBasisTemplates(
         unit_ids=unit_ids,
@@ -556,22 +583,21 @@ def compressed_upsampled_templates(
     )
 
 
-def _svd_helper(x):
+def _svd_helper(x, svd_dtype=torch.double):
     """This matches numpy's behavior in tests/test_matching.py."""
+    orig_dtype = x.dtype
+    x = x.to(dtype=svd_dtype)
     if x.device.type == "cuda":
-        # torch's cuda results need a certain driver to agree with numpy
-        try:
-            U, S, Vh = torch.linalg.svd(x, full_matrices=False, driver="gesvda")
-            return U, S, Vh
-        except torch.linalg.LinAlgError:  # type: ignore[reportPrivateImportUsage]
-            return torch.linalg.svd(x, full_matrices=False, driver="gesvd")
+        U, S, Vh = torch.linalg.svd(x, full_matrices=False, driver="gesvd")
+        U = U.to(dtype=orig_dtype)
+        S = S.to(dtype=orig_dtype)
+        Vh = Vh.to(dtype=orig_dtype)
+        return U, S, Vh
     else:
-        # torch's CPU results are disagreeing with numpy here.
-        # return torch.linalg.svd(x, full_matrices=False)
         U, S, Vh = np.linalg.svd(x.numpy(), full_matrices=False)
-        U = torch.from_numpy(U)
-        S = torch.from_numpy(S)
-        Vh = torch.from_numpy(Vh)
+        U = torch.asarray(U, dtype=orig_dtype)
+        S = torch.asarray(S, dtype=orig_dtype)
+        Vh = torch.asarray(Vh, dtype=orig_dtype)
         return U, S, Vh
 
 
@@ -606,6 +632,8 @@ def estimate_offset(
     min_weight=0.75,
 ):
     if strategy == "mainchan_trough_factor":
+        if torch.is_tensor(templates):
+            templates = templates.numpy(force=True)
         _, _, offsets = get_main_channels_and_alignments(
             None, trough_factor=trough_factor, templates=templates
         )

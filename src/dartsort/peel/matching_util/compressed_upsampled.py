@@ -156,6 +156,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             cup_temps, strategy=realign_strategy, trough_factor=trough_factor
         )
         cup_trough_shifts = cup_trough_shifts - int(trough_offset_samples)
+        cup_trough_shifts = torch.asarray(cup_trough_shifts).to(cup_index)
         self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
         # -- template grouping and coarse objective indexing
