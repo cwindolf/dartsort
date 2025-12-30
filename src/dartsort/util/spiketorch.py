@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from linear_operator.utils.cholesky import psd_safe_cholesky
 from scipy.fftpack import next_fast_len
+from sklearn.utils.extmath import svd_flip
 from torch import Tensor
 from torch.fft import irfft, rfft
 
@@ -154,6 +155,41 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
     for j in range(dim + 1, waveforms.ndim):
         window = window.unsqueeze(-1)
     return waveforms * window.to(waveforms)
+
+
+def svd_lowrank_helper(
+    x: Tensor,
+    rank: int,
+    *,
+    n_oversamples: int = 10,
+    fit_dtype=torch.double,
+    niter=21,
+    M=None,
+    with_loadings: bool = False,
+) -> tuple[Tensor | None, Tensor, Tensor, Tensor]:
+    assert x.ndim == 2
+    q = min(rank + n_oversamples, *x.shape)
+    orig_dtype = x.dtype
+    x = x.to(dtype=fit_dtype)
+    U, S, V = torch.svd_lowrank(x, q=q, M=M, niter=niter)
+    U = U[..., :rank]
+    S = S[..., :rank]
+    V = V[..., :rank]
+    Vt = V.T
+
+    # fix sign ambiguity for better reproducibility in unit tests
+    U, Vt = svd_flip(U.numpy(force=True), Vt.numpy(force=True))
+    U = torch.asarray(U, dtype=orig_dtype, device=S.device).contiguous()
+    Vt = torch.asarray(Vt, dtype=orig_dtype, device=S.device).contiguous()
+
+    if with_loadings:
+        loadings = U * S[..., None, :]
+    else:
+        loadings = None
+    components = Vt
+    explained_variance = S.square() / (x.shape[0] - 1)
+    whitener = torch.sqrt(explained_variance)
+    return loadings, components, explained_variance, whitener
 
 
 def ravel_multi_index(multi_index, dims):

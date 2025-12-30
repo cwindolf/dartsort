@@ -112,7 +112,7 @@ def tmm_demix(
         logger.dartsortverbose("Extra TMM asserts are on.")
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    tmm, train_data, val_data, full_data = instantiate_and_bootstrap_tmm(
+    tmm, train_data, val_data, full_data, _ = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion_est=motion_est,
         refinement_cfg=refinement_cfg,
@@ -175,6 +175,7 @@ class MixtureModelAndDatasets(NamedTuple):
     train_data: "TruncatedSpikeData"
     val_data: "TruncatedSpikeData | None"
     full_data: "StreamingSpikeData"
+    train_ixs: Tensor | slice
 
 
 @databag
@@ -557,6 +558,18 @@ class SuccessfulUnitSplitResult:
 
 
 UnitSplitResult = Optional[SuccessfulUnitSplitResult]
+
+
+@databag
+class UnitSplitDebugInfo:
+    bailed: bool = False
+    bail_reason: str | None = None
+    split_model: "TruncatedMixtureModel | None" = None
+    kmeans_x: Tensor | None = None
+    kmeans_chans: Tensor | None = None
+    kmeans_responsibilities: Tensor | None = None
+    merge_res: "SuccessfulGroupMergeResult | None" = None
+    split_data: "DenseSpikeData | None" = None
 
 
 @databag
@@ -1555,7 +1568,7 @@ class BaseMixtureModel(BModule):
             max_distance=self.max_distance,
         )
 
-    def merge_as_group(
+    def merge_as_group_on_data_subset(
         self,
         train_data: DenseSpikeData,
         eval_data: DenseSpikeData | None,
@@ -2284,18 +2297,21 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
-    ) -> UnitSplitResult:
+        debug: bool = False,
+    ) -> tuple[UnitSplitResult, UnitSplitDebugInfo | None]:
         # get dense train set slice in unit_id
         min_count_split = 2 * self.min_count
         split_data = train_data.dense_slice_by_unit(
             unit_id, gen=self.rg, min_count=min_count_split
         )
-        if split_data is None:
-            return None
+        if split_data is None and debug:
+            return None, UnitSplitDebugInfo(bailed=True, bail_reason="count")
+        elif split_data is None:
+            return None, None
 
         # kmeans on interp whitened feats
         assert self.erp is not None
-        kmeans_responsibliities = try_kmeans(
+        kmeans_responsibliities, kmeans_x, kmeans_chans = try_kmeans(
             split_data,
             k=self.split_k,
             erp=self.erp,
@@ -2303,13 +2319,21 @@ class TruncatedMixtureModel(BaseMixtureModel):
             feature_rank=self.noise.rank,
             min_count=self.min_count,
         )
-        if kmeans_responsibliities is None:
+        if kmeans_responsibliities is None and debug:
             logger.dartsortverbose(f"Split {unit_id}: kmeans bailed.")
-            return None
+            return None, UnitSplitDebugInfo(
+                bailed=True,
+                bail_reason="kmeans",
+                kmeans_x=kmeans_x,
+                split_data=split_data,
+                kmeans_chans=kmeans_chans,
+            )
+        elif kmeans_responsibliities is None:
+            return None, None
         assert kmeans_responsibliities.shape[1] >= 2
 
         # initialize dense model with fixed resps
-        split_model, _, split_data, any_spikes_discarded, keep_mask, keep_spikes = (
+        split_model, _, split_data, any_spikes_discarded, kmeans_keep_mask, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibliities,
@@ -2332,11 +2356,25 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         if any_spikes_discarded:
             kmeans_responsibliities = kmeans_responsibliities[keep_spikes]
-        if split_model.n_units <= 1:
+        if debug:
+            assert kmeans_x is not None
+            kmeans_responsibliities[:, kmeans_keep_mask]
+            kmeans_x = kmeans_x[keep_spikes]
+        if split_model.n_units <= 1 and debug:
             logger.dartsortverbose(
                 f"Split {unit_id}: only {split_model.n_units} of {kmeans_responsibliities.shape[1]} sub-units."
             )
-            return None
+            return None, UnitSplitDebugInfo(
+                bailed=True,
+                bail_reason="fit",
+                kmeans_responsibilities=kmeans_responsibliities,
+                kmeans_x=kmeans_x,
+                split_model=split_model,
+                split_data=split_data,
+                kmeans_chans=kmeans_chans,
+            )
+        elif split_model.n_units <= 1:
+            return None, None
 
         # see if that dog hunts
         if eval_data is None:
@@ -2350,7 +2388,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_scores_batch = scores.slice(split_eval_data.indices)
 
         pair_mask = split_model.unit_distance_matrix() <= self.max_distance
-        merge_res = split_model.merge_as_group(
+        merge_res = split_model.merge_as_group_on_data_subset(
             train_data=split_data,
             eval_data=split_eval_data,
             pair_mask=pair_mask,
@@ -2360,16 +2398,27 @@ class TruncatedMixtureModel(BaseMixtureModel):
             skip_full=False,
             skip_single=False,
         )
+        if debug:
+            dbg = UnitSplitDebugInfo(
+                split_model=split_model,
+                kmeans_x=kmeans_x,
+                kmeans_chans=kmeans_chans,
+                kmeans_responsibilities=kmeans_responsibliities,
+                merge_res=merge_res,
+                split_data=split_data,
+            )
+        else:
+            dbg = None
         if merge_res is not None and merge_res.grouping.n_groups <= 1:
             logger.dartsortverbose(
                 f"Split {unit_id}: merged all {split_model.n_units} split sub-units."
             )
-            return None
+            return None, dbg
         if merge_res is not None and merge_res.improvement <= 0.0:
             logger.dartsortverbose(
                 f"Split {unit_id}: mini-merge improvement {merge_res.improvement} too small."
             )
-            return None
+            return None, dbg
 
         no_allowed_partitions = not pair_mask.fill_diagonal_(False).any()
         if no_allowed_partitions:
@@ -2389,7 +2438,19 @@ class TruncatedMixtureModel(BaseMixtureModel):
             logger.dartsortverbose(
                 f"Split {unit_id}: no split, merge failed with allowed partitions."
             )
-            return None
+            if debug:
+                return None, UnitSplitDebugInfo(
+                    bailed=True,
+                    bail_reason="merge_fail",
+                    split_model=split_model,
+                    kmeans_x=kmeans_x,
+                    kmeans_chans=kmeans_chans,
+                    kmeans_responsibilities=kmeans_responsibliities,
+                    merge_res=merge_res,
+                    split_data=split_data,
+                )
+            else:
+                return None, None
         else:
             train_labels = merge_res.train_assignments
             train_indices = merge_res.train_indices
@@ -2397,7 +2458,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             means = merge_res.means
             bases = merge_res.bases
             sub_proportions = merge_res.sub_proportions
-
         if logger.isEnabledFor(DARTSORTVERBOSE):
             _l, _c = train_labels.unique(return_counts=True)
             imp = None if merge_res is None else merge_res.improvement
@@ -2406,7 +2466,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 f"assigned to {_l.tolist()} with counts {_c.tolist()}."
             )
 
-        return SuccessfulUnitSplitResult(
+        split_res = SuccessfulUnitSplitResult(
             unit_id=int(unit_id),
             n_split=n_groups,
             train_indices=train_indices,
@@ -2415,6 +2475,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bases=bases,
             sub_proportions=sub_proportions,
         )
+        return split_res, dbg
 
     def split(
         self,
@@ -2428,7 +2489,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         else:
             unit_ids = self.unit_ids
         split_results = (
-            self.split_unit(unit_id, train_data, eval_data, scores)
+            self.split_unit(unit_id, train_data, eval_data, scores)[0]
             for unit_id in unit_ids
         )
 
@@ -2441,6 +2502,44 @@ class TruncatedMixtureModel(BaseMixtureModel):
         torch.cuda.empty_cache()
 
         return split_result
+
+    def try_merge_group(
+        self,
+        group: Tensor,
+        train_data: TruncatedSpikeData,
+        eval_data: TruncatedSpikeData | None,
+        scores: Scores,
+    ) -> GroupMergeResult:
+        if group.numel() == 1:
+            return
+        assert group.numel() <= self.max_group_size
+
+        view = self.unit_slice(group)
+        group_train_data = train_data.dense_slice_by_unit(group, gen=self.rg)
+        assert group_train_data is not None
+        if pnoid:
+            cov = group_train_data.lut_coverage(view.unit_ids, self.lut)
+            assert cov.any(dim=1).all()
+        if eval_data is None:
+            group_eval_data = None
+            assert scores.log_liks.shape[0] == train_data.N
+            group_scores = scores.slice(group_train_data.indices)
+        else:
+            group_eval_data = eval_data.dense_slice_by_unit(group, gen=self.rg)
+            assert group_eval_data is not None
+            assert scores.log_liks.shape[0] == eval_data.N
+            group_scores = scores.slice(group_eval_data.indices)
+        group_res = view.merge_as_group_on_data_subset(
+            train_data=group_train_data,
+            eval_data=group_eval_data,
+            pair_mask=None,
+            cur_scores=group_scores,
+            responsibilities=None,
+            cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
+            skip_full=False,
+            skip_single=False,
+        )
+        return group_res
 
     def merge(
         self,
@@ -2459,36 +2558,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
             groups = tqdm(groups, desc="Merge", smoothing=0.0)
 
         for group in groups:
-            if group.numel() == 1:
-                continue
-            assert group.numel() <= self.max_group_size
-
-            view = self.unit_slice(group)
-            group_train_data = train_data.dense_slice_by_unit(group, gen=self.rg)
-            assert group_train_data is not None
-            if pnoid:
-                cov = group_train_data.lut_coverage(view.unit_ids, self.lut)
-                assert cov.any(dim=1).all()
-            if eval_data is None:
-                group_eval_data = None
-                assert scores.log_liks.shape[0] == train_data.N
-                group_scores = scores.slice(group_train_data.indices)
-            else:
-                group_eval_data = eval_data.dense_slice_by_unit(group, gen=self.rg)
-                assert group_eval_data is not None
-                assert scores.log_liks.shape[0] == eval_data.N
-                group_scores = scores.slice(group_eval_data.indices)
-            group_res = view.merge_as_group(
-                train_data=group_train_data,
-                eval_data=group_eval_data,
-                pair_mask=None,
-                cur_scores=group_scores,
-                responsibilities=None,
-                cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
-                skip_full=False,
-                skip_single=False,
+            group_res = self.try_merge_group(
+                group=group,
+                train_data=train_data,
+                eval_data=eval_data,
+                scores=scores,
             )
-            del group_train_data, group_eval_data
 
             # no-merge cases
             if group_res is None:
@@ -3128,7 +3203,7 @@ def get_truncated_datasets(
         params=refinement_cfg.interp_params,
     )
 
-    return neighb_cov, erp, train_data, val_data, full_data, noise
+    return neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs
 
 
 def get_full_neighborhood_data(
@@ -3219,7 +3294,7 @@ def instantiate_and_bootstrap_tmm(
     )
     sorting = sorting.flatten()
 
-    neighb_cov, erp, train_data, val_data, full_data, noise = get_truncated_datasets(
+    neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs = get_truncated_datasets(
         sorting=sorting,
         motion_est=motion_est,
         refinement_cfg=refinement_cfg,
@@ -3248,7 +3323,7 @@ def instantiate_and_bootstrap_tmm(
     lut = train_data.bootstrap_candidates(D)
     tmm.update_lut(lut)
 
-    return MixtureModelAndDatasets(tmm, train_data, val_data, full_data)
+    return MixtureModelAndDatasets(tmm, train_data, val_data, full_data, train_ixs)
 
 
 def run_split(tmm, train_data, val_data, prog_level):
@@ -3780,12 +3855,14 @@ def try_kmeans(
     kmeanspp_initial="random",
     n_kmeans_tries: int = 10,
     n_kmeanspp_tries: int = 10,
-) -> Tensor | None:
+    debug: bool = False,
+) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_count)
     erp_x = data.whitenedx.view(data.x.shape[0], feature_rank, -1)
     x = erp.interp_to_chans(erp_x, data.neighborhood_ids, channels)
     x = x.view(len(x), -1)
+    x_ret = x if debug else None
 
     # kmeans
     kres = kmeans(
@@ -3801,14 +3878,13 @@ def try_kmeans(
     )
     resps = kres["responsibilities"]
     if resps is None:
-        return
+        return None, x_ret, channels
     assert resps.shape[1] <= k
     (big_enough,) = (resps.sum(dim=0) >= min_count).nonzero(as_tuple=True)
     if big_enough.numel() <= 1:
-        return
+        return None, x_ret, channels
     resps = resps[:, big_enough]
-
-    return resps
+    return resps, x_ret, channels
 
 
 def labels_from_scores(scores: Scores) -> np.ndarray:

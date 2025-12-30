@@ -1,13 +1,13 @@
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.utils.extmath import svd_flip
 
 from ..util.waveform_util import (
     channel_subset_by_radius,
     get_channels_in_probe,
     set_channels_in_probe,
 )
+from ..util.spiketorch import svd_lowrank_helper
 from .transform_base import (
     BaseWaveformAutoencoder,
     BaseWaveformDenoiser,
@@ -121,31 +121,21 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             mean = torch.zeros_like(waveforms_fit[0])
 
-        n_samples, n_times = waveforms_fit.shape
-        q = min(self.rank + self.n_oversamples, n_samples, n_times)
-        M = None
         if self.centered:
             # torch does not seem always to want to broadcast M as advertised?
             M = mean[None].broadcast_to(waveforms_fit.shape)
+        else:
+            M = None
 
-        # niter=7 is sklearn's auto choice. but that's usually double...
-        orig_dtype = waveforms_fit.dtype
-        waveforms_fit = waveforms_fit.to(dtype=self.fit_dtype)
-        U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=self.niter)
-        U = U[..., : self.rank]
-        S = S[..., : self.rank]
-        V = V[..., : self.rank]
-        Vt = V.T
-
-        # fix sign ambiguity for better reproducibility in unit tests
-        U, Vt = svd_flip(U.numpy(force=True), Vt.numpy(force=True))
-        U = torch.asarray(U, dtype=orig_dtype, device=S.device).contiguous()
-        Vt = torch.asarray(Vt, dtype=orig_dtype, device=S.device).contiguous()
-
-        # loadings = U * S[..., None, :]
-        components = Vt
-        explained_variance = S.square() / (n_samples - 1)
-        whitener = torch.sqrt(explained_variance)
+        _, components, _, whitener = svd_lowrank_helper(
+            x=waveforms_fit,
+            rank=self.rank,
+            n_oversamples=self.n_oversamples,
+            fit_dtype=self.fit_dtype,
+            niter=self.niter,
+            M=M,
+            with_loadings=False,
+        )
 
         self.b.mean.copy_(mean)
         self.b.components.copy_(components)

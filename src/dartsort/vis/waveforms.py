@@ -27,7 +27,7 @@ def geomplot(
     msbar=False,
     bar_color="k",
     bar_background="w",
-    zlim="tight",
+    zlim: str | None="tight",
     c=None,
     color=None,
     colors=None,

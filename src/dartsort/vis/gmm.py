@@ -12,12 +12,7 @@ from ..util.waveform_util import get_pitch
 
 from ..cluster.gmm import gaussian_mixture, stable_features
 from ..util import spiketorch
-from ..util.multiprocessing_util import (
-    CloudpicklePoolExecutor,
-    ThreadPoolExecutor,
-    cloudpickle,
-    get_pool,
-)
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from . import analysis_plots, gmm_helpers, layout
 from .colors import glasbey1024
 from .waveforms import geomplot
