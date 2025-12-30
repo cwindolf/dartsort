@@ -453,7 +453,7 @@ def test_small_default_config(tmp_path, extract_radius=100):
 
     # add a spike every so often samples
     so_often = 501
-    template = 20 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
+    template = -20 * np.exp(-(((np.arange(121) - 42) / 5) ** 2))
     gt_times = []
     gt_channels = []
     for t in range(0, T_samples - 121, so_often):

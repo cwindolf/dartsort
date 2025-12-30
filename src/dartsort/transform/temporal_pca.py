@@ -134,7 +134,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         Vt = V.T
 
         # fix sign ambiguity for better reproducibility in unit tests
-        U, Vt = svd_flip(U.cpu(), Vt.cpu())
+        U, Vt = svd_flip(U.numpy(force=True), Vt.numpy(force=True))
         U = torch.asarray(U).to(S).contiguous()
         Vt = torch.asarray(Vt).to(S).contiguous()
 
