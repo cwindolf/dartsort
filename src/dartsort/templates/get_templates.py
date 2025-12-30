@@ -4,12 +4,12 @@ The class TemplateData in templates.py provides a friendlier interface,
 where you can get templates using the TemplateConfig in config.py.
 """
 
+import threading
 from dataclasses import replace
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import torch
-import threading
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import TruncatedSVD
@@ -33,7 +33,11 @@ def get_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
-    realign_strategy="normsq_weighted_trough_factor",
+    realign_strategy: Literal[
+        "mainchan_trough_factor",
+        "normsq_weighted_trough_factor",
+        "ampsq_weighted_trough_factor",
+    ] = "normsq_weighted_trough_factor",
     trough_factor=3.0,
     low_rank_denoising=True,
     denoising_tsvd=None,
@@ -662,19 +666,19 @@ def get_all_shifted_raw_and_low_rank_templates(
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
             if with_raw_std_dev:
-                raw_square_templates[ix_chunk] = raw_square_temps_chunk
+                raw_square_templates[ix_chunk] = raw_square_temps_chunk  # type: ignore
             if not raw:
-                low_rank_templates[ix_chunk] = low_rank_temps_chunk
+                low_rank_templates[ix_chunk] = low_rank_temps_chunk  # type: ignore
             snrs_by_channel[ix_chunk] = snrs_chunk
             spike_counts_by_channel[ix_chunk] = chancounts_chunk
             if show_progress:
-                pbar.update(len(units_chunk))
+                pbar.update(len(units_chunk))  # type: ignore
         if show_progress:
-            pbar.close()
+            pbar.close()  # type: ignore
 
     raw_std_dev = None
     if with_raw_std_dev:
-        raw_std_dev = raw_square_templates
+        raw_std_dev = raw_square_templates  # type: ignore
         raw_std_dev -= raw_templates**2
         np.abs(raw_std_dev, out=raw_std_dev)
         raw_std_dev **= 0.5
@@ -999,4 +1003,4 @@ class TorchSVDProjector(torch.nn.Module):
     def forward(self, x, in_place=False):
         embed = x @ self.components.T
         out = x if in_place else None
-        return torch.matmul(embed, self.components, out=out)
+        return torch.matmul(embed, cast(torch.Tensor, self.components), out=out)
