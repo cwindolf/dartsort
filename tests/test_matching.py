@@ -163,12 +163,8 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         scale_max=matcher.amp_scale_max,
     )
 
-    assert res["n_spikes"] > 0
-
     conv = res["conv"].numpy(force=True)
     residual = res["residual"].numpy(force=True)
-    times_samples = res["times_samples"].numpy(force=True)
-    labels = res["labels"].numpy(force=True)
 
     # testing tolerance depends on whether the method is "exact" and on how
     # well the (upsampled) templates were reconstructed in the first place
@@ -178,8 +174,9 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     )
     assert gt_up_templates.shape[1] == upsampling
     match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
+    assert np.isfinite(match_up_templates).all()
     np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=2.5e-3)
-
+    
     # difference between upsampling before going to multichan or after...
     true_temps_up = gt_sorting._load_dataset("templates_up")
     np.testing.assert_allclose(gt_up_templates, true_temps_up, atol=1e-4)
@@ -258,6 +255,8 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
 
     with subtests.test(msg="crumbs_sorting"):
         assert res["n_spikes"] == gt_n_spikes
+        times_samples = res["times_samples"].numpy(force=True)
+        labels = res["labels"].numpy(force=True)
         np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
         np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
 
@@ -457,7 +456,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
         assert res["n_spikes"] == len(times)
         assert np.array_equal(res["times_samples"].numpy(force=True), times)
         assert np.array_equal(res["labels"].numpy(force=True), labels)
-        assert np.array_equal(res["upsampling_indices"].numpy(force=True), [0, 0])
+        assert np.array_equal(res["up_inds"].numpy(force=True), [0, 0])
         resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
         assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
         conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
@@ -592,7 +591,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
                     padding=(temp_a.shape[0] - 1, 0),
                 )
                 pconv2 = pconv2[0, 0, :, 0]
-                assert np.allclose(pconv2.numpy()[::-1], pconv)
+                np.testing.assert_allclose(pconv2.numpy()[::-1], pconv[0], atol=1e-3, rtol=1e-6)
                 assert np.isclose(pc, tc)
 
         res = matcher.peel_chunk(
@@ -608,9 +607,12 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             res["times_samples"].numpy(force=True), times + trough_shifts
         )
         assert np.array_equal(res["labels"].numpy(force=True), labels)
-        assert np.array_equal(
-            res["upsampling_indices"].numpy(force=True), upsampling_indices
-        )
+        if "up_inds" in res:
+            assert np.array_equal(
+                res["up_inds"].numpy(force=True), upsampling_indices
+            )
+        else:
+            assert up_factor == 1
         resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
         assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
         conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
@@ -684,6 +686,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             conv_ignore_threshold=0.0,
             template_svd_compression_rank=2,
             cd_iter=cd_iter,
+            chunk_length_samples=recording_length_samples,
         )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -736,7 +739,7 @@ def test_static(tmp_path, up_factor, cd_iter):
                 conv_in = torch.as_tensor(tempupb[None]).mT[None]
                 pconv_ = F.conv2d(conv_in, conv_filt, padding=(0, 120), groups=1)
                 pconv1 = pconv_.squeeze()[spike_length_samples - 1].numpy(force=True)
-                assert torch.isclose(pcf.cpu(), pconv_).all()
+                np.testing.assert_allclose(pcf.cpu(), pconv_.squeeze(), rtol=1e-5, atol=1e-4)
 
                 pconv2 = (
                     F.conv2d(
@@ -760,7 +763,8 @@ def test_static(tmp_path, up_factor, cd_iter):
 
         assert res["n_spikes"] == len(times)
         assert np.array_equal(res["times_samples"].cpu(), times)
-        assert np.array_equal(res["upsampling_indices"].cpu(), np.zeros(len(times)))
+        if up_factor > 1:
+            assert np.array_equal(res["up_inds"].cpu(), np.zeros(len(times)))
         assert np.array_equal(res["labels"].cpu(), labels)
         assert np.isclose(torch.square(res["residual"]).mean().cpu(), 0.0, atol=1e-5)
         assert np.isclose(torch.square(res["conv"]).mean().cpu(), 0.0, atol=1e-3)

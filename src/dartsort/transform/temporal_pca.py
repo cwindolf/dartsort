@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.utils.extmath import svd_flip
 
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -31,6 +32,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         name_prefix="",
         temporal_slice: slice | None = None,
         n_oversamples=10,
+        niter=21,
         max_waveforms=20_000,
     ):
         if fit_radius is not None:
@@ -51,6 +53,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.fit_radius = fit_radius
         self.random_state = random_state
         self.n_oversamples = n_oversamples
+        self.niter = niter
         self.max_waveforms = max_waveforms
 
         # gizmo
@@ -123,21 +126,26 @@ class BaseTemporalPCA(BaseWaveformModule):
             # torch does not seem always to want to broadcast M as advertised?
             M = mean[None].broadcast_to(waveforms_fit.shape)
 
-        # 7 is based on sklearn's auto choice
-        U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=7)
+        # niter=7 is sklearn's auto choice. but that's usually double...
+        U, S, V = torch.svd_lowrank(waveforms_fit, q=q, M=M, niter=self.niter)
         U = U[..., : self.rank]
         S = S[..., : self.rank]
         V = V[..., : self.rank]
+        Vt = V.T
+
+        # fix sign ambiguity for better reproducibility in unit tests
+        U, Vt = svd_flip(U.cpu(), Vt.cpu())
+        U = torch.asarray(U).to(S).contiguous()
+        Vt = torch.asarray(Vt).to(S).contiguous()
 
         # loadings = U * S[..., None, :]
-        components = V.T.contiguous()
+        components = Vt
         explained_variance = (S**2) / (n_samples - 1)
         whitener = torch.sqrt(explained_variance)
 
         self.b.mean.copy_(mean)
         self.b.components.copy_(components)
         self.b.whitener.copy_(whitener)
-
         self._needs_fit = False
 
     def needs_fit(self):

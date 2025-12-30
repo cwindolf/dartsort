@@ -186,7 +186,7 @@ def generate_geom(
         num_columns_even_half = 1 + (num_columns // 2)
         y_shift_per_column = [stagger, 0.0] * num_columns_even_half
         y_shift_per_column = y_shift_per_column[:num_columns]
-    elif y_shift_per_column == "flat":
+    elif y_shift_per_column == "flat" or y_shift_per_column is None:
         y_shift_per_column = [0.0] * num_columns
     else:
         assert isinstance(y_shift_per_column, (tuple, list, np.ndarray))

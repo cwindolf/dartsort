@@ -1,3 +1,5 @@
+from typing import cast
+
 import h5py
 import numpy as np
 import pytest
@@ -7,7 +9,6 @@ from dartsort.evaluate import simkit, simlib
 from dartsort.util.internal_config import FeaturizationConfig
 from dartsort.util.noise_util import StationaryFactorizedNoise
 from dartsort.util.registration_util import estimate_motion
-
 
 f_dt = "float32"
 r_dt = "float16"
@@ -97,7 +98,7 @@ def test_reproducible_and_residual(
         kw["template_library"] = 10 * rg.normal(size=(10, 121, 48))
     if templates_kind == "librarygrid":
         kw["template_simulator_kwargs"] = dict(
-            interp_method="griddata", interp_kernel_name="linear"
+            interp_method="griddata", griddata_method="linear"
         )
 
     for j, n_jobs in enumerate((1, 4)):
@@ -133,13 +134,12 @@ def test_reproducible_and_residual(
     tpca_vals = []
     for st in (st0, st1):
         with h5py.File(st.parent_h5_path, "r", locking=False) as h5:
-            f = h5["collisioncleaned_tpca_features"][:]
+            f = cast(h5py.Dataset, h5["collisioncleaned_tpca_features"])[:]
             np.nan_to_num(f, nan=-111111.0, copy=False)
             tpca_vals.append(f)
     if torch.cuda.is_available():
-        diff = np.subtract(*tpca_vals)
-        diff = np.abs(diff, out=diff)
-        assert diff.max() < 2e-2
+        tpca0, tpca1 = tpca_vals
+        np.testing.assert_allclose(tpca0, tpca1, atol=0.01)
     else:
         assert np.array_equal(*tpca_vals)
     del tpca_vals, f
@@ -147,7 +147,7 @@ def test_reproducible_and_residual(
     residuals = []
     for st in (st0, st1):
         with h5py.File(st.parent_h5_path, "r", locking=False) as h5:
-            f = h5["residual"][:]
+            f = cast(h5py.Dataset, h5["residual"])[:]
             np.nan_to_num(f, nan=-111111.0, copy=False)
             residuals.append(f)
     assert np.array_equal(*residuals)

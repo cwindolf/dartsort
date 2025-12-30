@@ -21,6 +21,7 @@ from ...templates import (
 from ...templates.template_util import estimate_offset
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
+from ...util.logging_util import get_logger, DARTSORTVERBOSE
 from ...util.spiketorch import add_at_, convolve_lowrank, grab_spikes_full
 from .matching_base import (
     ChunkTemplateData,
@@ -29,6 +30,9 @@ from .matching_base import (
     PconvBase,
 )
 from .pairwise import CompressedPairwiseConv
+
+logger = get_logger(__name__)
+_extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
 
 
 class CompressedUpsampledMatchingTemplates(MatchingTemplates):
@@ -64,11 +68,11 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         dtype=torch.float,
     ):
         super().__init__()
+        global _extra_checks
+        _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
 
         lrt = low_rank_templates
         del low_rank_templates
-
-        self.pconv_db = pconv_db
 
         # in this case there is bookkeeping to manage correspondence
         # between coarse and fine templates
@@ -79,6 +83,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.upsampling = n_cupt > self.n_templates
         self.comp_up_max = n_cupt
         self.registered_template_depths_um = registered_template_depths_um
+        self.pconv_db = pconv_db
 
         # -- store relevant arrays from LRTs and obj LRTs
         self.svd_rank = lrt.singular_values.shape[1]
@@ -86,6 +91,10 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         tc = torch.asarray(lrt.temporal_components, dtype=dtype)
         sv = torch.asarray(lrt.singular_values, dtype=dtype)
         sc = torch.asarray(lrt.spatial_components, dtype=dtype)
+        if _extra_checks:
+            assert tc.isfinite().all()
+            assert sv.isfinite().all()
+            assert sc.isfinite().all()
         self.register_buffer("unit_ids", uids)
         self.register_buffer("temporal_comps", tc)
         self.register_buffer("spatial_sing", sv[:, :, None] * sc)
@@ -562,7 +571,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
                 obj_template_inds=peaks.obj_template_inds,
                 template_inds=template_inds,
                 scalings=peaks.scalings,
-                scores=objs
+                scores=objs,
             )
         assert residual_snips is not None
         assert template_inds is not None
@@ -612,7 +621,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             scalings[dup_ix, column_ix] = scalings_
             scalings = scalings.take_along_dim(dim=1, indices=best_column_ix[:, None])
             scalings = scalings[:, 0]
-        
+
         assert peaks.times is not None
         times = peaks.times + time_shifts
         return MatchingPeaks(

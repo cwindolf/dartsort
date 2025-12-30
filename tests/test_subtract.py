@@ -1,5 +1,6 @@
 import dataclasses
 import tempfile
+from typing import cast
 import pytest
 
 import h5py
@@ -490,8 +491,10 @@ def test_small_default_config(tmp_path, extract_radius=100):
             for k in h5.keys():
                 if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
                     lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
-            assert (np.abs(h5["times_samples"][:] - gt_times) <= 3).all()  # type: ignore
-            assert np.array_equal(h5["channels"][:], gt_channels)  # type: ignore[reportAttributeAccessIssue]
+            h5_times = cast(h5py.Dataset, h5["times_samples"])[:]
+            h5_channels = cast(h5py.Dataset, h5["channels"])[:]
+            np.testing.assert_allclose(h5_times, gt_times, atol=3)
+            np.testing.assert_array_equal(h5_channels, gt_channels)
             assert np.unique(lens).size == 1
             assert lens[0] == len(gt_times)
 

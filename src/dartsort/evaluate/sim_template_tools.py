@@ -500,6 +500,10 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         else:
             self.precomputed_data = None
 
+        _, _, offsets_up = self.templates(up=True)
+        offsets_up = offsets_up - self.trough_offset_samples()
+        self.offsets_up = offsets_up.reshape(self.n_units, temporal_jitter)
+
     def trough_offset_samples(self):
         return self._trough_offset_samples
 
@@ -647,7 +651,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         if not padded:
             out = out[..., :-1]
 
-        out_flat = out.reshape(nu * up_factor, nt, nc_out) if up else out
+        out_flat = out.reshape(nu * up_factor, nt, nc_out - (not padded)) if up else out
         _, _, offsets = get_main_channels_and_alignments(templates=out_flat)
         if up:
             offsets = offsets.reshape(nu, up_factor)
