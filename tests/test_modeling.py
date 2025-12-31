@@ -92,7 +92,7 @@ def test_truncated_mixture(
     )
 
     # copy-pasting from tmm_demix here
-    neighb_cov, erp, train_data, val_data, full_data, noise = (
+    neighb_cov, erp, train_data, val_data, full_data, noise, _ = (
         mixture.get_truncated_datasets(
             sorting=init_sorting,
             motion_est=None,
@@ -165,7 +165,7 @@ def test_truncated_mixture(
             for unit_id, kmeansk in zip(to_split, n_pieces):
                 split_data = train_data.dense_slice_by_unit(unit_id, gen=tmm.rg)
                 assert split_data is not None
-                kmeans_responsibliities = mixture.try_kmeans(
+                kmeans_responsibliities, *_ = mixture.try_kmeans(
                     split_data,
                     k=kmeansk,
                     erp=tmm.erp,

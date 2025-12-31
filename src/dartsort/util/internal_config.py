@@ -235,9 +235,9 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
     max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
+    n_waveforms_fit: int = 40_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_sampling: FitSamplingMethod = "random"
     fit_max_reweighting: float = 4.0
     fit_only: bool = False
 
@@ -1083,7 +1083,7 @@ unshifted_raw_template_cfg = TemplateConfig(
     denoising_method="none",
     superres_templates=False,
 )
-unaligned_coarse_denoised_template_cfg = TemplateConfig(
+unaligned_coarse_template_cfg = TemplateConfig(
     realign_peaks=False, denoising_method="none", superres_templates=False
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(

@@ -299,7 +299,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             )
             self.offsets_up = sct_up.argmin(2) - self.trough_offset_samples()
         np.testing.assert_allclose(
-            self.singlechan_templates, self.singlechan_templates_up[:, 0]
+            self.singlechan_templates, self.singlechan_templates_up[:, 0], atol=1e-15
         )
         assert np.all(
             self.singlechan_templates.argmin(1) == self.trough_offset_samples()

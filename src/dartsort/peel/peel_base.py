@@ -26,9 +26,11 @@ from ..util.data_util import (
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule
+from ..util.logging_util import get_logger
 from ..util import job_util
 
 
+logger = get_logger(__name__)
 _lock = Lock()
 
 
@@ -177,6 +179,7 @@ class BasePeeler(BModule):
             last_chunk_start, resids_so_far = self.check_resuming(
                 output_hdf5_filename, overwrite=overwrite
             )
+            logger.dartsortdebug(f"[{self.__class__.__name__}:{task_name}] Resuming at {last_chunk_start=}.")
         else:
             assert False
 

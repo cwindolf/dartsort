@@ -2234,6 +2234,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # initialize storage for output on data's device
         if data.candidates is None:
+            # streaming setting, assumption is that this is too big for device
             dev = torch.device("cpu")
         else:
             dev = data.candidates.device

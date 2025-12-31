@@ -116,7 +116,13 @@ class DARTsortSorting:
             return False
         if self.labels is None:
             return False
-        return np.array_equal(self.labels, self._load_dataset("labels"))
+        if "labels" in self._ephemeral_feature_names:
+            assert "labels" not in self._loaded_persistent_features
+            return False
+        try:
+            return np.array_equal(self.labels, self._load_dataset("labels"))
+        except KeyError:
+            return False
 
     # interface for setting features
 
@@ -984,8 +990,10 @@ def subsample_waveforms(
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }
-    if subsample_by_weighting:
+    if subsample_by_weighting and weights is not None:
         fixed_properties["weights"] = torch.as_tensor(weights, device=device)
+    elif subsample_by_weighting:
+        fixed_properties["weights"] = torch.ones(waveforms.shape[0], device=device)
 
     return waveformsr, fixed_properties
 

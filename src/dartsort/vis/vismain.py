@@ -128,6 +128,7 @@ def visualize_sorting(
                     figure=None,
                 )
                 fig.savefig(sum_png, dpi=dpi)
+                plt.close(fig)
     except Exception as e:
         if errors_to_warnings:
             warnings.warn(str(e))
@@ -153,10 +154,12 @@ def visualize_sorting(
             )
             fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
             fig.savefig(comp_png, dpi=dpi)
+            plt.close(fig)
 
     if vs_png is not None and gt_vs is not None:
         fig = versus.make_versus_summary(gt_vs)
         fig.savefig(vs_png, dpi=dpi)
+        plt.close(fig)
 
     if unit_sum_dir is not None:
         unit.make_all_summaries(

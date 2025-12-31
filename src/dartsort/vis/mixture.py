@@ -1,5 +1,4 @@
 from pathlib import Path
-from functools import lru_cache
 import math
 
 from matplotlib.lines import Line2D
@@ -57,13 +56,11 @@ class MixtureVisData:
     def times_seconds(self):
         return self.sorting.times_seconds  # type: ignore
 
-    @lru_cache(1)
     def inu_and_times_full(self, unit_id: int):
         inu_full = np.flatnonzero(self.full_labels == unit_id)
         times = self.times_seconds[inu_full]
         return inu_full, times
 
-    @lru_cache(5)
     def train_inds_and_chans(
         self, unit_id: int, count=None
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -77,7 +74,6 @@ class MixtureVisData:
         chans = self.tmm.neighb_cov.obs_ix.cpu()[neighb_ids]
         return inu_train, chans.numpy(force=True)
 
-    @lru_cache(5)
     def chans_in_radius(self, unit_id: int, radius: float):
         mean = self.tmm.b.means[unit_id].view(self.tmm.neighb_cov.feat_rank, -1)
         my_chan = mean.square().sum(0).argmax()
@@ -87,7 +83,6 @@ class MixtureVisData:
         (close,) = (inf_dist < radius).cpu().nonzero(as_tuple=True)
         return close
 
-    @lru_cache(5)
     def friends(self, unit_id: int, count: int, me_last=True):
         dists, neighbors = self.inf_diag_unit_distance_matrix[unit_id].sort()
         count = min(count, dists.numel() - 1)
@@ -118,7 +113,6 @@ class MixtureVisData:
             recon = recon[0]
         return recon.numpy(force=True)
 
-    @lru_cache(1)
     def random_train_waveforms(
         self, unit_id: int, count=128
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -806,7 +800,7 @@ def fit_mixture_for_vis(
     train_scores = mix_data.tmm.soft_assign(
         data=mix_data.train_data,
         needs_bootstrap=False,
-        full_proposal_view=True,
+        full_proposal_view=False,
     )
     train_labels = labels_from_scores(train_scores)
     full_scores = mix_data.tmm.soft_assign(

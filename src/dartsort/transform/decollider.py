@@ -77,6 +77,7 @@ class Decollider(BaseMultichannelDenoiser):
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
+        queue_chunks=32,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -112,6 +113,7 @@ class Decollider(BaseMultichannelDenoiser):
         )
 
         self.epoch_size = epoch_size
+        self.queue_chunks = queue_chunks
 
         self.inference_z_samples = inference_z_samples
         self.detach_amortizer = detach_amortizer
@@ -452,10 +454,10 @@ class Decollider(BaseMultichannelDenoiser):
                     optimizer.step()
 
                     for k, v in loss_dict.items():
-                        train_losses[k] = v.item() + train_losses.get(k, 0.0)
+                        train_losses[k] = v + train_losses.get(k, 0.0)
                 # // epoch loop
                 train_data.cleanup()
-                train_losses = {k: v / len(train_data) for k, v in train_losses.items()}
+                train_losses = {k: v.item() / len(train_data) for k, v in train_losses.items()}
                 train_records.append({**train_losses})
 
                 # Validation phase (only if val_loader is not None)
@@ -494,9 +496,9 @@ class Decollider(BaseMultichannelDenoiser):
                                 output_l1_alpha=self.output_l1_alpha,
                             )
                             for k, v in loss_dict.items():
-                                val_losses[k] = v.item() + val_losses.get(k, 0.0)
+                                val_losses[k] = v + val_losses.get(k, 0.0)
 
-                    val_losses = {k: v / len(val_data) for k, v in val_losses.items()}
+                    val_losses = {k: v.item() / len(val_data) for k, v in val_losses.items()}
                     val_loss = sum(val_losses.values())
                     train_records[-1]["val_loss"] = val_loss
 
@@ -555,6 +557,7 @@ class Decollider(BaseMultichannelDenoiser):
             self.model_channel_index.numpy(force=True),
             spike_length_samples=spike_length_samples,
             generator=spawn_torch_rg(rg),
+            queue_chunks=self.queue_chunks,
         )
         if self.cycle_loss_alpha:
             train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
@@ -563,6 +566,7 @@ class Decollider(BaseMultichannelDenoiser):
                 self.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
                 generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
             )
         else:
             train_cycle_noise_dataset = NoneDataset(len(train_channels))

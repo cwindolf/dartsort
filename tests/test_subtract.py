@@ -347,8 +347,11 @@ def test_fakedata_nonn(tmp_path):
         )
         assert stb is not None
         print(f"{len(sta)=} {len(stb)=}")
+        print(f"{np.setdiff1d(st0.times_samples, stb.times_samples)=}")
         assert len(sta) < ns0
         assert len(stb) == ns0
+        np.testing.assert_array_equal(st0.times_samples, stb.times_samples)
+        np.testing.assert_array_equal(st0.channels, stb.channels)
 
 
 @pytest.mark.parametrize("nn_localization", [False, True])
