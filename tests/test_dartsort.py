@@ -154,7 +154,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
-        count_dif_tol = 0.075
+        count_dif_tol = 0.015
     elif type == "universal":
         count_dif_tol = 0.01
     elif type == "subtract":

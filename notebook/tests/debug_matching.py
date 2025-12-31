@@ -25,6 +25,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import logging
+logging.basicConfig(level=14)
 
 import spikeinterface.full as si
 
@@ -49,23 +51,40 @@ test_dir = dartsort.resolve_path("~/data/test")
 res = simkit.generate_simulation(
     folder=test_dir / "tmprec",
     noise_recording_folder=test_dir / "noi",
-    n_units=5,
-    min_fr_hz=100.0,
-    max_fr_hz=150.0,
-    duration_seconds=0.5,
-    geom=np.zeros((1, 2)),
-    noise_kind="white",
-    white_noise_scale=0.0,
+
+    
+    # n_units=5,
+    # min_fr_hz=100.0,
+    # max_fr_hz=150.0,
+    # duration_seconds=0.5,
+    # geom=np.zeros((1, 2)),
+    # noise_kind="white",
+    # white_noise_scale=0.0,
+    # # amplitude_jitter=0.0,
+    # temporal_jitter=1,
     # amplitude_jitter=0.0,
-    temporal_jitter=1,
-    amplitude_jitter=0.0,
     globally_refractory=True,
-    # refractory_ms=1.0,
+    # # refractory_ms=1.0,
     refractory_ms=5.0,
-    # refractory_ms=1.0,
-    drift_speed=0.0,
-    # noise_kind="zero",
-    # noise_in_memory=True,
+    # # refractory_ms=1.0,
+    # drift_speed=0.0,
+    # # noise_kind="zero",
+    # # noise_in_memory=True,
+
+    duration_seconds=9.9,
+    n_units=20,
+    min_fr_hz=20.0,
+    max_fr_hz=31.0,
+
+    probe_kwargs=dict(
+        num_columns=2, num_contact_per_column=12, y_shift_per_column="flat",
+        # num_columns=1, num_contact_per_column=1, y_shift_per_column="flat",
+    ),
+    # temporal_jitter=1,
+    temporal_jitter=4,
+    noise_kind="white",
+    template_simulator_kwargs=dict(min_rms_distance=1.0),
+
     overwrite=True,
 )
 rec = res["recording"]
@@ -75,10 +94,45 @@ np.linalg.norm(res["templates"].templates, axis=(1, 2))
 # %%
 fig, axes = plt.subplots(ncols=2, figsize=(5, 2.5))
 axes[0].plot(res["templates"].templates[:, :, 0].T);
-axes[1].plot(traces[:1000])
+axes[1].plot(traces[:1000]);
 
 # %%
 res["sorting"]
+
+# %%
+matching_cfg = dartsort.MatchingConfig(
+        threshold=10.,
+        template_type="drifty",
+        up_method="keys4",
+        
+        template_temporal_upsampling_factor=4,
+        # amplitude_scaling_variance=0.0,
+        
+        # template_temporal_upsampling_factor=16,
+        # amplitude_scaling_variance=0.1,
+
+        # template_svd_compression_rank=121,
+        # cd_iter=5,
+        cd_iter=0,
+    )
+mst = dartsort.match(
+    test_dir / 'scratchmatch',
+    recording=rec,
+    template_data=res["templates"],
+    featurization_cfg=dartsort.skip_featurization_cfg,
+    matching_cfg=matching_cfg,
+    overwrite=True,
+)
+
+# %%
+mst
+
+# %%
+np.array_equal(mst.times_samples, res["sorting"].times_samples)
+
+# %%
+
+# %%
 
 # %% [markdown]
 # # Lo
@@ -87,27 +141,91 @@ res["sorting"]
 matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
     rec,
     waveform_cfg=dartsort.default_waveform_cfg,
-    featurization_cfg=dartsort.default_featurization_cfg,
-    matching_cfg=dartsort.MatchingConfig(
-        threshold=5.,
-        template_type="drifty",
-        up_method="keys4",
-        
-        template_temporal_upsampling_factor=1,
-        amplitude_scaling_variance=0.0,
-        
-        # template_temporal_upsampling_factor=16,
-        # amplitude_scaling_variance=0.1,
-
-        template_svd_compression_rank=121,
-        # cd_iter=5,
-        cd_iter=0,
-    ),
+    featurization_cfg=dartsort.skip_featurization_cfg,
+    matching_cfg=matching_cfg,
     template_data=res["templates"],
 )
 matcher.precompute_models(test_dir / 'tmp', overwrite=True)
 if torch.cuda.is_available():
     matcher = matcher.cuda()
+
+# %%
+rec
+
+# %%
+cres = matcher.process_chunk(30_000)
+cres['n_spikes']
+
+# %%
+cres["times_samples"][:-1][np.diff(cres["times_samples"]) < 5] - 30000
+
+# %%
+np.sum(
+    res["sorting"].times_samples
+    == res["sorting"].times_samples.clip(30_000, 60_000)
+)
+
+# %%
+np.linalg.norm(res["templates"].templates, axis=(1, 2))[[3, 12]] ** 2
+
+# %%
+res["sorting"].scalings[161], res["sorting"].jitter_ix[161]
+
+# %%
+tup = res["sorting"]._load_dataset("templates_up")
+
+# %%
+tup.shape
+
+# %%
+t0 = tup[12, 0]
+t1 = tup[12, 2]
+
+# %%
+t0.shape
+
+# %%
+np.ptp(t0, 0).argmax()
+
+# %%
+plt.plot(t0[:-1, 13])
+plt.plot(t1[:-1, 13])
+plt.plot(res["templates"].templates[12, :-1, 13])
+
+# %%
+np.square(t0[1:, :]).sum()
+
+# %%
+
+# %%
+
+# %%
+plt.plot(t0[1:, 13])
+plt.plot(t1[:-1, 13])
+
+# %%
+
+# %%
+vis_offset = 4700 + 242
+vis_len = 512
+matching_debug_util.visualize_step_results(
+    matcher=matcher,
+    chunk_start_samples=30_000- matcher.chunk_margin_samples,
+    chunk=rec.get_traces(0, 30_000 - matcher.chunk_margin_samples, 60_000 + matcher.chunk_margin_samples).astype(np.float32),
+    t_s=1.5,
+    max_iter=500,
+    s=20,
+    cmap="berlin",
+    vis_start=vis_offset,
+    vis_end=vis_len + vis_offset,
+    obj_mode=False,
+    gt_sorting=res["sorting"],
+    # chunk_vis_style="trace",
+)
+
+# %%
+
+# %%
 
 # %%
 # ctd = matcher.matching_templates.data_at_time(0.0, scaling=False, inv_lambda=float('inf'), scale_min=1.0, scale_max=1.0)

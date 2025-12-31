@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self, cast
 
 import numpy as np
 import torch
@@ -17,6 +17,7 @@ from ...peel.matching import (
 from ...peel.matching_util.matching_base import subtract_precomputed_pconv
 from ...templates.template_util import get_main_channels_and_alignments
 from ...templates.templates import TemplateData
+from ..data_util import DARTsortSorting
 from ..internal_config import ComputationConfig, MatchingConfig
 from ..job_util import ensure_computation_config
 from ..py_util import databag
@@ -112,19 +113,20 @@ def yield_step_results(
             conv = chunk_data.obj_from_conv(chk["conv"]).numpy(force=True)
         else:
             conv = chk["conv"].numpy(force=True)
+        if not chk["n_spikes"]:
+            break
         times_samples = chk["times_samples"].numpy(force=True)
         labels = chk["labels"].numpy(force=True)
         channels = chk["channels"].numpy(force=True)
-        if not times_samples.size:
-            break
 
         yield resid, pre_conv, conv, times_samples, labels, channels
 
 
 def visualize_step_results(
     matcher: ObjectiveUpdateTemplateMatchingPeeler,
-    chunk,
+    chunk: np.ndarray,
     t_s: float,
+    chunk_start_samples: int = 0,
     max_iter: int = 5,
     cmap="berlin",
     figsize=(10, 10),
@@ -132,6 +134,8 @@ def visualize_step_results(
     vis_start=None,
     vis_end=None,
     obj_mode=False,
+    chunk_vis_style: Literal["im", "trace"] = "im",
+    gt_sorting: DARTsortSorting | None = None,
 ):
     import matplotlib.pyplot as plt
 
@@ -143,6 +147,16 @@ def visualize_step_results(
         vis_end = chunk.shape[0]
     vis_len = vis_end - vis_start
     chunk_sl = slice(vis_start, vis_end)
+
+    if gt_sorting is not None:
+        gt_t = gt_sorting.times_samples - chunk_start_samples
+        gtvalid = np.flatnonzero(gt_t == gt_t.clip(vis_start, vis_end - 1))
+        gt_t = gt_t[gtvalid] - vis_start
+        gt_chan = gt_sorting.channels[gtvalid]
+        gt_l = cast(np.ndarray, gt_sorting.labels)[gtvalid]
+        gt_c = glasbey1024[gt_l]
+    else:
+        gt_t = gt_chan = gt_c = None
 
     obj_sl = slice(
         max(vis_start + matcher.obj_pad_len, matcher.obj_pad_len),
@@ -180,23 +194,35 @@ def visualize_step_results(
         panel = plt.figure(figsize=figsize, layout="constrained")
         axes = panel.subplots(nrows=6, sharex=True)
 
-        for x, ax in zip((chunk, resid, chunk - resid), axes):
-            ax.imshow(
-                x[chunk_sl].T,
-                vmin=-5,
-                vmax=5,
-                aspect="auto",
-                cmap=cmap,
-                origin="lower",
-                interpolation="none",
-            )
+        for x, ax, name in zip(
+            (chunk, resid, chunk - resid), axes, ("chunk", "resid", "signal")
+        ):
+            if chunk_vis_style == "im":
+                ax.imshow(
+                    x[chunk_sl].T,
+                    vmin=-5,
+                    vmax=5,
+                    aspect="auto",
+                    cmap=cmap,
+                    origin="lower",
+                    interpolation="none",
+                )
+            elif chunk_vis_style == "trace":
+                for j, trace in enumerate(x[chunk_sl].T):
+                    ax.plot(j, color="k", zorder=1)
+                    ax.plot(trace + j, color="k", zorder=2)
             ax.scatter(
                 times_samples, channels, c=glasbey1024[labels], s=s, ec="w", lw=1
             )
+            ax.set_ylabel(name)
+
+        if gt_t is not None:
+            axes[-3].scatter(gt_t, gt_chan, c=gt_c, s=4 * s, lw=0, marker="o")
 
         axes[-3].scatter(
             t_full[:n], c_full[:n], c=glasbey1024[l_full[:n]], s=s, lw=1, ec="k"
         )
+        axes[-3].set_ylabel("channel scatter")
         axes[-3].scatter(
             times_samples, channels, c=glasbey1024[labels], s=s, ec="w", lw=1
         )
@@ -204,10 +230,12 @@ def visualize_step_results(
 
         for j, c in enumerate(pre_conv):
             axes[-2].plot(obj_domain, c[obj_sl], color=glasbey1024[j], lw=0.5)
+        axes[-2].set_ylabel("pre-step " + ("obj" if obj_mode else "conv"))
         for t, l in zip(times_samples, labels):
             axes[-2].axvline(t, color=glasbey1024[l], lw=1, ls=":")
         for j, c in enumerate(conv):
             axes[-1].plot(obj_domain, c[obj_sl], color=glasbey1024[j], lw=0.5)
+        axes[-1].set_ylabel("post-step " + ("obj" if obj_mode else "conv"))
         for ax in axes[-2:]:
             ax.grid()
         if obj_mode:
@@ -446,7 +474,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
 
         for n, (t, l) in enumerate(zip(times, template_inds)):
             bank = self.templates_up[l]
-            resid_chunk = residual[t: t + nt + 1]
+            resid_chunk = residual[t : t + nt + 1]
             T = resid_chunk.shape[0]
             snips = [resid_chunk[t0 : t0 + nt] for t0 in range(T - nt + 1)]
             snips = torch.stack(snips, dim=0)

@@ -272,26 +272,38 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             )
         elif temporal_jitter_kind == "cubic":
             _, sct = self.simulate_singlechan(size=n_units, up=False)
-            sct_up = upsample_singlechan(sct, temporal_jitter=temporal_jitter)
             self.singlechan_templates = sct
-            self.singlechan_templates_up = sct_up
-            self.offsets = sct.argmin(1) - self.trough_offset_samples()
-            self.offsets_up = sct_up.argmin(2) - self.trough_offset_samples()
+            self.offsets = (
+                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
+            )
         else:
             assert False
-        assert np.all(
-            self.singlechan_templates.argmin(1) == self.trough_offset_samples()
-        )
         self.min_rms_distance = min_rms_distance
         min_dist = min_rms_distance + 0.0
         n_checks = 0
         while min_rms_distance and (min_dist <= min_rms_distance):
+            assert temporal_jitter_kind == "cubic"
             min_dist = self.check_and_fix_distances()
             n_checks += 1
             if n_checks > 512:
                 raise ValueError(
                     f"Couldn't reach min distance {min_rms_distance}, got to {min_dist}."
                 )
+        if temporal_jitter_kind == "cubic":
+            sct_up = upsample_singlechan(
+                self.singlechan_templates, temporal_jitter=temporal_jitter
+            )
+            self.singlechan_templates_up = sct_up
+            self.offsets = (
+                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
+            )
+            self.offsets_up = sct_up.argmin(2) - self.trough_offset_samples()
+        np.testing.assert_allclose(
+            self.singlechan_templates, self.singlechan_templates_up[:, 0]
+        )
+        assert np.all(
+            self.singlechan_templates.argmin(1) == self.trough_offset_samples()
+        )
 
     def templates(self, drift=0, up=False, padded=False, pad_value=np.nan):
         pos = self.template_pos
