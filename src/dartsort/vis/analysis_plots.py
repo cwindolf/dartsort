@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
 from matplotlib.collections import LineCollection
-from matplotlib.colors import to_hex
+from matplotlib.colors import to_hex, Colormap
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
 from .colors import glasbey1024
@@ -153,23 +153,31 @@ def distance_matrix_dendro(
     dendrogram_threshold=0.25,
     show_unit_labels=False,
     vmax=1.0,
-    image_cmap=plt.cm.RdGy,
+    image_cmap: str | Colormap="RdGy",
     show_values=False,
+    label_colors=glasbey1024,
     label=None,
+    hspace=0.01,
+    with_colorbar=True,
 ):
+    image_cmap = plt.get_cmap(image_cmap)
     show_dendrogram = dendrogram_linkage is not None
     dendro_width = (0.7,) if show_dendrogram else ()
+    cbar_width = (0.15,) if with_colorbar else ()
 
     gs = panel.add_gridspec(
         nrows=3,
-        ncols=2 + show_dendrogram,
+        ncols=1 + with_colorbar + show_dendrogram,
         height_ratios=[0.5, 1, 0.5],
-        width_ratios=[2, 0.15, *dendro_width],
+        width_ratios=[2, *cbar_width, *dendro_width],
+        hspace=hspace,
+        wspace=0.00,
     )
     ax_im = panel.add_subplot(gs[:, 0])
-    ax_cbar = panel.add_subplot(gs[1, 1])
+    if with_colorbar:
+        ax_cbar = panel.add_subplot(gs[1, 1])
     if show_dendrogram:
-        scipy.cluster.hierarchy.set_link_color_palette(list(map(to_hex, glasbey1024)))
+        scipy.cluster.hierarchy.set_link_color_palette(list(map(to_hex, label_colors)))
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
         ax_dendro.axis("off")
 
@@ -224,16 +232,17 @@ def distance_matrix_dendro(
         for i, (tx, ty) in enumerate(
             zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
         ):
-            tx.set_color(glasbey1024[unit_ids[i]])
-            ty.set_color(glasbey1024[unit_ids[i]])
+            tx.set_color(label_colors[unit_ids[i]])
+            ty.set_color(label_colors[unit_ids[i]])
     else:
         ax_im.set_xticks([])
         ax_im.set_yticks([])
 
-    plt.colorbar(im, cax=ax_cbar, label=label)
-    ax_cbar.set_yticks([0, vmax])
-    if label:
-        ax_cbar.set_ylabel("template distance", labelpad=-5)
+    if with_colorbar:
+        plt.colorbar(im, cax=ax_cbar, label=label, pad=0)
+        ax_cbar.set_yticks([0, vmax])
+        if label:
+            ax_cbar.set_ylabel("template distance", labelpad=-5)
     return ax_im
 
 

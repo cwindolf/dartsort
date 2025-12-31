@@ -171,6 +171,8 @@ def svd_lowrank_helper(
     q = min(rank + n_oversamples, *x.shape)
     orig_dtype = x.dtype
     x = x.to(dtype=fit_dtype)
+    if M is not None:
+        M = M.to(dtype=fit_dtype)
     U, S, V = torch.svd_lowrank(x, q=q, M=M, niter=niter)
     U = U[..., :rank]
     S = S[..., :rank]

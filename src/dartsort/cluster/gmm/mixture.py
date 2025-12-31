@@ -67,7 +67,6 @@ from ...util.py_util import databag
 from ...util.spiketorch import (
     cosine_distance,
     ecl,
-    elbo,
     entropy,
     mean_elbo_dim1,
     sign,
@@ -595,6 +594,13 @@ class GroupPartition:
     single_ixs: list[int]
     subset_ids: list[int]
 
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(n_groups={self.n_groups}, "
+            f"unit_ids={self.unit_ids.cpu().tolist()}, "
+            f"group_ids={self.group_ids.cpu().tolist()})"
+        )
+
 
 @databag
 class SuccessfulGroupMergeResult:
@@ -987,6 +993,7 @@ class BatchedSpikeData:
         new_top_candidates: Tensor | None,
         distances: Tensor,
         expand_lut: bool = False,
+        skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
         """Subclasses do what they need to do to update their candidates.
 
@@ -1059,6 +1066,7 @@ class StreamingSpikeData(BatchedSpikeData):
         new_top_candidates: Tensor | None,
         distances: Tensor,
         expand_lut: bool = False,
+        skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
         # I only do candidates on the fly, so this does nothing.
         # it is an error to assign candidates which would lead to the LUT
@@ -1258,6 +1266,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         new_top_candidates: Tensor | None,
         distances: Tensor,
         expand_lut: bool = False,
+        skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
         self._update_sizes_from_n_units(distances.shape[0])
         # fill in top spots
@@ -1286,7 +1295,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
 
         # fill in explore set randomly using explore adjacency
-        if self.n_explore:
+        if self.n_explore and skip_explore:
+            self.candidates[:, self.explore_slice].fill_(-1)
+        elif self.n_explore:
             assert self.rg is not None
             p, inds = _get_explore_sampling_data(
                 un_adj_lut=self.un_adj_lut,
@@ -1464,6 +1475,7 @@ class FullProposalDataView(BatchedSpikeData):
         new_top_candidates: Tensor | None,
         distances: Tensor,
         expand_lut: bool = False,
+        skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
         raise ValueError("View doesn't update.")
 
@@ -1578,6 +1590,7 @@ class BaseMixtureModel(BModule):
         responsibilities: Tensor | None,
         skip_full: bool,
         skip_single: bool,
+        debug: bool = False,
     ) -> GroupMergeResult:
         """Find an optimal partition of this model's units as a whole."""
         return brute_merge(
@@ -1590,6 +1603,7 @@ class BaseMixtureModel(BModule):
             responsibilities=responsibilities,
             skip_full=skip_full,
             skip_single=skip_single,
+            debug=debug,
         )
 
     def unit_distance_matrix(self) -> Tensor:
@@ -2095,7 +2109,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             delbos = np.diff(elbos)
             smalldif = delbos.min()
             bigdiff = delbos.max()
-            logger.dartsortdebug(
+            logger.dartsortverbose(
                 f"Fixed fit elbo end-start={begend:0.4f} over {j + 1} iterations, "
                 f"biggest and smallest diffs {bigdiff:0.4f} and {smalldif:0.4f}."
             )
@@ -2263,11 +2277,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 scores.responsibilities[bix] = batch_scores.responsibilities.to(dev)
 
             lut_changed, lut = data.update(
-                scores.candidates, distances, expand_lut=True
+                scores.candidates, distances, expand_lut=True, skip_explore=True
             )
-            if lut_changed:
+            if lut_changed and target_data.proposal_is_complete:
                 # it can't actually change.
                 assert lut == self.lut
+            else:
+                self.update_lut(lut, no_parameter_changes=True)
             if target_data.proposal_is_complete:
                 break
             assert data.candidates is not None
@@ -2319,6 +2335,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             gen=self.rg,
             feature_rank=self.noise.rank,
             min_count=self.min_count,
+            debug=debug,
         )
         if kmeans_responsibliities is None and debug:
             logger.dartsortverbose(f"Split {unit_id}: kmeans bailed.")
@@ -2334,7 +2351,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert kmeans_responsibliities.shape[1] >= 2
 
         # initialize dense model with fixed resps
-        split_model, _, split_data, any_spikes_discarded, kmeans_keep_mask, keep_spikes = (
+        split_model, _, split_data, any_spikes_discarded, _, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibliities,
@@ -2359,7 +2376,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             kmeans_responsibliities = kmeans_responsibliities[keep_spikes]
         if debug:
             assert kmeans_x is not None
-            kmeans_responsibliities[:, kmeans_keep_mask]
             kmeans_x = kmeans_x[keep_spikes]
         if split_model.n_units <= 1 and debug:
             logger.dartsortverbose(
@@ -2398,28 +2414,42 @@ class TruncatedMixtureModel(BaseMixtureModel):
             responsibilities=kmeans_responsibliities,
             skip_full=False,
             skip_single=False,
+            debug=debug,
         )
-        if debug:
-            dbg = UnitSplitDebugInfo(
-                split_model=split_model,
-                kmeans_x=kmeans_x,
-                kmeans_chans=kmeans_chans,
-                kmeans_responsibilities=kmeans_responsibliities,
-                merge_res=merge_res,
-                split_data=split_data,
-            )
-        else:
-            dbg = None
         if merge_res is not None and merge_res.grouping.n_groups <= 1:
             logger.dartsortverbose(
                 f"Split {unit_id}: merged all {split_model.n_units} split sub-units."
             )
-            return None, dbg
+            if debug:
+                return None, UnitSplitDebugInfo(
+                    bailed=True,
+                    bail_reason="merge <= 1 groups",
+                    split_model=split_model,
+                    kmeans_x=kmeans_x,
+                    kmeans_chans=kmeans_chans,
+                    kmeans_responsibilities=kmeans_responsibliities,
+                    merge_res=merge_res,
+                    split_data=split_data,
+                )
+            else:
+                return None, None
         if merge_res is not None and merge_res.improvement <= 0.0:
             logger.dartsortverbose(
-                f"Split {unit_id}: mini-merge improvement {merge_res.improvement} too small."
+                f"Split {unit_id}: mini-merge improvement {merge_res.improvement:0.3f} too small."
             )
-            return None, dbg
+            if debug:
+                return None, UnitSplitDebugInfo(
+                    bailed=True,
+                    bail_reason=f"improvement {merge_res.improvement:0.3f}",
+                    split_model=split_model,
+                    kmeans_x=kmeans_x,
+                    kmeans_chans=kmeans_chans,
+                    kmeans_responsibilities=kmeans_responsibliities,
+                    merge_res=merge_res,
+                    split_data=split_data,
+                )
+            else:
+                return None, None
 
         no_allowed_partitions = not pair_mask.fill_diagonal_(False).any()
         if no_allowed_partitions:
@@ -2476,7 +2506,17 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bases=bases,
             sub_proportions=sub_proportions,
         )
-        return split_res, dbg
+        if debug:
+            return split_res, UnitSplitDebugInfo(
+                split_model=split_model,
+                kmeans_x=kmeans_x,
+                kmeans_chans=kmeans_chans,
+                kmeans_responsibilities=kmeans_responsibliities,
+                merge_res=merge_res,
+                split_data=split_data,
+            )
+        else:
+            return split_res, None
 
     def split(
         self,
@@ -2510,8 +2550,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
+        pair_mask: Tensor | None = None,
     ) -> GroupMergeResult:
-        if group.numel() == 1:
+        if group.numel() <= 1:
             return
         assert group.numel() <= self.max_group_size
 
@@ -2533,7 +2574,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         group_res = view.merge_as_group_on_data_subset(
             train_data=group_train_data,
             eval_data=group_eval_data,
-            pair_mask=None,
+            pair_mask=pair_mask,
             cur_scores=group_scores,
             responsibilities=None,
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
@@ -3295,12 +3336,14 @@ def instantiate_and_bootstrap_tmm(
     )
     sorting = sorting.flatten()
 
-    neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs = get_truncated_datasets(
-        sorting=sorting,
-        motion_est=motion_est,
-        refinement_cfg=refinement_cfg,
-        device=device,
-        rg=rg,
+    neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs = (
+        get_truncated_datasets(
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_cfg=refinement_cfg,
+            device=device,
+            rg=rg,
+        )
     )
 
     # every spike's feature subset needs to be covered by that of a mixture component,
@@ -3338,9 +3381,8 @@ def run_split(tmm, train_data, val_data, prog_level):
     else:
         eval_scores = tmm.soft_assign(
             data=train_data,
-            full_proposal_view=False,
+            full_proposal_view=True,
             needs_bootstrap=False,
-            max_iter=1,
             show_progress=prog_level,
         )
     split_res = tmm.split(
@@ -3360,9 +3402,8 @@ def run_merge(tmm, train_data, val_data, prog_level):
     else:
         eval_scores = tmm.soft_assign(
             data=train_data,
-            full_proposal_view=False,
+            full_proposal_view=True,
             needs_bootstrap=False,
-            max_iter=1,
             show_progress=prog_level,
         )
     merge_map = tmm.merge(
@@ -3588,6 +3629,7 @@ def brute_merge(
     skip_full: bool,
     skip_single: bool,
     max_fit_at_once: int = 8,
+    debug: bool = False,
 ) -> GroupMergeResult:
     if pair_mask is not None and pair_mask.sum() == pair_mask.shape[0]:
         return None
@@ -3606,6 +3648,8 @@ def brute_merge(
     partitions, subset_to_id, id_to_subset = allowed_partitions(
         mm.unit_ids, pair_mask, skip_full=skip_full, skip_single=skip_single
     )
+    if debug:
+        logger.dartsortdebug(f"brute_merge partitions: {partitions}")
     n_subsets = len(subset_to_id)
     if not n_subsets:
         return None
@@ -3714,6 +3758,11 @@ def brute_merge(
         cur_resp = cur_scores.responsibilities
     assert cur_resp.shape == cur_scores.log_liks.shape
     cur_crit = ecl(cur_resp, cur_scores.log_liks, cl_alpha=mm.cl_alpha)
+    if debug:
+        h = entropy(cur_resp).item()
+        logger.dartsortdebug(
+            f"brute_merge cur score {cur_crit.item():.4f} entropy {h:.4f}"
+        )
     del cur_resp
 
     # now, find the best subset. combine subset scores with remainder scores.
@@ -3731,6 +3780,12 @@ def brute_merge(
 
         part_resps = F.softmax(part_logliks[:, :k2], dim=1)
         part_score = ecl(part_resps, part_logliks[:, :k2], cl_alpha=mm.cl_alpha)
+        if debug:
+            imp = part_score - cur_crit
+            h = entropy(part_resps).item()
+            logger.dartsortdebug(
+                f"brute_merge {part} score {part_score.item():.4f} imp {imp:.4f} entropy {h:.4f}"
+            )
         del part_resps
 
         if part_score > best_score:

@@ -1,5 +1,6 @@
 from pathlib import Path
 import math
+from typing import Iterable, cast
 
 from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
@@ -13,6 +14,7 @@ from ..cluster.gmm.mixture import (
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
+    UnitSplitDebugInfo,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
 )
@@ -96,9 +98,9 @@ class MixtureVisData:
         neighbors = np.concatenate([[unit_id], neighbors.numpy(force=True)])
         dists = np.concatenate([[0.0], dists.numpy(force=True)])
         if me_last:
-            return dists[::-1], neighbors[::-1]
-        else:
-            return dists, neighbors
+            dists = np.ascontiguousarray(dists[::-1])
+            neighbors = np.ascontiguousarray(neighbors[::-1])
+        return dists, neighbors
 
     def reconstruct_flat(self, features: torch.Tensor) -> np.ndarray:
         frank = self.tmm.neighb_cov.feat_rank
@@ -108,6 +110,7 @@ class MixtureVisData:
         assert features.ndim == 2
         n = features.shape[0]
         features = features.view(n, frank, -1)
+        features = features.to(self.tpca.b.components.device)
         recon = self.tpca.force_reconstruct(features)
         if single:
             recon = recon[0]
@@ -134,18 +137,26 @@ class MixtureComponentPlot(BasePlot):
 
 class TextInfo(MixtureComponentPlot):
     kind = "small"
-    height = 0.75
+    height = 0.25
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         axis = panel.subplots()
         axis.axis("off")
-        msg = f"unit {unit_id}\n"
-        axis.text(0, 0, msg, fontsize=5.5)
+        msg = f"$\\mathbf{{unit\\ {unit_id}}}$\n"
+        axis.text(
+            0.5,
+            0.5,
+            msg,
+            fontsize="small",
+            ha="center",
+            va="center",
+            transform=axis.transAxes,
+        )
 
 
 class ISIHistogram(MixtureComponentPlot):
     kind = "small"
-    height = 0.75
+    height = 1.0
 
     def __init__(self, bin_ms=0.1, max_ms=5):
         self.bin_ms = bin_ms
@@ -155,15 +166,17 @@ class ISIHistogram(MixtureComponentPlot):
         axis = panel.subplots()
         inu_full, times_s = mix_data.inu_and_times_full(unit_id)
         dt_ms = np.diff(times_s) * 1000
-        bin_edges = np.arange(0, self.max_ms + self.bin_ms, self.bin_ms)
+        bin_edges = np.arange(
+            -0.5 * self.bin_ms, self.max_ms + self.bin_ms + 1e-5, self.bin_ms
+        )
         counts, _ = np.histogram(dt_ms, bin_edges)
         axis.stairs(counts, bin_edges, color=glasbey1024[unit_id], fill=True)
-        axis.set_xlabel("isi (ms)")
-        axis.set_ylabel(f"count ({dt_ms.size + 1} tot. sp.)")
+        axis.set_xlabel(f"isi (ms, {dt_ms.size + 1} tot. sp.)")
+        axis.set_ylabel("count")
 
 
 class ChansHeatmap(MixtureComponentPlot):
-    kind = "tall"
+    kind = "small"
     height = 1.5
 
     def __init__(self, cmap="magma", snr_cmap="viridis"):
@@ -173,29 +186,47 @@ class ChansHeatmap(MixtureComponentPlot):
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         inu_train, chans = mix_data.train_inds_and_chans(unit_id)
         chans = chans[chans < mix_data.tmm.neighb_cov.n_channels]
+        uchans, counts = np.unique(chans, return_counts=True)
 
-        mean = mix_data.tmm.b.mean[unit_id].view(-1, mix_data.tmm.neighb_cov.n_channels)
+        mean = mix_data.tmm.b.means[unit_id].view(
+            -1, mix_data.tmm.neighb_cov.n_channels
+        )
         ptp = spiketorch.ptp(mean, dim=0).cpu()
-        (support,) = ptp.nonzero(as_tuple=True)
+        (support,) = ptp[uchans].nonzero(as_tuple=True)
+        support = uchans[support]
         ptp = ptp[support]
 
-        uchans, counts = np.unique(chans, return_counts=True)
         ax = panel.subplots()
         xy = mix_data.tmm.neighb_cov.prgeom.numpy(force=True)
         ax.scatter(*xy[support].T, c=ptp, lw=2, s=5)
         s = ax.scatter(*xy[uchans].T, c=counts, lw=0, cmap=self.cmap, s=5)
-        plt.colorbar(s, ax=ax, shrink=0.3, label="chan count")
+        plt.colorbar(s, ax=ax, shrink=0.3, label="chan count", pad=0.01)
         ax.scatter(*xy[support[ptp.argmax()]].T, color="gold", lw=1, fc="none", s=5)
-        ax.set_title(f"chans:{chans.min().item()}-{chans.max().item()}")
+        ax.set_title(
+            f"chans:{chans.min().item()}-{chans.max().item()}", fontsize="small"
+        )
 
 
 class LikelihoodsView(MixtureComponentPlot):
-    kind = "block"
-    width = 2
-    height = 1
-
-    def __init__(self, viol_ms=1.0):
+    def __init__(self, viol_ms=1.0, layout="vert"):
         self.viol_ms = viol_ms
+        self.layout = layout
+        if layout == "vert":
+            self.kind = "small"
+            self.width = 1
+            self.height = 4
+            self.ncols = 1
+            self.nrows = 3
+            self.width_ratios = [1]
+        elif layout == "horz":
+            self.kind = "block"
+            self.width = 2
+            self.height = 1
+            self.ncols = 3
+            self.nrows = 1
+            self.width_ratios = [3, 2, 1]
+        else:
+            assert False
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
         inu, t = mix_data.inu_and_times_full(unit_id)
@@ -208,10 +239,10 @@ class LikelihoodsView(MixtureComponentPlot):
             np.pad(viol, (0, 1), constant_values=False),
         )
         viol = np.flatnonzero(viol)
-        my_min = np.min(my_ll)
-        my_max = np.max(my_ll)
-        noise_min = np.min(noise_ll)
-        noise_max = np.max(noise_ll)
+        my_min = my_ll.min()
+        my_max = my_ll.max()
+        noise_min = noise_ll.min()
+        noise_max = noise_ll.max()
         mn = min(my_min, noise_min)
         mx = max(my_max, noise_max)
         assert math.isfinite(mn)
@@ -221,7 +252,10 @@ class LikelihoodsView(MixtureComponentPlot):
         my_ll, noise_ll, t, viol, mn, mx = self.compute(mix_data, unit_id)
 
         ax_time, ax_noise, ax_hist = panel.subplots(
-            ncols=3, width_ratios=[3, 2, 1], sharey=True
+            ncols=self.ncols,
+            nrows=self.nrows,
+            width_ratios=self.width_ratios,
+            sharey=True,
         )
         ax_time.set_ylabel("log likelihood")
         ax_time.set_xlabel("time (s)")
@@ -330,19 +364,20 @@ class NeighborDistances(MixtureComponentPlot):
             image_cmap=self.cmap,
             show_values=True,
         )
+        panel.suptitle("cosine dists", fontsize="small")
 
 
 class MergeView(MixtureComponentPlot):
     kind = "block"
     width = 2
-    height = 2
+    height = 2.5
 
     def __init__(self):
         pass
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
         # get pair mask
-        gsize = mix_data.tmm.max_group_size
+        gsize = mix_data.tmm.max_group_size - 1
         dists, neighbors = mix_data.friends(unit_id, count=gsize)
         d = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
         d.diagonal().fill_(0.0)
@@ -362,13 +397,14 @@ class MergeView(MixtureComponentPlot):
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
+            pair_mask=pair_mask,
         )
 
         return neighbors, pair_mask, group_res
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         neighbors, pair_mask, group_res = self.compute(mix_data, unit_id)
-        panel_mask, panel_info = panel.subfigures(ncols=2, width_ratios=[2, 1])
+        panel_mask, panel_info = panel.subfigures(nrows=2, height_ratios=[2, 0.5])
         distance_matrix_dendro(
             panel_mask,
             pair_mask,
@@ -389,26 +425,53 @@ class MergeView(MixtureComponentPlot):
                 f"imp: {group_res.improvement:.3f}\n"
                 f"props: {propstr}"
             )
-        ax_info.text(0, 0, msg, fontsize=5.5)
+        ax_info.text(
+            0.2, 0.5, msg, fontsize="small", va="center", transform=ax_info.transAxes
+        )
+        panel.suptitle("merge pair mask", fontsize="small")
 
 
 class MeanView(MixtureComponentPlot):
-    kind = "bigblock"
-    width = 3
-    height = 3
-
-    def __init__(self, n_waveforms_show=128, alpha=0.1, show_zero=True):
+    def __init__(
+        self,
+        n_waveforms_show=128,
+        alpha=0.25,
+        show_zero=True,
+        mini=False,
+        mini_rad=41.0,
+    ):
         self.n_waveforms_show = n_waveforms_show
         self.alpha = alpha
         self.show_zero = show_zero
+        self.mini = mini
+        self.mini_rad = mini_rad
+        if mini:
+            self.kind = "tall"
+            self.width = 2.5
+            self.height = 2
+        else:
+            self.kind = "bigblock"
+            self.width = 3
+            self.height = 4
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        mean = mix_data.tmm.b.mean[unit_id]
+        mean = mix_data.tmm.b.means[unit_id]
         mean_recon = mix_data.reconstruct_flat(mean)
         mean_recon = mean_recon.reshape(1, -1, mix_data.tmm.neighb_cov.n_channels)
         inu_train, wchans, features, waveforms = mix_data.random_train_waveforms(
             unit_id=unit_id, count=self.n_waveforms_show
         )
+        if self.mini:
+            targchans = mix_data.chans_in_radius(unit_id, radius=self.mini_rad)
+            wchans = torch.asarray(wchans).to(targchans)
+            vchans = torch.isin(wchans, targchans)
+            vii, vcc = vchans.cpu().nonzero(as_tuple=True)
+            wchans = wchans[vii, vcc].cpu()
+            waveforms = waveforms[vii, :, vcc]
+            wchans = wchans[:, None]
+            assert wchans.ndim == 2
+            waveforms = waveforms[:, :, None]
+            assert waveforms.ndim == 3
         maa = np.nanmax(np.abs(waveforms)).item()
         return waveforms, wchans, mean_recon, maa
 
@@ -426,6 +489,7 @@ class MeanView(MixtureComponentPlot):
             max_abs_amp=maa,
             geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
             show_zero=self.show_zero,
+            linewidth=0.5,
             return_chans=True,
         )
         pchans = np.array(list(pchans))
@@ -444,12 +508,13 @@ class MeanView(MixtureComponentPlot):
 class CovarianceView(MixtureComponentPlot):
     kind = "bigblock"
     width = 3
-    height = 4
+    height = 3
 
-    def __init__(self, n_waveforms_show=128, neigs=20):
+    def __init__(self, n_waveforms_show=128, neigs=16, cov_vert=False):
         self.n_waveforms_show = n_waveforms_show
-        self.colors = dict(emp="k", noise="r", signal="g", model="b")
+        self.colors = dict(emp="k", interp="gray", noise="r", signal="g", model="b")
         self.neigs = neigs
+        self.cov_vert = cov_vert
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
         # load data
@@ -460,18 +525,42 @@ class CovarianceView(MixtureComponentPlot):
         # pick channels and put data there
         chan_set = torch.asarray(wchans).unique().to(device=mix_data.tmm.b.means.device)
         chan_set = chan_set[chan_set < mix_data.tmm.neighb_cov.n_channels]
-        full_features = mix_data.tmm.erp.interp_to_chans(
-            waveforms=torch.asarray(features).to(mix_data.tmm.b.means),
+        features = features.reshape(
+            features.shape[0], -1, mix_data.tmm.neighb_cov.max_nc_obs
+        )
+        features = torch.asarray(features)
+        # -- with nans
+        feat_nan = features.new_full(
+            (*features.shape[:2], mix_data.tmm.neighb_cov.n_channels + 1), torch.nan
+        )
+        ix = torch.asarray(wchans)
+        ix = ix[:, None, :].broadcast_to(features.shape)
+        feat_nan.scatter_(
+            dim=2,
+            index=ix,
+            src=features,
+        )
+        feat_nan = feat_nan[:, :, chan_set.cpu()]
+        feat_nan = feat_nan.view(feat_nan.shape[0], -1)
+        # -- with interp
+        feat_interp = mix_data.tmm.erp.interp_to_chans(
+            waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
             target_channels=chan_set,
         )
+        feat_interp = feat_interp.view(feat_interp.shape[0], -1)
 
         # empirical covariance
-        cov_emp = torch.cov(full_features.T)
+        mean_nan = torch.nanmean(feat_nan, dim=0)
+        feat_nan -= mean_nan
+        cov_nan = cast(torch.Tensor, spiketorch.nancov(feat_nan, correction=0))
+
+        # interp covariance
+        cov_interp = torch.cov(feat_interp.T)
 
         # noise covariance
         cov_noise = mix_data.tmm.noise.marginal_covariance(channels=chan_set).to_dense()
-        assert cov_noise.shape == cov_emp.shape
+        assert cov_noise.shape == cov_interp.shape
 
         # signal covariance
         if mix_data.tmm.signal_rank:
@@ -489,19 +578,22 @@ class CovarianceView(MixtureComponentPlot):
         cov_model = cov_noise + cov_signal
 
         # np-ify
-        cov_emp = cov_emp.numpy(force=True)
+        cov_nan = cov_nan.numpy(force=True)
+        cov_interp = cov_interp.numpy(force=True)
         cov_noise = cov_noise.numpy(force=True)
         cov_signal = cov_signal.numpy(force=True)
         cov_model = cov_model.numpy(force=True)
 
         # spectra: empirical, noise, sginal, model
-        ev_emp = np.linalg.eigvalsh(cov_emp)[::-1]
+        ev_nan = np.linalg.eigvalsh(cov_nan)[::-1]
+        ev_interp = np.linalg.eigvalsh(cov_interp)[::-1]
         ev_noise = np.linalg.eigvalsh(cov_noise)[::-1]
         ev_signal = np.linalg.eigvalsh(cov_signal)[::-1]
         ev_model = np.linalg.eigvalsh(cov_model)[::-1]
 
         return {
-            "emp": (cov_emp, ev_emp),
+            "emp": (cov_nan, ev_nan),
+            "interp": (cov_interp, ev_interp),
             "noise": (cov_noise, ev_noise),
             "signal": (cov_signal, ev_signal),
             "model": (cov_model, ev_model),
@@ -512,33 +604,49 @@ class CovarianceView(MixtureComponentPlot):
         cov_emp = stats["emp"][0]
         vm = np.percentile(np.abs(cov_emp), 98)
 
-        top, bottom = panel.subfigures(nrows=2, height_ratios=[3, 1])
-        axes_top = top.subplots(ncols=2, nrows=len(stats))
+        toph = 2 + int(self.cov_vert)
+        top, bottom = panel.subfigures(nrows=2, height_ratios=[toph, 1])
+        if self.cov_vert:
+            axes_top = top.subplots(ncols=2, nrows=len(stats))
+        else:
+            axes_top = top.subplots(ncols=len(stats), nrows=2)
+            axes_top = axes_top.T
         ax_bottom = bottom.subplots()
 
         cov_kw = dict(
             aspect=1.0, interpolation="none", vmin=-vm, vmax=vm, cmap="seismic"
         )
-        res_kw = cov_kw | dict(vmin=-0.1 * vm, vmax=0.1 * vm)
+        res_kw = cov_kw | dict(vmin=-vm, vmax=vm)
 
         for row_top, (name, (cov, ev)) in zip(axes_top, stats.items()):
             c = self.colors[name]
-            row_top[0].set_ylabel(name, color=c)
-            row_top[0].imshow(cov, **cov_kw)
-            row_top[1].imshow(cov_emp - cov, **res_kw)
+            if self.cov_vert:
+                row_top[0].set_ylabel(name, color=c)
+            else:
+                row_top[0].set_title(name, color=c, fontsize=6)
+            ima = row_top[0].imshow(cov, **cov_kw)
+            imb = row_top[1].imshow(cov_emp - cov, **res_kw)
             ax_bottom.plot(ev[: self.neigs], color=c)
+        if not self.cov_vert:
+            plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
+            plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
 
-        axes_top[0, 0].set_title("cov", fontsize="small")
-        axes_top[0, 1].set_title("emp - cov", fontsize="small")
+        if self.cov_vert:
+            axes_top[0, 0].set_title("cov", fontsize="small")
+            axes_top[0, 1].set_title("emp - cov", fontsize="small")
+        else:
+            axes_top[0, 0].set_ylabel("cov", fontsize="small")
+            axes_top[0, 1].set_ylabel("emp - cov", fontsize="small")
         for ax in axes_top.flat:
-            ax.axis("off")
+            ax.set_xticks([])
+            ax.set_yticks([])
         ax_bottom.grid(which="both")
 
 
 class SplitView(MixtureComponentPlot):
     kind = "tall"
     width = 2.5
-    height = 7
+    height = 5
 
     def __init__(
         self,
@@ -562,20 +670,6 @@ class SplitView(MixtureComponentPlot):
         )
         assert debug_info is not None
 
-        # compute text info
-        if debug_info.bailed:
-            txt = f"bail: {debug_info.bail_reason}"
-        else:
-            assert debug_info.merge_res is not None
-            propstr = ",".join(
-                f"{p:0.2f}" for p in debug_info.merge_res.sub_proportions.cpu()
-            )
-            txt = (
-                f"part: {debug_info.merge_res.grouping.group_ids.tolist()}\n"
-                f"imp: {debug_info.merge_res.improvement:.3f}\n"
-                f"props: {propstr}"
-            )
-
         if debug_info.split_data is not None:
             n_spikes = debug_info.split_data.x.shape[0]
         else:
@@ -590,6 +684,18 @@ class SplitView(MixtureComponentPlot):
         else:
             kmeans_labels = torch.zeros(n_spikes, dtype=torch.long)
             colors = np.broadcast_to(np.array([self.bail_color]), (n_spikes,))
+
+        # compute channels by kmeans label
+        if debug_info.kmeans_responsibilities is not None:
+            assert debug_info.split_data is not None
+            chans_by_km = {}
+            for l in kmeans_labels.unique():
+                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == l]
+                chans_l = mix_data.tmm.neighb_cov.obs_ix[neighbs_l]
+                chans_l = chans_l[chans_l < mix_data.tmm.neighb_cov.n_channels]
+                chans_by_km[l.item()] = chans_l.numpy(force=True)
+        else:
+            chans_by_km = None
 
         # compute amplitudes
         if debug_info.split_data is not None:
@@ -631,8 +737,34 @@ class SplitView(MixtureComponentPlot):
             means = debug_info.split_model.b.means
             means = means.view(means.shape[0], -1, mix_data.tmm.neighb_cov.n_channels)
             means = means[:, :, mean_chans]
+            means = means.view(means.shape[0], -1)
+            means = mix_data.reconstruct_flat(means)
         else:
             means = None
+
+        # compute text info
+        if debug_info.bailed:
+            txt = f"bail: {debug_info.bail_reason}"
+        else:
+            assert split_res is not None
+            propstr = ",".join(f"{p:0.2f}" for p in split_res.sub_proportions.cpu())
+            countstr = ",".join(
+                str(p.item())
+                for p in split_res.train_assignments.unique(return_counts=True)[1]
+            )
+            if debug_info.merge_res is not None:
+                txt = (
+                    f"part: {debug_info.merge_res.grouping.group_ids.tolist()}\n"
+                    f"imp: {debug_info.merge_res.improvement:.3f}\n"
+                )
+            else:
+                txt = f"no allowed partitions\n"
+            txt += f"props: {propstr}\ncounts: {countstr}"
+            if debug_info.kmeans_responsibilities is not None:
+                kcountstr = ",".join(
+                    str(p.item()) for p in kmeans_labels.unique(return_counts=True)[1]
+                )
+                txt += f"\nkmeans counts: {kcountstr}"
 
         return (
             txt,
@@ -643,18 +775,23 @@ class SplitView(MixtureComponentPlot):
             dists,
             means,
             mean_chans,
+            chans_by_km,
         )
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         c = self.compute(mix_data, unit_id)
-        txt, colors, t, amps, loadings, dists, means, mean_chans = c
+        txt, colors, t, amps, loadings, dists, means, mean_chans, chans_by_km = c
 
         # layout
-        amp_info_row, mean_row, dist_pc_row = panel.subfigures(nrows=3)
+        amp_info_row, mean_row, dist_pc_row = panel.subfigures(
+            nrows=3, height_ratios=[1, 1, 1.5]
+        )
         ax_amp, ax_info = amp_info_row.subplots(ncols=2)
         ax_mean = mean_row.subplots()
-        fig_dist, fig_pc = dist_pc_row.subfigures(ncols=2)
+        fig_dist_chans, fig_pc = dist_pc_row.subfigures(ncols=2)
         ax_pc = fig_pc.subplots()
+        fig_dist, fig_chans = fig_dist_chans.subfigures(nrows=2)
+        ax_chans = fig_chans.subplots()
 
         # unit dist matrix / pair mask
         if dists is not None:
@@ -665,25 +802,47 @@ class SplitView(MixtureComponentPlot):
                 vmax=mix_data.tmm.max_distance,
                 image_cmap=self.dist_cmap,
                 show_values=True,
+                label_colors=self.colors,
+                with_colorbar=False,
             )
         else:
             ax_dist = fig_dist.subplots()
             ax_dist.axis("off")
             ax_dist.text(0, 0, "no dists", fontsize=5)
 
+        if chans_by_km is not None:
+            low = min(c.min().item() for c in chans_by_km.values())
+            hi = max(c.max().item() for c in chans_by_km.values())
+            bins = np.arange(low - 0.5, hi + 0.6, step=1.0)
+            ax_chans.hist(
+                list(chans_by_km.values()),
+                stacked=True,
+                color=self.colors[list(chans_by_km.keys())],
+                bins=bins,
+            )
+
         # merge res text info
         ax_info.axis("off")
-        ax_info.text(0, 0, txt, fontsize=6)
+        ax_info.text(
+            0.5,
+            0.5,
+            txt,
+            fontsize="small",
+            ha="center",
+            va="center",
+            transform=ax_info.transAxes,
+        )
 
         # pc scatter
         if loadings is not None:
-            ax_pc.scatter(*loadings.T, colors=colors, s=5, lw=0, alpha=0.5)
+            ax_pc.scatter(*loadings.T, c=colors, s=5, lw=0, alpha=0.5)
             ax_pc.grid()
         else:
             ax_pc.axis("off")
             ax_pc.text(0, 0, "no kmeans pca", fontsize=5)
 
         # recon mean view
+        ax_mean.axis("off")
         if means is not None:
             chans = mean_chans[None].broadcast_to(len(means), *mean_chans.shape)
             geomplot(
@@ -698,33 +857,34 @@ class SplitView(MixtureComponentPlot):
                 annotate_z=True,
             )
         else:
-            ax_mean.axis("off")
             ax_mean.text(0, 0, "no subunit means", fontsize=5)
 
         # amp view
         if amps is not None:
-            ax_amp.scatter(t, amps, colors=colors, s=5, lw=0, alpha=0.5)
+            ax_amp.scatter(t, amps, c=colors, s=5, lw=0, alpha=0.5)
             ax_amp.grid()
             ax_amp.set_xlabel("t (s)")
             ax_amp.set_ylabel("feat maxchan norm")
         else:
             ax_amp.axis("off")
             ax_amp.text(0, 0, "no amps", fontsize=5)
+        panel.suptitle("split result vis")
 
 
-figsize = (15, 8)
-default_mixture_plots = (
-    TextInfo(),
-    ISIHistogram(),
-    ChansHeatmap(),
-    LikelihoodsView(),
-    NeighborMeans(),
-    NeighborDistances(),
-    MergeView(),
-    MeanView(),
-    CovarianceView(),
-    SplitView(),
-)
+def default_mixture_plots():
+    return (
+        TextInfo(),
+        ISIHistogram(),
+        ChansHeatmap(),
+        LikelihoodsView(),
+        NeighborMeans(),
+        NeighborDistances(),
+        MergeView(),
+        MeanView(),
+        CovarianceView(),
+        MeanView(mini=True),
+        SplitView(),
+    )
 
 
 def fit_mixture_and_visualize_all_components(
@@ -736,7 +896,7 @@ def fit_mixture_and_visualize_all_components(
     save_folder: str | Path,
     plots=default_mixture_plots,
     max_height=9,
-    figsize=figsize,
+    figsize=(17, 10),
     hspace=0.01,
     dpi=200,
     image_ext="png",
@@ -800,7 +960,7 @@ def fit_mixture_for_vis(
     train_scores = mix_data.tmm.soft_assign(
         data=mix_data.train_data,
         needs_bootstrap=False,
-        full_proposal_view=False,
+        full_proposal_view=True,
     )
     train_labels = labels_from_scores(train_scores)
     full_scores = mix_data.tmm.soft_assign(
@@ -848,18 +1008,21 @@ def make_mixture_component_summary(
     unit_id: int,
     plots=default_mixture_plots,
     max_height=9,
-    figsize=figsize,
-    hspace=0.01,
+    figsize=(17, 10),
+    card_hspace=0.01,
     figure=None,
     **other_global_params,
 ):
+    if callable(plots):
+        plots = plots()
+    plots = cast(Iterable[MixtureComponentPlot], plots)
     for p in plots:
         p.notify_global_params(**other_global_params)
     figure = flow_layout(
         plots,
         max_height=max_height,
         figsize=figsize,
-        hspace=hspace,
+        card_hspace=card_hspace,
         figure=figure,
         mix_data=mix_data,
         unit_id=unit_id,
@@ -872,8 +1035,8 @@ def make_mixture_summaries(
     save_folder: str | Path,
     plots=default_mixture_plots,
     max_height=9,
-    figsize=figsize,
-    hspace=0.01,
+    figsize=(17, 10),
+    card_hspace=0.01,
     dpi=200,
     image_ext="png",
     n_jobs=0,
@@ -906,7 +1069,7 @@ def make_mixture_summaries(
         plots,
         max_height,
         figsize,
-        hspace,
+        card_hspace,
         dpi,
         save_folder,
         image_ext,
@@ -947,7 +1110,7 @@ class SummaryJobContext:
         plots,
         max_height,
         figsize,
-        hspace,
+        card_hspace,
         dpi,
         save_folder,
         image_ext,
@@ -959,7 +1122,7 @@ class SummaryJobContext:
         self.plots = plots
         self.max_height = max_height
         self.figsize = figsize
-        self.hspace = hspace
+        self.card_hspace = card_hspace
         self.dpi = dpi
         self.save_folder = save_folder
         self.image_ext = image_ext
@@ -998,7 +1161,7 @@ def _summary_job(unit_id):
         make_mixture_component_summary(
             _summary_job_context.mix_data,
             unit_id,
-            hspace=_summary_job_context.hspace,
+            card_hspace=_summary_job_context.card_hspace,
             plots=_summary_job_context.plots,
             max_height=_summary_job_context.max_height,
             figsize=_summary_job_context.figsize,
@@ -1020,3 +1183,53 @@ def _summary_job(unit_id):
     finally:
         if tmp_out is not None and tmp_out.exists():
             tmp_out.unlink()
+
+
+# -- one-offs
+
+
+def vis_split_interpolation(
+    mix_data: MixtureVisData,
+    unit_id: int,
+    debug_info: UnitSplitDebugInfo | None = None,
+    n_per_group=8,
+    seed=0,
+):
+    if debug_info is None:
+        split_res, debug_info = mix_data.tmm.split_unit(
+            unit_id=unit_id,
+            train_data=mix_data.train_data,
+            eval_data=mix_data.val_data,
+            scores=mix_data.eval_scores,
+            debug=True,
+        )
+    assert debug_info is not None
+    assert debug_info.split_data is not None
+
+    n_spikes = debug_info.split_data.x.shape[0]
+    assert debug_info.kmeans_x is not None
+    assert debug_info.kmeans_chans is not None
+    if debug_info.kmeans_responsibilities is not None:
+        assert debug_info.kmeans_responsibilities.shape[0] == n_spikes
+        kmeans_labels = debug_info.kmeans_responsibilities.argmax(dim=1)
+        kmeans_labels = kmeans_labels.cpu()
+    else:
+        kmeans_labels = torch.zeros(n_spikes, dtype=torch.long)
+
+    vis_ix = []
+    rg = np.random.default_rng(seed)
+    for l in kmeans_labels.unique():
+        (in_l,) = (kmeans_labels == l).nonzero(as_tuple=True)
+        in_l = in_l.numpy(force=True)
+        if in_l.size > n_per_group:
+            in_l = rg.choice(in_l, size=n_per_group, replace=False)
+        vis_ix.append(in_l)
+    vis_ix = np.concatenate(vis_ix)
+
+    features = debug_info.kmeans_x[vis_ix]
+    features = features.mT.reshape(len(features), -1)
+    features = features.numpy(force=True)
+
+    fig, ax = plt.subplots()
+    ax.imshow(features, vmin=-5, vmax=5)
+    return fig, debug_info
