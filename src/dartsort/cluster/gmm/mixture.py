@@ -58,7 +58,11 @@ from ...util.internal_config import (
     DARTsortInternalConfig,
     RefinementConfig,
 )
-from ...util.interpolation_util import NeighborhoodInterpolator
+from ...util.interpolation_util import (
+    NeighborhoodInterpolator,
+    NeighborhoodFiller,
+    NeighborhoodImputer,
+)
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.main_util import ds_save_intermediate_labels
@@ -1517,7 +1521,7 @@ class BaseMixtureModel(BModule):
         signal_rank: int,
         neighb_cov: NeighborhoodCovariance,
         noise: EmbeddedNoise,
-        erp: NeighborhoodInterpolator,
+        erp: NeighborhoodFiller,
         em_iters: int,
         prior_pseudocount: float,
         criterion_em_iters: int,
@@ -1628,7 +1632,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         noise_log_prop: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
         noise: EmbeddedNoise,
-        erp: NeighborhoodInterpolator,
+        erp: NeighborhoodFiller,
         em_iters: int,
         criterion_em_iters: int,
         min_count: int,
@@ -1709,7 +1713,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         split_k: int,
         data: TruncatedSpikeData,
         noise: EmbeddedNoise,
-        erp: NeighborhoodInterpolator,
+        erp: NeighborhoodFiller,
         em_iters: int,
         criterion_em_iters: int,
         min_count: int,
@@ -1761,7 +1765,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cls,
         *,
         noise: EmbeddedNoise,
-        erp: NeighborhoodInterpolator,
+        erp: NeighborhoodFiller,
         neighb_cov: NeighborhoodCovariance,
         train_data: TruncatedSpikeData,
         seed: int | np.random.Generator,
@@ -1796,7 +1800,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cls,
         *,
         signal_rank: int,
-        erp: NeighborhoodInterpolator,
+        erp: NeighborhoodFiller,
         min_count: int,
         min_channel_count: int,
         data: DenseSpikeData,
@@ -2328,7 +2332,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # kmeans on interp whitened feats
         assert self.erp is not None
-        kmeans_responsibliities, kmeans_x, kmeans_chans = try_kmeans(
+        kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
             split_data,
             k=self.split_k,
             erp=self.erp,
@@ -2337,7 +2341,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             min_count=self.min_count,
             debug=debug,
         )
-        if kmeans_responsibliities is None and debug:
+        if kmeans_responsibilities is None and debug:
             logger.dartsortverbose(f"Split {unit_id}: kmeans bailed.")
             return None, UnitSplitDebugInfo(
                 bailed=True,
@@ -2346,15 +2350,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 split_data=split_data,
                 kmeans_chans=kmeans_chans,
             )
-        elif kmeans_responsibliities is None:
+        elif kmeans_responsibilities is None:
             return None, None
-        assert kmeans_responsibliities.shape[1] >= 2
+        assert kmeans_responsibilities.shape[1] >= 2
 
         # initialize dense model with fixed resps
         split_model, _, split_data, any_spikes_discarded, _, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
-                responsibilities=kmeans_responsibliities,
+                responsibilities=kmeans_responsibilities,
                 signal_rank=self.signal_rank,
                 erp=self.erp,
                 min_count=self.min_count,
@@ -2373,18 +2377,18 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
         )
         if any_spikes_discarded:
-            kmeans_responsibliities = kmeans_responsibliities[keep_spikes]
+            kmeans_responsibilities = kmeans_responsibilities[keep_spikes]
         if debug:
             assert kmeans_x is not None
             kmeans_x = kmeans_x[keep_spikes]
         if split_model.n_units <= 1 and debug:
             logger.dartsortverbose(
-                f"Split {unit_id}: only {split_model.n_units} of {kmeans_responsibliities.shape[1]} sub-units."
+                f"Split {unit_id}: only {split_model.n_units} of {kmeans_responsibilities.shape[1]} sub-units."
             )
             return None, UnitSplitDebugInfo(
                 bailed=True,
                 bail_reason="fit",
-                kmeans_responsibilities=kmeans_responsibliities,
+                kmeans_responsibilities=kmeans_responsibilities,
                 kmeans_x=kmeans_x,
                 split_model=split_model,
                 split_data=split_data,
@@ -2411,7 +2415,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             pair_mask=pair_mask,
             cur_scores=cur_scores_batch,
             cur_unit_ids=torch.as_tensor(unit_id, device=train_data.x.device),
-            responsibilities=kmeans_responsibliities,
+            responsibilities=kmeans_responsibilities,
             skip_full=False,
             skip_single=False,
             debug=debug,
@@ -2427,7 +2431,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     split_model=split_model,
                     kmeans_x=kmeans_x,
                     kmeans_chans=kmeans_chans,
-                    kmeans_responsibilities=kmeans_responsibliities,
+                    kmeans_responsibilities=kmeans_responsibilities,
                     merge_res=merge_res,
                     split_data=split_data,
                 )
@@ -2444,7 +2448,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     split_model=split_model,
                     kmeans_x=kmeans_x,
                     kmeans_chans=kmeans_chans,
-                    kmeans_responsibilities=kmeans_responsibliities,
+                    kmeans_responsibilities=kmeans_responsibilities,
                     merge_res=merge_res,
                     split_data=split_data,
                 )
@@ -2476,7 +2480,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     split_model=split_model,
                     kmeans_x=kmeans_x,
                     kmeans_chans=kmeans_chans,
-                    kmeans_responsibilities=kmeans_responsibliities,
+                    kmeans_responsibilities=kmeans_responsibilities,
                     merge_res=merge_res,
                     split_data=split_data,
                 )
@@ -2511,7 +2515,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 split_model=split_model,
                 kmeans_x=kmeans_x,
                 kmeans_chans=kmeans_chans,
-                kmeans_responsibilities=kmeans_responsibliities,
+                kmeans_responsibilities=kmeans_responsibilities,
                 merge_res=merge_res,
                 split_data=split_data,
             )
@@ -3239,11 +3243,16 @@ def get_truncated_datasets(
         train_data.neighborhoods.b.neighborhoods,
     )
 
-    erp = NeighborhoodInterpolator(
-        prgeom=prgeom,
-        neighborhoods=full_neighbs,
-        params=refinement_cfg.interp_params,
-    )
+    if refinement_cfg.impute_kind == "interp":
+        erp = NeighborhoodInterpolator(
+            prgeom=prgeom,
+            neighborhoods=full_neighbs,
+            params=refinement_cfg.interp_params,
+        )
+    elif refinement_cfg.impute_kind == "impute":
+        erp = NeighborhoodImputer(noise=noise, neighborhoods=full_neighbs)
+    else:
+        assert False
 
     return neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs
 
@@ -3443,7 +3452,7 @@ def initialize_parameters_by_unit(
     data: TruncatedSpikeData,
     signal_rank: int,
     noise: EmbeddedNoise,
-    erp: NeighborhoodInterpolator,
+    erp: NeighborhoodFiller,
     prior_pseudocount: float,
     gen: torch.Generator,
     min_channel_count: int = 1,
@@ -3534,7 +3543,7 @@ def get_responsibilities_matrix_from_scores(unit_ids: Tensor, scores: Scores) ->
 def initialize_params_from_dense_data(
     data: DenseSpikeData,
     rank: int,
-    erp: NeighborhoodInterpolator,
+    erp: NeighborhoodFiller,
     noise: EmbeddedNoise,
     prior_pseudocount: float,
     min_channel_count: int = 1,
@@ -3901,7 +3910,7 @@ def get_part_assignments(
 def try_kmeans(
     data: DenseSpikeData,
     k: int,
-    erp: NeighborhoodInterpolator,
+    erp: NeighborhoodFiller,
     gen: torch.Generator,
     min_count: int,
     feature_rank: int,
@@ -3912,10 +3921,14 @@ def try_kmeans(
     n_kmeans_tries: int = 10,
     n_kmeanspp_tries: int = 10,
     debug: bool = False,
+    whiten: bool = False,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_count)
-    erp_x = data.whitenedx.view(data.x.shape[0], feature_rank, -1)
+    if whiten:
+        erp_x = data.whitenedx.view(data.x.shape[0], feature_rank, -1)
+    else:
+        erp_x = data.x.view(data.x.shape[0], feature_rank, -1)
     x = erp.interp_to_chans(erp_x, data.neighborhood_ids, channels)
     x = x.view(len(x), -1)
     x_ret = x if debug else None

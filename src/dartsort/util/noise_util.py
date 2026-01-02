@@ -460,6 +460,7 @@ class EmbeddedNoise(torch.nn.Module):
             self.register_buffer("rank_vt", rank_vt)
         if channel_vt is not None:
             self.register_buffer("channel_vt", channel_vt)
+            self.register_buffer("channel_vt_zpad", F.pad(channel_vt, (0, 1)))
         if full_cov is not None:
             self.register_buffer("full_cov", full_cov)
             if device is None:
@@ -491,7 +492,9 @@ class EmbeddedNoise(torch.nn.Module):
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         elif self.mean_kind == "by_rank":
-            return cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
+            return (
+                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
+            )
         elif self.mean_kind == "full":
             return cast(torch.Tensor, self.mean)
         else:
@@ -503,7 +506,9 @@ class EmbeddedNoise(torch.nn.Module):
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         if self.mean_kind == "by_rank":
-            return cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
+            return (
+                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
+            )
         if self.mean_kind == "full":
             return self.mean
         assert False
@@ -555,6 +560,25 @@ class EmbeddedNoise(torch.nn.Module):
         if device is not None:
             self._full_inverse = self._full_inverse.to(device)
         return self._full_inverse
+
+    def cov_batch(self, channels_left: torch.Tensor, channels_right: torch.Tensor):
+        if self.cov_kind != "factorized":
+            raise NotImplementedError(
+                f"Need to implement cov_batch for {self.cov_kind=}."
+            )
+        rank_root = self.rank_vt.T * self.rank_std
+        rank_cov = rank_root @ rank_root.T
+        chan_root_left = self.channel_vt_zpad.T[channels_left] * self.channel_std
+        chan_root_right = self.channel_vt_zpad.T[channels_right] * self.channel_std
+        if chan_root_right.ndim == 2:
+            chan_root_right = chan_root_right[None].broadcast_to(
+                chan_root_left.shape[0], *chan_root_right.shape
+            )
+        chan_cov = chan_root_left.bmm(chan_root_right.mT)
+        rank_cov = rank_cov[None].broadcast_to(
+            channels_left.shape[0], self.rank, self.rank
+        )
+        return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
 
     def marginal_covariance(
         self,

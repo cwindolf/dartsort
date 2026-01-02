@@ -17,6 +17,7 @@ from ..cluster.gmm.mixture import (
     UnitSplitDebugInfo,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
+    try_kmeans,
 )
 from ..transform import TemporalPCA
 from ..util import spiketorch
@@ -26,6 +27,7 @@ from ..util.internal_config import (
     RefinementConfig,
     default_refinement_cfg,
 )
+from ..util.interpolation_util import NeighborhoodFiller
 from ..util.job_util import ensure_computation_config
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
@@ -275,8 +277,8 @@ class LikelihoodsView(MixtureComponentPlot):
         ax_hist.hist(noise_ll, color="darkgray", label="noise", bins=bins, **histk)
         ax_hist.legend(
             loc="lower right",
-            borderpad=0.1,
             frameon=False,
+            borderpad=0.1,
             borderaxespad=0.1,
             handletextpad=0.3,
             handlelength=1.0,
@@ -510,11 +512,14 @@ class CovarianceView(MixtureComponentPlot):
     width = 3
     height = 3
 
-    def __init__(self, n_waveforms_show=128, neigs=16, cov_vert=False):
+    def __init__(
+        self, n_waveforms_show=128, neigs=16, cov_vert=False, reference_cov="interp"
+    ):
         self.n_waveforms_show = n_waveforms_show
         self.colors = dict(emp="k", interp="gray", noise="r", signal="g", model="b")
         self.neigs = neigs
         self.cov_vert = cov_vert
+        self.reference_cov = reference_cov
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
         # load data
@@ -601,7 +606,7 @@ class CovarianceView(MixtureComponentPlot):
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         stats = self.compute(mix_data, unit_id)
-        cov_emp = stats["emp"][0]
+        cov_emp = stats[self.reference_cov][0]
         vm = np.percentile(np.abs(cov_emp), 98)
 
         toph = 2 + int(self.cov_vert)
@@ -626,21 +631,37 @@ class CovarianceView(MixtureComponentPlot):
                 row_top[0].set_title(name, color=c, fontsize=6)
             ima = row_top[0].imshow(cov, **cov_kw)
             imb = row_top[1].imshow(cov_emp - cov, **res_kw)
-            ax_bottom.plot(ev[: self.neigs], color=c)
+            ax_bottom.plot(ev[: self.neigs], color=c, label=name)
         if not self.cov_vert:
             plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
             plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
 
         if self.cov_vert:
             axes_top[0, 0].set_title("cov", fontsize="small")
-            axes_top[0, 1].set_title("emp - cov", fontsize="small")
+            axes_top[0, 1].set_title(
+                f"{self.reference_cov} - cov",
+                fontsize="small",
+                color=self.colors[self.reference_cov],
+            )
         else:
             axes_top[0, 0].set_ylabel("cov", fontsize="small")
-            axes_top[0, 1].set_ylabel("emp - cov", fontsize="small")
+            axes_top[0, 1].set_ylabel(
+                f"{self.reference_cov} - cov",
+                fontsize="small",
+                color=self.colors[self.reference_cov],
+            )
         for ax in axes_top.flat:
             ax.set_xticks([])
             ax.set_yticks([])
         ax_bottom.grid(which="both")
+        ax_bottom.legend(
+            borderpad=0.1,
+            borderaxespad=0.1,
+            handletextpad=0.3,
+            handlelength=1.0,
+            loc="upper right",
+            ncols=2,
+        )
 
 
 class SplitView(MixtureComponentPlot):
@@ -1192,44 +1213,118 @@ def vis_split_interpolation(
     mix_data: MixtureVisData,
     unit_id: int,
     debug_info: UnitSplitDebugInfo | None = None,
+    erp: NeighborhoodFiller | None = None,
+    whiten: bool = True,
+    figscale=5,
     n_per_group=8,
     seed=0,
+    layout="horz",
+    overlay=True,
 ):
-    if debug_info is None:
-        split_res, debug_info = mix_data.tmm.split_unit(
-            unit_id=unit_id,
-            train_data=mix_data.train_data,
-            eval_data=mix_data.val_data,
-            scores=mix_data.eval_scores,
-            debug=True,
-        )
-    assert debug_info is not None
-    assert debug_info.split_data is not None
+    if erp is None:
+        erp = mix_data.tmm.erp
 
-    n_spikes = debug_info.split_data.x.shape[0]
-    assert debug_info.kmeans_x is not None
-    assert debug_info.kmeans_chans is not None
-    if debug_info.kmeans_responsibilities is not None:
-        assert debug_info.kmeans_responsibilities.shape[0] == n_spikes
-        kmeans_labels = debug_info.kmeans_responsibilities.argmax(dim=1)
+    split_data = mix_data.train_data.dense_slice_by_unit(
+        unit_id, gen=mix_data.tmm.rg, min_count=2 * mix_data.tmm.min_count
+    )
+    assert split_data is not None
+
+    kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
+        split_data,
+        k=mix_data.tmm.split_k,
+        erp=erp,
+        gen=mix_data.tmm.rg,
+        feature_rank=mix_data.tmm.noise.rank,
+        min_count=mix_data.tmm.min_count,
+        debug=True,
+        whiten=whiten,
+    )
+
+    n_spikes = split_data.x.shape[0]
+    assert kmeans_x is not None
+    assert kmeans_x.shape[0] == n_spikes
+    assert kmeans_chans is not None
+    if kmeans_responsibilities is not None:
+        assert kmeans_responsibilities.shape[0] == n_spikes
+        kmeans_labels = kmeans_responsibilities.argmax(dim=1)
         kmeans_labels = kmeans_labels.cpu()
     else:
         kmeans_labels = torch.zeros(n_spikes, dtype=torch.long)
 
     vis_ix = []
     rg = np.random.default_rng(seed)
-    for l in kmeans_labels.unique():
+    ulabels = kmeans_labels.unique()
+    for l in ulabels:
         (in_l,) = (kmeans_labels == l).nonzero(as_tuple=True)
         in_l = in_l.numpy(force=True)
         if in_l.size > n_per_group:
             in_l = rg.choice(in_l, size=n_per_group, replace=False)
         vis_ix.append(in_l)
-    vis_ix = np.concatenate(vis_ix)
 
-    features = debug_info.kmeans_x[vis_ix]
-    features = features.mT.reshape(len(features), -1)
-    features = features.numpy(force=True)
+    # interpolated waveforms
+    interp_wfs = []
+    for vix in vis_ix:
+        f = kmeans_x[vix].reshape(len(vix), -1)
+        f = mix_data.reconstruct_flat(f)
+        interp_wfs.append(f)
 
-    fig, ax = plt.subplots()
-    ax.imshow(features, vmin=-5, vmax=5)
-    return fig, debug_info
+    # original observed waveforms
+    orig_wfs = []
+    orig_chans = []
+    for vix in vis_ix:
+        f = (split_data.whitenedx if whiten else split_data.x)[vix]
+        f = mix_data.reconstruct_flat(f)
+        orig_wfs.append(f)
+        orig_chans.append(
+            split_data.neighborhoods.b.neighborhoods[split_data.neighborhood_ids[vix]]
+        )
+
+    # -- draw
+
+    if layout == "horz":
+        fig, axes = plt.subplots(
+            nrows=2,
+            ncols=ulabels.numel(),
+            figsize=(figscale * ulabels.numel(), figscale * 2),
+            layout="constrained",
+        )
+        axes = axes.T
+    else:
+        fig, axes = plt.subplots(
+            ncols=2,
+            nrows=ulabels.numel(),
+            figsize=(figscale * 2, figscale * ulabels.numel()),
+            layout="constrained",
+        )
+    maa = max([np.abs(w).max() for w in orig_wfs])
+
+    for col, iwf, owf, ochans, c in zip(axes, interp_wfs, orig_wfs, orig_chans, "rgb"):
+        print(f"{np.abs(iwf).max()=} {np.abs(owf).max()=}")
+        geomplot(
+            waveforms=iwf,
+            channels=kmeans_chans[None].broadcast_to(iwf.shape[0], *kmeans_chans.shape),
+            geom=mix_data.prgeom,
+            show_zero=False,
+            subar=False,
+            ax=col[1],
+            max_abs_amp=maa,
+            linewidth=1,
+            zlim=None,
+        )
+        for ax in col[: 1 + overlay]:
+            geomplot(
+                waveforms=owf,
+                channels=ochans,
+                geom=mix_data.prgeom,
+                show_zero=True,
+                subar=True,
+                ax=ax,
+                max_abs_amp=maa,
+                color="k",
+                linewidth=1,
+                zlim=None,
+            )
+    for ax in axes.flat:
+        ax.axis("off")
+
+    return fig

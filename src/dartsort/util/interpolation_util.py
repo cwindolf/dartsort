@@ -1,6 +1,6 @@
 """Library for flavors of kernel interpolation and data interp utilities"""
 
-from typing import cast
+from typing import Protocol, cast, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -16,6 +16,11 @@ from .internal_config import (
 )
 from .torch_util import BModule
 from .waveform_util import make_channel_index
+
+if TYPE_CHECKING:
+    from .noise_util import EmbeddedNoise
+else:
+    EmbeddedNoise = None  # type: ignore
 
 
 def interpolate_by_chunk(
@@ -779,6 +784,15 @@ class StableFeaturesInterpolator(BModule):
         )
 
 
+class NeighborhoodFiller(Protocol):
+    def interp_to_chans(
+        self,
+        waveforms: torch.Tensor,
+        neighborhood_ids: torch.Tensor,
+        target_channels: torch.Tensor | slice,
+    ) -> torch.Tensor: ...
+
+
 class NeighborhoodInterpolator(BModule):
     def __init__(
         self,
@@ -804,7 +818,7 @@ class NeighborhoodInterpolator(BModule):
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
-        target_channels: torch.Tensor | slice | None = None,
+        target_channels: torch.Tensor | slice,
     ):
         if target_channels is None:
             targ_pos = self.b.prgeom
@@ -822,6 +836,33 @@ class NeighborhoodInterpolator(BModule):
             precomputed_data=neighb_data,
             params=self.params,
         )
+
+
+class NeighborhoodImputer(BModule):
+    def __init__(self, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods):
+        super().__init__()
+        prec = all_neighb_precisions(noise, neighborhoods)
+        self.register_buffer("prec", prec)
+        chans_arange = torch.arange(noise.n_channels, device=prec.device)
+        self.register_buffer("chans_arange", chans_arange)
+        self.neighborhoods = neighborhoods
+        self.noise = noise
+
+    def interp_to_chans(
+        self,
+        waveforms: torch.Tensor,
+        neighborhood_ids: torch.Tensor,
+        target_channels: torch.Tensor | slice,
+    ) -> torch.Tensor:
+        if not torch.is_tensor(target_channels):
+            target_channels = self.b.chans_arange[target_channels]
+        source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
+        kernel = self.noise.cov_batch(source_channels, target_channels).to_dense()
+        waveforms = waveforms.view(waveforms.shape[0], 1, -1)
+        waveforms = waveforms.bmm(self.b.prec[neighborhood_ids])
+        # waveforms = waveforms.view(waveforms.shape[0], -1)
+        waveforms = torch.bmm(waveforms, kernel)
+        return waveforms.view(waveforms.shape[0], self.noise.rank, -1)
 
 
 class FullProbeInterpolator(BModule):
@@ -873,3 +914,35 @@ class FullProbeInterpolator(BModule):
             target_pos=(self.b.geom + shift).broadcast_to(n, self.c_targ, self.dim),
             precomputed_data=self.b.data,
         )
+
+
+def all_neighb_precisions(noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods):
+    channel_index = neighborhoods.b.neighborhoods
+    nneighb = channel_index.shape[0]
+    nc_obs = channel_index.shape[1]
+    rank = noise.rank
+    nc = noise.n_channels
+    dev = channel_index.device
+
+    Cooinv = torch.zeros((nneighb, rank, nc_obs, rank, nc_obs), device=dev)
+
+    for j, joix in enumerate(channel_index):
+        (joixvix,) = (joix < nc).nonzero(as_tuple=True)
+        joixv = joix[joixvix]
+        ncoi = joixv.numel()
+
+        jCoo = noise.marginal_covariance(
+            channels=joixv, cache_prefix=neighborhoods.name, cache_key=j
+        )
+
+        jL = jCoo.cholesky(upper=False)  # C = LL'
+        jLinv = jL.inverse().to_dense()
+        jCooinv = jLinv.T @ jLinv  # Cinv = Linv' Linv
+
+        # fancy inds to front! love that.
+        jCooinv = jCooinv.view(rank, ncoi, rank, ncoi)
+        Cooinv[j, :, joixvix[:, None], :, joixvix[None]] = jCooinv.permute(1, 3, 0, 2)
+
+    obsdim = rank * nc_obs
+    Cooinv = Cooinv.view(nneighb, obsdim, obsdim)
+    return Cooinv

@@ -669,6 +669,7 @@ class RefinementConfig:
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
     max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
+    impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
     noise_interp_params: InterpolationParams = default_interpolation_params
 
