@@ -16,7 +16,7 @@ def simulate_moppca(
     n_missing=2,
     K=5,
     t_mu: Literal["zero", "smooth", "random"] = "smooth",
-    t_cov: Literal["eye", "random"] = "eye",
+    t_cov: Literal["eye", "random", "eyesmall"] = "eye",
     # zero, hot, random,
     t_w: Literal["zero", "hot", "smooth", "random"] = "zero",
     t_missing: Literal[
@@ -82,6 +82,14 @@ def simulate_moppca(
             nc,
             cov_kind="scalar",
             global_std=torch.tensor(1.0, dtype=torch.float, device=device),
+        )
+    elif t_cov == "eyesmall":
+        cov = 1e-4 * np.eye(D)
+        noise = EmbeddedNoise(
+            rank,
+            nc,
+            cov_kind="scalar",
+            global_std=torch.tensor(0.01, dtype=torch.float, device=device),
         )
     elif t_cov == "random":
         _c = rg.normal(size=(D, 10 * D))

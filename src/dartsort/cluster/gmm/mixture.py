@@ -4278,13 +4278,15 @@ def _initialize_single(
 
     # NB they return V not Vh here, so rank dim comes last
     if full_svd:
-        _, s, Vh = torch.linalg.svd(x.double(), driver="gesvd")
+        _, s, Vh = torch.linalg.svd(
+            x, driver="gesvd" if x.device.type == "cuda" else None
+        )
         V = Vh.T
     else:
         q = min(n, d * c, n_oversamples + rank)
-        _, s, V = torch.svd_lowrank(x.double(), q=q, niter=niter)
-    s = s[:rank].float()
-    V = V[:, :rank].float()
+        _, s, V = torch.svd_lowrank(x, q=q, niter=niter)
+    s = s[:rank]
+    V = V[:, :rank]
 
     # convert to eigvals
     if weight is None:
@@ -4298,8 +4300,8 @@ def _initialize_single(
     s = s.sub_(1.0).clamp_(min=eps)
     ev = s.sqrt_()
     W = V.mul_(ev.mul_(flip))
-    # W = U.T @ W
-    W = U @ W
+    W = U.T @ W
+    # W = U @ W
 
     mean = mean.view(d, c)
     # TODO build this the other way

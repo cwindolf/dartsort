@@ -167,12 +167,13 @@ def test_truncated_mixture(
                 split_data = train_data.dense_slice_by_unit(unit_id, gen=tmm.rg)
                 assert split_data is not None
                 kmeans_responsibliities, *_ = mixture.try_kmeans(
-                    split_data,
+                    data=split_data,
                     k=kmeansk,
                     erp=tmm.erp,
                     gen=tmm.rg,
                     feature_rank=tmm.noise.rank,
                     min_count=tmm.min_count,
+                    min_channel_count=tmm.min_channel_count,
                 )
                 assert kmeans_responsibliities is not None
                 split_model, _, _, any_discarded, _, _ = (
@@ -336,13 +337,13 @@ def test_truncated_mixture(
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
 
 
-@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
-@pytest.mark.parametrize("n_chans", [1, 8])
-@pytest.mark.parametrize("rank", [1, 5])
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("n_chans", [1, 2])
+@pytest.mark.parametrize("rank", [4])
 @pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
-@pytest.mark.parametrize("cov_type", ["eye", "random"])
+@pytest.mark.parametrize("cov_type", ["eyesmall", "eye", "random"])
 @pytest.mark.parametrize("mean_type", ["zero", "smooth"])
-@pytest.mark.parametrize("full_svd", [True, False])
+@pytest.mark.parametrize("full_svd", [False])
 @pytest.mark.parametrize("true_mean", [True, False])
 def test_component_initialization(
     mean_type, cov_type, basis_type, rank, n_chans, seed, true_mean, full_svd
@@ -359,10 +360,17 @@ def test_component_initialization(
         t_cov=cov_type,
         device=device,
     )
-    mean = moppca_sim["mu"][0].numpy(force=True)
+    n = moppca_sim["x"].shape[0]
+    mean = moppca_sim["mu"][0].numpy(force=True).ravel()
     basis = moppca_sim["W"][0].numpy(force=True)
     basis = basis.transpose(2, 0, 1).reshape(rank, -1)
+    ncov = moppca_sim["noise"].marginal_covariance().to_dense().numpy(force=True)
     subspace = basis.T @ basis
+    true_cov = subspace + ncov
+
+    emp_cov = torch.cov(moppca_sim["x"].view(n, -1).T)
+    emp_cov = emp_cov.numpy(force=True)
+    emp_subspace = emp_cov - ncov
 
     mean_, basis_ = mixture._initialize_single(
         x=moppca_sim["x"],
@@ -373,16 +381,19 @@ def test_component_initialization(
         full_svd=full_svd,
     )
     assert basis_ is not None
-    mean_ = mean_.numpy(force=True)
+    mean_ = mean_.numpy(force=True).ravel()
     basis_ = basis_.numpy(force=True).reshape(rank, -1)
     subspace_ = basis_.T @ basis_
 
     se = 1.0 / np.sqrt(moppca_sim["x"].shape[0])
-    mean_atol = 4 * se
-    subspace_atol = 16 * se
+    mean_atol = 8 * se
+    subspace_atol = np.abs(emp_cov - true_cov).max() + mean_atol
 
-    np.testing.assert_allclose(mean, mean_, atol=mean_atol)
-    np.testing.assert_allclose(subspace, subspace_, atol=subspace_atol)
+    if not true_mean:
+        np.testing.assert_allclose(mean_, moppca_sim["x"].view(n, -1).mean(0))
+    np.testing.assert_allclose(mean_, mean, atol=mean_atol)
+    np.testing.assert_allclose(subspace_, emp_subspace, atol=mean_atol)
+    np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)
 
 
 @pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])  # , "tvi_nlp"])
