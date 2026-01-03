@@ -12,6 +12,7 @@ from dartsort.cluster.gmm import (
     gaussian_mixture,
 )
 from dartsort.util.internal_config import RefinementConfig
+from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.sparse_util import integers_without_inner_replacement
 from dartsort.util.spiketorch import spawn_torch_rg
@@ -333,6 +334,55 @@ def test_truncated_mixture(
             wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
             diff.mul_(wcmask)
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("n_chans", [1, 8])
+@pytest.mark.parametrize("rank", [1, 5])
+@pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
+@pytest.mark.parametrize("cov_type", ["eye", "random"])
+@pytest.mark.parametrize("mean_type", ["zero", "smooth"])
+@pytest.mark.parametrize("full_svd", [True, False])
+@pytest.mark.parametrize("true_mean", [True, False])
+def test_component_initialization(
+    mean_type, cov_type, basis_type, rank, n_chans, seed, true_mean, full_svd
+):
+    rg = np.random.default_rng(seed)
+    device = ensure_computation_config(None).actual_device()
+    moppca_sim = mixture_testing_util.simulate_moppca(
+        Nper=10_000,
+        M=rank,
+        K=1,
+        nc=n_chans,
+        t_w=basis_type,
+        t_mu=mean_type,
+        t_cov=cov_type,
+        device=device,
+    )
+    mean = moppca_sim["mu"][0].numpy(force=True)
+    basis = moppca_sim["W"][0].numpy(force=True)
+    basis = basis.transpose(2, 0, 1).reshape(rank, -1)
+    subspace = basis.T @ basis
+
+    mean_, basis_ = mixture._initialize_single(
+        x=moppca_sim["x"],
+        chans=torch.arange(n_chans, device=device),
+        noise=moppca_sim["noise"],
+        rank=rank,
+        mean=moppca_sim["mu"][0].view(-1).to(device) if true_mean else None,
+        full_svd=full_svd,
+    )
+    assert basis_ is not None
+    mean_ = mean_.numpy(force=True)
+    basis_ = basis_.numpy(force=True).reshape(rank, -1)
+    subspace_ = basis_.T @ basis_
+
+    se = 1.0 / np.sqrt(moppca_sim["x"].shape[0])
+    mean_atol = 4 * se
+    subspace_atol = 16 * se
+
+    np.testing.assert_allclose(mean, mean_, atol=mean_atol)
+    np.testing.assert_allclose(subspace, subspace_, atol=subspace_atol)
 
 
 @pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])  # , "tvi_nlp"])

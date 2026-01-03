@@ -597,6 +597,7 @@ class GroupPartition:
     n_groups: int
     single_ixs: list[int]
     subset_ids: list[int]
+    unit_ids_combined: list[int]
 
     def __repr__(self):
         return (
@@ -1551,7 +1552,9 @@ class BaseMixtureModel(BModule):
     def unit_slice(self, unit_ids: Tensor) -> "TMMView":
         raise NotImplementedError
 
-    def get_params_at(self, indices: Tensor) -> tuple[Tensor, Tensor | None]:
+    def get_params_at(
+        self, indices: Tensor | list[int]
+    ) -> tuple[Tensor, Tensor | None]:
         raise NotImplementedError
 
     def get_lut(self) -> NeighborhoodLUT:
@@ -1594,6 +1597,7 @@ class BaseMixtureModel(BModule):
         responsibilities: Tensor | None,
         skip_full: bool,
         skip_single: bool,
+        focus_scoring: bool = False,
         debug: bool = False,
     ) -> GroupMergeResult:
         """Find an optimal partition of this model's units as a whole."""
@@ -1607,6 +1611,7 @@ class BaseMixtureModel(BModule):
             responsibilities=responsibilities,
             skip_full=skip_full,
             skip_single=skip_single,
+            focus_scoring=focus_scoring,
             debug=debug,
         )
 
@@ -2333,12 +2338,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # kmeans on interp whitened feats
         assert self.erp is not None
         kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
-            split_data,
+            data=split_data,
             k=self.split_k,
             erp=self.erp,
             gen=self.rg,
             feature_rank=self.noise.rank,
-            min_count=self.min_count,
+            min_count=self.min_count // 2,
+            min_channel_count=self.min_channel_count,
             debug=debug,
         )
         if kmeans_responsibilities is None and debug:
@@ -2555,6 +2561,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
         pair_mask: Tensor | None = None,
+        debug: bool = False,
     ) -> GroupMergeResult:
         if group.numel() <= 1:
             return
@@ -2584,6 +2591,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
             skip_full=False,
             skip_single=False,
+            focus_scoring=True,
+            debug=debug,
         )
         return group_res
 
@@ -2599,6 +2608,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         any_merged = False
 
         groups = self.group_units_for_merge()
+        groups = [g for g in groups if g.numel() > 1]
+
         logger.dartsortverbose("Merge groups: %s.", groups)
         if show_progress:
             groups = tqdm(groups, desc="Merge", smoothing=0.0)
@@ -2680,7 +2691,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return flat_map
 
-    def get_params_at(self, indices: Tensor):
+    def get_params_at(self, indices: Tensor | list[int]):
         m = self.b.means[indices]
         if self.signal_rank:
             b = self.b.bases[indices]
@@ -2969,7 +2980,7 @@ class TMMView(BaseMixtureModel):
         )
         self.tmm = tmm
 
-    def get_params_at(self, indices: Tensor):
+    def get_params_at(self, indices: Tensor | list[int]):
         # need this one!
         m = self.tmm.b.means[self.unit_ids[indices]]
         if self.signal_rank:
@@ -3079,7 +3090,7 @@ class TMMStack(BaseMixtureModel):
         lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
         return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
 
-    def get_params_at(self, indices: Tensor):
+    def get_params_at(self, indices: Tensor | list[int]):
         if not len(indices):
             m = torch.empty_like(self.tmms[0].b.means[:0])
             if self.signal_rank:
@@ -3512,6 +3523,7 @@ def initialize_parameters_by_unit(
 
 
 def _desparsifiers(unit_ids, candidates):
+    """Dense candidate array -> indices of >-1s and their positions in unit_ids"""
     unit_ids = torch.as_tensor(unit_ids, device=candidates.device)
     ii, jj = (candidates >= 0).nonzero(as_tuple=True)
     uu = candidates[ii, jj]
@@ -3524,6 +3536,7 @@ def _desparsifiers(unit_ids, candidates):
 
 
 def get_log_liks_matrix_from_scores(unit_ids: Tensor, scores: Scores) -> Tensor:
+    """Basically scores.log_liks, but grabs and reorders to match unit_ids on dim 1."""
     ii, jj, ix_in_unit_ids = _desparsifiers(unit_ids, scores.candidates)
     n = scores.log_liks.shape[0]
     log_liks = scores.log_liks.new_full((n, unit_ids.shape[0]), -torch.inf)
@@ -3532,6 +3545,7 @@ def get_log_liks_matrix_from_scores(unit_ids: Tensor, scores: Scores) -> Tensor:
 
 
 def get_responsibilities_matrix_from_scores(unit_ids: Tensor, scores: Scores) -> Tensor:
+    """Basically scores.responsibilities, but grabs and reorders to match unit_ids on dim 1."""
     assert scores.responsibilities is not None
     ii, jj, ix_in_unit_ids = _desparsifiers(unit_ids, scores.candidates)
     n = scores.responsibilities.shape[0]
@@ -3592,6 +3606,7 @@ def initialize_params_from_dense_data(
 def tree_groups(
     distances: Tensor, max_group_size: int, max_distance: float, link="complete"
 ) -> list[Tensor]:
+    """Extract groups up to size max_group_size and (@link-linked) distances out to size max_distance."""
     device = distances.device
     k = distances.shape[0]
     if k <= max_group_size and distances.max() <= max_distance:
@@ -3637,9 +3652,16 @@ def brute_merge(
     cur_unit_ids: Tensor,
     skip_full: bool,
     skip_single: bool,
-    max_fit_at_once: int = 8,
+    max_fit_at_once: int = 16,
     debug: bool = False,
+    focus_scoring: bool = False,
 ) -> GroupMergeResult:
+    """Brute-force model selection
+
+    Considering all partitions of cur_unit_ids into subgroups (obeying pair_mask),
+    fit candidate models and check their heldout validation criterion using eval_data.
+    Return the best one.
+    """
     if pair_mask is not None and pair_mask.sum() == pair_mask.shape[0]:
         return None
 
@@ -3649,6 +3671,11 @@ def brute_merge(
     if pnoid:
         cov = train_data.lut_coverage(mm.unit_ids, mm.get_lut())
         assert torch.equal(cov, train_full_scores.candidates >= 0)
+        assert torch.logical_or(
+            train_full_scores.candidates
+            == mm.unit_ids.to(train_full_scores.candidates),
+            train_full_scores.candidates == -1,
+        ).all()
         assert cov.any(dim=1).all()
     if responsibilities is None:
         responsibilities = F.softmax(train_full_scores.log_liks, dim=1)[:, : mm.n_units]
@@ -3658,7 +3685,7 @@ def brute_merge(
         mm.unit_ids, pair_mask, skip_full=skip_full, skip_single=skip_single
     )
     if debug:
-        logger.dartsortdebug(f"brute_merge partitions: {partitions}")
+        logger.dartsortdebug(f"brute_merge n partitions = {len(partitions)}.")
     n_subsets = len(subset_to_id)
     if not n_subsets:
         return None
@@ -3766,7 +3793,24 @@ def brute_merge(
     else:
         cur_resp = cur_scores.responsibilities
     assert cur_resp.shape == cur_scores.log_liks.shape
-    cur_crit = ecl(cur_resp, cur_scores.log_liks, cl_alpha=mm.cl_alpha)
+    cur_ecls = ecl(
+        cur_resp, cur_scores.log_liks, cl_alpha=mm.cl_alpha, reduce_mean=False
+    )
+    if focus_scoring:
+        cur_crit = torch.tensor(torch.inf)
+        if pnoid:
+            Nc = cur_scores.candidates.shape[1]
+            assert (
+                cur_scores.log_liks[:, 0, None] >= cur_scores.log_liks[:, :Nc]
+            ).all()
+        cur_choice = cur_scores.candidates[:, 0]
+        masks = {
+            u: (cur_choice == u).nonzero().squeeze()
+            for u in cur_unit_ids.cpu().tolist()
+        }
+    else:
+        masks = {}
+        cur_crit = cur_ecls.mean()
     if debug:
         h = entropy(cur_resp).item()
         logger.dartsortdebug(
@@ -3780,30 +3824,46 @@ def brute_merge(
     kfull = mm.n_units
     part_logliks = F.pad(rest_logliks, (0, kfull), value=-torch.inf)
     best_part = partitions[0]
-    best_score = torch.tensor(-torch.inf)
+    best_imp = torch.tensor(-torch.inf)
     for part in partitions:
         k1 = k0 + len(part.single_ixs)
         k2 = k1 + len(part.subset_ids)
         part_logliks[:, k0:k1] = crit_full_scores.log_liks[:, part.single_ixs]
         part_logliks[:, k1:k2] = crit_subset_scores.log_liks[:, part.subset_ids]
-
         part_resps = F.softmax(part_logliks[:, :k2], dim=1)
-        part_score = ecl(part_resps, part_logliks[:, :k2], cl_alpha=mm.cl_alpha)
+
+        if focus_scoring:
+            if part.unit_ids_combined:
+                part_mask = torch.concatenate(
+                    [masks[u] for u in part.unit_ids_combined]
+                )
+            else:
+                part_mask = slice(None)
+            part_ecls = ecl(
+                part_resps,
+                part_logliks[:, :k2],
+                cl_alpha=mm.cl_alpha,
+                reduce_mean=False,
+            )
+            cur_crit = cur_ecls[part_mask].mean()
+            part_score = part_ecls[part_mask].mean()
+        else:
+            part_score = ecl(part_resps, part_logliks[:, :k2], cl_alpha=mm.cl_alpha)
+        part_imp = part_score - cur_crit
         if debug:
-            imp = part_score - cur_crit
             h = entropy(part_resps).item()
             logger.dartsortdebug(
-                f"brute_merge {part} score {part_score.item():.4f} imp {imp:.4f} entropy {h:.4f}"
+                f"brute_merge {part} score {part_score.item():.4f} imp {part_imp:.4f} entropy {h:.4f}"
             )
         del part_resps
 
-        if part_score > best_score:
-            best_score = part_score
+        if part_imp > best_imp:
             best_part = part
+            best_imp = part_imp
 
     if pnoid:
         assert math.isfinite(cur_crit)
-        assert math.isfinite(best_score)
+        assert math.isfinite(best_imp)
 
     # spike assignments
     train_assignments = get_part_assignments(
@@ -3832,7 +3892,7 @@ def brute_merge(
 
     return SuccessfulGroupMergeResult(
         grouping=best_part,
-        improvement=(best_score - cur_crit).cpu().item(),
+        improvement=best_imp.cpu().item(),
         train_assignments=train_assignments,
         train_indices=train_data.indices,
         means=means,
@@ -3846,7 +3906,7 @@ def allowed_partitions(
     pair_mask: Tensor | None,
     skip_full: bool = False,
     skip_single: bool = False,
-):
+) -> tuple[list[GroupPartition], dict[tuple[int], int], dict[int, list[int]]]:
     n_units = unit_ids.numel()
     # this will be like 0,0,1,2 to indicate (uids[0],uids[1]),uids[2],uids[3]
     group_ids = torch.zeros_like(unit_ids)
@@ -3860,6 +3920,7 @@ def allowed_partitions(
             # partition is like [0, 1, 2], [3, 4]
             subset_ids = []
             single_ixs = []
+            uids_combined = []
             for j, p in enumerate(partition):
                 tp = tuple(p)
                 p = torch.tensor(p)
@@ -3868,8 +3929,10 @@ def allowed_partitions(
                     subset_to_id[tp] = subset_id
                     id_to_subset[subset_id] = p
                     subset_id += 1
+                    uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) > 1:
                     subset_ids.append(subset_to_id[tp])
+                    uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) == 1:
                     single_ixs.append(tp[0])
                 else:
@@ -3887,6 +3950,7 @@ def allowed_partitions(
                     n_groups=n_groups,
                     single_ixs=single_ixs,
                     subset_ids=subset_ids,
+                    unit_ids_combined=uids_combined,
                 )
                 group_partitions.append(group_partition)
 
@@ -3908,11 +3972,13 @@ def get_part_assignments(
 
 
 def try_kmeans(
+    *,
     data: DenseSpikeData,
     k: int,
     erp: NeighborhoodFiller,
     gen: torch.Generator,
     min_count: int,
+    min_channel_count: int,
     feature_rank: int,
     n_iter: int = 100,
     with_proportions: bool = True,
@@ -3924,7 +3990,7 @@ def try_kmeans(
     whiten: bool = False,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
-    channels = data.covered_channels(min_count)
+    channels = data.covered_channels(min_channel_count)
     if whiten:
         erp_x = data.whitenedx.view(data.x.shape[0], feature_rank, -1)
     else:
@@ -3958,6 +4024,9 @@ def try_kmeans(
 
 def labels_from_scores(scores: Scores) -> np.ndarray:
     """Pick either top candidate or noise."""
+    if pnoid:
+        Nc = scores.candidates.shape[1]
+        assert (scores.log_liks[:, 0, None] >= scores.log_liks[:, :Nc]).all()
     labels = scores.candidates[:, 0].clone()
     noise_better = scores.log_liks[:, -1] > scores.log_liks[:, 0]
     labels.masked_fill_(noise_better, -1)
@@ -4145,10 +4214,13 @@ def _initialize_single(
     chans: Tensor,
     noise: EmbeddedNoise,
     rank: int,
-    prior_pseudocount: float,
+    prior_pseudocount: float = 0.0,
     weight: Tensor | None = None,
     eps: float = 1e-5,
     mean: Tensor | None = None,
+    n_oversamples: int = 10,
+    niter: int = 21,
+    full_svd: bool = False,
 ):
     """
     Replaces ppcalib initialize_mean and the branch where SVD was done in ppcalib.
@@ -4192,8 +4264,6 @@ def _initialize_single(
         mean = mean.view(d, c)
         return mean, None
 
-    q = min(n, d * c, 10 + rank)
-
     # we want x(C^-0.5)=xU^-1 -- need to use upper factor.
     noise_cov = noise.marginal_covariance(chans)
     U = torch.linalg.cholesky(noise_cov, upper=True).to_dense()
@@ -4207,21 +4277,29 @@ def _initialize_single(
         x *= weight.sqrt()[:, None]
 
     # NB they return V not Vh here, so rank dim comes last
-    _, s, V = torch.svd_lowrank(x, q=q, niter=7)
-    s = s[:rank]
-    V = V[:, :rank]
+    if full_svd:
+        _, s, Vh = torch.linalg.svd(x.double(), driver="gesvd")
+        V = Vh.T
+    else:
+        q = min(n, d * c, n_oversamples + rank)
+        _, s, V = torch.svd_lowrank(x.double(), q=q, niter=niter)
+    s = s[:rank].float()
+    V = V[:, :rank].float()
 
     # convert to eigvals
     if weight is None:
-        s = s.square_().div_(max(1.0, n - 1.0))
+        s = s.div_(math.sqrt(max(1.0, n - 1.0))).square_()
     else:
         s = s.square_().div_(wsum.sub_(1.0).clamp_(min=1.0))
 
     # extra 1 was picked up from identity in whitened space, remove and
     # compute the low rank factor that remains, which is our basis
+    flip = sign(V.diagonal(dim1=-2, dim2=-1))
     s = s.sub_(1.0).clamp_(min=eps)
-    W = V.mul_(s.sqrt_().mul_(sign(V.diagonal(dim1=-2, dim2=-1))))
-    W = U.T @ W
+    ev = s.sqrt_()
+    W = V.mul_(ev.mul_(flip))
+    # W = U.T @ W
+    W = U @ W
 
     mean = mean.view(d, c)
     # TODO build this the other way

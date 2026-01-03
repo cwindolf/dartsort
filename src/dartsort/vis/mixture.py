@@ -60,6 +60,9 @@ class MixtureVisData:
     def times_seconds(self):
         return self.sorting.times_seconds  # type: ignore
 
+    def to_sorting(self) -> DARTsortSorting:
+        return self.sorting.ephemeral_replace(labels=self.full_labels)
+
     def inu_and_times_full(self, unit_id: int):
         inu_full = np.flatnonzero(self.full_labels == unit_id)
         times = self.times_seconds[inu_full]
@@ -400,6 +403,7 @@ class MergeView(MixtureComponentPlot):
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
             pair_mask=pair_mask,
+            debug=True,
         )
 
         return neighbors, pair_mask, group_res
@@ -1077,12 +1081,8 @@ def make_mixture_summaries(
     if not overwrite and all_summaries_done(unit_ids, save_folder, ext=image_ext):
         return
 
-    assert hasattr(mix_data, "log_liks")
-
     save_folder.mkdir(exist_ok=True, parents=True)
-
     global_params = dict(**other_global_params)
-
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
 
     initargs = (
@@ -1212,7 +1212,6 @@ def _summary_job(unit_id):
 def vis_split_interpolation(
     mix_data: MixtureVisData,
     unit_id: int,
-    debug_info: UnitSplitDebugInfo | None = None,
     erp: NeighborhoodFiller | None = None,
     whiten: bool = True,
     figscale=5,
@@ -1230,12 +1229,13 @@ def vis_split_interpolation(
     assert split_data is not None
 
     kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
-        split_data,
+        data=split_data,
         k=mix_data.tmm.split_k,
         erp=erp,
         gen=mix_data.tmm.rg,
         feature_rank=mix_data.tmm.noise.rank,
         min_count=mix_data.tmm.min_count,
+        min_channel_count=mix_data.tmm.min_channel_count,
         debug=True,
         whiten=whiten,
     )

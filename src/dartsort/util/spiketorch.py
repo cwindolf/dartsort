@@ -119,6 +119,7 @@ def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
     return oelbo
 
 
+@torch.jit.script
 def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     logP = log_liks.nan_to_num(neginf=0.0)
@@ -128,18 +129,24 @@ def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) ->
     return oelbo
 
 
-def entropy(Q, reduce_mean=True, dim=1) -> Tensor:
-    Qpos = Q > 0
-    logQ = torch.where(Qpos, Q, _1).log_()
+@torch.jit.script
+def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
+    logQ = Q.log().nan_to_num_(neginf=0.0)
     H = logQ.mul_(Q).sum(dim=dim)
     if reduce_mean:
         H = H.mean()
     return H.neg_()
 
 
-def ecl(resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0) -> Tensor:
-    h = entropy(resps, dim=1, reduce_mean=True)
-    crit = log_liks.logsumexp(dim=1).mean() - cl_alpha * h
+@torch.jit.script
+def ecl(
+    resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
+) -> Tensor:
+    h = entropy(resps, dim=1, reduce_mean=reduce_mean)
+    log_lik = log_liks.logsumexp(dim=1)
+    if reduce_mean:
+        log_lik = log_lik.mean()
+    crit = log_lik - cl_alpha * h
     return crit
 
 

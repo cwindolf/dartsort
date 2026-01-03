@@ -651,7 +651,7 @@ class RefinementConfig:
     laplace_ard: bool = False
     kmeansk: int = 3
     noise_fp_correction: bool = False
-    full_proposal_every: int = 20
+    full_proposal_every: int = 10
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None

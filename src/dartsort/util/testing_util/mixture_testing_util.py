@@ -57,6 +57,8 @@ def simulate_moppca(
         clus_mask = np.zeros((K, nc))
         for j, n in enumerate(clus_neighbs):
             clus_mask[j, n] = 1.0
+    if t_missing in (None, "none"):
+        n_missing = 0
 
     if t_mu == "zero":
         mu = np.zeros((K, rank, nc))
@@ -216,6 +218,7 @@ def simulate_moppca(
     )
 
     data = data.to(device)
+    x = x.to(device)
     noise = noise.to(device)
     neighbs = neighbs.to(device)
     noise_log_priors = noise.detection_prior_log_prob(mu)
