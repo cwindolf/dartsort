@@ -9,6 +9,7 @@ from .cluster import (
     get_clustering_features,
     kmeans,
     merge,
+    postprocess_util,
     postprocess,
     ppcalib,
     refinement_strategies,

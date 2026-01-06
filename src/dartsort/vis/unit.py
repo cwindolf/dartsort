@@ -25,7 +25,7 @@ from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloud
 from . import layout
 from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
 from .colors import glasbey1024
-from .waveforms import geomplot
+from .waveforms import geomplot, geomplot_templates
 
 # -- main class. see fn make_unit_summary below to make lots of UnitPlots.
 
@@ -312,7 +312,7 @@ class WaveformPlot(UnitPlot):
             axis = panel.subplots()
 
         waves = self.get_waveforms(sorting_analysis, unit_id)
-        tslice = None if waves is None else waves.temporal_slice 
+        tslice = None if waves is None else waves.temporal_slice
         trough_offset_samples = sorting_analysis.trough_offset_samples
         spike_length_samples = sorting_analysis.spike_length_samples
         if tslice is not None and tslice.start is not None:
@@ -369,7 +369,9 @@ class WaveformPlot(UnitPlot):
         if show_template:
             assert templates is not None
             if waves is None:
-                showchans = sorting_analysis.vis_channel_index[sorting_analysis.unit_max_channel(unit_id)]
+                showchans = sorting_analysis.vis_channel_index[
+                    sorting_analysis.unit_max_channel(unit_id)
+                ]
                 geom = sorting_analysis.registered_geom
             else:
                 showchans = waves.channel_index[waves.main_channel]
@@ -451,47 +453,18 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors
         )
-        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
         if not np.equal(neighbor_ids, unit_id).any():
             axis.axis("off")
             return
         assert neighbor_ids[0] == unit_id
-        chan = np.ptp(neighbor_coarse_templates[0], 0).argmax()
-        ci = sorting_analysis.vis_channel_index
-        channels = ci[chan]
-        neighbor_coarse_templates = np.pad(
+        geomplot_templates(
+            axis,
+            neighbor_ids,
             neighbor_coarse_templates,
-            [(0, 0), (0, 0), (0, 1)],
-            constant_values=np.nan,
+            sorting_analysis.vis_channel_index,
+            sorting_analysis.registered_geom,
+            title="",
         )
-        neighbor_coarse_templates = neighbor_coarse_templates[:, :, channels]
-        maxamp = np.nanmax(np.abs(neighbor_coarse_templates))
-
-        labels = []
-        handles = []
-        for uid, color, template in reversed(
-            list(zip(neighbor_ids, colors, neighbor_coarse_templates))
-        ):
-            lines = geomplot(
-                template[None],
-                max_channels=[chan],
-                channel_index=ci,
-                geom=sorting_analysis.registered_geom,
-                ax=axis,
-                show_zero=False,
-                max_abs_amp=maxamp,
-                subar=True,
-                bar_color="k",
-                bar_background="w",
-                zlim="tight",
-                color=color,
-            )
-            labels.append(str(uid))
-            handles.append(lines)
-        axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
-        axis.set_xticks([])
-        axis.set_yticks([])
-        axis.set_title(self.title)
 
 
 class CoarseTemplateDistancePlot(UnitPlot):
@@ -575,7 +548,9 @@ class NeighborCCGPlot(UnitPlot):
         neighbor_ids = neighbor_ids[1:]
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
-        my_st = sorting_analysis.sorting.times_samples[sorting_analysis.in_unit(unit_id)]
+        my_st = sorting_analysis.sorting.times_samples[
+            sorting_analysis.in_unit(unit_id)
+        ]
         neighb_sts = [
             sorting_analysis.sorting.times_samples[sorting_analysis.in_unit(nid)]
             for nid in neighbor_ids

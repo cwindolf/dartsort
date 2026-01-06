@@ -153,7 +153,7 @@ def distance_matrix_dendro(
     dendrogram_threshold=0.25,
     show_unit_labels=False,
     vmax=1.0,
-    image_cmap: str | Colormap="RdGy",
+    image_cmap: str | Colormap = "RdGy",
     show_values=False,
     show_values_from=None,
     label_colors=glasbey1024,
