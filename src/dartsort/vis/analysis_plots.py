@@ -155,6 +155,7 @@ def distance_matrix_dendro(
     vmax=1.0,
     image_cmap: str | Colormap="RdGy",
     show_values=False,
+    show_values_from=None,
     label_colors=glasbey1024,
     label=None,
     hspace=0.01,
@@ -164,6 +165,8 @@ def distance_matrix_dendro(
     show_dendrogram = dendrogram_linkage is not None
     dendro_width = (0.7,) if show_dendrogram else ()
     cbar_width = (0.15,) if with_colorbar else ()
+    if show_values_from is None:
+        show_values_from = distances
 
     gs = panel.add_gridspec(
         nrows=3,
@@ -211,7 +214,7 @@ def distance_matrix_dendro(
     if show_values:
         sc = 10 if show_dendrogram else 1
         so = 5 if show_dendrogram else 0
-        for (j, i), val in np.ndenumerate(distances[order][:, order]):
+        for (j, i), val in np.ndenumerate(show_values_from[order][:, order]):
             lc = invert(image_cmap(val / vmax))
             ax_im.text(
                 so + sc * i,

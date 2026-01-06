@@ -561,6 +561,37 @@ class EmbeddedNoise(torch.nn.Module):
             self._full_inverse = self._full_inverse.to(device)
         return self._full_inverse
 
+    def cov_batch_mul(
+        self, x: torch.Tensor, channels_src: torch.Tensor, channels_targ: torch.Tensor
+    ):
+        assert x.ndim == 3
+        n = x.shape[0]
+        assert x.shape[2] == channels_src.shape[1]
+        assert channels_src.ndim == 2
+        assert channels_src.shape[0] == n
+        if channels_targ.ndim == 2:
+            assert channels_targ.shape[0] == n
+        else:
+            assert channels_targ.ndim == 1
+
+        if self.cov_kind != "factorized":
+            raise NotImplementedError(
+                f"Need to implement cov_batch_mul for {self.cov_kind=}."
+            )
+
+        rank_root = self.rank_vt.T * self.rank_std  # type: ignore
+        rank_cov = cast(torch.Tensor, rank_root @ rank_root.T)
+        rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
+        x = rank_cov.bmm(x)
+
+        chan_root_left = self.channel_vt_zpad.T[channels_src] * self.channel_std  # type: ignore
+        chan_root_right = self.channel_vt_zpad.T[channels_targ] * self.channel_std  # type: ignore
+        if chan_root_right.ndim == 2:
+            targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
+            chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
+        chan_cov = chan_root_left.bmm(chan_root_right.mT)
+        return x.bmm(chan_cov)
+
     def cov_batch(self, channels_left: torch.Tensor, channels_right: torch.Tensor):
         if self.cov_kind != "factorized":
             raise NotImplementedError(

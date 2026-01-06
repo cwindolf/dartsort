@@ -1,6 +1,6 @@
 """Library for flavors of kernel interpolation and data interp utilities"""
 
-from typing import Protocol, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -121,17 +121,16 @@ def interpolate_by_chunk(
         channel_index=channel_index,
         params=params,
     )
-
-    for ixs, chunk_features in yield_masked_chunks(
+    for sli, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
     ):
         # interpolate, store
         chunk_features = torch.from_numpy(chunk_features).to(device)
-        out[ixs] = erp.interp(
+        out[sli] = erp.interp(
             features=chunk_features,
-            source_main_channels=channels[ixs].to(device),
-            target_channels=target_channels[ixs],
-            source_shifts=shifts[ixs].to(device),
+            source_main_channels=channels[sli].to(device),
+            target_channels=target_channels[sli],
+            source_shifts=shifts[sli].to(device),
             allow_destroy=True,
         ).to(out)
 
@@ -784,25 +783,60 @@ class StableFeaturesInterpolator(BModule):
         )
 
 
-class NeighborhoodFiller(Protocol):
+class NeighborhoodFiller(BModule):
+    batch_size: int
+
     def interp_to_chans(
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
         target_channels: torch.Tensor | slice,
-    ) -> torch.Tensor: ...
+        out: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if waveforms.shape[0] <= self.batch_size and out is None:
+            return self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
+
+        if torch.is_tensor(target_channels):
+            assert target_channels.ndim == 1
+            ntarg = target_channels.shape[0]
+        else:
+            ntarg = len(range(*target_channels.indices(len(self.b.prgeom))))
+        out_shp = (*waveforms.shape[:2], ntarg)
+        if out is None:
+            out = waveforms.new_zeros(out_shp)
+        else:
+            assert out.shape == out_shp
+        n = out.shape[0]
+        for i0 in range(0, n, self.batch_size):
+            i1 = min(n, i0 + self.batch_size)
+            out[i0:i1] = self._interp_to_chans(
+                waveforms=waveforms[i0:i1],
+                neighborhood_ids=neighborhood_ids[i0:i1],
+                target_channels=target_channels,
+            )
+        return out
+
+    def _interp_to_chans(
+        self,
+        waveforms: torch.Tensor,
+        neighborhood_ids: torch.Tensor,
+        target_channels: torch.Tensor | slice,
+    ) -> torch.Tensor:
+        raise NotImplementedError
 
 
-class NeighborhoodInterpolator(BModule):
+class NeighborhoodInterpolator(NeighborhoodFiller):
     def __init__(
         self,
         prgeom: torch.Tensor,
         neighborhoods: SpikeNeighborhoods,
         params: InterpolationParams = default_interpolation_params,
+        batch_size: int = 1024,
     ):
         super().__init__()
         assert len(prgeom) == neighborhoods.n_channels + 1
         self.params: InterpolationParams = params.normalize()
+        self.batch_size = batch_size
         self.register_buffer("prgeom", prgeom.clone())
         self.b.prgeom[-1].fill_(torch.nan)
         neighb_data = interp_precompute(
@@ -814,7 +848,7 @@ class NeighborhoodInterpolator(BModule):
         self.register_buffer_or_none("neighb_data", neighb_data)
         self.register_buffer("neighb_pos", self.b.prgeom[neighborhoods.b.neighborhoods])
 
-    def interp_to_chans(
+    def _interp_to_chans(
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
@@ -838,8 +872,13 @@ class NeighborhoodInterpolator(BModule):
         )
 
 
-class NeighborhoodImputer(BModule):
-    def __init__(self, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods):
+class NeighborhoodImputer(NeighborhoodFiller):
+    def __init__(
+        self,
+        noise: EmbeddedNoise,
+        neighborhoods: SpikeNeighborhoods,
+        batch_size: int = 1024,
+    ):
         super().__init__()
         prec = all_neighb_precisions(noise, neighborhoods)
         self.register_buffer("prec", prec)
@@ -847,8 +886,9 @@ class NeighborhoodImputer(BModule):
         self.register_buffer("chans_arange", chans_arange)
         self.neighborhoods = neighborhoods
         self.noise = noise
+        self.batch_size = batch_size
 
-    def interp_to_chans(
+    def _interp_to_chans(
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
@@ -857,12 +897,12 @@ class NeighborhoodImputer(BModule):
         if not torch.is_tensor(target_channels):
             target_channels = self.b.chans_arange[target_channels]
         source_channels = self.neighborhoods.b.neighborhoods[neighborhood_ids]
-        kernel = self.noise.cov_batch(source_channels, target_channels).to_dense()
+
         waveforms = waveforms.view(waveforms.shape[0], 1, -1)
         waveforms = waveforms.bmm(self.b.prec[neighborhood_ids])
-        # waveforms = waveforms.view(waveforms.shape[0], -1)
-        waveforms = torch.bmm(waveforms, kernel)
-        return waveforms.view(waveforms.shape[0], self.noise.rank, -1)
+        waveforms = waveforms.view(waveforms.shape[0], self.noise.rank, -1)
+
+        return self.noise.cov_batch_mul(waveforms, source_channels, target_channels)
 
 
 class FullProbeInterpolator(BModule):

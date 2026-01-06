@@ -621,7 +621,8 @@ class RefinementConfig:
     train_batch_size: int = 512
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
-    merge_distance_threshold: float = 0.75
+    split_distance_threshold: float = 1.0
+    merge_distance_threshold: float = 0.9
     criterion_threshold: float | None = 0.0
     criterion: Literal[
         "heldout_loglik",

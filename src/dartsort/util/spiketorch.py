@@ -164,6 +164,11 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
     return waveforms * window.to(waveforms)
 
 
+def minmax(x: np.ndarray) -> np.ndarray:
+    x = x - np.min(x)
+    return x / np.max(x)
+
+
 def svd_lowrank_helper(
     x: Tensor,
     rank: int,
@@ -585,6 +590,17 @@ def cosine_distance(means, means_b=None, true_distance=True):
         dist.diagonal().fill_(0.0)
     if true_distance:
         dist.mul_(2.0).sqrt_()
+    return dist
+
+
+def normeuc_distance(means):
+    """|a-b|/sqrt(|a||b|)"""
+    means = means.reshape(means.shape[0], -1)
+    norms_sqrt = means.square().sum(dim=1).sqrt_().sqrt_()
+    dist = torch.cdist(means, means)
+    dist.div_(norms_sqrt[:, None])
+    dist.div_(norms_sqrt[None, :])
+    dist.diagonal().zero_()
     return dist
 
 

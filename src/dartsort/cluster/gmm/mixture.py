@@ -59,9 +59,9 @@ from ...util.internal_config import (
     RefinementConfig,
 )
 from ...util.interpolation_util import (
-    NeighborhoodInterpolator,
     NeighborhoodFiller,
     NeighborhoodImputer,
+    NeighborhoodInterpolator,
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
@@ -73,6 +73,7 @@ from ...util.spiketorch import (
     ecl,
     entropy,
     mean_elbo_dim1,
+    normeuc_distance,
     sign,
     spawn_torch_rg,
 )
@@ -171,6 +172,9 @@ def tmm_demix(
 
 
 # -- shared objects holding precomputed neighborhood-related data
+
+
+ComponentDistanceMetric = Literal["cosine", "normeuc"]
 
 
 class MixtureModelAndDatasets(NamedTuple):
@@ -1517,8 +1521,9 @@ class BaseMixtureModel(BModule):
         *,
         max_group_size: int,
         max_distance: float,
+        merge_max_distance: float,
         unit_ids: Tensor,
-        distance_kind: Literal["cosine"] = "cosine",
+        distance_kind: ComponentDistanceMetric = "cosine",
         signal_rank: int,
         neighb_cov: NeighborhoodCovariance,
         noise: EmbeddedNoise,
@@ -1535,6 +1540,7 @@ class BaseMixtureModel(BModule):
         self.max_group_size = max_group_size
         self.min_channel_count = min_channel_count
         self.max_distance = max_distance
+        self.merge_max_distance = merge_max_distance
         self.unit_ids = unit_ids
         self.n_units = unit_ids.shape[0]
         self.signal_rank = signal_rank
@@ -1584,7 +1590,7 @@ class BaseMixtureModel(BModule):
         return tree_groups(
             distances,
             max_group_size=self.max_group_size,
-            max_distance=self.max_distance,
+            max_distance=self.merge_max_distance,
         )
 
     def merge_as_group_on_data_subset(
@@ -1618,6 +1624,8 @@ class BaseMixtureModel(BModule):
     def unit_distance_matrix(self) -> Tensor:
         if self.distance_kind == "cosine":
             return cosine_distance(self.centroids)
+        elif self.distance_kind == "normeuc":
+            return normeuc_distance(self.centroids)
         else:
             assert False
 
@@ -1630,6 +1638,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         *,
         max_group_size: int,
         max_distance: float,
+        merge_max_distance: float,
         split_k: int,
         log_proportions: Tensor,
         means: Tensor,
@@ -1644,7 +1653,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         prior_pseudocount: float,
         cl_alpha: float,
         full_proposal_every: int = 10,
-        distance_kind: Literal["cosine"] = "cosine",
+        distance_kind: ComponentDistanceMetric = "cosine",
         lut_puff: float = 1.5,
         seed: int | np.random.Generator | torch.Generator = 0,
         min_channel_count: int = 1,
@@ -1655,6 +1664,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             distance_kind=distance_kind,
             max_group_size=max_group_size,
             max_distance=max_distance,
+            merge_max_distance=merge_max_distance,
             min_channel_count=min_channel_count,
             unit_ids=torch.arange(means.shape[0], device=log_proportions.device),
             signal_rank=bases.shape[2] if bases is not None else 0,
@@ -1704,6 +1714,36 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.rg = spawn_torch_rg(seed, device=means.device)
         self.lut_params = None
 
+    def change_rank(
+        self, new_signal_rank: int, train_data: TruncatedSpikeData, train_scores: Scores
+    ):
+        assert self.b.bases is None
+        assert self.signal_rank == 0
+        if new_signal_rank == 0:
+            return
+        _, _, _means, bases = initialize_parameters_by_unit(
+            scores=train_scores,
+            data=train_data,
+            signal_rank=new_signal_rank,
+            noise=self.noise,
+            erp=self.erp,
+            gen=self.rg,
+            min_channel_count=self.min_channel_count,
+            prior_pseudocount=self.prior_pseudocount,
+            rank0_model=self,
+        )
+        assert _means is None
+        assert bases is not None
+        assert bases.shape[0] == self.n_units
+        assert bases.shape[1] == new_signal_rank
+        assert bases.shape[2] == self.b.means.shape[1]
+        self.del_none_buffer("bases")
+        self.register_buffer("bases", bases)
+        self.signal_rank = new_signal_rank
+        self.lut_params = None
+        gc.collect()
+        self.update_lut(self.lut)
+
     def get_lut(self):
         return self.lut
 
@@ -1714,6 +1754,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighb_cov: NeighborhoodCovariance,
         max_group_size: int,
         max_distance: float,
+        merge_max_distance: float,
         signal_rank: int,
         split_k: int,
         data: TruncatedSpikeData,
@@ -1726,7 +1767,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         prior_pseudocount: float,
         cl_alpha: float,
         full_proposal_every: int = 10,
-        distance_kind: Literal["cosine"] = "cosine",
+        distance_kind: ComponentDistanceMetric = "cosine",
         min_channel_count: int = 1,
         elbo_atol: float = 1e-4,
     ) -> Self:
@@ -1742,11 +1783,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             prior_pseudocount=prior_pseudocount,
             puff=split_k,
         )
+        assert means is not None
         return cls(
             neighb_cov=neighb_cov,
             erp=erp,
             max_group_size=max_group_size,
             max_distance=max_distance,
+            merge_max_distance=merge_max_distance,
             distance_kind=distance_kind,
             log_proportions=log_props,
             split_k=split_k,
@@ -1787,8 +1830,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
             seed=seed,
             max_group_size=refinement_cfg.merge_group_size,
             data=train_data,
-            max_distance=refinement_cfg.merge_distance_threshold,
-            signal_rank=refinement_cfg.signal_rank,
+            max_distance=refinement_cfg.split_distance_threshold,
+            merge_max_distance=refinement_cfg.merge_distance_threshold,
+            signal_rank=0
+            if refinement_cfg.initialize_at_rank_0
+            else refinement_cfg.signal_rank,
             min_count=refinement_cfg.min_count,
             split_k=refinement_cfg.kmeansk,
             min_channel_count=refinement_cfg.channels_count_min,
@@ -1813,6 +1859,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         noise: EmbeddedNoise,
         max_group_size: int,
         max_distance: float,
+        merge_max_distance: float,
         neighb_cov: NeighborhoodCovariance,
         min_iter: int,
         max_iter: int,
@@ -1867,6 +1914,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self = cls(
             max_group_size=max_group_size,
             max_distance=max_distance,
+            merge_max_distance=merge_max_distance,
             min_count=min_count,
             min_channel_count=min_channel_count,
             split_k=0,
@@ -2326,9 +2374,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         debug: bool = False,
     ) -> tuple[UnitSplitResult, UnitSplitDebugInfo | None]:
         # get dense train set slice in unit_id
-        min_count_split = 2 * self.min_count
         split_data = train_data.dense_slice_by_unit(
-            unit_id, gen=self.rg, min_count=min_count_split
+            unit_id, gen=self.rg, min_count=self.min_count
         )
         if split_data is None and debug:
             return None, UnitSplitDebugInfo(bailed=True, bail_reason="count")
@@ -2343,7 +2390,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=self.erp,
             gen=self.rg,
             feature_rank=self.noise.rank,
-            min_count=self.min_count // 2,
+            min_count=self.min_count // 10,
             min_channel_count=self.min_channel_count,
             debug=debug,
         )
@@ -2372,6 +2419,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 noise=self.noise,
                 max_group_size=self.max_group_size,
                 max_distance=self.max_distance,
+                merge_max_distance=self.merge_max_distance,
                 neighb_cov=self.neighb_cov,
                 min_iter=self.criterion_em_iters,
                 max_iter=self.em_iters,
@@ -2591,7 +2639,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
             skip_full=False,
             skip_single=False,
-            focus_scoring=True,
+            # focus_scoring=True,
             debug=debug,
         )
         return group_res
@@ -2964,6 +3012,7 @@ class TMMView(BaseMixtureModel):
     def __init__(self, tmm: TruncatedMixtureModel, unit_ids: Tensor):
         super().__init__(
             max_distance=tmm.max_distance,
+            merge_max_distance=tmm.merge_max_distance,
             max_group_size=tmm.max_group_size,
             unit_ids=torch.as_tensor(unit_ids, device=tmm.unit_ids.device),
             distance_kind=tmm.distance_kind,  # type: ignore
@@ -3049,6 +3098,7 @@ class TMMStack(BaseMixtureModel):
 
         super().__init__(
             max_distance=tmms[0].max_distance,
+            merge_max_distance=tmms[0].merge_max_distance,
             max_group_size=tmms[0].max_group_size,
             unit_ids=self.unit_ids,
             distance_kind=tmm.distance_kind,  # type: ignore
@@ -3387,6 +3437,22 @@ def instantiate_and_bootstrap_tmm(
     lut = train_data.bootstrap_candidates(D)
     tmm.update_lut(lut)
 
+    if refinement_cfg.initialize_at_rank_0 and refinement_cfg.signal_rank > 0:
+        tmm.em(train_data)
+        scores = tmm.soft_assign(
+            data=train_data,
+            full_proposal_view=True,
+            needs_bootstrap=False,
+        )
+        tmm.change_rank(
+            new_signal_rank=refinement_cfg.signal_rank,
+            train_data=train_data,
+            train_scores=scores,
+        )
+        logger.dartsortdebug(
+            f"Update signal rank from 0->{tmm.signal_rank} after first EM round."
+        )
+
     return MixtureModelAndDatasets(tmm, train_data, val_data, full_data, train_ixs)
 
 
@@ -3466,14 +3532,25 @@ def initialize_parameters_by_unit(
     erp: NeighborhoodFiller,
     prior_pseudocount: float,
     gen: torch.Generator,
+    scores: Scores | None = None,
     min_channel_count: int = 1,
+    rank0_model: TruncatedMixtureModel | None = None,
+    K: int | None = None,
     puff=1.0,
 ):
-    units, counts = data.candidates[:, 0].unique(return_counts=True)
-    K = int(units.amax().item()) + 1
+    if scores is None:
+        labels = data.candidates[:, 0]
+    else:
+        labels = labels_from_scores_(scores)
+    units, counts = labels.unique(return_counts=True)
+    K_ = int(units.amax().item()) + 1
+    if K is None:
+        K = K_
+    else:
+        assert K >= K_
     counts = counts[units >= 0]
     units = units[units >= 0]
-    assert units.shape == (K,)
+    assert units.shape == (K_,)
     feat_rank = noise.rank
     nc = data.neighborhoods.n_channels
 
@@ -3481,26 +3558,40 @@ def initialize_parameters_by_unit(
 
     # do log_softmax in separate tensor (tmp) so that noise_log_prop is not
     # a view of an element of log_proportions buffer
-    log_proportions = torch.zeros((puff_K + 1,), device=counts.device)
-    log_proportions = log_proportions.resize_(K)
-    tmp = log_proportions.new_empty((K + 1,))
-    tmp[:K] = counts.float()
-    tmp[-1] = tmp[:K].mean()
-    tmp = F.log_softmax(tmp.log_(), dim=0)
-    noise_log_prop = tmp[-1].clone()
-    log_proportions.copy_(tmp[:K])
+    if rank0_model is None:
+        log_proportions = torch.zeros((puff_K + 1,), device=counts.device)
+        log_proportions = log_proportions.resize_(K)
+        tmp = log_proportions.new_empty((K + 1,))
+        tmp[:K] = counts.float()
+        tmp[-1] = tmp[:K].mean()
+        tmp = F.log_softmax(tmp.log_(), dim=0)
+        noise_log_prop = tmp[-1].clone()
+        log_proportions.copy_(tmp[:K])
+    else:
+        log_proportions = rank0_model.b.log_proportions
+        noise_log_prop = rank0_model.b.noise_log_prop
 
     dev = data.noise_logliks.device
-    means = torch.zeros((puff_K, feat_rank, nc), device=dev)
-    means = means.resize_(K, *means.shape[1:])
+    if rank0_model is None:
+        means = torch.zeros((puff_K, feat_rank, nc), device=dev)
+        means = means.resize_(K, *means.shape[1:])
+    else:
+        means = None
     if signal_rank:
         bases = torch.zeros((puff_K, signal_rank, feat_rank, nc), device=dev)
         bases = bases.resize_(K, *bases.shape[1:])
     else:
         bases = None
-    for k in range(K):
+    for k in units:
         kdata = data.dense_slice_by_unit(k, gen=gen)
         assert kdata is not None
+        if scores is not None:
+            assert scores.responsibilities is not None
+            if pnoid:
+                assert (scores.candidates[kdata.indices, 0] == k).all()
+            kweight = scores.responsibilities[kdata.indices, 0]
+        else:
+            kweight = None
         ((kc, km, ks),), _ = initialize_params_from_dense_data(
             kdata,
             erp=erp,
@@ -3508,14 +3599,18 @@ def initialize_parameters_by_unit(
             noise=noise,
             min_channel_count=min_channel_count,
             prior_pseudocount=prior_pseudocount,
+            mean=rank0_model.b.means[k] if rank0_model is not None else None,
+            single_weight=kweight,
         )
-        means[k, :, kc] = km
+        if means is not None:
+            means[k, :, kc] = km
         if bases is not None:
             assert ks is not None
             bases[k, :, :, kc] = ks
 
     # flatten
-    means = means.view(K, -1)
+    if means is not None:
+        means = means.view(K, -1)
     if bases is not None:
         bases = bases.view(K, signal_rank, -1)
 
@@ -3560,8 +3655,10 @@ def initialize_params_from_dense_data(
     erp: NeighborhoodFiller,
     noise: EmbeddedNoise,
     prior_pseudocount: float,
+    mean: Tensor | None = None,
     min_channel_count: int = 1,
     weights: Tensor | None = None,
+    single_weight: Tensor | None = None,
 ) -> tuple[list[tuple[Tensor, Tensor, Tensor | None]], Tensor | None]:
     """Weighted mean and basis, possibly by multiple weight vectors at once.
 
@@ -3576,12 +3673,22 @@ def initialize_params_from_dense_data(
 
     x_erp = data.x.view(data.x.shape[0], noise.rank, -1)
     x = erp.interp_to_chans(x_erp, data.neighborhood_ids, target_channels=covered_chans)
-
+    if mean is not None:
+        mean = mean.view(noise.rank, -1)[:, covered_chans]
     if weights is None:
-        mean, W = _initialize_single(x, covered_chans, noise, rank, prior_pseudocount)
+        mean, W = _initialize_single(
+            x,
+            covered_chans,
+            noise,
+            rank,
+            prior_pseudocount,
+            mean=mean,
+            weight=single_weight,
+        )
         return [(covered_chans, mean, W)], None
 
     # weighted case. re-choose channel neighborhoods.
+    assert mean is None
     subsets, full_coverage = data.weighted_covered_channels(
         weights=weights, within=covered_chans, min_count=min_channel_count
     )
@@ -3711,6 +3818,7 @@ def brute_merge(
                 noise=mm.noise,
                 max_group_size=mm.max_group_size,
                 max_distance=mm.max_distance,
+                merge_max_distance=mm.max_distance,
                 neighb_cov=mm.neighb_cov,
                 min_iter=mm.criterion_em_iters,
                 max_iter=mm.em_iters,
@@ -3985,7 +4093,7 @@ def try_kmeans(
     drop_prop: float = 0.025,
     kmeanspp_initial="random",
     n_kmeans_tries: int = 10,
-    n_kmeanspp_tries: int = 10,
+    n_kmeanspp_tries: int = 25,
     debug: bool = False,
     whiten: bool = False,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
@@ -4015,14 +4123,16 @@ def try_kmeans(
     if resps is None:
         return None, x_ret, channels
     assert resps.shape[1] <= k
-    (big_enough,) = (resps.sum(dim=0) >= min_count).nonzero(as_tuple=True)
-    if big_enough.numel() <= 1:
+    big_enough_mask = resps.sum(dim=0) >= min_count
+    n_big = big_enough_mask.sum().cpu().item()
+    if n_big <= 1:
         return None, x_ret, channels
-    resps = resps[:, big_enough]
+    elif n_big < resps.shape[1]:
+        resps = _combine_similar_resps(resps, big_enough_mask, n_big)
     return resps, x_ret, channels
 
 
-def labels_from_scores(scores: Scores) -> np.ndarray:
+def labels_from_scores_(scores: Scores) -> Tensor:
     """Pick either top candidate or noise."""
     if pnoid:
         Nc = scores.candidates.shape[1]
@@ -4030,7 +4140,11 @@ def labels_from_scores(scores: Scores) -> np.ndarray:
     labels = scores.candidates[:, 0].clone()
     noise_better = scores.log_liks[:, -1] > scores.log_liks[:, 0]
     labels.masked_fill_(noise_better, -1)
-    return labels.numpy(force=True)
+    return labels
+
+
+def labels_from_scores(scores: Scores) -> np.ndarray:
+    return labels_from_scores_(scores).numpy(force=True)
 
 
 # -- method helpers
@@ -4292,7 +4406,8 @@ def _initialize_single(
     if weight is None:
         s = s.div_(math.sqrt(max(1.0, n - 1.0))).square_()
     else:
-        s = s.square_().div_(wsum.sub_(1.0).clamp_(min=1.0))
+        denom = wsum.sub_(1.0).clamp_(min=1.0).sqrt_()
+        s = s.div_(denom).square_()
 
     # extra 1 was picked up from identity in whitened space, remove and
     # compute the low rank factor that remains, which is our basis
@@ -4684,6 +4799,22 @@ def _count_candidates(candidates, batch_candidate_counts, batch_size):
     for b, i0 in enumerate(range(0, candidates.shape[0], batch_size)):
         counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
     batch_candidate_counts.copy_(counts.cpu())
+
+
+@torch.jit.script
+def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
+    n_discard = resps.shape[1] - n_keep
+    assert n_discard + n_keep == resps.shape[1]
+    discard_mask = torch.logical_not(keep_mask)
+    discard_ix = discard_mask.nonzero_static(size=n_discard)[:, 0]
+    keep_ix = keep_mask.nonzero_static(size=n_keep)[:, 0]
+    assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
+    kept_resp = resps[:, keep_ix]
+    discard_resp = resps[:, discard_ix]
+    sim = discard_resp.T @ kept_resp
+    match = sim.argmax(1)
+    kept_resp[:, match] += discard_resp
+    return kept_resp
 
 
 def concatenate_scores(scoress: list[Scores]) -> Scores:
