@@ -42,6 +42,12 @@ from .peel.grab import GrabAndFeaturize
 from .templates import TemplateData, realign_sorting, realign_templates
 from .transform import WaveformPipeline
 from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
+from .util.logging_util import (
+    get_logger,
+    DARTsortLogger,
+    DARTSORTDEBUG,
+    DARTSORTVERBOSE,
+)
 from .util.data_util import DARTsortSorting, get_featurization_pipeline
 from .util.drift_util import registered_geometry
 from .util.internal_config import *

@@ -137,6 +137,9 @@ def tmm_demix(
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
     tmm.em(train_data)
+    if saving:
+        stepname = f"tmm00em"
+        save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
     for outer_it in range(refinement_cfg.n_total_iters):
         # split, maybe, then em.
@@ -145,11 +148,9 @@ def tmm_demix(
         if do_split:
             run_split(tmm, train_data, val_data, prog_level - 1)
             tmm.em(train_data, show_progress=prog_level)
-            stepname = f"tmm{outer_it}asplit"
-        else:
-            stepname = f"tmm{outer_it}aem"
-        if saving:
-            save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
+            if saving:
+                stepname = f"tmm{outer_it}1split"
+                save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
         if break_after_split:
             break
 
@@ -157,7 +158,7 @@ def tmm_demix(
         run_merge(tmm, train_data, val_data, prog_level - 1)
         tmm.em(train_data, show_progress=prog_level)
         if saving:
-            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}bmerge", **save_kw)  # type: ignore
+            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
 
     # final assignments
     # TODO output the soft probs somehow
@@ -2803,7 +2804,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         """
         # torch doesn't have return_index
         uniq_remapped_ids, uniq_first_inds = np.unique(
-            remapping.mapping.cpu(), return_index=True
+            remapping.mapping.cpu(),
+            return_index=True,
+            return_inverse=False,
+            return_counts=False,
         )
         uniq_remapped_ids = torch.from_numpy(uniq_remapped_ids)
         uniq_first_inds = torch.from_numpy(uniq_first_inds)
@@ -2944,13 +2948,17 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 _lp = res.sub_proportions.sum()
                 assert torch.isclose(_lp, torch.ones_like(_lp))
             split_log_props = (
-                res.sub_proportions.log() + self.b.log_proportions[unit_id]
+                res.sub_proportions.double().log()
+                + self.b.log_proportions[unit_id].double()
             )
+            split_log_props = split_log_props.clamp_(min=self.LP_MIN)
 
             # assign split result first params to unit_id's spot
             assert res.means.shape[0] == res.n_split
             assert res.sub_proportions.shape == (res.n_split,)
-            self.b.log_proportions[unit_id] = split_log_props[0]
+            self.b.log_proportions[unit_id] = split_log_props[0].to(
+                self.b.log_proportions
+            )
             self.b.means[unit_id] = res.means[0]
             if self.signal_rank:
                 assert res.bases is not None
@@ -2991,7 +2999,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         for nm, nlp, nb in zip(new_means, new_log_props, new_bases):
             newk = nlp.numel()
             self.b.means[k0 : k0 + newk] = nm
-            self.b.log_proportions[k0 : k0 + newk] = nlp
+            self.b.log_proportions[k0 : k0 + newk] = nlp.to(self.b.log_proportions)
             if nb is not None:
                 self.b.bases[k0 : k0 + newk] = nb
             k0 += newk
