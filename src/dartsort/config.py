@@ -226,8 +226,8 @@ class DeveloperConfig(DARTsortUserConfig):
     # interpolation for features
     interp_method: InterpMethod = "kriging"
     interp_kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = None
-    extrap_kernel: InterpKernel | None = None
+    extrap_method: InterpMethod | None = "kernel"
+    extrap_kernel: InterpKernel | None = "rbf"
     kriging_poly_degree: int = 1
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5
@@ -258,7 +258,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # gaussian mixture high level
     truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    signal_rank: Annotated[int, Field(ge=0)] = 5
+    signal_rank: Annotated[int, Field(ge=0)] = 8
     criterion_threshold: float = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -270,7 +270,7 @@ class DeveloperConfig(DARTsortUserConfig):
         "ecl",
         "ecelbo",
     ] = "heldout_ecl"
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
     kmeansk: int = 4
     min_cluster_size: int = 50
 

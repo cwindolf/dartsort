@@ -328,6 +328,7 @@ RealignStrategy = Literal[
     "ampsq_weighted_svd_trough_factor",
 ]
 
+
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
@@ -606,10 +607,10 @@ class RefinementConfig:
     # model params
     channels_strategy: Literal["count", "all"] = "count"
     neighb_overlap: float = 0.75
-    explore_neighb_steps: int = 1
+    explore_neighb_steps: int = 0
     min_count: int = 50
     channels_count_min: int = 1
-    signal_rank: int = 5
+    signal_rank: int = 8
     initialize_at_rank_0: bool = True
     cl_alpha: float = 1.0
     n_spikes_fit: int = 4096
@@ -654,7 +655,7 @@ class RefinementConfig:
     prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
-    kmeansk: int = 3
+    kmeansk: int = 4
     noise_fp_correction: bool = False
     full_proposal_every: int = 10
 
@@ -673,7 +674,7 @@ class RefinementConfig:
     cov_radius: float = 500.0
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
-    max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
+    max_n_spikes: float | int = argfield(default=1000 * 1024, arg_type=int_or_inf)
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
     noise_interp_params: InterpolationParams = default_interpolation_params
