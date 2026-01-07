@@ -1585,14 +1585,6 @@ class BaseMixtureModel(BModule):
 
     # -- shared logic
 
-    def group_units_for_merge(self) -> Iterable[Tensor]:
-        distances = self.unit_distance_matrix()
-        return tree_groups(
-            distances,
-            max_group_size=self.max_group_size,
-            max_distance=self.merge_max_distance,
-        )
-
     def merge_as_group_on_data_subset(
         self,
         train_data: DenseSpikeData,
@@ -2602,18 +2594,45 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return split_result
 
+    def group_units_for_merge(self) -> Iterable[Tensor]:
+        distances = self.unit_distance_matrix()
+        # restrict my merge such that units which don't overlap at all aren't
+        # considered. to trim search, but also because bad solutions can
+        # occur in that case.
+        un_adj = (self.lut.lut < self.lut.unit_ids.shape[0]).float()
+        uu_not_adj = un_adj @ un_adj.T == 0
+        distances.masked_fill_(uu_not_adj, torch.inf)
+        return tree_groups(
+            distances,
+            max_group_size=self.max_group_size,
+            max_distance=self.merge_max_distance,
+        )
+
     def try_merge_group(
         self,
         group: Tensor,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
+        apply_adj_mask: bool = False,
         pair_mask: Tensor | None = None,
         debug: bool = False,
     ) -> GroupMergeResult:
         if group.numel() <= 1:
             return
         assert group.numel() <= self.max_group_size
+
+        if apply_adj_mask:
+            # this path is for vis. this is already done in group_units.
+            # restrict my merge such that units which don't overlap at all aren't
+            # considered. to trim search, but also because bad solutions can
+            # occur in that case.
+            un_adj = (self.lut.lut[group] < self.lut.unit_ids.shape[0]).float()
+            uu_adj = un_adj @ un_adj.T > 0
+            if pair_mask is None:
+                pair_mask = uu_adj
+            else:
+                pair_mask = pair_mask.logical_and_(uu_adj.to(pair_mask))
 
         view = self.unit_slice(group)
         group_train_data = train_data.dense_slice_by_unit(group, gen=self.rg)

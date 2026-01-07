@@ -8,6 +8,7 @@ from .util.internal_config import (
     default_pretrained_path,
     InterpMethod,
     InterpKernel,
+    RealignStrategy
 )
 from .util.py_util import (
     cfg_dataclass,
@@ -219,11 +220,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     always_recompute_tsvd: bool = True
     matching_template_min_amplitude: float = 0.0
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
+    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
     trough_factor: float = 3.0
 
     # interpolation for features
@@ -274,7 +271,7 @@ class DeveloperConfig(DARTsortUserConfig):
         "ecelbo",
     ] = "heldout_ecl"
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
-    kmeansk: int = 3
+    kmeansk: int = 4
     min_cluster_size: int = 50
 
     # gausian mixture low level
@@ -297,7 +294,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     gmm_euclidean_threshold: float = 5.0
     gmm_kl_threshold: float = 2.0
-    gmm_cosine_threshold: float = 0.75
+    gmm_cosine_threshold: float = 0.8
 
     # gaussian mixture unused
     hard_noise: bool = False

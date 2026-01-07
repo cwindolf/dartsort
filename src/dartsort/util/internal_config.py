@@ -444,11 +444,7 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
+    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
     trough_factor: float = 3.0
     trough_shifting: bool = False
 
@@ -630,7 +626,7 @@ class RefinementConfig:
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     split_distance_threshold: float = 1.0
-    merge_distance_threshold: float = 0.9
+    merge_distance_threshold: float = 0.8
     criterion_threshold: float | None = 0.0
     criterion: Literal[
         "heldout_loglik",

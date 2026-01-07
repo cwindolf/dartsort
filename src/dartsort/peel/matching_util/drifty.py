@@ -268,7 +268,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             )
         else:
             trough_shifts = torch.zeros(
-                (self.n_units, self.up_factor), device=normsq.device
+                (self.n_units, self.up_factor), dtype=torch.long, device=normsq.device
             )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,

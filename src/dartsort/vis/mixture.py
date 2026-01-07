@@ -418,6 +418,7 @@ class MergeView(MixtureComponentPlot):
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
             pair_mask=pair_mask,
+            apply_adj_mask=True,
             debug=True,
         )
 
@@ -429,11 +430,14 @@ class MergeView(MixtureComponentPlot):
         distance_matrix_dendro(
             panel_mask,
             pair_mask,
+            show_values_from=dist,
             unit_ids=neighbors,
             dendrogram_linkage=None,
             show_unit_labels=True,
-            image_cmap="binary",
+            image_cmap="RdGy_r",
             show_values=True,
+            with_colorbar=False,
+            value_color="w",
         )
         ax_info = panel_info.subplots()
         ax_info.axis("off")

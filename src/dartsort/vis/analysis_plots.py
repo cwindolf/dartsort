@@ -160,6 +160,7 @@ def distance_matrix_dendro(
     label=None,
     hspace=0.01,
     with_colorbar=True,
+    value_color=None,
 ):
     image_cmap = plt.get_cmap(image_cmap)
     show_dendrogram = dendrogram_linkage is not None
@@ -215,7 +216,10 @@ def distance_matrix_dendro(
         sc = 10 if show_dendrogram else 1
         so = 5 if show_dendrogram else 0
         for (j, i), val in np.ndenumerate(show_values_from[order][:, order]):
-            lc = invert(image_cmap(val / vmax))
+            if value_color is None:
+                lc = invert(image_cmap(val / vmax))
+            else:
+                lc = value_color
             ax_im.text(
                 so + sc * i,
                 so + sc * j,
