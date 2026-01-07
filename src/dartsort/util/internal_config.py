@@ -317,6 +317,17 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
+RealignStrategy = Literal[
+    "mainchan_trough_factor",
+    "snr_weighted_trough_factor",
+    "normsq_weighted_trough_factor",
+    "ampsq_weighted_trough_factor",
+    "mainchan_svd_trough_factor",
+    "snr_weighted_svd_trough_factor",
+    "normsq_weighted_svd_trough_factor",
+    "ampsq_weighted_svd_trough_factor",
+]
+
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
@@ -363,12 +374,8 @@ class TemplateConfig:
     loot_cov: Literal["diag", "global"] = "global"
 
     # realignment
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
     realign_peaks: bool = True
+    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
 
@@ -443,6 +450,7 @@ class MatchingConfig:
         "ampsq_weighted_trough_factor",
     ] = "normsq_weighted_trough_factor"
     trough_factor: float = 3.0
+    trough_shifting: bool = False
 
     # template postprocessing parameters
     min_template_snr: float = 40.0

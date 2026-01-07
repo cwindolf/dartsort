@@ -25,7 +25,7 @@ from ..util.data_util import (
     restrict_to_valid_times,
     yield_chunks,
 )
-from ..util.internal_config import TemplateConfig, WaveformConfig
+from ..util.internal_config import TemplateConfig, WaveformConfig, RealignStrategy
 from ..util.logging_util import DARTsortLogger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
@@ -288,6 +288,15 @@ class RunningTemplates(GrabAndFeaturize):
             sorting, max_spikes=template_cfg.spikes_per_unit, seed=random_state
         )
 
+        # try to load denoiser if denoising is happening
+        denoising = (
+            template_cfg.denoising_method != "none"
+            or template_cfg.realign_strategy.endswith("svd_trough_factor")
+        )
+        if tsvd is None and template_cfg.use_svd and denoising:
+            if not template_cfg.recompute_tsvd:
+                tsvd = load_stored_tsvd(sorting)
+
         # realign to empirical trough if necessary
         n_pitches_shift = template_time_shifts = None
         if template_cfg.realign_peaks and realign_samples:
@@ -298,6 +307,9 @@ class RunningTemplates(GrabAndFeaturize):
             ) = realign_by_running_templates(
                 sorting,
                 recording,
+                trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
+                spike_length_samples=waveform_cfg.spike_length_samples(fs),
+                denoising_tsvd=tsvd,
                 motion_est=motion_est,
                 realign_samples=realign_samples,
                 realign_strategy=template_cfg.realign_strategy,
@@ -314,12 +326,6 @@ class RunningTemplates(GrabAndFeaturize):
 
         # remove discarded spikes so they don't get loaded
         sorting = sorting.drop_missing()
-
-        # try to load denoiser if denoising is happening
-        denoising = template_cfg.denoising_method != "none"
-        if tsvd is None and template_cfg.use_svd and denoising:
-            if not template_cfg.recompute_tsvd:
-                tsvd = load_stored_tsvd(sorting)
 
         properties = {}
         if template_time_shifts is not None:
@@ -1168,13 +1174,12 @@ class RunningTemplatesTasks:
 def realign_by_running_templates(
     sorting,
     recording,
+    trough_offset_samples,
+    spike_length_samples,
+    denoising_tsvd=None,
     motion_est=None,
     realign_samples=0,
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "mainchan_trough_factor",
+    realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
     show_progress=True,
     computation_cfg=None,
@@ -1187,6 +1192,17 @@ def realign_by_running_templates(
 
     # compute "templates". actually need only a narrow window here, and
     # will not do any denoising in this case. configs to match.
+    if realign_strategy != "mainchan_trough_factor":
+        # pad the trough_offset_samples and spike_length_samples so that
+        # if the user did not request denoising we can just return the
+        # raw templates right away
+        trough_offset_load = trough_offset_samples + realign_samples
+        spike_length_load = spike_length_samples + 2 * realign_samples
+    else:
+        # otherwise, no need to compute the full thing yet.
+        trough_offset_load = 0 + realign_samples
+        spike_length_load = 1 + 2 * realign_samples
+
     dropped_sorting = sorting.drop_missing()
     peeler = RunningTemplates(
         recording=recording,
@@ -1194,8 +1210,8 @@ def realign_by_running_templates(
         times_samples=dropped_sorting.times_samples,
         channels=dropped_sorting.channels,
         labels=dropped_sorting.labels,
-        trough_offset_samples=realign_samples,
-        spike_length_samples=2 * realign_samples + 1,
+        trough_offset_samples=trough_offset_load,
+        spike_length_samples=spike_length_load,
         motion_est=motion_est,
     )
     template_data = peeler.compute_template_data(
@@ -1212,14 +1228,17 @@ def realign_by_running_templates(
 
     sorting, templates, template_time_shifts = realign_sorting(
         sorting,
+        denoising_tsvd=denoising_tsvd,
         templates=template_data.templates,
         snrs_by_channel=template_data.snrs_by_channel(),
         unit_ids=template_data.unit_ids,
         max_shift=realign_samples,
         trough_factor=trough_factor,
         realign_strategy=realign_strategy,
-        trough_offset_samples=0,
+        trough_offset_samples=trough_offset_samples,
         recording_length_samples=recording.get_total_samples(),
+        padded_trough_offset_samples=trough_offset_load,
+        spike_length_samples=spike_length_samples,
     )
     return sorting, pitch_shifts, template_time_shifts
 

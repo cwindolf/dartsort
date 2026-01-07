@@ -5,8 +5,7 @@ where you can get templates using the TemplateConfig in config.py.
 """
 
 import threading
-from dataclasses import replace
-from typing import Literal, cast
+from typing import cast
 
 import numpy as np
 import torch
@@ -21,6 +20,7 @@ from ..util.drift_util import registered_template
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import fast_nanmedian, ptp
 from ..util.waveform_util import make_channel_index
+from ..util.internal_config import RealignStrategy
 
 
 def get_templates(
@@ -33,11 +33,7 @@ def get_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor",
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor",
     trough_factor=3.0,
     low_rank_denoising=True,
     denoising_tsvd=None,
@@ -113,6 +109,26 @@ def get_templates(
     # validate arguments
     raw_only = not low_rank_denoising
 
+    # fit tsvd
+    need_denoiser = denoising_tsvd is None and (
+        low_rank_denoising or realign_strategy.endswith("svd_trough_factor")
+    )
+    if need_denoiser:
+        denoising_tsvd = fit_tsvd(
+            recording,
+            sorting,
+            dtype=dtype,
+            denoising_rank=denoising_rank,
+            denoising_fit_radius=denoising_fit_radius,
+            denoising_spikes_fit=denoising_spikes_fit,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            recompute_tsvd=recompute_tsvd,
+            random_seed=random_seed,
+        )
+    elif not low_rank_denoising:
+        denoising_tsvd = None
+
     # estimate peak sample times and realign spike train
     if realign_peaks:
         if raw_only or realign_strategy != "mainchan_trough_factor":
@@ -121,12 +137,10 @@ def get_templates(
             # raw templates right away
             trough_offset_load = trough_offset_samples + realign_max_sample_shift
             spike_length_load = spike_length_samples + 2 * realign_max_sample_shift
-            trough_offset_align = trough_offset_samples
         else:
             # otherwise, no need to compute the full thing yet.
             trough_offset_load = 0 + realign_max_sample_shift
             spike_length_load = 1 + 2 * realign_max_sample_shift
-            trough_offset_align = 0
         raw_results = get_raw_templates(
             recording,
             sorting,
@@ -147,14 +161,16 @@ def get_templates(
             device=device,
         )
         sorting, templates, time_shifts = realign_sorting(
-            sorting,
-            raw_results["raw_templates"],
-            raw_results["snrs_by_channel"],
-            raw_results["unit_ids"],
+            sorting=sorting,
+            denoising_tsvd=denoising_tsvd,
+            templates=raw_results["raw_templates"],
+            snrs_by_channel=raw_results["snrs_by_channel"],
+            unit_ids=raw_results["unit_ids"],
             realign_strategy=realign_strategy,
             trough_factor=trough_factor,
             max_shift=realign_max_sample_shift,
-            trough_offset_samples=trough_offset_align,
+            padded_trough_offset_samples=trough_offset_load,
+            trough_offset_samples=trough_offset_samples,
             recording_length_samples=recording.get_num_samples(),
         )
         if raw_results.get("raw_std_devs", None) is not None:
@@ -170,23 +186,6 @@ def get_templates(
             raw_results["sorting"] = sorting
             raw_results["templates"] = raw_results["raw_templates"] = templates
             return raw_results
-
-    # fit tsvd
-    if low_rank_denoising and denoising_tsvd is None:
-        denoising_tsvd = fit_tsvd(
-            recording,
-            sorting,
-            dtype=dtype,
-            denoising_rank=denoising_rank,
-            denoising_fit_radius=denoising_fit_radius,
-            denoising_spikes_fit=denoising_spikes_fit,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            recompute_tsvd=recompute_tsvd,
-            random_seed=random_seed,
-        )
-    elif not low_rank_denoising:
-        denoising_tsvd = None
 
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs
@@ -306,26 +305,26 @@ def realign_sorting(
     templates,
     snrs_by_channel,
     unit_ids,
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "mainchan_trough_factor",
+    denoising_tsvd=None,
+    realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
     max_shift=20,
     trough_offset_samples=42,
+    spike_length_samples=121,
+    padded_trough_offset_samples=42,
     recording_length_samples=None,
 ):
-    n, t, c = templates.shape
     if max_shift == 0:
         return sorting, templates, None
 
-    template_maxchans = snrs_by_channel.argmax(1)
     template_shifts, aligned_templates = realign_templates(
         templates,
+        denoising_tsvd=denoising_tsvd,
+        snrs_by_channel=snrs_by_channel,
         unit_ids=unit_ids,
-        main_channels=template_maxchans,
+        padded_trough_offset_samples=padded_trough_offset_samples,
         trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
         max_shift=max_shift,
         realign_strategy=realign_strategy,
         trough_factor=trough_factor,
@@ -336,7 +335,7 @@ def realign_sorting(
         sorting,
         template_shifts=template_shifts,
         trough_offset_samples=trough_offset_samples,
-        spike_length_samples=t,
+        spike_length_samples=spike_length_samples,
         recording_length_samples=recording_length_samples,
     )
 
@@ -389,39 +388,53 @@ def apply_time_shifts(
 
 def realign_templates(
     templates,
+    denoising_tsvd=None,
+    snrs_by_channel=None,
     unit_ids=None,
     main_channels=None,
+    padded_trough_offset_samples=42,
     trough_offset_samples=42,
+    spike_length_samples=121,
     max_shift=20,
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor",
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor",
     trough_factor=3.0,
 ):
     from .template_util import estimate_offset
 
     if main_channels is None:
-        if realign_strategy == "mainchan_trough_factor":
-            main_channels = np.ptp(templates).max(1).argmax(1)
-        elif realign_strategy == "normsq_weighted_trough_factor":
+        if realign_strategy.startswith("mainchan"):
+            if snrs_by_channel is not None:
+                main_channels = snrs_by_channel.argmax(1)
+            else:
+                main_channels = np.ptp(templates, axis=1).argmax(1)
+        elif realign_strategy.startswith("snr_weighted"):
+            assert snrs_by_channel is not None
+            main_channels = snrs_by_channel.argmax(1)
+        elif realign_strategy.startswith("normsq_weighted"):
             main_channels = np.square(templates).sum(1).argmax(1)
-        elif realign_strategy == "ampsq_weighted_trough_factor":
+        elif realign_strategy.startswith("ampsq_weighted"):
             main_channels = np.ptp(templates).max(1).argmax(1)
         else:
             assert False
     assert main_channels is not None
 
     # find template peak time
+    pad = padded_trough_offset_samples - trough_offset_samples
     template_peak_times = estimate_offset(
-        templates, strategy=realign_strategy, trough_factor=trough_factor
+        templates,
+        denoising_tsvd=denoising_tsvd,
+        snrs_by_channel=snrs_by_channel,
+        strategy=realign_strategy,
+        trough_factor=trough_factor,
+        main_channels=main_channels,
+        tsvd_slice=slice(pad, pad + spike_length_samples),
     )
 
     # find unit sample time shifts
     if torch.is_tensor(template_peak_times):
         template_peak_times = template_peak_times.numpy(force=True)
-    template_shifts_ = template_peak_times - (trough_offset_samples + max_shift)
+    assert template_peak_times is not None
+    template_shifts_ = template_peak_times - padded_trough_offset_samples
     template_shifts_[np.abs(template_shifts_) > max_shift] = 0
     if unit_ids is None:
         template_shifts = template_shifts_

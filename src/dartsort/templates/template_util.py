@@ -11,6 +11,7 @@ from ..util import drift_util, waveform_util
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, DARTSORTVERBOSE
 from ..util.spiketorch import fast_nanmedian, ptp
+from ..util.waveform_util import full_channel_index
 from .get_templates import get_templates
 
 logger = get_logger(__name__)
@@ -321,7 +322,9 @@ def svd_compress_templates(
         assert np.isfinite(temporal_components).all()
         assert np.isfinite(singular_values).all()
         assert np.isfinite(spatial_components).all()
-        recon = np.einsum("ntr,nr,nrc->ntc", temporal_components, singular_values, spatial_components)
+        recon = np.einsum(
+            "ntr,nr,nrc->ntc", temporal_components, singular_values, spatial_components
+        )
         tp = templates.numpy(force=True)
         err = np.square(recon - tp).sum(axis=(1, 2))
         ss = np.square(tp).sum(axis=(1, 2))
@@ -611,35 +614,70 @@ def singlechan_alignments(
 
 
 def get_main_channels_and_alignments(
-    template_data=None, trough_factor=3.0, templates=None
+    template_data=None, trough_factor=3.0, templates=None, main_channels=None
 ):
     if templates is None:
         assert template_data is not None
         templates = template_data.templates
-    main_chans = np.ptp(templates, axis=1).argmax(1)
-    mc_traces = np.take_along_axis(templates, main_chans[:, None, None], axis=2)[
+    if main_channels is None:
+        main_channels = np.ptp(templates, axis=1).argmax(1)
+    mc_traces = np.take_along_axis(templates, main_channels[:, None, None], axis=2)[
         :, :, 0
     ]
     aligner_traces = np.where(mc_traces < 0, trough_factor * mc_traces, -mc_traces)
     offsets = np.abs(aligner_traces).argmax(1)
-    return main_chans, mc_traces, offsets
+    return main_channels, mc_traces, offsets
 
 
 def estimate_offset(
     templates,
+    denoising_tsvd=None,
+    tsvd_slice=slice(None),
+    snrs_by_channel=None,
     strategy="mainchan_trough_factor",
     trough_factor=3.0,
     min_weight=0.75,
+    main_channels=None,
 ):
+    templates = torch.asarray(templates)
+    if strategy.endswith("svd_trough_factor"):
+        assert denoising_tsvd is not None
+        from ..transform.temporal_pca import TemporalPCA
+
+        if isinstance(denoising_tsvd, TemporalPCA):
+            tsvd = denoising_tsvd
+        else:
+            tsvd = TemporalPCA.from_sklearn(
+                channel_index=full_channel_index(templates.shape[2]), pca=denoising_tsvd
+            )
+        target = torch.zeros_like(templates)
+        target[:, tsvd_slice] = tsvd.force_project(templates[:, tsvd_slice])
+        templates = target
+        strategy = strategy.removesuffix("svd_trough_factor")
+        strategy = strategy + "trough_factor"
+
     if strategy == "mainchan_trough_factor":
-        if torch.is_tensor(templates):
-            templates = templates.numpy(force=True)
         _, _, offsets = get_main_channels_and_alignments(
-            None, trough_factor=trough_factor, templates=templates
+            None,
+            trough_factor=trough_factor,
+            templates=templates.numpy(force=True),
+            main_channels=main_channels,
         )
         return offsets
 
-    templates = torch.asarray(templates)
+    if strategy == "snr_weighted_trough_factor":
+        assert snrs_by_channel is not None
+        weights = torch.asarray(snrs_by_channel).clone()
+        weights /= weights.amax(dim=1, keepdim=True)
+        weights[weights < min_weight] = 0.0
+        weights /= weights.sum(dim=1, keepdim=True)
+        tmp = templates.clone()
+        tmp[tmp < 0] *= trough_factor
+        tmp.abs_()
+        offsets = tmp.argmax(dim=1).double()
+        offsets = torch.sum(offsets * weights, dim=1)
+        offsets = torch.round(offsets).long()
+        return offsets
 
     if strategy == "normsq_weighted_trough_factor":
         tmp = templates.square()
