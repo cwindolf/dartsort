@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from spikeinterface.core import BaseRecording
 import torch
 
-from .cluster import (
+from .clustering import (
     SimpleMatrixFeatures,
     get_clusterer,
     get_clustering_features,

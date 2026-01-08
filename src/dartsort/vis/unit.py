@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
 
-from ..cluster import split
+from ..clustering import split
 from ..util.internal_config import raw_template_cfg
 from ..util.job_util import get_global_computation_config
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag

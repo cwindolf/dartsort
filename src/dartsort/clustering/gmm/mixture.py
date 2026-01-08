@@ -1861,6 +1861,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cl_alpha: float,
         elbo_atol: float,
         noise_log_prop: Tensor | float = -torch.inf,
+        debug: bool = False,
     ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor]:
         """Fit units with fixed label posterior
 
@@ -2067,7 +2068,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if not skip_proportions:
             assert lp.isfinite().all()  # type: ignore
 
-    def fixed_weight_em(self, data: DenseSpikeData, responsibilities: Tensor):
+    def fixed_weight_em(
+        self, data: DenseSpikeData, responsibilities: Tensor, debug: bool = False
+    ):
         assert self.lut_params is not None
         batches = data.to_batches(self.unit_ids, self.lut)
         elbos = []
@@ -2154,12 +2157,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 signal_rank=self.signal_rank,
             )
 
-        if logger.isEnabledFor(DARTSORTVERBOSE) and len(elbos):
+        if debug and len(elbos):
             begend = elbos[-1] - elbos[0]
             delbos = np.diff(elbos)
             smalldif = delbos.min()
             bigdiff = delbos.max()
-            logger.dartsortverbose(
+            logger.dartsortdebug(
                 f"Fixed fit elbo end-start={begend:0.4f} over {j + 1} iterations, "
                 f"biggest and smallest diffs {bigdiff:0.4f} and {smalldif:0.4f}."
             )
@@ -2421,6 +2424,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 cl_alpha=self.cl_alpha,
                 total_log_proportion=self.b.log_proportions[unit_id].item(),
                 noise_log_prop=self.b.noise_log_prop,
+                debug=debug,
             )
         )
         if any_spikes_discarded:
@@ -2468,10 +2472,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             debug=debug,
         )
         if merge_res is not None and merge_res.grouping.n_groups <= 1:
-            logger.dartsortverbose(
-                f"Split {unit_id}: merged all {split_model.n_units} split sub-units."
-            )
             if debug:
+                logger.dartsortdebug(
+                    f"Split {unit_id}: merged all {split_model.n_units} split sub-units."
+                )
                 return None, UnitSplitDebugInfo(
                     bailed=True,
                     bail_reason="merge <= 1 groups",
@@ -2485,10 +2489,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             else:
                 return None, None
         if merge_res is not None and merge_res.improvement <= 0.0:
-            logger.dartsortverbose(
-                f"Split {unit_id}: mini-merge improvement {merge_res.improvement:0.3f} too small."
-            )
             if debug:
+                logger.dartsortdebug(
+                    f"Split {unit_id}: mini-merge improvement {merge_res.improvement:0.3f} too small."
+                )
                 return None, UnitSplitDebugInfo(
                     bailed=True,
                     bail_reason=f"improvement {merge_res.improvement:0.3f}",
@@ -2517,10 +2521,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bases = split_model.b.bases
             sub_proportions = F.softmax(split_model.b.log_proportions, dim=0)
         elif merge_res is None:
-            logger.dartsortverbose(
-                f"Split {unit_id}: no split, merge failed with allowed partitions."
-            )
             if debug:
+                logger.dartsortdebug(
+                    f"Split {unit_id}: no split, merge failed with allowed partitions."
+                )
                 return None, UnitSplitDebugInfo(
                     bailed=True,
                     bail_reason="merge_fail",
@@ -3853,6 +3857,7 @@ def brute_merge(
                 cl_alpha=mm.cl_alpha,
                 total_log_proportion=mm.non_noise_log_proportion(),
                 elbo_atol=mm.elbo_atol,
+                debug=debug,
             )
         )
         subset_models_lst.append(s0m)

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..cluster.gmm.stable_features import SpikeNeighborhoods
+from ..clustering.gmm.stable_features import SpikeNeighborhoods
 from .data_util import yield_masked_chunks
 from .internal_config import (
     InterpKernel,

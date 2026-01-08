@@ -16,7 +16,7 @@ import torch
 from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
 
-from ..cluster import merge
+from ..clustering import merge
 from ..util.internal_config import (
     TemplateConfig,
     TemplateMergeConfig,

@@ -33,7 +33,7 @@ def get_templates(
     registered_geom=None,
     realign_peaks=False,
     realign_max_sample_shift=20,
-    realign_strategy: RealignStrategy = "snr_weighted_trough_factor",
+    realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
     low_rank_denoising=True,
     denoising_tsvd=None,
@@ -396,7 +396,7 @@ def realign_templates(
     trough_offset_samples=42,
     spike_length_samples=121,
     max_shift=20,
-    realign_strategy: RealignStrategy = "snr_weighted_trough_factor",
+    realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
 ):
     from .template_util import estimate_offset

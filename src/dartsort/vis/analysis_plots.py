@@ -6,7 +6,7 @@ from matplotlib.colors import to_hex, Colormap
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 
 from .colors import glasbey1024
-from ..cluster.cluster_util import leafsets
+from ..clustering.cluster_util import leafsets
 
 
 def scatter_max_channel_waveforms(

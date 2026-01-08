@@ -139,7 +139,7 @@ class DARTsortUserConfig:
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
-    amplitude_scaling_limit: Annotated[float, Field(ge=0)] = 1.0
+    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
@@ -220,7 +220,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     always_recompute_tsvd: bool = True
     matching_template_min_amplitude: float = 0.0
-    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
 
     # interpolation for features

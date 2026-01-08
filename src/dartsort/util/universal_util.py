@@ -29,7 +29,7 @@ def get_singlechan_centroids(
     random_seed=0,
 ):
     """Kmeanspp in pca space"""
-    from dartsort.cluster import kmeans
+    from dartsort.clustering import kmeans
 
     full_length = spike_length_samples + 2 * alignment_padding
     full_trough = trough_offset_samples + alignment_padding

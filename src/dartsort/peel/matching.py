@@ -336,6 +336,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_conv = traces.new_zeros(
             chunk_template_data.obj_n_templates, padded_obj_len
         )
+        if self.is_scaling:
+            padded_scalings = padded_conv.clone()
+        else:
+            padded_scalings = None
         padded_objective = traces.new_zeros(
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
@@ -387,11 +391,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
                 # find spikes
                 new_peaks = self.find_peaks(
-                    residual,
-                    padded_conv,
-                    padded_objective,
-                    apply_refrac_mask,
-                    chunk_template_data,
+                    residual=residual,
+                    padded_conv=padded_conv,
+                    padded_scalings=padded_scalings,
+                    padded_objective=padded_objective,
+                    refrac_mask=apply_refrac_mask,
+                    chunk_template_data=chunk_template_data,
                     unit_mask=unit_mask,
                     coarse_only=coarse_only,
                 )
@@ -474,16 +479,20 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
     def find_peaks(
         self,
+        *,
         residual: Tensor,
         padded_conv: Tensor,
         padded_objective: Tensor,
+        padded_scalings: Tensor | None,
         refrac_mask: Tensor,
         chunk_template_data: ChunkTemplateData,
         unit_mask=None,
         coarse_only=False,
     ):
         # update the coarse objective
-        chunk_template_data.obj_from_conv(padded_conv, out=padded_objective[:-1])
+        chunk_template_data.obj_from_conv(
+            conv=padded_conv, out=padded_objective[:-1], scalings_out=padded_scalings
+        )
 
         # enforce refractoriness
         objective = (padded_objective + refrac_mask)[
@@ -494,19 +503,15 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # find peaks in the coarse objective
         assert self.thresholdsq is not None
-        if coarse_only:
-            # early in cd iters, always do a full coarse pass
-            skip_scaling = False
+        if padded_scalings is None:
+            scalings = None
         else:
-            # otherwise, coarse scaling is just redundant with the fine pass
-            skip_scaling = chunk_template_data.needs_fine_pass
-        conv = padded_conv[:, self.obj_pad_len : -self.obj_pad_len]
+            scalings = padded_scalings[:, self.obj_pad_len : -self.obj_pad_len]
         coarse_peaks = chunk_template_data.coarse_match(
-            conv=conv,
             objective=objective,
+            scalings=scalings,
             thresholdsq=self.thresholdsq,
             obj_arange=self.b.obj_arange,
-            skip_scaling=skip_scaling,
         )
         if coarse_only or not coarse_peaks.n_spikes:
             return coarse_peaks

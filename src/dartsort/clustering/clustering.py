@@ -404,6 +404,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             hellinger_strong=clustering_cfg.hellinger_strong,
             hellinger_weak=clustering_cfg.hellinger_weak,
             mop=clustering_cfg.mop,
+            max_sigma=clustering_cfg.gmmdpc_max_sigma,
             max_samples=clustering_cfg.kdtree_subsample_max_size,
             n_neighbors_search=clustering_cfg.n_neighbors_search,
             computation_cfg=computation_cfg,

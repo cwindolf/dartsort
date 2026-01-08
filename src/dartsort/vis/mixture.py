@@ -10,7 +10,7 @@ from matplotlib.lines import Line2D
 from scipy.sparse.csgraph import connected_components
 from tqdm.auto import tqdm
 
-from ..cluster.gmm.mixture import (
+from ..clustering.gmm.mixture import (
     Scores,
     StreamingSpikeData,
     TruncatedMixtureModel,

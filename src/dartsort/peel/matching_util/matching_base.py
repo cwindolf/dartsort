@@ -206,16 +206,35 @@ class ChunkTemplateData:
             conv=conv, peaks=peaks, padding=padding, batch_size=batch_size, sign=1
         )
 
-    def obj_from_conv(self, conv: Tensor, out=None) -> Tensor:
-        return torch.add(self.obj_normsq[:, None]._neg_view(), conv, alpha=2.0, out=out)
+    def obj_from_conv(
+        self,
+        *,
+        conv: Tensor,
+        out: Tensor,
+        scalings_out: Tensor | None = None,
+    ) -> Tensor:
+        if self.scaling:
+            assert scalings_out is not None
+            return _scaled_coarse_objective(
+                conv=conv,
+                normsq=self.obj_normsq,
+                out=out,
+                scalings=scalings_out,
+                inv_lambda=self.inv_lambda,
+                scale_min=self.scale_min,
+                scale_max=self.scale_max,
+            )
+        else:
+            return torch.add(
+                self.obj_normsq[:, None]._neg_view(), conv, alpha=2.0, out=out
+            )
 
     def coarse_match(
         self,
-        conv: Tensor,
         objective: Tensor,
+        scalings: Tensor | None,
         thresholdsq: float,
         obj_arange: Tensor,
-        skip_scaling: bool = False,
     ) -> "MatchingPeaks":
         objective_max, max_obj_template = objective.max(dim=0)
         times = argrelmax(
@@ -228,33 +247,20 @@ class ChunkTemplateData:
         if not n_spikes:
             return MatchingPeaks()
 
+        objs = objective_max[times]
         template_inds = max_obj_template[times]
         if _extra_checks:
             assert (objective_max[times] >= thresholdsq).all()
-        if skip_scaling or not self.scaling:
-            objs = objective_max[times]
-            return MatchingPeaks(
-                times=times,
-                obj_template_inds=template_inds,
-                template_inds=template_inds,
-                scores=objs,
-            )
-        scalings, objs = _coarse_match_scaled(
-            conv=conv,
-            template_inds=template_inds,
-            times=times,
-            obj_normsq=self.obj_normsq,
-            inv_lambda=self.inv_lambda,
-            scale_min=self.scale_min,
-            scale_max=self.scale_max,
-        )
+        if self.scaling:
+            assert scalings is not None
+            scalings = scalings[template_inds, times]
+        else:
+            scalings = None
         if _extra_checks:
             assert (objs >= thresholdsq).all()
+        if _extra_checks and scalings is not None:
             assert (scalings >= self.scale_min).all()
             assert (scalings <= self.scale_max).all()
-        if _extra_checks and self.scaling:
-            assert self.inv_lambda < float("inf")
-            assert scalings.numel() < 3 or (scalings != 1.0).any()
         return MatchingPeaks(
             times=times,
             obj_template_inds=template_inds,
@@ -538,6 +544,27 @@ def _subtract_precomputed_pconv_scaled(
         if neg:
             batch = batch._neg_view()
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
+
+
+@torch.jit.script
+def _scaled_coarse_objective(
+    conv: Tensor,
+    normsq: Tensor,
+    out: Tensor,
+    scalings: Tensor,
+    inv_lambda: Tensor,
+    scale_min: Tensor,
+    scale_max: Tensor,
+) -> Tensor:
+    b = conv + inv_lambda
+    a = normsq[:, None] + inv_lambda
+    torch.divide(b, a, out=scalings)
+    scalings.clamp_(min=scale_min, max=scale_max)
+    # this is 2 * sc * b - sc**2 * a - inv_lambda
+    torch.square(scalings, out=out)
+    torch.addcmul(-inv_lambda, -a, out, out=out)
+    out.addcmul_(scalings, b, value=2.0)
+    return out
 
 
 @torch.jit.script

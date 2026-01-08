@@ -1,7 +1,7 @@
 import importlib.metadata
 
 from . import detect, util
-from .cluster import (
+from .clustering import (
     cluster_util,
     clustering_strategies,
     density,

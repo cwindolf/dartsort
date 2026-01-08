@@ -376,7 +376,7 @@ class TemplateConfig:
 
     # realignment
     realign_peaks: bool = True
-    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
 
@@ -405,7 +405,7 @@ class TemplateMergeConfig:
     min_spatial_cosine: float = 0.5
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 1.0
+    amplitude_scaling_boundary: float = 0.33
     svd_compression_rank: int = 20
     max_shift_samples: int = 50
 
@@ -432,7 +432,7 @@ class MatchingConfig:
     template_min_channel_amplitude: float = 0.0
     refractory_radius_frames: int = 10
     amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 1.0
+    amplitude_scaling_boundary: float = 0.333
     max_iter: int = 1000
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
@@ -445,9 +445,9 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    realign_strategy: RealignStrategy = "snr_weighted_svd_trough_factor"
+    realign_strategy: RealignStrategy = "normsq_weighted_trough_factor"
     trough_factor: float = 3.0
-    trough_shifting: bool = False
+    trough_shifting: bool = True
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -566,6 +566,7 @@ class ClusteringConfig:
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
     use_hellinger: bool = False
+    gmmdpc_max_sigma: float = 5.0
     mop: bool = False
 
     # hdbscan parameters
@@ -874,7 +875,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = MatchingConfig(
             threshold=cfg.matching_threshold,
             amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
-            amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
+            amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
             template_temporal_upsampling_factor=cfg.temporal_upsamples,
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
@@ -882,7 +883,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_type=cfg.matching_template_type,
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-            realign_strategy=cfg.realign_strategy,
+            # realign_strategy=cfg.realign_strategy,
             trough_factor=cfg.trough_factor,
         )
     elif cfg.detection_type == "universal":
@@ -1025,7 +1026,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
-        amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
+        amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,
         chunk_length_samples=cfg.chunk_length_samples,
         template_merge_cfg=TemplateMergeConfig(
@@ -1039,7 +1040,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_type=cfg.matching_template_type,
         up_method=cfg.matching_up_method,
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-        realign_strategy=cfg.realign_strategy,
+        # realign_strategy=cfg.realign_strategy,
         trough_factor=cfg.trough_factor,
     )
     computation_cfg = ComputationConfig(

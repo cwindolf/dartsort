@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from spikeinterface.comparison import GroundTruthComparison
 
-from ..cluster import merge
+from ..clustering import merge
 from .analysis import DARTsortAnalysis
 
 
