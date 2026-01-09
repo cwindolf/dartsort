@@ -146,7 +146,7 @@ def tmm_demix(
         do_split = bool(outer_it) or not refinement_cfg.skip_first_split
         break_after_split = refinement_cfg.one_split_only
         if do_split:
-            run_split(tmm, train_data, val_data, prog_level - 1)
+            run_split(tmm, train_data, val_data, prog_level)
             tmm.em(train_data, show_progress=prog_level)
             if saving:
                 stepname = f"tmm{outer_it}1split"
@@ -155,7 +155,7 @@ def tmm_demix(
             break
 
         # merge, then em.
-        run_merge(tmm, train_data, val_data, prog_level - 1)
+        run_merge(tmm, train_data, val_data, prog_level)
         tmm.em(train_data, show_progress=prog_level)
         if saving:
             save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
@@ -3581,7 +3581,6 @@ def initialize_parameters_by_unit(
         assert K >= K_
     counts = counts[units >= 0]
     units = units[units >= 0]
-    assert units.shape == (K_,)
     feat_rank = noise.rank
     nc = data.neighborhoods.n_channels
 
@@ -3613,6 +3612,7 @@ def initialize_parameters_by_unit(
         bases = bases.resize_(K, *bases.shape[1:])
     else:
         bases = None
+
     for k in units:
         kdata = data.dense_slice_by_unit(k, gen=gen)
         assert kdata is not None
