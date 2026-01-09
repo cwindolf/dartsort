@@ -105,8 +105,8 @@ class DARTsortGroundTruthComparison:
         self._agreement_scores = a
         return a
 
-    def unit_amplitudes(self):
-        return self.gt_analysis.unit_amplitudes()
+    def unit_amplitudes(self, unit_id):
+        return self.gt_analysis.unit_amplitudes(unit_id)
 
     def get_match(self, gt_unit):
         assert self.comparison.hungarian_match_12 is not None
@@ -124,12 +124,17 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df["gt_ptp_amplitude"] = amplitudes
         df["gt_firing_rate"] = firing_rates
-        coll, matched_coll, missed_coll = self.unit_collidedness()
-        assert coll.shape == matched_coll.shape == missed_coll.shape == df.index.shape
-        df["gt_collidedness"] = coll
-        df["gt_matched_collidedness"] = matched_coll
-        df["gt_missed_collidedness"] = missed_coll
-        df["gt_dt_rms"] = self.unit_matched_misalignment_rms()
+
+        # coll, matched_coll, missed_coll = self.unit_collidedness()
+        # assert coll.shape == matched_coll.shape == missed_coll.shape == df.index.shape
+        # df["gt_collidedness"] = coll
+        # df["gt_matched_collidedness"] = matched_coll
+        # df["gt_missed_collidedness"] = missed_coll
+        print('hi')
+        try:
+            df["gt_dt_rms"] = self.unit_matched_misalignment_rms()
+        except ValueError:
+            pass
         if self.has_templates and (force_distances or self.compute_distances):
             dist = np.nan_to_num(self.template_distances, nan=np.inf).min(axis=1)
             df["min_temp_dist"] = dist
@@ -191,7 +196,7 @@ class DARTsortGroundTruthComparison:
                     match_dt_rms[j] = np.sqrt(np.square(udt).mean())
             except ValueError as e:
                 warnings.warn(
-                    f"ValueError in misalignment. SI matching bug. {e=} {e.message=}"  # type: ignore
+                    f"ValueError in misalignment. SI matching bug. {e=}"  # type: ignore
                 )
         return match_dt_rms
 
@@ -341,10 +346,6 @@ class DARTsortGroundTruthComparison:
         tested_unit=None,
         max_samples_per_category=100,
         random_seed=0,
-        channel_show_radius_um=75,
-        trough_offset_samples=42,
-        spike_length_samples=121,
-        channel_dist_p=np.inf,
     ):
         rg = np.random.default_rng(random_seed)
         ind_groups = self.get_spikes_by_category(gt_unit, tested_unit=tested_unit)
@@ -353,13 +354,7 @@ class DARTsortGroundTruthComparison:
         # waveforms are read at GT unit max channel
         gt_max_chan = self.gt_analysis.unit_max_channel(gt_unit)
         waveform_kw = dict(
-            max_count=max_samples_per_category,
-            random_seed=rg,
-            channel_show_radius_um=channel_show_radius_um,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            channel_dist_p=channel_dist_p,
-            max_chan=gt_max_chan,
+            max_count=max_samples_per_category, random_seed=rg, main_channel=gt_max_chan
         )
 
         # return vars dict. lots of stuff going in here.
@@ -495,5 +490,7 @@ class DARTsortGTVersus:
         return self._unit_vs_df.copy(deep=True)
 
     def tagname(self):
-        vsstr = "vs_" + ",".join(oa.name or str(j) for j, oa in enumerate(self.other_analyses))
+        vsstr = "vs_" + ",".join(
+            oa.name or str(j) for j, oa in enumerate(self.other_analyses)
+        )
         return f"{self.gt_name}_{vsstr}"

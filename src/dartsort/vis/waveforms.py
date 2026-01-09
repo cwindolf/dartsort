@@ -288,11 +288,21 @@ def geomplot(
 
 
 def geomplot_templates(
-    axis, unit_ids, unit_templates, channel_index, registered_geom, title=""
+    axis,
+    unit_ids,
+    unit_templates,
+    channel_index,
+    registered_geom,
+    title="",
+    main_channel=None,
+    linestyles=None,
 ):
     unit_ids = np.asarray(unit_ids)
     colors = np.asarray(glasbey1024)[unit_ids % len(glasbey1024)]
-    chan = np.ptp(unit_templates[0], 0).argmax()
+    if main_channel is None:
+        chan = np.ptp(unit_templates[0], 0).argmax()
+    else:
+        chan = main_channel
     channels = channel_index[chan]
     unit_templates = np.pad(
         unit_templates,
@@ -302,9 +312,12 @@ def geomplot_templates(
     unit_templates = unit_templates[:, :, channels]
     maxamp = np.nanmax(np.abs(unit_templates))
 
+    if linestyles is None:
+        linestyles = '-' * len(unit_ids)
+
     labels = []
     handles = []
-    for uid, color, template in reversed(list(zip(unit_ids, colors, unit_templates))):
+    for uid, color, template, ls in reversed(list(zip(unit_ids, colors, unit_templates, linestyles))):
         lines = geomplot(
             template[None],
             max_channels=[chan],
@@ -318,6 +331,7 @@ def geomplot_templates(
             bar_background="w",
             zlim="tight",
             color=color,
+            linestyle=ls,
         )
         labels.append(str(uid))
         handles.append(lines)

@@ -1,3 +1,4 @@
+from typing import Any
 import warnings
 from logging import getLogger
 
@@ -12,7 +13,7 @@ try:
     from matplotlib_venn import venn2
 except ImportError:
 
-    def venn2(*args, **kwargs):
+    def venn2(*args, **kwargs) -> Any:
         raise ImportError("`matplotlib_venn` is needed for venn plots.")
 
 
@@ -154,7 +155,6 @@ class GTUnitTextInfo(UnitComparisonPlot):
 
         td = getattr(comparison, "template_distances", None)
         if td is not None:
-            print(f"{td.shape=}")
             temp_dist = td[unit_id, tested_unit_id]
             msg += f"Hung. temp dist: {temp_dist:0.1f}\n"
             mn = td[unit_id].min()
@@ -277,7 +277,6 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         tested_color=None,
         unsorted_matched_color=None,
         unsorted_missed_color=None,
-        channel_show_radius_um=35,
         count=50,
         single_channel=False,
         order="tprandom",
@@ -300,7 +299,6 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 unsorted_missed_color or _class_colors["unsorted_fn"]
             )
 
-        self.radius = 0 if single_channel else channel_show_radius_um
         self.count = count
         self.alpha = alpha
         if order == "random":
@@ -326,7 +324,6 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
             tested_unit=tested_unit_id,
             max_samples_per_category=self.count,
             random_seed=0,
-            channel_show_radius_um=self.radius,
         )
 
         waveforms = []
@@ -361,7 +358,8 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         chans = chans[chans < len(w["geom"])]
         geomplot(
             waveforms,
-            channels=np.broadcast_to(chans[None], (len(waveforms), *chans.shape)),
+            max_channels=max_channels,
+            channel_index=w['channel_index'],
             geom=w["geom"],
             ax=ax,
             show_zero=False,
@@ -463,13 +461,11 @@ class TemplateDistanceHistogram(UnitComparisonPlot):
 class NearbyTemplates(UnitComparisonPlot):
     def __init__(
         self,
-        channel_show_radius_um=35.0,
         n_neighbors=5,
         single_channel=False,
         which="tested",
         neighbor_method="templates",
     ):
-        self.channel_show_radius_um = channel_show_radius_um
         self.single_channel = single_channel
         self.n_neighbors = n_neighbors
         self.kind = "traces" if single_channel else "waveforms"
@@ -508,13 +504,8 @@ class NearbyTemplates(UnitComparisonPlot):
             assert False
 
         max_chan = comparison.gt_analysis.unit_max_channel(unit_id)
-        geom = comparison.gt_analysis.show_geom
-        rad = 0 if self.single_channel else self.channel_show_radius_um
-        rad = float(rad) + 0
-        channel_index = comparison.gt_analysis.show_channel_index(
-            channel_show_radius_um=rad
-        )
-        channels = channel_index[max_chan]
+        geom = comparison.gt_analysis.registered_geom
+        channels = comparison.gt_analysis.vis_channel_index[max_chan]
         channels = channels[channels < len(geom)]
         templates = templates[:, :, channels]
 
@@ -751,7 +742,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ids = ids[1:]  # remove main.
         ta = comparison.tested_analysis
         va = comparison.gt_analysis if self.which == "gt" else ta
-        vsts = {u: va.times_samples(va.in_unit(u)) for u in ids}
+        vsts = {u: va.sorting.times_samples[va.in_unit(u)] for u in ids}
         cat_spikes = comparison.get_spikes_by_category(unit_id, tested_unit_id)
         colors = glasbey1024[ids % len(glasbey1024)]
 
@@ -921,7 +912,6 @@ def make_unit_comparison(
     max_height=18,
     figsize=(16, 18),
     figure=None,
-    channel_show_radius_um=35.0,
     **other_global_params,
 ):
     if plots is None:
@@ -934,7 +924,6 @@ def make_unit_comparison(
         figsize=figsize,
         figure=figure,
         gizmo_name="comparison",
-        channel_show_radius_um=channel_show_radius_um,
         **other_global_params,
     )
 

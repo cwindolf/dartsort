@@ -58,7 +58,7 @@ class DARTsortAnalysis:
     merge_distances: np.ndarray | None
     geom: np.ndarray
     registered_geom: np.ndarray
-    extract_channel_index: np.ndarray
+    extract_channel_index: np.ndarray | None
     vis_channel_index: np.ndarray
     xyza: np.ndarray
     x: np.ndarray
@@ -67,6 +67,8 @@ class DARTsortAnalysis:
     shifting: bool
     times_seconds: np.ndarray
     amplitudes: np.ndarray
+    unit_ids: np.ndarray
+    spike_counts: np.ndarray
     amplitude_vectors: np.ndarray | None
     erp: StableFeaturesInterpolator | None
     sklearn_tpca: PCA | None
@@ -142,10 +144,9 @@ class DARTsortAnalysis:
             coarse_template_data = merge_distances = None
 
         channel_index = getattr(sorting, "channel_index", None)
-        assert channel_index is not None
         amplitudes = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
         amplitude_vecs = getattr(
-            sorting, clustering_features_cfg.amplitude_vectors_dataset_name
+            sorting, clustering_features_cfg.amplitude_vectors_dataset_name, None
         )
         xyza = getattr(sorting, clustering_features_cfg.localizations_dataset_name)
         tpca_features_dset = clustering_features_cfg.pca_dataset_name
@@ -168,7 +169,7 @@ class DARTsortAnalysis:
         assert rgeom is not None
 
         device = computation_cfg.actual_device()
-        if vis_radius:
+        if vis_radius and channel_index is not None:
             # interping to geom with shifts on fly rather than rgeom.
             erp = StableFeaturesInterpolator(
                 source_geom=pad_geom(geom, device=device),
@@ -178,6 +179,10 @@ class DARTsortAnalysis:
             )
         else:
             erp = None
+
+        unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)  # type: ignore
+        spike_counts = spike_counts[unit_ids >= 0]
+        unit_ids = unit_ids[unit_ids >= 0]
 
         return cls(
             sorting=sorting,
@@ -208,6 +213,8 @@ class DARTsortAnalysis:
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             tpca_features_dset=tpca_features_dset,
+            unit_ids=unit_ids,
+            spike_counts=spike_counts,
         )
 
     def in_unit(self, unit_id):
@@ -223,8 +230,10 @@ class DARTsortAnalysis:
         assert self.template_data is not None
         return np.flatnonzero(self.template_data.unit_ids == unit_id)
 
-    def unit_amplitudes(self):
+    def unit_amplitudes(self, unit_id=None):
         assert self.template_data is not None
+        if unit_id is not None:
+            return np.ptp(self.template_data.unit_templates(unit_id))
         amplitudes = np.zeros(self.sorting.unit_ids.shape)
         for j, unit_id in enumerate(self.sorting.unit_ids):
             temps = self.template_data.unit_templates(unit_id)
@@ -233,10 +242,8 @@ class DARTsortAnalysis:
 
     def firing_rates(self):
         assert self.sorting.labels is not None
-        unit_ids, counts = np.unique(self.sorting.labels, return_counts=True)
-        assert np.array_equal(unit_ids[unit_ids >= 0], self.sorting.unit_ids)
-        counts = counts[unit_ids >= 0]
-        frs = counts / self.recording.get_duration()
+        assert np.array_equal(self.unit_ids, self.sorting.unit_ids)
+        frs = self.spike_counts / self.recording.get_duration()
         return frs
 
     def named_feature(self, fname: str, which: slice | np.ndarray):
@@ -281,11 +288,16 @@ class DARTsortAnalysis:
             read_chans = self.sorting.channels[which]
         else:
             read_chans = np.full(len(which), main_channel)
+        
+        if self.extract_channel_index is None:
+            read_channel_index = self.vis_channel_index
+        else:
+            read_channel_index = self.extract_channel_index
 
         waveforms = read_waveforms_channel_index(
             recording=self.recording,
             times_samples=self.sorting.times_samples[which],
-            channel_index=self.extract_channel_index,
+            channel_index=read_channel_index,
             main_channels=read_chans,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
@@ -298,6 +310,7 @@ class DARTsortAnalysis:
             which=which,
             waveforms=waveforms,
             read_chans=read_chans,
+            main_channel=main_channel,
         )
         return WaveformsBag(
             which=which,
@@ -470,13 +483,18 @@ class DARTsortAnalysis:
             )
         else:
             n_pitches_shift = None
+        
+        if self.extract_channel_index is None:
+            read_channel_index = self.vis_channel_index
+        else:
+            read_channel_index = self.extract_channel_index
 
         waveforms_valid = get_waveforms_on_static_channels(
             waveforms=waveforms,
             geom=self.geom,
             n_pitches_shift=n_pitches_shift,
             main_channels=read_chans,
-            channel_index=self.extract_channel_index,
+            channel_index=read_channel_index,
             target_channels=show_chans,
             registered_geom=self.registered_geom,
         )
