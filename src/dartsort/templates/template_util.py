@@ -1,79 +1,24 @@
 import math
 from dataclasses import dataclass, replace
+from typing import cast
 
 import numpy as np
-from scipy.interpolate import interp1d
-from scipy.spatial import KDTree
 import torch
 import torch.nn.functional as F
+from scipy.interpolate import interp1d
+from scipy.spatial import KDTree
 
 from ..util import drift_util, waveform_util
+from ..util.data_util import DARTsortSorting
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger, DARTSORTVERBOSE
-from ..util.spiketorch import fast_nanmedian, ptp
+from ..util.logging_util import DARTSORTVERBOSE, get_logger
+from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
 from .get_templates import get_templates
 
 logger = get_logger(__name__)
 
 # -- alternate template constructors
-
-
-def get_registered_templates(
-    recording,
-    sorting,
-    spike_times_s,
-    spike_depths_um,
-    geom,
-    motion_est,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    spikes_per_unit=500,
-    realign_peaks=False,
-    realign_max_sample_shift=20,
-    low_rank_denoising=True,
-    denoising_tsvd=None,
-    denoising_rank=5,
-    denoising_fit_radius=75,
-    denoising_spikes_fit=50_000,
-    denoising_snr_threshold=50.0,
-    reducer=fast_nanmedian,
-    random_seed=0,
-    n_jobs=0,
-    show_progress=True,
-):
-    # use geometry and motion estimate to get pitch shifts and reg geom
-    registered_geom = drift_util.registered_geometry(geom, motion_est=motion_est)
-    pitch_shifts = drift_util.get_spike_pitch_shifts(
-        spike_depths_um, geom, times_s=spike_times_s, motion_est=motion_est
-    )
-
-    # now compute templates
-    results = get_templates(
-        recording,
-        sorting,
-        registered_geom=registered_geom,
-        pitch_shifts=pitch_shifts,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        spikes_per_unit=spikes_per_unit,
-        realign_peaks=realign_peaks,
-        realign_max_sample_shift=realign_max_sample_shift,
-        low_rank_denoising=low_rank_denoising,
-        denoising_tsvd=denoising_tsvd,
-        denoising_rank=denoising_rank,
-        denoising_fit_radius=denoising_fit_radius,
-        denoising_spikes_fit=denoising_spikes_fit,
-        denoising_snr_threshold=denoising_snr_threshold,
-        reducer=reducer,
-        random_seed=random_seed,
-        n_jobs=n_jobs,
-        show_progress=show_progress,
-    )
-    results["registered_geom"] = registered_geom
-    results["registered_templates"] = results["templates"]
-
-    return results
 
 
 def get_realigned_sorting(
@@ -91,7 +36,7 @@ def get_realigned_sorting(
         low_rank_denoising=low_rank_denoising,
         **kwargs,
     )
-    sorting = results["sorting"]
+    sorting = cast(DARTsortSorting, results["sorting"])
     if reassign_channels:
         assert "templates" in results
         templates = results["templates"]

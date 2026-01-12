@@ -23,10 +23,6 @@ from .get_templates import apply_time_shifts, fit_tsvd, get_templates
 from .superres_util import superres_sorting
 from .template_util import get_realigned_sorting, weighted_average
 
-_motion_error_prefix = (
-    "If template_cfg has registered_templates==True or superres_templates=True, then "
-)
-_aware_error = "motion_est must be passed to TemplateData.from_config()"
 
 logger = get_logger(__name__)
 
@@ -324,36 +320,22 @@ def _from_config_with_realigned_sorting(
         assert template_cfg.denoising_method == "exp_weighted"
         low_rank_denoising = True
 
-    motion_aware = motion_est is not None and (
-        template_cfg.registered_templates or template_cfg.superres_templates
-    )
-    localizations_dataset_name = template_cfg.localizations_dataset_name
-    has_localizations = hasattr(sorting, localizations_dataset_name)
-    if motion_aware and not has_localizations:
-        raise ValueError(
-            f"{_motion_error_prefix}"
-            "sorting must contain localizations in the attribute "
-            f"{localizations_dataset_name=}. Using load_simple_features"
-            "=True in DARTsortSorting.from_peeling_hdf5() would put them "
-            "there."
-        )
-
     # load motion features if necessary
     geom = recording.get_channel_locations()
-    motion_kw = {}
-    rgeom = geom
-    if template_cfg.registered_templates and motion_est is not None:
-        rgeom = drift_util.registered_geometry(geom, motion_est=motion_est)
-        motion_kw["registered_geom"] = rgeom
-        motion_kw["pitch_shifts"] = drift_util.get_spike_pitch_shifts(
-            geom=geom, sorting=sorting, motion_est=motion_est
+    if template_cfg.registered_templates:
+        motion_kw = dict(
+            motion_est=motion_est,
+            geom=geom,
+            localizations_dataset_name=template_cfg.localizations_dataset_name,
         )
+    else:
+        motion_kw = dict(geom=geom)
 
     # handle superresolved templates
     if template_cfg.superres_templates:
         superres_data = superres_sorting(
-            sorting,
-            geom,
+            sorting=sorting,
+            geom=geom,
             motion_est=motion_est,
             strategy=template_cfg.superres_strategy,
             superres_bin_size_um=template_cfg.superres_bin_size_um,
@@ -390,13 +372,16 @@ def _from_config_with_realigned_sorting(
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
-        **motion_kw,
+        **motion_kw,  # type: ignore
     )
     if template_cfg.superres_templates:
         assert group_ids is not None
         unit_ids = group_ids[results["unit_ids"]]  # type: ignore
     else:
         unit_ids = results["unit_ids"]
+    rgeom = results["registered_geom"]
+    if rgeom is None:
+        rgeom = geom
     obj = cls(
         results["templates"],
         unit_ids=unit_ids,

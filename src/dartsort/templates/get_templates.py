@@ -16,7 +16,11 @@ from tqdm.auto import tqdm
 
 from ..util import spikeio
 from ..util.data_util import DARTsortSorting, load_stored_tsvd
-from ..util.drift_util import registered_template
+from ..util.drift_util import (
+    registered_template,
+    registered_geometry,
+    get_spike_pitch_shifts,
+)
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import fast_nanmedian, ptp
 from ..util.waveform_util import make_channel_index
@@ -29,6 +33,8 @@ def get_templates(
     trough_offset_samples=42,
     spike_length_samples=121,
     spikes_per_unit=500,
+    motion_est=None,
+    geom=None,
     pitch_shifts=None,
     registered_geom=None,
     realign_peaks=False,
@@ -52,6 +58,8 @@ def get_templates(
     dtype=np.float32,
     show_progress=True,
     device=None,
+    localizations_dataset_name="point_source_localizations",
+    times_s_dataset_name="times_seconds",
 ):
     """Raw, denoised, and shifted templates
 
@@ -108,6 +116,27 @@ def get_templates(
     """
     # validate arguments
     raw_only = not low_rank_denoising
+
+    # use geometry and motion estimate to get pitch shifts and reg geom
+    if pitch_shifts is None and motion_est is not None:
+        assert geom is not None
+        registered_geom = registered_geometry(geom, motion_est=motion_est)
+        try:
+            spike_depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
+        except AttributeError:
+            raise ValueError(
+                "Sorting must contain localizations in the attribute "
+                f"{localizations_dataset_name=} when computing registered templates."
+            )
+        spike_times_s = getattr(sorting, times_s_dataset_name)
+        pitch_shifts = get_spike_pitch_shifts(
+            spike_depths_um, geom, times_s=spike_times_s, motion_est=motion_est
+        )
+    if pitch_shifts is not None:
+        assert registered_geom is not None
+        geom_kw = dict(registered_geom=registered_geom)
+    else:
+        geom_kw = dict(registered_geom=geom)
 
     # fit tsvd
     need_denoiser = denoising_tsvd is None and (
@@ -185,6 +214,7 @@ def get_templates(
             # handle keep_waveforms_in_hdf5
             raw_results["sorting"] = sorting
             raw_results["templates"] = raw_results["raw_templates"] = templates
+            raw_results.update(geom_kw)
             return raw_results
 
     # template logic
@@ -229,6 +259,7 @@ def get_templates(
             raw_std_devs=raw_std_devs,
             snrs_by_channel=snrs_by_channel,
             spike_counts_by_channel=spike_counts_by_channel,
+            **geom_kw,
         )
 
     weights = denoising_weights(
@@ -251,6 +282,7 @@ def get_templates(
         snrs_by_channel=snrs_by_channel,
         spike_counts_by_channel=spike_counts_by_channel,
         weights=weights,
+        **geom_kw,
     )
 
 

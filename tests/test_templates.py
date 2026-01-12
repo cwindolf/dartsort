@@ -245,19 +245,21 @@ def test_drifting_templates(tmp_path):
                 0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
             )
 
+            t_s = np.array([0., 2, 6, 8])
             sorting = DARTsortSorting(
                 times_samples=np.array([0, 2, 6, 8]),
                 labels=np.array([0, 0, 1, 1]),
                 channels=np.array([0, 0, 0, 0]),
                 sampling_frequency=1,
+                ephemeral_features=dict(
+                    point_source_localizations=np.zeros((4, 3)),
+                    times_seconds=t_s,
+                )
             )
-            t_s = [0, 2, 6, 8]
 
-            res = template_util.get_registered_templates(
+            res = get_templates.get_templates(
                 rec,
                 sorting,
-                spike_times_s=t_s,
-                spike_depths_um=np.zeros(4),
                 geom=geom,
                 motion_est=me,
                 trough_offset_samples=0,
