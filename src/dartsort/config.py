@@ -8,6 +8,7 @@ from .util.internal_config import (
     default_pretrained_path,
     InterpMethod,
     InterpKernel,
+    RealignStrategy
 )
 from .util.py_util import (
     cfg_dataclass,
@@ -138,7 +139,7 @@ class DARTsortUserConfig:
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
-    amplitude_scaling_limit: Annotated[float, Field(ge=0)] = 1.0
+    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
@@ -219,18 +220,14 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     always_recompute_tsvd: bool = True
     matching_template_min_amplitude: float = 0.0
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"
     interp_kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = None
-    extrap_kernel: InterpKernel | None = None
+    extrap_method: InterpMethod | None = "kernel"
+    extrap_kernel: InterpKernel | None = "rbf"
     kriging_poly_degree: int = 1
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5
@@ -261,7 +258,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # gaussian mixture high level
     truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    signal_rank: Annotated[int, Field(ge=0)] = 5
+    signal_rank: Annotated[int, Field(ge=0)] = 8
     criterion_threshold: float = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -273,8 +270,8 @@ class DeveloperConfig(DARTsortUserConfig):
         "ecl",
         "ecelbo",
     ] = "heldout_ecl"
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_000_000
-    kmeansk: int = 3
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
+    kmeansk: int = 4
     min_cluster_size: int = 50
 
     # gausian mixture low level
@@ -297,7 +294,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     gmm_euclidean_threshold: float = 5.0
     gmm_kl_threshold: float = 2.0
-    gmm_cosine_threshold: float = 0.75
+    gmm_cosine_threshold: float = 0.8
 
     # gaussian mixture unused
     hard_noise: bool = False

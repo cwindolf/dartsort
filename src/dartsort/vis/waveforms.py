@@ -5,6 +5,8 @@ from matplotlib.patches import Rectangle
 import numpy as np
 import torch
 
+from .colors import glasbey1024
+
 
 def geomplot(
     waveforms,
@@ -27,7 +29,7 @@ def geomplot(
     msbar=False,
     bar_color="k",
     bar_background="w",
-    zlim: str | None="tight",
+    zlim: str | None = "tight",
     c=None,
     color=None,
     colors=None,
@@ -283,3 +285,58 @@ def geomplot(
         return lines, unique_chans
 
     return lines
+
+
+def geomplot_templates(
+    axis,
+    unit_ids,
+    unit_templates,
+    channel_index,
+    registered_geom,
+    title="",
+    main_channel=None,
+    linestyles=None,
+):
+    unit_ids = np.asarray(unit_ids)
+    colors = np.asarray(glasbey1024)[unit_ids % len(glasbey1024)]
+    if main_channel is None:
+        chan = np.ptp(unit_templates[0], 0).argmax()
+    else:
+        chan = main_channel
+    channels = channel_index[chan]
+    unit_templates = np.pad(
+        unit_templates,
+        [(0, 0), (0, 0), (0, 1)],
+        constant_values=np.nan,
+    )
+    unit_templates = unit_templates[:, :, channels]
+    maxamp = np.nanmax(np.abs(unit_templates))
+
+    if linestyles is None:
+        linestyles = '-' * len(unit_ids)
+
+    labels = []
+    handles = []
+    for uid, color, template, ls in reversed(list(zip(unit_ids, colors, unit_templates, linestyles))):
+        lines = geomplot(
+            template[None],
+            max_channels=[chan],
+            channel_index=channel_index,
+            geom=registered_geom,
+            ax=axis,
+            show_zero=False,
+            max_abs_amp=maxamp,
+            subar=True,
+            bar_color="k",
+            bar_background="w",
+            zlim="tight",
+            color=color,
+            linestyle=ls,
+        )
+        labels.append(str(uid))
+        handles.append(lines)
+    axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
+    axis.set_xticks([])
+    axis.set_yticks([])
+    if title:
+        axis.set_title(title)

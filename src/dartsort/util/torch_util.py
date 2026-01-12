@@ -16,8 +16,15 @@ class BModule(Module):
         super().__init__(*args, **kwargs)
 
         # bypassing torch Module's hooks
-        self.___cpu_buffers = {}
+        self.___cpu_buffers: dict[str, Tensor | None] = {}
         self._init_bgetter()
+
+    def del_none_buffer(self, bufname: str):
+        assert bufname in self.___cpu_buffers
+        assert hasattr(self, bufname)
+        assert self.___cpu_buffers[bufname] is None
+        delattr(self, bufname)
+        del self.___cpu_buffers[bufname]
 
     def _init_bgetter(self):
         self.___bgetter = BufGetter(self._buffers, self.___cpu_buffers)

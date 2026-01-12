@@ -64,17 +64,17 @@ if "LOG_LEVEL" in os.environ:
     logger.log(ilevel, f"Log level set to {level} ({ilevel}).")
 
 
+def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+    import sys, traceback
+
+    log = file if hasattr(file, "write") else sys.stderr
+    assert log is not None
+    traceback.print_stack(file=log)
+    log.write(warnings.formatwarning(message, category, filename, lineno, line))
+
+
 # override warnings to show tracebacks when debugging
 if logger.isEnabledFor(DARTSORTVERBOSE):
-
-    def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
-        import sys, traceback
-
-        log = file if hasattr(file, "write") else sys.stderr
-        assert log is not None
-        traceback.print_stack(file=log)
-        log.write(warnings.formatwarning(message, category, filename, lineno, line))
-
     logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
     warnings.showwarning = warn_with_traceback
 

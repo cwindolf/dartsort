@@ -84,6 +84,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
+        trough_shifting: bool = False,
         up_interp_params=default_upsampling_params,
         drift_interp_params: InterpolationParams = default_interpolation_params,
         interp_neighborhood_radius: float = 150.0,
@@ -99,11 +100,13 @@ class DriftyMatchingTemplates(MatchingTemplates):
             How to pick the upsampling index? If we have a coarse match at time t,
         """
         super().__init__()
+        self.up_factor = up_factor
         self.upsampling = up_factor > 1
         self.up_method = up_method
         self.interpolating = motion_est is not None
         self.realign_strategy = realign_strategy
         self.trough_factor = trough_factor
+        self.trough_shifting = trough_shifting
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
@@ -218,6 +221,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             trough_offset_samples=template_data.trough_offset_samples,
             unit_ids=unit_ids,
             rgeom=rgeom,
+            trough_shifting=matching_cfg.trough_shifting,
             up_factor=matching_cfg.template_temporal_upsampling_factor,
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
@@ -252,15 +256,20 @@ class DriftyMatchingTemplates(MatchingTemplates):
         else:
             pconv = self.b.pconv
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
-        trough_shifts = _calc_trough_shifts(
-            spatial_sing=spatial_sing,
-            main_channels=main_channels,
-            up_temporal_comps=self.b.up_temporal_comps,
-            trough_offset_samples=self.b.trough_offset_samples,
-            normsq_by_chan=normsq_by_chan,
-            strategy=self.realign_strategy,
-            trough_factor=self.trough_factor,
-        )
+        if self.trough_shifting:
+            trough_shifts = _calc_trough_shifts(
+                spatial_sing=spatial_sing,
+                main_channels=main_channels,
+                up_temporal_comps=self.b.up_temporal_comps,
+                trough_offset_samples=self.b.trough_offset_samples,
+                normsq_by_chan=normsq_by_chan,
+                strategy=self.realign_strategy,
+                trough_factor=self.trough_factor,
+            )
+        else:
+            trough_shifts = torch.zeros(
+                (self.n_units, self.up_factor), dtype=torch.long, device=normsq.device
+            )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
             unit_ids=self.b.unit_ids,

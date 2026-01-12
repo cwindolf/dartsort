@@ -103,7 +103,7 @@ def kmeanspp(
             if invalid.all():
                 logger.dartsortdebug(f"kmeanspp: All close, stop at iteration {j}.")
                 break
-            p[invalid] = 0.0
+            p.masked_fill_(invalid, 0.0)
         centroid_ixs[j] = torch.multinomial(p, 1, generator=gen)
 
         newdists = torch.subtract(X, X[centroid_ixs[j]], out=diff_buffer).square_()
@@ -111,10 +111,8 @@ def kmeanspp(
         if not skip_assignment:
             closer = newdists < dists
             assert assignments is not None
-            assignments[closer] = j
-            dists[closer] = newdists[closer]
-        else:
-            torch.minimum(dists, newdists, out=dists)
+            assignments.masked_fill_(closer, j)
+        torch.minimum(dists, newdists, out=dists)
     else:
         j += 1  # type: ignore
 

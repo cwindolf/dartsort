@@ -64,6 +64,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         refractory_radius_frames: int = 10,
         realign_strategy: str = "mainchan_trough_factor",
         trough_factor: float = 3.0,
+        trough_shifting: bool = False,
         motion_est=None,
         dtype=torch.float,
     ):
@@ -84,6 +85,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.comp_up_max = n_cupt
         self.registered_template_depths_um = registered_template_depths_um
         self.pconv_db = pconv_db
+        self.trough_shifting = trough_shifting
 
         # -- store relevant arrays from LRTs and obj LRTs
         self.svd_rank = lrt.singular_values.shape[1]
@@ -152,11 +154,14 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             cup_temporal,
             self.b.spatial_sing[cupt.compressed_index_to_template_index],
         )
-        cup_trough_shifts = estimate_offset(
-            cup_temps, strategy=realign_strategy, trough_factor=trough_factor
-        )
-        cup_trough_shifts = cup_trough_shifts - int(trough_offset_samples)
-        cup_trough_shifts = torch.asarray(cup_trough_shifts).to(cup_index)
+        if self.trough_shifting:
+            cup_trough_shifts = estimate_offset(
+                cup_temps, strategy=realign_strategy, trough_factor=trough_factor
+            )
+            cup_trough_shifts = cup_trough_shifts - int(trough_offset_samples)
+            cup_trough_shifts = torch.asarray(cup_trough_shifts).to(cup_index)
+        else:
+            cup_trough_shifts = torch.zeros(len(cup_temporal)).to(cup_index)
         self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
         # -- template grouping and coarse objective indexing
@@ -277,6 +282,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             motion_est=motion_est,
             realign_strategy=matching_cfg.realign_strategy,
             trough_factor=matching_cfg.trough_factor,
+            trough_shifting=matching_cfg.trough_shifting,
             dtype=dtype,
         )
 

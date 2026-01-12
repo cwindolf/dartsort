@@ -1,40 +1,46 @@
-from pathlib import Path
 import math
+from pathlib import Path
 from typing import Iterable, cast
 
-from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from dredge.motion_util import MotionEstimate
+from matplotlib.lines import Line2D
 from scipy.sparse.csgraph import connected_components
 from tqdm.auto import tqdm
 
-from ..cluster.gmm.mixture import (
+from ..clustering.gmm.mixture import (
     Scores,
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
-    UnitSplitDebugInfo,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
+    run_split,
     try_kmeans,
 )
 from ..transform import TemporalPCA
 from ..util import spiketorch
-from ..util.data_util import DARTsortSorting, resolve_path, get_tpca
+from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
 from ..util.internal_config import (
     ComputationConfig,
+    InterpolationParams,
     RefinementConfig,
     default_refinement_cfg,
 )
-from ..util.interpolation_util import NeighborhoodFiller
+from ..util.interpolation_util import (
+    NeighborhoodFiller,
+    StableFeaturesInterpolator,
+    pad_geom,
+)
 from ..util.job_util import ensure_computation_config
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
+from .analysis_plots import distance_matrix_dendro
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
 from .waveforms import geomplot
-from .analysis_plots import distance_matrix_dendro
 
 
 @databag
@@ -46,11 +52,13 @@ class MixtureVisData:
     val_data: TruncatedSpikeData | None
     full_data: StreamingSpikeData
     sorting: DARTsortSorting
+    motion_est: MotionEstimate | None
     train_scores: Scores
     full_scores: Scores
     eval_scores: Scores
     train_times: np.ndarray
     train_labels: np.ndarray
+    train_ixs: np.ndarray
     full_labels: np.ndarray
     tpca: TemporalPCA
     inf_diag_unit_distance_matrix: torch.Tensor
@@ -142,18 +150,25 @@ class MixtureComponentPlot(BasePlot):
 
 class TextInfo(MixtureComponentPlot):
     kind = "small"
-    height = 0.25
+    height = 0.5
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         axis = panel.subplots()
         axis.axis("off")
+
+        ntot = (mix_data.full_labels == unit_id).sum()
+        ntrain = (mix_data.train_labels == unit_id).sum()
+
         msg = f"$\\mathbf{{unit\\ {unit_id}}}$\n"
+        msg += f"n total: {ntot}\n"
+        msg += f"n train: {ntrain}\n"
+
         axis.text(
-            0.5,
+            0.025,
             0.5,
             msg,
             fontsize="small",
-            ha="center",
+            ha="left",
             va="center",
             transform=axis.transAxes,
         )
@@ -346,7 +361,7 @@ class NeighborDistances(MixtureComponentPlot):
     width = 2
     height = 2
 
-    def __init__(self, count=5, cmap="managua"):
+    def __init__(self, count=5, cmap="plasma"):
         self.count = count
         self.cmap = plt.get_cmap(cmap)
 
@@ -369,7 +384,7 @@ class NeighborDistances(MixtureComponentPlot):
             image_cmap=self.cmap,
             show_values=True,
         )
-        panel.suptitle("cosine dists", fontsize="small")
+        panel.suptitle(f"{mix_data.tmm.distance_kind} dists", fontsize="small")
 
 
 class MergeView(MixtureComponentPlot):
@@ -386,7 +401,7 @@ class MergeView(MixtureComponentPlot):
         dists, neighbors = mix_data.friends(unit_id, count=gsize)
         d = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
         d.diagonal().fill_(0.0)
-        pair_mask = d < mix_data.tmm.max_distance
+        pair_mask = d < mix_data.tmm.merge_max_distance
 
         # determine connected components and re-order (stably)
         n_comps, labels = connected_components(pair_mask.numpy(force=True))
@@ -403,22 +418,26 @@ class MergeView(MixtureComponentPlot):
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
             pair_mask=pair_mask,
+            apply_adj_mask=True,
             debug=True,
         )
 
-        return neighbors, pair_mask, group_res
+        return neighbors, d, pair_mask, group_res
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
-        neighbors, pair_mask, group_res = self.compute(mix_data, unit_id)
+        neighbors, dist, pair_mask, group_res = self.compute(mix_data, unit_id)
         panel_mask, panel_info = panel.subfigures(nrows=2, height_ratios=[2, 0.5])
         distance_matrix_dendro(
             panel_mask,
             pair_mask,
+            show_values_from=dist,
             unit_ids=neighbors,
             dendrogram_linkage=None,
             show_unit_labels=True,
-            image_cmap="binary",
+            image_cmap="RdGy_r",
             show_values=True,
+            with_colorbar=False,
+            value_color="w",
         )
         ax_info = panel_info.subplots()
         ax_info.axis("off")
@@ -675,10 +694,10 @@ class SplitView(MixtureComponentPlot):
 
     def __init__(
         self,
-        colors=["r", "g", "b"],
+        colors=["r", "g", "b", "darkorange", "darkviolet", "mediumturquoise"],
         bail_color="k",
         vis_radius=50.0,
-        dist_cmap="managua",
+        dist_cmap="plasma",
     ):
         self.colors = np.array(colors)
         self.bail_color = bail_color
@@ -768,28 +787,39 @@ class SplitView(MixtureComponentPlot):
             means = None
 
         # compute text info
+        txt = ""
         if debug_info.bailed:
-            txt = f"bail: {debug_info.bail_reason}"
+            txt += f"bail: {debug_info.bail_reason}\n"
+        if debug_info.merge_res is not None:
+            txt += (
+                f"part: {debug_info.merge_res.grouping.group_ids.tolist()}\n"
+                f"imp: {debug_info.merge_res.improvement:.3f}\n"
+            )
         else:
-            assert split_res is not None
-            propstr = ",".join(f"{p:0.2f}" for p in split_res.sub_proportions.cpu())
+            txt += f"no allowed partitions\n"
+        if debug_info.split_model is not None:
+            sprops = debug_info.split_model.b.log_proportions.cpu()
+            sprops = sprops - mix_data.tmm.b.log_proportions[unit_id].cpu()
+            propstr = "+".join(f"{p:0.3f}" for p in sprops.exp())
+            txt += f"norm kmeans model props:\n  {propstr}={sprops.exp().sum():.2f}\n"
+        if debug_info.merge_res is not None:
+            mresprops = debug_info.merge_res.sub_proportions
+            propstr = "+".join(f"{p:0.3f}" for p in mresprops)
+            txt += f"mres props: {propstr}={mresprops.sum():.2f}\n"
+        if debug_info.kmeans_responsibilities is not None:
+            kcountstr = ",".join(
+                str(p.item()) for p in kmeans_labels.unique(return_counts=True)[1]
+            )
+            txt += f"kmeans counts: {kcountstr}\n"
+        if split_res is not None:
+            propstr = "+".join(f"{p:0.3f}" for p in split_res.sub_proportions.cpu())
             countstr = ",".join(
                 str(p.item())
                 for p in split_res.train_assignments.unique(return_counts=True)[1]
             )
-            if debug_info.merge_res is not None:
-                txt = (
-                    f"part: {debug_info.merge_res.grouping.group_ids.tolist()}\n"
-                    f"imp: {debug_info.merge_res.improvement:.3f}\n"
-                )
-            else:
-                txt = f"no allowed partitions\n"
-            txt += f"props: {propstr}\ncounts: {countstr}"
-            if debug_info.kmeans_responsibilities is not None:
-                kcountstr = ",".join(
-                    str(p.item()) for p in kmeans_labels.unique(return_counts=True)[1]
-                )
-                txt += f"\nkmeans counts: {kcountstr}"
+            txt += f"props: {propstr}={split_res.sub_proportions.cpu().sum():.2f}\n"
+            txt += f"counts: {countstr}\n"
+        txt = txt.rstrip()
 
         return (
             txt,
@@ -815,14 +845,17 @@ class SplitView(MixtureComponentPlot):
         ax_mean = mean_row.subplots()
         fig_dist_chans, fig_pc = dist_pc_row.subfigures(ncols=2)
         ax_pc = fig_pc.subplots()
-        fig_dist, fig_chans = fig_dist_chans.subfigures(nrows=2)
+        fig_dist, fig_chans = fig_dist_chans.subfigures(nrows=2, height_ratios=[3, 2])
         ax_chans = fig_chans.subplots()
 
         # unit dist matrix / pair mask
         if dists is not None:
+            dists_inf = dists.copy()
+            dists_inf[dists > mix_data.tmm.max_distance] = np.inf
             distance_matrix_dendro(
                 panel=fig_dist,
-                distances=dists,
+                distances=dists_inf,
+                show_values_from=dists,
                 show_unit_labels=True,
                 vmax=mix_data.tmm.max_distance,
                 image_cmap=self.dist_cmap,
@@ -849,11 +882,10 @@ class SplitView(MixtureComponentPlot):
         # merge res text info
         ax_info.axis("off")
         ax_info.text(
-            0.5,
+            0.2,
             0.5,
             txt,
             fontsize="small",
-            ha="center",
             va="center",
             transform=ax_info.transAxes,
         )
@@ -973,6 +1005,7 @@ def fit_mixture_for_vis(
     motion_est,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
+    split: bool = False,
 ) -> MixtureVisData:
     # run model to convergence and soft assign train/full sets
     mix_data = instantiate_and_bootstrap_tmm(
@@ -982,6 +1015,10 @@ def fit_mixture_for_vis(
         computation_cfg=computation_cfg,
     )
     mix_data.tmm.em(mix_data.train_data)
+    if split:
+        run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
+        mix_data.tmm.em(mix_data.train_data)
+
     train_scores = mix_data.tmm.soft_assign(
         data=mix_data.train_data,
         needs_bootstrap=False,
@@ -1009,6 +1046,12 @@ def fit_mixture_for_vis(
     tpca = get_tpca(sorting)
     assert tpca is not None
     assert isinstance(tpca, TemporalPCA)
+    if isinstance(mix_data.train_ixs, slice):
+        assert mix_data.train_ixs == slice(None)
+        assert train_labels.shape == full_labels.shape
+        train_ixs = np.arange(train_labels.shape[0])
+    else:
+        train_ixs = mix_data.train_ixs.numpy(force=True)
 
     return MixtureVisData(
         tmm=mix_data.tmm,
@@ -1016,10 +1059,12 @@ def fit_mixture_for_vis(
         val_data=mix_data.val_data,
         full_data=mix_data.full_data,
         sorting=sorting,
+        motion_est=motion_est,
         train_scores=train_scores,
         full_scores=full_scores,
         eval_scores=eval_scores,
         train_times=sorting.times_seconds[mix_data.train_ixs],  # type: ignore
+        train_ixs=train_ixs,
         train_labels=train_labels,
         full_labels=full_labels,
         tpca=tpca,
@@ -1326,5 +1371,98 @@ def vis_split_interpolation(
             )
     for ax in axes.flat:
         ax.axis("off")
+
+    return fig
+
+
+def vis_obs_interpolation(
+    mix_data: MixtureVisData,
+    unit_id: int,
+    count: int = 256,
+    erp_params: dict[str, InterpolationParams] | None = None,
+    figscale=5.0,
+    disp_colormap="viridis",
+    time_colormap="plasma",
+):
+    (trix,) = (mix_data.train_labels == unit_id).nonzero()
+    if trix.size > count:
+        trix = np.random.default_rng(0).choice(trix, size=count, replace=False)
+        trix.sort()
+    fix = mix_data.train_ixs[trix]
+    n = len(trix)
+
+    t_s = mix_data.train_times[trix]
+    z = mix_data.sorting.slice_feature_by_name("point_source_localizations", fix)[:, 2]
+    if mix_data.motion_est is None:
+        disp = np.zeros_like(z)
+    else:
+        disp = mix_data.motion_est.disp_at_s(t_s, z)
+
+    dev = mix_data.tmm.b.means.device
+    sgeom = pad_geom(mix_data.sorting.geom, device=dev)  # type: ignore
+    tgeom = torch.asarray(mix_data.prgeom).to(sgeom)
+    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)  # type: ignore
+    erps = {}
+    for k, ip in (erp_params or {}).items():
+        erps[k] = StableFeaturesInterpolator(
+            source_geom=sgeom,
+            target_geom=tgeom,
+            channel_index=channel_index,
+            params=ip,
+        )
+
+    features = {"actual": mix_data.train_data.x[trix]}
+    origf = mix_data.sorting.slice_feature_by_name(
+        "collisioncleaned_tpca_features", fix
+    )
+    origf = torch.asarray(origf).to(sgeom)
+    chans = torch.asarray(mix_data.sorting.channels[fix]).to(channel_index)
+    shifts = torch.asarray(-disp).to(sgeom)
+    tchans = mix_data.tmm.neighb_cov.obs_ix[mix_data.train_data.neighborhood_ids[trix]]
+    for name, erp in (erps or {}).items():
+        features[name] = erp.interp(
+            features=origf,
+            source_main_channels=chans,
+            target_channels=tchans,
+            source_shifts=shifts,
+        )
+
+    waveforms = {
+        k: mix_data.reconstruct_flat(f.view(n, -1)) for k, f in features.items()
+    }
+
+    maa = origf.abs().nan_to_num_().max().cpu().item()
+    dcolors = plt.get_cmap(disp_colormap)(spiketorch.minmax(disp))
+    tcolors = plt.get_cmap(time_colormap)(spiketorch.minmax(t_s))
+
+    ncols = 2
+    nrows = len(features)
+    fig = plt.figure(
+        figsize=(ncols * figscale, (nrows + 0.5) * figscale),
+        layout="constrained",
+    )
+    panels = fig.subfigures(
+        nrows=nrows + 1,
+        height_ratios=[1] + ([2] * nrows),
+    )
+
+    ax_top = panels[0].subplots()
+    ax_top.scatter(t_s, disp, c=dcolors, s=3, lw=0)
+
+    for row, (name, wf) in zip(panels[1:], waveforms.items()):
+        row_axs = row.subplots(ncols=2)
+        row.suptitle(name, fontsize="small")
+        for ax, cs in zip(row_axs, (dcolors, tcolors)):
+            geomplot(
+                waveforms=wf,
+                channels=tchans.numpy(force=True),
+                geom=mix_data.prgeom,
+                colors=cs,
+                subar=True,
+                ax=ax,
+                max_abs_amp=maa,
+                lw=0.5,
+            )
+            ax.axis("off")
 
     return fig

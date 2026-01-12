@@ -30,7 +30,7 @@ def simulate_moppca(
     from dartsort.transform import TemporalPCAFeaturizer
     from dartsort.util.data_util import DARTsortSorting
     from dartsort.util.noise_util import EmbeddedNoise
-    from dartsort.cluster.gmm.stable_features import (
+    from dartsort.clustering.gmm.stable_features import (
         StableSpikeDataset,
         SpikeNeighborhoods,
     )
@@ -269,7 +269,7 @@ def fit_moppcas(
     gmm_kw={},
 ):
     import dartsort
-    from dartsort.cluster.gmm.gaussian_mixture import SpikeMixtureModel
+    from dartsort.clustering.gmm.gaussian_mixture import SpikeMixtureModel
 
     N = data.n_spikes
 
@@ -354,7 +354,7 @@ def fit_ppca(
     prior_pseudocount=0,
     laplace_ard=False,
 ):
-    from dartsort.cluster import ppcalib
+    from dartsort.clustering import ppcalib
 
     nc = neighborhoods.n_channels
     res = ppcalib.ppca_em(

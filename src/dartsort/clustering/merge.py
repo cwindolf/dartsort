@@ -80,10 +80,11 @@ def merge_templates(
         computation_cfg = job_util.get_global_computation_config()
 
     if template_data is None:
+        assert template_cfg is not None
         template_data, sorting = TemplateData.from_config_with_realigned_sorting(
             recording,
             sorting,
-            template_cfg,
+            template_cfg=template_cfg,
             motion_est=motion_est,
             computation_cfg=computation_cfg,
             save_folder=template_save_folder,
@@ -125,8 +126,6 @@ def merge_templates(
         template_snrs,
         merge_distance_threshold=merge_distance_threshold,
         link=linkage,
-        template_data=template_data,
-        dist_matrix_kwargs=dist_matrix_kwargs,
     )
 
     return dict(sorting=merged_sorting, new_unit_ids=new_unit_ids)
@@ -445,8 +444,6 @@ def recluster(
     template_snrs,
     merge_distance_threshold=0.25,
     link="complete",
-    template_data=None,
-    dist_matrix_kwargs=None,
 ):
     # upper triangle not including diagonal, aka condensed distance matrix in scipy
     pdist = dists[np.triu_indices(dists.shape[0], k=1)]
@@ -455,6 +452,7 @@ def recluster(
     finite = np.isfinite(pdist)
     if not finite.any():
         return sorting, np.arange(dists.shape[0])
+    assert units.shape[0] == dists.shape[0] == dists.shape[1]
 
     pdist[~finite] = 1_000_000 + pdist[finite].max()
     Z = linkage(pdist, method=link)
@@ -466,8 +464,7 @@ def recluster(
     # update labels
     labels_updated = np.full_like(sorting.labels, -1)
     kept = np.flatnonzero(np.isin(sorting.labels, units))
-    _, flat_labels = np.unique(sorting.labels[kept], return_inverse=True)
-    labels_updated[kept] = new_labels[flat_labels]
+    labels_updated[kept] = new_labels[sorting.labels[kept]]
 
     # update times according to shifts
     times_updated = sorting.times_samples.copy()

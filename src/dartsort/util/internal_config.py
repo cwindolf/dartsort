@@ -317,6 +317,18 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
+RealignStrategy = Literal[
+    "mainchan_trough_factor",
+    "snr_weighted_trough_factor",
+    "normsq_weighted_trough_factor",
+    "ampsq_weighted_trough_factor",
+    "mainchan_svd_trough_factor",
+    "snr_weighted_svd_trough_factor",
+    "normsq_weighted_svd_trough_factor",
+    "ampsq_weighted_svd_trough_factor",
+]
+
+
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
@@ -363,12 +375,8 @@ class TemplateConfig:
     loot_cov: Literal["diag", "global"] = "global"
 
     # realignment
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
     realign_peaks: bool = True
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
 
@@ -397,7 +405,7 @@ class TemplateMergeConfig:
     min_spatial_cosine: float = 0.5
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 1.0
+    amplitude_scaling_boundary: float = 0.33
     svd_compression_rank: int = 20
     max_shift_samples: int = 50
 
@@ -424,7 +432,7 @@ class MatchingConfig:
     template_min_channel_amplitude: float = 0.0
     refractory_radius_frames: int = 10
     amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 1.0
+    amplitude_scaling_boundary: float = 0.333
     max_iter: int = 1000
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
@@ -437,12 +445,9 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    realign_strategy: Literal[
-        "mainchan_trough_factor",
-        "normsq_weighted_trough_factor",
-        "ampsq_weighted_trough_factor",
-    ] = "normsq_weighted_trough_factor"
+    realign_strategy: RealignStrategy = "normsq_weighted_trough_factor"
     trough_factor: float = 3.0
+    trough_shifting: bool = True
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
@@ -561,6 +566,7 @@ class ClusteringConfig:
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
     use_hellinger: bool = False
+    gmmdpc_max_sigma: float = 5.0
     mop: bool = False
 
     # hdbscan parameters
@@ -602,10 +608,10 @@ class RefinementConfig:
     # model params
     channels_strategy: Literal["count", "all"] = "count"
     neighb_overlap: float = 0.75
-    explore_neighb_steps: int = 1
+    explore_neighb_steps: int = 0
     min_count: int = 50
     channels_count_min: int = 1
-    signal_rank: int = 5
+    signal_rank: int = 8
     initialize_at_rank_0: bool = True
     cl_alpha: float = 1.0
     n_spikes_fit: int = 4096
@@ -621,7 +627,8 @@ class RefinementConfig:
     train_batch_size: int = 512
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
-    merge_distance_threshold: float = 0.75
+    split_distance_threshold: float = 1.0
+    merge_distance_threshold: float = 0.8
     criterion_threshold: float | None = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -649,7 +656,7 @@ class RefinementConfig:
     prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     laplace_ard: bool = False
-    kmeansk: int = 3
+    kmeansk: int = 4
     noise_fp_correction: bool = False
     full_proposal_every: int = 10
 
@@ -668,7 +675,7 @@ class RefinementConfig:
     cov_radius: float = 500.0
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
-    max_n_spikes: float | int = argfield(default=2_000_000, arg_type=int_or_inf)
+    max_n_spikes: float | int = argfield(default=1000 * 1024, arg_type=int_or_inf)
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
     noise_interp_params: InterpolationParams = default_interpolation_params
@@ -868,7 +875,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = MatchingConfig(
             threshold=cfg.matching_threshold,
             amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
-            amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
+            amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
             template_temporal_upsampling_factor=cfg.temporal_upsamples,
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
@@ -876,7 +883,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_type=cfg.matching_template_type,
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-            realign_strategy=cfg.realign_strategy,
+            # realign_strategy=cfg.realign_strategy,
             trough_factor=cfg.trough_factor,
         )
     elif cfg.detection_type == "universal":
@@ -1019,7 +1026,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
-        amplitude_scaling_boundary=cfg.amplitude_scaling_limit,
+        amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
         template_temporal_upsampling_factor=cfg.temporal_upsamples,
         chunk_length_samples=cfg.chunk_length_samples,
         template_merge_cfg=TemplateMergeConfig(
@@ -1033,7 +1040,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_type=cfg.matching_template_type,
         up_method=cfg.matching_up_method,
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-        realign_strategy=cfg.realign_strategy,
+        # realign_strategy=cfg.realign_strategy,
         trough_factor=cfg.trough_factor,
     )
     computation_cfg = ComputationConfig(

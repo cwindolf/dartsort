@@ -6,7 +6,7 @@ from matplotlib.patches import Ellipse
 from scipy.spatial import KDTree
 
 from .colors import glasbey1024, gray
-from dartsort.cluster.density import kdtree_inliers
+from dartsort.clustering.density import kdtree_inliers
 
 
 def scatter_spike_features(

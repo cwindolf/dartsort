@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 from ..util.drift_util import get_shift_info, get_spike_pitch_shifts
 from ..util.waveform_util import get_pitch
 
-from ..cluster.gmm import gaussian_mixture, stable_features
+from ..clustering.gmm import gaussian_mixture, stable_features
 from ..util import spiketorch
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from . import analysis_plots, gmm_helpers, layout

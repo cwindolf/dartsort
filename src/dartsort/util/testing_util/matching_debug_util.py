@@ -310,7 +310,7 @@ class DebugMatchingTemplates(MatchingTemplates):
         )
         return cls(
             templates_up=templates_up,
-            trough_shifts_up=trough_shifts_up,
+            trough_shifts_up=trough_shifts_up * int(matching_cfg.trough_shifting),
             refrac_radius=matching_cfg.refractory_radius_frames,
         )
 

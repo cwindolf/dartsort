@@ -1,29 +1,29 @@
 from collections.abc import Sequence
-from logging import getLogger
+from typing import Literal, cast
 
 import numpy as np
+import torch
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.stats import bernoulli
-import torch
 
+from ..util.logging_util import get_logger
 from .cluster_util import decrumb
 
-
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def kdtree_inliers(
     X,
     kdtree=None,
-    n_neighbors=10,
-    distance_upper_bound=25.0,
+    n_neighbors: int | None = 10,
+    distance_upper_bound: float | None = 25.0,
     workers=1,
     batch_size=2**16,
-):
+) -> tuple[np.ndarray, KDTree]:
     """Mark outlying points by a neighbors distance criterion
 
     Returns
@@ -50,18 +50,17 @@ def kdtree_inliers(
             distance_upper_bound=distance_upper_bound,
             workers=workers,
         )
+        indices = cast(np.ndarray, indices)
         inliers[i0:i1] = indices[:, -1] < kdtree.n
 
     return inliers, kdtree
 
 
-def get_smoothed_densities(
+def get_smoothed_density(
     X,
-    inliers=slice(None),
-    sigmas=None,
-    weights=None,
-    return_hist=False,
-    sigma_lows=None,
+    inliers: np.ndarray | slice = slice(None),
+    sigma: float = 1.0,
+    sigma_low: float | None = None,
     sigma_ramp_ax=-1,
     bin_sizes=None,
     bin_size_ratio=10.0,
@@ -69,25 +68,18 @@ def get_smoothed_densities(
     ramp_min_bin_size=5.0,
     max_n_bins=128,
     min_n_bins=5,
-    revert=False,
-):
+) -> np.ndarray:
     """Get RBF density estimates for each X[i] and bandwidth in sigmas
 
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
     histogram is liable to be way too big.
     """
     # figure out what bandwidths we'll be working on
-    seq = isinstance(sigmas, Sequence)
-    if not seq:
-        sigmas = (sigmas,)
-    do_ramp = sigma_lows is not None
-    if not do_ramp:
-        sigma_lows = [None for _ in sigmas]
-    elif not seq:
-        sigma_lows = (sigma_lows,)
-    min_sigma = min(sigmas)
-    if do_ramp:
-        min_sigma = min(min_sigma, min(sigma_lows))
+
+    if do_ramp := bool(sigma_low):
+        min_sigma = min(sigma, sigma_low)
+    else:
+        min_sigma = sigma
 
     # histogram bin sizes -- not too big, not too small
     infeats = X[inliers]
@@ -101,67 +93,92 @@ def get_smoothed_densities(
     dextents = np.ptp(extents, 1)
     if not (dextents > 0).all():
         raise ValueError(
-            f"Issue in KDE. {dextents=} {infeats.shape=} {sigmas=} {bin_sizes=}."
+            f"Issue in KDE. {dextents=} {infeats.shape=} {sigma=} {bin_sizes=}."
         )
     nbins = np.ceil(dextents / bin_sizes).astype(int)
     nbins = nbins.clip(min_n_bins, max_n_bins)
     bin_edges = [np.linspace(e[0], e[1], num=nb + 1) for e, nb in zip(extents, nbins)]
 
     # compute histogram and figure out how big the bins actually were
-    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges, weights=weights)
+    raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
     bin_sizes = np.array([(be[1] - be[0]) for be in bin_edges])
     bin_centers = [0.5 * (be[1:] + be[:-1]) for be in bin_edges]
 
     # normalize histogram to samples / volume
     raw_histogram = raw_histogram / bin_sizes.prod()
 
-    kdes = []
-    if return_hist:
-        hists = []
-    for sigma, sigma_low in zip(list(sigmas), list(sigma_lows)):
-        # fix up sigma, sigma_low based on bin size
-        if sigma is not None:
-            sigma = sigma / bin_sizes
-        if sigma_low is not None:
-            sigma_low = sigma_low / bin_sizes
+    # figure out how histogram should be filtered
+    hist = raw_histogram
+    if sigma is not None and sigma_low is None:
+        sigma_hist = sigma * np.reciprocal(bin_sizes)
+        hist = gaussian_filter(raw_histogram, sigma_hist)
+    elif sigma is not None and sigma_low is not None:
+        # filter by a sequence of bandwidths
+        sigma_hist = sigma * np.reciprocal(bin_sizes)
+        sigma_low_hist = sigma_low * np.reciprocal(bin_sizes)
+        ramp = np.linspace(
+            sigma_low_hist[sigma_ramp_ax],
+            sigma_hist[sigma_ramp_ax],
+            num=hist.shape[sigma_ramp_ax],
+        )
 
-        # figure out how histogram should be filtered
-        hist = raw_histogram
-        if sigma is not None and sigma_low is None:
-            hist = gaussian_filter(raw_histogram, sigma)
-        elif sigma is not None and sigma_low is not None:
-            # filter by a sequence of bandwidths
-            ramp = np.linspace(sigma_low, sigma, num=hist.shape[sigma_ramp_ax])
-            if revert:
-                ramp[:, sigma_ramp_ax] = np.linspace(
-                    sigma[sigma_ramp_ax],
-                    sigma_low[sigma_ramp_ax],
-                    num=hist.shape[sigma_ramp_ax],
-                )
+        # operate along the ramp axis
+        hist_move = np.moveaxis(hist, sigma_ramp_ax, 0)
+        hist_smoothed = hist_move.copy()
+        for j, sig in enumerate(ramp):
+            sig_move = sig.copy()
+            sig_move[0] = sig[sigma_ramp_ax]
+            sig_move[sigma_ramp_ax] = sig[0]
+            hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]  # sig_move
+        hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
 
-            # operate along the ramp axis
-            hist_move = np.moveaxis(hist, sigma_ramp_ax, 0)
-            hist_smoothed = hist_move.copy()
-            for j, sig in enumerate(ramp):
-                sig_move = sig.copy()
-                sig_move[0] = sig[sigma_ramp_ax]
-                sig_move[sigma_ramp_ax] = sig[0]
-                hist_smoothed[j] = gaussian_filter(hist_move, sig_move)[j]  # sig_move
-            hist = np.moveaxis(hist_smoothed, 0, sigma_ramp_ax)
-        if return_hist:
-            hists.append(hist)
+    lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
+    low = np.array([np.min(bc) for bc in bin_centers])
+    high = np.array([np.max(bc) for bc in bin_centers])
+    dens = lerp(X.clip(low, high))
 
-        lerp = RegularGridInterpolator(bin_centers, hist, bounds_error=False)
-        low = np.array([np.min(bc) for bc in bin_centers])
-        high = np.array([np.max(bc) for bc in bin_centers])
-        dens = lerp(X.clip(low, high))
-        kdes.append(dens)
+    return dens
 
-    kdes = kdes if seq else kdes[0]
-    if return_hist:
-        hists = hists if seq else hists[0]
-        return kdes, hists
-    return kdes
+
+def get_smoothed_density_ratio(
+    X,
+    *,
+    inliers: np.ndarray | slice = slice(None),
+    sigmas: list[float],
+    sigma_lows: list[float] | list[None] | None = None,
+    sigma_ramp_ax=-1,
+    bin_sizes=None,
+    bin_size_ratio=10.0,
+    min_bin_size=0.1,
+    ramp_min_bin_size=5.0,
+    max_n_bins=128,
+    min_n_bins=5,
+) -> np.ndarray:
+    assert 0 < len(sigmas) <= 2
+    sigma_lows = sigma_lows or [None] * len(sigmas)
+    dens = [
+        get_smoothed_density(
+            X=X,
+            inliers=inliers,
+            sigma=sigma,
+            sigma_low=sigma_low,
+            sigma_ramp_ax=sigma_ramp_ax,
+            bin_sizes=bin_sizes,
+            bin_size_ratio=bin_size_ratio,
+            min_bin_size=min_bin_size,
+            ramp_min_bin_size=ramp_min_bin_size,
+            max_n_bins=max_n_bins,
+            min_n_bins=min_n_bins,
+        )
+        for sigma, sigma_low in zip(sigmas, sigma_lows)
+    ]
+    if len(sigmas) == 1:
+        return dens[0]
+    else:
+        dens_ = dens[0]
+        dens_ /= dens[1]
+        np.nan_to_num(dens_, out=dens_)  # type: ignore
+        return dens_
 
 
 def nearest_higher_density_neighbor(
@@ -171,7 +188,7 @@ def nearest_higher_density_neighbor(
     distance_upper_bound=5.0,
     workers=1,
     batch_size=2**16,
-):
+) -> np.ndarray:
     nhdn = np.full(kdtree.n, kdtree.n, dtype=np.intp)
     density_padded = np.pad(density, (0, 1), constant_values=np.inf)
 
@@ -238,7 +255,7 @@ def remove_border_points(
 
 def guess_mode(
     X,
-    sigma="rule_of_thumb",
+    sigma: float | Literal["rule_of_thumb"] = "rule_of_thumb",
     outlier_neighbor_count=10,
     outlier_sigma=3.0,
     kdtree=None,
@@ -254,15 +271,19 @@ def guess_mode(
         distance_upper_bound=outlier_sigma * sigma0,
         workers=workers,
     )
+    inliers = cast(np.ndarray, inliers)
 
     if sigma == "rule_of_thumb":
-        sigma = (
+        sigma_dens = (
             1.06
             * np.linalg.norm(np.std(X[inliers], axis=0))
             * np.power(inliers.sum(), -0.2)
         )
+    else:
+        sigma_dens = sigma
 
-    density = get_smoothed_densities(X, inliers=inliers, sigmas=sigma)
+    density = get_smoothed_density(X, inliers=inliers, sigma=sigma_dens)
+    assert isinstance(density, np.ndarray)
     assert density.shape == (n,)
 
     return np.argmax(density)
@@ -307,8 +328,8 @@ def density_peaks(
     use_histograms=False,
     sigma_local=5.0,
     sigma_regional=None,
-    outlier_neighbor_count=10,
-    outlier_radius=25.0,
+    outlier_neighbor_count: int | None = 10,
+    outlier_radius: float | None = 25.0,
     n_neighbors_search=20,
     radius_search=25.0,
     noise_density=0.0,
@@ -343,21 +364,10 @@ def density_peaks(
                 kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
             )
         elif use_histograms:
-            sigmas = [sigma_local] + (
-                [sigma_regional] * int(sigma_regional is not None)
-            )
-            density = get_smoothed_densities(X, inliers=inliers, sigmas=sigmas)
+            sigmas = [sigma_local]
             if sigma_regional is not None:
-                d0, d1 = density
-                assert isinstance(d0, np.ndarray)
-                assert isinstance(d1, np.ndarray)
-                d1_0 = np.flatnonzero(d1 == 0)
-                assert np.all(d0[d1_0] == 0.0)
-                d1[d1_0] = 1.0
-                density = d0
-                density /= d1
-            else:
-                density = density[0]
+                sigmas.append(sigma_regional)
+            density = get_smoothed_density_ratio(X, inliers=inliers, sigmas=sigmas)
         else:
             density = knn_density(
                 kdtree,
@@ -438,7 +448,7 @@ def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25, centroids_b
     return dists
 
 
-def coo_nhdn(coo, densities):
+def coo_nhdn(coo, densities) -> np.ndarray:
     ii, jj = coo.coords
     dists = coo.data.copy()
     M = dists.max()
@@ -451,7 +461,8 @@ def coo_nhdn(coo, densities):
     dists[ii == jj] = 2 * M + 1  # i am my last resort
     coo2 = coo_array((dists, (ii, jj)), shape=coo.shape)
     # argmin == nearest
-    nhdn: np.ndarray = coo2.tocsc().argmin(axis=1, explicit=True)
+    nhdn = coo2.tocsc().argmin(axis=1, explicit=True)
+    nhdn = np.atleast_1d(nhdn)
     assert nhdn.shape == densities.shape[:1]
     return nhdn
 
@@ -536,7 +547,7 @@ def gmm_density_peaks(
 
     Xi = X[inliers]
     ni = len(Xi)
-    _, cchans = np.unique(channels[inliers], return_counts=True)
+    uchans, cchans = np.unique(channels[inliers], return_counts=True)
     comps_per_chan = np.minimum(
         max_components_per_channel,
         np.ceil(cchans / min_spikes_per_component).astype(int),
@@ -565,104 +576,48 @@ def gmm_density_peaks(
         sigma_atol=1e-3 if (use_hellinger or not gibbs_lls) else -1,
     )
     res["n_components"] = n_components
-    n_components = len(res["centroids"])
+    n_components = len(cast(torch.Tensor, res["centroids"]))
     res["n_components_kept"] = n_components
-    maxdist = max_sigma * res["sigma"] * np.sqrt(X.shape[1])
-    if not use_hellinger:
-        log_likelihoods = res["log_likelihoods"].numpy(force=True)
-        # density = np.full(len(X), -np.inf, dtype=log_likelihoods.dtype)
-        # density[inliers] = log_likelihoods
-        kdtree_res = density_peaks(
-            X[inliers],
-            density=log_likelihoods,
-            outlier_radius=None,
-            outlier_neighbor_count=None,
-            radius_search=maxdist,
+    maxdist = max_sigma * cast(float, res["sigma"]) * np.sqrt(X.shape[1])
+    if use_hellinger:
+        centroids = cast(torch.Tensor, res["centroids"]).numpy(force=True)
+        log_proportions = cast(torch.Tensor, res["log_proportions"]).numpy(force=True)
+        labels = gmmdpc_hellinger(
+            X=X,
+            centroids=centroids,
+            sigma=res["sigma"],
+            log_proportions=log_proportions,
+            maxdist=maxdist,
             workers=workers,
-            remove_clusters_smaller_than=0,
+            hellinger_cutoff=hellinger_cutoff,
+            hellinger_strong=hellinger_strong,
+            hellinger_weak=hellinger_weak,
+        )
+    else:
+        log_likelihoods = cast(torch.Tensor, res["log_likelihoods"]).numpy(force=True)
+        labels = gmmdpc_classic(
+            X=X,
+            inliers=inliers,
+            log_likelihoods=log_likelihoods,
+            maxdist=maxdist,
+            workers=workers,
             n_neighbors_search=n_neighbors_search,
         )
-        labels = nearest_neighbor_assign(
-            kdtree_res["kdtree"],
-            kdtree_res["labels"],
-            X,
-            radius_search=maxdist,
-            workers=workers,
-        )
-        labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
-        res["labels"] = labels
-        return res
-
-    if show_progress:
-        logger.info("Hellinger...")
-    centroids = res["centroids"].numpy(force=True)
-    coo = sparse_iso_hellinger(
-        centroids,
-        res["sigma"],
-        hellinger_threshold=hellinger_cutoff,
-    )
-    res["hellinger"] = coo
-    proportions = res["log_proportions"].numpy(force=True)
-    nhdn = coo_nhdn(coo, proportions)
-    assert nhdn.shape == (len(centroids),) == (n_components,)
-    ii = np.arange(len(nhdn))
-    jj = nhdn
-    if hellinger_strong:
-        strong = np.flatnonzero(coo.data < hellinger_strong)
-        ii = np.concatenate([ii, coo.coords[0][strong]])
-        jj = np.concatenate([jj, coo.coords[1][strong]])
-        order = np.argsort(ii, stable=True)
-        ii = ii[order]
-        jj = jj[order]
-    if hellinger_weak:
-        disconnected = nhdn == ii
-        disconnected = np.logical_and(
-            disconnected,
-            np.logical_not(np.isin(ii, nhdn[np.logical_not(disconnected)])),
-        )
-        disconnected = np.flatnonzero(disconnected)
-    if hellinger_weak and disconnected.size:
-        coo_weak = sparse_iso_hellinger(
-            centroids[disconnected],
-            res["sigma"],
-            hellinger_threshold=hellinger_weak,
-            centroids_b=centroids,
-        )
-        coo_weak = coo_array(
-            (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
-            shape=(n_components, n_components),
-        )
-        weak_nhdn = coo_nhdn(coo_weak, proportions)
-        jj[disconnected] = weak_nhdn[disconnected]
-
-    _1 = np.ones((1,), dtype="float32")
-    _1 = np.broadcast_to(_1, jj.shape)
-    nhdn_coo = coo_array((_1, (ii, jj)), shape=(n_components, n_components))
-    if show_progress:
-        logger.info("Components...")
-    _, labels = connected_components(nhdn_coo)
-    assert labels.shape == (n_components,)
-    labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
-
-    ckdt = KDTree(res["centroids"].numpy(force=True))
-    if show_progress:
-        logger.info("Last query...")
-    _, q = ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)
-    labels = labels_padded[q]
 
     if remove_clusters_smaller_than:
         if show_progress:
             logger.info("Clean...")
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
-    res["labels"] = labels
+    res["labels"] = labels  # type: ignore
 
     if mop:
         # use k-dtree dpc to mop up any remaining clusters...
         inliers = np.flatnonzero(inliers)
         discarded = np.flatnonzero(labels[inliers] < 0)
+        log_likelihoods = cast(torch.Tensor, res["log_likelihoods"]).numpy(force=True)
         mop_res = density_peaks(
             Xi[discarded],
-            density=res["log_likelihoods"].numpy(force=True)[discarded],
+            density=log_likelihoods[discarded],
             outlier_radius=outlier_radius,
             outlier_neighbor_count=outlier_neighbor_count,
             radius_search=maxdist,
@@ -676,6 +631,102 @@ def gmm_density_peaks(
         labels[inliers[discarded[mopped]]] = mopped_labels
 
     return res
+
+
+def gmmdpc_classic(
+    X,
+    inliers,
+    log_likelihoods,
+    maxdist,
+    workers=-1,
+    n_neighbors_search=20,
+):
+    kdtree_res = density_peaks(
+        X[inliers],
+        density=log_likelihoods,
+        outlier_radius=None,
+        outlier_neighbor_count=None,
+        radius_search=maxdist,
+        workers=workers,
+        remove_clusters_smaller_than=0,
+        n_neighbors_search=n_neighbors_search,
+    )
+    labels = nearest_neighbor_assign(
+        kdtree=kdtree_res["kdtree"],
+        tree_labels=kdtree_res["labels"],
+        X_other=X,
+        radius_search=maxdist,
+        workers=workers,
+    )
+    return labels
+
+
+def gmmdpc_hellinger(
+    X,
+    centroids,
+    sigma,
+    log_proportions,
+    maxdist: float,
+    workers=-1,
+    hellinger_cutoff=0.95,
+    hellinger_strong=0.0,
+    hellinger_weak=0.999,
+) -> np.ndarray:
+    logger.dartsortdebug("GMMDPC: Hellinger...")
+    coo = sparse_iso_hellinger(
+        centroids,
+        sigma,
+        hellinger_threshold=hellinger_cutoff,
+    )
+    nhdn = coo_nhdn(coo, log_proportions)
+    assert nhdn.shape == (len(centroids),)
+    n_components = len(centroids)
+    ii = np.arange(len(nhdn))
+    jj = nhdn
+
+    if hellinger_strong:
+        strong = np.flatnonzero(coo.data < hellinger_strong)
+        ii = np.concatenate([ii, coo.coords[0][strong]])
+        jj = np.concatenate([jj, coo.coords[1][strong]])
+        order = np.argsort(ii, stable=True)
+        ii = ii[order]
+        jj = jj[order]
+
+    if hellinger_weak:
+        disconnected = nhdn == ii
+        disconnected = np.logical_and(
+            disconnected,
+            np.logical_not(np.isin(ii, nhdn[np.logical_not(disconnected)])),
+        )
+        disconnected = np.flatnonzero(disconnected)
+    else:
+        disconnected = np.array([], dtype=int)
+
+    if hellinger_weak and disconnected.size:
+        coo_weak = sparse_iso_hellinger(
+            centroids[disconnected],
+            sigma,
+            hellinger_threshold=hellinger_weak,
+            centroids_b=centroids,
+        )
+        coo_weak = coo_array(
+            (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
+            shape=(n_components, n_components),
+        )
+        weak_nhdn = coo_nhdn(coo_weak, log_proportions)
+        jj[disconnected] = weak_nhdn[disconnected]
+
+    _1 = np.ones((1,), dtype="float32")
+    _1 = np.broadcast_to(_1, jj.shape)
+    nhdn_coo = coo_array((_1, (ii, jj)), shape=(n_components, n_components))
+    _, labels = connected_components(nhdn_coo)
+    assert labels.shape == (n_components,)
+    labels_padded = np.pad(labels, [(0, 1)], constant_values=-1)
+
+    ckdt = KDTree(centroids)
+    _, q = ckdt.query(X, workers=workers or 1, distance_upper_bound=maxdist)
+    labels = labels_padded[q]
+    return labels
 
 
 # -- versions used in UHD project
@@ -703,7 +754,6 @@ def density_peaks_fancy(
     distance_dependent_noise_density=False,
     attach_density_feature=False,
     triage_quantile_per_cluster=0.0,
-    revert=False,
     ramp_triage_per_cluster=False,
     triage_quantile_before_clustering=0.0,
     amp_no_triaging_before_clustering=6.0,
@@ -731,7 +781,6 @@ def density_peaks_fancy(
         noise_density=noise_density,
         triage_quantile_per_cluster=triage_quantile_per_cluster,
         ramp_triage_per_cluster=ramp_triage_per_cluster,
-        revert=revert,
         triage_quantile_before_clustering=triage_quantile_before_clustering,
         amp_no_triaging_before_clustering=amp_no_triaging_before_clustering,
         amp_no_triaging_after_clustering=amp_no_triaging_after_clustering,
@@ -777,7 +826,6 @@ def _density_peaks_clustering_uhd_implementation(
     triage_quantile_per_cluster=0.0,
     amp_no_triaging_after_clustering=12.0,
     ramp_triage_per_cluster=False,
-    revert=False,
     distance_dependent_noise_density=False,
     amp_lowest_noise_density=8.0,
     min_distance_noise_density=0.0,
@@ -806,7 +854,7 @@ def _density_peaks_clustering_uhd_implementation(
             np.minimum(distances_to_geom, radius_triage_before_clustering)
             / radius_triage_before_clustering
         )
-        which_to_discard = bernoulli.rvs(probabilities).astype("bool")
+        which_to_discard = bernoulli.rvs(probabilities).astype("bool")  # type: ignore
         inliers_first[idx_low_ptp[which_to_discard]] = False
         inliers_first = np.arange(len(X))[inliers_first]
     else:
@@ -871,23 +919,22 @@ def _density_peaks_clustering_uhd_implementation(
 
     if l2_norm is None:
         do_ratio = sigma_regional is not None
-        density = get_smoothed_densities(
+        density = get_smoothed_density(
             X[inliers_first],
             inliers=inliers,
-            sigmas=sigma_local,
-            sigma_lows=sigma_local_low,
-            revert=revert,
+            sigma=sigma_local,
+            sigma_low=sigma_local_low,
             min_bin_size=min_bin_size,
             max_n_bins=max_n_bins,
         )
         if density is None:
             return dict(labels=np.full(X.shape[0], -1))
         if do_ratio:
-            reg_density = get_smoothed_densities(
+            reg_density = get_smoothed_density(
                 X[inliers_first],
                 inliers=inliers,
-                sigmas=sigma_regional,
-                sigma_lows=sigma_regional_low,
+                sigma=sigma_regional,
+                sigma_low=sigma_regional_low,
                 min_bin_size=min_bin_size,
             )
             density = density / reg_density
@@ -927,7 +974,7 @@ def _density_peaks_clustering_uhd_implementation(
         dist = np.sqrt(
             (
                 (
-                    np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None]
+                    np.c_[X[inliers_first, 0], z_not_reg[inliers_first]][:, None]  # type: ignore
                     - geom[None]
                 )
                 ** 2

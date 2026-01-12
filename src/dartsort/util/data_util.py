@@ -336,6 +336,8 @@ class DARTsortSorting:
             loaded_persistent_features = data.get("loaded_persistent_features", [])
 
         if parent_h5_path is not None:
+            parent_h5_path = parent_h5_path.item()
+            assert isinstance(parent_h5_path, str)
             if additional_persistent_features:
                 loaded_persistent_features = set(
                     loaded_persistent_features + additional_persistent_features
@@ -344,8 +346,10 @@ class DARTsortSorting:
                 parent_h5_path,
                 load_feature_names=list(loaded_persistent_features),
             )
+            if labels is not None:
+                ephemeral_features["labels"] = labels
             return self.ephemeral_replace(
-                times_samples=times_samples, **ephemeral_features
+                times_samples=times_samples, channels=channels, **ephemeral_features
             )
         assert not loaded_persistent_features
 
@@ -1021,7 +1025,7 @@ def fit_reweighting(
             assert False
     assert isinstance(voltages, np.ndarray)
 
-    from ..cluster.density import get_smoothed_densities
+    from ..clustering.density import get_smoothed_densities
 
     if torch.is_tensor(voltages):
         voltages = voltages.numpy(force=True)

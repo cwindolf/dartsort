@@ -57,21 +57,22 @@ def realign_and_chuck_noisy_template_units(
         assert sorting is not None
     assert template_data.spike_counts_by_channel is not None
 
-    template_ptps = np.ptp(template_data.templates, 1).max(1)
-    template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
-    good_templates = np.logical_and(
-        template_data.spike_counts >= min_n_spikes,
-        template_snrs > min_template_snr,
+    good_templates = snr_mask(
+        template_data, min_n_spikes=min_n_spikes, min_template_snr=min_template_snr
     )
     logger.dartsortdebug(
         f"Discard {np.logical_not(good_templates).sum()} low-signal templates."
     )
-
     good_unit_ids = template_data.unit_ids[good_templates]
     assert np.all(np.diff(good_unit_ids) >= 0)
     unique_good_unit_ids, new_template_unit_ids = np.unique(
         good_unit_ids, return_inverse=True
     )
+
+    if template_data.properties:
+        properties = {k: v[good_templates] for k, v in template_data.properties.items()}
+    else:
+        properties = None
 
     assert sorting.labels is not None
     new_labels = sorting.labels.copy()
@@ -87,6 +88,7 @@ def realign_and_chuck_noisy_template_units(
         spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        properties=properties,
     )
     if template_save_folder is not None:
         if template_npz_filename is not None:
@@ -94,6 +96,16 @@ def realign_and_chuck_noisy_template_units(
             new_template_data.to_npz(npz)
 
     return new_sorting, new_template_data
+
+
+def snr_mask(template_data, min_n_spikes=50, min_template_snr=15.0):
+    template_ptps = np.ptp(template_data.templates, 1).max(1)
+    template_snrs = template_ptps * np.sqrt(template_data.spike_counts)
+    good_templates = np.logical_and(
+        template_data.spike_counts >= min_n_spikes,
+        template_snrs > min_template_snr,
+    )
+    return good_templates
 
 
 def reorder_by_depth(sorting, template_data):
@@ -104,8 +116,15 @@ def reorder_by_depth(sorting, template_data):
     w /= w.sum(axis=1, keepdims=True)
     meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
 
-    new_to_old = np.argsort(meanz)
-    old_to_new = np.argsort(new_to_old)
+    # new_to_old[i] = old id for new id i
+    new_to_old = np.argsort(meanz, stable=True)
+    # old_to_new[i] = new id for old id i
+    old_to_new = np.argsort(new_to_old, stable=True)
+
+    if template_data.properties:
+        properties = {k: v[new_to_old] for k, v in template_data.properties.items()}
+    else:
+        properties = {}
 
     valid = np.flatnonzero(sorting.labels >= 0)
     labels = np.full_like(sorting.labels, -1)
@@ -127,6 +146,7 @@ def reorder_by_depth(sorting, template_data):
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        properties=properties,
     )
     return sorting, template_data
 
@@ -191,7 +211,6 @@ def postprocess(
     merge_cfg = matching_cfg.template_merge_cfg
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return sorting, ensure_save(template_data, template_npz_path)
-
     merge_res = merge_templates(
         sorting=sorting,
         recording=recording,
@@ -211,56 +230,90 @@ def postprocess(
     )
     sorting = merge_res["sorting"]
     new_unit_ids = merge_res["new_unit_ids"]
+    del merge_res
     assert sorting.parent_h5_path == h5_path
 
     # determine which units were merged and recompute only those templates
-    ul, uc = np.unique(new_unit_ids, return_counts=True)
+    ul, ui, uc = np.unique(new_unit_ids, return_index=True, return_counts=True)
+    n_merged_units = ul.shape[0]
+    assert np.array_equal(ul, np.arange(len(ul)))
     needs_recompute = ul[uc > 1]
-    if not needs_recompute.size:
-        return sorting, ensure_save(template_data, template_npz_path)
-    recompute_labels = np.where(
-        np.isin(sorting.labels, needs_recompute), sorting.labels, -1
-    )
-    recompute_sorting = sorting.ephemeral_replace(labels=recompute_labels)
-    recompute_sorting, recompute_template_data = realign_and_chuck_noisy_template_units(
-        recording,
-        recompute_sorting,
-        motion_est=motion_est,
-        min_n_spikes=matching_cfg.min_template_count,
-        min_template_snr=matching_cfg.min_template_snr,
-        waveform_cfg=waveform_cfg,
-        template_cfg=template_cfg,
-        tsvd=tsvd,
-        computation_cfg=computation_cfg,
-    )
-    assert len(recompute_template_data.templates) == needs_recompute.size
-    assert (
-        recompute_template_data.trough_offset_samples
-        == template_data.trough_offset_samples
-    )
-    assert (
-        recompute_template_data.spike_length_samples
-        == template_data.spike_length_samples
-    )
+    if needs_recompute.size:
+        recompute_labels = np.where(
+            np.isin(sorting.labels, needs_recompute), sorting.labels, -1
+        )
+        recompute_sorting = sorting.ephemeral_replace(labels=recompute_labels)
+        recompute_sorting, recompute_template_data = realign_and_chuck_noisy_template_units(
+            recording,
+            recompute_sorting,
+            motion_est=motion_est,
+            min_n_spikes=matching_cfg.min_template_count,
+            min_template_snr=matching_cfg.min_template_snr,
+            waveform_cfg=waveform_cfg,
+            template_cfg=template_cfg,
+            tsvd=tsvd,
+            computation_cfg=computation_cfg,
+        )
+        assert len(recompute_template_data.templates) == needs_recompute.size
+        assert (
+            recompute_template_data.trough_offset_samples
+            == template_data.trough_offset_samples
+        )
+        assert (
+            recompute_template_data.spike_length_samples
+            == template_data.spike_length_samples
+        )
+    else:
+        recompute_template_data = None
+
+    # new indices corresponding to kept units
+    new_kept_ixs = np.flatnonzero(uc <= 1)
+    # original indices corresponding to kept units
+    old_kept_ixs = ui[new_kept_ixs]
+    # new indices for recomputed units
+    new_recompute_ix = np.flatnonzero(uc > 1)
+    # original indices corresponding to recomputed units
+    old_recompute_ix = ui[new_recompute_ix]
 
     # pack up the the templates
-    original_keep = np.isin(new_unit_ids, ul[uc <= 1])
-    otemps = template_data.templates[original_keep]
-    templates = np.concatenate([otemps, recompute_template_data.templates], axis=0)
-    osc = template_data.spike_counts[original_keep]
-    spike_counts = np.concatenate([osc, recompute_template_data.spike_counts], axis=0)
-    spike_counts_by_channel = None
+    templates = np.empty(
+        (n_merged_units, *template_data.templates.shape[1:]),
+        dtype=template_data.templates.dtype,
+    )
+    templates[new_kept_ixs] = template_data.templates[old_kept_ixs]
+    if recompute_template_data is not None:
+        templates[new_recompute_ix] = recompute_template_data.templates
+
+    spike_counts = np.empty(
+        (n_merged_units, *template_data.spike_counts.shape[1:]),
+        dtype=template_data.spike_counts.dtype,
+    )
+    spike_counts[new_kept_ixs] = template_data.spike_counts[old_kept_ixs]
+    if recompute_template_data is not None:
+        spike_counts[new_recompute_ix] = recompute_template_data.spike_counts
+
     if template_data.spike_counts_by_channel is not None:
-        ocounts = template_data.spike_counts_by_channel[original_keep]
-        new_counts = recompute_template_data.spike_counts_by_channel
-        assert new_counts is not None
-        spike_counts_by_channel = np.concatenate([ocounts, new_counts], axis=0)
-    raw_std_dev = None
+        spike_counts_by_channel = np.empty(
+            (n_merged_units, *template_data.spike_counts_by_channel.shape[1:]),
+            dtype=template_data.spike_counts_by_channel.dtype,
+        )
+        spike_counts_by_channel[new_kept_ixs] = template_data.spike_counts_by_channel[old_kept_ixs]
+        if recompute_template_data is not None:
+            spike_counts_by_channel[new_recompute_ix] = recompute_template_data.spike_counts_by_channel
+    else:
+        spike_counts_by_channel = None
+
     if template_data.raw_std_dev is not None:
-        ostd = template_data.raw_std_dev[original_keep]
-        new_std = recompute_template_data.raw_std_dev
-        assert new_std is not None
-        raw_std_dev = np.concatenate([ostd, new_std], axis=0)
+        raw_std_dev = np.empty(
+            (n_merged_units, *template_data.raw_std_dev.shape[1:]),
+            dtype=template_data.raw_std_dev.dtype,
+        )
+        raw_std_dev[new_kept_ixs] = template_data.raw_std_dev[old_kept_ixs]
+        if recompute_template_data is not None:
+            raw_std_dev[new_recompute_ix] = recompute_template_data.raw_std_dev
+    else:
+        raw_std_dev = None
+
     template_data = TemplateData(
         templates,
         unit_ids=np.arange(len(templates)),

@@ -405,12 +405,12 @@ def load_dartsort_step_sortings(
                 age = time.time() - detection_h5_path.stat().st_mtime
                 if age < mtime_dt:
                     continue
-            h5s = [detection_h5_path]
+            h5s = [resolve_path(detection_h5_path)]
             break
         else:
             h5s = []
     else:
-        h5s = [detection_h5_path]
+        h5s = [resolve_path(detection_h5_path)]
 
     for j in range(1, 100):
         mh5 = sorting_dir / f"matching{j}.h5"
@@ -419,7 +419,7 @@ def load_dartsort_step_sortings(
         if mtime_dt:
             if time.time() - mh5.stat().st_mtime < mtime_dt:
                 break
-        h5s.append(mh5)
+        h5s.append(resolve_path(mh5))
 
     # let's check that there is at least something to do...
     labels_npys = sorting_dir.glob("*_labels.npy")
@@ -431,7 +431,6 @@ def load_dartsort_step_sortings(
         name_formatter = _same
 
     for step, h5 in enumerate(h5s):
-        h5 = resolve_path(h5)
         if not h5.exists():
             continue
         st0 = DARTsortSorting.from_peeling_hdf5(

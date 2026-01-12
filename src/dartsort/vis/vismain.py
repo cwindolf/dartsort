@@ -51,6 +51,7 @@ def visualize_sorting(
     make_unit_comparisons=True,
     make_versus=True,
     sorting_analysis=None,
+    single_unit_ids=None,
     template_cfg=unshifted_template_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     channel_show_radius_um=50.0,
@@ -117,6 +118,7 @@ def visualize_sorting(
         computation_cfg=computation_cfg,
         exhaustive_gt=exhaustive_gt,
         gt_comparison_with_distances=gt_comparison_with_distances,
+        single_unit_ids=single_unit_ids,
     )
     sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png = paths_or_nones
 
@@ -173,6 +175,7 @@ def visualize_sorting(
             dpi=dpi,
             show_progress=True,
             overwrite=overwrite,
+            unit_ids=single_unit_ids,
             n_jobs=computation_cfg.n_jobs_cpu,
         )
 
@@ -221,6 +224,7 @@ def visualize_all_sorting_steps(
     exhaustive_gt=True,
     start_from_matching=False,
     n_units=None,
+    single_unit_ids=None,
     stop_after=None,
     dpi=200,
     overwrite=False,
@@ -294,6 +298,7 @@ def visualize_all_sorting_steps(
                 gt_analysis=gt_analysis,
                 other_analyses=other_analyses,
                 n_units=n_units,
+                single_unit_ids=single_unit_ids,
                 exhaustive_gt=exhaustive_gt,
                 gt_comparison_with_distances=gt_comparison_with_distances,
                 channel_show_radius_um=channel_show_radius_um,
@@ -368,6 +373,7 @@ def _plan_vis(
     gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
+    single_unit_ids=None,
 ):
     if computation_cfg is None:
         computation_cfg = get_global_computation_config()
@@ -432,7 +438,7 @@ def _plan_vis(
             # TODO: unit_comparison.all_summaries_done
             assert gt_analysis is not None
             need_ucomps = not unit.all_summaries_done(
-                gt_analysis.sorting.unit_ids,
+                single_unit_ids or gt_analysis.sorting.unit_ids,
                 unit_comparison_dir,
                 sorting_analysis=gt_analysis,
                 namebyamp=True,
