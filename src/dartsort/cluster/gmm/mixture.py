@@ -4301,7 +4301,6 @@ def _initialize_single(
     ev = s.sqrt_()
     W = V.mul_(ev.mul_(flip))
     W = U.T @ W
-    # W = U @ W
 
     mean = mean.view(d, c)
     # TODO build this the other way
