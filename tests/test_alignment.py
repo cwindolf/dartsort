@@ -503,6 +503,6 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     if up_factor > 1:
         assert match_up is not None
         assert np.array_equal(gt_up, match_up)
-    assert np.array_equal(gt_st.times_samples, st.times_samples)
+    np.testing.assert_array_equal(gt_st.times_samples, st.times_samples)
     mcs = np.abs(templates).sum(axis=1).argmax(axis=1)
     assert np.array_equal(st.channels, mcs[gt_st.labels])

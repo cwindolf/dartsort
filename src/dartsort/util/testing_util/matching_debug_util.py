@@ -15,7 +15,6 @@ from ...peel.matching import (
     ObjectiveUpdateTemplateMatchingPeeler,
 )
 from ...peel.matching_util.matching_base import subtract_precomputed_pconv
-from ...templates.template_util import get_main_channels_and_alignments
 from ...templates.templates import TemplateData
 from ..data_util import DARTsortSorting
 from ..internal_config import ComputationConfig, MatchingConfig
@@ -96,7 +95,11 @@ def yield_step_results(
     for _ in range(max_iter):
         pre_conv = chunk_data.convolve(cur_residual.T, padding=matcher.obj_pad_len)
         if obj_mode:
-            pre_conv = chunk_data.obj_from_conv(pre_conv)
+            pre_conv = chunk_data.obj_from_conv(
+                conv=pre_conv,
+                out=torch.zeros_like(pre_conv),
+                scalings_out=torch.zeros_like(pre_conv) if matcher.is_scaling else None,
+            )
 
         chk = matcher.match_chunk(
             cur_residual,
@@ -110,7 +113,13 @@ def yield_step_results(
         pre_conv = pre_conv.numpy(force=True)
         resid = chk["residual"].numpy(force=True)
         if obj_mode:
-            conv = chunk_data.obj_from_conv(chk["conv"]).numpy(force=True)
+            conv = chunk_data.obj_from_conv(
+                conv=chk["conv"],
+                out=torch.zeros_like(chk["conv"]),
+                scalings_out=torch.zeros_like(chk["conv"])
+                if matcher.is_scaling
+                else None,
+            ).numpy(force=True)
         else:
             conv = chk["conv"].numpy(force=True)
         if not chk["n_spikes"]:
@@ -256,9 +265,7 @@ class DebugMatchingTemplates(MatchingTemplates):
 
     template_type = "debug"
 
-    def __init__(
-        self, templates_up: Tensor, trough_shifts_up: Tensor, refrac_radius: int
-    ):
+    def __init__(self, templates_up: Tensor, refrac_radius: int):
         super().__init__()
         self.register_buffer("templates_up", templates_up)
         pconv = reference_pairwise_convolution(
@@ -267,7 +274,6 @@ class DebugMatchingTemplates(MatchingTemplates):
         )
         pconv = torch.asarray(pconv, device=templates_up.device)
         self.register_buffer("pconv", pconv)
-        self.register_buffer("trough_shifts_up", trough_shifts_up)
         refrac_ix = torch.arange(-refrac_radius, refrac_radius + 1, device=pconv.device)
         conv_lags = torch.arange(
             -templates_up.shape[2] + 1, templates_up.shape[2], device=pconv.device
@@ -299,18 +305,9 @@ class DebugMatchingTemplates(MatchingTemplates):
         assert templates_up.shape[1] == matching_cfg.template_temporal_upsampling_factor
         assert templates_up.shape[3] == recording.get_num_channels()
         assert template_data.templates.shape[2] == recording.get_num_channels()
-        _, _, trough_shifts_up = get_main_channels_and_alignments(
-            templates=templates_up.reshape(-1, *templates_up.shape[-2:])
-        )
-        trough_shifts_up = trough_shifts_up - template_data.trough_offset_samples
-        trough_shifts_up = trough_shifts_up.reshape(*templates_up.shape[:2])
         templates_up = torch.asarray(templates_up, device=device, dtype=dtype)
-        trough_shifts_up = torch.asarray(
-            trough_shifts_up, device=device, dtype=torch.long
-        )
         return cls(
             templates_up=templates_up,
-            trough_shifts_up=trough_shifts_up * int(matching_cfg.trough_shifting),
             refrac_radius=matching_cfg.refractory_radius_frames,
         )
 
@@ -329,7 +326,6 @@ class DebugMatchingTemplates(MatchingTemplates):
             ),
             main_channels=self.b.main_channels,
             templates_up=self.b.templates_up,
-            trough_shifts_up=self.b.trough_shifts_up,
             obj_normsq=self.b.templates_up[:, 0].square().sum(dim=(1, 2)),
             normsq_up=self.b.templates_up.square().sum(dim=(2, 3)),
             obj_n_templates=self.b.templates_up.shape[0],
@@ -355,7 +351,6 @@ class DebugChunkTemplateData(ChunkTemplateData):
     normsq_up: Tensor
     obj_n_templates: int
     templates_up: Tensor
-    trough_shifts_up: Tensor
     pconv: Tensor
     conv_lags: Tensor
     refrac_ix: Tensor
@@ -461,7 +456,8 @@ class DebugChunkTemplateData(ChunkTemplateData):
         if not peaks.n_spikes:
             return peaks
 
-        times = peaks.times
+        assert peaks.times is not None
+        times = peaks.times.clone()
         template_inds = peaks.template_inds
         assert times is not None
         assert template_inds is not None
@@ -488,6 +484,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
             else:
                 sc = None
                 objs = 2.0 * dots - self.normsq_up[l, :, None]
+            objs[0].add_(1e-5)
             best_val, best_flat = objs.view(-1).max(dim=0)
             best_u = best_flat // dots.shape[1]
             best_s = best_flat % dots.shape[1]
@@ -501,6 +498,9 @@ class DebugChunkTemplateData(ChunkTemplateData):
             times[n] += best_s
             scores[n] = best_val
 
+        up_half = self.up_factor // 2
+        time_shifts = (up_inds > up_half).long().neg_()
+
         return MatchingPeaks(
             times=times,
             obj_template_inds=peaks.obj_template_inds,
@@ -508,14 +508,8 @@ class DebugChunkTemplateData(ChunkTemplateData):
             scalings=scalings,
             up_inds=up_inds,
             scores=scores,
+            time_shifts=time_shifts,
         )
-
-    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        if not peaks.n_spikes:
-            return torch.zeros(size=(), dtype=torch.long)
-        assert peaks.template_inds is not None
-        assert peaks.up_inds is not None
-        return self.trough_shifts_up[peaks.template_inds, peaks.up_inds]
 
     def reconstruct_up_templates(self):
         return self.templates_up

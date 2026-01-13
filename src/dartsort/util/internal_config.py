@@ -448,7 +448,6 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    trough_shifting: bool = True
 
     # template postprocessing parameters
     min_template_snr: float = 40.0

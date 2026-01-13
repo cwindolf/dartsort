@@ -450,7 +450,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             peaks=peaks,
             trough_offset_samples=self.trough_offset_samples,
             unit_ids=chunk_template_data.unit_ids,
-            trough_shifts=chunk_template_data.trough_shifts(peaks),
+            trough_shifts=peaks.time_shifts,
         )
         # extract collision-cleaned waveforms on small neighborhoods
         if return_collisioncleaned_waveforms or self.picking_channels:

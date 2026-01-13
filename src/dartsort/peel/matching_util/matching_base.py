@@ -177,9 +177,6 @@ class ChunkTemplateData:
     ) -> "MatchingPeaks":
         raise NotImplementedError
 
-    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        raise NotImplementedError
-
     # this one is just for debugging / unit testing
     def reconstruct_up_templates(self):
         raise NotImplementedError
@@ -354,6 +351,7 @@ class MatchingPeaks:
     up_inds: Tensor | None = None
     scalings: Tensor | None = None
     scores: Tensor | None = None
+    time_shifts: Tensor | None = None
 
     if _extra_checks:
 
@@ -364,6 +362,7 @@ class MatchingPeaks:
                 assert self.up_inds is None
                 assert self.scalings is None
                 assert self.scores is None
+                assert self.time_shifts is None
             else:
                 assert self.times.ndim == 1
                 assert self.obj_template_inds is not None
@@ -378,6 +377,9 @@ class MatchingPeaks:
                 )
                 assert self.scores is not None
                 assert self.times.shape == self.scores.shape
+                assert (self.time_shifts is None) or (
+                    self.times.shape == self.time_shifts.shape
+                )
 
     @property
     def n_spikes(self):
@@ -416,6 +418,7 @@ class MatchingPeaks:
             up_inds=_mask_or_none(self.up_inds, mask),
             scalings=_mask_or_none(self.scalings, mask),
             scores=_mask_or_none(self.scores, mask),
+            time_shifts=_mask_or_none(self.time_shifts, mask),
         )
 
     @classmethod
@@ -431,6 +434,7 @@ class MatchingPeaks:
             up_inds=_cat_or_none([p.up_inds for p in peaks]),
             scalings=_cat_or_none([p.scalings for p in peaks]),
             scores=_cat_or_none([p.scores for p in peaks]),
+            time_shifts=_cat_or_none([p.time_shifts for p in peaks]),
         )
 
 

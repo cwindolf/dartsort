@@ -8,11 +8,9 @@ from scipy.interpolate import griddata
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 
-from ..templates.template_util import (
-    svd_compress_templates,
-    get_main_channels_and_alignments,
-)
+from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
+from ..templates.realignment import get_main_channels_and_alignments
 from ..util.interpolation_util import (
     InterpolationParams,
     default_interpolation_params,
@@ -124,10 +122,10 @@ class StaticTemplateSimulator(BaseTemplateSimulator):
         self.templates_up = upsample_multichan(
             self.template_data.templates, temporal_jitter=temporal_jitter
         )
-        _, _, a0 = get_main_channels_and_alignments(template_data)
+        _, mct, a0 = get_main_channels_and_alignments(template_data)
         self.offsets = a0 - template_data.trough_offset_samples
         assert self.templates_up.shape[:2] == (self.n_units, temporal_jitter)
-        _, _, a1 = get_main_channels_and_alignments(
+        _, mct, a1 = get_main_channels_and_alignments(
             templates=self.templates_up.reshape(
                 self.n_units * temporal_jitter, *self.templates_up.shape[2:]
             )
@@ -297,7 +295,13 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             self.offsets = (
                 self.singlechan_templates.argmin(1) - self.trough_offset_samples()
             )
-            self.offsets_up = sct_up.argmin(2) - self.trough_offset_samples()
+            assert (self.offsets == 0).all()
+            # atimes = (sct_up.shape[2] - 1) - sct_up[:, :, ::-1].argmin(2)
+            up_half = temporal_jitter // 2
+            off_up = (np.arange(temporal_jitter) > up_half).astype(np.int32)
+            off_up = self.offsets[:, None] - off_up
+            atimes = sct_up.argmin(2)
+            self.offsets_up = off_up
         np.testing.assert_allclose(
             self.singlechan_templates, self.singlechan_templates_up[:, 0], atol=1e-15
         )

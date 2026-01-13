@@ -18,7 +18,6 @@ from ...templates import (
     svd_compress_templates,
     templates_at_time,
 )
-from ...templates.template_util import estimate_offset
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import get_logger, DARTSORTVERBOSE
@@ -62,9 +61,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         registered_geom: np.ndarray | None = None,
         registered_template_depths_um: np.ndarray | None = None,
         refractory_radius_frames: int = 10,
-        realign_strategy: str = "mainchan_trough_factor",
-        trough_factor: float = 3.0,
-        trough_shifting: bool = False,
         motion_est=None,
         dtype=torch.float,
     ):
@@ -85,7 +81,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.comp_up_max = n_cupt
         self.registered_template_depths_um = registered_template_depths_um
         self.pconv_db = pconv_db
-        self.trough_shifting = trough_shifting
 
         # -- store relevant arrays from LRTs and obj LRTs
         self.svd_rank = lrt.singular_values.shape[1]
@@ -148,21 +143,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.register_buffer("cup_index", cup_index)
         self.register_buffer("cup_ix_to_up_ix", cup_ix_to_up_ix)
         self.register_buffer("cup_temporal", cup_temporal)
-
-        cup_temps = torch.einsum(
-            "ntr,nrc->ntc",
-            cup_temporal,
-            self.b.spatial_sing[cupt.compressed_index_to_template_index],
-        )
-        if self.trough_shifting:
-            cup_trough_shifts = estimate_offset(
-                cup_temps, strategy=realign_strategy, trough_factor=trough_factor
-            )
-            cup_trough_shifts = cup_trough_shifts - int(trough_offset_samples)
-            cup_trough_shifts = torch.asarray(cup_trough_shifts).to(cup_index)
-        else:
-            cup_trough_shifts = torch.zeros(len(cup_temporal)).to(cup_index)
-        self.register_buffer("cup_trough_shifts", cup_trough_shifts)
 
         # -- template grouping and coarse objective indexing
         gres = handle_template_groups(
@@ -280,9 +260,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             registered_template_depths_um=template_data.registered_depths_um(),
             pconv_db=pairwise_conv_db,
             motion_est=motion_est,
-            realign_strategy=matching_cfg.realign_strategy,
-            trough_factor=matching_cfg.trough_factor,
-            trough_shifting=matching_cfg.trough_shifting,
             dtype=dtype,
         )
 
@@ -363,7 +340,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             normsq=normsq,
             cup_index=self.b.cup_index,
             cup_map=self.b.cup_map,
-            cup_trough_shifts=self.b.cup_trough_shifts,
             cup_ix_to_up_ix=self.b.cup_ix_to_up_ix,
             coarse_index=self.b.coarse_index,
             group_index=self.b.group_index,
@@ -412,7 +388,6 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     cup_map: Tensor
     cup_ix_to_up_ix: Tensor
     coarse_index: Tensor
-    cup_trough_shifts: Tensor
     group_index: Tensor | None
     unit_ids: Tensor
     fine_to_coarse: Tensor
@@ -469,14 +444,6 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             ix_template = template_indices_a[:, None]
             ix_time = times_sub[:, None] + (padding + self.conv_lags)[None, :]
             add_at_(conv, (ix_template, ix_time), pconvs, sign=sign)
-
-    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        if peaks.up_inds is None:
-            assert self.cup_map.shape[1] == 1
-            compressed_up_inds = self.cup_map[peaks.template_inds][:, 0]
-        else:
-            compressed_up_inds = self.cup_map[peaks.template_inds, peaks.up_inds]
-        return self.cup_trough_shifts[compressed_up_inds]
 
     def subtract(self, traces, peaks, sign=-1):
         """Subtract templates from traces."""
@@ -605,6 +572,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             objs = torch.add(-norms[:, None], convs, alpha=2.0)
             scalings = None
             del convs
+        # this is just for numerical duplicates encountered in testing.
+        objs += (column_ix == 0).float()[:, None] * 1e-5
         objs_, better_dt = objs.max(dim=1)
         objs = objs.new_full(comp_up_ix.shape, -torch.inf)
         objs[dup_ix, column_ix] = objs_
@@ -631,6 +600,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
 
         assert peaks.times is not None
         times = peaks.times + time_shifts
+        up_half = self.up_factor // 2
+        time_shifts = (up_inds > up_half).long().neg_()
         return MatchingPeaks(
             times=times,
             obj_template_inds=peaks.obj_template_inds,
@@ -638,6 +609,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             up_inds=up_inds,
             scalings=scalings,
             scores=objs,
+            time_shifts=time_shifts,
         )
 
     def get_clean_waveforms(

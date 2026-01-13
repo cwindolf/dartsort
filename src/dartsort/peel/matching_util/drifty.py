@@ -40,10 +40,7 @@ from spikeinterface.core import BaseRecording
 from torch import Tensor
 
 from ...templates import TemplateData
-from ...templates.template_util import (
-    shared_basis_compress_templates,
-    singlechan_alignments,
-)
+from ...templates.template_util import shared_basis_compress_templates
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.interpolation_util import (
     FullProbeInterpolator,
@@ -84,13 +81,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
-        trough_shifting: bool = False,
         up_interp_params=default_upsampling_params,
         drift_interp_params: InterpolationParams = default_interpolation_params,
         interp_neighborhood_radius: float = 150.0,
         refractory_radius_frames: int = 10,
-        realign_strategy="normsq_weighted_trough_factor",
-        trough_factor=3.0,
         device: torch.device,
     ):
         """
@@ -104,9 +98,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.upsampling = up_factor > 1
         self.up_method = up_method
         self.interpolating = motion_est is not None
-        self.realign_strategy = realign_strategy
-        self.trough_factor = trough_factor
-        self.trough_shifting = trough_shifting
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
@@ -221,15 +212,12 @@ class DriftyMatchingTemplates(MatchingTemplates):
             trough_offset_samples=template_data.trough_offset_samples,
             unit_ids=unit_ids,
             rgeom=rgeom,
-            trough_shifting=matching_cfg.trough_shifting,
             up_factor=matching_cfg.template_temporal_upsampling_factor,
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
             drift_interp_params=matching_cfg.drift_interp_params,
             interp_neighborhood_radius=matching_cfg.drift_interp_neighborhood_radius,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
-            realign_strategy=matching_cfg.realign_strategy,
-            trough_factor=matching_cfg.trough_factor,
             device=device,
         )
 
@@ -256,20 +244,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         else:
             pconv = self.b.pconv
         padded_spatial_sing = F.pad(spatial_sing, (0, 1))
-        if self.trough_shifting:
-            trough_shifts = _calc_trough_shifts(
-                spatial_sing=spatial_sing,
-                main_channels=main_channels,
-                up_temporal_comps=self.b.up_temporal_comps,
-                trough_offset_samples=self.b.trough_offset_samples,
-                normsq_by_chan=normsq_by_chan,
-                strategy=self.realign_strategy,
-                trough_factor=self.trough_factor,
-            )
-        else:
-            trough_shifts = torch.zeros(
-                (self.n_units, self.up_factor), dtype=torch.long, device=normsq.device
-            )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
             unit_ids=self.b.unit_ids,
@@ -293,7 +267,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
             refrac_ix=self.b.refrac_ix,
             padded_spatial_sing=padded_spatial_sing,
             up_data=self.up_data,
-            up_trough_shifts=trough_shifts,
         )
 
 
@@ -325,7 +298,6 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     refrac_ix: Tensor
     conv_lags: Tensor
     up_data: "UpsamplingData | None"
-    up_trough_shifts: Tensor
 
     # template grouping is not implemented, so this is always false.
     coarse_objective: bool = False
@@ -426,13 +398,6 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         row_ix = peaks.obj_template_inds[:, None]
         mask[row_ix, time_ix] = value
 
-    def trough_shifts(self, peaks: "MatchingPeaks") -> Tensor:
-        if peaks.up_inds is None:
-            assert self.up_trough_shifts.shape[1] == 1
-            return self.up_trough_shifts[peaks.template_inds][:, 0]
-        else:
-            return self.up_trough_shifts[peaks.template_inds, peaks.up_inds]
-
     def fine_match(
         self,
         *,
@@ -474,6 +439,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             up_inds=up_inds,
             scalings=scalings,
             scores=objs,
+            time_shifts=-time_shifts,
         )
 
     def reconstruct_up_templates(self):
@@ -483,59 +449,6 @@ class DriftyChunkTemplateData(ChunkTemplateData):
 
 
 # -- helpers
-
-
-def _calc_trough_shifts(
-    spatial_sing: Tensor,
-    main_channels: Tensor,
-    up_temporal_comps: Tensor,
-    trough_offset_samples: Tensor,
-    normsq_by_chan: Tensor,
-    strategy: str,
-    trough_factor: float,
-    min_weight=0.75,
-) -> Tensor:
-    # pick alignments of the temporal components
-    rank, up, t = up_temporal_comps.shape
-    assert spatial_sing.shape[1] == rank
-
-    if strategy == "mainchan_trough_factor":
-        main_sing = spatial_sing.take_along_dim(
-            dim=2, indices=main_channels[:, None, None]
-        )[:, :, 0]
-        tcomps = up_temporal_comps.view(rank, up * t)
-        main_traces_up = main_sing @ tcomps
-        main_traces_up = main_traces_up.view(main_channels.shape[0], up, t)
-        trough_shifts = singlechan_alignments(
-            main_traces_up, dim=2, trough_factor=trough_factor
-        )
-        trough_shifts = trough_shifts.sub(trough_offset_samples)
-        return trough_shifts
-
-    if strategy == "normsq_weighted_trough_factor":
-        weights = normsq_by_chan
-        weights_mask = weights >= min_weight * weights.amax(dim=1, keepdim=True)
-        weights = weights.masked_fill(torch.logical_not(weights_mask), 0.0)
-        wtotal = weights.sum(dim=1)
-        units, chans = weights_mask.nonzero(as_tuple=True)
-        weights = weights[units, chans] / wtotal[units]
-    elif strategy == "ampsq_weighted_trough_factor":
-        raise NotImplementedError
-    else:
-        assert False
-
-    nnz = units.shape[0]
-    spatial = spatial_sing[units, :, chans]
-    traces = spatial @ up_temporal_comps.view(rank, up * t)
-    traces_up = traces.view(nnz, up, t)
-    offsets_nz = singlechan_alignments(traces_up, dim=2, trough_factor=trough_factor)
-    offsets = traces.new_zeros((len(spatial_sing), up))
-    ix = units[:, None].broadcast_to(offsets_nz.shape)
-    src = offsets_nz * weights[:, None]
-    offsets.scatter_add_(dim=0, index=ix, src=src)
-    offsets = offsets.round().long() - trough_offset_samples
-
-    return offsets
 
 
 def get_interp_upsampling_indices(

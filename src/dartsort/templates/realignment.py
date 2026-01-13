@@ -60,7 +60,6 @@ def realign(
             sampling_frequency=recording.sampling_frequency
         ),
         trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
         realign_strategy=realign_cfg.realign_strategy,
         trough_factor=realign_cfg.trough_factor,
     )
@@ -100,14 +99,15 @@ def get_main_channels_and_alignments(
         :, :, 0
     ]
     aligner_traces = np.where(mc_traces < 0, trough_factor * mc_traces, -mc_traces)
-    offsets = np.abs(aligner_traces).argmax(1)
+    aligner_traces = np.abs(aligner_traces, out=aligner_traces)
+    # break ties late
+    tmax = aligner_traces.shape[1] - 1
+    offsets = tmax - aligner_traces[:, ::-1].argmax(1)
     return main_channels, mc_traces, offsets
 
 
 def estimate_offset(
     templates,
-    denoising_tsvd=None,
-    tsvd_slice=slice(None),
     snrs_by_channel=None,
     strategy="mainchan_trough_factor",
     trough_factor=3.0,
@@ -170,14 +170,11 @@ def estimate_offset(
 
 def realign_templates(
     templates,
-    denoising_tsvd=None,
     snrs_by_channel=None,
     unit_ids=None,
     main_channels=None,
     padded_trough_offset_samples=42,
     trough_offset_samples=42,
-    spike_length_samples=121,
-    max_shift=20,
     realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
 ):
@@ -199,15 +196,13 @@ def realign_templates(
     assert main_channels is not None
 
     # find template peak time
-    pad = padded_trough_offset_samples - trough_offset_samples
+    max_shift = padded_trough_offset_samples - trough_offset_samples
     template_peak_times = estimate_offset(
         templates,
-        denoising_tsvd=denoising_tsvd,
         snrs_by_channel=snrs_by_channel,
         strategy=realign_strategy,
         trough_factor=trough_factor,
         main_channels=main_channels,
-        tsvd_slice=slice(pad, pad + spike_length_samples),
     )
 
     # find unit sample time shifts
@@ -223,7 +218,7 @@ def realign_templates(
         template_shifts[unit_ids] = template_shifts_
 
     aligned_templates = trim_templates_to_shift(
-        templates,
+        templates=templates,
         max_shift=max_shift,
         template_shifts=template_shifts,
         unit_ids=unit_ids,
