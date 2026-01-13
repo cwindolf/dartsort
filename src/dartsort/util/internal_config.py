@@ -380,6 +380,7 @@ class TemplateConfig:
 
 RealignStrategy = Literal[
     "mainchan_trough_factor",
+    "dredge",
     "snr_weighted_trough_factor",
     "normsq_weighted_trough_factor",
     "ampsq_weighted_trough_factor",

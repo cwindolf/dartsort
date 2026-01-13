@@ -1,6 +1,8 @@
 from dataclasses import replace
+import gc
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 from spikeinterface.core import BaseRecording
 
@@ -14,6 +16,7 @@ from ..util.internal_config import (
 )
 from ..util.data_util import DARTsortSorting
 from ..util.spiketorch import ptp
+from ..util.job_util import ensure_computation_config
 from .templates import TemplateData
 
 
@@ -54,6 +57,7 @@ def realign(
 
     template_shifts, aligned_templates = realign_templates(
         templates=templates.templates,
+        rgeom=torch.asarray(templates.registered_geom),
         snrs_by_channel=templates.snrs_by_channel(),
         unit_ids=templates.unit_ids,
         padded_trough_offset_samples=realignment_waveform_cfg.trough_offset_samples(
@@ -62,6 +66,7 @@ def realign(
         trough_offset_samples=trough_offset_samples,
         realign_strategy=realign_cfg.realign_strategy,
         trough_factor=realign_cfg.trough_factor,
+        computation_cfg=computation_cfg,
     )
     templates = replace(
         templates,
@@ -107,14 +112,21 @@ def get_main_channels_and_alignments(
 
 
 def estimate_offset(
+    *,
     templates,
+    rgeom: torch.Tensor,
+    computation_cfg: ComputationConfig,
     snrs_by_channel=None,
     strategy="mainchan_trough_factor",
     trough_factor=3.0,
     min_weight=0.75,
+    overlap_radius: float = 150.0,
     main_channels=None,
-):
+    padded_trough_offset_samples=42,
+    trough_offset_samples=42,
+) -> torch.Tensor:
     templates = torch.asarray(templates)
+
     if strategy == "mainchan_trough_factor":
         _, _, offsets = get_main_channels_and_alignments(
             None,
@@ -122,6 +134,22 @@ def estimate_offset(
             templates=templates.numpy(force=True),
             main_channels=main_channels,
         )
+        return offsets - padded_trough_offset_samples
+
+    if strategy == "dredge":
+        offsets = dredge_realign(
+            templates=templates,
+            main_channels=main_channels,
+            snrs_by_channel=snrs_by_channel,
+            rgeom=rgeom,
+            overlap_radius=overlap_radius,
+            trough_factor=trough_factor,
+            padded_trough_offset_samples=padded_trough_offset_samples,
+            trough_offset_samples=trough_offset_samples,
+            computation_cfg=computation_cfg,
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
         return offsets
 
     if strategy == "snr_weighted_trough_factor":
@@ -136,7 +164,7 @@ def estimate_offset(
         offsets = tmp.argmax(dim=1).double()
         offsets = torch.sum(offsets * weights, dim=1)
         offsets = torch.round(offsets).long()
-        return offsets
+        return offsets - padded_trough_offset_samples
 
     if strategy == "normsq_weighted_trough_factor":
         tmp = templates.square()
@@ -150,7 +178,7 @@ def estimate_offset(
         offsets = tmp.argmax(dim=1).double()
         offsets = torch.sum(offsets * weights, dim=1)
         offsets = torch.round(offsets).long()
-        return offsets
+        return offsets - padded_trough_offset_samples
 
     if strategy == "ampsq_weighted_trough_factor":
         weights = ptp(templates).square()
@@ -163,13 +191,15 @@ def estimate_offset(
         offsets = tmp.argmax(dim=1).double()
         offsets = torch.sum(offsets * weights, dim=1)
         offsets = torch.round(offsets).long()
-        return offsets
+        return offsets - padded_trough_offset_samples
 
     assert False
 
 
 def realign_templates(
+    *,
     templates,
+    rgeom,
     snrs_by_channel=None,
     unit_ids=None,
     main_channels=None,
@@ -177,7 +207,9 @@ def realign_templates(
     trough_offset_samples=42,
     realign_strategy: RealignStrategy = "mainchan_trough_factor",
     trough_factor=3.0,
+    computation_cfg: ComputationConfig | None = None,
 ):
+    computation_cfg = ensure_computation_config(computation_cfg)
     if main_channels is None:
         if realign_strategy.startswith("mainchan"):
             if snrs_by_channel is not None:
@@ -197,20 +229,26 @@ def realign_templates(
 
     # find template peak time
     max_shift = padded_trough_offset_samples - trough_offset_samples
-    template_peak_times = estimate_offset(
-        templates,
+    template_shifts__ = estimate_offset(
+        rgeom=rgeom,
+        computation_cfg=computation_cfg,
+        templates=templates,
         snrs_by_channel=snrs_by_channel,
         strategy=realign_strategy,
         trough_factor=trough_factor,
         main_channels=main_channels,
+        padded_trough_offset_samples=padded_trough_offset_samples,
+        trough_offset_samples=trough_offset_samples,
     )
+    if torch.is_tensor(template_shifts__):
+        template_shifts_ = template_shifts__.numpy(force=True)
+    else:
+        template_shifts_ = template_shifts__
+
+    # clip if needed
+    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
 
     # find unit sample time shifts
-    if torch.is_tensor(template_peak_times):
-        template_peak_times = template_peak_times.numpy(force=True)
-    assert template_peak_times is not None
-    template_shifts_ = template_peak_times - padded_trough_offset_samples
-    template_shifts_[np.abs(template_shifts_) > max_shift] = 0
     if unit_ids is None:
         template_shifts = template_shifts_
     else:
@@ -292,3 +330,115 @@ def apply_time_shifts(
         labels = sorting.labels
 
     return sorting.ephemeral_replace(labels=labels, times_samples=new_times)
+
+
+def dredge_realign(
+    *,
+    templates: torch.Tensor,
+    main_channels: torch.Tensor | None,
+    snrs_by_channel: torch.Tensor | None,
+    rgeom: torch.Tensor,
+    overlap_radius: float = 150.0,
+    min_corr: float = 0.5,
+    trough_factor: float = 3.0,
+    padded_trough_offset_samples: int,
+    trough_offset_samples: int,
+    computation_cfg: ComputationConfig,
+) -> torch.Tensor:
+    from dredge.dredgelib import newton_solve_rigid
+
+    max_shift = padded_trough_offset_samples - trough_offset_samples
+
+    if main_channels is None and snrs_by_channel is not None:
+        main_channels = snrs_by_channel.argmax(1)
+
+    # start with trough alignment
+    main_channels, main_channel_traces, offsets = get_main_channels_and_alignments(
+        None,
+        trough_factor=trough_factor,
+        templates=templates.numpy(force=True),
+        main_channels=main_channels,
+    )
+    offsets = offsets - padded_trough_offset_samples
+    offsets[np.abs(offsets) > max_shift] = 0
+
+    # trim to alignment
+    templates_trim0 = trim_templates_to_shift(
+        templates=templates,
+        max_shift=max_shift,
+        template_shifts=offsets,
+    )
+
+    # which pairs to convolve?
+    pos = rgeom[main_channels]
+    dist = torch.cdist(pos, pos)
+    pair_mask = dist <= overlap_radius
+    ii, jj = pair_mask.nonzero(as_tuple=True)
+    triu = jj > ii
+    ii = ii[triu]
+    jj = jj[triu]
+
+    # get best lags and correlations
+    templates_trim0 = torch.asarray(
+        templates_trim0, dtype=torch.float, device=computation_cfg.actual_device()
+    )
+    lags, corrs = _pairwise_correlate_templates(templates_trim0, ii, jj, max_shift)
+    lags = lags.numpy(force=True)
+    corrs = corrs.numpy(force=True)
+
+    # densify
+    k = len(templates)
+    D = np.zeros((k, k))
+    C = D.copy()
+    D[ii, jj] = lags
+    D[jj, ii] = -lags
+    C[ii, jj] = corrs
+    C[jj, ii] = corrs
+    np.fill_diagonal(C, 1.0)
+
+    # corrs->weights
+    C[C < min_corr] = 0.0
+
+    # call out to dredge
+    Sigma0inv = np.eye(C.shape[0])
+    p, *_ = newton_solve_rigid(D, C, Sigma0inv)
+
+    # adjust offsets
+    offsets = torch.asarray(offsets) + torch.asarray(p)
+
+    return offsets
+
+
+def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=16):
+    lags = torch.arange(-max_shift, max_shift + 1).to(templates.device)
+    k = len(templates)
+    npair = len(ii)
+
+    # compute norms...
+    normsa = templates.new_zeros((k, lags.shape[0]))
+    normsb = templates.new_zeros((k, lags.shape[0]))
+    for i0 in range(0, k, batch_size):
+        i1 = min(npair, i0 + batch_size)
+
+        filt = templates[i0:i1][:, None]
+        ones = torch.ones_like(filt)
+        conv = F.conv2d(ones, filt, padding=(max_shift, 0))
+        assert conv.shape == (i1 - i0, 1, lags.shape[0], 1)
+        conv = conv[:, 0, :, 0].sqrt_()
+        normsa[i0:i1] = conv
+        normsb[i0:i1] = torch.flip(conv, dims=(1,))
+
+    best_lag = templates.new_zeros(ii.shape)
+    best_corr = templates.new_zeros(ii.shape)
+
+    for i0 in range(0, npair, batch_size):
+        i1 = min(npair, i0 + batch_size)
+
+        filt = templates[ii[i0:i1]][:, None]
+        inpt = templates[jj[i0:i1]][:, None]
+        conv = F.conv2d(inpt, filt, padding=(max_shift, 0))
+        assert conv.shape == (i1 - i0, 1, lags.shape[0], 1)
+        conv = conv[:, 0, :, 0].div_(normsa[ii] * normsb[jj])
+        best_lag[i0:i1], best_corr[i0:i1] = conv.max(dim=1)
+
+    return best_lag, best_corr
