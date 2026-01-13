@@ -9,8 +9,6 @@ from .clustering import (
     get_clustering_features,
     kmeans,
     merge,
-    postprocess_util,
-    estimate_template_library,
     ppcalib,
     refinement_strategies,
 )
@@ -39,18 +37,23 @@ from .main import (
     universal_match,
 )
 from .peel.grab import GrabAndFeaturize
-from .templates import TemplateData, realign
+from .templates import (
+    TemplateData,
+    estimate_template_library,
+    postprocess_util,
+    realign,
+)
 from .transform import WaveformPipeline
 from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
-from .util.logging_util import (
-    get_logger,
-    DARTsortLogger,
-    DARTSORTDEBUG,
-    DARTSORTVERBOSE,
-)
 from .util.data_util import DARTsortSorting, get_featurization_pipeline
 from .util.drift_util import registered_geometry
 from .util.internal_config import *
+from .util.logging_util import (
+    DARTSORTDEBUG,
+    DARTSORTVERBOSE,
+    DARTsortLogger,
+    get_logger,
+)
 from .util.noise_util import EmbeddedNoise
 from .util.py_util import resolve_path
 from .util.registration_util import try_load_motion_est

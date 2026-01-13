@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from dartsort.cluster import kmeans
+from dartsort.clustering import kmeans
 
 
 @pytest.fixture

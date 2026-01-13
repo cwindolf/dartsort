@@ -3,7 +3,7 @@ import pytest
 import torch
 
 import dartsort
-from dartsort.cluster.refine_util import initialize_gmm
+from dartsort.clustering.refine_util import initialize_gmm
 
 
 TEST_N_EM_ITERS = 10

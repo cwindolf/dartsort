@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD, PCA
 from tqdm.auto import tqdm
 
 from ..util import spikeio
@@ -238,10 +238,11 @@ def fit_tsvd(
     dtype=np.float32,
     random_seed=0,
     n_iter=15,
-):
+) -> PCA | TruncatedSVD:
     tsvd = None
     if not recompute_tsvd:
         tsvd = load_stored_tsvd(sorting)
+        assert isinstance(tsvd, (TruncatedSVD, PCA))
     if tsvd is not None:
         return tsvd
 

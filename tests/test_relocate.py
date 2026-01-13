@@ -4,7 +4,7 @@ in drift_util.py
 """
 
 import numpy as np
-from dartsort.cluster import relocate
+from dartsort.clustering import relocate
 from dartsort.util import drift_util, waveform_util
 from test_util import dense_layout
 

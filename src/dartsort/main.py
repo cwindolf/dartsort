@@ -1,18 +1,13 @@
+import gc
 import traceback
 from dataclasses import asdict
-import gc
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from spikeinterface.core import BaseRecording
 import torch
+from spikeinterface.core import BaseRecording
 
-from .clustering import (
-    SimpleMatrixFeatures,
-    get_clusterer,
-    get_clustering_features,
-    estimate_template_library,
-)
+from .clustering import SimpleMatrixFeatures, get_clusterer, get_clustering_features
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
     GrabAndFeaturize,
@@ -21,7 +16,7 @@ from .peel import (
     ThresholdAndFeaturize,
     UniversalTemplatesMatchingPeeler,
 )
-from .templates import TemplateData
+from .templates import TemplateData, estimate_template_library
 from .util.data_util import DARTsortSorting, check_recording
 from .util.internal_config import (
     ClusteringConfig,

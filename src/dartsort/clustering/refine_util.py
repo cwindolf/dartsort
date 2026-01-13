@@ -9,6 +9,7 @@ from ..util import job_util, noise_util, data_util, spiketorch
 from ..util.logging_util import get_logger
 from ..util.main_util import ds_save_intermediate_labels
 from ..transform.temporal_pca import BaseTemporalPCA
+from ..templates import TemplateData
 from .cluster_util import agglomerate
 from .split import split_clusters
 from .merge import merge_templates
@@ -167,11 +168,15 @@ def split_merge(
         n_jobs=computation_cfg.actual_n_jobs(),
         motion_est=motion_est,
     )
-    merge_sorting = merge_templates(
-        split_sorting,
-        recording,
+    template_data = TemplateData.from_config(
+        recording=recording,
+        sorting=sorting,
         motion_est=motion_est,
         template_cfg=merge_template_cfg,
+    )
+    merge_sorting = merge_templates(
+        sorting=split_sorting,
+        template_data=template_data,
         merge_distance_threshold=merge_cfg.merge_distance_threshold,
         min_spatial_cosine=merge_cfg.min_spatial_cosine,
         linkage=merge_cfg.linkage,

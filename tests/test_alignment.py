@@ -191,8 +191,11 @@ def test_denoiser_alignment(align_sim, align_templates):
 
     # get templates
     (pst0, tr0), (pst1, tr1) = [
-        dartsort.postprocess(
-            rec, st, template_cfg=dartsort.raw_template_cfg, waveform_cfg=waveform_cfg
+        dartsort.estimate_template_library(
+            rec,
+            st,
+            template_cfg=dartsort.raw_template_cfg,
+            waveform_cfg=waveform_cfg,
         )
         for st in sts
     ]
@@ -234,54 +237,68 @@ def test_denoiser_alignment(align_sim, align_templates):
 
 
 def template_makers(rec, st, align=True, align_max=0):
-    t0 = dartsort.TemplateData.from_config(
-        rec,
-        st,
-        template_cfg=dartsort.TemplateConfig(
-            realign_peaks=align,
-            denoising_method="none",
-            realign_shift_ms=align_max,
-            algorithm="by_chunk",
-            spikes_per_unit=10000,
-        ),
+    tcfg0 = dartsort.TemplateConfig(
+        denoising_method="none", algorithm="by_chunk", spikes_per_unit=10000
+    )
+    tcfg1 = dartsort.TemplateConfig(
+        denoising_method="none", algorithm="by_unit", spikes_per_unit=10000
+    )
+    tcfg2 = dartsort.TemplateConfig(
+        denoising_method="none", reduction="median", spikes_per_unit=10000
+    )
+    tcfg3 = dartsort.TemplateConfig(
+        denoising_method="none",
+        spikes_per_unit=10000,
+    )
+    realign_cfg = dartsort.TemplateRealignmentConfig(
+        realign_peaks=align,
+        realign_shift_ms=align_max,
+    )
+    _, t0 = dartsort.estimate_template_library(
+        recording=rec,
+        sorting=st,
+        template_cfg=tcfg0,
+        realign_cfg=realign_cfg,
         waveform_cfg=waveform_cfg,
     )
-    t1 = dartsort.TemplateData.from_config(
-        rec,
-        st,
-        template_cfg=dartsort.TemplateConfig(
-            realign_peaks=align,
-            denoising_method="none",
-            realign_shift_ms=align_max,
-            algorithm="by_unit",
-            spikes_per_unit=10000,
-        ),
+    _, t1 = dartsort.estimate_template_library(
+        recording=rec,
+        sorting=st,
+        template_cfg=tcfg1,
+        realign_cfg=realign_cfg,
         waveform_cfg=waveform_cfg,
     )
-    t2 = dartsort.TemplateData.from_config(
-        rec,
-        st,
-        template_cfg=dartsort.TemplateConfig(
-            realign_peaks=align,
-            denoising_method="none",
-            realign_shift_ms=align_max,
-            reduction="median",
-            spikes_per_unit=10000,
-        ),
+    _, t2 = dartsort.estimate_template_library(
+        recording=rec,
+        sorting=st,
+        template_cfg=tcfg2,
+        realign_cfg=realign_cfg,
         waveform_cfg=waveform_cfg,
     )
-    _, t3 = dartsort.postprocess(
-        rec,
-        st,
-        template_cfg=dartsort.TemplateConfig(
-            realign_peaks=align,
-            denoising_method="none",
-            realign_shift_ms=align_max,
-            spikes_per_unit=10000,
-        ),
+    _, t3 = dartsort.estimate_template_library(
+        recording=rec,
+        sorting=st,
+        template_cfg=tcfg3,
+        realign_cfg=realign_cfg,
         waveform_cfg=waveform_cfg,
     )
-    return [t0, t1, t2, t3]
+    ts = [t0, t1, t2, t3]
+    if not align:
+        t0_ = dartsort.TemplateData.from_config(
+            rec,
+            st,
+            template_cfg=tcfg0,
+            waveform_cfg=waveform_cfg,
+        )
+        ts.append(t0_)
+        t1_ = dartsort.TemplateData.from_config(
+            rec,
+            st,
+            template_cfg=tcfg1,
+            waveform_cfg=waveform_cfg,
+        )
+        ts.append(t1_)
+    return ts
 
 
 @pytest.mark.parametrize("with_spike_shifts", (False, True))

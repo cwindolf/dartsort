@@ -109,7 +109,7 @@ def superres_sorting(
 
     # handle too-small units
     superres_labels, superres_to_original = remove_small_superres_units(
-        superres_labels, superres_to_original, min_spikes_per_bin=min_spikes_per_bin
+        superres_labels, superres_to_original, min_spikes_per_bin=min_spikes_per_bin  # type: ignore
     )
 
     # back to un-triaged label space

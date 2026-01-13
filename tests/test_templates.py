@@ -15,9 +15,10 @@ from dartsort.templates import (
     template_util,
     templates,
     TemplateData,
+    estimate_template_library,
 )
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.internal_config import TemplateConfig
+from dartsort.util.internal_config import TemplateConfig, TemplateRealignmentConfig
 from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
 from test_util import no_overlap_recording_sorting
 
@@ -76,19 +77,22 @@ def test_refractory_templates(
 
     template_cfg = TemplateConfig(
         registered_templates=drift is not False,
-        realign_peaks=bool(realign_peaks),
-        realign_strategy=realign_peaks if realign_peaks else "mainchan_trough_factor",
         reduction=reduction,
         algorithm=algorithm,
         denoising_method=denoising_method,
         with_raw_std_dev=True,
         use_zero=denoising_method == "t",
     )
-    td = TemplateData.from_config(
+    realign_cfg = TemplateRealignmentConfig(
+        realign_peaks=bool(realign_peaks),
+        realign_strategy=realign_peaks if realign_peaks else "mainchan_trough_factor",
+    )
+    st, td = estimate_template_library(
         recording=sim["recording"],
         sorting=sim["sorting"],
         motion_est=sim["motion_est"],
         template_cfg=template_cfg,
+        realign_cfg=realign_cfg,
     )
 
     unit_ids, spike_counts = np.unique(sim["sorting"].labels, return_counts=True)
@@ -127,21 +131,24 @@ def test_refractory_templates_algorithm_agreement(
             continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
-            realign_peaks=bool(realign_peaks),
-            realign_strategy=realign_peaks
-            if realign_peaks
-            else "mainchan_trough_factor",
             reduction="mean",
             algorithm=algorithm,
             denoising_method=denoising_method,
             with_raw_std_dev=True,
         )
-        td = TemplateData.from_config(
+        realign_cfg = TemplateRealignmentConfig(
+            realign_peaks=bool(realign_peaks),
+            realign_strategy=realign_peaks
+            if realign_peaks
+            else "mainchan_trough_factor",
+        )
+        _, td = estimate_template_library(
             recording=sim["recording"],
             sorting=sim["sorting"],
             motion_est=sim["motion_est"],
             template_cfg=template_cfg,
             tsvd=tsvd,
+            realign_cfg=realign_cfg,
         )
         tds.append(td)
 
@@ -177,7 +184,6 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
             denoising_method=denoising_method,
             superres_bin_min_spikes=0,
             use_svd=False,
-            realign_peaks=False,
             algorithm=algorithm,
         ),
         motion_est=IdentityMotionEstimate(),
@@ -214,7 +220,6 @@ def test_static_templates(tmp_path):
                 sorting,
                 trough_offset_samples=0,
                 spike_length_samples=2,
-                realign_peaks=False,
                 low_rank_denoising=False,
             )
             temps = res["raw_templates"]
@@ -245,7 +250,7 @@ def test_drifting_templates(tmp_path):
                 0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
             )
 
-            t_s = np.array([0., 2, 6, 8])
+            t_s = np.array([0.0, 2, 6, 8])
             sorting = DARTsortSorting(
                 times_samples=np.array([0, 2, 6, 8]),
                 labels=np.array([0, 0, 1, 1]),
@@ -254,7 +259,7 @@ def test_drifting_templates(tmp_path):
                 ephemeral_features=dict(
                     point_source_localizations=np.zeros((4, 3)),
                     times_seconds=t_s,
-                )
+                ),
             )
 
             res = get_templates.get_templates(
@@ -264,7 +269,6 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
                 trough_offset_samples=0,
                 spike_length_samples=2,
-                realign_peaks=False,
                 low_rank_denoising=False,
                 show_progress=False,
             )
@@ -339,7 +343,6 @@ def test_main_object():
         sorting,
         dartsort.TemplateConfig(
             denoising_method="none",
-            realign_peaks=False,
             superres_templates=False,
             denoising_rank=2,
         ),

@@ -2,13 +2,13 @@ import numpy as np
 import pytest
 from sklearn.metrics import rand_score
 
-from dartsort.cluster import (
+from dartsort.clustering import (
     clustering_strategies,
     get_clusterer,
     get_clustering_features,
     refinement_strategies,
 )
-from dartsort.cluster.postprocess import reorder_by_depth
+from dartsort.templates.postprocess_util import reorder_by_depth
 from dartsort.main import cluster
 from dartsort.util.internal_config import (
     ClusteringConfig,
@@ -105,9 +105,7 @@ def test_refinement(simulations, sim_name, refkw):
     if refkw["refinement_strategy"]:
         refkw["split_cfg"] = SplitConfig()
         refkw["merge_cfg"] = TemplateMergeConfig()
-        refkw["merge_template_cfg"] = TemplateConfig(
-            realign_peaks=False, denoising_method="none"
-        )
+        refkw["merge_template_cfg"] = TemplateConfig(denoising_method="none")
 
     clusterer = get_clusterer(
         clustering_cfg=None,
@@ -140,7 +138,9 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
         refinement_cfg=RefinementConfig(**refkw),
     )
     for k in np.unique(res_sorting.labels):
-        logger.warning(f"{k=} {np.unique(sorting.labels[res_sorting.labels==k], return_counts=True)=}")
+        logger.warning(
+            f"{k=} {np.unique(sorting.labels[res_sorting.labels==k], return_counts=True)=}"
+        )
     with subtests.test(msg="rand score"):
         if refkw["refinement_strategy"] == "gmm":
             assert rand_score(sorting.labels, res_sorting.labels) > 0.97

@@ -97,7 +97,7 @@ def point_source_amplitude_vectors(x, y, z_abs, alpha, geom, channels=None):
     return alpha[:, None] / denom
 
 
-def determine_alpha(ampvecs, x, y, z, geom, channels=None):
+def determine_alpha(ampvecs, x, y, z, geom, channels):
     geom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
     mask = (channels < len(geom)).astype(ampvecs.dtype)
     preds = point_source_amplitude_vectors(

@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 
-from dartsort.cluster.gmm import (
+from dartsort.clustering.gmm import (
     truncated_mixture,
     mixture,
     stable_features,
@@ -194,6 +194,7 @@ def test_truncated_mixture(
                         prior_pseudocount=tmm.prior_pseudocount,
                         cl_alpha=tmm.cl_alpha,
                         total_log_proportion=tmm.b.log_proportions[unit_id].item(),
+                        merge_max_distance=tmm.merge_max_distance,
                     )
                 )
                 assert not any_discarded

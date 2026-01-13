@@ -5,11 +5,10 @@ import numpy as np
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
 
-from ..templates import TemplateData, realign
+from . import TemplateData, realign
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
-    MatchingConfig,
     TemplateConfig,
     TemplateMergeConfig,
     TemplateRealignmentConfig,
@@ -33,11 +32,11 @@ def estimate_template_library(
     min_template_count: int = 0,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg: TemplateConfig = default_template_cfg,
-    realign_cfg: TemplateRealignmentConfig | None = TemplateRealignmentConfig(),
+    realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
     computation_cfg: ComputationConfig | None = None,
-    depth_order: bool = True,
+    depth_order: bool = False,
     template_npz_path=None,
 ) -> tuple[DARTsortSorting, TemplateData]:
     """Postprocess spike train and estimate a TemplateData."""
@@ -89,6 +88,7 @@ def estimate_template_library(
         waveform_cfg=waveform_cfg,
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
+        tsvd=tsvd,
     )
 
     # merge units by template distance
@@ -272,7 +272,7 @@ def _handle_merge(
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return sorting, template_data
 
-    from .merge import merge_templates
+    from ..clustering.merge import merge_templates
 
     merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
     merge_res = merge_templates(
