@@ -11,7 +11,7 @@ from .clustering import (
     SimpleMatrixFeatures,
     get_clusterer,
     get_clustering_features,
-    postprocess,
+    estimate_template_library,
 )
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
@@ -404,11 +404,15 @@ def match(
 
     # compute templates
     if template_data is None and not matching_cfg.precomputed_templates_npz:
-        sorting, template_data = postprocess(
-            recording,
-            sorting,
+        assert sorting is not None
+        sorting, template_data = estimate_template_library(
+            recording=recording,
+            sorting=sorting,
             motion_est=motion_est,
-            matching_cfg=matching_cfg,
+            min_template_snr=matching_cfg.min_template_snr,
+            min_template_count=matching_cfg.min_template_count,
+            depth_order=matching_cfg.depth_order,
+            template_merge_cfg=matching_cfg.template_merge_cfg,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,

@@ -10,7 +10,7 @@ from .clustering import (
     kmeans,
     merge,
     postprocess_util,
-    postprocess,
+    estimate_template_library,
     ppcalib,
     refinement_strategies,
 )
@@ -39,7 +39,7 @@ from .main import (
     universal_match,
 )
 from .peel.grab import GrabAndFeaturize
-from .templates import TemplateData, realign_sorting, realign_templates
+from .templates import TemplateData, realign
 from .transform import WaveformPipeline
 from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
 from .util.logging_util import (

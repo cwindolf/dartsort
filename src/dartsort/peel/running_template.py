@@ -233,25 +233,13 @@ class RunningTemplates(GrabAndFeaturize):
         template_cfg: TemplateConfig,
         tsvd=None,
         motion_est=None,
-        show_progress=True,
-        computation_cfg=None,
         random_state=0,
     ):
         assert sorting.labels is not None
         random_state = np.random.default_rng(random_state)
         coll_sorting = sorting if template_cfg.denoising_method == "coll" else None
 
-        # restrict to valid times...
-        fs = recording.sampling_frequency
-        if template_cfg.realign_peaks:
-            realign_samples = waveform_cfg.ms_to_samples(
-                template_cfg.realign_shift_ms, sampling_frequency=fs
-            )
-        else:
-            realign_samples = 0
-        sorting = restrict_to_valid_times(
-            sorting, recording, waveform_cfg, pad=realign_samples
-        )
+        sorting = restrict_to_valid_times(sorting, recording, waveform_cfg)
 
         # superres sorting if requested
         if template_cfg.superres_templates:
@@ -289,34 +277,10 @@ class RunningTemplates(GrabAndFeaturize):
         )
 
         # try to load denoiser if denoising is happening
-        denoising = (
-            template_cfg.denoising_method != "none"
-            or template_cfg.realign_strategy.endswith("svd_trough_factor")
-        )
+        denoising = template_cfg.denoising_method != "none"
         if tsvd is None and template_cfg.use_svd and denoising:
             if not template_cfg.recompute_tsvd:
                 tsvd = load_stored_tsvd(sorting)
-
-        # realign to empirical trough if necessary
-        n_pitches_shift = template_time_shifts = None
-        if template_cfg.realign_peaks and realign_samples:
-            (
-                sorting,
-                n_pitches_shift,
-                template_time_shifts,
-            ) = realign_by_running_templates(
-                sorting,
-                recording,
-                trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
-                spike_length_samples=waveform_cfg.spike_length_samples(fs),
-                denoising_tsvd=tsvd,
-                motion_est=motion_est,
-                realign_samples=realign_samples,
-                realign_strategy=template_cfg.realign_strategy,
-                trough_factor=template_cfg.trough_factor,
-                show_progress=show_progress,
-                computation_cfg=computation_cfg,
-            )
 
         loot_or_t = template_cfg.denoising_method in ("loot", "t")
         if template_cfg.loot_cov == "global" and loot_or_t:
@@ -327,23 +291,19 @@ class RunningTemplates(GrabAndFeaturize):
         # remove discarded spikes so they don't get loaded
         sorting = sorting.drop_missing()
 
-        properties = {}
-        if template_time_shifts is not None:
-            properties["template_time_shifts"] = template_time_shifts
-
         if template_cfg.denoising_method == "coll":
             assert hasattr(sorting, "mask_indices")
             mask_indices = sorting.mask_indices  # pyright: ignore
         else:
             mask_indices = None
 
+        fs = recording.sampling_frequency
         return cls(
             recording=recording,
             channel_index=full_channel_index(recording.get_num_channels()),
             times_samples=sorting.times_samples,
             channels=sorting.channels,
             labels=sorting.labels,
-            n_pitches_shift=n_pitches_shift,
             denoising_method=template_cfg.denoising_method,
             tsvd=tsvd,
             tsvd_rank=template_cfg.denoising_rank,
@@ -363,7 +323,6 @@ class RunningTemplates(GrabAndFeaturize):
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
             n_waveforms_fit=template_cfg.denoising_spikes_fit,
             fit_subsampling_random_state=random_state,
-            properties=properties,
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
             t_iters=template_cfg.t_iters,
@@ -453,6 +412,11 @@ class RunningTemplates(GrabAndFeaturize):
             assert raw_stds.shape == templates.shape
             raw_stds = raw_stds.numpy(force=True)
 
+        if self.tpca is None:
+            tsvd = None
+        else:
+            tsvd = self.tpca.to_sklearn()
+
         return TemplateData(
             templates=templates,
             unit_ids=unit_ids,
@@ -462,6 +426,7 @@ class RunningTemplates(GrabAndFeaturize):
             registered_geom=self.reg_geom,
             trough_offset_samples=self.trough_offset_samples,
             properties=self.properties or None,
+            tsvd=tsvd,
         )
 
     def templates(self):
@@ -1169,78 +1134,6 @@ class RunningTemplatesTasks:
             return True
         else:
             return self.mixture_passes_done == self.n_mixture_passes - 1
-
-
-def realign_by_running_templates(
-    sorting,
-    recording,
-    trough_offset_samples,
-    spike_length_samples,
-    denoising_tsvd=None,
-    motion_est=None,
-    realign_samples=0,
-    realign_strategy: RealignStrategy = "mainchan_trough_factor",
-    trough_factor=3.0,
-    show_progress=True,
-    computation_cfg=None,
-):
-    """Realign spike times by label according to the empirical template's trough/peak"""
-    from ..templates.get_templates import realign_sorting
-
-    if not realign_samples:
-        return sorting, None, None
-
-    # compute "templates". actually need only a narrow window here, and
-    # will not do any denoising in this case. configs to match.
-    if realign_strategy != "mainchan_trough_factor":
-        # pad the trough_offset_samples and spike_length_samples so that
-        # if the user did not request denoising we can just return the
-        # raw templates right away
-        trough_offset_load = trough_offset_samples + realign_samples
-        spike_length_load = spike_length_samples + 2 * realign_samples
-    else:
-        # otherwise, no need to compute the full thing yet.
-        trough_offset_load = 0 + realign_samples
-        spike_length_load = 1 + 2 * realign_samples
-
-    dropped_sorting = sorting.drop_missing()
-    peeler = RunningTemplates(
-        recording=recording,
-        channel_index=full_channel_index(recording.get_num_channels()),
-        times_samples=dropped_sorting.times_samples,
-        channels=dropped_sorting.channels,
-        labels=dropped_sorting.labels,
-        trough_offset_samples=trough_offset_load,
-        spike_length_samples=spike_length_load,
-        motion_est=motion_est,
-    )
-    template_data = peeler.compute_template_data(
-        show_progress=show_progress,
-        computation_cfg=computation_cfg,
-        task_name="Realign",
-    )
-    pitch_shifts = peeler.n_pitches_shift
-    assert getrefcount(peeler) == 2
-    del peeler
-
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    sorting, templates, template_time_shifts = realign_sorting(
-        sorting,
-        denoising_tsvd=denoising_tsvd,
-        templates=template_data.templates,
-        snrs_by_channel=template_data.snrs_by_channel(),
-        unit_ids=template_data.unit_ids,
-        max_shift=realign_samples,
-        trough_factor=trough_factor,
-        realign_strategy=realign_strategy,
-        trough_offset_samples=trough_offset_samples,
-        recording_length_samples=recording.get_total_samples(),
-        padded_trough_offset_samples=trough_offset_load,
-        spike_length_samples=spike_length_samples,
-    )
-    return sorting, pitch_shifts, template_time_shifts
 
 
 def registerize(

@@ -2,19 +2,112 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+from sklearn.decomposition import PCA, TruncatedSVD
+from spikeinterface.core import BaseRecording
 
-from ..templates import TemplateData
-from ..templates.get_templates import fit_tsvd
+from ..templates import TemplateData, realign
+from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
-    coarse_template_cfg,
-    default_matching_cfg,
+    ComputationConfig,
+    MatchingConfig,
+    TemplateConfig,
+    TemplateMergeConfig,
+    TemplateRealignmentConfig,
+    WaveformConfig,
+    default_template_cfg,
     default_waveform_cfg,
 )
+from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
 
 logger = get_logger(__name__)
+
+
+def estimate_template_library(
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    motion_est=None,
+    min_template_snr: float = 0.0,
+    min_template_count: int = 0,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    template_cfg: TemplateConfig = default_template_cfg,
+    realign_cfg: TemplateRealignmentConfig | None = TemplateRealignmentConfig(),
+    template_merge_cfg: TemplateMergeConfig | None = None,
+    tsvd: PCA | TruncatedSVD | None = None,
+    computation_cfg: ComputationConfig | None = None,
+    depth_order: bool = True,
+    template_npz_path=None,
+) -> tuple[DARTsortSorting, TemplateData]:
+    """Postprocess spike train and estimate a TemplateData."""
+    if template_npz_path is not None:
+        template_npz_path = resolve_path(template_npz_path)
+        if template_npz_path.exists():
+            return sorting, TemplateData.from_npz(template_npz_path)
+
+    assert sorting.labels is not None
+    if (sorting.labels < 0).all():
+        raise ValueError("No labels in sorting input to template postprocessing.")
+    computation_cfg = ensure_computation_config(computation_cfg)
+
+    # realign sorting and estimate template snr
+    sorting, templates0 = realign(
+        recording=recording,
+        sorting=sorting,
+        realign_cfg=realign_cfg,
+        waveform_cfg=waveform_cfg,
+        computation_cfg=computation_cfg,
+        motion_est=motion_est,
+    )
+
+    # filter out low-count/snr units
+    # min_n_spikes=matching_cfg.min_template_count,
+    # min_template_snr=matching_cfg.min_template_snr,
+    if templates0 is None and (min_template_count or min_template_snr):
+        templates0 = _quick_mean_templates(
+            recording=recording,
+            sorting=sorting,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            motion_est=motion_est,
+        )
+    if min_template_count or min_template_snr:
+        assert templates0 is not None
+        count_mask = templates0.spike_counts >= min_template_count
+        snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
+        mask = np.logical_and(count_mask, snr_mask)
+        sorting = filter_by_unit_mask(sorting, mask)
+    del templates0
+    _check_still_valid(sorting)
+
+    # main task: get denoised templates from aligned spike train
+    templates = TemplateData.from_config(
+        recording=recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
+        computation_cfg=computation_cfg,
+    )
+
+    # merge units by template distance
+    sorting, templates = _handle_merge(
+        recording=recording,
+        sorting=sorting,
+        template_data=templates,
+        motion_est=motion_est,
+        merge_cfg=template_merge_cfg,
+        computation_cfg=computation_cfg,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
+    )
+
+    # re-order along probe length
+    if depth_order:
+        sorting, templates = reorder_by_depth(sorting, templates)
+
+    return sorting, ensure_save(templates, template_npz_path)
 
 
 def realign_and_chuck_noisy_template_units(
@@ -25,7 +118,7 @@ def realign_and_chuck_noisy_template_units(
     min_n_spikes=50,
     min_template_snr=15.0,
     waveform_cfg=default_waveform_cfg,
-    template_cfg=coarse_template_cfg,
+    template_cfg=default_template_cfg,
     tsvd=None,
     computation_cfg=None,
     template_save_folder=None,
@@ -43,7 +136,7 @@ def realign_and_chuck_noisy_template_units(
                 return sorting, TemplateData.from_npz(npz)
 
     if template_data is None:
-        template_data, sorting = TemplateData.from_config_with_realigned_sorting(
+        template_data = TemplateData.from_config(
             recording,
             sorting,
             template_cfg=template_cfg,
@@ -151,72 +244,41 @@ def reorder_by_depth(sorting, template_data):
     return sorting, template_data
 
 
-def postprocess(
-    recording,
-    sorting,
-    motion_est=None,
-    matching_cfg=default_matching_cfg,
-    waveform_cfg=default_waveform_cfg,
-    template_cfg=coarse_template_cfg,
-    tsvd=None,
-    computation_cfg=None,
-    depth_order=True,
-    template_npz_path=None,
-):
-    from .merge import merge_templates
-
+def ensure_save(template_data, template_npz_path):
     if template_npz_path is not None:
-        template_npz_path = resolve_path(template_npz_path)
-        if template_npz_path.exists():
-            return sorting, TemplateData.from_npz(template_npz_path)
+        template_npz_path.parent.parent.mkdir(exist_ok=True)
+        template_npz_path.parent.mkdir(exist_ok=True)
+        template_data.to_npz(template_npz_path)
+    return template_data
 
-    assert sorting.labels is not None
-    if (sorting.labels < 0).all():
-        raise ValueError("No labels in sorting input to template postprocessing.")
 
-    # get tsvd to share across steps
-    if tsvd is None and template_cfg.denoising_method not in (None, "none"):
-        trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
-        full = waveform_cfg.spike_length_samples(recording.sampling_frequency)
-        tsvd = fit_tsvd(
-            recording,
-            sorting,
-            denoising_rank=template_cfg.denoising_rank,
-            denoising_fit_radius=template_cfg.denoising_fit_radius,
-            trough_offset_samples=trough,
-            spike_length_samples=full,
-            recompute_tsvd=template_cfg.recompute_tsvd,
-        )
-    h5_path = sorting.parent_h5_path
-
-    sorting, template_data = realign_and_chuck_noisy_template_units(
-        recording,
-        sorting,
-        motion_est=motion_est,
-        min_n_spikes=matching_cfg.min_template_count,
-        min_template_snr=matching_cfg.min_template_snr,
-        waveform_cfg=waveform_cfg,
-        template_cfg=template_cfg,
-        tsvd=tsvd,
-        computation_cfg=computation_cfg,
-    )
-    assert sorting.parent_h5_path == h5_path
-    fs_ms = recording.sampling_frequency / 1000
-    max_shift_samples = int(template_cfg.realign_shift_ms * fs_ms)
+def _check_still_valid(sorting: DARTsortSorting):
     assert sorting.labels is not None
     if (sorting.labels < 0).all():
         raise ValueError("All units were thrown away during template postprocessing.")
 
-    # merge
-    merge_cfg = matching_cfg.template_merge_cfg
+
+def _handle_merge(
+    *,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    motion_est,
+    template_data: TemplateData,
+    merge_cfg: TemplateMergeConfig | None,
+    computation_cfg: ComputationConfig,
+    waveform_cfg: WaveformConfig,
+    template_cfg: TemplateConfig,
+) -> tuple[DARTsortSorting, TemplateData]:
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
-        return sorting, ensure_save(template_data, template_npz_path)
+        return sorting, template_data
+
+    from .merge import merge_templates
+
+    merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
     merge_res = merge_templates(
         sorting=sorting,
-        recording=recording,
         template_data=template_data,
-        motion_est=motion_est,
-        max_shift_samples=max_shift_samples,
+        max_shift_samples=merge_shift_samples,
         linkage=merge_cfg.linkage,
         merge_distance_threshold=merge_cfg.merge_distance_threshold,
         temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
@@ -224,14 +286,13 @@ def postprocess(
         amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
         svd_compression_rank=merge_cfg.svd_compression_rank,
         min_spatial_cosine=merge_cfg.min_spatial_cosine,
-        denoising_tsvd=tsvd,
         computation_cfg=computation_cfg,
         show_progress=True,
     )
     sorting = merge_res["sorting"]
     new_unit_ids = merge_res["new_unit_ids"]
     del merge_res
-    assert sorting.parent_h5_path == h5_path
+    assert sorting.labels is not None
 
     # determine which units were merged and recompute only those templates
     ul, ui, uc = np.unique(new_unit_ids, return_index=True, return_counts=True)
@@ -243,16 +304,20 @@ def postprocess(
             np.isin(sorting.labels, needs_recompute), sorting.labels, -1
         )
         recompute_sorting = sorting.ephemeral_replace(labels=recompute_labels)
-        recompute_sorting, recompute_template_data = realign_and_chuck_noisy_template_units(
-            recording,
-            recompute_sorting,
+        # turn off merge here
+        recompute_sorting, recompute_template_data = estimate_template_library(
+            recording=recording,
+            sorting=recompute_sorting,
             motion_est=motion_est,
-            min_n_spikes=matching_cfg.min_template_count,
-            min_template_snr=matching_cfg.min_template_snr,
+            min_template_snr=0.0,
+            min_template_count=0,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
-            tsvd=tsvd,
+            realign_cfg=None,
+            template_merge_cfg=None,
+            tsvd=template_data.tsvd,
             computation_cfg=computation_cfg,
+            depth_order=False,
         )
         assert len(recompute_template_data.templates) == needs_recompute.size
         assert (
@@ -297,9 +362,13 @@ def postprocess(
             (n_merged_units, *template_data.spike_counts_by_channel.shape[1:]),
             dtype=template_data.spike_counts_by_channel.dtype,
         )
-        spike_counts_by_channel[new_kept_ixs] = template_data.spike_counts_by_channel[old_kept_ixs]
+        spike_counts_by_channel[new_kept_ixs] = template_data.spike_counts_by_channel[
+            old_kept_ixs
+        ]
         if recompute_template_data is not None:
-            spike_counts_by_channel[new_recompute_ix] = recompute_template_data.spike_counts_by_channel
+            spike_counts_by_channel[new_recompute_ix] = (
+                recompute_template_data.spike_counts_by_channel
+            )
     else:
         spike_counts_by_channel = None
 
@@ -323,15 +392,30 @@ def postprocess(
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
     )
-    if depth_order:
-        sorting, template_data = reorder_by_depth(sorting, template_data)
-
-    return sorting, ensure_save(template_data, template_npz_path)
+    return sorting, template_data
 
 
-def ensure_save(template_data, template_npz_path):
-    if template_npz_path is not None:
-        template_npz_path.parent.parent.mkdir(exist_ok=True)
-        template_npz_path.parent.mkdir(exist_ok=True)
-        template_data.to_npz(template_npz_path)
-    return template_data
+def _quick_mean_templates(
+    recording, sorting, waveform_cfg, computation_cfg, motion_est
+):
+    return TemplateData.from_config(
+        recording=recording,
+        sorting=sorting,
+        motion_est=motion_est,
+        waveform_cfg=waveform_cfg,
+        template_cfg=TemplateConfig(denoising_method="none"),
+        computation_cfg=computation_cfg,
+    )
+
+
+def filter_by_unit_mask(
+    sorting: DARTsortSorting, keep_mask: np.ndarray
+) -> DARTsortSorting:
+    assert sorting.labels is not None
+    discard_mask = np.logical_not(keep_mask)
+    if not discard_mask.any():
+        return sorting
+    valid = np.flatnonzero(sorting.labels >= 0)
+    chuck = valid[discard_mask[sorting.labels[valid]]]
+    sorting.labels[chuck] = -1
+    return sorting.flatten()

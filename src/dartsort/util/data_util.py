@@ -1025,7 +1025,7 @@ def fit_reweighting(
             assert False
     assert isinstance(voltages, np.ndarray)
 
-    from ..clustering.density import get_smoothed_densities
+    from ..clustering.density import get_smoothed_density
 
     if torch.is_tensor(voltages):
         voltages = voltages.numpy(force=True)
@@ -1033,7 +1033,7 @@ def fit_reweighting(
         sign = voltages / np.abs(voltages)
         voltages = sign * np.log(np.abs(voltages))
     sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
-    dens = get_smoothed_densities(voltages[:, None], sigmas=sigma)
+    dens = get_smoothed_density(voltages[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)

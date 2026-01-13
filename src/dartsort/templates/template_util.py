@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass, replace
-from typing import cast
 
 import numpy as np
 import torch
@@ -9,42 +8,12 @@ from scipy.interpolate import interp1d
 from scipy.spatial import KDTree
 
 from ..util import drift_util, waveform_util
-from ..util.data_util import DARTsortSorting
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTVERBOSE, get_logger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
-from .get_templates import get_templates
 
 logger = get_logger(__name__)
-
-# -- alternate template constructors
-
-
-def get_realigned_sorting(
-    recording,
-    sorting,
-    realign_peaks=True,
-    low_rank_denoising=False,
-    reassign_channels=False,
-    **kwargs,
-):
-    results = get_templates(
-        recording,
-        sorting,
-        realign_peaks=realign_peaks,
-        low_rank_denoising=low_rank_denoising,
-        **kwargs,
-    )
-    sorting = cast(DARTsortSorting, results["sorting"])
-    if reassign_channels:
-        assert "templates" in results
-        templates = results["templates"]
-        assert isinstance(templates, np.ndarray)
-        max_chans = np.abs(templates).max(1).argmax(1)
-        new_channels = max_chans[sorting.labels]
-        sorting = sorting.ephemeral_replace(channels=new_channels)
-    return sorting
 
 
 def weighted_average(unit_ids, templates, weights):

@@ -317,18 +317,6 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
-RealignStrategy = Literal[
-    "mainchan_trough_factor",
-    "snr_weighted_trough_factor",
-    "normsq_weighted_trough_factor",
-    "ampsq_weighted_trough_factor",
-    "mainchan_svd_trough_factor",
-    "snr_weighted_svd_trough_factor",
-    "normsq_weighted_svd_trough_factor",
-    "ampsq_weighted_svd_trough_factor",
-]
-
-
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
@@ -374,12 +362,6 @@ class TemplateConfig:
     svd_inside_t: bool = False
     loot_cov: Literal["diag", "global"] = "global"
 
-    # realignment
-    realign_peaks: bool = True
-    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
-    realign_shift_ms: float = 1.5
-    trough_factor: float = 3.0
-
     # where to find motion data if needed
     localizations_dataset_name: str = "point_source_localizations"
 
@@ -396,6 +378,27 @@ class TemplateConfig:
             raise ValueError("Median reduction not supported for 't' templates.")
 
 
+RealignStrategy = Literal[
+    "mainchan_trough_factor",
+    "snr_weighted_trough_factor",
+    "normsq_weighted_trough_factor",
+    "ampsq_weighted_trough_factor",
+    "mainchan_svd_trough_factor",
+    "snr_weighted_svd_trough_factor",
+    "normsq_weighted_svd_trough_factor",
+    "ampsq_weighted_svd_trough_factor",
+]
+
+
+@cfg_dataclass
+class TemplateRealignmentConfig:
+    realign_peaks: bool = True
+    realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
+    realign_shift_ms: float = 1.5
+    trough_factor: float = 3.0
+    template_cfg: TemplateConfig = TemplateConfig(denoising_method="none")
+
+
 @cfg_dataclass
 class TemplateMergeConfig:
     distance_kind: str = "rms"
@@ -407,7 +410,7 @@ class TemplateMergeConfig:
     amplitude_scaling_variance: float = 0.1**2
     amplitude_scaling_boundary: float = 0.33
     svd_compression_rank: int = 20
-    max_shift_samples: int = 50
+    max_shift_ms: float = 1.6666
 
 
 @cfg_dataclass
@@ -445,16 +448,16 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    realign_strategy: RealignStrategy = "normsq_weighted_trough_factor"
-    trough_factor: float = 3.0
     trough_shifting: bool = True
 
     # template postprocessing parameters
     min_template_snr: float = 40.0
     min_template_count: int = 50
+    depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
         merge_distance_threshold=0.025
     )
+    template_realignment_cfg: TemplateRealignmentConfig = TemplateRealignmentConfig()
     precomputed_templates_npz: str | None = None
     delete_pconv: bool = True
 
@@ -883,8 +886,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_type=cfg.matching_template_type,
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-            # realign_strategy=cfg.realign_strategy,
-            trough_factor=cfg.trough_factor,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -896,15 +897,12 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um,
-        realign_shift_ms=cfg.alignment_ms,
         spikes_per_unit=cfg.template_spikes_per_unit,
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
         use_zero=cfg.template_mix_zero,
         use_svd=cfg.template_mix_svd,
         recompute_tsvd=cfg.always_recompute_tsvd,
-        realign_strategy=cfg.realign_strategy,
-        trough_factor=cfg.trough_factor,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -1013,13 +1011,14 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         merge_decision_algorithm=merge_decision_algorithm,
         distance_metric=distance_metric,
     )
-    pre_refinement_cfg = None
     if cfg.pre_refinement_merge:
         pre_refinement_cfg = RefinementConfig(
             refinement_strategy="pcmerge",
             pc_merge_metric=cfg.pre_refinement_merge_metric,
             pc_merge_threshold=cfg.pre_refinement_merge_threshold,
         )
+    else:
+        pre_refinement_cfg = None
     motion_estimation_cfg = MotionEstimationConfig(
         **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
     )
@@ -1034,14 +1033,22 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         ),
         cd_iter=cfg.matching_cd_iter,
         coarse_cd=cfg.matching_coarse_cd,
-        min_template_snr=cfg.min_template_snr,
-        min_template_count=cfg.min_template_count,
         channel_selection_radius=cfg.channel_selection_radius,
         template_type=cfg.matching_template_type,
         up_method=cfg.matching_up_method,
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
-        # realign_strategy=cfg.realign_strategy,
-        trough_factor=cfg.trough_factor,
+        min_template_snr=cfg.min_template_snr,
+        min_template_count=cfg.min_template_count,
+        template_realignment_cfg=TemplateRealignmentConfig(
+            trough_factor=cfg.trough_factor,
+            realign_strategy=cfg.realign_strategy,
+            realign_shift_ms=cfg.alignment_ms,
+            template_cfg=TemplateConfig(
+                denoising_method="none",
+                spikes_per_unit=cfg.template_spikes_per_unit,
+                reduction=cfg.template_reduction,
+            ),
+        ),
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
@@ -1082,19 +1089,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
-unshifted_template_cfg = TemplateConfig(realign_peaks=False)
-coarse_template_cfg = TemplateConfig(superres_templates=False)
-raw_template_cfg = TemplateConfig(
-    realign_peaks=False, denoising_method="none", superres_templates=False
-)
+raw_template_cfg = TemplateConfig(denoising_method="none")
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
-    realign_peaks=False,
     denoising_method="none",
     superres_templates=False,
-)
-unaligned_coarse_template_cfg = TemplateConfig(
-    realign_peaks=False, denoising_method="none", superres_templates=False
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,

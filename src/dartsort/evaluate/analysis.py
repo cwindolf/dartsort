@@ -43,8 +43,6 @@ from ..util import job_util, logging_util
 
 logger = logging_util.get_logger(__name__)
 
-basic_template_cfg = TemplateConfig(realign_peaks=False, superres_templates=False)
-
 
 @dataclass
 class DARTsortAnalysis:
@@ -87,7 +85,7 @@ class DARTsortAnalysis:
         motion_est=None,
         name: str | None = None,
         template_data: TemplateData | None = None,
-        template_cfg: TemplateConfig | None = basic_template_cfg,
+        template_cfg: TemplateConfig | None = TemplateConfig(denoising_method="none"),
         template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(),
         clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
         computation_cfg: ComputationConfig | None = None,
@@ -136,6 +134,7 @@ class DARTsortAnalysis:
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
                 computation_cfg=computation_cfg,
+                sampling_frequency=recording.sampling_frequency,
             )[1]
             trough_offset_samples = template_data.trough_offset_samples
             spike_length_samples = template_data.spike_length_samples
@@ -288,7 +287,7 @@ class DARTsortAnalysis:
             read_chans = self.sorting.channels[which]
         else:
             read_chans = np.full(len(which), main_channel)
-        
+
         if self.extract_channel_index is None:
             read_channel_index = self.vis_channel_index
         else:
@@ -483,7 +482,7 @@ class DARTsortAnalysis:
             )
         else:
             n_pitches_shift = None
-        
+
         if self.extract_channel_index is None:
             read_channel_index = self.vis_channel_index
         else:
