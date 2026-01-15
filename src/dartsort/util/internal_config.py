@@ -451,6 +451,7 @@ class MatchingConfig:
     upsampling_compression_map: Literal["yass", "none"] = "yass"
 
     # template postprocessing parameters
+    min_template_ptp: float = 1.0
     min_template_snr: float = 40.0
     min_template_count: int = 50
     depth_order: bool = True

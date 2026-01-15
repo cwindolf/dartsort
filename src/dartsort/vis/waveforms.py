@@ -296,6 +296,7 @@ def geomplot_templates(
     title="",
     main_channel=None,
     linestyles=None,
+    legend_loc="best"
 ):
     unit_ids = np.asarray(unit_ids)
     colors = np.asarray(glasbey1024)[unit_ids % len(glasbey1024)]
@@ -335,7 +336,7 @@ def geomplot_templates(
         )
         labels.append(str(uid))
         handles.append(lines)
-    axis.legend(handles=handles, labels=labels, fancybox=False, loc="lower center")
+    axis.legend(handles=handles, labels=labels, fancybox=False, loc=legend_loc)
     axis.set_xticks([])
     axis.set_yticks([])
     if title:

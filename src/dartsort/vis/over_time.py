@@ -8,13 +8,10 @@ from matplotlib import animation
 from ..clustering import merge
 from ..templates import templates
 from ..templates.get_templates import fit_tsvd
-from ..util import data_util, internal_config
+from ..util import data_util
+from ..util.internal_config import raw_template_cfg
 from ..evaluate import analysis
 from . import analysis_plots, scatterplots, layout, unit
-
-basic_template_config = internal_config.TemplateConfig(
-    realign_peaks=False, superres_templates=False
-)
 
 
 # -- over_time_summary stuff
@@ -126,7 +123,7 @@ def make_all_over_time_summaries(
     save_folder,
     plots=over_time_plots,
     chunk_length_s=300.0,
-    template_config=basic_template_config,
+    template_config=raw_template_cfg,
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -218,7 +215,7 @@ def sorting_scatter_animation(
     suptitle=None,
     depth_feature="z",
     features=("x", "amplitude", "log_peak_to_trough"),
-    template_config=basic_template_config,
+    template_config=raw_template_cfg,
     templates_tsvd=None,
     trough_offset_samples=42,
     spike_length_samples=121,

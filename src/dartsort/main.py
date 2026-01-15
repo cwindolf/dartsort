@@ -397,25 +397,25 @@ def match(
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
 
-    # compute templates
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
         sorting, template_data = estimate_template_library(
             recording=recording,
             sorting=sorting,
             motion_est=motion_est,
+            min_template_ptp=matching_cfg.min_template_ptp,
             min_template_snr=matching_cfg.min_template_snr,
             min_template_count=matching_cfg.min_template_count,
             depth_order=matching_cfg.depth_order,
-            template_merge_cfg=matching_cfg.template_merge_cfg,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
+            realign_cfg=matching_cfg.template_realignment_cfg,
+            template_merge_cfg=matching_cfg.template_merge_cfg,
             computation_cfg=computation_cfg,
             tsvd=template_denoising_tsvd,
             template_npz_path=model_dir / template_npz_filename,
         )
 
-    # instantiate peeler
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
         waveform_cfg=waveform_cfg,

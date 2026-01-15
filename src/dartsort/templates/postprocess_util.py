@@ -29,6 +29,7 @@ def estimate_template_library(
     sorting: DARTsortSorting,
     motion_est=None,
     min_template_snr: float = 0.0,
+    min_template_ptp: float = 0.0,
     min_template_count: int = 0,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg: TemplateConfig = default_template_cfg,
@@ -75,8 +76,9 @@ def estimate_template_library(
         assert templates0 is not None
         count_mask = templates0.spike_counts >= min_template_count
         snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
-        mask = np.logical_and(count_mask, snr_mask)
-        sorting = filter_by_unit_mask(sorting, mask)
+        amp_mask = ptp(templates0.templates).max(1) >= min_template_ptp
+        mask = count_mask & snr_mask & amp_mask
+        sorting = filter_by_unit_mask(sorting, mask, mask_ids=templates0.unit_ids)
     del templates0
     _check_still_valid(sorting)
 
@@ -409,13 +411,24 @@ def _quick_mean_templates(
 
 
 def filter_by_unit_mask(
-    sorting: DARTsortSorting, keep_mask: np.ndarray
+    sorting: DARTsortSorting, keep_mask: np.ndarray, mask_ids: np.ndarray | None = None
 ) -> DARTsortSorting:
     assert sorting.labels is not None
+
+    if mask_ids is not None:
+        assert mask_ids.shape == keep_mask.shape
+        k_full = mask_ids.max() + 1
+        assert k_full >= keep_mask.shape[0]
+        mask = np.zeros(k_full, dtype=bool)
+        mask[mask_ids[keep_mask]] = True
+        keep_mask = mask
+
     discard_mask = np.logical_not(keep_mask)
     if not discard_mask.any():
         return sorting
+
     valid = np.flatnonzero(sorting.labels >= 0)
     chuck = valid[discard_mask[sorting.labels[valid]]]
     sorting.labels[chuck] = -1
+
     return sorting.flatten()

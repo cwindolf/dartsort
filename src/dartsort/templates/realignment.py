@@ -1,23 +1,27 @@
-from dataclasses import replace
 import gc
+from dataclasses import replace
+import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
 from spikeinterface.core import BaseRecording
+from tqdm.auto import trange
 
+from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
-    RealignStrategy,
-    TemplateConfig,
-    WaveformConfig,
-    TemplateRealignmentConfig,
     ComputationConfig,
+    RealignStrategy,
+    TemplateRealignmentConfig,
+    WaveformConfig,
     default_waveform_cfg,
 )
-from ..util.data_util import DARTsortSorting
-from ..util.spiketorch import ptp
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
+from ..util.spiketorch import ptp
 from .templates import TemplateData
+
+logger = get_logger(__name__)
 
 
 def realign(
@@ -57,7 +61,6 @@ def realign(
 
     template_shifts, aligned_templates = realign_templates(
         templates=templates.templates,
-        rgeom=torch.asarray(templates.registered_geom),
         snrs_by_channel=templates.snrs_by_channel(),
         unit_ids=templates.unit_ids,
         padded_trough_offset_samples=realignment_waveform_cfg.trough_offset_samples(
@@ -114,13 +117,11 @@ def get_main_channels_and_alignments(
 def estimate_offset(
     *,
     templates,
-    rgeom: torch.Tensor,
     computation_cfg: ComputationConfig,
     snrs_by_channel=None,
     strategy="mainchan_trough_factor",
     trough_factor=3.0,
     min_weight=0.75,
-    overlap_radius: float = 150.0,
     main_channels=None,
     padded_trough_offset_samples=42,
     trough_offset_samples=42,
@@ -141,8 +142,6 @@ def estimate_offset(
             templates=templates,
             main_channels=main_channels,
             snrs_by_channel=snrs_by_channel,
-            rgeom=rgeom,
-            overlap_radius=overlap_radius,
             trough_factor=trough_factor,
             padded_trough_offset_samples=padded_trough_offset_samples,
             trough_offset_samples=trough_offset_samples,
@@ -199,7 +198,6 @@ def estimate_offset(
 def realign_templates(
     *,
     templates,
-    rgeom,
     snrs_by_channel=None,
     unit_ids=None,
     main_channels=None,
@@ -211,7 +209,7 @@ def realign_templates(
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
     if main_channels is None:
-        if realign_strategy.startswith("mainchan"):
+        if realign_strategy in ("mainchan_trough_factor", "dredge"):
             if snrs_by_channel is not None:
                 main_channels = snrs_by_channel.argmax(1)
             else:
@@ -230,7 +228,6 @@ def realign_templates(
     # find template peak time
     max_shift = padded_trough_offset_samples - trough_offset_samples
     template_shifts__ = estimate_offset(
-        rgeom=rgeom,
         computation_cfg=computation_cfg,
         templates=templates,
         snrs_by_channel=snrs_by_channel,
@@ -296,7 +293,9 @@ def apply_time_shifts(
     spike_length_samples=None,
     recording_length_samples=None,
 ) -> DARTsortSorting:
-    if template_data is not None and template_data.properties:
+    if template_shifts is not None:
+        unit_ids = None
+    elif template_data is not None and template_data.properties:
         if "template_time_shifts" in template_data.properties:
             template_shifts = template_data.properties["template_time_shifts"]
         elif "time_shifts" in template_data.properties:
@@ -337,13 +336,14 @@ def dredge_realign(
     templates: torch.Tensor,
     main_channels: torch.Tensor | None,
     snrs_by_channel: torch.Tensor | None,
-    rgeom: torch.Tensor,
-    overlap_radius: float = 150.0,
+    min_spatial_cosine: float = 0.75,
     min_corr: float = 0.5,
     trough_factor: float = 3.0,
     padded_trough_offset_samples: int,
     trough_offset_samples: int,
     computation_cfg: ComputationConfig,
+    dredge_window_fraction: float = 0.5,
+    eps=1e-3,
 ) -> torch.Tensor:
     from dredge.dredgelib import newton_solve_rigid
 
@@ -364,27 +364,39 @@ def dredge_realign(
 
     # trim to alignment
     templates_trim0 = trim_templates_to_shift(
-        templates=templates,
+        templates=templates.numpy(force=True),
         max_shift=max_shift,
         template_shifts=offsets,
     )
 
     # which pairs to convolve?
-    pos = rgeom[main_channels]
-    dist = torch.cdist(pos, pos)
-    pair_mask = dist <= overlap_radius
+    sp = snrs_by_channel if snrs_by_channel is not None else ptp(templates_trim0)
+    sp = torch.asarray(sp)
+    sp = sp / torch.linalg.norm(sp, dim=1)[:, None]
+    spcos = sp @ sp.T
+    pair_mask = spcos >= min_spatial_cosine
     ii, jj = pair_mask.nonzero(as_tuple=True)
-    triu = jj > ii
+    triu = ii < jj
     ii = ii[triu]
     jj = jj[triu]
+    logger.dartsortdebug(
+        f"DREDge align: convolving {ii.numel()} pairs (mincos={min_spatial_cosine:.2f})."
+    )
 
     # get best lags and correlations
     templates_trim0 = torch.asarray(
         templates_trim0, dtype=torch.float, device=computation_cfg.actual_device()
     )
-    lags, corrs = _pairwise_correlate_templates(templates_trim0, ii, jj, max_shift)
+    dredge_max_shift = math.floor(max_shift * dredge_window_fraction)
+    lags, corrs = _pairwise_correlate_templates(
+        templates=templates_trim0, ii=ii, jj=jj, max_shift=dredge_max_shift
+    )
     lags = lags.numpy(force=True)
     corrs = corrs.numpy(force=True)
+    logger.dartsortdebug(
+        f"DREDge align: {100 * (corrs >= min_corr).mean():.1f}% "
+        "of pairs were correlated enough."
+    )
 
     # densify
     k = len(templates)
@@ -400,16 +412,17 @@ def dredge_realign(
     C[C < min_corr] = 0.0
 
     # call out to dredge
-    Sigma0inv = np.eye(C.shape[0])
+    Sigma0inv = np.eye(C.shape[0]) * eps
     p, *_ = newton_solve_rigid(D, C, Sigma0inv)
+    p = np.rint(p).astype(offsets.dtype)
 
     # adjust offsets
-    offsets = torch.asarray(offsets) + torch.asarray(p)
+    offsets = torch.asarray(offsets) - torch.asarray(p)
 
     return offsets
 
 
-def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=16):
+def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=256):
     lags = torch.arange(-max_shift, max_shift + 1).to(templates.device)
     k = len(templates)
     npair = len(ii)
@@ -418,27 +431,31 @@ def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=
     normsa = templates.new_zeros((k, lags.shape[0]))
     normsb = templates.new_zeros((k, lags.shape[0]))
     for i0 in range(0, k, batch_size):
-        i1 = min(npair, i0 + batch_size)
+        i1 = min(k, i0 + batch_size)
 
-        filt = templates[i0:i1][:, None]
-        ones = torch.ones_like(filt)
-        conv = F.conv2d(ones, filt, padding=(max_shift, 0))
-        assert conv.shape == (i1 - i0, 1, lags.shape[0], 1)
-        conv = conv[:, 0, :, 0].sqrt_()
+        filt = torch.square(templates[i0:i1])[:, None]
+        ones = torch.ones_like(templates[i0:i1])[None, :]
+        conv = F.conv2d(ones, filt, padding=(max_shift, 0), groups=i1 - i0)
+        assert conv.shape == (1, i1 - i0, lags.shape[0], 1)
+        conv = conv[0, :, :, 0].sqrt_()
         normsa[i0:i1] = conv
         normsb[i0:i1] = torch.flip(conv, dims=(1,))
 
     best_lag = templates.new_zeros(ii.shape)
     best_corr = templates.new_zeros(ii.shape)
 
-    for i0 in range(0, npair, batch_size):
+    for i0 in trange(0, npair, batch_size, desc="DREDge template alignment"):
         i1 = min(npair, i0 + batch_size)
 
-        filt = templates[ii[i0:i1]][:, None]
-        inpt = templates[jj[i0:i1]][:, None]
-        conv = F.conv2d(inpt, filt, padding=(max_shift, 0))
-        assert conv.shape == (i1 - i0, 1, lags.shape[0], 1)
-        conv = conv[:, 0, :, 0].div_(normsa[ii] * normsb[jj])
-        best_lag[i0:i1], best_corr[i0:i1] = conv.max(dim=1)
+        iib = ii[i0:i1]
+        jjb = jj[i0:i1]
+
+        filt = templates[iib][:, None]
+        inpt = templates[jjb][None, :]
+        conv = F.conv2d(inpt, filt, padding=(max_shift, 0), groups=i1 - i0)
+        assert conv.shape == (1, i1 - i0, lags.shape[0], 1)
+        conv = conv[0, :, :, 0].div_(normsa[iib] * normsb[jjb])
+        best_corr[i0:i1], lag_ix = conv.max(dim=1)
+        best_lag[i0:i1] = lags[lag_ix]
 
     return best_lag, best_corr

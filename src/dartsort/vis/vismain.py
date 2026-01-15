@@ -10,12 +10,8 @@ from tqdm.auto import tqdm
 from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import (
-    raw_template_cfg,
-    unshifted_template_cfg,
-    ComputationConfig,
-)
-from ..util.job_util import get_global_computation_config
+from ..util.internal_config import raw_template_cfg, ComputationConfig
+from ..util.job_util import ensure_computation_config
 from ..util.registration_util import try_load_motion_est
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from . import over_time, scatterplots, unit, gt, unit_comparison, versus
@@ -52,7 +48,7 @@ def visualize_sorting(
     make_versus=True,
     sorting_analysis=None,
     single_unit_ids=None,
-    template_cfg=unshifted_template_cfg,
+    template_cfg=raw_template_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
@@ -63,12 +59,11 @@ def visualize_sorting(
     exhaustive_gt=True,
     dpi=200,
     overwrite=False,
-    computation_cfg=None,
+    computation_cfg: ComputationConfig | None=None,
     errors_to_warnings=True,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
-    if computation_cfg is None:
-        computation_cfg = get_global_computation_config()
+    computation_cfg = ensure_computation_config(computation_cfg)
 
     if sorting is None and sorting_path is not None:
         if sorting_path.name.endswith(".h5"):
@@ -209,11 +204,11 @@ def visualize_all_sorting_steps(
     make_unit_comparisons=True,
     make_versus=True,
     step_sortings=None,
-    template_cfg=unshifted_template_cfg,
+    template_cfg=raw_template_cfg,
     gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
-    step_name_filter: Callable | None=None,
+    step_name_filter: Callable | None = None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     amp_vecs_dataset_name="denoised_ptp_amplitude_vectors",
     motion_est=None,
@@ -368,15 +363,14 @@ def _plan_vis(
     sorting_analysis=None,
     other_analyses=None,
     gt_analysis=None,
-    template_cfg=unshifted_template_cfg,
+    template_cfg=raw_template_cfg,
     exhaustive_gt=True,
     gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
     single_unit_ids=None,
 ):
-    if computation_cfg is None:
-        computation_cfg = get_global_computation_config()
+    computation_cfg = ensure_computation_config(computation_cfg)
 
     # goal of this fn is to figure out if we need to instantiate these
     # SortingAnalysis and GTComparison objects, or if we can skip everything
