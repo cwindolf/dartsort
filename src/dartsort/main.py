@@ -109,7 +109,9 @@ def dartsort(
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             work_dir = resolve_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
-            ds_all_to_workdir(cfg, output_dir, work_dir, overwrite)
+            recording, work_dir = ds_all_to_workdir(
+                cfg, output_dir, work_dir, recording, overwrite
+            )
             try:
                 return _dartsort_impl(
                     recording, output_dir, cfg, motion_est, work_dir, overwrite

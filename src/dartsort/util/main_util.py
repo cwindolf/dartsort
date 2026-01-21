@@ -3,6 +3,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
+from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import DARTsortInternalConfig
@@ -59,16 +60,33 @@ def ds_all_to_workdir(
     internal_cfg: DARTsortInternalConfig,
     output_dir: Path,
     work_dir: Path | None = None,
+    recording: BaseRecording | None = None,
     overwrite=False,
-):
+    rec_subdir="recppx",
+    sort_subdir="dartsort",
+) -> Path:
+    """Copy stuff to temporary working directory, if there is one."""
     if work_dir is None:
-        return
+        return recording, None
+
+    if recording is not None and internal_cfg.copy_recording_to_tmpdir:
+        rec_dir = work_dir / rec_subdir
+        logger.info(
+            f"Writing recording to {rec_dir}. Parallelism is handled by "
+            "spikeinterface for this part, so use its `set_global_job_kwargs()` "
+            "function if you're waiting around."
+        )
+        recording = recording.save_to_folder(rec_dir)
+
+    sort_dir = work_dir / sort_subdir
     if overwrite:
         logger.info(f"Working in {work_dir}. No copy since {overwrite=}.")
-        return
+        return recording, sort_dir
+
     # TODO: maybe no need to copy everything, esp. if fast forwarding?
-    logger.dartsortdebug(f"Copy {output_dir=} -> {work_dir=}.")
-    dartcopytree(internal_cfg, output_dir, work_dir)
+    logger.dartsortdebug(f"Copy {output_dir=} -> {sort_dir=}.")
+    dartcopytree(internal_cfg, output_dir, sort_dir)
+    return recording, sort_dir
 
 
 def ds_save_motion_est(

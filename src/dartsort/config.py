@@ -52,6 +52,7 @@ class DARTsortUserConfig:
 
     # -- storage behavior
     work_in_tmpdir: bool = False
+    copy_recording_to_tmpdir: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     workdir_follow_symlinks: bool = False
     tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
