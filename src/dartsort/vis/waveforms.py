@@ -296,10 +296,19 @@ def geomplot_templates(
     title="",
     main_channel=None,
     linestyles=None,
-    legend_loc="best"
+    legend_loc="best",
+    color_reroll_seed=None,
+    color_flat=False,
 ):
     unit_ids = np.asarray(unit_ids)
-    colors = np.asarray(glasbey1024)[unit_ids % len(glasbey1024)]
+    carr = np.asarray(glasbey1024)
+    if color_reroll_seed is not None:
+        rg = np.random.default_rng(color_reroll_seed)
+        carr = carr[rg.permutation(len(carr))]
+    if color_flat:
+        colors = carr[np.arange(len(unit_ids))]
+    else:
+        colors = carr[unit_ids % len(glasbey1024)]
     if main_channel is None:
         chan = np.ptp(unit_templates[0], 0).argmax()
     else:

@@ -171,11 +171,12 @@ class Voltage(BaseWaveformFeaturizer):
 
     def __init__(
         self,
-        channel_index=None,
+        channel_index,
         geom=None,
         dtype=torch.float,
         name=None,
         name_prefix="",
+        trough_offset_samples: int = 42,
     ):
         if name is None:
             name = self.default_name
@@ -183,10 +184,14 @@ class Voltage(BaseWaveformFeaturizer):
                 name = f"{name_prefix}_{name}"
         super().__init__(name=name, name_prefix=name_prefix)
         self.dtype = dtype
+        self.trough_offset_samples = trough_offset_samples
+        chans_arange = torch.arange(len(channel_index)).to(channel_index)
+        cix, rel_inds = (channel_index == chans_arange[:, None]).nonzero(as_tuple=True)
+        assert torch.equal(chans_arange, cix)
+        self.register_buffer("main_channel_relative_inds", rel_inds)
 
-    def transform(self, waveforms, **unused):
-        c = ptp(waveforms).nan_to_num_().argmax(dim=1)
-        w = waveforms.take_along_dim(c[:, None, None], dim=2)[:, :, 0]
-        vix = w.abs().argmax(dim=1)
-        voltages = w.take_along_dim(vix[:, None], dim=1)
-        return {self.name: voltages[:, 0]}
+    def transform(self, waveforms, *, channels, **unused):
+        waveforms_at_time = waveforms[:, self.trough_offset_samples]
+        rel_inds = self.b.main_channel_relative_inds[channels]
+        v = waveforms_at_time.take_along_dim(rel_inds[:, None], dim=1)[:, 0]
+        return {self.name: v}

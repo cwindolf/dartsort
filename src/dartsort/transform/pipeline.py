@@ -4,6 +4,7 @@ import torch
 
 from .transform_base import BaseWaveformModule, BaseWaveformFeaturizer
 from ..util.data_util import SpikeDataset
+from ..util.internal_config import WaveformConfig, FeaturizationConfig
 
 
 class WaveformPipeline(torch.nn.Module):
@@ -89,7 +90,7 @@ class WaveformPipeline(torch.nn.Module):
         recording=None,
         geom=None,
         channel_index=None,
-        sampling_frequency: int | float=30_000,
+        sampling_frequency: int | float = 30_000,
     ):
         if geom is None:
             from dartsort.util.waveform_util import make_channel_index
@@ -200,9 +201,9 @@ def check_unique_feature_names(transformers):
 
 
 def featurization_config_to_class_names_and_kwargs(
-    featurization_cfg,
-    waveform_cfg,
-    sampling_frequency: int | float=30_000,
+    featurization_cfg: FeaturizationConfig,
+    waveform_cfg: WaveformConfig,
+    sampling_frequency: float = 30_000.0,
 ):
     """Convert this config into a list of waveform transformer classes and arguments
 
@@ -215,13 +216,15 @@ def featurization_config_to_class_names_and_kwargs(
 
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
-    sls_kw = dict(
-        spike_length_samples=waveform_cfg.spike_length_samples(sampling_frequency)
-    )
+
+    tos = waveform_cfg.trough_offset_samples(sampling_frequency)
+    sls = waveform_cfg.spike_length_samples(sampling_frequency)
+    tos_kw = dict(trough_offset_samples=tos)
+    sls_kw = dict(spike_length_samples=sls)
 
     if do_feats and fc.save_input_voltages:
         class_names_and_kwargs.append(
-            ("Voltage", {"name_prefix": fc.input_waveforms_name})
+            ("Voltage", {"name_prefix": fc.input_waveforms_name, **tos_kw})
         )
     if fc.save_input_waveforms:
         class_names_and_kwargs.append(

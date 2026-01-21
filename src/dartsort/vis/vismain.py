@@ -1,20 +1,20 @@
+import warnings
 from logging import getLogger
 from pathlib import Path
 from typing import Callable
-import warnings
 
 import matplotlib.pyplot as plt
+import numpy as np
 from tqdm.auto import tqdm
-
 
 from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
+from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import raw_template_cfg, ComputationConfig
+from ..util.internal_config import ComputationConfig, raw_template_cfg
 from ..util.job_util import ensure_computation_config
 from ..util.registration_util import try_load_motion_est
-from ..evaluate.hybrid_util import load_dartsort_step_sortings
-from . import over_time, scatterplots, unit, gt, unit_comparison, versus
+from . import gt, over_time, scatterplots, unit, unit_comparison, versus
 from .sorting import make_sorting_summary
 
 try:
@@ -59,7 +59,7 @@ def visualize_sorting(
     exhaustive_gt=True,
     dpi=200,
     overwrite=False,
-    computation_cfg: ComputationConfig | None=None,
+    computation_cfg: ComputationConfig | None = None,
     errors_to_warnings=True,
 ):
     output_directory.mkdir(exist_ok=True, parents=True)
@@ -113,6 +113,7 @@ def visualize_sorting(
         computation_cfg=computation_cfg,
         exhaustive_gt=exhaustive_gt,
         gt_comparison_with_distances=gt_comparison_with_distances,
+        n_units=n_units,
         single_unit_ids=single_unit_ids,
     )
     sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png = paths_or_nones
@@ -368,6 +369,8 @@ def _plan_vis(
     gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
+    seed=0,
+    n_units=None,
     single_unit_ids=None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -395,9 +398,17 @@ def _plan_vis(
         if overwrite:
             need_summaries = True
         else:
-            need_summaries = not unit.all_summaries_done(
-                sorting.unit_ids, unit_summary_dir
-            )
+            if single_unit_ids is not None:
+                check_ids = single_unit_ids
+            elif n_units:
+                check_ids = sorting.unit_ids
+                if check_ids.shape[0] > n_units:
+                    rg = np.random.default_rng(seed)
+                    check_ids = rg.choice(check_ids, size=n_units, replace=False)
+                    check_ids.sort()
+            else:
+                check_ids = sorting.unit_ids
+            need_summaries = not unit.all_summaries_done(check_ids, unit_summary_dir)
         need_analysis = need_analysis or need_summaries
         if not need_summaries:
             unit_summary_dir = None

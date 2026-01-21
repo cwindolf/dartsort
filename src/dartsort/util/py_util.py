@@ -17,6 +17,10 @@ from typing import dataclass_transform
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
+from .logging_util import DARTSORTVERBOSE, get_logger
+
+logger = get_logger(__name__)
+
 # check if we are installed in editable mode
 pkgname = sys.modules[__name__].__name__.split(".")[0]
 durl = Distribution.from_name(pkgname).read_text("direct_url.json")
@@ -58,7 +62,8 @@ class timer:
     assert np.isclose(tic.dt, 0)
     """
 
-    def __init__(self, name="timer"):
+    def __init__(self, name="timer", loglevel=DARTSORTVERBOSE):
+        self.loglevel = loglevel
         self.name = name
 
     def __enter__(self):
@@ -67,7 +72,7 @@ class timer:
 
     def __exit__(self, *args):
         self.dt = time.time() - self.start
-        print(self.name, "took", self.dt, "s")
+        logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
 
 
 class NoKeyboardInterrupt:

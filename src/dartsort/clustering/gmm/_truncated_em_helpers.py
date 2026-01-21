@@ -424,8 +424,8 @@ def woodbury_inv_quad(whitenedx, whitenednu, wburyroot=None, flat=False, ow_wnu=
     """Faster inv quad term in log likelihoods
 
     We want to compute
-        (x - nu)' [Co + Wo Wo']^-1 (x - nu)
-          = (x-nu)' [Co^-1 - Co^-1 Wo(I_m+Wo'Co^-1Wo)^-1Wo'Co^-1] (x-nu)
+        (x - nu)' [Co + Wo (s2 Im) Wo']^-1 (x - nu)
+          = (x-nu)' [Co^-1 - Co^-1 Wo(I_m/s2+Wo'Co^-1Wo)^-1Wo'Co^-1] (x-nu)
 
     Let's say we already have computed...
         %  name in code: whitenednu

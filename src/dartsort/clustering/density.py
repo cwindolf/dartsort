@@ -1,16 +1,23 @@
-from collections.abc import Sequence
 from typing import Literal, cast
 
+import numba
 import numpy as np
 import torch
+from torch import Tensor
+import torch.nn.functional as F
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist, squareform
 from scipy.stats import bernoulli
+from tqdm.auto import trange
 
 from ..util.logging_util import get_logger
+from ..util.py_util import timer
+from ..util.internal_config import ComputationConfig
+from ..util.job_util import ensure_computation_config
 from .cluster_util import decrumb
 
 logger = get_logger(__name__)
@@ -23,6 +30,7 @@ def kdtree_inliers(
     distance_upper_bound: float | None = 25.0,
     workers=1,
     batch_size=2**16,
+    show_progress=False,
 ) -> tuple[np.ndarray, KDTree]:
     """Mark outlying points by a neighbors distance criterion
 
@@ -41,7 +49,11 @@ def kdtree_inliers(
         return inliers, kdtree
 
     inliers = np.zeros(kdtree.n, dtype=bool)
-    for i0 in range(0, kdtree.n, batch_size):
+    if show_progress:
+        iters = trange(0, kdtree.n, batch_size, desc="KDTin")
+    else:
+        iters = range(0, kdtree.n, batch_size)
+    for i0 in iters:
         i1 = min(kdtree.n, i0 + batch_size)
 
         _, indices = kdtree.query(
@@ -289,6 +301,171 @@ def guess_mode(
     return np.argmax(density)
 
 
+def bucket_density_ratio(
+    X: np.ndarray,
+    scaled_geom: np.ndarray,
+    sigma: float,
+    sigma_regional: float,
+    max_sigma: float = 3.0,
+    computation_cfg: ComputationConfig | None = None,
+    workers=-1,
+    batch_size=8192,
+):
+    """
+
+    Algorithm:
+     - Assign spikes to channels with a geom-kdtree (make sure geom's x
+       scale matches the clustering feature's x scale.)
+     - Let Dc be pairwise distances between channels
+     - Compute sparse distance matrix. If Dx is pairwise distance between
+       all pairs of spikes, we just want the entries with Dx<max_dist.
+     - Note
+         |ci-cj| = |(ci-xi) + (xj-cj) + (xi-xj)|
+                <= 2C + |xi-xj|
+       Thus we need not consider i,j s.t. |ci-cj|-2C>max_dist.
+    """
+    computation_cfg = ensure_computation_config(computation_cfg)
+    with timer("geom bucketing"):
+        geom_kdt = KDTree(scaled_geom, leafsize=1)
+        dists, channels = geom_kdt.query(X[:, :2], workers=workers)
+    
+    max_dist_by_chan = np.zeros(len(scaled_geom))
+    for c in range(len(scaled_geom)):
+        inc = np.flatnonzero(channels==c)
+        if inc.size:
+            max_dist_by_chan[c] = dists[inc].max()
+
+    larger_sigma = max(sigma, sigma_regional or 0.0)
+    max_dist = max_sigma * larger_sigma
+
+    lb = squareform(pdist(scaled_geom))
+    lb -= max_dist_by_chan[:, None]
+    lb -= max_dist_by_chan
+    chans_pair_mask = lb <= max_dist
+    print(f"{chans_pair_mask.sum(1).min()=}")
+    print(f"{chans_pair_mask.sum(1).max()=}")
+    print(f"{max_dist_by_chan.max()=}")
+    print(f"{max_dist_by_chan.min()=}")
+
+    device = computation_cfg.actual_device()
+    channels = torch.asarray(channels, device=device, dtype=torch.long)
+    Xt = torch.asarray(X, device=device, dtype=torch.float)
+    chans_pair_mask = torch.asarray(chans_pair_mask, device=device, dtype=torch.bool)
+    density_ratio = torch.full((len(X),), -torch.inf, device=device)
+
+    # for c in trange(len(scaled_geom), desc="bktdens"):
+    for c in trange(25, desc="bktdens"):
+        (inc,) = (channels == c).nonzero(as_tuple=True)
+        (friends,) = chans_pair_mask[c][channels].nonzero(as_tuple=True)
+        density_ratio[inc] = _local_sparse_dens_ratio(
+            Xt, inc, friends, max_dist, sigma, sigma_regional, batch_size=batch_size
+        )
+    
+    return density_ratio
+
+
+@torch.jit.script
+def _local_sparse_dens_ratio(
+    X: Tensor,
+    inc: Tensor,
+    inf: Tensor,
+    max_dist: float,
+    sigma0: float,
+    sigma1: float,
+    batch_size: int = 1024,
+):
+    nc = inc.shape[0]
+    nf = inf.shape[0]
+    dens_ratio = X.new_empty(nc)
+
+    s0_factor = (1.0 / (torch.sqrt(torch.tensor(2.0)) * sigma0)).to(X)
+    s1_factor = (1.0 / (torch.sqrt(torch.tensor(2.0)) * sigma1)).to(X)
+
+    for ic0 in range(0, nc, batch_size):
+        ic1 = min(nc, ic0 + batch_size)
+        Xc = X[inc[ic0:ic1]]
+        for if0 in range(0, nf, batch_size):
+            if1 = min(nf, if0 + batch_size)
+            Xf = X[inf[if0:if1]]
+
+            d = torch.cdist(Xc, Xf)
+            F.threshold(d, threshold=max_dist, value=torch.inf, inplace=True)
+
+            d0 = d * s0_factor
+            d1 = d * s1_factor
+            d0.square_().neg_().exp_()
+            d1.square_().neg_().exp_()
+            d0 = d0.sum(1)
+            d1 = d1.sum(1)
+            torch.divide(d0, d1, out=dens_ratio[ic0:ic1])
+
+    return dens_ratio.nan_to_num_()
+
+
+def kdt_density(
+    kdtree: KDTree,
+    X: np.ndarray,
+    sigma: float,
+    sigma_regional: float,
+    batch_size=8192 * 2,
+    max_sigma: float = 3.0,
+):
+    n, d = X.shape
+    max_dist = max_sigma * sigma_regional
+    density = np.full((n,), -np.inf)
+
+    for i0 in trange(0, n, batch_size, desc="KDTdens"):
+        i1 = min(n, i0 + batch_size)
+
+        batch_kdt = KDTree(X[i0:i1])
+
+        sdm = batch_kdt.sparse_distance_matrix(kdtree, max_dist, output_type="ndarray")
+        v = sdm["v"]
+        ii = sdm["i"]
+        jj = sdm["j"]
+
+        v_local = _gkernel(v, sigma)
+        v_regional = _gkernel(v, sigma_regional)
+
+        coo_local = coo_array(
+            (v_local, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v.dtype
+        )
+        coo_regional = coo_array(
+            (v_regional, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v.dtype
+        )
+
+        dens_local = coo_local.sum(axis=1)
+        dens_regional = coo_regional.sum(axis=1)
+
+        np.divide(dens_local, dens_regional, out=density[i0:i1])
+
+    np.nan_to_num(density, copy=False)
+    return density
+
+
+def _dens_vs(kdt_a, kdt_b, max_dist, sigma, sigma_regional):
+    sdm = kdt_a.sparse_distance_matrix(kdt_b, max_dist, output_type="ndarray")
+    v = sdm["v"]
+    ii = sdm["i"]
+    jj = sdm["j"]
+    v_local = _gkernel(v, sigma)
+    v_regional = _gkernel(v, sigma_regional)
+    coo_local = coo_array((v_local, (ii, jj)), shape=(kdt_a.n, kdt_b.n))
+    coo_regional = coo_array((v_regional, (ii, jj)), shape=(kdt_a.n, kdt_b.n))
+    dens_local = coo_local.sum(axis=1)
+    dens_regional = coo_regional.sum(axis=1)
+    return dens_local, dens_regional
+
+
+@numba.jit(
+    parallel=True, nopython=True, boundscheck=False, nogil=True, error_model="numpy"
+)
+def _gkernel(v: np.ndarray, sigma: float):
+    v = v / (np.sqrt(2.0) * sigma)
+    v = np.square(v)
+    return np.exp(-v)
+
+
 def knn_density(
     kdtree, X, k, distance_upper_bound, batch_size=2**12, workers=-1, sigma=None
 ):
@@ -359,7 +536,11 @@ def density_peaks(
     )
 
     if density is None:
-        if use_knn:
+        if sigma_regional and not use_histograms:
+            density = kdt_density(
+                kdtree, X, sigma=sigma_local, sigma_regional=sigma_regional
+            )
+        elif use_knn:
             density = knn_density(
                 kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
             )
@@ -428,6 +609,7 @@ def nearest_neighbor_assign(
 
 
 def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25, centroids_b=None):
+    """Sparse Hellinger distance between isotropic Gaussian components"""
     c = centroids * (1.0 / (sigma * np.sqrt(8.0)))
     kdt = KDTree(c)
     if centroids_b is None:
@@ -444,6 +626,8 @@ def sparse_iso_hellinger(centroids, sigma, hellinger_threshold=0.25, centroids_b
     vals *= -1
     np.exp(vals, out=vals)  # now BC
     np.subtract(1, vals, out=vals)  # and now hell^2.
+    np.abs(vals, out=vals)  # numerical -0
+    np.sqrt(vals, out=vals)  # and now hell
     dists = coo_array((vals, (dists["j"], dists["i"])), shape=(kdt_b.n, kdt.n))
     return dists
 
@@ -484,11 +668,11 @@ def gmm_density_peaks(
     hellinger_strong=0.0,
     hellinger_weak=0.999,
     max_sigma=5.0,
+    sigma_atol=1e-4,
     max_samples=2_000_000,
     noise_const_dims=None,
     show_progress=True,
     use_hellinger=False,
-    gibbs_lls=False,
     mop=True,
     n_neighbors_search=20,
     device=None,
@@ -572,13 +756,14 @@ def gmm_density_peaks(
         show_progress=show_progress,
         noise_const_dims=noise_const_dims,
         with_log_likelihoods=mop or not use_hellinger,
-        gibbs=gibbs_lls and not use_hellinger,
-        sigma_atol=1e-3 if (use_hellinger or not gibbs_lls) else -1,
+        sigma_atol=sigma_atol,
     )
     res["n_components"] = n_components
+    res["kmeans_labels"] = res["labels"]
     n_components = len(cast(torch.Tensor, res["centroids"]))
     res["n_components_kept"] = n_components
-    maxdist = max_sigma * cast(float, res["sigma"]) * np.sqrt(X.shape[1])
+    print("nosqrt")
+    maxdist = max_sigma * float(res["sigma"])  # * np.sqrt(X.shape[1])
     if use_hellinger:
         centroids = cast(torch.Tensor, res["centroids"]).numpy(force=True)
         log_proportions = cast(torch.Tensor, res["log_proportions"]).numpy(force=True)
@@ -672,6 +857,16 @@ def gmmdpc_hellinger(
     hellinger_strong=0.0,
     hellinger_weak=0.999,
 ) -> np.ndarray:
+    """Density peaks clustering via isotropic GMM (Hellinger version)
+
+    Spikes are assigned to isotropic Gaussian clusters by k-means. Then
+    density peaks is carried out on centroids, where the notion of density
+    for a centroid is its log proportion in the mixture.
+
+    As in any DPC implementation, the key is the neighbor criterion. Here,
+    components are neighbors if they meet certain criteria about Hellinger
+    distance, which is like cosine distance for probability distributions.
+    """
     logger.dartsortdebug("GMMDPC: Hellinger...")
     coo = sparse_iso_hellinger(
         centroids,
@@ -707,14 +902,18 @@ def gmmdpc_hellinger(
             centroids[disconnected],
             sigma,
             hellinger_threshold=hellinger_weak,
-            centroids_b=centroids,
+            # centroids_b=centroids,
         )
         coo_weak = coo_array(
-            (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
-            shape=(n_components, n_components),
+            (coo_weak.data, (coo_weak.coords[1], coo_weak.coords[0])),
+            shape=(disconnected.size, disconnected.size),
+            # (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
+            # shape=(n_components, n_components),
         )
-        weak_nhdn = coo_nhdn(coo_weak, log_proportions)
-        jj[disconnected] = weak_nhdn[disconnected]
+        weak_nhdn = coo_nhdn(coo_weak, log_proportions[disconnected])
+        # jj[disconnected] = weak_nhdn[disconnected]
+        print("weak2")
+        jj[disconnected] = disconnected[weak_nhdn]
 
     _1 = np.ones((1,), dtype="float32")
     _1 = np.broadcast_to(_1, jj.shape)

@@ -86,7 +86,7 @@ class DARTsortUserConfig:
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=10.0,
+        default=15.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
@@ -138,9 +138,9 @@ class DARTsortUserConfig:
     )
 
     # -- matching parameters
-    amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.1
+    amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
     amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
-    temporal_upsamples: Annotated[int, Field(ge=1)] = 4
+    temporal_upsamples: Annotated[int, Field(ge=1)] = 8
 
     # -- motion estimation parameters
     do_motion_estimation: bool = argfield(
@@ -171,7 +171,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # high level behavior
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
-    cluster_strategy: str = "gmmdpc"
+    cluster_strategy: str = "dpc"
     refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = (
         "tmm"
     )
@@ -194,7 +194,7 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
     cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
-    convexity_threshold: float | None = argfield(default=-75.0, arg_type=float_or_none)
+    convexity_threshold: float | None = argfield(default=None, arg_type=float_or_none)
     convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching
@@ -237,28 +237,30 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_euclidean_complete_only: bool = False
     initial_cosine_complete_only: bool = False
     initial_amp_feat: bool = False
-    initial_pc_feats: int = 3
+    initial_signed_amp_feat: bool = True
+    initial_pc_feats: int = 5
     initial_pc_transform: Literal["log", "sqrt", "none"] = "none"
-    initial_pc_scale: float = 5.0
+    initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
     clustering_workers: int = 5
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 100_000
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 500_000
     pre_refinement_merge: bool = True
-    pre_refinement_merge_metric: str = "cosine"
-    pre_refinement_merge_threshold: float = 0.2
-    use_hellinger: bool = False
+    pre_refinement_merge_metric: str = "normeuc"
+    pre_refinement_merge_threshold: float = 0.1
+    use_hellinger: bool = True
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
-    dpc_mop: bool = False
+    dpc_mop: bool = True
     n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
     # gaussian mixture high level
     truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    signal_rank: Annotated[int, Field(ge=0)] = 8
+    initialize_at_rank_0: bool = True
+    signal_rank: Annotated[int, Field(ge=0)] = 5
     criterion_threshold: float = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -279,13 +281,15 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
-    gmm_metric: Literal["kl", "cosine"] = "cosine"
+    gmm_metric: Literal["kl", "cosine", "normeuc"] = "normeuc"
     gmm_search: Literal["topk", "random"] = "topk"
     gmm_n_candidates: int = 3
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
     gmm_split_decision_algorithm: str = "brute"
     gmm_merge_decision_algorithm: str = "brute"
+    latent_prior_std: float = 1.0
+    initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
@@ -295,6 +299,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_euclidean_threshold: float = 5.0
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
+    gmm_normeuc_threshold: float = 1.0
 
     # gaussian mixture unused
     hard_noise: bool = False

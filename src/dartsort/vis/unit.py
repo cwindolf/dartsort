@@ -119,6 +119,7 @@ class ISIHistogram(UnitPlot):
         if axis is None:
             axis = panel.subplots()
         which = sorting_analysis.in_unit(unit_id)
+        assert sorting_analysis.times_seconds is not None
         times_s = sorting_analysis.times_seconds[which]
         isi_hist(
             times_s,
@@ -151,10 +152,14 @@ class XZScatter(UnitPlot):
             axis = panel.subplots()
 
         in_unit = sorting_analysis.in_unit(unit_id)
+        assert sorting_analysis.x is not None
+        assert sorting_analysis.amplitudes is not None
         x = sorting_analysis.x[in_unit]
         if self.registered:
+            assert sorting_analysis.registered_z is not None
             z = sorting_analysis.registered_z[in_unit]
         else:
+            assert sorting_analysis.z is not None
             z = sorting_analysis.z[in_unit]
         geomx, geomz = sorting_analysis.geom.T
         pad = self.probe_margin_um
@@ -199,6 +204,7 @@ class PCAScatter(UnitPlot):
         if which is None:
             return
         assert loadings is not None
+        assert sorting_analysis.amplitudes is not None
         amps = sorting_analysis.amplitudes[which]
         c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
         s = axis.scatter(
@@ -240,6 +246,8 @@ class TimeFeatScatter(UnitPlot):
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
+        assert sorting_analysis.times_seconds is not None
+        assert sorting_analysis.amplitudes is not None
         in_unit = sorting_analysis.in_unit(unit_id)
         t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
@@ -447,6 +455,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
         if np.asarray(unit_id).size > 1:
             unit_id = unit_id[0]
         (
+            neighbor_ixs,
             neighbor_ids,
             neighbor_dists,
             neighbor_coarse_templates,
@@ -463,6 +472,7 @@ class NearbyCoarseTemplatesPlot(UnitPlot):
             neighbor_coarse_templates,
             sorting_analysis.vis_channel_index,
             sorting_analysis.registered_geom,
+            main_channel=sorting_analysis.unit_max_channel(unit_id),
             title="",
         )
 
@@ -492,6 +502,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         if axis is None:
             axis = panel.subplots()
         (
+            neighbor_ixs,
             neighbor_ids,
             neighbor_dists,
             neighbor_coarse_templates,
@@ -538,6 +549,7 @@ class NeighborCCGPlot(UnitPlot):
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
+            neighbor_ixs,
             neighbor_ids,
             neighbor_dists,
             neighbor_coarse_templates,

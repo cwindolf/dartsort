@@ -69,6 +69,7 @@ def realign(
         trough_offset_samples=trough_offset_samples,
         realign_strategy=realign_cfg.realign_strategy,
         trough_factor=realign_cfg.trough_factor,
+        min_pair_corr=realign_cfg.min_pair_corr,
         computation_cfg=computation_cfg,
     )
     templates = replace(
@@ -122,6 +123,7 @@ def estimate_offset(
     strategy="mainchan_trough_factor",
     trough_factor=3.0,
     min_weight=0.75,
+    min_pair_corr=0.75,
     main_channels=None,
     padded_trough_offset_samples=42,
     trough_offset_samples=42,
@@ -145,6 +147,7 @@ def estimate_offset(
             trough_factor=trough_factor,
             padded_trough_offset_samples=padded_trough_offset_samples,
             trough_offset_samples=trough_offset_samples,
+            min_corr=min_pair_corr,
             computation_cfg=computation_cfg,
         )
         gc.collect()
@@ -204,6 +207,7 @@ def realign_templates(
     padded_trough_offset_samples=42,
     trough_offset_samples=42,
     realign_strategy: RealignStrategy = "mainchan_trough_factor",
+    min_pair_corr=0.75,
     trough_factor=3.0,
     computation_cfg: ComputationConfig | None = None,
 ):
@@ -234,6 +238,7 @@ def realign_templates(
         strategy=realign_strategy,
         trough_factor=trough_factor,
         main_channels=main_channels,
+        min_pair_corr=min_pair_corr,
         padded_trough_offset_samples=padded_trough_offset_samples,
         trough_offset_samples=trough_offset_samples,
     )
@@ -337,7 +342,7 @@ def dredge_realign(
     main_channels: torch.Tensor | None,
     snrs_by_channel: torch.Tensor | None,
     min_spatial_cosine: float = 0.75,
-    min_corr: float = 0.5,
+    min_corr: float = 0.75,
     trough_factor: float = 3.0,
     padded_trough_offset_samples: int,
     trough_offset_samples: int,

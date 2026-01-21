@@ -48,6 +48,7 @@ _nmeth_names = {
 class UnitComparisonPlot(BasePlot):
     kind = "unit_comparison"
     neighbor_method = "templates"
+    which = "tested"
     n_neighbors = 5
 
     def draw(self, panel, comparison, unit_id):
@@ -71,12 +72,12 @@ class UnitComparisonPlot(BasePlot):
         assert which in ("gt", "tested")
 
         if method == "templates" and which == "gt":
-            ids, dists, templates = comparison.nearby_gt_templates(
+            ixs, ids, dists, templates = comparison.nearby_gt_templates(
                 unit_id, n_neighbors=n
             )
             del dists  # just naming it for clarity
         elif method == "templates" and which == "tested":
-            ids, dists, templates = comparison.nearby_tested_templates(
+            ixs, ids, dists, templates = comparison.nearby_tested_templates(
                 unit_id, n_neighbors=n
             )
             del dists
@@ -84,7 +85,9 @@ class UnitComparisonPlot(BasePlot):
             # gt units with top agreement to tested match
             tested_unit_id = comparison.get_match(unit_id)
             a = comparison.agreement_scores[tested_unit_id]
-            ids = a.sort_values(ascending=False).index[:n].values if n else []
+            asorted = a.sort_values(ascending=False)
+            ids = asorted.index[:n].values if n else []
+            ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
             else:
@@ -94,6 +97,7 @@ class UnitComparisonPlot(BasePlot):
             # tested units with top agreement to gt
             a = comparison.agreement_scores.loc[unit_id]
             ids = a.sort_values(ascending=False).index[:n].values
+            ixs = np.searchsorted(comparison.tested_analysis.unit_ids, ids)
             templates = comparison.tested_analysis.coarse_template_data.unit_templates(
                 ids
             )
@@ -101,6 +105,7 @@ class UnitComparisonPlot(BasePlot):
             tested_unit_id = comparison.get_match(unit_id)
             g = comparison.greedy_iou[:, tested_unit_id]
             ids = np.argsort(g)[::-1][: n - 1] if n else []
+            ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
             else:
@@ -109,13 +114,14 @@ class UnitComparisonPlot(BasePlot):
         elif method == "greedy" and which == "tested":
             g = comparison.greedy_iou[unit_id]
             ids = np.argsort(g)[::-1][:n]
+            ixs = np.searchsorted(comparison.tested_analysis.unit_ids, ids)
             templates = comparison.tested_analysis.coarse_template_data.unit_templates(
                 ids
             )
         else:
             raise ValueError(f"Unknown neighbor method {method}.")
 
-        return np.asarray(ids), templates
+        return np.asarray(ixs), np.asarray(ids), templates
 
 
 class GTUnitTextInfo(UnitComparisonPlot):
@@ -155,9 +161,13 @@ class GTUnitTextInfo(UnitComparisonPlot):
 
         td = getattr(comparison, "template_distances", None)
         if td is not None:
-            temp_dist = td[unit_id, tested_unit_id]
+            unit_ix = np.searchsorted(comparison.gt_analysis.unit_ids, unit_id)
+            tested_unit_ix = np.searchsorted(
+                comparison.tested_analysis.unit_ids, tested_unit_id
+            )
+            temp_dist = td[unit_ix, tested_unit_ix]
             msg += f"Hung. temp dist: {temp_dist:0.1f}\n"
-            mn = td[unit_id].min()
+            mn = td[unit_ix].min()
             if mn < temp_dist:
                 msg += f"But, min temp dist={temp_dist:0.1f}\n"
 
@@ -179,10 +189,10 @@ class GTUnitTextInfo(UnitComparisonPlot):
         rec = tp / max((tp + fn), 1)
         prec = tp / max((tp + fp), 1)
         fdr = fp / max((tp + fp), 1)
-        acc = f"{100*acc:0.1f}".rstrip("0").rstrip(".")
-        rec = f"{100*rec:0.1f}".rstrip("0").rstrip(".")
-        prec = f"{100*prec:0.1f}".rstrip("0").rstrip(".")
-        fdr = f"{100*fdr:0.1f}".rstrip("0").rstrip(".")
+        acc = f"{100 * acc:0.1f}".rstrip("0").rstrip(".")
+        rec = f"{100 * rec:0.1f}".rstrip("0").rstrip(".")
+        prec = f"{100 * prec:0.1f}".rstrip("0").rstrip(".")
+        fdr = f"{100 * fdr:0.1f}".rstrip("0").rstrip(".")
         msg += f"acc (tpr)={acc}%\nrecall={rec}%\nprec={prec}%\nfdr={fdr}%"
 
         axis.text(0, 0, msg, fontsize=8)
@@ -328,11 +338,15 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
 
         waveforms = []
         colors = []
-        maa = float("-inf")
+        maa = 1.0
         for kind, color in self.colors.items():
-            if w[kind] is None or not w[kind].size:
+            if w[kind] is None or not w[kind].size or not np.isfinite(w[kind]).any():
                 continue
-            maa = max(maa, np.percentile(np.nanmax(np.abs(w[kind]), axis=(1, 2)), 90))
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+                maxs = np.nanmax(np.abs(w[kind]), axis=(1, 2))
+            maxs = np.nan_to_num(maxs, nan=1.0)
+            maa = max(maa, np.percentile(maxs, 90))
             if self.average:
                 avg = w[kind].mean(0, keepdims=True)
                 waveforms.append(avg)
@@ -359,7 +373,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         geomplot(
             waveforms,
             max_channels=max_channels,
-            channel_index=w['channel_index'],
+            channel_index=w["channel_index"],
             geom=w["geom"],
             ax=ax,
             show_zero=False,
@@ -394,7 +408,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 linestyle=(1, (1, 1)),
             )
             tk = f"{comparison.tested_analysis.name}#{tested_unit_id}"
-            handles[tk] = testedline
+            handles[tk] = testedline  # type: ignore
         if self.average:
             gt_template = comparison.gt_analysis.coarse_template_data.unit_templates(
                 unit_id
@@ -412,7 +426,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 color="k",
                 linestyle=(0, (1, 1)),
             )
-            handles["GT"] = gtline
+            handles["GT"] = gtline  # type: ignore
 
         ax.legend(
             handles=handles.values(),
@@ -427,6 +441,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
             ncols=min(3, len(handles)),
         )
 
+        k = ""
         if self.show_unsorted_matches:
             k = "unsorted tp/fn"
         if self.show_sorted_matches:
@@ -476,7 +491,7 @@ class NearbyTemplates(UnitComparisonPlot):
 
     def draw(self, panel, comparison, unit_id):
         try:
-            neighb_ids, templates = self.neighbors(
+            neighb_ixs, neighb_ids, templates = self.neighbors(
                 comparison, unit_id, which=self.which
             )
         except Exception:
@@ -561,12 +576,16 @@ class NearbyTemplatesDistanceMatrix(UnitComparisonPlot):
 
     def draw(self, panel, comparison, unit_id):
         try:
-            gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+            gt_neighb_ixs, gt_neighb_ids, _ = self.neighbors(
+                comparison, unit_id, which="gt"
+            )
         except Exception:
             neighbor_error_panel(self, panel, unit_id, which="gt")
             return
-        tested_neighb_ids, _ = self.neighbors(comparison, unit_id, which="tested")
-        dists = comparison.template_distances[gt_neighb_ids][:, tested_neighb_ids]
+        tested_neighb_ixs, tested_neighb_ids, _ = self.neighbors(
+            comparison, unit_id, which="tested"
+        )
+        dists = comparison.template_distances[gt_neighb_ixs][:, tested_neighb_ixs]
         ax = panel.subplots()
         # log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0)
@@ -576,7 +595,8 @@ class NearbyTemplatesDistanceMatrix(UnitComparisonPlot):
             norm=sqrt_norm,
             cmap=self.cmap,
         )
-        plt.colorbar(im, ax=ax, shrink=0.6)
+        if np.isfinite(dists).any():
+            plt.colorbar(im, ax=ax, shrink=0.6)
         ax.set_ylabel(f"{comparison.gt_name} unit")
         ax.set_xlabel(f"{comparison.tested_name} unit")
         ax.set_yticks(range(len(dists)), gt_neighb_ids)
@@ -606,11 +626,15 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
 
     def draw(self, panel, comparison, unit_id):
         try:
-            gt_neighb_ids, _ = self.neighbors(comparison, unit_id, which="gt")
+            gt_neighb_ixs, gt_neighb_ids, _ = self.neighbors(
+                comparison, unit_id, which="gt"
+            )
         except Exception:
             neighbor_error_panel(self, panel, unit_id, which="gt")
             return
-        tested_neighb_ids, _ = self.neighbors(comparison, unit_id, which="tested")
+        tested_neighb_ixs, tested_neighb_ids, _ = self.neighbors(
+            comparison, unit_id, which="tested"
+        )
 
         if self.confusion_kind == "siconfusion":
             conf = comparison.comparison.get_confusion_matrix()
@@ -622,6 +646,8 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = conf[gt_neighb_ids][:, tested_neighb_ids]
             conf_rows = gt_neighb_ids
             conf_cols = tested_neighb_ids
+        else:
+            assert False
 
         if self.confusion_kind.startswith("si"):
             conf = conf[conf.index != "FP"].sort_index()
@@ -648,7 +674,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = cfull[conf_rows][:, conf_cols]
 
         if self.confusion_kind in ("siconfusion", "greedy"):
-            union = union[conf_rows][:, conf_cols]
+            union = union[conf_rows][:, conf_cols]  # type: ignore[reportPossiblyUnbound]
             union[union == 0] = 1
             conf = conf / union
             suffix = " iou"
@@ -658,7 +684,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         conf = np.nan_to_num(conf)
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
-        conf = np.abs(np.clip(conf, min=0.0))
+        conf = np.abs(np.clip(conf, min=0.0))  # type: ignore[reportCallIssue]
 
         ax = panel.subplots()
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0, vmax=max(conf.max(), 0.01))
@@ -690,6 +716,11 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
             return
 
         match_dt = comparison.matched_misalignment(unit_id)
+        if match_dt is None:
+            ax.text(0, 0, f"ST shape mismatch (SI issue...?)")
+            ax.axis("off")
+            return
+
         df = comparison.delta_frames
         bins = np.arange(-df, df + 1)
         c = glasbey1024[unit_id % len(glasbey1024)]
@@ -734,7 +765,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
 
     def _draw(self, panel, comparison, unit_id, tested_unit_id):
         try:
-            ids, _ = self.neighbors(comparison, unit_id, n=self.n_neighbors + 1)
+            ixs, ids, _ = self.neighbors(comparison, unit_id, n=self.n_neighbors + 1)
         except Exception:
             neighbor_error_panel(self, panel, unit_id, tested_unit_id)
             return
@@ -751,9 +782,11 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
         for cat, ax in zip(self.categories, axes.flat):
             cat_st = cat_spikes[f"{cat}_times_samples"]
             ccgs = []
+            clags = None
             for u, vst in vsts.items():
                 clags, ccg = correlogram(cat_st, vst, max_lag=self.max_lag)
                 ccgs.append(ccg)
+            assert clags is not NotImplemented
 
             stackbar(ax, clags, ccgs, colors=colors, labels=ids)
             sns.despine(ax=ax, left=True)
@@ -773,7 +806,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ax.set_ylabel(f"{va.name} CCG v. {cat}", color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
-        ax.set_xlabel("lag (samples)")
+        ax.set_xlabel("lag (samples)")  # type: ignore
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)
@@ -957,9 +990,9 @@ def make_all_unit_comparisons(
         n_jobs=n_jobs,
         show_progress=show_progress,
         overwrite=overwrite,
-        unit_ids=unit_ids,
         gizmo_name="comparison",
         taskname="comparisons",
+        unit_ids=unit_ids if unit_ids is not None else comparison.gt_analysis.unit_ids,
         **other_global_params,
     )
 

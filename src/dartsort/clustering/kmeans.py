@@ -140,8 +140,6 @@ def truncated_kmeans(
     dcc_batch_size=64,
     noise_const_dims=None,
     with_log_likelihoods=False,
-    gibbs=False,
-    burn=50,
     device=None,
     show_progress=False,
 ):
@@ -211,11 +209,9 @@ def truncated_kmeans(
     distsq_buf = (distsq_buf, distsq_buf.clone())
     sigma = sigmasq.sqrt().numpy(force=True).item()
     if with_log_likelihoods:
-        log_likelihoods = X.new_full((n,), 0.0 if gibbs else -torch.inf)
+        log_likelihoods = X.new_full((n,), -torch.inf)
     else:
         log_likelihoods = None
-    if gibbs:
-        n_iter = n_iter + burn
 
     if show_progress:
         it = trange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
@@ -251,64 +247,35 @@ def truncated_kmeans(
                 dbufs=distsq_buf,
             )
             assert distsq_coo.shape == (i1 - i0, n_components)
-            if not gibbs:
-                distsq_values = distsq_coo.values().clone()
+            distsq_values = distsq_coo.values().clone()
             liks = distsq_to_lik_coo(
-                distsq_coo, sigmasq, log_proportions, in_place=not gibbs
+                distsq_coo, sigmasq, log_proportions, in_place=True
             )
-            if not gibbs:
-                del distsq_coo
-            if gibbs or (done and with_log_likelihoods):
+            del distsq_coo
+
+            if done and with_log_likelihoods:
                 assert log_likelihoods is not None
                 batch_liks = logsumexp_coo(liks)
-                if not gibbs:
-                    log_likelihoods[i0:i1] = batch_liks
-                elif j >= burn:
-                    # welford running log lik
-                    log_likelihoods[i0:i1] += batch_liks.sub_(
-                        log_likelihoods[i0:i1]
-                    ).mul_(1.0 / (j - burn + 1.0))
+                log_likelihoods[i0:i1] = batch_liks
                 if done:
                     continue
 
             resps = torch.sparse.softmax(liks, dim=1)
-            if gibbs:
-                batch_labels = torch.multinomial(
-                    resps.to_dense(), num_samples=1, generator=gen, out=labels[i0:i1]
-                )
-                resps = torch.sparse_coo_tensor(
-                    indices=torch.stack(
-                        (
-                            torch.arange(i1 - i0, device=batch_labels.device),
-                            batch_labels.squeeze(),
-                        ),
-                        dim=0,
-                    ),
-                    values=X.new_ones(batch_labels.shape[0]),
-                    size=resps.shape,
-                    is_coalesced=True,
-                )
-                distsq_values = (
-                    distsq_coo.to_dense()  # type: ignore
-                    .take_along_dim(dim=1, indices=batch_labels)
-                    .squeeze()
-                )
+            # update labels... torch sparse has no argmax(), so need scipy
+            # or cupy. scipy is a big slowdown here, so cupy if possible.
+            if is_gpu and HAVE_CUPY:
+                resps_cupy = coo_to_cupy(resps).tocsc()
+                batch_labels = resps_cupy.argmax(axis=1)
             else:
-                # update labels... torch sparse has no argmax(), so need scipy
-                # or cupy. scipy is a big slowdown here, so cupy if possible.
-                if is_gpu and HAVE_CUPY:
-                    resps_cupy = coo_to_cupy(resps).tocsc()
-                    batch_labels = resps_cupy.argmax(axis=1)
-                else:
-                    resps_scipy = coo_to_scipy(resps)
-                    batch_labels = resps_scipy.argmax(axis=1, explicit=True)
-                labels[i0:i1] = torch.as_tensor(batch_labels).to(labels).squeeze()
+                resps_scipy = coo_to_scipy(resps)
+                batch_labels = resps_scipy.argmax(axis=1, explicit=True)
+            labels[i0:i1] = torch.as_tensor(batch_labels).to(labels).squeeze()
 
             # get sigmasq
             w = resps.values().clone()
             batch_w = w.sum()
             w /= batch_w
-            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / p  # type: ignore
+            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / p
 
             # get N and centroids
             batch_N = resps.sum(dim=0).to_dense()

@@ -68,13 +68,13 @@ class DARTsortSorting:
         self._ephemeral_feature_names = []
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
-                check_shape = not self._is_geom_related(k)
+                check_shape = not self._no_check_needed(k)
                 self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
         self._loaded_persistent_features = []
         if persistent_features is not None:
             for k, v in persistent_features.items():
-                check_shape = not self._is_geom_related(k)
+                check_shape = not self._no_check_needed(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
 
     @property
@@ -105,13 +105,12 @@ class DARTsortSorting:
                     other._check_shape(k, v)
                 setattr(other, k, v)
             else:
-                other.add_ephemeral_feature(
-                    k, v, check_shape=check_shapes, overwrite=True
-                )
+                check = check_shapes and not self._no_check_needed(k)
+                other.add_ephemeral_feature(k, v, check_shape=check, overwrite=True)
         return other
 
-    def has_persistent_labels(self):
-        """Are my .labels from the hdf5 file?"""
+    def has_persistent_labels(self) -> bool:
+        """Are my .labels those from the hdf5 file?"""
         if self.parent_h5_path is None:
             return False
         if self.labels is None:
@@ -127,12 +126,18 @@ class DARTsortSorting:
     # interface for setting features
 
     def add_ephemeral_feature(
-        self, feature_name: str, feature: np.ndarray, check_shape=True, overwrite=False
+        self,
+        feature_name: str,
+        feature: np.ndarray,
+        check_shape: bool | None = None,
+        overwrite=False,
     ):
         """
         Ephemeral features are accessible as properties and persisted to/from .npz,
         but not saved in the .h5.
         """
+        if check_shape is None:
+            check_shape = not self._no_check_needed(feature_name)
         if check_shape:
             self._check_shape(feature_name, feature)
 
@@ -264,7 +269,7 @@ class DARTsortSorting:
                 for k in h5.keys():
                     if k in already_loaded:
                         continue
-                    if cls._is_geom_related(k):
+                    if cls._no_check_needed(k):
                         load_feature_names.append(k)
                         continue
                     dset = cast(h5py.Dataset, h5[k])
@@ -272,7 +277,7 @@ class DARTsortSorting:
                     if is_simple:
                         load_feature_names.append(k)
             elif load_feature_names is None:
-                load_feature_names = [k for k in h5.keys() if cls._is_geom_related(k)]
+                load_feature_names = [k for k in h5.keys() if cls._no_check_needed(k)]
             assert load_feature_names is not None
             load_feature_names = [
                 k for k in load_feature_names if k not in already_loaded
@@ -318,7 +323,7 @@ class DARTsortSorting:
         np.savez(sorting_npz, **data, allow_pickle=False)
 
     @classmethod
-    def load(cls, sorting_npz, additional_persistent_features=None):
+    def load(cls, sorting_npz, additional_persistent_features=None) -> Self:
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -385,7 +390,7 @@ class DARTsortSorting:
         for k in self._ephemeral_feature_names:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
-            if self._is_geom_related(k):
+            if self._no_check_needed(k):
                 eph[k] = v
             else:
                 eph[k] = v[mask]
@@ -395,7 +400,7 @@ class DARTsortSorting:
         for k in self._loaded_persistent_features:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
-            if self._is_geom_related(k):
+            if self._no_check_needed(k):
                 per[k] = v
             else:
                 per[k] = v[mask]
@@ -410,11 +415,29 @@ class DARTsortSorting:
             ephemeral_features=eph,
         )
 
-    def drop_missing(self):
+    def drop_missing(self) -> Self:
         assert self.labels is not None
         return self.mask(self.labels >= 0)
 
-    def flatten(self):
+    def drop_doubles(self):
+        assert self.labels is not None
+        viol_ixs = []
+        for uid in self.unit_ids:
+            inu = np.flatnonzero(self.labels == uid)
+            tu = self.times_samples[inu]
+            # this has the first indices of each pair. +1 has the second indices.
+            viol = np.flatnonzero(np.diff(tu) == 0)
+            viol_ixs.append(viol + 1)
+        viol_ixs = np.concatenate(viol_ixs)
+        if viol_ixs.size:
+            logger.dartsortdebug(f"Dropping {viol_ixs.size} duplicates.")
+            labels = self.labels.copy()
+            labels[viol_ixs] = -1
+            return self.ephemeral_replace(labels=labels)
+        else:
+            return self
+
+    def flatten(self) -> Self:
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
         _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
@@ -452,8 +475,16 @@ class DARTsortSorting:
         return self.n_spikes
 
     @staticmethod
-    def _is_geom_related(k):
+    def _is_geom_related(k) -> bool:
         return k == "geom" or k.endswith("channel_index")
+
+    @staticmethod
+    def _is_unit_related(k) -> bool:
+        return k.startswith("unit")
+
+    @classmethod
+    def _no_check_needed(cls, k) -> bool:
+        return cls._is_geom_related(k) or cls._is_unit_related(k)
 
     def _check_shape(self, feature_name: str, feature: np.ndarray):
         if feature.shape[0] != self.n_spikes:
@@ -461,7 +492,7 @@ class DARTsortSorting:
                 f"Feature {feature_name}'s shape {feature.shape} didn't agree with spike count {self.n_spikes}."
             )
 
-    def _load_dataset(self, dataset_name: str):
+    def _load_dataset(self, dataset_name: str) -> np.ndarray:
         assert self.parent_h5_path is not None
         with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
             dset = h5[dataset_name]
@@ -470,7 +501,7 @@ class DARTsortSorting:
 
     def slice_feature_by_name(
         self, dataset_name: str, mask: np.ndarray | slice = slice(None)
-    ):
+    ) -> np.ndarray:
         if hasattr(self, dataset_name):
             return getattr(self, dataset_name)[mask]
 

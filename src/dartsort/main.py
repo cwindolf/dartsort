@@ -242,24 +242,28 @@ def _dartsort_impl(
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
 
-        if cfg.final_refinement or not is_final:
+        if is_final and not cfg.final_refinement:
+            break
+
+        if cfg.recluster_after_first_matching:
+            step_clustering_cfg = cfg.clustering_cfg
+            step_features_cfg = cfg.clustering_features_cfg
+        else:
             step_clustering_cfg = step_features_cfg = None
-            if cfg.recluster_after_first_matching:
-                step_clustering_cfg = cfg.clustering_cfg
-                step_features_cfg = cfg.clustering_features_cfg
-            sorting = cluster(
-                recording,
-                sorting,
-                motion_est=motion_est,
-                pre_refinement_cfg=cfg.pre_refinement_cfg,
-                refinement_cfg=cfg.refinement_cfg,
-                clustering_cfg=step_clustering_cfg,
-                clustering_features_cfg=step_features_cfg,
-                _save_cfg=cfg,
-                _save_dir=output_dir,
-                _save_initial_name=f"recluster{step}",
-                _save_refined_name_fmt=f"refined{step}{{stepname}}",
-            )
+
+        sorting = cluster(
+            recording,
+            sorting,
+            motion_est=motion_est,
+            pre_refinement_cfg=cfg.pre_refinement_cfg,
+            refinement_cfg=cfg.refinement_cfg,
+            clustering_cfg=step_clustering_cfg,
+            clustering_features_cfg=step_features_cfg,
+            _save_cfg=cfg,
+            _save_dir=output_dir,
+            _save_initial_name=f"recluster{step}",
+            _save_refined_name_fmt=f"refined{step}{{stepname}}",
+        )
 
     # finally handle scratch directory and delete intermediate files if requested
     if work_dir is not None:
@@ -530,7 +534,6 @@ def cluster(
             motion_est=motion_est,
             clustering_features_cfg=clustering_features_cfg,
         )
-    assert features is not None
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,

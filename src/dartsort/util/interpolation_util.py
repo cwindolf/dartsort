@@ -32,6 +32,7 @@ def interpolate_by_chunk(
     shifts,
     registered_geom,
     target_channels,
+    trim_to_rank: int | None = None,
     params: InterpolationParams = default_interpolation_params,
     device=None,
     store_on_device=False,
@@ -120,12 +121,15 @@ def interpolate_by_chunk(
         target_geom=target_geom,
         channel_index=channel_index,
         params=params,
+        shift_dim=shift_dim,
     )
     for sli, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
     ):
         # interpolate, store
-        chunk_features = torch.from_numpy(chunk_features).to(device)
+        if trim_to_rank is not None:
+            chunk_features = chunk_features[:, :trim_to_rank]
+        chunk_features = torch.asarray(chunk_features, device=device, dtype=dtype)
         out[sli] = erp.interp(
             features=chunk_features,
             source_main_channels=channels[sli].to(device),
@@ -937,6 +941,7 @@ class FullProbeInterpolator(BModule):
 
     def interp_at_time(self, t_s: float, waveforms: torch.Tensor) -> torch.Tensor:
         assert waveforms.shape[2] == self.c_src
+
         # move geom to its position at time t_s
         shift = torch.zeros_like(self.b.geom)
         if self.motion_est is not None:
@@ -944,14 +949,14 @@ class FullProbeInterpolator(BModule):
                 t_s=np.array([t_s]), depth_um=self.g_depths, grid=True
             )
             assert disp.shape[1] == 1
-            shift[:, 1].copy_(torch.from_numpy(disp[:, 0]), non_blocking=True)
+            shift[:, 1].copy_(torch.tensor(disp[:, 0]))
 
         # interpolate from static geom to shifted geom
         n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
             source_pos=self.b.rgeom[None].broadcast_to(n, self.c_src, self.dim),
-            target_pos=(self.b.geom + shift).broadcast_to(n, self.c_targ, self.dim),
+            target_pos=(self.b.geom - shift).broadcast_to(n, self.c_targ, self.dim),
             precomputed_data=self.b.data,
         )
 

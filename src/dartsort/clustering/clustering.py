@@ -11,8 +11,8 @@ from . import cluster_util, density, forward_backward, refine_util
 from .gmm import mixture
 
 
-clustering_strategies = {}
-refinement_strategies = {}
+clustering_strategies: dict[str, "type[Clusterer]"] = {}
+refinement_strategies: dict[str, "type[Refinement]"] = {}
 
 
 def get_clusterer(
@@ -25,7 +25,6 @@ def get_clusterer(
     initial_name=None,
     refine_labels_fmt=None,
 ):
-    clus_strategy = None
     if clustering_cfg is not None:
         if clustering_cfg.cluster_strategy not in clustering_strategies:
             raise ValueError(
@@ -33,6 +32,8 @@ def get_clusterer(
                 f"Options are: {', '.join(clustering_strategies.keys())}."
             )
         clus_strategy = clustering_cfg.cluster_strategy
+    else:
+        clus_strategy = "none"
 
     saving_labels = save_cfg is not None and save_cfg.save_intermediate_labels
     if saving_labels:
@@ -46,7 +47,7 @@ def get_clusterer(
             save_cfg=None,
         )
 
-    C = clustering_strategies.get(clus_strategy, Clusterer)
+    C = clustering_strategies[clus_strategy]
     init_fmt = initial_name if (saving_labels and clustering_cfg is not None) else None
     clusterer = C.from_config(
         clustering_cfg,
@@ -82,10 +83,11 @@ def get_clusterer(
                 f"Options are: {', '.join(refinement_strategies.keys())}."
             )
         R = refinement_strategies[refinement_cfg.refinement_strategy]
+        rsave = saving_labels and refinement_cfg.refinement_strategy != "none"
         clusterer = R(
             clusterer,
             refinement_cfg=refinement_cfg,
-            labels_fmt=refine_labels_fmt if saving_labels else None,
+            labels_fmt=refine_labels_fmt if rsave else None,
             computation_cfg=computation_cfg,
             **shared_save_kw,
         )
@@ -212,6 +214,7 @@ class DensityPeaksClusterer(Clusterer):
         outlier_radius=5.0,
         outlier_neighbor_count=5,
         kdtree_subsample_max_size=2_000_000,
+        subsampling_strategy="byamp",
         workers=-1,
         uhdversion=False,
         random_seed=0,
@@ -232,6 +235,7 @@ class DensityPeaksClusterer(Clusterer):
         self.workers = workers
         self.uhdversion = uhdversion
         self.random_seed = random_seed
+        self.subsampling_strategy = subsampling_strategy
 
     @classmethod
     def from_config(
@@ -249,12 +253,13 @@ class DensityPeaksClusterer(Clusterer):
             sigma_regional=clustering_cfg.sigma_regional,
             n_neighbors_search=clustering_cfg.n_neighbors_search,
             radius_search=clustering_cfg.radius_search,
-            remove_clusters_smaller_than=clustering_cfg.remove_clusters_smaller_than,
+            remove_clusters_smaller_than=clustering_cfg.min_cluster_size,
             noise_density=clustering_cfg.noise_density,
             random_seed=clustering_cfg.random_seed,
             outlier_radius=clustering_cfg.outlier_radius,
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             kdtree_subsample_max_size=clustering_cfg.kdtree_subsample_max_size,
+            subsampling_strategy=clustering_cfg.subsampling_strategy,
             workers=clustering_cfg.workers,
             uhdversion=uhdversion,
             computation_cfg=computation_cfg,
@@ -268,13 +273,22 @@ class DensityPeaksClusterer(Clusterer):
         X = features.features
         subsampling = maxcount and len(X) > maxcount
         X_fit = X
-        if subsampling:
+        if subsampling and self.subsampling_strategy == "random":
             rg = np.random.default_rng(self.random_seed)
             choices = rg.choice(len(X), size=maxcount, replace=False)
             choices.sort()
             not_choices = np.setdiff1d(np.arange(len(X)), choices)
             X_fit = X[choices]
+        elif subsampling and self.subsampling_strategy == "byamp":
+            rg = np.random.default_rng(self.random_seed)
+            p = features.amplitudes.astype(np.float64)
+            p = p / p.sum()
+            choices = rg.choice(len(X), size=maxcount, replace=False, p=p)
+            choices.sort()
+            not_choices = np.setdiff1d(np.arange(len(X)), choices)
+            X_fit = X[choices]
         else:
+            assert not subsampling
             not_choices = choices = None
 
         if not self.uhdversion:
@@ -393,7 +407,7 @@ class GMMDensityPeaksClusterer(Clusterer):
         return cls(
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             outlier_radius=clustering_cfg.outlier_radius,
-            remove_clusters_smaller_than=clustering_cfg.remove_clusters_smaller_than,
+            remove_clusters_smaller_than=clustering_cfg.min_cluster_size,
             workers=clustering_cfg.workers,
             n_initializations=clustering_cfg.kmeanspp_initializations,
             n_iter=clustering_cfg.kmeans_iter,
@@ -545,6 +559,9 @@ class Refinement(Clusterer):
         return sorting
 
 
+refinement_strategies["none"] = Refinement
+
+
 class GMMRefinement(Refinement):
     def _refine(self, features, sorting, recording, motion_est=None):
         sorting, _ = refine_util.gmm_refine(
@@ -649,10 +666,3 @@ class ForwardBackwardEnsembler(Refinement):
 
 
 refinement_strategies["forwardbackward"] = ForwardBackwardEnsembler
-
-
-def _id(clusterer, **kwargs):
-    return clusterer
-
-
-refinement_strategies["none"] = _id

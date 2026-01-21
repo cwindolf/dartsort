@@ -112,7 +112,7 @@ class FeaturizationConfig:
     residual_later: bool = False
 
     # -- featurization configuration
-    save_input_voltages: bool = False
+    save_input_voltages: bool = True
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
@@ -229,6 +229,8 @@ default_extrapolation_params = InterpolationParams(
 )
 
 FitSamplingMethod = Literal["random", "amp_reweighted"]
+default_fit_sampling_method = "amp_reweighted"
+default_fit_max_reweighting = 3.0
 
 
 @cfg_dataclass
@@ -239,14 +241,15 @@ class SubtractionConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "random"
-    fit_max_reweighting: float = 4.0
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_max_reweighting: float = default_fit_max_reweighting
     fit_only: bool = False
 
     # subtraction
     detection_threshold: float = 4.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = True
+    denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
@@ -256,14 +259,14 @@ class SubtractionConfig:
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
     residnorm_decrease_threshold: float = 16.0
-    growth_tolerance: float | None = 0.5
+    growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
     singlechan_threshold: float = 50.0
     n_singlechan_templates: int = 10
     singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
-    convexity_threshold: float | None = -75.0
+    convexity_threshold: float | None = None
     convexity_radius: int = 7
 
     # how will waveforms be denoised before subtraction?
@@ -295,8 +298,8 @@ class ThresholdingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "random"
-    fit_max_reweighting: float = 4.0
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_max_reweighting: float = default_fit_max_reweighting
 
     # thresholding
     detection_threshold: float = 5.0
@@ -398,6 +401,7 @@ class TemplateRealignmentConfig:
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
     template_cfg: TemplateConfig = TemplateConfig(denoising_method="none")
+    min_pair_corr: float = 0.85
 
 
 @cfg_dataclass
@@ -406,10 +410,10 @@ class TemplateMergeConfig:
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
-    min_spatial_cosine: float = 0.5
+    min_spatial_cosine: float = 0.75
     temporal_upsampling_factor: int = 4
-    amplitude_scaling_variance: float = 0.1**2
-    amplitude_scaling_boundary: float = 0.33
+    amplitude_scaling_variance: float = 0.01**2
+    amplitude_scaling_boundary: float = 0.333
     svd_compression_rank: int = 20
     max_shift_ms: float = 1.6666
 
@@ -422,20 +426,20 @@ class MatchingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "random"
-    fit_max_reweighting: float = 4.0
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_max_reweighting: float = default_fit_max_reweighting
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 10.0  # norm, not normsq
+    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
     template_svd_compression_rank: int = 10
-    template_temporal_upsampling_factor: int = 4
+    template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 0.0
     refractory_radius_frames: int = 10
-    amplitude_scaling_variance: float = 0.1**2
+    amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
     max_iter: int = 1000
     conv_ignore_threshold: float = 0.0
@@ -471,8 +475,8 @@ class UniversalMatchingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 20_000
     fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "random"
-    fit_max_reweighting: float = 4.0
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_max_reweighting: float = default_fit_max_reweighting
 
     n_sigmas: int = 5
     n_centroids: int = 6
@@ -524,17 +528,20 @@ class ClusteringFeaturesConfig:
     use_z: bool = True
     motion_aware: bool = True
     use_amplitude: bool = False
+    use_signed_amplitude: bool = True
     log_transform_amplitude: bool = True
     amp_log_c: float = 5.0
-    amp_scale: float = 50.0
-    n_main_channel_pcs: int = 3
-    pc_scale: float = 5.0
+    amp_scale: float = 3.0
+    x_scale: float = 1.0
+    n_main_channel_pcs: int = 5
+    pc_scale: float = 2.0
     pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
     workers: int = 5
 
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
+    voltages_dataset_name: str = "collisioncleaned_voltages"
     amplitude_vectors_dataset_name: str = "denoised_ptp_amplitude_vectors"
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
@@ -544,11 +551,13 @@ class ClusteringFeaturesConfig:
 
 @cfg_dataclass
 class ClusteringConfig:
-    cluster_strategy: str = "gmmdpc"
+    cluster_strategy: str = "dpc"
 
     # global parameters
     workers: int = 5
     random_seed: int = 0
+    min_cluster_size: int = 50
+    subsampling_strategy: Literal["random", "byamp"] = "byamp"
 
     # density peaks parameters
     knn_k: int | None = None
@@ -556,11 +565,10 @@ class ClusteringConfig:
     sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
     n_neighbors_search: int = 50
     radius_search: float = 25.0
-    remove_clusters_smaller_than: int = 50
     noise_density: float = 0.0
     outlier_radius: float = 25.0
     outlier_neighbor_count: int = 10
-    kdtree_subsample_max_size: int = 100_000
+    kdtree_subsample_max_size: int = 500_000
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 10
@@ -569,12 +577,11 @@ class ClusteringConfig:
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0
-    use_hellinger: bool = False
+    use_hellinger: bool = True
     gmmdpc_max_sigma: float = 5.0
-    mop: bool = False
+    mop: bool = True
 
     # hdbscan parameters
-    min_cluster_size: int = 25
     min_samples: int = 25
     cluster_selection_epsilon: int = 1
     recursive: bool = False
@@ -595,11 +602,12 @@ class RefinementConfig:
     )
 
     # pcmerge
-    pc_merge_threshold: float = 0.2
-    pc_merge_metric: str = "cosine"
-    pc_merge_spikes_per_unit: int = 1024
-    pc_merge_linkage: str = "single"
+    pc_merge_threshold: float = 0.1
+    pc_merge_metric: str = "normeuc"
+    pc_merge_spikes_per_unit: int = 4096
+    pc_merge_linkage: str = "complete"
     pc_merge_rank: int = 5
+    pc_merge_min_iou: float = 0.95
 
     # -- gmm parameters
     # noise params
@@ -615,14 +623,24 @@ class RefinementConfig:
     explore_neighb_steps: int = 0
     min_count: int = 50
     channels_count_min: int = 1
-    signal_rank: int = 8
+    signal_rank: int = 5
+    feature_rank: int = 8
     initialize_at_rank_0: bool = True
     cl_alpha: float = 1.0
+    latent_prior_std: float = 1.0
+    initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
     ppca_inner_em_iter: int = 5
     distance_metric: Literal[
-        "noise_metric", "kl", "reverse_kl", "symkl", "cosine", "euclidean", "cosinesqrt"
-    ] = "cosine"
+        "noise_metric",
+        "kl",
+        "reverse_kl",
+        "symkl",
+        "cosine",
+        "euclidean",
+        "cosinesqrt",
+        "normeuc",
+    ] = "normeuc"
     search_type: Literal["topk", "random"] = "topk"
     n_candidates: int = 3
     merge_group_size: int = 5
@@ -632,7 +650,7 @@ class RefinementConfig:
     eval_batch_size: int = 512
     distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     split_distance_threshold: float = 1.0
-    merge_distance_threshold: float = 0.8
+    merge_distance_threshold: float = 1.0
     criterion_threshold: float | None = 0.0
     criterion: Literal[
         "heldout_loglik",
@@ -663,6 +681,7 @@ class RefinementConfig:
     kmeansk: int = 4
     noise_fp_correction: bool = False
     full_proposal_every: int = 10
+    search_adj: Literal["top", "explore"] = "top"
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
@@ -912,7 +931,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         n_neighbors_search=cfg.n_neighbors_search or cfg.min_cluster_size,
         outlier_radius=5 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
-        remove_clusters_smaller_than=cfg.min_cluster_size,
+        min_cluster_size=cfg.min_cluster_size,
         workers=cfg.clustering_workers,
         use_hellinger=cfg.use_hellinger,
         component_overlap=cfg.component_overlap,
@@ -923,9 +942,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
+        use_signed_amplitude=cfg.initial_signed_amp_feat,
         n_main_channel_pcs=cfg.initial_pc_feats,
-        pc_scale=cfg.initial_pc_scale,
         pc_transform=cfg.initial_pc_transform,
+        pc_scale=cfg.initial_pc_scale,
         pc_pre_transform_scale=cfg.initial_pc_pre_scale,
         motion_aware=cfg.motion_aware_clustering,
         workers=cfg.clustering_workers,
@@ -937,6 +957,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dist_thresh = cfg.gmm_kl_threshold
     elif cfg.gmm_metric == "euclidean":
         dist_thresh = cfg.gmm_euclidean_threshold
+    elif cfg.gmm_metric == "normeuc":
+        dist_thresh = cfg.gmm_normeuc_threshold
     else:
         assert False
     interp_params = InterpolationParams(
@@ -953,6 +975,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
         signal_rank=cfg.signal_rank,
+        feature_rank=cfg.temporal_pca_rank,
+        initialize_at_rank_0=cfg.initialize_at_rank_0,
         criterion=cfg.criterion,
         criterion_threshold=cfg.criterion_threshold,
         n_total_iters=cfg.n_refinement_iters,
@@ -969,6 +993,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         split_decision_algorithm=cfg.gmm_split_decision_algorithm,
         merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
+        latent_prior_std=cfg.latent_prior_std,
+        initial_basis_shrinkage=cfg.initial_basis_shrinkage,
         laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
         glasso_alpha=cfg.glasso_alpha,
@@ -1017,6 +1043,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             refinement_strategy="pcmerge",
             pc_merge_metric=cfg.pre_refinement_merge_metric,
             pc_merge_threshold=cfg.pre_refinement_merge_threshold,
+            pc_merge_rank=cfg.initial_pc_feats,
         )
     else:
         pre_refinement_cfg = None

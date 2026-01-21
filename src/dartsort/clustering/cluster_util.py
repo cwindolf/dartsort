@@ -383,7 +383,7 @@ def decrumb(labels, min_size=5, in_place=False, flatten=True):
     if flatten:
         units[big_enough] = np.arange(k1)
 
-    logger.dartsortdebug(f"decrumb: {k}->{k1}.")
+    logger.dartsortdebug(f"decrumb ({min_size}): {k}->{k1}.")
 
     labels[kept] = units[labels_kept]
 

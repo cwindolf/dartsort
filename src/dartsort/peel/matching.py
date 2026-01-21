@@ -4,6 +4,7 @@ from typing import Self, Literal
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import norm
 from spikeinterface.core import BaseRecording
 import torch
 import torch.nn.functional as F
@@ -527,8 +528,34 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return fine_peaks
 
     def pick_threshold(self):
+        if self.is_scaling:
+            # adjust threshold by the scaling prior's constant term
+            # nb, everything is x2 so halves are gone.
+            scstd = np.sqrt(self.amplitude_scaling_variance)
+            norm_const = -(np.log(2.0) + np.log(np.pi) + 2.0 * np.log(scstd))
+
+            # adjust by boundary
+            nm = norm(loc=1.0, scale=scstd)
+            p_up = nm.cdf(self.amp_scale_max)
+            p_lo = nm.cdf(self.amp_scale_min)
+            Z = p_up - p_lo
+
+            scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
+
+            if isinstance(self.threshold, float):
+                tb = np.sqrt(self.threshold**2 - scale_const)
+                _msg = f"In norm units, that's from {self.threshold:0.2f}->{tb:0.2f}"
+            else:
+                _msg = ""
+            logger.dartsortdebug(
+                f"matching: Amplitude scaling with std {scstd:0.4f} adjusts "
+                f"theshold by {scale_const:0.4f} in squared units. {_msg}"
+            )
+        else:
+            scale_const = 0.0
+
         if isinstance(self.threshold, float):
-            self.thresholdsq = self.threshold**2
+            self.thresholdsq = self.threshold**2 - scale_const
             return
 
         assert self.threshold == "fp_control"
@@ -550,6 +577,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             unit_ids=self.matching_templates.obj_unit_ids,
             spike_counts=self.obj_spike_counts,
         )
+        self.thresholdsq -= scale_const
         logger.info(
             f"Matcher picked threshold^2 {self.thresholdsq} for strategy fp_control."
         )

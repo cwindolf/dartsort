@@ -42,7 +42,7 @@ import math
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Literal, NamedTuple, Optional, Self, cast
+from typing import Iterable, Literal, NamedTuple, Optional, Self, cast, get_args
 
 import numpy as np
 import torch
@@ -161,14 +161,12 @@ def tmm_demix(
             save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
 
     # final assignments
-    # TODO output the soft probs somehow
-    full_scores = tmm.soft_assign(
-        data=full_data, full_proposal_view=True, needs_bootstrap=False
+    sorting = relabel_and_add_scores(sorting, tmm, full_data)
+    # log proportion can be useful for downstream analysis
+    sorting.add_ephemeral_feature(
+        "unit_log_proportions", tmm.b.log_proportions.numpy(force=True)
     )
-    labels = labels_from_scores(full_scores)
-    neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
-    del tmm, train_data, val_data, full_data, full_scores
-    sorting = sorting.ephemeral_replace(labels=labels, neighborhood_ids=neighb_ids)
+    del tmm, train_data, val_data, full_data
     return sorting
 
 
@@ -301,6 +299,7 @@ class LUTParams:
 
     signal_rank: int
     n_lut: int
+    latent_prior_std: float
 
     # unit- and neighborhood-dependent terms
     muo: Tensor
@@ -324,6 +323,7 @@ class LUTParams:
         bases: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
         lut: NeighborhoodLUT,
+        latent_prior_std: float,
         puff=1.0,
     ):
         signal_rank = 0 if bases is None else bases.shape[1]
@@ -333,6 +333,7 @@ class LUTParams:
             dim_obs=neighb_cov.max_nc_obs * neighb_cov.feat_rank,
             dim_miss_near=neighb_cov.max_nc_miss_near * neighb_cov.feat_rank,
             device=means.device,
+            latent_prior_std=latent_prior_std,
             puff=puff,
         )
         self.update(means, bases, neighb_cov, lut)
@@ -355,7 +356,9 @@ class LUTParams:
             if self.signal_rank == 0:
                 continue
             assert bases is not None
-            _update_lut_ppca_batch(self, i0, i1, bases, lut, neighb_cov)
+            _update_lut_ppca_batch(
+                self, i0, i1, bases, lut, neighb_cov, self.latent_prior_std
+            )
         if pnoid:
             self.check()
 
@@ -367,6 +370,7 @@ class LUTParams:
         dim_obs: int,
         dim_miss_near: int,
         device: torch.device,
+        latent_prior_std: float,
         puff=1.0,
     ) -> Self:
         n0 = n_lut if puff == 1.0 else int(puff * n_lut)
@@ -383,6 +387,7 @@ class LUTParams:
         self = cls(
             signal_rank=signal_rank,
             n_lut=n0,
+            latent_prior_std=latent_prior_std,
             muo=o,
             Linvmuo=torch.zeros_like(o),
             CmoCooinvmuo=m,
@@ -1160,6 +1165,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         CmoCooinvx: Tensor,
         noise_logliks: Tensor,
         neighborhoods: SpikeNeighborhoods,
+        search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
         batch_size: int = 128,
         explore_neighb_steps: int = 1,
@@ -1211,6 +1217,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         self.CmoCooinvx = CmoCooinvx
         self.noise_logliks = noise_logliks
         self.dense_slice_size_per_unit = dense_slice_size_per_unit
+        self.search_adj = search_adj
 
         n_batches = len(range(0, self.N, self.batch_size))
         self.batch_candidate_counts = torch.zeros(n_batches, dtype=torch.long)
@@ -1240,6 +1247,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         x: Tensor,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
+        search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
         explore_neighb_steps: int = 1,
         neighb_overlap: float = 0.75,
@@ -1267,6 +1275,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             batch_size=batch_size,
             explore_neighb_steps=explore_neighb_steps,
             neighb_overlap=neighb_overlap,
+            search_adj=search_adj,
         )
         self.candidates[:, 0] = labels
         return self
@@ -1292,8 +1301,14 @@ class TruncatedSpikeData(BatchedSpikeData):
         ]
 
         # fill in search neighbors with topk of distances, constrained by adj
+        if self.search_adj == "top":
+            search_adj = self.un_adj
+        elif self.search_adj == "explore":
+            search_adj = self.explore_adj
+        else:
+            assert False
         search_sets = candidate_search_sets(
-            distances, self.un_adj_lut, self.un_adj, self.n_search
+            distances, self.un_adj_lut, search_adj, self.n_search
         )
         torch.take_along_dim(
             search_sets[:, None, :],
@@ -1533,6 +1548,7 @@ class BaseMixtureModel(BModule):
         prior_pseudocount: float,
         criterion_em_iters: int,
         cl_alpha: float,
+        latent_prior_std: float,
         min_channel_count: int = 1,
         elbo_atol: float,
     ):
@@ -1553,6 +1569,7 @@ class BaseMixtureModel(BModule):
         self.prior_pseudocount = prior_pseudocount
         self.cl_alpha = cl_alpha
         self.elbo_atol = elbo_atol
+        self.latent_prior_std = latent_prior_std
 
     # -- subclasses implement
 
@@ -1645,6 +1662,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         min_count: int,
         prior_pseudocount: float,
         cl_alpha: float,
+        latent_prior_std: float,
         full_proposal_every: int = 10,
         distance_kind: ComponentDistanceMetric = "cosine",
         lut_puff: float = 1.5,
@@ -1668,6 +1686,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             criterion_em_iters=criterion_em_iters,
             prior_pseudocount=prior_pseudocount,
             cl_alpha=cl_alpha,
+            latent_prior_std=latent_prior_std,
             elbo_atol=elbo_atol,
         )
         self.min_count = min_count
@@ -1722,6 +1741,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=self.erp,
             gen=self.rg,
             min_channel_count=self.min_channel_count,
+            latent_prior_std=self.latent_prior_std,
             prior_pseudocount=self.prior_pseudocount,
             rank0_model=self,
         )
@@ -1759,6 +1779,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         seed: int | np.random.Generator,
         prior_pseudocount: float,
         cl_alpha: float,
+        latent_prior_std: float,
+        initial_basis_shrinkage: float,
         full_proposal_every: int = 10,
         distance_kind: ComponentDistanceMetric = "cosine",
         min_channel_count: int = 1,
@@ -1773,6 +1795,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=erp,
             gen=rg,
             min_channel_count=min_channel_count,
+            latent_prior_std=latent_prior_std * initial_basis_shrinkage,
             prior_pseudocount=prior_pseudocount,
             puff=split_k,
         )
@@ -1797,6 +1820,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             criterion_em_iters=criterion_em_iters,
             prior_pseudocount=prior_pseudocount,
             full_proposal_every=full_proposal_every,
+            latent_prior_std=latent_prior_std,
             elbo_atol=elbo_atol,
             cl_alpha=cl_alpha,
         )
@@ -1815,6 +1839,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert refinement_cfg.search_type == "topk"
         assert refinement_cfg.merge_decision_algorithm == "brute"
         assert refinement_cfg.split_decision_algorithm == "brute"
+        assert refinement_cfg.distance_metric in get_args(ComponentDistanceMetric)
+
         # TODO: remove all unused refinement_cfg parameters
         return cls.initialize_from_data_with_labels(
             noise=noise,
@@ -1828,6 +1854,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             signal_rank=0
             if refinement_cfg.initialize_at_rank_0
             else refinement_cfg.signal_rank,
+            distance_kind=cast(ComponentDistanceMetric, refinement_cfg.distance_metric),
             min_count=refinement_cfg.min_count,
             split_k=refinement_cfg.kmeansk,
             min_channel_count=refinement_cfg.channels_count_min,
@@ -1835,8 +1862,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             criterion_em_iters=refinement_cfg.criterion_em_iters,
             elbo_atol=refinement_cfg.em_converged_atol,
             prior_pseudocount=refinement_cfg.prior_pseudocount,
+            initial_basis_shrinkage=refinement_cfg.initial_basis_shrinkage,
             full_proposal_every=refinement_cfg.full_proposal_every,
             cl_alpha=refinement_cfg.cl_alpha,
+            latent_prior_std=refinement_cfg.latent_prior_std,
         )
 
     @classmethod
@@ -1860,6 +1889,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         prior_pseudocount: float,
         cl_alpha: float,
         elbo_atol: float,
+        latent_prior_std: float,
         noise_log_prop: Tensor | float = -torch.inf,
         debug: bool = False,
     ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor]:
@@ -1877,6 +1907,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             min_channel_count=min_channel_count,
             noise=noise,
             weights=responsibilities,
+            latent_prior_std=latent_prior_std,
             prior_pseudocount=prior_pseudocount,
         )
         assert chan_coverage is not None
@@ -1924,6 +1955,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             elbo_atol=elbo_atol,
             prior_pseudocount=prior_pseudocount,
             cl_alpha=cl_alpha,
+            latent_prior_std=latent_prior_std,
         )
 
         # subset data to coverage
@@ -2356,7 +2388,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.lut = lut
         if self.lut_params is None:
             self.lut_params = LUTParams.from_lut(
-                self.b.means, self.b.bases, self.neighb_cov, lut, puff=self.lut_puff
+                self.b.means,
+                self.b.bases,
+                self.neighb_cov,
+                lut,
+                latent_prior_std=self.latent_prior_std,
+                puff=self.lut_puff,
             )
         else:
             self.lut_params.update(self.b.means, self.b.bases, self.neighb_cov, lut)
@@ -2422,6 +2459,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 elbo_atol=self.elbo_atol,
                 prior_pseudocount=self.prior_pseudocount,
                 cl_alpha=self.cl_alpha,
+                latent_prior_std=self.latent_prior_std,
                 total_log_proportion=self.b.log_proportions[unit_id].item(),
                 noise_log_prop=self.b.noise_log_prop,
                 debug=debug,
@@ -3055,6 +3093,7 @@ class TMMView(BaseMixtureModel):
             em_iters=tmm.em_iters,
             criterion_em_iters=tmm.criterion_em_iters,
             prior_pseudocount=tmm.prior_pseudocount,
+            latent_prior_std=tmm.latent_prior_std,
             cl_alpha=tmm.cl_alpha,
             elbo_atol=tmm.elbo_atol,
         )
@@ -3141,6 +3180,7 @@ class TMMStack(BaseMixtureModel):
             em_iters=tmms[0].em_iters,
             criterion_em_iters=tmms[0].criterion_em_iters,
             prior_pseudocount=tmms[0].prior_pseudocount,
+            latent_prior_std=tmms[0].latent_prior_std,
             cl_alpha=tmms[0].cl_alpha,
             elbo_atol=tmms[0].elbo_atol,
         )
@@ -3279,6 +3319,7 @@ def get_truncated_datasets(
         max_n_candidates=max_candidates,
         max_n_search=max_search,
         max_n_explore=max_explore,
+        search_adj=refinement_cfg.search_adj,
         dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
         labels=labels[train_ixs].to(device=device),
         x=full_features[train_ixs].to(device=device),
@@ -3382,7 +3423,6 @@ def get_full_neighborhood_data(
             max_n_spikes=refinement_cfg.max_n_spikes,
             split_proportions=(1.0 - vp, vp),
             interp_params=refinement_cfg.interp_params.normalize(),
-            min_count=refinement_cfg.min_count,
             random_seed=rg,
             device=device,
         )
@@ -3561,6 +3601,7 @@ def initialize_parameters_by_unit(
     signal_rank: int,
     noise: EmbeddedNoise,
     erp: NeighborhoodFiller,
+    latent_prior_std: float,
     prior_pseudocount: float,
     gen: torch.Generator,
     scores: Scores | None = None,
@@ -3629,6 +3670,7 @@ def initialize_parameters_by_unit(
             rank=signal_rank,
             noise=noise,
             min_channel_count=min_channel_count,
+            latent_prior_std=latent_prior_std,
             prior_pseudocount=prior_pseudocount,
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
@@ -3686,6 +3728,7 @@ def initialize_params_from_dense_data(
     erp: NeighborhoodFiller,
     noise: EmbeddedNoise,
     prior_pseudocount: float,
+    latent_prior_std: float,
     mean: Tensor | None = None,
     min_channel_count: int = 1,
     weights: Tensor | None = None,
@@ -3712,7 +3755,8 @@ def initialize_params_from_dense_data(
             covered_chans,
             noise,
             rank,
-            prior_pseudocount,
+            prior_pseudocount=prior_pseudocount,
+            latent_prior_std=latent_prior_std,
             mean=mean,
             weight=single_weight,
         )
@@ -3735,6 +3779,7 @@ def initialize_params_from_dense_data(
             noise=noise,
             rank=rank,
             weight=weight,
+            latent_prior_std=latent_prior_std,
             prior_pseudocount=prior_pseudocount,
         )
         res.append((schans, m, w))
@@ -3803,6 +3848,12 @@ def brute_merge(
     if pair_mask is not None and pair_mask.sum() == pair_mask.shape[0]:
         return None
 
+    if eval_data is not None and eval_data.xt.shape[0] == 0:
+        logger.dartsortdebug(
+            "Empty eval data (cur ids: %s)", cur_unit_ids.cpu().tolist()
+        )
+        return None
+
     # score train data with mm to get the full model log liks and the
     # responsibilities that will be used for fitting below
     train_full_scores = mm.score(train_data)
@@ -3855,6 +3906,7 @@ def brute_merge(
                 max_iter=mm.em_iters,
                 prior_pseudocount=mm.prior_pseudocount,
                 cl_alpha=mm.cl_alpha,
+                latent_prior_std=mm.latent_prior_std,
                 total_log_proportion=mm.non_noise_log_proportion(),
                 elbo_atol=mm.elbo_atol,
                 debug=debug,
@@ -3904,10 +3956,15 @@ def brute_merge(
         cov = cov0.any(dim=1).logical_and_(cov1.any(dim=1))
         if not cov.all():
             (kept_spikes,) = cov.nonzero(as_tuple=True)
-            if not kept_spikes.numel():
+            n_kept = kept_spikes.numel()
+            if not n_kept:
                 return None
             eval_data = eval_data.slice(kept_spikes)
             cur_scores = cur_scores.slice(kept_spikes)
+            assert eval_data.xt.shape[0] == n_kept
+            assert cur_scores.log_liks.shape[0] == n_kept
+        else:
+            assert eval_data.xt.shape[0] == cov.shape[0] > 0
 
         crit_full_scores = mm.score(eval_data, skip_noise=True)
         crit_subset_scores = subset_models.score(eval_data, skip_noise=True)
@@ -4179,6 +4236,34 @@ def labels_from_scores(scores: Scores) -> np.ndarray:
     return labels_from_scores_(scores).numpy(force=True)
 
 
+def relabel_and_add_scores(
+    sorting: DARTsortSorting,
+    tmm: TruncatedMixtureModel,
+    full_data: BatchedSpikeData,
+    full_proposal_view=True,
+    needs_bootstrap=False,
+) -> DARTsortSorting:
+    full_scores = tmm.soft_assign(
+        data=full_data,
+        full_proposal_view=full_proposal_view,
+        needs_bootstrap=needs_bootstrap,
+    )
+    labels = labels_from_scores(full_scores)
+    neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
+    sorting.add_ephemeral_feature(
+        "candidates", feature=full_scores.candidates.numpy(force=True).astype(np.int32)
+    )
+    sorting.add_ephemeral_feature(
+        "log_liks", feature=full_scores.log_liks.numpy(force=True)
+    )
+    assert full_scores.responsibilities is not None
+    sorting.add_ephemeral_feature(
+        "responsibilities", feature=full_scores.responsibilities.numpy(force=True)
+    )
+    sorting = sorting.ephemeral_replace(labels=labels, neighborhood_ids=neighb_ids)
+    return sorting
+
+
 # -- method helpers
 
 
@@ -4360,6 +4445,7 @@ def _initialize_single(
     chans: Tensor,
     noise: EmbeddedNoise,
     rank: int,
+    latent_prior_std: float = 1.0,
     prior_pseudocount: float = 0.0,
     weight: Tensor | None = None,
     eps: float = 1e-5,
@@ -4441,11 +4527,12 @@ def _initialize_single(
         denom = wsum.sub_(1.0).clamp_(min=1.0).sqrt_()
         s = s.div_(denom).square_()
 
-    # extra 1 was picked up from identity in whitened space, remove and
-    # compute the low rank factor that remains, which is our basis
+    # extra 1.0 was picked up from identity in whitened space, remove and
+    # compute the low rank factor that remains, which is our basis scaled
+    # up by latent_prior_std
     flip = sign(V.diagonal(dim1=-2, dim2=-1))
     s = s.sub_(1.0).clamp_(min=eps)
-    ev = s.sqrt_()
+    ev = s.sqrt_() / latent_prior_std
     W = V.mul_(ev.mul_(flip))
     W = U.T @ W
 
@@ -4664,12 +4751,10 @@ def _fill_blank_labels(
 
         still_uncovered = adj.sum(0).min().cpu().item() == 0
         if still_uncovered and ensure_coverage_only:
-            n_units = un_adj.shape[0]
             # make new units by getting connected components of the uncovered
             # neighborhood graph
-            neighb_counts = _flat_count(neighborhood_ids, top=adj.shape[1] - 1)
             (uncovered_neighbs,) = (adj.sum(0) == 0).nonzero(as_tuple=True)
-            uncovered_neighbs = uncovered_neighbs[neighb_counts[uncovered_neighbs] > 0]
+            assert uncovered_neighbs.numel() > 0
             uncovered_graph = neighb_adj[uncovered_neighbs][:, uncovered_neighbs]
             uncovered_graph = uncovered_graph.numpy(force=True)
             n_new_units, neighb_component_ids = connected_components(uncovered_graph)
@@ -4686,10 +4771,10 @@ def _fill_blank_labels(
                 n_spikes += in_nid.numel()
                 if pnoid:
                     assert (labels[in_nid] < 0).all()
-                labels[in_nid] = n_units + neighb_component_ids[j]
+                labels[in_nid] = un_adj.shape[0] + neighb_component_ids[j]
             if pnoid:
                 Knew = labels.max() + 1 + int((labels < 0).any())
-                assert labels.unique().shape == (Knew,)
+                assert labels.unique().shape[0] <= Knew
             logger.dartsortverbose(
                 f"_fill_blank_labels made {n_new_units} new units for {n_spikes} spikes."
             )
@@ -4943,6 +5028,7 @@ def _update_lut_ppca_batch(
     bases: Tensor,
     lut: NeighborhoodLUT,
     neighb_cov: NeighborhoodCovariance,
+    latent_prior_std: float,
 ):
     """Update low-rank factors
 
@@ -4970,7 +5056,7 @@ def _update_lut_ppca_batch(
     # next, the capaciatance is I + Wo Cooinv Wo'. always pos def.
     WoCooinvsqrt = Wo.bmm(neighb_cov.Linv[nn].mT)
     cap = WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
-    cap.diagonal(dim1=-2, dim2=-1).add_(1.0)
+    cap.diagonal(dim1=-2, dim2=-1).add_(latent_prior_std**-2)
     if pnoid:
         assert cap.isfinite().all()
         assert torch.all(cap.diagonal(dim1=-2, dim2=-1) > 0)

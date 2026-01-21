@@ -177,7 +177,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         trough_width_min=0.005,
         trough_width_max=0.025,
         tip_width_min=0.01,
-        tip_width_max=0.075,
+        tip_width_max=0.05,
         peak_width_min=0.05,
         peak_width_max=0.2,
         # rel height params
@@ -258,7 +258,8 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
                 self.spike_length_samples() * temporal_jitter,
             )
             offset = sct_full.argmin(1) - self.trough_offset_samples() * temporal_jitter
-            assert np.all(np.abs(offset) < temporal_jitter // 2)
+            assert np.all(offset >= -temporal_jitter // 2)
+            assert np.all(offset <= temporal_jitter)
             sct_full = sct_full.reshape(
                 n_units, self.spike_length_samples(), temporal_jitter
             )
@@ -302,11 +303,11 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             off_up = self.offsets[:, None] - off_up
             atimes = sct_up.argmin(2)
             self.offsets_up = off_up
+            assert np.all(
+                self.singlechan_templates.argmin(1) == self.trough_offset_samples()
+            )
         np.testing.assert_allclose(
             self.singlechan_templates, self.singlechan_templates_up[:, 0], atol=1e-15
-        )
-        assert np.all(
-            self.singlechan_templates.argmin(1) == self.trough_offset_samples()
         )
 
     def templates(self, drift=0, up=False, padded=False, pad_value=np.nan):

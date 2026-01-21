@@ -10,7 +10,7 @@ from ..util.logging_util import get_logger
 from ..util.main_util import ds_save_intermediate_labels
 from ..transform.temporal_pca import BaseTemporalPCA
 from ..templates import TemplateData
-from .cluster_util import agglomerate
+from .cluster_util import agglomerate, reorder_by_depth
 from .split import split_clusters
 from .merge import merge_templates
 from .gmm.stable_features import StableSpikeDataset
@@ -273,19 +273,40 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     x = data._train_extract_features.view(n, -1, data.n_channels_extract)
     x = x[:, : refinement_cfg.pc_merge_rank]
     labels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
-    means = spiketorch.average_by_label(
+    means, counts = spiketorch.average_by_label(
         x, labels, data._train_extract_channels, data.n_channels
     )
 
     # compute distances
     if refinement_cfg.pc_merge_metric == "cosine":
         dists = spiketorch.cosine_distance(means)
+    elif refinement_cfg.pc_merge_metric == "maxz":
+        x = x.square_()
+        meansq, _ = spiketorch.average_by_label(
+            x, labels, data._train_extract_channels, data.n_channels
+        )
+        stddev = meansq.sub_(means.square()).sqrt_()
+        stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
+        stderr = stddev.div_(counts.sqrt()[:, None])
+        print("hia maxz")
+        dists = spiketorch.maxz_distance(
+            means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
+        )
+    elif refinement_cfg.pc_merge_metric == "normeuc":
+        print("hi normeuc", refinement_cfg.pc_merge_min_iou)
+        dists = spiketorch.weighted_normeuc_distance(
+            means, counts, min_iou=refinement_cfg.pc_merge_min_iou
+        )
+    elif refinement_cfg.pc_merge_metric == "normsup":
+        print("hi normsup", refinement_cfg.pc_merge_min_iou)
+        dists = spiketorch.weighted_normsup_distance(
+            means, counts, min_iou=refinement_cfg.pc_merge_min_iou
+        )
     elif refinement_cfg.pc_merge_metric == "euclidean":
         means = means.reshape(len(means), -1)
-        dists = torch.cdist(means, means)
+        dists = torch.cdist(means, means).numpy(force=True)
     else:
         raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
-    dists = dists.numpy(force=True)
 
     # linkage
     labels, ids = agglomerate(
@@ -296,7 +317,9 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     )
     logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
 
-    return sorting.ephemeral_replace(labels=labels)
+    sorting = sorting.ephemeral_replace(labels=labels)
+    sorting = reorder_by_depth(sorting, motion_est=motion_est)
+    return sorting
 
 
 def initialize_gmm(

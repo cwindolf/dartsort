@@ -408,6 +408,7 @@ class MergeView(MixtureComponentPlot):
         if n_comps > 1:
             reorder = [np.flatnonzero(labels == l) for l in range(n_comps)]
             reorder = np.concatenate(reorder)
+            d = d[reorder][:, reorder]
             pair_mask = pair_mask[reorder][:, reorder]
             neighbors = neighbors[reorder]
 
@@ -597,6 +598,7 @@ class CovarianceView(MixtureComponentPlot):
                 mix_data.tmm.signal_rank, -1, mix_data.tmm.neighb_cov.n_channels
             )
             basis = basis[:, :, chan_set].view(mix_data.tmm.signal_rank, -1)
+            basis = basis * mix_data.tmm.latent_prior_std
             cov_signal = basis.T @ basis
             assert cov_signal.shape == cov_noise.shape
         else:

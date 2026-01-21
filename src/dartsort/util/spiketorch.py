@@ -9,18 +9,19 @@ import torch
 import torch.nn.functional as F
 from linear_operator.utils.cholesky import psd_safe_cholesky
 from scipy.fftpack import next_fast_len
+from scipy.spatial.distance import squareform
 from sklearn.utils.extmath import svd_flip
 from torch import Tensor
 from torch.fft import irfft, rfft
+from tqdm.auto import trange
 
 HAVE_CUPY = False
-cp = None
 try:
     import cupy as cp  # type: ignore
 
     HAVE_CUPY = True
 except ImportError:
-    cupy = None
+    cp = None
     HAVE_CUPY = False
 
 logger = getLogger(__name__)
@@ -593,6 +594,132 @@ def cosine_distance(means, means_b=None, true_distance=True):
     return dist
 
 
+def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
+    assert means.ndim == 3
+    assert weights.ndim == 2
+    k, p = means.shape[:2]
+    assert weights.shape == (k, means.shape[2])
+
+    ii, jj = torch.triu_indices(k, k, offset=1)
+    npair = ii.shape[0]
+
+    pdist = means.new_full((npair,), torch.inf)
+    piou = means.new_zeros(npair)
+
+    weights = weights / weights.amax(dim=1, keepdims=True)
+
+    for i0 in trange(0, npair, batch_size):
+        i1 = min(npair, i0 + batch_size)
+
+        iii = ii[i0:i1]
+        jjj = jj[i0:i1]
+
+        wi = weights[iii]
+        wj = weights[jjj]
+        wmin = torch.minimum(wi, wj)
+        wminsum = wmin.sum(1)
+        piou[i0:i1] = wmin.sum(1) / torch.maximum(wi, wj).sum(1)
+        (valid,) = (piou[i0:i1] >= min_iou).nonzero(as_tuple=True)
+
+        xi = means[iii[valid]]
+        xj = means[jjj[valid]]
+
+        # w = wi[valid] * wj[valid]
+        w = wmin[valid] / (p * wminsum[valid, None])
+        dist = (xi - xj).square_().mul_(w[:, None]).sum(dim=(1, 2))
+        nmi = (xi.square_().mul_(w[:, None])).sum(dim=(1, 2)).sqrt_()
+        nmj = (xj.square_().mul_(w[:, None])).sum(dim=(1, 2)).sqrt_()
+
+        dist = dist.div_(nmi).div_(nmj)
+        pdist[i0 + valid] = dist
+    pdist = pdist.numpy(force=True)
+    return squareform(pdist)
+
+
+def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
+    assert means.ndim == 3
+    assert weights.ndim == 2
+    k, p = means.shape[:2]
+    assert weights.shape == (k, means.shape[2])
+
+    ii, jj = torch.triu_indices(k, k, offset=1)
+    npair = ii.shape[0]
+
+    pdist = means.new_full((npair,), torch.inf)
+    piou = means.new_zeros(npair)
+
+    weights = weights / weights.amax(dim=1, keepdims=True)
+
+    for i0 in trange(0, npair, batch_size):
+        i1 = min(npair, i0 + batch_size)
+
+        iii = ii[i0:i1]
+        jjj = jj[i0:i1]
+
+        wi = weights[iii]
+        wj = weights[jjj]
+        wmin = torch.minimum(wi, wj)
+        wminsum = wmin.sum(1)
+        piou[i0:i1] = wmin.sum(1) / torch.maximum(wi, wj).sum(1)
+        (valid,) = (piou[i0:i1] >= min_iou).nonzero(as_tuple=True)
+
+        xi = means[iii[valid]]
+        xj = means[jjj[valid]]
+
+        # w = wi[valid] * wj[valid]
+        w = wmin[valid] / (p * wminsum[valid, None])
+        dist = (xi - xj).abs_().mul_(w[:, None]).amax(dim=(1, 2))
+
+
+        nmi = (xi.abs_().mul_(w[:, None])).amax(dim=(1, 2))
+        nmj = (xj.abs_().mul_(w[:, None])).amax(dim=(1, 2))
+
+        dist = dist.div_(torch.minimum(nmi, nmj))
+        pdist[i0 + valid] = dist
+    pdist = pdist.numpy(force=True)
+    return squareform(pdist)
+
+
+def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
+    assert means.ndim == 3
+    assert weights.ndim == 2
+    k, p = means.shape[:2]
+    assert weights.shape == (k, means.shape[2])
+
+    ii, jj = torch.triu_indices(k, k, offset=1)
+    npair = ii.shape[0]
+
+    pdist = means.new_full((npair,), torch.inf)
+    piou = means.new_zeros(npair)
+
+    weights = weights / weights.amax(dim=1, keepdims=True)
+
+    for i0 in trange(0, npair, batch_size):
+        i1 = min(npair, i0 + batch_size)
+
+        iii = ii[i0:i1]
+        jjj = jj[i0:i1]
+
+        wi = weights[iii]
+        wj = weights[jjj]
+        wmin = torch.minimum(wi, wj)
+        piou[i0:i1] = wmin.sum(1) / torch.maximum(wi, wj).sum(1)
+        (valid,) = (piou[i0:i1] >= min_iou).nonzero(as_tuple=True)
+
+        xi = means[iii[valid]]
+        xj = means[jjj[valid]]
+        sei = stderrs[iii[valid]]
+        sej = stderrs[jjj[valid]]
+
+        # se = sei + sej  # deliberately multiplying by 2 to get a chi thing.
+        se = 2.0 * torch.minimum(sei, sej)
+        z_chan = (xi - xj).div_(se).square_().mean(dim=1).sqrt_()
+        max_z = z_chan.amax(dim=1)
+        pdist[i0 + valid] = max_z
+    pdist = pdist.numpy(force=True)
+    return squareform(pdist)
+
+
 def normeuc_distance(means):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)
@@ -988,28 +1115,21 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
     assert x.ndim == 3
     assert labels.shape == (n,)
     if weights is None:
-        unique_labels, counts = labels.unique(return_counts=True)
-        k = unique_labels.amax() + 1
-        weights = x.new_zeros(k + 1)
-        weights[unique_labels] = counts.to(weights).reciprocal()
-        weights = weights[labels]
-    else:
-        unique_labels = labels.unique()
-        k = unique_labels.amax() + 1
+        weights = x.new_ones(n)
+    unique_labels = labels.unique()
+    k = unique_labels.amax() + 1
     assert labels.shape == weights.shape
 
     out = x.new_zeros((k + 1, x.shape[1], n_channels + 1))
-    wsum = x.new_empty((n_channels + 1))
+    counts = x.new_zeros((k + 1, n_channels + 1))
     f_arange = torch.arange(x.shape[1]).to(x.device)
     for u in unique_labels:
-        wsum.fill_(0.0)
-
         (in_u,) = (labels == u).nonzero(as_tuple=True)
         wu = weights[in_u]
         cu = channels[in_u]
         wu = wu[:, None].broadcast_to(cu.shape).contiguous()
-        wsum.scatter_add_(dim=0, index=cu.view(-1), src=wu.view(-1))
-        wu.div_(wsum[cu])
+        counts[u].scatter_add_(dim=0, index=cu.view(-1), src=wu.view(-1))
+        wu.div_(counts[u][cu])
 
         wxu = x[in_u].mul_(wu[:, None])
         torch_add_at_(
@@ -1022,7 +1142,7 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
             wxu,
         )
 
-    return out[:k, :, :n_channels]
+    return out[:k, :, :n_channels], counts[:k, :n_channels]
 
 
 # -- channel reindexing

@@ -61,22 +61,31 @@ class SimpleMatrixFeatures:
 
         features = []
 
-        if clustering_features_cfg.use_x:
-            features.append(x[:, None])
-
         if clustering_features_cfg.use_z:
             if clustering_features_cfg.motion_aware:
                 features.append(z_reg[:, None])
             else:
                 features.append(z[:, None])
 
-        amp = None
+        if clustering_features_cfg.use_x:
+            features.append(x[:, None] * clustering_features_cfg.x_scale)
+
+        amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name, None)
         if clustering_features_cfg.use_amplitude:
-            amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+            assert amp is not None
+            ampft = amp.copy()
             if clustering_features_cfg.log_transform_amplitude:
-                amp = np.log(clustering_features_cfg.amp_log_c + amp)
-                amp *= clustering_features_cfg.amp_scale
-            features.append(amp[:, None])
+                ampft = np.log(clustering_features_cfg.amp_log_c + ampft)
+                ampft *= clustering_features_cfg.amp_scale
+            features.append(ampft[:, None])
+
+        samp = None
+        if clustering_features_cfg.use_signed_amplitude:
+            samp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+            v = getattr(sorting, clustering_features_cfg.voltages_dataset_name)
+            samp = samp * np.sign(v)
+            samp *= clustering_features_cfg.amp_scale
+            features.append(samp[:, None])
 
         do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
         pcs = None

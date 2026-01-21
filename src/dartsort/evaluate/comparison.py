@@ -130,7 +130,7 @@ class DARTsortGroundTruthComparison:
         # df["gt_collidedness"] = coll
         # df["gt_matched_collidedness"] = matched_coll
         # df["gt_missed_collidedness"] = missed_coll
-        print('hi')
+        print("hi")
         try:
             df["gt_dt_rms"] = self.unit_matched_misalignment_rms()
         except ValueError:
@@ -192,6 +192,8 @@ class DARTsortGroundTruthComparison:
         for j, uid in enumerate(uids):
             try:
                 udt = self.matched_misalignment(uid)
+                if udt is None:
+                    continue
                 if udt.size:
                     match_dt_rms[j] = np.sqrt(np.square(udt).mean())
             except ValueError as e:
@@ -208,6 +210,8 @@ class DARTsortGroundTruthComparison:
         test_matched_t = self.tested_analysis.sorting.times_samples[
             spikes["matched_tested_indices"]
         ]
+        if test_matched_t.shape != gt_matched_t.shape:
+            return None
         match_dt = test_matched_t - gt_matched_t
         return match_dt
 
@@ -234,7 +238,7 @@ class DARTsortGroundTruthComparison:
         neighb_dists = self.template_distances[gt_unit_ix, neighb_ixs[None, :]]
         neighb_coarse_templates = tested_td.templates[neighb_ixs]
 
-        return neighb_ids, neighb_dists, neighb_coarse_templates
+        return neighb_ixs, neighb_ids, neighb_dists, neighb_coarse_templates
 
     def _calculate_template_distances(self):
         """Compute the merge distance matrix"""
@@ -255,7 +259,7 @@ class DARTsortGroundTruthComparison:
             n_jobs=1,
             svd_compression_rank=10,
             device="cpu",
-            min_spatial_cosine=0.1,
+            min_spatial_cosine=0.95,
             distance_kind=self.distance_kind,
         )
         self._template_distances = dists
@@ -358,7 +362,9 @@ class DARTsortGroundTruthComparison:
         )
 
         # return vars dict. lots of stuff going in here.
-        w = dict(gt_unit=gt_unit, tested_unit=tested_unit, max_chan=gt_max_chan)
+        w: dict[str, int | np.ndarray | None] = dict(
+            gt_unit=gt_unit, tested_unit=tested_unit, max_chan=gt_max_chan
+        )
 
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
@@ -366,11 +372,16 @@ class DARTsortGroundTruthComparison:
             which=ind_groups["matched_gt_indices"],  # type: ignore
             **waveform_kw,  # type: ignore
         )
-        assert tp_waves is not None
-        w["which_tp"] = tp_waves.which
-        w["tp"] = tp_waves.waveforms
-        w["geom"] = tp_waves.geom
-        w["channel_index"] = tp_waves.channel_index
+        if tp_waves is None:
+            w["which_tp"] = None
+            w["tp"] = None
+            w["geom"] = self.gt_analysis.registered_geom
+            w["channel_index"] = self.gt_analysis.vis_channel_index
+        else:
+            w["which_tp"] = tp_waves.which
+            w["tp"] = tp_waves.waveforms
+            w["geom"] = tp_waves.geom
+            w["channel_index"] = tp_waves.channel_index
 
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index

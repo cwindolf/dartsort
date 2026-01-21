@@ -1,9 +1,10 @@
-from dataclasses import replace
 from pathlib import Path
+import gc
 
 import numpy as np
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
+import torch
 
 from . import TemplateData, realign
 from ..util.data_util import DARTsortSorting
@@ -80,7 +81,10 @@ def estimate_template_library(
         mask = count_mask & snr_mask & amp_mask
         sorting = filter_by_unit_mask(sorting, mask, mask_ids=templates0.unit_ids)
     del templates0
+
     _check_still_valid(sorting)
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # main task: get denoised templates from aligned spike train
     templates = TemplateData.from_config(
@@ -92,6 +96,8 @@ def estimate_template_library(
         computation_cfg=computation_cfg,
         tsvd=tsvd,
     )
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # merge units by template distance
     sorting, templates = _handle_merge(
@@ -104,6 +110,8 @@ def estimate_template_library(
         waveform_cfg=waveform_cfg,
         template_cfg=template_cfg,
     )
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # re-order along probe length
     if depth_order:
@@ -341,6 +349,8 @@ def _handle_merge(
     new_recompute_ix = np.flatnonzero(uc > 1)
     # original indices corresponding to recomputed units
     old_recompute_ix = ui[new_recompute_ix]
+
+    logger.dartsortverbose(f"Merged template indices: {new_recompute_ix.tolist()}")
 
     # pack up the the templates
     templates = np.empty(
