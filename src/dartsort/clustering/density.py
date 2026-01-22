@@ -1,4 +1,5 @@
 from typing import Literal, cast
+from threading import local
 
 import numba
 import numpy as np
@@ -12,12 +13,13 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import bernoulli
-from tqdm.auto import trange
+from tqdm.auto import trange, tqdm
 
 from ..util.logging_util import get_logger
 from ..util.py_util import timer
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
+from ..util.multiprocessing_util import get_pool
 from .cluster_util import decrumb
 
 logger = get_logger(__name__)
@@ -30,6 +32,7 @@ def kdtree_inliers(
     distance_upper_bound: float | None = 25.0,
     workers=1,
     batch_size=2**16,
+    leafsize=10,
     show_progress=False,
 ) -> tuple[np.ndarray, KDTree]:
     """Mark outlying points by a neighbors distance criterion
@@ -42,7 +45,7 @@ def kdtree_inliers(
     kdtree : KDTree
     """
     if kdtree is None:
-        kdtree = KDTree(X)
+        kdtree = KDTree(X, leafsize=leafsize)
 
     if distance_upper_bound is None or n_neighbors is None:
         inliers = np.ones(kdtree.n, dtype=bool)
@@ -407,63 +410,73 @@ def kdt_density(
     X: np.ndarray,
     sigma: float,
     sigma_regional: float,
-    batch_size=8192 * 2,
+    batch_size=2048,
     max_sigma: float = 3.0,
+    n_threads=8,
 ):
     n, d = X.shape
     max_dist = max_sigma * sigma_regional
-    density = np.full((n,), -np.inf)
 
-    for i0 in trange(0, n, batch_size, desc="KDTdens"):
-        i1 = min(n, i0 + batch_size)
-
-        batch_kdt = KDTree(X[i0:i1])
-
-        sdm = batch_kdt.sparse_distance_matrix(kdtree, max_dist, output_type="ndarray")
-        v = sdm["v"]
-        ii = sdm["i"]
-        jj = sdm["j"]
-
-        v_local = _gkernel(v, sigma)
-        v_regional = _gkernel(v, sigma_regional)
-
-        coo_local = coo_array(
-            (v_local, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v.dtype
-        )
-        coo_regional = coo_array(
-            (v_regional, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v.dtype
-        )
-
-        dens_local = coo_local.sum(axis=1)
-        dens_regional = coo_regional.sum(axis=1)
-
-        np.divide(dens_local, dens_regional, out=density[i0:i1])
-
+    jobs = range(0, n, batch_size)
+    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
+    with Executor(
+        max_workers=n_jobs,
+        mp_context=context,
+        initializer=_kdtdens_init,
+        initargs=(kdtree, X, batch_size, sigma, sigma_regional, max_dist),
+    ) as pool:
+        density = np.full((n,), -np.inf)
+        for i0, i1, dens in tqdm(
+            pool.map(_kdtdens_job, jobs),
+            total=len(jobs),
+            smoothing=0.0,
+            desc=f"KDTdens[{n_jobs}]",
+        ):
+            density[i0:i1] = dens
     np.nan_to_num(density, copy=False)
     return density
 
 
-def _dens_vs(kdt_a, kdt_b, max_dist, sigma, sigma_regional):
-    sdm = kdt_a.sparse_distance_matrix(kdt_b, max_dist, output_type="ndarray")
-    v = sdm["v"]
+_kdtdens_ctx = local()
+_kdtdens_ctx.sargs = None
+
+
+def _kdtdens_init(kdtree, X, batch_size, sigma, sigma_regional, max_dist):
+    global _kdtdens_ctx
+    _kdtdens_ctx.sargs = (kdtree, X, batch_size, sigma, sigma_regional, max_dist)
+
+
+def _kdtdens_job(i0):
+    global _kdtdens_ctx
+    kdtree, X, batch_size, sigma, sigma_regional, max_dist = _kdtdens_ctx.sargs
+    i1 = min(kdtree.n, i0 + batch_size)
+    batch_kdt = KDTree(X[i0:i1])
+    sdm = batch_kdt.sparse_distance_matrix(kdtree, max_dist, output_type="ndarray")
     ii = sdm["i"]
     jj = sdm["j"]
-    v_local = _gkernel(v, sigma)
-    v_regional = _gkernel(v, sigma_regional)
-    coo_local = coo_array((v_local, (ii, jj)), shape=(kdt_a.n, kdt_b.n))
-    coo_regional = coo_array((v_regional, (ii, jj)), shape=(kdt_a.n, kdt_b.n))
+    v_local = sdm["v"]
+    v_regional = sdm["v"].copy()
+    _gausskernel(v_local, sigma)
+    _gausskernel(v_regional, sigma_regional)
+    coo_local = coo_array(
+        (v_local, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v_local.dtype
+    )
+    coo_regional = coo_array(
+        (v_regional, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v_local.dtype
+    )
     dens_local = coo_local.sum(axis=1)
     dens_regional = coo_regional.sum(axis=1)
-    return dens_local, dens_regional
+    dens_local /= dens_regional
+    return i0, i1, dens_local
 
 
 @numba.jit(
-    parallel=True, nopython=True, boundscheck=False, nogil=True, error_model="numpy"
+    parallel=False, nopython=True, boundscheck=False, nogil=True, error_model="numpy"
 )
-def _gkernel(v: np.ndarray, sigma: float):
-    v = v / (np.sqrt(2.0) * sigma)
-    v = np.square(v)
-    return np.exp(-v)
+def _gausskernel(v: np.ndarray, sigma: float):
+    const = 1.0 / (np.sqrt(2.0) * sigma)
+    for i in range(v.size):
+        v[i] = np.exp(-np.square(v[i] * const))
 
 
 def knn_density(
@@ -514,6 +527,7 @@ def density_peaks(
     remove_borders=False,
     border_search_radius=10.0,
     border_search_neighbors=3,
+    leafsize=24,
     workers=-1,
 ):
     """Density peaks clustering as described by Rodriguez and Laio, but...
@@ -533,12 +547,13 @@ def density_peaks(
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius,
         workers=workers,
+        leafsize=leafsize,
     )
 
     if density is None:
         if sigma_regional and not use_histograms:
             density = kdt_density(
-                kdtree, X, sigma=sigma_local, sigma_regional=sigma_regional
+                kdtree, X, sigma=sigma_local, sigma_regional=sigma_regional, n_threads=workers
             )
         elif use_knn:
             density = knn_density(

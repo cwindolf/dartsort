@@ -154,7 +154,7 @@ def get_pool(
     multi_gpu=False,
 ):
     if n_jobs == -1:
-        n_jobs = multiprocessing.cpu_count()
+        n_jobs = os.process_cpu_count()
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
 

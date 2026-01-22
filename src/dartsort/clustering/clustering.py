@@ -273,13 +273,13 @@ class DensityPeaksClusterer(Clusterer):
         X = features.features
         subsampling = maxcount and len(X) > maxcount
         X_fit = X
-        if subsampling and self.subsampling_strategy == "random":
+        if subsampling and (self.subsampling_strategy == "random"):
             rg = np.random.default_rng(self.random_seed)
             choices = rg.choice(len(X), size=maxcount, replace=False)
             choices.sort()
             not_choices = np.setdiff1d(np.arange(len(X)), choices)
             X_fit = X[choices]
-        elif subsampling and self.subsampling_strategy == "byamp":
+        elif subsampling and (self.subsampling_strategy == "byamp"):
             rg = np.random.default_rng(self.random_seed)
             p = features.amplitudes.astype(np.float64)
             p = p / p.sum()
