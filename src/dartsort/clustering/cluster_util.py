@@ -225,7 +225,7 @@ def reorder_by_depth(sorting, motion_est=None):
 
 def closest_registered_channels(
     times_seconds, x, z_abs, geom, z_reg=None, motion_est=None
-):
+) -> np.ndarray:
     """Assign spikes to the drift-extended channel closest to their registered position"""
     if motion_est is None:
         motion_est = IdentityMotionEstimate()
@@ -236,6 +236,7 @@ def closest_registered_channels(
 
     registered_kdt = KDTree(registered_geom)
     _, reg_channels = registered_kdt.query(reg_pos)
+    reg_channels = np.atleast_1d(reg_channels)
 
     return reg_channels
 
@@ -249,7 +250,7 @@ def grid_snap(
     grid_dz=15.0,
     z_reg=None,
     motion_est=None,
-):
+) -> np.ndarray:
     if motion_est is None:
         motion_est = IdentityMotionEstimate()
     if z_reg is None:
@@ -270,6 +271,7 @@ def grid_snap(
     # snap to closest grid point
     registered_kdt = KDTree(grid)
     _, reg_channels = registered_kdt.query(reg_pos)
+    reg_channels = np.atleast_1d(reg_channels)
 
     return reg_channels
 

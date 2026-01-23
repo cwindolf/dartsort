@@ -104,7 +104,9 @@ def try_load_motion_est(output_directory: Path, filename="motion_est.pkl"):
     return None
 
 
-def save_motion_est(motion_est, output_directory: Path, filename="motion_est.pkl"):
+def save_motion_est(motion_est, output_directory: Path, filename="motion_est.pkl", overwrite: bool = False):
     filename = output_directory / filename
+    if filename.exists() and not overwrite:
+        return
     with open(filename, "wb") as jar:
         pickle.dump(motion_est, jar)

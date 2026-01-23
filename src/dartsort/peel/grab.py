@@ -1,19 +1,24 @@
-from spikeinterface import BaseRecording
-import torch
+from typing import Literal
+
 import numpy as np
+import torch
+from spikeinterface import BaseRecording
 
-
+from ..transform import WaveformPipeline
+from ..util import spiketorch
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import (
+    FeaturizationConfig,
+    FitSamplingConfig,
+    WaveformConfig,
+)
+from ..util.waveform_util import make_channel_index
 from .peel_base import (
     BasePeeler,
+    PeelingBatchResult,
     SpikeDataset,
     peeling_empty_result,
-    PeelingBatchResult,
 )
-from ..transform import WaveformPipeline
-from ..util.data_util import DARTsortSorting
-from ..util.internal_config import FeaturizationConfig, WaveformConfig
-from ..util.waveform_util import make_channel_index
-from ..util import spiketorch
 
 
 class GrabAndFeaturize(BasePeeler):
@@ -33,6 +38,8 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples=121,
         chunk_length_samples=30_000,
         n_waveforms_fit=20_000,
+        max_waveforms_fit=50_000,
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         n_seconds_fit=40,
         fit_subsampling_random_state: int | np.random.Generator = 0,
         dtype=torch.float,
@@ -50,6 +57,8 @@ class GrabAndFeaturize(BasePeeler):
             n_seconds_fit=n_seconds_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             n_waveforms_fit=n_waveforms_fit,
+            max_waveforms_fit=max_waveforms_fit,
+            fit_sampling=fit_sampling,
             dtype=dtype,
         )
         self.register_buffer("times_samples", torch.asarray(times_samples))
@@ -111,6 +120,7 @@ class GrabAndFeaturize(BasePeeler):
         sorting: DARTsortSorting,
         waveform_cfg: WaveformConfig,
         featurization_cfg: FeaturizationConfig,
+        sampling_cfg: FitSamplingConfig,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
@@ -130,17 +140,21 @@ class GrabAndFeaturize(BasePeeler):
             recording.sampling_frequency
         )
         return cls(
-            recording,
-            channel_index,
-            featurization_pipeline,
-            sorting.times_samples,
-            sorting.channels,
+            recording=recording,
+            channel_index=channel_index,
+            featurization_pipeline=featurization_pipeline,
+            times_samples=sorting.times_samples,
+            channels=sorting.channels,
             labels=sorting.labels,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             chunk_length_samples=30_000,
             n_seconds_fit=100,
             dtype=torch.float,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
+            fit_sampling=sampling_cfg.fit_sampling,
         )
 
     def peel_chunk(

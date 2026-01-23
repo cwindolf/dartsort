@@ -181,7 +181,7 @@ def split_merge(
         min_spatial_cosine=merge_cfg.min_spatial_cosine,
         linkage=merge_cfg.linkage,
         computation_cfg=computation_cfg,
-    )
+    )["sorting"]
 
     return merge_sorting
 

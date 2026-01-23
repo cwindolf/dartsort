@@ -57,14 +57,15 @@ def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
 
 
 def ds_all_to_workdir(
+    *,
     internal_cfg: DARTsortInternalConfig,
     output_dir: Path,
     work_dir: Path | None = None,
-    recording: BaseRecording | None = None,
+    recording: BaseRecording,
     overwrite=False,
     rec_subdir="recppx",
     sort_subdir="dartsort",
-) -> Path:
+) -> tuple[BaseRecording, Path | None]:
     """Copy stuff to temporary working directory, if there is one."""
     if work_dir is None:
         return recording, None
@@ -76,7 +77,7 @@ def ds_all_to_workdir(
             "spikeinterface for this part, so use its `set_global_job_kwargs()` "
             "function if you're waiting around."
         )
-        recording = recording.save_to_folder(rec_dir)
+        recording = recording.save_to_folder(str(rec_dir))
 
     sort_dir = work_dir / sort_subdir
     if overwrite:
@@ -90,14 +91,11 @@ def ds_all_to_workdir(
 
 
 def ds_save_motion_est(
-    motion_est,
-    output_dir: Path,
-    work_dir: Path | None = None,
-    overwrite=False,
+    motion_est, output_dir: Path, work_dir: Path | None = None, overwrite: bool = False
 ):
     if work_dir is None:
         return
-    save_motion_est(motion_est, output_dir)
+    save_motion_est(motion_est, output_dir, overwrite=overwrite)
 
 
 def ds_save_features(
@@ -175,9 +173,7 @@ def ds_fast_forward(store_dir, cfg):
     next_step: int
     cur_sorting: DARTsortSorting
     """
-    # if clustering labels
-    can_resume_from_clustering = cfg.save_intermediate_labels
-
+    # this cur_h5 variable points to the peeling result we'll try to load
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"
     cur_step = 0
     if not sub_h5.exists():

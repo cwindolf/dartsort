@@ -1,11 +1,20 @@
 import gc
+from typing import cast, Literal, Self
 
 import numpy as np
 import sklearn.cluster
 import torch
+from spikeinterface.core import BaseRecording
 
-from ..util.data_util import chunk_time_ranges
+from ..util.data_util import chunk_time_ranges, fit_reweighting, DARTsortSorting
 from ..util.main_util import ds_save_intermediate_labels
+from ..util.internal_config import (
+    ClusteringConfig,
+    RefinementConfig,
+    FitSamplingConfig,
+    ComputationConfig,
+)
+from .clustering_features import SimpleMatrixFeatures
 from ..util import job_util
 from . import cluster_util, density, forward_backward, refine_util
 from .gmm import mixture
@@ -16,10 +25,10 @@ refinement_strategies: dict[str, "type[Refinement]"] = {}
 
 
 def get_clusterer(
-    clustering_cfg=None,
-    refinement_cfg=None,
-    pre_refinement_cfg=None,
-    computation_cfg=None,
+    clustering_cfg: ClusteringConfig | None = None,
+    refinement_cfg: RefinementConfig | None = None,
+    pre_refinement_cfg: RefinementConfig | None = None,
+    computation_cfg: ComputationConfig | None = None,
     save_cfg=None,
     save_labels_dir=None,
     initial_name=None,
@@ -98,12 +107,14 @@ def get_clusterer(
 class Clusterer:
     def __init__(
         self,
-        computation_cfg=None,
+        computation_cfg: ComputationConfig | None = None,
+        sampling_cfg: FitSamplingConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
     ):
         self.computation_cfg = computation_cfg
+        self.sampling_cfg = sampling_cfg
         if computation_cfg is None:
             self.computation_cfg = job_util.get_global_computation_config()
         self.save_cfg = save_cfg
@@ -113,12 +124,12 @@ class Clusterer:
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
         del clustering_cfg
         return cls(
             computation_cfg=computation_cfg,
@@ -127,9 +138,39 @@ class Clusterer:
             labels_fmt=labels_fmt,
         )
 
-    def cluster(self, features, sorting, recording, motion_est=None):
-        labels = self._cluster(features, sorting, recording, motion_est)
-        sorting = sorting.ephemeral_replace(labels=labels)
+    def handle_sampling(
+        self, features: SimpleMatrixFeatures
+    ) -> tuple[Literal[False], slice] | tuple[Literal[True], np.ndarray]:
+        if self.sampling_cfg is None:
+            return False, slice(None)
+        elif features.features.shape[0] <= self.sampling_cfg.n_waveforms_fit:
+            return False, slice(None)
+
+        weights = fit_reweighting(
+            voltages=features.signed_amplitudes,
+            fit_sampling=self.sampling_cfg.fit_sampling,
+            fit_max_reweighting=self.sampling_cfg.fit_max_reweighting,
+        )
+        rg = np.random.default_rng(self.sampling_cfg.fit_subsampling_random_state)
+        ixs = rg.choice(
+            features.features.shape[0],
+            size=self.sampling_cfg.n_waveforms_fit,
+            p=weights,
+        )
+        return True, ixs
+
+    def cluster(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
+        if features is None:
+            pass
+        else:
+            labels = self._cluster(features, sorting, recording, motion_est)
+            sorting = sorting.ephemeral_replace(labels=labels)
         if self.labels_fmt and self.save_labels_dir is not None:
             assert "{" not in self.labels_fmt
             assert "}" not in self.labels_fmt
@@ -138,8 +179,16 @@ class Clusterer:
             )
         return sorting
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
+        """Unused method but shows API."""
         del features, recording, motion_est
+        assert sorting.labels is not None
         return sorting.labels
 
 
@@ -147,9 +196,15 @@ clustering_strategies["none"] = Clusterer
 
 
 class ChannelSnapClusterer(Clusterer):
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
         return cluster_util.closest_registered_channels(
-            times_seconds=sorting.times_seconds,
+            times_seconds=sorting.times_seconds,  # type: ignore
             x=features.x,
             z_abs=features.z,
             z_reg=features.z_reg,
@@ -170,12 +225,13 @@ class GridSnapClusterer(Clusterer):
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
+        assert clustering_cfg is not None
         return cls(
             grid_dx=clustering_cfg.grid_dx,
             grid_dz=clustering_cfg.grid_dz,
@@ -185,9 +241,15 @@ class GridSnapClusterer(Clusterer):
             labels_fmt=labels_fmt,
         )
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
         return cluster_util.grid_snap(
-            times_seconds=sorting.times_seconds,
+            times_seconds=sorting.times_seconds,  # type: ignore
             x=features.x,
             z_abs=features.z,
             z_reg=features.z_reg,
@@ -213,8 +275,6 @@ class DensityPeaksClusterer(Clusterer):
         noise_density=0.0,
         outlier_radius=5.0,
         outlier_neighbor_count=5,
-        kdtree_subsample_max_size=2_000_000,
-        subsampling_strategy="byamp",
         workers=-1,
         uhdversion=False,
         random_seed=0,
@@ -231,21 +291,20 @@ class DensityPeaksClusterer(Clusterer):
         self.noise_density = noise_density
         self.outlier_radius = outlier_radius
         self.outlier_neighbor_count = outlier_neighbor_count
-        self.kdtree_subsample_max_size = kdtree_subsample_max_size
         self.workers = workers
         self.uhdversion = uhdversion
         self.random_seed = random_seed
-        self.subsampling_strategy = subsampling_strategy
 
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
+        assert clustering_cfg is not None
         uhdversion = clustering_cfg.cluster_strategy == "density_peaks_uhdversion"
         return cls(
             knn_k=clustering_cfg.knn_k,
@@ -258,8 +317,6 @@ class DensityPeaksClusterer(Clusterer):
             random_seed=clustering_cfg.random_seed,
             outlier_radius=clustering_cfg.outlier_radius,
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
-            kdtree_subsample_max_size=clustering_cfg.kdtree_subsample_max_size,
-            subsampling_strategy=clustering_cfg.subsampling_strategy,
             workers=clustering_cfg.workers,
             uhdversion=uhdversion,
             computation_cfg=computation_cfg,
@@ -268,28 +325,16 @@ class DensityPeaksClusterer(Clusterer):
             labels_fmt=labels_fmt,
         )
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
-        maxcount = self.kdtree_subsample_max_size
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
+        subsampling, ixs = self.handle_sampling(features)
         X = features.features
-        subsampling = maxcount and len(X) > maxcount
-        X_fit = X
-        if subsampling and (self.subsampling_strategy == "random"):
-            rg = np.random.default_rng(self.random_seed)
-            choices = rg.choice(len(X), size=maxcount, replace=False)
-            choices.sort()
-            not_choices = np.setdiff1d(np.arange(len(X)), choices)
-            X_fit = X[choices]
-        elif subsampling and (self.subsampling_strategy == "byamp"):
-            rg = np.random.default_rng(self.random_seed)
-            p = features.amplitudes.astype(np.float64)
-            p = p / p.sum()
-            choices = rg.choice(len(X), size=maxcount, replace=False, p=p)
-            choices.sort()
-            not_choices = np.setdiff1d(np.arange(len(X)), choices)
-            X_fit = X[choices]
-        else:
-            assert not subsampling
-            not_choices = choices = None
+        X_fit = X[ixs]
 
         if not self.uhdversion:
             res = density.density_peaks(
@@ -323,21 +368,22 @@ class DensityPeaksClusterer(Clusterer):
                 workers=self.workers,
             )
 
-        labels = res["labels"]
         if subsampling:
-            assert choices is not None
-            assert not_choices is not None
             kdtree = res["kdtree"]
+            assert isinstance(ixs, np.ndarray)
+            rest = np.setdiff1d(np.arange(len(X)), ixs)
             other_labels = density.nearest_neighbor_assign(
                 kdtree,
-                labels,
-                X[not_choices],
+                res["labels"],
+                X[rest],
                 radius_search=self.radius_search,
                 workers=self.workers,
             )
             labels = cluster_util.combine_disjoint(
-                choices, labels, not_choices, other_labels
+                ixs, res["labels"], rest, other_labels
             )
+        else:
+            labels = res["labels"]
 
         labels = cluster_util.decrumb(
             labels, min_size=self.remove_clusters_smaller_than, in_place=True
@@ -398,12 +444,13 @@ class GMMDensityPeaksClusterer(Clusterer):
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
+        assert clustering_cfg is not None
         return cls(
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             outlier_radius=clustering_cfg.outlier_radius,
@@ -419,7 +466,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             hellinger_weak=clustering_cfg.hellinger_weak,
             mop=clustering_cfg.mop,
             max_sigma=clustering_cfg.gmmdpc_max_sigma,
-            max_samples=clustering_cfg.kdtree_subsample_max_size,
+            max_samples=clustering_cfg.sampling_cfg.n_waveforms_fit,
             n_neighbors_search=clustering_cfg.n_neighbors_search,
             computation_cfg=computation_cfg,
             save_cfg=save_cfg,
@@ -427,7 +474,13 @@ class GMMDensityPeaksClusterer(Clusterer):
             labels_fmt=labels_fmt,
         )
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
         res = density.gmm_density_peaks(
             X=features.features,
             channels=sorting.channels,
@@ -474,12 +527,13 @@ class RecursiveHDBSCANClusterer(Clusterer):
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
+        assert clustering_cfg is not None
         return cls(
             min_cluster_size=clustering_cfg.min_cluster_size,
             min_samples=clustering_cfg.min_samples,
@@ -491,7 +545,13 @@ class RecursiveHDBSCANClusterer(Clusterer):
             labels_fmt=labels_fmt,
         )
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
         return cluster_util.recursive_hdbscan_clustering(
             features.features,
             min_cluster_size=self.min_cluster_size,
@@ -510,12 +570,13 @@ class ScikitLearnClusterer(Clusterer):
     @classmethod
     def from_config(
         cls,
-        clustering_cfg,
-        computation_cfg=None,
+        clustering_cfg: ClusteringConfig | None,
+        computation_cfg: ComputationConfig | None = None,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
-    ):
+    ) -> Self:
+        assert clustering_cfg is not None
         return cls(
             sklearn_class_name=clustering_cfg.sklearn_class_name,
             sklearn_kwargs=clustering_cfg.sklearn_kwargs,
@@ -525,7 +586,13 @@ class ScikitLearnClusterer(Clusterer):
             labels_fmt=labels_fmt,
         )
 
-    def _cluster(self, features, sorting, recording, motion_est=None):
+    def _cluster(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ) -> np.ndarray:
         skcls = getattr(sklearn.cluster, self.sklearn_class_name)
         clus = skcls(**self.sklearn_kwargs)
         return clus.fit_predict(features.features)
@@ -535,21 +602,42 @@ clustering_strategies["sklearn"] = ScikitLearnClusterer
 
 
 class Refinement(Clusterer):
-    def __init__(self, clusterer, refinement_cfg, **kwargs):
+    def __init__(
+        self, clusterer: Clusterer, refinement_cfg: RefinementConfig, **kwargs
+    ):
         super().__init__(**kwargs)
         self.clusterer = clusterer
         self.refinement_cfg = refinement_cfg
+        self.sampling_cfg = refinement_cfg.sampling_cfg
 
-    def cluster(self, features, sorting, recording, motion_est=None):
+    def cluster(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         sorting = self.clusterer.cluster(features, sorting, recording, motion_est)
         sorting = self.refine(features, sorting, recording, motion_est)
         return sorting
 
-    def _refine(self, features, sorting, recording, motion_est=None):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         del features, recording, motion_est
         return sorting
 
-    def refine(self, features, sorting, recording, motion_est=None):
+    def refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         sorting = self._refine(features, sorting, recording, motion_est)
         if self.labels_fmt and self.save_labels_dir is not None:
             labels_fmt = self.labels_fmt.format(stepname="")
@@ -563,7 +651,13 @@ refinement_strategies["none"] = Refinement
 
 
 class GMMRefinement(Refinement):
-    def _refine(self, features, sorting, recording, motion_est=None):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         sorting, _ = refine_util.gmm_refine(
             recording,
             sorting,
@@ -581,12 +675,22 @@ refinement_strategies["gmm"] = GMMRefinement
 
 
 class TMMRefinement(Refinement):
-    def _refine(self, features, sorting, recording, motion_est=None):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
+        assert features is not None
+        subsampling, ixs = self.handle_sampling(features)
+        ixs = cast(np.ndarray, ixs) if subsampling else None
         sorting = mixture.tmm_demix(
             sorting=sorting,
             motion_est=motion_est,
             refinement_cfg=self.refinement_cfg,
             computation_cfg=self.computation_cfg,
+            fit_indices=ixs,
             save_step_labels_format=self.labels_fmt,
             save_step_labels_dir=self.save_labels_dir,
             save_cfg=self.save_cfg,
@@ -600,7 +704,13 @@ refinement_strategies["tmm"] = TMMRefinement
 
 
 class SplitMergeRefinement(Refinement):
-    def _refine(self, features, sorting, recording, motion_est=None):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         return refine_util.split_merge(
             recording=recording,
             sorting=sorting,
@@ -617,7 +727,13 @@ class SplitMergeRefinement(Refinement):
 
 
 class PCMergeRefinement(Refinement):
-    def _refine(self, features, sorting, recording, motion_est=None):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         return refine_util.pc_merge(
             sorting,
             refinement_cfg=self.refinement_cfg,
@@ -632,22 +748,25 @@ refinement_strategies["pcmerge"] = PCMergeRefinement
 class ForwardBackwardEnsembler(Refinement):
     """If there are more time chunk ones, make a new ABC with this logic."""
 
-    def cluster(self, features, sorting, recording, motion_est=None):
+    def cluster(
+        self,
+        features: SimpleMatrixFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion_est=None,
+    ):
         chunk_length_samples = (
             recording.sampling_frequency * self.refinement_cfg.chunk_size_s
         )
         chunk_time_ranges_s = chunk_time_ranges(recording, chunk_length_samples)
+        times_seconds = sorting.times_seconds  # type: ignore
+        assert features is not None
 
         chunk_sortings = []
         for lo, hi in chunk_time_ranges_s:
-            mask = np.flatnonzero(
-                sorting.times_seconds == sorting.times_seconds.clip(lo, hi)
-            )
+            mask = np.flatnonzero(times_seconds == times_seconds.clip(lo, hi))
             s = sorting.mask(mask)
-            if features is None:
-                f = None
-            else:
-                f = features.mask(mask)
+            f = features.mask(mask)
             l = self.clusterer._cluster(f, s, recording, motion_est)
             labels = np.full_like(sorting.labels, -1)
             labels[mask] = l

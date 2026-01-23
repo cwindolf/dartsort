@@ -1,16 +1,21 @@
-from typing import Literal
 import warnings
+from typing import Literal
 
 import numpy as np
 import torch
+from spikeinterface.core import BaseRecording
 
-
-from ..detect import detect_and_deduplicate, convexity_filter
+from ..detect import convexity_filter, detect_and_deduplicate
 from ..transform import WaveformPipeline
 from ..util import spiketorch
 from ..util.data_util import SpikeDataset
-from ..util.waveform_util import make_channel_index, get_channel_index_rel_inds
-
+from ..util.internal_config import (
+    FeaturizationConfig,
+    FitSamplingConfig,
+    ThresholdingConfig,
+    WaveformConfig,
+)
+from ..util.waveform_util import get_channel_index_rel_inds, make_channel_index
 from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
 
 
@@ -110,7 +115,15 @@ class ThresholdAndFeaturize(BasePeeler):
         )
 
     @classmethod
-    def from_config(cls, recording, waveform_cfg, thresholding_cfg, featurization_cfg):
+    def from_config(
+        cls,
+        *,
+        recording: BaseRecording,
+        waveform_cfg: WaveformConfig,
+        thresholding_cfg: ThresholdingConfig,
+        featurization_cfg: FeaturizationConfig,
+        sampling_cfg: FitSamplingConfig,
+    ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
@@ -124,23 +137,26 @@ class ThresholdAndFeaturize(BasePeeler):
             sampling_frequency=recording.sampling_frequency,
         )
 
-        relative_peak_channel_index = None
         if thresholding_cfg.relative_peak_radius_um:
             relative_peak_channel_index = make_channel_index(
                 geom, thresholding_cfg.relative_peak_radius_um, to_torch=True
             )
+        else:
+            relative_peak_channel_index = None
 
-        spatial_dedup_channel_index = None
         if thresholding_cfg.spatial_dedup_radius:
             spatial_dedup_channel_index = make_channel_index(
                 geom, thresholding_cfg.spatial_dedup_radius, to_torch=True
             )
+        else:
+            spatial_dedup_channel_index = None
 
-        spatial_jitter_channel_index = None
         if thresholding_cfg.spatial_jitter_radius:
             spatial_jitter_channel_index = make_channel_index(
                 geom, thresholding_cfg.spatial_jitter_radius, to_torch=True
             )
+        else:
+            spatial_jitter_channel_index = None
 
         # waveform logic
         trough_offset_samples = waveform_cfg.trough_offset_samples(
@@ -160,8 +176,6 @@ class ThresholdAndFeaturize(BasePeeler):
             chunk_length_samples=thresholding_cfg.chunk_length_samples,
             max_spikes_per_chunk=thresholding_cfg.max_spikes_per_chunk,
             peak_sign=thresholding_cfg.peak_sign,
-            fit_sampling=thresholding_cfg.fit_sampling,
-            fit_max_reweighting=thresholding_cfg.fit_max_reweighting,
             relative_peak_channel_index=relative_peak_channel_index,
             spatial_dedup_channel_index=spatial_dedup_channel_index,
             relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
@@ -171,9 +185,11 @@ class ThresholdAndFeaturize(BasePeeler):
             convexity_threshold=thresholding_cfg.convexity_threshold,
             convexity_radius=thresholding_cfg.convexity_radius,
             n_seconds_fit=thresholding_cfg.n_seconds_fit,
-            n_waveforms_fit=thresholding_cfg.n_waveforms_fit,
-            max_waveforms_fit=thresholding_cfg.max_waveforms_fit,
-            fit_subsampling_random_state=thresholding_cfg.fit_subsampling_random_state,
+            fit_sampling=sampling_cfg.fit_sampling,
+            fit_max_reweighting=sampling_cfg.fit_max_reweighting,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
             thinning=thresholding_cfg.thinning,
             time_jitter=thresholding_cfg.time_jitter,
             spatial_jitter_channel_index=spatial_jitter_channel_index,

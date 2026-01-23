@@ -23,6 +23,7 @@ from .util.internal_config import (
     ClusteringFeaturesConfig,
     ComputationConfig,
     DARTsortInternalConfig,
+    FitSamplingConfig,
     MatchingConfig,
     RefinementConfig,
     SubtractionConfig,
@@ -33,6 +34,7 @@ from .util.internal_config import (
     default_dartsort_cfg,
     default_featurization_cfg,
     default_matching_cfg,
+    default_peeling_fit_sampling_cfg,
     default_subtraction_cfg,
     default_template_cfg,
     default_thresholding_cfg,
@@ -96,7 +98,7 @@ def dartsort(
         in the `import dartsort.vis as dartvis` library.
      - "motion_est": dredge.MotionEstimate
 
-    To do: add the key "motion" with a spikeinterface Motion object.
+    TODO: add the key "motion" with a spikeinterface Motion object.
     """
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)
@@ -107,11 +109,20 @@ def dartsort(
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
+            # copy files and possibly recording to temporary directory
             work_dir = resolve_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
             recording, work_dir = ds_all_to_workdir(
-                cfg, output_dir, work_dir, recording, overwrite
+                internal_cfg=cfg,
+                output_dir=output_dir,
+                work_dir=work_dir,
+                recording=recording,
+                overwrite=overwrite,
             )
+            assert work_dir is not None
+
+            # run the sorter, with extra error handlers for grabbing stuff from
+            # the temporary directory if user asked for that.
             try:
                 return _dartsort_impl(
                     recording, output_dir, cfg, motion_est, work_dir, overwrite
@@ -136,6 +147,8 @@ def dartsort(
                     )
                 raise
 
+    # run the sorter regular with no tempdir, log exception to a
+    # traceback file in case of a crash for debugging
     try:
         return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
     except Exception as e:
@@ -162,6 +175,7 @@ def _dartsort_impl(
     store_dir = output_dir if work_dir is None else work_dir
 
     # if there are previous results stored, resume where they leave off
+    # TODO uhh. overwrite, right?
     next_step, sorting, motion_est = ds_fast_forward(store_dir, cfg)
 
     if next_step == 0:
@@ -297,6 +311,7 @@ def initial_detection(
             waveform_cfg=cfg.waveform_cfg,
             featurization_cfg=cfg.featurization_cfg,
             subtraction_cfg=cfg.initial_detection_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -308,6 +323,7 @@ def initial_detection(
             recording=recording,
             waveform_cfg=cfg.waveform_cfg,
             thresholding_cfg=cfg.initial_detection_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -322,6 +338,7 @@ def initial_detection(
             template_cfg=cfg.template_cfg,
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.initial_detection_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
             motion_est=motion_est,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -333,6 +350,7 @@ def initial_detection(
             output_dir=output_dir,
             recording=recording,
             universal_cfg=cfg.initial_detection_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -348,6 +366,7 @@ def subtract(
     waveform_cfg=default_waveform_cfg,
     featurization_cfg=default_featurization_cfg,
     subtraction_cfg=default_subtraction_cfg,
+    sampling_cfg=default_peeling_fit_sampling_cfg,
     computation_cfg: ComputationConfig | None = None,
     chunk_starts_samples=None,
     overwrite=False,
@@ -359,7 +378,8 @@ def subtract(
     output_dir = resolve_path(output_dir)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
-        recording,
+        recording=recording,
+        sampling_cfg=sampling_cfg,
         waveform_cfg=waveform_cfg,
         subtraction_cfg=subtraction_cfg,
         featurization_cfg=featurization_cfg,
@@ -389,6 +409,7 @@ def match(
     template_cfg=default_template_cfg,
     featurization_cfg=default_featurization_cfg,
     matching_cfg=default_matching_cfg,
+    sampling_cfg=default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     residual_filename: str | None = None,
@@ -426,6 +447,7 @@ def match(
         recording=recording,
         waveform_cfg=waveform_cfg,
         matching_cfg=matching_cfg,
+        sampling_cfg=sampling_cfg,
         featurization_cfg=featurization_cfg,
         template_data=template_data,
         motion_est=motion_est,
@@ -452,6 +474,7 @@ def grab(
     sorting: DARTsortSorting,
     waveform_cfg=default_waveform_cfg,
     featurization_cfg=default_featurization_cfg,
+    sampling_cfg=default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     show_progress=True,
@@ -464,6 +487,7 @@ def grab(
         sorting=sorting,
         recording=recording,
         waveform_cfg=waveform_cfg,
+        sampling_cfg=sampling_cfg,
         featurization_cfg=featurization_cfg,
     )
     sorting = run_peeler(
@@ -486,6 +510,7 @@ def threshold(
     waveform_cfg=default_waveform_cfg,
     thresholding_cfg=default_thresholding_cfg,
     featurization_cfg=default_featurization_cfg,
+    sampling_cfg=default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     show_progress=True,
@@ -495,7 +520,11 @@ def threshold(
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     thresholder = ThresholdAndFeaturize.from_config(
-        recording, waveform_cfg, thresholding_cfg, featurization_cfg
+        recording=recording,
+        waveform_cfg=waveform_cfg,
+        thresholding_cfg=thresholding_cfg,
+        featurization_cfg=featurization_cfg,
+        sampling_cfg=sampling_cfg,
     )
     sorting = run_peeler(
         thresholder,
@@ -562,6 +591,7 @@ def universal_match(
     recording: BaseRecording,
     universal_cfg=default_universal_cfg,
     featurization_cfg=default_featurization_cfg,
+    sampling_cfg=default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     show_progress=True,
@@ -571,7 +601,11 @@ def universal_match(
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     universal_matcher = UniversalTemplatesMatchingPeeler.from_config(
-        recording, universal_cfg=universal_cfg, featurization_cfg=featurization_cfg
+        recording=recording,
+        universal_cfg=universal_cfg,
+        waveform_cfg=universal_cfg.waveform_cfg,  # TODO...
+        featurization_cfg=featurization_cfg,
+        sampling_cfg=sampling_cfg,
     )
     sorting = run_peeler(
         universal_matcher,

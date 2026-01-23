@@ -97,6 +97,7 @@ def tmm_demix(
     sorting: DARTsortSorting,
     motion_est,
     refinement_cfg: RefinementConfig,
+    fit_indices: np.ndarray | None = None,
     computation_cfg: ComputationConfig | None,
     save_step_labels_format: str | None = None,
     save_step_labels_dir: Path | None = None,
@@ -122,6 +123,7 @@ def tmm_demix(
         refinement_cfg=refinement_cfg,
         seed=seed,
         computation_cfg=computation_cfg,
+        fit_indices=fit_indices,
     )
 
     saving = save_cfg is not None and save_cfg.save_intermediate_labels
@@ -3273,7 +3275,15 @@ class TMMStack(BaseMixtureModel):
 
 
 def get_truncated_datasets(
-    *, sorting, motion_est, refinement_cfg, device, rg, noise=None, stable_data=None
+    *,
+    sorting,
+    motion_est,
+    refinement_cfg,
+    device,
+    rg,
+    fit_indices: np.ndarray | None = None,
+    noise=None,
+    stable_data=None,
 ):
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
@@ -3285,6 +3295,7 @@ def get_truncated_datasets(
         motion_est=motion_est,
         rg=rg,
         refinement_cfg=refinement_cfg,
+        fit_indices=fit_indices,
         stable_data=stable_data,
         device=device,
     )
@@ -3397,6 +3408,7 @@ def get_full_neighborhood_data(
     refinement_cfg: RefinementConfig,
     device: torch.device | None,
     rg: np.random.Generator | int,
+    fit_indices: np.ndarray | None = None,
     stable_data: StableSpikeDataset | None = None,
 ) -> tuple[
     Tensor,
@@ -3420,7 +3432,8 @@ def get_full_neighborhood_data(
             motion_est=motion_est,
             _core_feature_splits=(),  # turn off feat cache
             core_radius="extract",
-            max_n_spikes=refinement_cfg.max_n_spikes,
+            kept_indices=fit_indices,
+            max_n_spikes=refinement_cfg.sampling_cfg.n_waveforms_fit,
             split_proportions=(1.0 - vp, vp),
             interp_params=refinement_cfg.interp_params.normalize(),
             random_seed=rg,
@@ -3466,6 +3479,7 @@ def instantiate_and_bootstrap_tmm(
     motion_est,
     refinement_cfg: RefinementConfig,
     seed: np.random.Generator | int = 0,
+    fit_indices: np.ndarray | None = None,
     computation_cfg: ComputationConfig | None = None,
 ) -> MixtureModelAndDatasets:
     rg = np.random.default_rng(seed)
@@ -3482,6 +3496,7 @@ def instantiate_and_bootstrap_tmm(
             sorting=sorting,
             motion_est=motion_est,
             refinement_cfg=refinement_cfg,
+            fit_indices=fit_indices,
             device=device,
             rg=rg,
         )

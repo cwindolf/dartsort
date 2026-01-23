@@ -5,6 +5,12 @@ import torch
 from ..templates.template_util import LowRankTemplates, compressed_upsampled_templates
 from ..transform import WaveformPipeline
 from ..util import universal_util, waveform_util
+from ..util.internal_config import (
+    UniversalMatchingConfig,
+    FitSamplingConfig,
+    FeaturizationConfig,
+    WaveformConfig,
+)
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
 from .matching_util.compressed_upsampled import CompressedUpsampledMatchingTemplates
 from .matching_util.pairwise import SeparablePairwiseConv
@@ -50,7 +56,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         max_waveforms_fit=50_000,
         n_waveforms_fit=20_000,
         fit_subsampling_random_state=0,
-        fit_sampling: Literal["random", "amp_reweighted"]="random",
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_max_reweighting=4.0,
         refractory_radius_frames=10,
         max_iter=1000,
@@ -137,12 +143,19 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         )
 
     @classmethod
-    def from_config(cls, recording, *, universal_cfg, featurization_cfg):  # type: ignore
+    def from_config(  # type: ignore[reportIncompatibleOverride]
+        cls,
+        recording,
+        *,
+        universal_cfg: UniversalMatchingConfig,
+        featurization_cfg: FeaturizationConfig,
+        waveform_cfg: WaveformConfig,
+        sampling_cfg: FitSamplingConfig,
+    ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = waveform_util.make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
-        waveform_cfg = universal_cfg.waveform_cfg
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
@@ -162,11 +175,11 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
             recording,
             chunk_length_samples=universal_cfg.chunk_length_samples,
             n_seconds_fit=universal_cfg.n_seconds_fit,
-            n_waveforms_fit=universal_cfg.n_waveforms_fit,
-            max_waveforms_fit=universal_cfg.max_waveforms_fit,
-            fit_subsampling_random_state=universal_cfg.fit_subsampling_random_state,
-            fit_sampling=universal_cfg.fit_sampling,
-            fit_max_reweighting=universal_cfg.fit_max_reweighting,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
+            fit_sampling=sampling_cfg.fit_sampling,
+            fit_max_reweighting=sampling_cfg.fit_max_reweighting,
             threshold=universal_cfg.threshold,
             detection_threshold=universal_cfg.detection_threshold,
             n_sigmas=universal_cfg.n_sigmas,

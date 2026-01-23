@@ -1,37 +1,35 @@
-from dataclasses import dataclass, field, replace
 import gc
-from logging import getLogger
 import math
-from typing import Literal
-from sys import getrefcount
 import warnings
+from dataclasses import dataclass, field, replace
+from logging import getLogger
+from sys import getrefcount
+from typing import Literal
 
 import h5py
 import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.special import ndtri
 from spikeinterface.core import BaseRecording
-import torch
-from torch.distributions import StudentT, Normal
-import torch.nn.functional as F
+from torch.distributions import StudentT
 
 from ..templates.superres_util import superres_sorting
+from ..transform import TemporalPCAFeaturizer, Waveform, WaveformPipeline
 from ..transform.transform_base import BaseWaveformModule
-from ..transform import WaveformPipeline, Waveform, TemporalPCAFeaturizer
 from ..util import drift_util
 from ..util.data_util import (
     DARTsortSorting,
     load_stored_tsvd,
-    subsample_to_max_count,
     restrict_to_valid_times,
+    subsample_to_max_count,
     yield_chunks,
 )
-from ..util.internal_config import TemplateConfig, WaveformConfig, RealignStrategy
+from ..util.internal_config import FitSamplingConfig, TemplateConfig, WaveformConfig
 from ..util.logging_util import DARTsortLogger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
-
 from .grab import GrabAndFeaturize
-
 
 logger: DARTsortLogger = getLogger(__name__)  # type: ignore
 
@@ -86,6 +84,8 @@ class RunningTemplates(GrabAndFeaturize):
         chunk_length_samples=30_000,
         n_seconds_fit=600,
         n_waveforms_fit=25000,
+        max_waveforms_fit=25000,
+        fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_subsampling_random_state: int | np.random.Generator = 0,
     ):
         n_channels = recording.get_num_channels()
@@ -162,6 +162,8 @@ class RunningTemplates(GrabAndFeaturize):
             n_seconds_fit=n_seconds_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
             n_waveforms_fit=n_waveforms_fit,
+            max_waveforms_fit=max_waveforms_fit,
+            fit_sampling=fit_sampling,
         )
 
         self.motion_aware = motion_est is not None
@@ -298,6 +300,7 @@ class RunningTemplates(GrabAndFeaturize):
             mask_indices = None
 
         fs = recording.sampling_frequency
+        sampling_cfg = template_cfg.denoising_fit_sampling_cfg
         return cls(
             recording=recording,
             channel_index=full_channel_index(recording.get_num_channels()),
@@ -321,7 +324,9 @@ class RunningTemplates(GrabAndFeaturize):
             global_sigma=global_sigma,
             trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
-            n_waveforms_fit=template_cfg.denoising_spikes_fit,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_sampling=sampling_cfg.fit_sampling,
             fit_subsampling_random_state=random_state,
             gamma_df=template_cfg.fixed_t_df,
             initial_df=template_cfg.initial_t_df,
@@ -1166,8 +1171,8 @@ def get_gamma_latent(x, labels, mu, nu=1.0, sigma=1.0):
 
 def estimate_gamma_df(wbar, logwbar, sqwbar, cutoff=100, min_df=0.01):
     """Solves digamma(nu/2) - log(nu) = 1 + logwbar - wbar."""
-    from scipy.special import psi  # , polygamma
     from scipy.optimize import root_scalar
+    from scipy.special import psi  # , polygamma
 
     dtype = wbar.dtype
     dev = wbar.device

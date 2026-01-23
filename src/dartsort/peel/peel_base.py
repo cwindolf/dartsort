@@ -1,13 +1,13 @@
+import gc
+import tempfile
 from concurrent.futures import CancelledError
 from contextlib import contextmanager
-import gc
 from itertools import repeat
 from pathlib import Path
 from sys import getrefcount
-import tempfile
-from threading import local, Lock
+from threading import Lock, local
 from types import MappingProxyType
-from typing import TypedDict, Literal, overload, Any
+from typing import Any, Literal, TypedDict, overload
 
 import h5py
 import numpy as np
@@ -17,18 +17,17 @@ from sympy import divisors
 from tqdm.auto import tqdm
 
 from ..transform import WaveformPipeline
+from ..util import job_util
 from ..util.data_util import (
-    subsample_waveforms,
     SpikeDataset,
-    extract_random_snips,
     divide_randomly,
+    extract_random_snips,
+    subsample_waveforms,
 )
+from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule
-from ..util.logging_util import get_logger
-from ..util import job_util
-
 
 logger = get_logger(__name__)
 _lock = Lock()
@@ -50,7 +49,7 @@ class BasePeeler(BModule):
         self,
         recording,
         channel_index,
-        featurization_pipeline: WaveformPipeline | None=None,
+        featurization_pipeline: WaveformPipeline | None = None,
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
         n_seconds_fit=40,
@@ -179,7 +178,9 @@ class BasePeeler(BModule):
             last_chunk_start, resids_so_far = self.check_resuming(
                 output_hdf5_filename, overwrite=overwrite
             )
-            logger.dartsortdebug(f"[{self.__class__.__name__}:{task_name}] Resuming at {last_chunk_start=}.")
+            logger.dartsortdebug(
+                f"[{self.__class__.__name__}:{task_name}] Resuming at {last_chunk_start=}."
+            )
         else:
             assert False
 

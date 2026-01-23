@@ -230,7 +230,27 @@ default_extrapolation_params = InterpolationParams(
 
 FitSamplingMethod = Literal["random", "amp_reweighted"]
 default_fit_sampling_method = "amp_reweighted"
-default_fit_max_reweighting = 3.0
+default_fit_max_reweighting = 4.0
+
+
+@cfg_dataclass
+class FitSamplingConfig:
+    max_waveforms_fit: int = 50_000
+    n_waveforms_fit: int = 40_000
+    fit_subsampling_random_state: int = 0
+    fit_sampling: FitSamplingMethod = "amp_reweighted"
+    fit_max_reweighting: float = default_fit_max_reweighting
+
+
+default_peeling_fit_sampling_cfg = FitSamplingConfig()
+default_clustering_fit_sampling_cfg = FitSamplingConfig(
+    max_waveforms_fit=500_000,
+    n_waveforms_fit=500_000,
+)
+default_refinement_fit_sampling_cfg = FitSamplingConfig(
+    max_waveforms_fit=1_000_000,
+    n_waveforms_fit=1_000_000,
+)
 
 
 @cfg_dataclass
@@ -238,11 +258,6 @@ class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 40_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "amp_reweighted"
-    fit_max_reweighting: float = default_fit_max_reweighting
     fit_only: bool = False
 
     # subtraction
@@ -295,11 +310,7 @@ class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "amp_reweighted"
-    fit_max_reweighting: float = default_fit_max_reweighting
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
 
     # thresholding
     detection_threshold: float = 5.0
@@ -353,7 +364,7 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
     recompute_tsvd: bool = True
-    denoising_spikes_fit: int = 25_000
+    denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -423,11 +434,6 @@ class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "amp_reweighted"
-    fit_max_reweighting: float = default_fit_max_reweighting
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
@@ -472,11 +478,6 @@ class UniversalMatchingConfig:
     # peeling common
     chunk_length_samples: int = 1_000
     n_seconds_fit: int = 100
-    max_waveforms_fit: int = 50_000
-    n_waveforms_fit: int = 20_000
-    fit_subsampling_random_state: int = 0
-    fit_sampling: FitSamplingMethod = "amp_reweighted"
-    fit_max_reweighting: float = default_fit_max_reweighting
 
     n_sigmas: int = 5
     n_centroids: int = 6
@@ -552,12 +553,12 @@ class ClusteringFeaturesConfig:
 @cfg_dataclass
 class ClusteringConfig:
     cluster_strategy: str = "dpc"
+    sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
     # global parameters
     workers: int = 5
     random_seed: int = 0
     min_cluster_size: int = 50
-    subsampling_strategy: Literal["random", "byamp"] = "byamp"
 
     # density peaks parameters
     knn_k: int | None = None
@@ -568,7 +569,6 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float = 25.0
     outlier_neighbor_count: int = 10
-    kdtree_subsample_max_size: int = 500_000
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 10
@@ -600,6 +600,7 @@ class RefinementConfig:
     refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
         "tmm"
     )
+    sampling_cfg: FitSamplingConfig = default_refinement_fit_sampling_cfg
 
     # pcmerge
     pc_merge_threshold: float = 0.1
@@ -698,7 +699,6 @@ class RefinementConfig:
     cov_radius: float = 500.0
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.25
-    max_n_spikes: float | int = argfield(default=1000 * 1024, arg_type=int_or_inf)
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
     noise_interp_params: InterpolationParams = default_interpolation_params
@@ -762,6 +762,7 @@ class DARTsortInternalConfig:
 
     waveform_cfg: WaveformConfig = default_waveform_cfg
     featurization_cfg: FeaturizationConfig = default_featurization_cfg
+    peeler_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
     initial_detection_cfg: (
         SubtractionConfig
         | MatchingConfig
@@ -853,6 +854,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         learn_cleaned_tpca_basis=True,
     )
+    peeler_fit_sampling_cfg = FitSamplingConfig(
+        n_waveforms_fit=cfg.n_waveforms_fit,
+        max_waveforms_fit=cfg.max_waveforms_fit,
+        fit_sampling=cfg.fit_sampling,
+    )
 
     if cfg.detection_type == "subtract":
         subtraction_denoising_cfg = FeaturizationConfig(
@@ -939,7 +945,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         hellinger_strong=cfg.hellinger_strong,
         hellinger_weak=cfg.hellinger_weak,
         mop=cfg.dpc_mop,
-        kdtree_subsample_max_size=cfg.clustering_max_spikes,
+        sampling_cfg=FitSamplingConfig(
+            n_waveforms_fit=cfg.clustering_max_spikes,
+            max_waveforms_fit=cfg.clustering_max_spikes,
+            fit_sampling=cfg.fit_sampling,
+        ),
     )
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
@@ -982,7 +992,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         criterion_threshold=cfg.criterion_threshold,
         n_total_iters=cfg.n_refinement_iters,
         n_em_iters=cfg.n_em_iters,
-        max_n_spikes=cfg.gmm_max_spikes,
+        sampling_cfg=FitSamplingConfig(
+            n_waveforms_fit=cfg.gmm_max_spikes,
+            max_waveforms_fit=cfg.gmm_max_spikes,
+            fit_sampling=cfg.fit_sampling,
+        ),
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
         truncated=cfg.truncated,
@@ -1090,6 +1104,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
         initial_detection_cfg=initial_detection_cfg,
+        peeler_sampling_cfg=peeler_fit_sampling_cfg,
         template_cfg=template_cfg,
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,

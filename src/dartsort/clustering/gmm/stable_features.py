@@ -248,6 +248,7 @@ class StableSpikeDataset(torch.nn.Module):
         motion_est=None,
         core_radius: float | Literal["extract"] | None = 35.0,
         max_n_spikes: float | int = np.inf,
+        kept_indices: np.ndarray | None = None,
         discard_triaged: bool = False,
         interp_params: InterpolationParams = default_interpolation_params,
         features_dataset_name="collisioncleaned_tpca_features",
@@ -311,15 +312,12 @@ class StableSpikeDataset(torch.nn.Module):
 
             rg = np.random.default_rng(random_seed)
 
-            # choose splits. make sure all neighborhoods are covered in the train split.
-            # this can lead to some bias, because the validation set may underrepresent those
-            # neighborhoods that have little coverage, but we wouldn't have made good decisions
-            # there without training on them anyway.
             assert len(split_names) >= 1
             assert "train" in split_names
-            if discard_triaged:
+            if kept_indices is not None:
+                pass
+            elif discard_triaged:
                 kept_indices = np.flatnonzero(sorting.labels >= 0)
-                is_coverage = np.zeros(len(kept_indices), dtype=bool)
             elif len(sorting) <= max_n_spikes:
                 kept_indices = np.arange(len(sorting))
             else:

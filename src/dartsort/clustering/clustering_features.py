@@ -37,7 +37,8 @@ class SimpleMatrixFeatures:
     z: np.ndarray
     z_reg: np.ndarray
     xyza: np.ndarray
-    amplitudes: np.ndarray | None
+    signed_amplitudes: np.ndarray
+    amplitudes: np.ndarray
 
     def mask(self, mask):
         return self.__class__(
@@ -46,7 +47,8 @@ class SimpleMatrixFeatures:
             z=self.z[mask],
             z_reg=self.z_reg[mask],
             xyza=self.xyza[mask],
-            amplitudes=self.amplitudes[mask] if self.amplitudes is not None else None,
+            signed_amplitudes=self.signed_amplitudes[mask],
+            amplitudes=self.amplitudes[mask],
         )
 
     @classmethod
@@ -70,7 +72,7 @@ class SimpleMatrixFeatures:
         if clustering_features_cfg.use_x:
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
-        amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name, None)
+        amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
         if clustering_features_cfg.use_amplitude:
             assert amp is not None
             ampft = amp.copy()
@@ -79,13 +81,16 @@ class SimpleMatrixFeatures:
                 ampft *= clustering_features_cfg.amp_scale
             features.append(ampft[:, None])
 
-        samp = None
+        if (
+            v := getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
+        ) is not None:
+            samp = amp * v
+        else:
+            samp = amp.copy()
+
         if clustering_features_cfg.use_signed_amplitude:
-            samp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
-            v = getattr(sorting, clustering_features_cfg.voltages_dataset_name)
-            samp = samp * np.sign(v)
             samp *= clustering_features_cfg.amp_scale
-            features.append(samp[:, None])
+            features.append(clustering_features_cfg.amp_scale * samp[:, None])
 
         do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
         pcs = None
@@ -148,7 +153,15 @@ class SimpleMatrixFeatures:
             features.append(pcs)
 
         features = np.concatenate(features, axis=1)
-        return cls(features=features, x=x, z=z, z_reg=z_reg, xyza=xyza, amplitudes=amp)
+        return cls(
+            features=features,
+            x=x,
+            z=z,
+            z_reg=z_reg,
+            xyza=xyza,
+            amplitudes=amp,
+            signed_amplitudes=samp,
+        )
 
 
 def signed_log1p(x, pre_scale=1.0):

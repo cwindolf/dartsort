@@ -5,7 +5,7 @@ from tqdm.auto import trange
 def forward_backward(
     chunk_time_ranges_s,
     chunk_sortings,
-    log_c=5,
+    log_c=5.0,
     feature_scales=(1, 1, 50),
     adaptive_feature_scales=False,
     motion_est=None,

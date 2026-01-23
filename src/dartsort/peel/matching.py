@@ -1,35 +1,34 @@
 """A simple residual updating template matcher."""
 
-from typing import Self, Literal
 from pathlib import Path
+from typing import Literal, Self
 
 import numpy as np
-from scipy.stats import norm
-from spikeinterface.core import BaseRecording
 import torch
 import torch.nn.functional as F
+from scipy.stats import norm
+from spikeinterface.core import BaseRecording
 from torch import Tensor
 
-from ..templates import TemplateData, LowRankTemplates
+from ..templates import LowRankTemplates, TemplateData
 from ..transform import WaveformPipeline
 from ..util.data_util import SpikeDataset
 from ..util.internal_config import (
     ComputationConfig,
     FeaturizationConfig,
-    WaveformConfig,
+    FitSamplingConfig,
     MatchingConfig,
+    WaveformConfig,
 )
 from ..util.logging_util import get_logger
 from ..util.waveform_util import make_channel_index
-
 from .matching_util import (
+    ChunkTemplateData,
     MatchingPeaks,
     MatchingTemplates,
     MatchingTemplatesBuilder,
-    ChunkTemplateData,
 )
 from .peel_base import BasePeeler, PeelingBatchResult
-
 
 logger = get_logger(__name__)
 
@@ -183,6 +182,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         waveform_cfg: WaveformConfig,
         matching_cfg: MatchingConfig,
         featurization_cfg: FeaturizationConfig,
+        sampling_cfg: FitSamplingConfig,
         template_data: TemplateData | None,
         motion_est=None,
         parent_sorting_hdf5_path=None,
@@ -247,12 +247,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_selection_index=channel_selection_index,
             chunk_length_samples=matching_cfg.chunk_length_samples,
             n_seconds_fit=matching_cfg.n_seconds_fit,
-            max_waveforms_fit=matching_cfg.max_waveforms_fit,
-            fit_subsampling_random_state=matching_cfg.fit_subsampling_random_state,
-            n_waveforms_fit=matching_cfg.n_waveforms_fit,
-            fit_sampling=matching_cfg.fit_sampling,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            fit_sampling=sampling_cfg.fit_sampling,
+            fit_max_reweighting=sampling_cfg.fit_max_reweighting,
             up_factor=matching_cfg.template_temporal_upsampling_factor,
-            fit_max_reweighting=matching_cfg.fit_max_reweighting,
             max_iter=matching_cfg.max_iter,
             max_spikes_per_second=matching_cfg.max_spikes_per_second,
             cd_iter=matching_cfg.cd_iter,

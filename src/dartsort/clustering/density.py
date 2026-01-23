@@ -331,10 +331,10 @@ def bucket_density_ratio(
     with timer("geom bucketing"):
         geom_kdt = KDTree(scaled_geom, leafsize=1)
         dists, channels = geom_kdt.query(X[:, :2], workers=workers)
-    
+
     max_dist_by_chan = np.zeros(len(scaled_geom))
     for c in range(len(scaled_geom)):
-        inc = np.flatnonzero(channels==c)
+        inc = np.flatnonzero(channels == c)
         if inc.size:
             max_dist_by_chan[c] = dists[inc].max()
 
@@ -363,7 +363,7 @@ def bucket_density_ratio(
         density_ratio[inc] = _local_sparse_dens_ratio(
             Xt, inc, friends, max_dist, sigma, sigma_regional, batch_size=batch_size
         )
-    
+
     return density_ratio
 
 
@@ -418,8 +418,8 @@ def kdt_density(
     max_dist = max_sigma * sigma_regional
 
     jobs = range(0, n, batch_size)
-    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
-    with Executor(
+    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")  # type: ignore
+    with Executor(  # type: ignore
         max_workers=n_jobs,
         mp_context=context,
         initializer=_kdtdens_init,
@@ -553,7 +553,11 @@ def density_peaks(
     if density is None:
         if sigma_regional and not use_histograms:
             density = kdt_density(
-                kdtree, X, sigma=sigma_local, sigma_regional=sigma_regional, n_threads=workers
+                kdtree,
+                X,
+                sigma=sigma_local,
+                sigma_regional=sigma_regional,
+                n_threads=workers,
             )
         elif use_knn:
             density = knn_density(

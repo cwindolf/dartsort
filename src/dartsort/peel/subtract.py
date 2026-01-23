@@ -1,18 +1,18 @@
+import gc
 import tempfile
-from typing import Literal
 import warnings
 from collections import namedtuple
 from pathlib import Path
-import gc
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
-
+from spikeinterface.core import BaseRecording
 
 from ..detect import (
+    convexity_filter,
     detect_and_deduplicate,
     singlechan_template_detect_and_deduplicate,
-    convexity_filter,
 )
 from ..transform import (
     SingleChannelTemplates,
@@ -20,18 +20,23 @@ from ..transform import (
     Waveform,
     WaveformPipeline,
 )
-from ..util.data_util import subsample_waveforms, SpikeDataset
 from ..util import job_util
-from ..util.spiketorch import grab_spikes, subtract_spikes_, ptp
+from ..util.data_util import SpikeDataset, subsample_waveforms
+from ..util.internal_config import (
+    FeaturizationConfig,
+    FitSamplingConfig,
+    SubtractionConfig,
+    WaveformConfig,
+)
+from ..util.spiketorch import grab_spikes, ptp, subtract_spikes_
 from ..util.waveform_util import (
+    get_channel_index_rel_inds,
     get_relative_subset,
     make_channel_index,
     relative_channel_subset_index,
-    get_channel_index_rel_inds,
 )
-
 from .peel_base import BasePeeler, PeelingBatchResult
-from .threshold import threshold_chunk, ThresholdAndFeaturize
+from .threshold import ThresholdAndFeaturize, threshold_chunk
 
 
 class SubtractionPeeler(BasePeeler):
@@ -58,7 +63,7 @@ class SubtractionPeeler(BasePeeler):
         temporal_dedup_radius_samples=7,
         remove_exact_duplicates=True,
         positive_temporal_dedup_radius_samples=41,
-        trough_priority=2.0,
+        trough_priority: float | None = 2.0,
         convexity_threshold=None,
         convexity_radius=3,
         n_seconds_fit=100,
@@ -67,8 +72,9 @@ class SubtractionPeeler(BasePeeler):
         fit_subsampling_random_state=0,
         fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_max_reweighting=4.0,
-        residnorm_decrease_threshold=3.162,
-        growth_tolerance=0.1,
+        residnorm_decrease_threshold=16.0,
+        decrease_objective: Literal["norm", "normsq"] = "normsq",
+        growth_tolerance: float | None = 0.1,
         use_singlechan_templates=False,
         n_singlechan_templates=10,
         singlechan_threshold=40.0,
@@ -124,6 +130,7 @@ class SubtractionPeeler(BasePeeler):
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
         self.max_iter = max_iter
+        self.decrease_objective: Literal["norm", "normsq"] = decrease_objective
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -236,10 +243,12 @@ class SubtractionPeeler(BasePeeler):
     @classmethod
     def from_config(
         cls,
-        recording,
-        waveform_cfg,
-        subtraction_cfg,
-        featurization_cfg,
+        *,
+        recording: BaseRecording,
+        waveform_cfg: WaveformConfig,
+        subtraction_cfg: SubtractionConfig,
+        featurization_cfg: FeaturizationConfig,
+        sampling_cfg: FitSamplingConfig,
     ):
         # waveform extraction channel neighborhoods
         geom = torch.tensor(recording.get_channel_locations())
@@ -250,9 +259,12 @@ class SubtractionPeeler(BasePeeler):
             geom, subtraction_cfg.subtract_radius, to_torch=True
         )
         # per-threshold spike event deduplication channel neighborhoods
-        spatial_dedup_channel_index = make_channel_index(
-            geom, subtraction_cfg.spatial_dedup_radius, to_torch=True
-        )
+        if subtraction_cfg.spatial_dedup_radius is not None:
+            spatial_dedup_channel_index = make_channel_index(
+                geom, subtraction_cfg.spatial_dedup_radius, to_torch=True
+            )
+        else:
+            spatial_dedup_channel_index = None
 
         relative_peak_channel_index = None
         if subtraction_cfg.relative_peak_radius_um:
@@ -315,11 +327,11 @@ class SubtractionPeeler(BasePeeler):
             remove_exact_duplicates=subtraction_cfg.remove_exact_duplicates,
             positive_temporal_dedup_radius_samples=subtraction_cfg.positive_temporal_dedup_radius_samples,
             n_seconds_fit=subtraction_cfg.n_seconds_fit,
-            max_waveforms_fit=subtraction_cfg.max_waveforms_fit,
-            fit_sampling=subtraction_cfg.fit_sampling,
-            fit_max_reweighting=subtraction_cfg.fit_max_reweighting,
-            n_waveforms_fit=subtraction_cfg.n_waveforms_fit,
-            fit_subsampling_random_state=subtraction_cfg.fit_subsampling_random_state,
+            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
+            fit_sampling=sampling_cfg.fit_sampling,
+            fit_max_reweighting=sampling_cfg.fit_max_reweighting,
+            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
+            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
             residnorm_decrease_threshold=subtraction_cfg.residnorm_decrease_threshold,
             convexity_threshold=subtraction_cfg.convexity_threshold,
             convexity_radius=subtraction_cfg.convexity_radius,
@@ -384,6 +396,7 @@ class SubtractionPeeler(BasePeeler):
             remove_exact_duplicates=self.remove_exact_duplicates,
             pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
+            decrease_objective=self.decrease_objective,
             trough_priority=self.trough_priority,
             growth_tolerance=self.growth_tolerance,
             cumulant_order=self.cumulant_order,
@@ -669,7 +682,8 @@ def subtract_chunk(
     spatial_dedup_channel_index=None,
     subtract_rel_inds=None,
     spatial_dedup_rel_inds=None,
-    residnorm_decrease_threshold=3.162,  # sqrt(10)
+    residnorm_decrease_threshold=16.0,
+    decrease_objective: Literal["norm", "normsq"] = "norm",
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
@@ -740,7 +754,13 @@ def subtract_chunk(
 
     # resid norm decrease logic
     check_resid = bool(residnorm_decrease_threshold)
-    residnormsq_thresh = residnorm_decrease_threshold**2
+    squaring = decrease_objective == "normsq"
+    rooting = decrease_objective == "norm"
+    if squaring:
+        dec_thresh = residnorm_decrease_threshold**2
+    else:
+        dec_thresh = residnorm_decrease_threshold
+
     if growth_tolerance is not None:
         gtol = traces.abs().add_(growth_tolerance)
     else:
@@ -883,15 +903,18 @@ def subtract_chunk(
 
         if check_resid:
             assert residuals is not None
-            orig_normsq = residuals.square().sum(dim=(1, 2))
+            orig_decobj = residuals.square().sum(dim=(1, 2))
             residuals = residuals.sub_(waveforms).nan_to_num_()
-            new_normsq = residuals.square_().sum(dim=(1, 2))
-            reduction = orig_normsq - new_normsq
-            keep = residnormsq_thresh < reduction
+            new_decobj = residuals.square_().sum(dim=(1, 2))
+            if rooting:
+                orig_decobj = orig_decobj.sqrt_()
+                new_decobj = new_decobj.sqrt_()
+            reduction = orig_decobj - new_decobj
+            keep = dec_thresh < reduction
             (keep,) = keep.nonzero(as_tuple=True)
             if not keep.numel():
                 break
-            if keep.numel() < new_normsq.numel():
+            if keep.numel() < new_decobj.numel():
                 waveforms = waveforms[keep]
                 times_samples = times_samples[keep]
                 channels = channels[keep]

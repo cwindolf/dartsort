@@ -1068,7 +1068,7 @@ def fit_reweighting(
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
-    sample_p = sample_p.astype(float)  # ensure double before normalizing
+    sample_p = sample_p.astype(np.float64)  # ensure double before normalizing
     sample_p /= sample_p.sum()
     return sample_p
 

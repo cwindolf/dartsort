@@ -1,5 +1,5 @@
-from logging import getLogger
 import dataclasses
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ from torch.utils.data import (
 from tqdm.auto import trange
 
 from ..util.spiketorch import reindex, spawn_torch_rg
+from ..util.logging_util import get_logger
 from ._multichan_denoiser_kit import (
     BaseMultichannelDenoiser,
     get_noise,
@@ -24,7 +25,7 @@ from ._multichan_denoiser_kit import (
 )
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Decollider(BaseMultichannelDenoiser):
@@ -190,8 +191,8 @@ class Decollider(BaseMultichannelDenoiser):
                 m = get_noise(
                     self.recording,
                     channels.numpy(force=True),
-                    self.model_channel_index.numpy(force=True),
-                    spike_length_samples=self.spike_length_samples,
+                    self.b.model_channel_index.numpy(force=True),
+                    spike_length_samples=cast(int, self.spike_length_samples),
                     rg=None,
                 )
                 m = m.to(waveforms)
@@ -264,6 +265,7 @@ class Decollider(BaseMultichannelDenoiser):
             e_exz_y = self.inf_net((y, mask.unsqueeze(1)))
 
         if self.cycle_loss_alpha:
+            assert e_exz_y is not None
             cycle_targ = e_exz_y.detach() if self.detach_cycle_loss else e_exz_y
             cycle_input = cycle_targ + ell
             cycle_output = self.den_net((cycle_input, mask.unsqueeze(1)))
@@ -343,62 +345,6 @@ class Decollider(BaseMultichannelDenoiser):
                 )
         return loss_dict
 
-    def get_losses(self, waveforms, channels, recording, random_seed=None):
-        n = len(waveforms)
-        noise = get_noise(
-            recording,
-            channels.numpy(force=True),
-            self.model_channel_index.numpy(force=True),
-            spike_length_samples=self.spike_length_samples,
-            rg=np.random.default_rng(
-                random_seed if random_seed is not None else self.random_seed
-            ),
-        )
-        dataset = TensorDataset(waveforms, channels, noise)
-        loader = DataLoader(dataset, batch_size=self.inference_batch_size)
-
-        losses = {
-            "eyz": np.zeros(n, dtype=np.float32),
-            "emz": np.zeros(n, dtype=np.float32),
-            "e_exz_y": np.zeros(n, dtype=np.float32),
-        }
-
-        bs = 0
-        self.eval()
-        with torch.no_grad():
-            for waveform_batch, channels_batch, noise_batch in loader:
-                waveform_batch = waveform_batch.to(self.device)
-                channels_batch = channels_batch.to(self.device)
-                noise_batch = noise_batch.to(self.device)
-                be = bs + len(waveform_batch)
-
-                waveform_batch = reindex(
-                    channels_batch,
-                    waveform_batch,
-                    self.relative_index,
-                    pad_value=0.0,
-                )
-                m = noise_batch.to(waveform_batch)
-                mask = self.get_masks(channels_batch).to(waveform_batch)
-                fres = self.train_forward(waveform_batch, m, mask)
-
-                eyz = fres["eyz"]
-                emz = fres["emz"]
-                e_exz_y = fres["e_exz_y"]
-
-                mask = mask.unsqueeze(1)
-                if eyz is not None:
-                    ll = F.mse_loss(mask * eyz, mask * waveform_batch, reduction="none")
-                    losses["eyz"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
-                if emz is not None:
-                    ll = F.mse_loss(mask * emz, mask * m, reduction="none")
-                    losses["emz"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
-                if e_exz_y is not None:
-                    ll = F.mse_loss(mask * exz, mask * e_exz_y, reduction="none")
-                    losses["e_exz_y"][bs:be] = ll.mean(dim=(1, 2)).numpy(force=True)
-                bs = be
-        return losses
-
     def _fit(
         self,
         train_data: "DecolliderDataLoader",
@@ -450,14 +396,16 @@ class Decollider(BaseMultichannelDenoiser):
                         output_l1_alpha=self.output_l1_alpha,
                     )
                     loss = sum(loss_dict.values())
-                    loss.backward()
+                    loss.backward()  # type: ignore
                     optimizer.step()
 
                     for k, v in loss_dict.items():
                         train_losses[k] = v + train_losses.get(k, 0.0)
                 # // epoch loop
                 train_data.cleanup()
-                train_losses = {k: v.item() / len(train_data) for k, v in train_losses.items()}
+                train_losses = {
+                    k: v.item() / len(train_data) for k, v in train_losses.items()
+                }
                 train_records.append({**train_losses})
 
                 # Validation phase (only if val_loader is not None)
@@ -498,7 +446,9 @@ class Decollider(BaseMultichannelDenoiser):
                             for k, v in loss_dict.items():
                                 val_losses[k] = v + val_losses.get(k, 0.0)
 
-                    val_losses = {k: v.item() / len(val_data) for k, v in val_losses.items()}
+                    val_losses = {
+                        k: v.item() / len(val_data) for k, v in val_losses.items()
+                    }
                     val_loss = sum(val_losses.values())
                     train_records[-1]["val_loss"] = val_loss
 
@@ -516,7 +466,7 @@ class Decollider(BaseMultichannelDenoiser):
                     self.step_callback(self, epoch, val_loss)
 
                 # Print loss summary
-                loss_str = f"Train {loss:.4f} " + "|".join(
+                loss_str = f"Train {loss:.4f} " + "|".join(  # type: ignore
                     f"{k}: {v:.3f}" for k, v in train_losses.items()
                 )
                 if val_data is not None:
@@ -525,7 +475,7 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                 pbar.set_description(f"Epochs [{loss_str}]")
 
-                self.step_scheduler(scheduler, loss, val_loss)
+                self.step_scheduler(scheduler, loss, val_loss)  # type: ignore
 
         train_df = pd.DataFrame.from_records(train_records)
         return train_df
@@ -554,7 +504,7 @@ class Decollider(BaseMultichannelDenoiser):
         train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
             recording,
             train_channels.numpy(force=True),
-            self.model_channel_index.numpy(force=True),
+            self.b.model_channel_index.numpy(force=True),
             spike_length_samples=spike_length_samples,
             generator=spawn_torch_rg(rg),
             queue_chunks=self.queue_chunks,
@@ -563,7 +513,7 @@ class Decollider(BaseMultichannelDenoiser):
             train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
                 recording,
                 train_channels.numpy(force=True),
-                self.model_channel_index.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
                 generator=spawn_torch_rg(rg),
                 queue_chunks=self.queue_chunks,
@@ -604,7 +554,7 @@ class Decollider(BaseMultichannelDenoiser):
             val_noise = get_noise(
                 recording,
                 val_channels.numpy(force=True),
-                self.model_channel_index.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
                 rg=rg,
             )
@@ -612,7 +562,7 @@ class Decollider(BaseMultichannelDenoiser):
                 cycle_val_noise = get_noise(
                     recording,
                     val_channels.numpy(force=True),
-                    self.model_channel_index.numpy(force=True),
+                    self.b.model_channel_index.numpy(force=True),
                     spike_length_samples=spike_length_samples,
                     rg=rg,
                 )
@@ -625,7 +575,7 @@ class Decollider(BaseMultichannelDenoiser):
             # val set does not need shuffling
             val_loader = DataLoader(
                 val_dataset,
-                num_workers=self.n_data_workers,
+                num_workers=self.n_data_workers,  # type: ignore
                 persistent_workers=bool(self.n_data_workers),
                 batch_size=self.batch_size,
             )

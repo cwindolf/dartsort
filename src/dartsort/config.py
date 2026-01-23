@@ -179,8 +179,9 @@ class DeveloperConfig(DARTsortUserConfig):
     recluster_after_first_matching: bool = True
 
     # general peeling
-    n_waveforms_fit: int = 20_000
+    n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
+    fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000

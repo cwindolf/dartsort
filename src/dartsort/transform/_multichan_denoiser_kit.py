@@ -1,4 +1,3 @@
-from logging import getLogger
 from threading import Thread
 from queue import Queue
 
@@ -11,15 +10,15 @@ import numpy as np
 from .transform_base import BaseWaveformDenoiser
 from ..util.waveform_util import regularize_channel_index
 from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg
+from ..util.logging_util import get_logger
 from ..util import nn_util
 from ..util import spikeio
 
 
-logger = getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseMultichannelDenoiser(BaseWaveformDenoiser):
-
     def __init__(
         self,
         channel_index,
@@ -95,6 +94,9 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self._needs_fit = True
         self.random_seed = random_seed
 
+    def forward_unbatched(self, waveforms, channels):
+        raise NotImplementedError
+
     def forward(self, waveforms, *, channels, **unused):
         out = torch.empty_like(waveforms)
         odev = waveforms.device
@@ -155,8 +157,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         scheduler.step(*sc_args)
 
     @property
-    def device(self):
-        return self.channel_index.device
+    def device(self) -> torch.device:
+        return self.b.channel_index.device
 
     def needs_fit(self):
         return self._needs_fit
@@ -404,7 +406,10 @@ class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
                 ]
         else:
             self.indices = torch.multinomial(
-                self.weights.to(generator.device), n_draws, self.replacement, generator=generator
+                self.weights.to(generator.device),
+                n_draws,
+                self.replacement,
+                generator=generator,
             )
 
 

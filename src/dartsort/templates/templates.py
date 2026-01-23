@@ -407,7 +407,7 @@ def get_templates_by_chunk(
             dtype=dtype,
             denoising_rank=template_cfg.denoising_rank,
             denoising_fit_radius=template_cfg.denoising_fit_radius,
-            denoising_spikes_fit=template_cfg.denoising_spikes_fit,
+            denoising_spikes_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
             recompute_tsvd=template_cfg.recompute_tsvd,
             trough_offset_samples=waveform_cfg.trough_offset_samples(
                 recording.sampling_frequency
