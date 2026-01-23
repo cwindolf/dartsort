@@ -130,12 +130,16 @@ class Clusterer:
         save_labels_dir=None,
         labels_fmt=None,
     ) -> Self:
-        del clustering_cfg
+        if clustering_cfg is None:
+            sampling_cfg = None
+        else:
+            sampling_cfg = clustering_cfg.sampling_cfg
         return cls(
             computation_cfg=computation_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=sampling_cfg,
         )
 
     def handle_sampling(
@@ -156,7 +160,9 @@ class Clusterer:
             features.features.shape[0],
             size=self.sampling_cfg.n_waveforms_fit,
             p=weights,
+            replace=False,
         )
+        ixs.sort()
         return True, ixs
 
     def cluster(
@@ -239,6 +245,7 @@ class GridSnapClusterer(Clusterer):
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=clustering_cfg.sampling_cfg,
         )
 
     def _cluster(
@@ -323,6 +330,7 @@ class DensityPeaksClusterer(Clusterer):
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=clustering_cfg.sampling_cfg,
         )
 
     def _cluster(
@@ -472,6 +480,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=clustering_cfg.sampling_cfg,
         )
 
     def _cluster(
@@ -543,6 +552,7 @@ class RecursiveHDBSCANClusterer(Clusterer):
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=clustering_cfg.sampling_cfg,
         )
 
     def _cluster(
@@ -584,6 +594,7 @@ class ScikitLearnClusterer(Clusterer):
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
+            sampling_cfg=clustering_cfg.sampling_cfg,
         )
 
     def _cluster(

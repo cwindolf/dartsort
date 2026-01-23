@@ -81,12 +81,11 @@ class SimpleMatrixFeatures:
                 ampft *= clustering_features_cfg.amp_scale
             features.append(ampft[:, None])
 
-        if (
-            v := getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
-        ) is not None:
-            samp = amp * v
-        else:
+        v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
+        if v is None:
             samp = amp.copy()
+        else:
+            samp = amp * np.sign(v)
 
         if clustering_features_cfg.use_signed_amplitude:
             samp *= clustering_features_cfg.amp_scale
