@@ -145,7 +145,7 @@ class FeaturizationConfig:
     input_tpca_waveform_cfg: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
-    tpca_max_waveforms: int = 20_000
+    tpca_max_waveforms: int = 40_000
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -248,8 +248,8 @@ default_clustering_fit_sampling_cfg = FitSamplingConfig(
     n_waveforms_fit=500_000,
 )
 default_refinement_fit_sampling_cfg = FitSamplingConfig(
-    max_waveforms_fit=1_000_000,
-    n_waveforms_fit=1_000_000,
+    max_waveforms_fit=1000 * 1024,
+    n_waveforms_fit=1000 * 1024,
 )
 
 
