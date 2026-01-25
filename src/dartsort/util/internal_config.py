@@ -376,7 +376,8 @@ class TemplateConfig:
     svd_inside_t: bool = False
     loot_cov: Literal["diag", "global"] = "global"
 
-    # where to find motion data if needed
+    # where to find data if needed
+    amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
 
     def actual_algorithm(self) -> Literal["by_chunk", "by_unit"]:
@@ -464,6 +465,8 @@ class MatchingConfig:
     min_template_ptp: float = 1.0
     min_template_snr: float = 40.0
     min_template_count: int = 50
+    max_cc_flag_rate: float = 0.5
+    cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
         merge_distance_threshold=0.025
@@ -558,7 +561,7 @@ class ClusteringConfig:
     # global parameters
     workers: int = 5
     random_seed: int = 0
-    min_cluster_size: int = 50
+    min_cluster_size: int = 25
 
     # density peaks parameters
     knn_k: int | None = None
@@ -622,7 +625,8 @@ class RefinementConfig:
     channels_strategy: Literal["count", "all"] = "count"
     neighb_overlap: float = 0.75
     explore_neighb_steps: int = 0
-    min_count: int = 50
+    min_count: int = 25
+    split_min_count: int = 8
     channels_count_min: int = 1
     signal_rank: int = 5
     feature_rank: int = 8
@@ -775,6 +779,7 @@ class DARTsortInternalConfig:
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
+    post_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
@@ -859,7 +864,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         max_waveforms_fit=cfg.max_waveforms_fit,
         fit_sampling=cfg.fit_sampling,
     )
-
     if cfg.detection_type == "subtract":
         subtraction_denoising_cfg = FeaturizationConfig(
             denoise_only=True,
@@ -1109,6 +1113,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
+        post_refinement_cfg=pre_refinement_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
         clustering_features_cfg=clustering_features_cfg,

@@ -28,6 +28,7 @@ def get_clusterer(
     clustering_cfg: ClusteringConfig | None = None,
     refinement_cfg: RefinementConfig | None = None,
     pre_refinement_cfg: RefinementConfig | None = None,
+    post_refinement_cfg: RefinementConfig | None = None,
     computation_cfg: ComputationConfig | None = None,
     save_cfg=None,
     save_labels_dir=None,
@@ -65,38 +66,36 @@ def get_clusterer(
         **shared_save_kw,
     )
 
+    # handle {pre_,,post_}refinement_cfg name formatting.
+    r_cfgs = [pre_refinement_cfg, refinement_cfg, post_refinement_cfg]
     if pre_refinement_cfg is not None:
-        pr_strategy = pre_refinement_cfg.refinement_strategy
-        if pr_strategy not in refinement_strategies:
-            raise ValueError(
-                f"Unknown refinement_strategy={pre_refinement_cfg.refinement_strategy}. "
-                f"Options are: {', '.join(refinement_strategies.keys())}."
-            )
-        R = refinement_strategies[pre_refinement_cfg.refinement_strategy]
-        if saving_labels and clustering_cfg is not None:
-            mid_fmt = f"{initial_name}_preref{pr_strategy}"
+        prefmt = f"{initial_name}_preref{pre_refinement_cfg.refinement_strategy}"
+    else:
+        prefmt = None
+    if post_refinement_cfg is not None:
+        postfmt = f"postref{post_refinement_cfg.refinement_strategy}"
+        if refine_labels_fmt:
+            postfmt = refine_labels_fmt.format(stepname=postfmt)
         else:
-            mid_fmt = None
-        clusterer = R(
-            clusterer,
-            refinement_cfg=pre_refinement_cfg,
-            labels_fmt=mid_fmt,
-            computation_cfg=computation_cfg,
-            **shared_save_kw,
-        )
+            postfmt = f"{initial_name}_{postfmt}"
+    else:
+        postfmt = None
+    r_fmts = [prefmt, refine_labels_fmt, postfmt]
 
-    if refinement_cfg is not None:
-        if refinement_cfg.refinement_strategy not in refinement_strategies:
+    for r_cfg, r_fmt in zip(r_cfgs, r_fmts):
+        if r_cfg is None:
+            continue
+        if r_cfg.refinement_strategy not in refinement_strategies:
             raise ValueError(
-                f"Unknown refinement_strategy={refinement_cfg.refinement_strategy}. "
+                f"Unknown refinement_strategy={r_cfg.refinement_strategy}. "
                 f"Options are: {', '.join(refinement_strategies.keys())}."
             )
-        R = refinement_strategies[refinement_cfg.refinement_strategy]
-        rsave = saving_labels and refinement_cfg.refinement_strategy != "none"
+        R = refinement_strategies[r_cfg.refinement_strategy]
+        rsave = saving_labels and r_cfg.refinement_strategy != "none"
         clusterer = R(
             clusterer,
-            refinement_cfg=refinement_cfg,
-            labels_fmt=refine_labels_fmt if rsave else None,
+            refinement_cfg=r_cfg,
+            labels_fmt=r_fmt if rsave else None,
             computation_cfg=computation_cfg,
             **shared_save_kw,
         )
@@ -147,7 +146,7 @@ class Clusterer:
     ) -> tuple[Literal[False], slice] | tuple[Literal[True], np.ndarray]:
         if self.sampling_cfg is None:
             return False, slice(None)
-        elif features.features.shape[0] <= self.sampling_cfg.n_waveforms_fit:
+        elif features.n <= self.sampling_cfg.n_waveforms_fit:
             return False, slice(None)
 
         weights = fit_reweighting(
@@ -157,7 +156,7 @@ class Clusterer:
         )
         rg = np.random.default_rng(self.sampling_cfg.fit_subsampling_random_state)
         ixs = rg.choice(
-            features.features.shape[0],
+            features.n,
             size=self.sampling_cfg.n_waveforms_fit,
             p=weights,
             replace=False,
@@ -167,11 +166,11 @@ class Clusterer:
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
-    ):
+    ) -> DARTsortSorting:
         if features is None:
             pass
         else:
@@ -623,7 +622,7 @@ class Refinement(Clusterer):
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -634,7 +633,7 @@ class Refinement(Clusterer):
 
     def _refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -644,7 +643,7 @@ class Refinement(Clusterer):
 
     def refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -664,7 +663,7 @@ refinement_strategies["none"] = Refinement
 class GMMRefinement(Refinement):
     def _refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -688,7 +687,7 @@ refinement_strategies["gmm"] = GMMRefinement
 class TMMRefinement(Refinement):
     def _refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -717,7 +716,7 @@ refinement_strategies["tmm"] = TMMRefinement
 class SplitMergeRefinement(Refinement):
     def _refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -740,7 +739,7 @@ class SplitMergeRefinement(Refinement):
 class PCMergeRefinement(Refinement):
     def _refine(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,
@@ -761,7 +760,7 @@ class ForwardBackwardEnsembler(Refinement):
 
     def cluster(
         self,
-        features: SimpleMatrixFeatures | None,
+        features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
         motion_est=None,

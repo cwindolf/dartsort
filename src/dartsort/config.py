@@ -276,7 +276,7 @@ class DeveloperConfig(DARTsortUserConfig):
     ] = "heldout_ecl"
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
     kmeansk: int = 4
-    min_cluster_size: int = 50
+    min_cluster_size: int = 25
 
     # gausian mixture low level
     n_refinement_iters: int = 1

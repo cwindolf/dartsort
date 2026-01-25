@@ -1,5 +1,4 @@
-from dataclasses import dataclass
-from typing import cast
+from typing import cast, Self
 
 import h5py
 import numpy as np
@@ -7,10 +6,18 @@ import torch
 
 from ..util.internal_config import ClusteringFeaturesConfig
 from ..util import drift_util, interpolation_util
+from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
 from . import cluster_util
 
-default_clustering_features_config = ClusteringFeaturesConfig()
+default_clustering_features_cfg = ClusteringFeaturesConfig()
+minimal_features_cfg = ClusteringFeaturesConfig(
+    n_main_channel_pcs=0,
+    use_amplitude=False,
+    use_signed_amplitude=False,
+    use_x=False,
+    use_z=False,
+)
 
 
 def get_clustering_features(
@@ -19,10 +26,10 @@ def get_clustering_features(
     motion_est=None,
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
-    ) = default_clustering_features_config,
-):
+    ) = default_clustering_features_cfg,
+) -> "SimpleMatrixFeatures":
     if clustering_features_cfg is None:
-        return None
+        clustering_features_cfg = minimal_features_cfg
     if clustering_features_cfg.features_type == "simple_matrix":
         return SimpleMatrixFeatures.from_config(
             recording, sorting, motion_est, clustering_features_cfg
@@ -30,8 +37,9 @@ def get_clustering_features(
     assert False
 
 
-@dataclass
+@databag
 class SimpleMatrixFeatures:
+    n: int
     features: np.ndarray
     x: np.ndarray
     z: np.ndarray
@@ -40,10 +48,12 @@ class SimpleMatrixFeatures:
     signed_amplitudes: np.ndarray
     amplitudes: np.ndarray
 
-    def mask(self, mask):
+    def mask(self, mask) -> Self:
+        x = self.x[mask]
         return self.__class__(
+            n=x.shape[0],
             features=self.features[mask],
-            x=self.x[mask],
+            x=x,
             z=self.z[mask],
             z_reg=self.z_reg[mask],
             xyza=self.xyza[mask],
@@ -151,8 +161,13 @@ class SimpleMatrixFeatures:
                 pcs = pcs.numpy(force=True)
             features.append(pcs)
 
-        features = np.concatenate(features, axis=1)
+        n = x.shape[0]
+        if len(features):
+            features = np.concatenate(features, axis=1)
+        else:
+            features = np.empty((n, 0))
         return cls(
+            n=n,
             features=features,
             x=x,
             z=z,

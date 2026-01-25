@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import dataclass_transform
 
 from pydantic import ConfigDict
-from pydantic.dataclasses import dataclass
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .logging_util import DARTSORTVERBOSE, get_logger
 
@@ -28,15 +28,15 @@ assert durl is not None
 EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
 
 
-# config.py and internal_config.py use the following decorator
-
+# without this, pydantic allows unknown keys, so you can easily
+# make a typo in your parameter name!
 pydantic_strict_cfg = ConfigDict(strict=True, extra="forbid")
 
 
-# needed to annotate pydantic for pyright to pick up cfg fields
+# used for configuration objects in [internal_]config.py
 @dataclass_transform(kw_only_default=True, frozen_default=True)
 def cfg_dataclass(*args, frozen=True, kw_only=True, **kwargs):
-    return dataclass(
+    return pydantic_dataclass(
         *args, **kwargs, frozen=frozen, kw_only=kw_only, config=pydantic_strict_cfg
     )
 

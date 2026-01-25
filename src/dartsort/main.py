@@ -3,6 +3,7 @@ import traceback
 from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 import torch
 from spikeinterface.core import BaseRecording
@@ -23,7 +24,6 @@ from .util.internal_config import (
     ClusteringFeaturesConfig,
     ComputationConfig,
     DARTsortInternalConfig,
-    FitSamplingConfig,
     MatchingConfig,
     RefinementConfig,
     SubtractionConfig,
@@ -220,6 +220,7 @@ def _dartsort_impl(
             motion_est=motion_est,
             pre_refinement_cfg=cfg.pre_refinement_cfg,
             refinement_cfg=cfg.initial_refinement_cfg,
+            post_refinement_cfg=cfg.post_refinement_cfg,
             clustering_cfg=cfg.clustering_cfg,
             clustering_features_cfg=cfg.clustering_features_cfg,
             _save_cfg=cfg,
@@ -237,6 +238,13 @@ def _dartsort_impl(
     for step in range(next_step, cfg.matching_iterations + 1):
         is_final = step == cfg.matching_iterations
 
+        if step == 0:
+            assert False
+        elif step == 1:
+            previous_detection_cfg = cfg.initial_detection_cfg
+        else:
+            previous_detection_cfg = cfg.matching_cfg
+
         # TODO
         # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
 
@@ -251,6 +259,7 @@ def _dartsort_impl(
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite or cfg.overwrite_matching,
+            previous_detection_cfg=previous_detection_cfg,
             computation_cfg=cfg.computation_cfg,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",
@@ -273,6 +282,7 @@ def _dartsort_impl(
             motion_est=motion_est,
             pre_refinement_cfg=cfg.pre_refinement_cfg,
             refinement_cfg=cfg.refinement_cfg,
+            post_refinement_cfg=cfg.post_refinement_cfg,
             clustering_cfg=step_clustering_cfg,
             clustering_features_cfg=step_features_cfg,
             _save_cfg=cfg,
@@ -410,6 +420,7 @@ def match(
     featurization_cfg=default_featurization_cfg,
     matching_cfg=default_matching_cfg,
     sampling_cfg=default_peeling_fit_sampling_cfg,
+    previous_detection_cfg: Any | None = None,
     chunk_starts_samples=None,
     overwrite=False,
     residual_filename: str | None = None,
@@ -433,12 +444,15 @@ def match(
             min_template_ptp=matching_cfg.min_template_ptp,
             min_template_snr=matching_cfg.min_template_snr,
             min_template_count=matching_cfg.min_template_count,
+            max_cc_flag_rate=matching_cfg.max_cc_flag_rate,
+            cc_flag_entropy_cutoff=matching_cfg.cc_flag_entropy_cutoff,
             depth_order=matching_cfg.depth_order,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
             realign_cfg=matching_cfg.template_realignment_cfg,
             template_merge_cfg=matching_cfg.template_merge_cfg,
             computation_cfg=computation_cfg,
+            detection_cfg=previous_detection_cfg,
             tsvd=template_denoising_tsvd,
             template_npz_path=model_dir / template_npz_filename,
         )
@@ -550,6 +564,7 @@ def cluster(
     ) = default_clustering_features_cfg,
     pre_refinement_cfg: RefinementConfig | None = None,
     refinement_cfg: RefinementConfig | None = None,
+    post_refinement_cfg: RefinementConfig | None = None,
     computation_cfg: ComputationConfig | None = None,
     features: SimpleMatrixFeatures | None = None,
     *,
@@ -565,10 +580,12 @@ def cluster(
             motion_est=motion_est,
             clustering_features_cfg=clustering_features_cfg,
         )
+    assert features is not None
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         refinement_cfg=refinement_cfg,
+        post_refinement_cfg=post_refinement_cfg,
         computation_cfg=computation_cfg,
         save_cfg=_save_cfg,
         save_labels_dir=_save_dir,

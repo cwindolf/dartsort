@@ -38,6 +38,7 @@ def scatter_spike_features(
     label_axes=True,
     random_seed=0,
     annotate_labels_over_xz=False,
+    annotate_labels_over_amp=False,
     amplitudes_dataset_name=("denoised_ptp_amplitudes", "ptp_amplitudes", "amplitudes"),
     localizations_dataset_name=("point_source_localizations", "localizations"),
     extra_features=None,
@@ -115,7 +116,10 @@ def scatter_spike_features(
             & (x[to_show] > geom[:, 0].min() - probe_margin_um)
             & (x[to_show] < geom[:, 0].max() + probe_margin_um)
         ]
-    if len(times_s) > max_spikes_plot:
+    if isinstance(limits, (list, tuple, np.ndarray)):
+        assert len(limits) == 2
+        to_show = to_show[depths_um[to_show] == depths_um[to_show].clip(*limits)]
+    if len(to_show) > max_spikes_plot:
         np.random.default_rng(random_seed).shuffle(to_show)
         to_show = to_show[:max_spikes_plot]
         to_show.sort()
@@ -123,7 +127,6 @@ def scatter_spike_features(
         a = 50 * np.log(amplitudes + 5)
         inliers, kdtree = kdtree_inliers(np.c_[depths_um, x, a][to_show])
         to_show = to_show[inliers]
-
     _, s_x = scatter_x_vs_depth(
         x=x,
         depths_um=depths_um,
@@ -174,6 +177,7 @@ def scatter_spike_features(
         limits=limits,
         linewidth=linewidth,
         to_show=to_show,
+        annotate_labels=annotate_labels_over_amp,
         amplitudes_dataset_name=amplitudes_dataset_name,
         localizations_dataset_name=localizations_dataset_name,
         show_triaged=show_triaged,
@@ -444,6 +448,7 @@ def scatter_amplitudes_vs_depth(
     localizations_dataset_name="point_source_localizations",
     show_triaged=True,
     label_colors=glasbey1024,
+    annotate_labels=False,
     **scatter_kw,
 ):
     """Scatter plot of spike amplitude vs spike depth (vertical position on probe)"""
@@ -489,6 +494,7 @@ def scatter_amplitudes_vs_depth(
         to_show=to_show,
         show_triaged=show_triaged,
         label_colors=label_colors,
+        annotate_labels=annotate_labels,
         **scatter_kw,
     )
     if semilog_amplitudes:
@@ -573,7 +579,7 @@ def scatter_feature_vs_depth(
         to_show = to_show[np.argsort(amplitudes[to_show])]
 
     if sorting is not None and labels is None:
-        if sorting.labels.max() > 0:
+        if sorting.labels is not None and sorting.labels.max() > 0:
             labels = sorting.labels
 
     if labels is None:

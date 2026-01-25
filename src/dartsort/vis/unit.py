@@ -370,6 +370,7 @@ class WaveformPlot(UnitPlot):
                 color=self.color,
                 alpha=self.alpha,
                 max_abs_amp=max_abs_amp,
+                trough_offset=trough_offset_samples,
                 lw=1,
             )
             handles["waveforms"] = ls

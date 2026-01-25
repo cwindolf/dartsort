@@ -1662,6 +1662,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         em_iters: int,
         criterion_em_iters: int,
         min_count: int,
+        split_min_count: int,
         prior_pseudocount: float,
         cl_alpha: float,
         latent_prior_std: float,
@@ -1692,6 +1693,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             elbo_atol=elbo_atol,
         )
         self.min_count = min_count
+        self.split_min_count = split_min_count
         self.split_k = split_k
         self.lut_puff = lut_puff
         self.full_proposal_every = full_proposal_every
@@ -1778,6 +1780,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         em_iters: int,
         criterion_em_iters: int,
         min_count: int,
+        split_min_count: int,
         seed: int | np.random.Generator,
         prior_pseudocount: float,
         cl_alpha: float,
@@ -1815,6 +1818,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bases=bases,
             noise_log_prop=noise_log_prop,
             min_count=min_count,
+            split_min_count=split_min_count,
             min_channel_count=min_channel_count,
             seed=rg,
             noise=noise,
@@ -1858,6 +1862,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             else refinement_cfg.signal_rank,
             distance_kind=cast(ComponentDistanceMetric, refinement_cfg.distance_metric),
             min_count=refinement_cfg.min_count,
+            split_min_count=refinement_cfg.split_min_count,
             split_k=refinement_cfg.kmeansk,
             min_channel_count=refinement_cfg.channels_count_min,
             em_iters=refinement_cfg.n_em_iters,
@@ -1877,6 +1882,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         signal_rank: int,
         erp: NeighborhoodFiller,
         min_count: int,
+        split_min_count: int,
         min_channel_count: int,
         data: DenseSpikeData,
         responsibilities: Tensor,
@@ -1943,6 +1949,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             max_distance=max_distance,
             merge_max_distance=merge_max_distance,
             min_count=min_count,
+            split_min_count=split_min_count,
             min_channel_count=min_channel_count,
             split_k=0,
             log_proportions=log_proportions,
@@ -2425,7 +2432,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             erp=self.erp,
             gen=self.rg,
             feature_rank=self.noise.rank,
-            min_count=self.min_count // 10,
+            min_count=self.split_min_count,
             min_channel_count=self.min_channel_count,
             debug=debug,
         )
@@ -2449,7 +2456,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 responsibilities=kmeans_responsibilities,
                 signal_rank=self.signal_rank,
                 erp=self.erp,
-                min_count=self.min_count,
+                min_count=self.split_min_count,
+                split_min_count=self.split_min_count,
                 min_channel_count=self.min_channel_count,
                 noise=self.noise,
                 max_group_size=self.max_group_size,
@@ -3911,6 +3919,7 @@ def brute_merge(
                 signal_rank=mm.signal_rank,
                 erp=mm.erp,
                 min_count=mm.min_channel_count,  # this isn't used from here, shimming
+                split_min_count=mm.min_channel_count,  # this isn't used from here, shimming
                 min_channel_count=mm.min_channel_count,
                 noise=mm.noise,
                 max_group_size=mm.max_group_size,

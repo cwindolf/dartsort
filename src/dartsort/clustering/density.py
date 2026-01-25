@@ -47,7 +47,7 @@ def kdtree_inliers(
     if kdtree is None:
         kdtree = KDTree(X, leafsize=leafsize)
 
-    if distance_upper_bound is None or n_neighbors is None:
+    if distance_upper_bound is None or not n_neighbors:
         inliers = np.ones(kdtree.n, dtype=bool)
         return inliers, kdtree
 
@@ -527,6 +527,7 @@ def density_peaks(
     remove_borders=False,
     border_search_radius=10.0,
     border_search_neighbors=3,
+    inlier_dims=slice(0, 2),
     leafsize=24,
     workers=-1,
 ):
@@ -538,17 +539,22 @@ def density_peaks(
      - Noise: you can throw away points with too low of a density (ratio)
     """
     n = len(X)
+
     radius_search = radius_search * np.sqrt(X.shape[1])
+    dim_arange = np.arange(X.shape[1])
+    inlier_dim_ixs = dim_arange[inlier_dims]
     if outlier_radius is not None:
-        outlier_radius = outlier_radius * np.sqrt(X.shape[1])
+        outlier_radius = outlier_radius * np.sqrt(inlier_dim_ixs.size)
     inliers, kdtree = kdtree_inliers(
-        X,
+        X[:, inlier_dims],
         kdtree=kdtree,
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius,
         workers=workers,
         leafsize=leafsize,
     )
+    if not np.array_equal(inlier_dim_ixs, dim_arange):
+        kdtree = KDTree(X)
 
     if density is None:
         if sigma_regional and not use_histograms:

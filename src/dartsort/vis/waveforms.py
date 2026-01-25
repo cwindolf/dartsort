@@ -10,6 +10,7 @@ from .colors import glasbey1024
 
 def geomplot(
     waveforms,
+    *,
     max_channel=None,
     max_channels=None,
     channel_index=None,
@@ -19,6 +20,8 @@ def geomplot(
     z_extension=1.0,
     x_extension=0.8,
     show_zero=True,
+    show_trough=True,
+    trough_offset=42,
     show_zero_kwargs=None,
     max_abs_amp=None,
     show_chan_label=False,
@@ -163,12 +166,14 @@ def geomplot(
         chan_labels if chan_labels is not None else list(map(str, range(len(geom))))
     )
     for c in unique_chans:
+        if show_zero_kwargs is None:
+            show_zero_kwargs = dict(color="gray", lw=0.8, linestyle="--")
         if show_zero:
-            if show_zero_kwargs is None:
-                show_zero_kwargs = dict(color="gray", lw=0.8, linestyle="--")
             ax.axhline(geom_plot[c, 1], **show_zero_kwargs)
         if show_chan_label:
             ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
+        if show_trough:
+            ax.axvline(geom_plot[c, 0] + t_domain[trough_offset], **show_zero_kwargs)
     lines = LineCollection(
         np.array(draw),
         colors=np.array(draw_colors) if draw_colors else None,

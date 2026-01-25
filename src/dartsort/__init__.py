@@ -45,7 +45,14 @@ from .templates import (
 )
 from .transform import WaveformPipeline
 from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
-from .util.data_util import DARTsortSorting, get_featurization_pipeline
+from .util.data_util import (
+    DARTsortSorting,
+    get_featurization_pipeline,
+    load_h5,
+    get_tpca,
+    load_stored_tsvd,
+    check_recording,
+)
 from .util.drift_util import registered_geometry
 from .util.internal_config import *
 from .util.logging_util import (

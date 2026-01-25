@@ -1,9 +1,12 @@
 from pathlib import Path
+from typing import Any
 import gc
 
 import numpy as np
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
+from scipy.spatial import KDTree
+from scipy.sparse import coo_array
 import torch
 
 from . import TemplateData, realign
@@ -14,6 +17,7 @@ from ..util.internal_config import (
     TemplateMergeConfig,
     TemplateRealignmentConfig,
     WaveformConfig,
+    SubtractionConfig,
     default_template_cfg,
     default_waveform_cfg,
 )
@@ -32,12 +36,15 @@ def estimate_template_library(
     min_template_snr: float = 0.0,
     min_template_ptp: float = 0.0,
     min_template_count: int = 0,
+    max_cc_flag_rate: float = 1.0,
+    cc_flag_entropy_cutoff: float = 0.0,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg: TemplateConfig = default_template_cfg,
     realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
     computation_cfg: ComputationConfig | None = None,
+    detection_cfg: Any | None = None,
     depth_order: bool = False,
     template_npz_path=None,
 ) -> tuple[DARTsortSorting, TemplateData]:
@@ -47,8 +54,7 @@ def estimate_template_library(
         if template_npz_path.exists():
             return sorting, TemplateData.from_npz(template_npz_path)
 
-    assert sorting.labels is not None
-    if (sorting.labels < 0).all():
+    if (sorting.labels is None) or (sorting.labels < 0).all():
         raise ValueError("No labels in sorting input to template postprocessing.")
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -63,8 +69,6 @@ def estimate_template_library(
     )
 
     # filter out low-count/snr units
-    # min_n_spikes=matching_cfg.min_template_count,
-    # min_template_snr=matching_cfg.min_template_snr,
     if templates0 is None and (min_template_count or min_template_snr):
         templates0 = _quick_mean_templates(
             recording=recording,
@@ -73,12 +77,21 @@ def estimate_template_library(
             computation_cfg=computation_cfg,
             motion_est=motion_est,
         )
-    if min_template_count or min_template_snr:
+    if min_template_count or min_template_snr or (max_cc_flag_rate < 1.0):
         assert templates0 is not None
         count_mask = templates0.spike_counts >= min_template_count
         snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
         amp_mask = ptp(templates0.templates).max(1) >= min_template_ptp
         mask = count_mask & snr_mask & amp_mask
+        flag_mask = cc_flag_criterion(
+            sorting,
+            detection_cfg,
+            max_cc_flag_rate,
+            cc_flag_entropy_cutoff,
+            amplitudes_dataset_name=template_cfg.amplitudes_dataset_name,
+        )
+        if flag_mask is not None:
+            mask = mask & flag_mask
         sorting = filter_by_unit_mask(sorting, mask, mask_ids=templates0.unit_ids)
     del templates0
 
@@ -213,9 +226,7 @@ def snr_mask(template_data, min_n_spikes=50, min_template_snr=15.0):
 
 def reorder_by_depth(sorting, template_data):
     assert template_data.registered_geom is not None
-    w = ptp(template_data.templates, dim=1)
-    if template_data.spike_counts_by_channel is not None:
-        w *= np.sqrt(template_data.spike_counts_by_channel)
+    w = template_data.snrs_by_channel()
     w /= w.sum(axis=1, keepdims=True)
     meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
 
@@ -442,3 +453,103 @@ def filter_by_unit_mask(
     sorting.labels[chuck] = -1
 
     return sorting.flatten()
+
+
+def flag_possible_cc_error_spikes(
+    sorting: DARTsortSorting,
+    subtraction_cfg,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    from ..util.py_util import timer
+
+    times = sorting.times_samples
+    channels = sorting.channels
+    amps = getattr(sorting, amplitudes_dataset_name)
+    xy = sorting.geom[channels]  # type: ignore
+    n = len(times)
+
+    # rescale units so that the max allowed temporal and spatial dists are 10
+    times = times / subtraction_cfg.temporal_dedup_radius_samples
+    xy_subtract = xy / subtraction_cfg.subtract_radius
+    kdt_subtract = KDTree(np.c_[times, xy_subtract])
+
+    # get all possible neighbors
+    with timer("a"):
+        sdm = kdt_subtract.sparse_distance_matrix(
+            kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
+        )
+    # this is more an adjacency matrix. 0s will be discarded later.
+    v = np.ones(sdm["i"].shape, dtype=np.float32)
+    coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
+    print(f"{coo=}")
+
+    # remove the exclusions by marking their distance as large
+    if subtraction_cfg.spatial_dedup_radius:
+        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius
+        kdt_dedup = KDTree(np.c_[times, xy_dedup])
+        with timer("b"):
+            sdm_dedup = kdt_dedup.sparse_distance_matrix(
+                kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
+            )
+        del kdt_dedup, xy_dedup
+        v = np.ones(sdm_dedup["i"].shape, dtype=np.float32)
+        coo_dedup = coo_array(
+            (v, (sdm_dedup["i"], sdm_dedup["j"])), shape=(n, n), dtype=v.dtype
+        )
+        print(f"{coo_dedup=}")
+        coo = coo - coo_dedup
+        coo = coo.tocoo()
+        print(f"{coo=}")
+
+        # dedup neighbors are removed
+        coo.sum_duplicates()
+        coo.eliminate_zeros()
+
+    # apply higher amplitude criterion
+    bigger = np.flatnonzero(amps[coo.coords[0]] > amps[coo.coords[1]])
+    coo.data[bigger] = 0.0
+    coo.eliminate_zeros()
+
+    # i am suspicious if i have any neighbors. obviously many spikes do.
+    # it's just that a unit consisting entirely of such spikes is suspicious.
+    flagged = np.zeros(len(times), dtype=bool)
+    ii, jj = coo.coords
+    flagged[ii] = True
+
+    return flagged, ii, jj
+
+
+def cc_flag_criterion(
+    sorting: DARTsortSorting,
+    detection_cfg: Any | None = None,
+    max_cc_flag_rate=1.0,
+    cc_flag_entropy_cutoff=0.0,
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
+) -> np.ndarray | None:
+    if max_cc_flag_rate == 1.0:
+        return None
+    if not isinstance(detection_cfg, SubtractionConfig):
+        # this step applied only at subtraction to clean up nn error units
+        return None
+
+    flagged, ii, jj = flag_possible_cc_error_spikes(
+        sorting=sorting,
+        subtraction_cfg=detection_cfg,
+        amplitudes_dataset_name=amplitudes_dataset_name,
+    )
+    assert sorting.labels is not None
+    li = sorting.labels[ii]
+    lj = sorting.labels[jj]
+
+    rate = np.zeros(sorting.unit_ids.shape)
+    entropy = np.zeros_like(rate)
+    for j, u in enumerate(sorting.unit_ids):
+        inu = np.flatnonzero(sorting.labels == u)
+        rate[j] = flagged[inu].mean()
+        _, friend_count = np.unique(lj[li == u], return_counts=True)
+        friend_p = friend_count / friend_count.sum()
+        entropy[j] = -(np.log(friend_p) * friend_p).sum()
+
+    bad = (rate > max_cc_flag_rate) & (entropy < cc_flag_entropy_cutoff)
+    logger.dartsortdebug(f"CCG peak criterion flagged {bad.sum().item()} units.")
+    return np.logical_not(bad)

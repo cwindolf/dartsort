@@ -535,6 +535,10 @@ class DARTsortSorting:
             return _read_by_chunk(mask, dset, show_progress=False)
 
 
+def load_h5(f: str | Path) -> DARTsortSorting:
+    return DARTsortSorting.from_peeling_hdf5(h5_path=f)
+
+
 def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
     if sorting.parent_h5_path is None:
         return None
