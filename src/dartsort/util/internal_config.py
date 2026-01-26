@@ -446,7 +446,7 @@ class MatchingConfig:
     refractory_radius_frames: int = 10
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
-    max_iter: int = 1000
+    max_iter: int = 100
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True

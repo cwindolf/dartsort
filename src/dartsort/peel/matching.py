@@ -120,7 +120,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.is_upsampling = up_factor > 1
 
         # amplitude scaling properties
-        self.is_scaling = bool(amplitude_scaling_variance)
+        self.is_scaling = amplitude_scaling_variance > 0
         self.amplitude_scaling_variance = amplitude_scaling_variance
         self.inv_lambda = (
             1.0 / amplitude_scaling_variance if self.is_scaling else float("inf")
@@ -528,7 +528,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return fine_peaks
 
     def pick_threshold(self):
-        if self.is_scaling:
+        if self.is_scaling and self.amplitude_scaling_variance < torch.inf:
             # adjust threshold by the scaling prior's constant term
             # nb, everything is x2 so halves are gone.
             scstd = np.sqrt(self.amplitude_scaling_variance)

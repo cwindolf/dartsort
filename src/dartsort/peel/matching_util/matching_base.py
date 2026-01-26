@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Literal, Self, Sequence, cast
 
 import torch
+import torch.nn.functional as F
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording
 from torch import Tensor
@@ -210,7 +211,12 @@ class ChunkTemplateData:
         out: Tensor,
         scalings_out: Tensor | None = None,
     ) -> Tensor:
-        if self.scaling:
+        if self.scaling and self.inv_lambda == 0.0:
+            assert scalings_out is not None
+            return _free_coarse_objective(
+                conv=conv, normsq=self.obj_normsq, out=out, scalings=scalings_out
+            )
+        elif self.scaling:
             assert scalings_out is not None
             return _scaled_coarse_objective(
                 conv=conv,
@@ -548,6 +554,20 @@ def _subtract_precomputed_pconv_scaled(
         if neg:
             batch = batch._neg_view()
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
+
+
+@torch.jit.script
+def _free_coarse_objective(
+    conv: Tensor,
+    normsq: Tensor,
+    out: Tensor,
+    scalings: Tensor,
+) -> Tensor:
+    out.copy_(conv)
+    F.relu(out, inplace=True)
+    torch.divide(out, normsq[:, None], out=scalings)
+    obj = out.mul_(scalings)
+    return obj
 
 
 @torch.jit.script

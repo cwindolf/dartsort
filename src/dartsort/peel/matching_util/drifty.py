@@ -640,7 +640,10 @@ def _upsampling_fine_match(
     conv_up = conv_snips @ interpolator
 
     # compute objective
-    if scaling:
+    if scaling and inv_lambda == 0.0:
+        scalings = conv_up.relu().div_(normsq[template_inds][:, None])
+        obj_up = scalings.mul(conv_up)
+    elif scaling:
         b = conv_up + inv_lambda
         a = normsq[template_inds] + inv_lambda
         scalings = (b / a[:, None]).clamp_(scale_min, scale_max)
