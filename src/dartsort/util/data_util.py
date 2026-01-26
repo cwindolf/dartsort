@@ -1065,9 +1065,11 @@ def fit_reweighting(
     if torch.is_tensor(voltages):
         voltages = voltages.numpy(force=True)
     if log_voltages:
-        sign = voltages / np.abs(voltages)
+        sign = np.sign(voltages)
         voltages = sign * np.log(np.abs(voltages))
+    voltages = np.nan_to_num(voltages)
     sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
+    assert np.isfinite(sigma)
     dens = get_smoothed_density(voltages[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens

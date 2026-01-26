@@ -142,17 +142,44 @@ def visualize_sorting(
                 interval=frame_interval,
             )
 
-    if comp_png is not None and gt_analysis is not None:
-        if overwrite or not comp_png.exists():
+    try:
+        if comp_png is not None and gt_analysis is not None:
+            if overwrite or not comp_png.exists():
+                assert gt_comparison is not None
+                plots = (
+                    gt.full_gt_overview_plots
+                    if gt_comparison_with_distances
+                    else gt.default_gt_overview_plots
+                )
+                fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
+                fig.savefig(comp_png, dpi=dpi)
+                plt.close(fig)
+    except Exception as e:
+        if errors_to_warnings:
+            warnings.warn(str(e))
+        else:
+            raise
+
+    try:
+        if unit_comp_dir is not None and gt_analysis is not None:
             assert gt_comparison is not None
-            plots = (
-                gt.full_gt_overview_plots
-                if gt_comparison_with_distances
-                else gt.default_gt_overview_plots
+            unit_comparison.make_all_unit_comparisons(
+                gt_comparison,
+                unit_comp_dir,
+                channel_show_radius_um=channel_show_radius_um,
+                amplitude_color_cutoff=amplitude_color_cutoff,
+                amplitudes_dataset_name=amplitudes_dataset_name,
+                pca_radius_um=pca_radius_um,
+                dpi=dpi,
+                show_progress=True,
+                overwrite=overwrite,
+                n_jobs=computation_cfg.n_jobs_cpu,
             )
-            fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
-            fig.savefig(comp_png, dpi=dpi)
-            plt.close(fig)
+    except Exception as e:
+        if errors_to_warnings:
+            warnings.warn(str(e))
+        else:
+            raise
 
     if vs_png is not None and gt_vs is not None:
         fig = versus.make_versus_summary(gt_vs)
@@ -172,21 +199,6 @@ def visualize_sorting(
             show_progress=True,
             overwrite=overwrite,
             unit_ids=single_unit_ids,
-            n_jobs=computation_cfg.n_jobs_cpu,
-        )
-
-    if unit_comp_dir is not None and gt_analysis is not None:
-        assert gt_comparison is not None
-        unit_comparison.make_all_unit_comparisons(
-            gt_comparison,
-            unit_comp_dir,
-            channel_show_radius_um=channel_show_radius_um,
-            amplitude_color_cutoff=amplitude_color_cutoff,
-            amplitudes_dataset_name=amplitudes_dataset_name,
-            pca_radius_um=pca_radius_um,
-            dpi=dpi,
-            show_progress=True,
-            overwrite=overwrite,
             n_jobs=computation_cfg.n_jobs_cpu,
         )
 

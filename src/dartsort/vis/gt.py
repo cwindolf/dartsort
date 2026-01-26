@@ -155,10 +155,11 @@ class MetricRegPlot(ComparisonPlot):
             ax.semilogx()
         elif self.log_y:
             ax.semilogy()
-        met = df[self.y].mean()
+        met = df[self.y].mean().item()
         n_inf_y = np.logical_not(finite_y).sum()
         n_inf_x = np.logical_not(finite_x).sum()
-        title = f"mean {self.y}: {met:.3f}"
+        metstr = f"{met:.3f}" if 0 <= met <= 1 else f"{met:6g}"
+        title = f"mean {self.y}: {metstr}"
         if n_inf_y or n_inf_x:
             title = f"{title}, yinf: {n_inf_y}, xinf: {n_inf_x}"
         ax.set_title(title, fontsize="small")
@@ -229,7 +230,8 @@ class TemplateDistanceMatrix(ComparisonPlot):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
         col_order = np.array(agreement.columns)
-        dist = comparison.template_distances[row_order, :][:, col_order]
+        col_order_ix = np.searchsorted(comparison.tested_analysis.sorting.unit_ids, col_order)
+        dist = comparison.template_distances[row_order, :][:, col_order_ix]
 
         ax = panel.subplots()
         log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)

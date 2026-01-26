@@ -704,8 +704,6 @@ def make_all_summaries(
         n_jobs = get_global_computation_config().n_jobs_cpu
     if n_jobs:
         initargs = (cloudpickle.dumps(initargs),)
-    else:
-        initargs = ()
     n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
     with Executor(  # type: ignore
         max_workers=n_jobs,

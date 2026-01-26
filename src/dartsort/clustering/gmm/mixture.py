@@ -3656,9 +3656,10 @@ def initialize_parameters_by_unit(
         log_proportions = torch.zeros((puff_K + 1,), device=counts.device)
         log_proportions = log_proportions.resize_(K)
         tmp = log_proportions.new_empty((K + 1,))
-        tmp[:K] = counts.float()
+        tmp[units] = counts.float()
         tmp[-1] = tmp[:K].mean()
         tmp = F.log_softmax(tmp.log_(), dim=0)
+        tmp = tmp.clamp_(min=TruncatedMixtureModel.LP_MIN)
         noise_log_prop = tmp[-1].clone()
         log_proportions.copy_(tmp[:K])
     else:
