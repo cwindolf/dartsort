@@ -41,7 +41,7 @@ def refractory_poisson_spike_train(
     trough_offset_samples=42,
     spike_length_samples=121,
     sampling_frequency=30000.0,
-    overestimation=1.5,
+    overestimation=2.0,
 ):
     """Sample a refractory Poisson spike train
 

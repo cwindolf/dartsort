@@ -41,6 +41,7 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        whitener: Tensor | None = None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -56,6 +57,7 @@ class MatchingTemplates(BModule):
             computation_cfg=computation_cfg,
             motion_est=motion_est,
             overwrite=overwrite,
+            whitener=whitener,
             dtype=dtype,
         )
 
@@ -68,6 +70,7 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        whitener=None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -99,6 +102,7 @@ class MatchingTemplatesBuilder:
     template_data: TemplateData
     matching_cfg: MatchingConfig
     motion_est: MotionEstimate | None = None
+    whitener: Tensor | None = None
     dtype: torch.dtype = torch.float
 
     def build(
@@ -114,6 +118,7 @@ class MatchingTemplatesBuilder:
             matching_cfg=self.matching_cfg,
             computation_cfg=computation_cfg,
             motion_est=self.motion_est,
+            whitener=self.whitener,
             dtype=self.dtype,
             overwrite=overwrite,
         )
@@ -580,10 +585,12 @@ def _scaled_coarse_objective(
     scale_min: Tensor,
     scale_max: Tensor,
 ) -> Tensor:
+    neg = conv < 0
     b = conv + inv_lambda
     a = normsq[:, None] + inv_lambda
     torch.divide(b, a, out=scalings)
     scalings.clamp_(min=scale_min, max=scale_max)
+    scalings.masked_fill_(neg, 0.0)
     # this is 2 * sc * b - sc**2 * a - inv_lambda
     torch.square(scalings, out=out)
     torch.addcmul(-inv_lambda, -a, out, out=out)

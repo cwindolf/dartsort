@@ -458,6 +458,7 @@ class MatchingConfig:
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
+    whiten: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -628,7 +629,7 @@ class RefinementConfig:
     channels_count_min: int = 1
     signal_rank: int = 5
     feature_rank: int = 8
-    initialize_at_rank_0: bool = True
+    initialize_at_rank_0: bool = False
     cl_alpha: float = 1.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
@@ -1084,6 +1085,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
+        whiten=cfg.whiten_matching,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,

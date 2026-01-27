@@ -21,6 +21,7 @@ from ..util.internal_config import (
     WaveformConfig,
 )
 from ..util.logging_util import get_logger
+from ..util.noise_util import whitener_from_hdf5
 from ..util.waveform_util import make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -216,11 +217,24 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
         assert trough_offset_samples == template_data.trough_offset_samples
 
+        if matching_cfg.whiten:
+            # TODO defer computation of this
+            whitener = whitener_from_hdf5(
+                parent_sorting_hdf5_path,
+                motion_est=motion_est,
+                interp_params=matching_cfg.drift_interp_params,
+                rgeom=template_data.registered_geom,
+            )
+            whitener = torch.tensor(whitener)
+        else:
+            whitener = None
+
         builder = MatchingTemplatesBuilder(
             recording=recording,
             template_data=template_data,
             matching_cfg=matching_cfg,
             motion_est=motion_est,
+            whitener=whitener,
         )
 
         logger.info(

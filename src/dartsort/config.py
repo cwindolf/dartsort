@@ -224,6 +224,7 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_template_min_amplitude: float = 0.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
+    whiten_matching: bool = False
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"
@@ -261,7 +262,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # gaussian mixture high level
     truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
-    initialize_at_rank_0: bool = True
+    initialize_at_rank_0: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 5
     criterion_threshold: float = 0.0
     criterion: Literal[

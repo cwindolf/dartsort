@@ -78,6 +78,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         trough_offset_samples: int,
         unit_ids: Tensor | None = None,
         rgeom: Tensor | None = None,
+        whitener: Tensor | None = None,
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
@@ -98,6 +99,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.upsampling = up_factor > 1
         self.up_method = up_method
         self.interpolating = motion_est is not None
+        self.whitening = whitener is not None
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
@@ -154,6 +156,13 @@ class DriftyMatchingTemplates(MatchingTemplates):
             unit_ids = torch.arange(self.n_units, device=device)
         self.register_buffer("unit_ids", unit_ids)
 
+        self.register_buffer_or_none("whitener", whitener)
+        if self.whitening:
+            assert torch.is_tensor(whitener)
+            pconv_spatial_sing = torch.einsum("nqc,cd->nqd", spatial_sing, whitener.T @ whitener)
+        else:
+            pconv_spatial_sing = spatial_sing
+
         if not self.interpolating:
             # can precompute the full pconv in this case.
             pconv = full_shared_pconv(self.b.temporal_pconv, self.b.spatial_sing)
@@ -181,6 +190,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        whitener: Tensor | None = None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -218,6 +228,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             drift_interp_params=matching_cfg.drift_interp_params,
             interp_neighborhood_radius=matching_cfg.drift_interp_neighborhood_radius,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
+            whitener=whitener,
             device=device,
         )
 

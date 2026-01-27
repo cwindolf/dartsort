@@ -1347,3 +1347,48 @@ def fp_control_threshold_from_h5(
         template_normsqs=fp_res["normsq"],
         max_fp_per_input_spike=max_fp_per_input_spike,
     )
+
+
+def whitener_from_hdf5(
+    hdf5_path,
+    motion_est=None,
+    interp_params: InterpolationParams = default_interpolation_params,
+    device=None,
+    rgeom=None,
+    eps=1e-4,
+):
+    from dartsort.util.drift_util import registered_geometry
+
+    with h5py.File(hdf5_path, "r", locking=False) as h5:
+        geom = cast(h5py.Dataset, h5["geom"])[:]
+    if rgeom is None:
+        rgeom = geom
+        if motion_est is not None:
+            rgeom = registered_geometry(geom, motion_est=motion_est)
+
+    snippets = interpolate_residual_snippets(
+        motion_est,
+        hdf5_path,
+        geom,
+        rgeom,
+        interp_params=interp_params,
+        device=device,
+    )
+
+    x = np.asarray(snippets, dtype=np.float32)
+    x = x.reshape(-1)
+    invalid = np.flatnonzero(np.isnan(x))
+    if invalid.size:
+        rg = np.random.default_rng(0)
+        x[invalid] = rg.normal(size=invalid.size).astype(x.dtype)
+    x = x.reshape(-1, len(rgeom))
+    _, S, Vh = np.linalg.svd(x, full_matrices=False)
+    assert Vh.shape == (len(rgeom), len(rgeom))
+    assert S.shape == (len(rgeom),)
+    std = S / np.sqrt(len(x) - 1.0) + eps
+
+    # using the zca whitener here. maintains space and life is easy because
+    # it's symmetric.
+    whitener = (Vh.T * (std ** -0.5)) @ Vh
+
+    return whitener

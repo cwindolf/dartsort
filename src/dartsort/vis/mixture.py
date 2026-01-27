@@ -15,6 +15,7 @@ from ..clustering.gmm.mixture import (
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
+    NeighborhoodLUT,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
     run_split,
@@ -137,6 +138,22 @@ class MixtureVisData:
         waveforms = self.reconstruct_flat(features)
         features = features.numpy(force=True)
         return inu_train, chans, features, waveforms
+
+    def full_lut_scores(self, show_progress=2, n_candidates=None):
+        lut0 = self.tmm.lut
+        lut1 = torch.ones_like(lut0.lut)
+        unit_ids, neighb_ids = lut1.nonzero(as_tuple=True)
+        lut1[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0]).to(lut1)
+        new_lut = NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut1)
+        self.tmm.update_lut(new_lut, no_parameter_changes=True)
+        # old_nc = self.full_data.n_candidates
+        sc = self.tmm.soft_assign(
+            data=self.full_data,
+            needs_bootstrap=False,
+            full_proposal_view=True,
+            show_progress=show_progress,
+        )
+        return sc
 
 
 class MixtureComponentPlot(BasePlot):
