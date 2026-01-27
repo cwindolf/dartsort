@@ -5,7 +5,9 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from scipy.spatial import KDTree
 from spikeinterface.comparison import GroundTruthComparison
+from tqdm.auto import tqdm
 
 from ..clustering import merge
 from .analysis import DARTsortAnalysis
@@ -130,7 +132,6 @@ class DARTsortGroundTruthComparison:
         # df["gt_collidedness"] = coll
         # df["gt_matched_collidedness"] = matched_coll
         # df["gt_missed_collidedness"] = missed_coll
-        print("hi")
         try:
             df["gt_dt_rms"] = self.unit_matched_misalignment_rms()
         except ValueError:
@@ -284,6 +285,7 @@ class DARTsortGroundTruthComparison:
         u = (c.sum(0, keepdims=True) + c.sum(1, keepdims=True)) - c
         self._greedy_iou = c / u
 
+        self._tested_to_gt = greedy_res["test2gt_spike"]
         self._unsorted_detection = np.logical_not(greedy_res["gt_unmatched"])
         gtns = self.gt_analysis.sorting.n_spikes
         assert self._unsorted_detection.shape == (gtns,)
@@ -342,6 +344,29 @@ class DARTsortGroundTruthComparison:
             fp_times_samples=self.tested_analysis.sorting.times_samples[
                 only_tested_indices
             ],
+        )
+
+    def get_greedy_correspondence_in_si_match(self):
+        tlabels = self.tested_analysis.sorting.labels
+        gt_labels_for_tested = np.full_like(tlabels, -1)
+        to_ms = 1000.0 / self.gt_analysis.recording.sampling_frequency
+        for gtu in tqdm(self.gt_analysis.unit_ids, desc="Spike match"):
+            tu = self.get_match(gtu)
+            if tu < 0:
+                continue
+            in_gt = self.gt_analysis.in_unit(gtu)
+            in_tu = self.tested_analysis.in_unit(tu)
+            gt_times_ms = self.gt_analysis.sorting.times_samples[in_gt] * to_ms
+            tested_times_ms = self.tested_analysis.sorting.times_samples[in_tu] * to_ms
+            gt_kdt = KDTree(gt_times_ms[:, None])
+            dd, ii = gt_kdt.query(
+                tested_times_ms[:, None], distance_upper_bound=self.delta_time
+            )
+            ii = np.atleast_1d(ii)
+            gt_labels_for_tested[in_tu[ii < gt_kdt.n]] = in_gt[ii[ii < gt_kdt.n]]
+
+        return dict(
+            gt_labels_for_tested=gt_labels_for_tested,
         )
 
     def get_raw_waveforms_by_category(

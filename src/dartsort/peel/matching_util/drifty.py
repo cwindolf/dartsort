@@ -156,13 +156,21 @@ class DriftyMatchingTemplates(MatchingTemplates):
             unit_ids = torch.arange(self.n_units, device=device)
         self.register_buffer("unit_ids", unit_ids)
 
-        self.register_buffer_or_none("whitener", whitener)
         if self.whitening:
             assert torch.is_tensor(whitener)
-            pconv_spatial_sing = torch.einsum("nqc,cd->nqd", spatial_sing, whitener.T @ whitener)
+            whitener = whitener.to(spatial_sing.device)
+            conv_spatial_sing = torch.einsum(
+                "nqc,dc->nqd", spatial_sing, whitener.T @ whitener
+            )
+            pconv_spatial_sing = torch.einsum("nqc,dc->nqd", spatial_sing, whitener)
         else:
-            pconv_spatial_sing = spatial_sing
+            pconv_spatial_sing = conv_spatial_sing = None
+        self.register_buffer_or_none("whitener", whitener)
+        self.register_buffer_or_none("pconv_spatial_sing", pconv_spatial_sing)
+        self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
 
+        if self.whitening and not self.interpolating:
+            pconv = full_shared_pconv(self.b.temporal_pconv, self.b.pconv_spatial_sing)
         if not self.interpolating:
             # can precompute the full pconv in this case.
             pconv = full_shared_pconv(self.b.temporal_pconv, self.b.spatial_sing)
@@ -232,11 +240,47 @@ class DriftyMatchingTemplates(MatchingTemplates):
             device=device,
         )
 
-    def spatial_sing_at_time(self, t_s: float) -> Tensor:
-        if not self.interpolating:
-            return self.b.spatial_sing
-        assert self.erp is not None
-        return self.erp.interp_at_time(t_s=t_s, waveforms=self.b.spatial_sing)
+    def spatial_at_time(self, t_s: float) -> tuple[Tensor, ...]:
+        if self.interpolating:
+            assert self.erp is not None
+            spatial_sing = self.erp.interp_at_time(
+                t_s=t_s, waveforms=self.b.spatial_sing
+            )
+        else:
+            spatial_sing = self.b.spatial_sing
+        if self.whitening and self.interpolating:
+            assert self.erp is not None
+            # TODO not this
+            conv_spatial_sing = self.erp.interp_at_time(
+                t_s=t_s, waveforms=self.b.conv_spatial_sing
+            )
+            pconv_spatial_sing = self.erp.interp_at_time(
+                t_s=t_s, waveforms=self.b.pconv_spatial_sing
+            )
+        elif self.whitening:
+            conv_spatial_sing = self.b.conv_spatial_sing
+            pconv_spatial_sing = self.b.pconv_spatial_sing
+        else:
+            conv_spatial_sing = pconv_spatial_sing = spatial_sing
+
+        # normsq for channel selection from original
+        # normsq for conv is whitened
+        normsq_by_chan = spatial_sing.square().sum(dim=1)
+        main_channels = normsq_by_chan.argmax(dim=1)
+        if self.whitening:
+            normsq = pconv_spatial_sing.square().sum(dim=(1, 2))
+        else:
+            normsq = normsq_by_chan.sum(dim=1)
+
+        # padded spatial sing is used for clean wfs only
+        padded_spatial_sing = F.pad(spatial_sing, (0, 1))
+
+        if self.b.pconv is None:
+            pconv = full_shared_pconv(self.b.temporal_pconv, pconv_spatial_sing)
+        else:
+            pconv = self.b.pconv
+
+        return conv_spatial_sing, normsq, main_channels, padded_spatial_sing, pconv
 
     def data_at_time(
         self,
@@ -246,15 +290,9 @@ class DriftyMatchingTemplates(MatchingTemplates):
         scale_min: float,
         scale_max: float,
     ) -> ChunkTemplateData:
-        spatial_sing = self.spatial_sing_at_time(t_s=t_s)
-        normsq_by_chan = spatial_sing.square().sum(dim=1)
-        main_channels = normsq_by_chan.argmax(dim=1)
-        normsq = normsq_by_chan.sum(dim=1)
-        if self.b.pconv is None:
-            pconv = full_shared_pconv(self.b.temporal_pconv, spatial_sing)
-        else:
-            pconv = self.b.pconv
-        padded_spatial_sing = F.pad(spatial_sing, (0, 1))
+        spatial_sing, normsq, main_channels, padded_spatial_sing, pconv = (
+            self.spatial_at_time(t_s=t_s)
+        )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
             unit_ids=self.b.unit_ids,
@@ -337,12 +375,12 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             tempc = tempc[None].broadcast_to(peaks.n_spikes, *tempc.shape)
         if peaks.scalings is None:
             batch_templates = torch.bmm(
-                tempc.mT, self.spatial_sing[peaks.template_inds]
+                tempc.mT, self.padded_spatial_sing[peaks.template_inds]
             )
         else:
             tempc = tempc * peaks.scalings[:, None, None]
             batch_templates = torch.bmm(
-                tempc.mT, self.spatial_sing[peaks.template_inds]
+                tempc.mT, self.padded_spatial_sing[peaks.template_inds]
             )
         n, t, c = batch_templates.shape
         time_ix = peaks.times[:, None] + self.time_ix[None, :]
@@ -351,11 +389,9 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         batch_templates = batch_templates.view(n * t, c)
         time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
         if sign == -1:
-            traces[:, :c].scatter_add_(
-                dim=0, src=batch_templates._neg_view(), index=time_ix
-            )
+            traces.scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
         elif sign == 1:
-            traces[:, :c].scatter_add_(dim=0, src=batch_templates, index=time_ix)
+            traces.scatter_add_(dim=0, src=batch_templates, index=time_ix)
         else:
             assert False
 
@@ -455,7 +491,9 @@ class DriftyChunkTemplateData(ChunkTemplateData):
 
     def reconstruct_up_templates(self):
         return torch.einsum(
-            "nrc,urt->nutc", self.spatial_sing.cpu(), self.up_major_temporal_comps.cpu()
+            "nrc,urt->nutc",
+            self.padded_spatial_sing[..., :-1].cpu(),
+            self.up_major_temporal_comps.cpu(),
         )
 
 
