@@ -255,11 +255,11 @@ class DARTsortGroundTruthComparison:
         ) = merge.cross_match_distance_matrix(
             self.gt_analysis.coarse_template_data,
             self.tested_analysis.coarse_template_data,
-            sym_function=np.maximum,
+            sym_function=np.minimum,
             n_jobs=1,
             svd_compression_rank=10,
             device="cpu",
-            min_spatial_cosine=0.95,
+            min_spatial_cosine=0.7,
             distance_kind=self.distance_kind,
         )
         self._template_distances = dists

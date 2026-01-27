@@ -193,7 +193,7 @@ def greedy_match(
     TODO: Return the gt->test assignments, which are easily computable here,
     if needed.
     """
-    assignments = np.full(len(test_coords), -1)
+    assignments = np.full(len(test_coords), -1, dtype=np.intp)
     gt_unmatched = np.ones(len(gt_coords), dtype=bool)
 
     thresholds = np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx)
