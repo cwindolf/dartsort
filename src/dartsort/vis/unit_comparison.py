@@ -773,6 +773,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ids = ids[1:]  # remove main.
         if self.which == "tested":
             ids = np.concatenate([ids, [-1]])
+
         ta = comparison.tested_analysis
         va = comparison.gt_analysis if self.which == "gt" else ta
         vsts = {u: va.sorting.times_samples[va.in_unit(u)] for u in ids}

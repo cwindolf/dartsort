@@ -1000,6 +1000,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             max_waveforms_fit=cfg.gmm_max_spikes,
             fit_sampling=cfg.fit_sampling,
         ),
+        em_converged_atol=cfg.gmm_em_atol,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
         truncated=cfg.truncated,
