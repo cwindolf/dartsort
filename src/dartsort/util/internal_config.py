@@ -411,7 +411,7 @@ class TemplateRealignmentConfig:
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
     template_cfg: TemplateConfig = TemplateConfig(denoising_method="none")
-    min_pair_corr: float = 0.85
+    min_pair_corr: float = 0.8
 
 
 @cfg_dataclass

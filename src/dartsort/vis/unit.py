@@ -586,6 +586,75 @@ class NeighborCCGPlot(UnitPlot):
         axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
 
 
+class NeighborQDAPlot(UnitPlot):
+    kind = "neighbors"
+    width = 3
+    height = 2
+
+    def __init__(self, n_neighbors=6, log=True):
+        super().__init__()
+        self.n_neighbors = n_neighbors
+        self.log = log
+
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
+        (
+            neighbor_ixs,
+            neighbor_ids,
+            neighbor_dists,
+            neighbor_coarse_templates,
+        ) = sorting_analysis.nearby_coarse_templates(
+            unit_id, n_neighbors=self.n_neighbors + 1
+        )
+        # assert neighbor_ids[0] == unit_id
+        neighbor_ids = neighbor_ids[1:]
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+
+        axes = panel.subplots(
+            nrows=2,
+            sharey="row",
+            sharex=False,
+            squeeze=False,
+            ncols=len(neighbor_ids) // 2,
+        )
+        for ax, nid, color in zip(axes.flat, neighbor_ids, colors):
+            in_pair = np.flatnonzero(
+                np.isin(sorting_analysis.sorting.labels, [unit_id, nid])
+            )
+            cand = sorting_analysis.sorting.candidates[in_pair]
+            ll = sorting_analysis.sorting.log_liks[in_pair]
+
+            my_mask = cand == unit_id
+            nid_mask = cand == nid
+
+            overlap = np.logical_and(nid_mask.any(1), my_mask.any(1))
+            count = overlap.sum()
+            iou = count / in_pair.shape[0]
+            ax.set_title(f"{nid}, SAiou: {iou.item():.2f}", fontsize="small")
+            if not count:
+                continue
+
+            _, my_ix = np.nonzero(my_mask[overlap])
+            my_ll = np.take_along_axis(ll[overlap], my_ix[:, None], axis=1)[:, 0]
+
+            _, their_ix = np.nonzero(nid_mask[overlap])
+            their_ll = np.take_along_axis(ll[overlap], their_ix[:, None], axis=1)[:, 0]
+
+            ax.hist(
+                my_ll - their_ll,
+                bins=32,
+                color=color,
+                histtype="step",
+                log=self.log,
+                density=True,
+            )
+            ax.axvline(0, color="k", lw=0.8)
+            ax.grid()
+
+        axes[0, 0].set_ylabel("density")
+        axes[1, 0].set_ylabel("density")
+        axes[1, axes.shape[1] // 2].set_xlabel("my ll - their ll")
+
+
 # -- main routines
 
 default_plots = (

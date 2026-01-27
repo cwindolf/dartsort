@@ -143,6 +143,7 @@ def tmm_demix(
         stepname = f"tmm00em"
         save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
+    outer_it = -1
     for outer_it in range(refinement_cfg.n_total_iters):
         # split, maybe, then em.
         do_split = bool(outer_it) or not refinement_cfg.skip_first_split
@@ -161,6 +162,13 @@ def tmm_demix(
         tmm.em(train_data, show_progress=prog_level)
         if saving:
             save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
+
+    save_tmm_labels(
+        tmm=tmm,
+        stepname=f"tmm{outer_it + 1}finalkeepnoise",
+        remove_noise=False,
+        **save_kw,  # type: ignore
+    )
 
     # final assignments
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
@@ -3601,6 +3609,7 @@ def save_tmm_labels(
     original_sorting: DARTsortSorting,
     save_step_labels_dir: Path | None,
     save_cfg: DARTsortInternalConfig | None,
+    remove_noise: bool = True,
     full_proposal: bool = True,
 ):
     assert save_step_labels_format is not None
@@ -3609,7 +3618,9 @@ def save_tmm_labels(
         full_proposal_view=full_proposal,
         needs_bootstrap=not full_proposal,
     )
-    sorting = original_sorting.ephemeral_replace(labels=labels_from_scores(full_scores))
+    sorting = original_sorting.ephemeral_replace(
+        labels=labels_from_scores(full_scores, remove_noise=remove_noise)
+    )
     ds_save_intermediate_labels(
         step_name=save_step_labels_format.format(stepname=stepname),
         step_sorting=sorting,
@@ -4246,19 +4257,20 @@ def try_kmeans(
     return resps, x_ret, channels
 
 
-def labels_from_scores_(scores: Scores) -> Tensor:
+def labels_from_scores_(scores: Scores, remove_noise: bool = True) -> Tensor:
     """Pick either top candidate or noise."""
     if pnoid:
         Nc = scores.candidates.shape[1]
         assert (scores.log_liks[:, 0, None] >= scores.log_liks[:, :Nc]).all()
     labels = scores.candidates[:, 0].clone()
-    noise_better = scores.log_liks[:, -1] > scores.log_liks[:, 0]
-    labels.masked_fill_(noise_better, -1)
+    if remove_noise:
+        noise_better = scores.log_liks[:, -1] > scores.log_liks[:, 0]
+        labels.masked_fill_(noise_better, -1)
     return labels
 
 
-def labels_from_scores(scores: Scores) -> np.ndarray:
-    return labels_from_scores_(scores).numpy(force=True)
+def labels_from_scores(scores: Scores, remove_noise: bool = True) -> np.ndarray:
+    return labels_from_scores_(scores, remove_noise=remove_noise).numpy(force=True)
 
 
 def relabel_and_add_scores(

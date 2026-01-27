@@ -192,6 +192,13 @@ def greedy_match(
 
     TODO: Return the gt->test assignments, which are easily computable here,
     if needed.
+
+    Returns
+    -------
+    assignments: np.ndarray
+        GT spike ind for each tested spike
+    gt_unmatched: np.ndarray
+        Whether a GT spike had no tested match
     """
     assignments = np.full(len(test_coords), -1, dtype=np.intp)
     gt_unmatched = np.ones(len(gt_coords), dtype=bool)

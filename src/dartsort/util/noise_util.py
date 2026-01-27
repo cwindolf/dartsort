@@ -1369,13 +1369,15 @@ def whitener_from_hdf5(
     snippets = interpolate_residual_snippets(
         motion_est,
         hdf5_path,
-        geom,
-        rgeom,
+        geom.astype(np.float32),
+        rgeom.astype(np.float32),
         interp_params=interp_params,
         device=device,
     )
+    print(f"{snippets.shape=}")
+    print(f"{len(rgeom)=}")
 
-    x = np.asarray(snippets, dtype=np.float32)
+    x = np.ascontiguousarray(snippets.cpu(), dtype=np.float64)
     x = x.reshape(-1)
     invalid = np.flatnonzero(np.isnan(x))
     if invalid.size:
@@ -1386,9 +1388,17 @@ def whitener_from_hdf5(
     assert Vh.shape == (len(rgeom), len(rgeom))
     assert S.shape == (len(rgeom),)
     std = S / np.sqrt(len(x) - 1.0) + eps
+    logger.dartsortdebug(
+        "Whitening standard deviations: min,mean,max="
+        f"{std.min().item():0.5f},{std.mean().item():0.5f},{std.max().item():0.5f}"
+    )
 
-    # using the zca whitener here. maintains space and life is easy because
-    # it's symmetric.
-    whitener = (Vh.T * (std ** -0.5)) @ Vh
+    wstd = 1.0 / std
+    # life is easier if we try not to change the units
+    # too much in the whitened data domain
+    wstd /= np.median(wstd)
 
-    return whitener
+    # using the zca whitener here. symmetry takes a load off the mind.
+    whitener = (Vh * wstd) @ Vh.T
+
+    return whitener.astype(np.float32)

@@ -288,17 +288,14 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
         stddev = meansq.sub_(means.square()).sqrt_()
         stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
         stderr = stddev.div_(counts.sqrt()[:, None])
-        print("hia maxz")
         dists = spiketorch.maxz_distance(
             means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
     elif refinement_cfg.pc_merge_metric == "normeuc":
-        print("hi normeuc", refinement_cfg.pc_merge_min_iou)
         dists = spiketorch.weighted_normeuc_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
     elif refinement_cfg.pc_merge_metric == "normsup":
-        print("hi normsup", refinement_cfg.pc_merge_min_iou)
         dists = spiketorch.weighted_normsup_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
