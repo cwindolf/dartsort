@@ -111,7 +111,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
 
         if self.interpolating:
             assert rgeom is not None
-            logger.dartsortdebug("Drifty matching will interpolate.")
+            logger.dartsortdebug("Drifty matching will interpolate templates.")
             self.erp = FullProbeInterpolator(
                 geom=geom,
                 rgeom=rgeom,

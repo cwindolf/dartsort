@@ -300,6 +300,7 @@ def kernel_interpolate(
     target_pos,
     params: InterpolationParams = default_interpolation_params,
     precomputed_data=None,
+    solver_map=None,
     allow_destroy=False,
     out=None,
 ):
@@ -352,6 +353,7 @@ def kernel_interpolate(
             kriging_poly_degree=params.kriging_poly_degree,
             smoothing_lambda=params.smoothing_lambda,
             precomputed_data=precomputed_data,
+            solver_map=solver_map,
         )
     else:
         features_out = None
@@ -371,6 +373,7 @@ def kernel_interpolate(
         kriging_poly_degree=params.kriging_poly_degree,
         smoothing_lambda=params.smoothing_lambda,
         precomputed_data=precomputed_data,
+        solver_map=solver_map,
         allow_destroy=allow_destroy,
         out=out,
     )
@@ -396,6 +399,7 @@ def _kernel_interpolate(
     kriging_poly_degree: int,
     smoothing_lambda: float,
     precomputed_data,
+    solver_map=None,
     allow_destroy=False,
     out=None,
 ):
@@ -418,6 +422,7 @@ def _kernel_interpolate(
             kernel,
             features,
             solvers=precomputed_data,
+            solver_map=solver_map,
             sigma=sigma,
             poly_degree=kriging_poly_degree,
         )
@@ -482,7 +487,7 @@ def get_kernel(
     return kernel
 
 
-def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree=-1):
+def kriging_solve(target_pos, kernels, features, solvers, solver_map=None, sigma=1.0, poly_degree=-1):
     n, rank = features.shape[:2]
     n_, n_targ, dim = target_pos.shape
     assert n == n_
@@ -537,14 +542,20 @@ def kriging_solve(target_pos, kernels, features, solvers, sigma=1.0, poly_degree
     # inputs share the same neighborhood-solver per channel.
     solvers = solvers[0]
     c = kernels.shape[2]
-    assert c == solvers.shape[0]
+    if solver_map is None:
+        assert c == solvers.shape[0]
     c_ = kernels.shape[1]
     assert c_ >= c
     assert c_ == solvers.shape[1] == solvers.shape[2]
     out = y.new_zeros((*y.shape[:2], c))
     for cc in range(c):
+        # solver_map brings channels of y (targ chans) to source geom
+        if solver_map is None:
+            sc = cc
+        else:
+            sc = solver_map[cc]
         # just reducing memory use here relative to the einsum below
-        out[:, :, cc] = torch.einsum("ntp,pq,nq->nt", y, solvers[cc], kernels[:, :, cc])
+        out[:, :, cc] = torch.einsum("ntp,pq,nq->nt", y, solvers[sc], kernels[:, :, cc])
     # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
     return out
 
@@ -950,6 +961,13 @@ class FullProbeInterpolator(BModule):
             )
             assert disp.shape[1] == 1
             shift[:, 1].copy_(torch.tensor(disp[:, 0]))
+        
+        # which rgeom channel does each shifted geom channel land on?
+        sgeom = self.b.geom - shift
+        dist = torch.cdist(sgeom, self.b.rgeom)
+        # closest rgeom channel to each shifted channel determines which
+        # precomputed solver is selected
+        solver_map = dist.argmin(1)
 
         # interpolate from static geom to shifted geom
         n = waveforms.shape[0]
@@ -958,6 +976,7 @@ class FullProbeInterpolator(BModule):
             source_pos=self.b.rgeom[None].broadcast_to(n, self.c_src, self.dim),
             target_pos=(self.b.geom - shift).broadcast_to(n, self.c_targ, self.dim),
             precomputed_data=self.b.data,
+            solver_map=solver_map,
         )
 
 

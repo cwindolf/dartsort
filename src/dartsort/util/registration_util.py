@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from spikeinterface.core import Motion
 
 try:
     from dredge import dredge_ap
@@ -110,3 +111,18 @@ def save_motion_est(motion_est, output_directory: Path, filename="motion_est.pkl
         return
     with open(filename, "wb") as jar:
         pickle.dump(motion_est, jar)
+
+
+def dredge_to_si(motion_est) -> Motion:
+    disp = motion_est.displacement
+    t = motion_est.time_bin_centers_s
+    if disp.ndim == 1:
+        # rigid case
+        return Motion(
+            displacement=disp[:, None],
+            temporal_bins_s=t,
+            spatial_bins_um=np.zeros(1),
+        )
+    else:
+        # TODO
+        raise NotImplementedError
