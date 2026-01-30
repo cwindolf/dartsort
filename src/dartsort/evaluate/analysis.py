@@ -568,6 +568,28 @@ class DARTsortAnalysis:
         neighb_coarse_templates = td.templates[neighb_ixs]
         return neighb_ixs, neighb_ids, neighb_dists, neighb_coarse_templates
 
+    def spike_isis(self):
+        isis_ms = np.zeros(len(self.sorting))
+        for uid in self.unit_ids:
+            inu = self.in_unit(uid)
+            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
+            isi = np.diff(t_ms)
+            isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
+            isi = np.minimum(isi[1:], isi[:-1])
+            isis_ms[inu] = isi
+        return isis_ms
+
+    def viol_rate(self, dt_ms=0.8):
+        viol_rates = np.zeros(self.unit_ids.shape)
+        for j, uid in enumerate(self.unit_ids):
+            inu = self.in_unit(uid)
+            if not inu.size > 1:
+                continue
+            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
+            isi = np.diff(t_ms)
+            viol_rates[j] = (np.abs(isi) < dt_ms).mean()
+        return viol_rates
+
 
 @databag
 class WaveformsBag:

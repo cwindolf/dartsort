@@ -283,7 +283,7 @@ class DARTsortGroundTruthComparison:
         c = greedy_res["counts"]
         self._greedy_confusion = c
         u = (c.sum(0, keepdims=True) + c.sum(1, keepdims=True)) - c
-        self._greedy_iou = c / u
+        self._greedy_iou = c / np.maximum(u, 1)
 
         self._tested_to_gt = greedy_res["test2gt_spike"]
         self._unsorted_detection = np.logical_not(greedy_res["gt_unmatched"])
