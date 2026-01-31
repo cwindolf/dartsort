@@ -71,7 +71,7 @@ class Decollider(BaseMultichannelDenoiser):
         emz_res_type="none",
         l4_alpha=0,
         l1_alpha=0,
-        output_l1_alpha=5e-4,
+        output_l1_alpha=1e-5,
         cycle_loss_alpha=1.0,
         separate_cycle_net=False,
         detach_cycle_loss=False,

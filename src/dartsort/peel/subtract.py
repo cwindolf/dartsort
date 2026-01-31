@@ -73,7 +73,7 @@ class SubtractionPeeler(BasePeeler):
         fit_sampling: Literal["random", "amp_reweighted"] = "random",
         fit_max_reweighting=4.0,
         residnorm_decrease_threshold=16.0,
-        decrease_objective: Literal["norm", "normsq"] = "normsq",
+        decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
         growth_tolerance: float | None = 0.1,
         use_singlechan_templates=False,
         n_singlechan_templates=10,
@@ -130,7 +130,7 @@ class SubtractionPeeler(BasePeeler):
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
         self.max_iter = max_iter
-        self.decrease_objective: Literal["norm", "normsq"] = decrease_objective
+        self.decrease_objective: Literal["norm", "normsq", "deconv"] = decrease_objective
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -683,7 +683,7 @@ def subtract_chunk(
     subtract_rel_inds=None,
     spatial_dedup_rel_inds=None,
     residnorm_decrease_threshold=16.0,
-    decrease_objective: Literal["norm", "normsq"] = "norm",
+    decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
@@ -751,15 +751,6 @@ def subtract_chunk(
     # can only subtract spikes with trough time >=trough_offset and <max_trough
     post_trough_samples = spike_length_samples - trough_offset_samples
     max_trough_time = traces.shape[0] - post_trough_samples
-
-    # resid norm decrease logic
-    check_resid = bool(residnorm_decrease_threshold)
-    squaring = decrease_objective == "normsq"
-    rooting = decrease_objective == "norm"
-    if squaring:
-        dec_thresh = residnorm_decrease_threshold**2
-    else:
-        dec_thresh = residnorm_decrease_threshold
 
     if growth_tolerance is not None:
         gtol = traces.abs().add_(growth_tolerance)
@@ -894,35 +885,31 @@ def subtract_chunk(
             already_padded=True,
         )
 
-        if check_resid:
-            residuals = torch.nan_to_num(waveforms)
+        if residnorm_decrease_threshold:
+            original_waveforms = waveforms.nan_to_num()
         else:
-            residuals = None
+            original_waveforms = None
 
         waveforms, features = denoising_pipeline(waveforms, channels=channels)
 
-        if check_resid:
-            assert residuals is not None
-            orig_decobj = residuals.square().sum(dim=(1, 2))
-            residuals = residuals.sub_(waveforms).nan_to_num_()
-            new_decobj = residuals.square_().sum(dim=(1, 2))
-            if rooting:
-                orig_decobj = orig_decobj.sqrt_()
-                new_decobj = new_decobj.sqrt_()
-            reduction = orig_decobj - new_decobj
-            keep = dec_thresh < reduction
-            (keep,) = keep.nonzero(as_tuple=True)
-            if not keep.numel():
+        resid_keep, new_feats = check_residual_decrease(
+            original_waveforms,
+            waveforms,
+            decrease_objective=decrease_objective,
+            threshold=residnorm_decrease_threshold,
+            save_residnorm_decrease=save_residnorm_decrease,
+        )
+        features.update(new_feats)
+        if resid_keep is not None:
+            if not resid_keep.numel():
                 break
-            if keep.numel() < new_decobj.numel():
-                waveforms = waveforms[keep]
-                times_samples = times_samples[keep]
-                channels = channels[keep]
-                voltages = voltages[keep]
-                for k in features:
-                    features[k] = features[k][keep]
-            if save_residnorm_decrease:
-                features["residnorm_decreases"] = reduction[keep]
+            if resid_keep.numel() < len(original_waveforms):
+                waveforms = waveforms[resid_keep]
+                times_samples = times_samples[resid_keep]
+                channels = channels[resid_keep]
+                voltages = voltages[resid_keep]
+                for k, ft in features.items():
+                    features[k] = ft[resid_keep]
 
         # -- subtract in place
         residual = subtract_spikes_(
@@ -1096,3 +1083,41 @@ def denoiser_time_shifts(
     peaks = snips.argmax(dim=1)
     dt = peaks.sub_(denoiser_realignment_shift).to(dtype=torch.int16)
     return dt
+
+
+def check_residual_decrease(
+    orig_wfs,
+    dn_wfs,
+    decrease_objective="deconv",
+    threshold=10.0,
+    save_residnorm_decrease=False,
+):
+    if not threshold:
+        return None, {}
+
+    if decrease_objective == "deconv":
+        dn_wfs = dn_wfs.nan_to_num()
+        conv = (orig_wfs * dn_wfs).sum(dim=(1, 2))
+        norm = dn_wfs.square_().sum(dim=(1, 2))
+        reduction = conv.mul_(2.0).sub_(norm)
+        threshold = threshold ** 2
+    elif decrease_objective in ("norm", "normsq"):
+        orig_decobj = orig_wfs.square().sum(dim=(1, 2))
+        orig_wfs = orig_wfs.sub_(dn_wfs).nan_to_num_()
+        new_decobj = orig_wfs.square_().sum(dim=(1, 2))
+        if decrease_objective == "norm":
+            orig_decobj = orig_decobj.sqrt_()
+            new_decobj = new_decobj.sqrt_()
+        else:
+            threshold = threshold ** 2
+        reduction = orig_decobj - new_decobj
+    else:
+        assert False
+
+    keep = threshold < reduction
+    (keep,) = keep.nonzero(as_tuple=True)
+    if save_residnorm_decrease:
+        features = dict(residnorm_decreases=reduction)
+    else:
+        features = {}
+    return keep, features

@@ -489,14 +489,6 @@ def load_dartsort_step_sortings(
                 st0.ephemeral_replace(labels=np.load(npy)),
             )
 
-        # refinement final
-        npy = sorting_dir / f"{stepstr}_labels.npy"
-        if npy.exists():
-            yield (
-                name_formatter(stepstr),
-                st0.ephemeral_replace(labels=np.load(npy)),
-            )
-
 
 def load_dartsort_step_unit_info_dataframes(
     sorting_dir,

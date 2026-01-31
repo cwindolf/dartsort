@@ -108,7 +108,7 @@ class FeaturizationConfig:
     denoise_only: bool = False
 
     # -- residual snips
-    n_residual_snips: int = 4096
+    n_residual_snips: int = 4 * 4096
     residual_later: bool = False
 
     # -- featurization configuration
@@ -1000,6 +1000,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             max_waveforms_fit=cfg.gmm_max_spikes,
             fit_sampling=cfg.fit_sampling,
         ),
+        em_converged_atol=cfg.gmm_em_atol,
         val_proportion=cfg.gmm_val_proportion,
         channels_strategy=cfg.channels_strategy,
         truncated=cfg.truncated,

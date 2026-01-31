@@ -26,9 +26,7 @@ refinement_strategies: dict[str, "type[Refinement]"] = {}
 
 def get_clusterer(
     clustering_cfg: ClusteringConfig | None = None,
-    refinement_cfg: RefinementConfig | None = None,
-    pre_refinement_cfg: RefinementConfig | None = None,
-    post_refinement_cfg: RefinementConfig | None = None,
+    refinement_cfgs: list[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
     save_cfg=None,
     save_labels_dir=None,
@@ -66,36 +64,29 @@ def get_clusterer(
         **shared_save_kw,
     )
 
-    # handle {pre_,,post_}refinement_cfg name formatting.
-    r_cfgs = [pre_refinement_cfg, refinement_cfg, post_refinement_cfg]
-    if pre_refinement_cfg is not None:
-        prefmt = f"{initial_name}_preref{pre_refinement_cfg.refinement_strategy}"
-    else:
-        prefmt = None
-    if post_refinement_cfg is not None:
-        postfmt = f"postref{post_refinement_cfg.refinement_strategy}"
-        if refine_labels_fmt:
-            postfmt = refine_labels_fmt.format(stepname=postfmt)
-        else:
-            postfmt = f"{initial_name}_{postfmt}"
-    else:
-        postfmt = None
-    r_fmts = [prefmt, refine_labels_fmt, postfmt]
-
-    for r_cfg, r_fmt in zip(r_cfgs, r_fmts):
+    for j, r_cfg in enumerate(refinement_cfgs):
         if r_cfg is None:
             continue
-        if r_cfg.refinement_strategy not in refinement_strategies:
+
+        strat = r_cfg.refinement_strategy
+        if strat not in refinement_strategies:
             raise ValueError(
-                f"Unknown refinement_strategy={r_cfg.refinement_strategy}. "
+                f"Unknown refinement_strategy={strat}. "
                 f"Options are: {', '.join(refinement_strategies.keys())}."
             )
-        R = refinement_strategies[r_cfg.refinement_strategy]
-        rsave = saving_labels and r_cfg.refinement_strategy != "none"
+
+        R = refinement_strategies[strat]
+        rsave = saving_labels and strat != "none"
+        if rsave:
+            stepfmt = f"_{j}_{strat}_{{stepname}}"
+            r_fmt = refine_labels_fmt.format(stepname=stepfmt)
+        else:
+            r_fmt = None
+
         clusterer = R(
             clusterer,
             refinement_cfg=r_cfg,
-            labels_fmt=r_fmt if rsave else None,
+            labels_fmt=r_fmt,
             computation_cfg=computation_cfg,
             **shared_save_kw,
         )
