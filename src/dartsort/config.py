@@ -284,7 +284,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
-    gmm_em_atol: float = 5e-3,
+    gmm_em_atol: float = 5e-3
     gmm_metric: Literal["kl", "cosine", "normeuc"] = "normeuc"
     gmm_search: Literal["topk", "random"] = "topk"
     gmm_n_candidates: int = 3
