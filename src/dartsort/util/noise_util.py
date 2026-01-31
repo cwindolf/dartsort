@@ -1077,6 +1077,7 @@ def interpolate_residual_snippets(
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     interp_params: InterpolationParams = default_interpolation_params,
+    do_tpca=True,
     workers=None,
     device=None,
     batch_size=16,
@@ -1088,41 +1089,51 @@ def interpolate_residual_snippets(
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else None
-
-    tpca = data_util.get_tpca(hdf5_path)
-    if device is not None:
-        tpca = tpca.to(tpca.b.components.dtype)
-    tpca = tpca.to(device=device)
+    device = torch.device(device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
         snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
         times_s = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
-    channel_index = torch.from_numpy(channel_index).to(tpca.components.device)
+    channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    times_s = torch.from_numpy(times_s).to(tpca.components)
+    times_s = torch.from_numpy(times_s)
 
     # tpca project
-    if tpca.temporal_slice is not None:
-        snippets = snippets[:, tpca.temporal_slice]
-    n, t, c = snippets.shape
-    snippets = snippets.permute(0, 2, 1).reshape(n * c, t)
-    snippets = snippets.to(tpca.components)
-    snippets = tpca._transform_in_probe(snippets)
-    snippets = snippets.reshape(n, c, -1).permute(0, 2, 1)
+    if do_tpca:
+        tpca = data_util.get_tpca(hdf5_path)
+        if device is not None:
+            tpca = tpca.to(tpca.b.components.dtype)
+        tpca = tpca.to(device=device)
+        if tpca.temporal_slice is not None:
+            snippets = snippets[:, tpca.temporal_slice]
+        n, t, c = snippets.shape
+        snippets_proj = snippets.new_zeros(n, tpca.rank, c)
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            nb = i1 - i0
+            b = snippets[i0:i1].permute(0, 2, 1).reshape(nb * c, t)
+            b = tpca._transform_in_probe(b.to(tpca.components))
+            snippets_proj[i0:i1] = b.reshape(nb, c, -1).permute(0, 2, 1)
+        snippets = snippets_proj
+    n, dim, c = snippets.shape
     assert snippets.isfinite().all()
 
     # -- interpolate
     # fill in the registered probe with residual snippets using interpolation,
     # with possible missing values
-    source_geom = torch.asarray(geom).to(snippets)
+    source_geom = torch.asarray(geom).to(snippets).to(device)
     source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
 
     # - precompute
     interp_params = interp_params.normalize()
     precomputed_data = interpolation_util.full_probe_precompute(
-        source_geom=source_geom, channel_index=channel_index, params=interp_params
+        source_geom=source_geom.to(device),
+        channel_index=channel_index.to(device),
+        params=interp_params,
     )
+    if precomputed_data is not None:
+        precomputed_data = precomputed_data.to(device)
     if motion_est is None:
         # no drift case, no missing values, but still interpolate to avoid
         # statistical differences between drifty/no drift versions of the sorter
@@ -1133,13 +1144,13 @@ def interpolate_residual_snippets(
         for bs in range(0, n, batch_size):
             sl = slice(bs, min(n, bs + batch_size))
             snippets[sl] = interpolation_util.kernel_interpolate(
-                snippets[sl],
-                source_pos[sl],
-                target_pos[sl],
+                snippets[sl].to(device),
+                source_pos[sl].to(device),
+                target_pos[sl].to(device),
                 params=interp_params,
                 precomputed_data=precomputed_data,
                 allow_destroy=True,
-            )
+            ).to(snippets)
         return snippets
 
     # goal
@@ -1182,17 +1193,17 @@ def interpolate_residual_snippets(
     for bs in range(0, n, batch_size):
         sl = slice(bs, min(n, bs + batch_size))
         snippets[sl] = interpolation_util.kernel_interpolate(
-            snippets[sl],
-            source_pos[sl],
-            target_pos_shifted[sl],
+            snippets[sl].to(device),
+            source_pos[sl].to(device),
+            target_pos_shifted[sl].to(device),
             params=interp_params,
             precomputed_data=precomputed_data,
             allow_destroy=True,
-        )
+        ).to(snippets)
     assert snippets.isfinite().all()
 
     # now, let's embed these into the full registered probe
-    snippets_full = snippets.new_full((n, tpca.rank, len(registered_geom)), torch.nan)
+    snippets_full = snippets.new_full((n, dim, len(registered_geom)), torch.nan)
     targ_inds = targ_inds[:, None].broadcast_to(snippets.shape)
     snippets_full.scatter_(2, targ_inds.to(snippets.device), snippets)
 
@@ -1356,6 +1367,7 @@ def whitener_from_hdf5(
     device=None,
     rgeom=None,
     eps=1e-4,
+    corr_mode=False,
 ):
     from dartsort.util.drift_util import registered_geometry
 
@@ -1373,6 +1385,7 @@ def whitener_from_hdf5(
         rgeom.astype(np.float32),
         interp_params=interp_params,
         device=device,
+        do_tpca=False,
     )
     print(f"{snippets.shape=}")
     print(f"{len(rgeom)=}")
@@ -1384,6 +1397,9 @@ def whitener_from_hdf5(
         rg = np.random.default_rng(0)
         x[invalid] = rg.normal(size=invalid.size).astype(x.dtype)
     x = x.reshape(-1, len(rgeom))
+    if corr_mode:
+        std = np.std(x, axis=0)
+        x /= std
     _, S, Vh = np.linalg.svd(x, full_matrices=False)
     assert Vh.shape == (len(rgeom), len(rgeom))
     assert S.shape == (len(rgeom),)
