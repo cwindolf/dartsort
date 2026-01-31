@@ -29,6 +29,7 @@ from ..util.data_util import (
     DARTsortSorting,
     get_tpca,
     try_get_model_dir,
+    sorting_isis,
 )
 from ..util.drift_util import (
     get_spike_pitch_shifts,
@@ -569,15 +570,7 @@ class DARTsortAnalysis:
         return neighb_ixs, neighb_ids, neighb_dists, neighb_coarse_templates
 
     def spike_isis(self):
-        isis_ms = np.zeros(len(self.sorting))
-        for uid in self.unit_ids:
-            inu = self.in_unit(uid)
-            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
-            isi = np.diff(t_ms)
-            isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
-            isi = np.minimum(isi[1:], isi[:-1])
-            isis_ms[inu] = isi
-        return isis_ms
+        return sorting_isis(self.sorting)
 
     def viol_rate(self, dt_ms=0.8):
         viol_rates = np.zeros(self.unit_ids.shape)

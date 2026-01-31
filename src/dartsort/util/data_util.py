@@ -628,6 +628,19 @@ def get_residual_snips(h5_path) -> np.ndarray:
         return h5["residual"][:]  # type: ignore
 
 
+def sorting_isis(sorting: DARTsortSorting):
+    assert sorting.labels is not None
+    isis_ms = np.zeros(len(sorting))
+    for uid in sorting.unit_ids:
+        inu = np.flatnonzero(sorting.labels == uid)
+        t_ms = sorting.times_seconds[inu] * 1000  # type: ignore
+        isi = np.diff(t_ms)
+        isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
+        isi = np.minimum(isi[1:], isi[:-1])
+        isis_ms[inu] = isi
+    return isis_ms
+
+
 def keep_only_most_recent_spikes(
     sorting,
     n_min_spikes=250,

@@ -118,7 +118,7 @@ class DARTsortGroundTruthComparison:
         assert self.comparison.best_match_12 is not None
         return int(self.comparison.best_match_12[gt_unit])
 
-    def unit_info_dataframe(self, force_distances=False):
+    def unit_info_dataframe(self, force_distances=False, perf_only=False):
         amplitudes = self.gt_analysis.unit_amplitudes()
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
@@ -126,6 +126,8 @@ class DARTsortGroundTruthComparison:
         df = df.astype(float)  # not sure what the problem was...
         df["gt_ptp_amplitude"] = amplitudes
         df["gt_firing_rate"] = firing_rates
+        if perf_only:
+            return df
 
         # coll, matched_coll, missed_coll = self.unit_collidedness()
         # assert coll.shape == matched_coll.shape == missed_coll.shape == df.index.shape
