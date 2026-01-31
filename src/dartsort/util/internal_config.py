@@ -108,7 +108,7 @@ class FeaturizationConfig:
     denoise_only: bool = False
 
     # -- residual snips
-    n_residual_snips: int = 4096
+    n_residual_snips: int = 4 * 4096
     residual_later: bool = False
 
     # -- featurization configuration

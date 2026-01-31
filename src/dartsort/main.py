@@ -49,6 +49,7 @@ from .util.main_util import (
     ds_fast_forward,
     ds_handle_delete_intermediate_features,
     ds_save_features,
+    ds_save_intermediate_labels,
     ds_save_motion_est,
 )
 from .util.peel_util import run_peeler
@@ -214,19 +215,29 @@ def _dartsort_impl(
             return ret
 
         # clustering: initialization and first refinement
+        r_cfgs = [
+            cfg.pre_refinement_cfg,
+            cfg.initial_refinement_cfg,
+            cfg.post_refinement_cfg,
+        ]
         sorting = cluster(
             recording,
             sorting,
             motion_est=motion_est,
-            pre_refinement_cfg=cfg.pre_refinement_cfg,
-            refinement_cfg=cfg.initial_refinement_cfg,
-            post_refinement_cfg=cfg.post_refinement_cfg,
+            refinement_cfgs=r_cfgs,
             clustering_cfg=cfg.clustering_cfg,
             clustering_features_cfg=cfg.clustering_features_cfg,
             _save_cfg=cfg,
             _save_dir=output_dir,
         )
         logger.info(f"First clustering: {sorting}")
+        ds_save_intermediate_labels(
+            step_name="refined0",
+            step_sorting=sorting,
+            output_dir=output_dir,
+            cfg=cfg,
+            work_dir=work_dir,
+        )
 
         # be sure to start matching at step 1
         next_step += 1
@@ -276,19 +287,30 @@ def _dartsort_impl(
         else:
             step_clustering_cfg = step_features_cfg = None
 
+        r_cfgs = [
+            cfg.pre_refinement_cfg,
+            cfg.refinement_cfg,
+            cfg.post_refinement_cfg,
+        ]
+
         sorting = cluster(
             recording,
             sorting,
             motion_est=motion_est,
-            pre_refinement_cfg=cfg.pre_refinement_cfg,
-            refinement_cfg=cfg.refinement_cfg,
-            post_refinement_cfg=cfg.post_refinement_cfg,
+            refinement_cfgs=r_cfgs,
             clustering_cfg=step_clustering_cfg,
             clustering_features_cfg=step_features_cfg,
             _save_cfg=cfg,
             _save_dir=output_dir,
             _save_initial_name=f"recluster{step}",
             _save_refined_name_fmt=f"refined{step}{{stepname}}",
+        )
+        ds_save_intermediate_labels(
+            step_name=f"refined{step}",
+            step_sorting=sorting,
+            output_dir=output_dir,
+            cfg=cfg,
+            work_dir=work_dir,
         )
 
     # finally handle scratch directory and delete intermediate files if requested
@@ -562,9 +584,7 @@ def cluster(
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
     ) = default_clustering_features_cfg,
-    pre_refinement_cfg: RefinementConfig | None = None,
-    refinement_cfg: RefinementConfig | None = None,
-    post_refinement_cfg: RefinementConfig | None = None,
+    refinement_cfgs: list[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
     features: SimpleMatrixFeatures | None = None,
     *,
@@ -583,9 +603,7 @@ def cluster(
     assert features is not None
     clusterer = get_clusterer(
         clustering_cfg=clustering_cfg,
-        pre_refinement_cfg=pre_refinement_cfg,
-        refinement_cfg=refinement_cfg,
-        post_refinement_cfg=post_refinement_cfg,
+        refinement_cfgs=refinement_cfgs,
         computation_cfg=computation_cfg,
         save_cfg=_save_cfg,
         save_labels_dir=_save_dir,
