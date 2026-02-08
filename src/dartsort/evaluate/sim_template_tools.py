@@ -259,7 +259,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             trough_offset_samples=self.trough_offset_samples(),
             time_domain=self.time_domain_ms(),
             time_domain_up=t_up,
-            geom=geom,
+            geom=self.geom3,
             location_kw=self.location_kw,
             singlechan_kw=self.waveform_kw,
             decay_model=decay_model,
@@ -731,7 +731,8 @@ def _get_separated_group(
         geom3=geom3,
         decay_model=decay_model,
     )
-    d = pdist(x.reshape(n, -1))
+    d = pdist(x.reshape(n, -1), metric='sqeuclidean')
+    d = np.sqrt(d / np.prod(x.shape[1:]))
     ii, jj = np.triu_indices(n, k=1)
     mask = np.flatnonzero(d >= threshold)
     ii = ii[mask]

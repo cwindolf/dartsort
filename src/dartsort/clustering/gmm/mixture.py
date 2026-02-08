@@ -2717,7 +2717,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
             skip_full=False,
             skip_single=False,
-            focus_scoring=True,
+            # focus_scoring=True,
             debug=debug,
         )
         return group_res
