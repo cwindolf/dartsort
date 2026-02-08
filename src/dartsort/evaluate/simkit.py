@@ -132,6 +132,7 @@ def generate_simulation(
     assert noise_recording.dtype == np.dtype(recording_dtype)
     assert noise_recording.sampling_frequency == sampling_frequency
     assert noise_recording.get_num_frames() == duration_samples
+
     if just_noise:
         return
 
@@ -337,6 +338,10 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             nt = self.get_num_frames()
             bs = int(self.sampling_frequency * chunk_len_s)
             chunk_starts = range(0, nt, bs)
+            n_residual_snips = min(
+                n_residual_snips,
+                self.segment.get_num_samples() // self.segment.spike_length_samples,
+            )
             residual_snips_per_chunk = divide_randomly(
                 n_residual_snips, len(chunk_starts), self.segment.random_seed
             )
@@ -397,10 +402,14 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 residual = h5.create_dataset(
                     "residual",
                     shape=(n_residual_snips, *self.segment.wf_shape),
+                    maxshape=(n_residual_snips, *self.segment.wf_shape),
                     dtype=f_dt,
                 )
                 residual_times = h5.create_dataset(
-                    "residual_times_seconds", shape=(n_residual_snips,), dtype=f_dt
+                    "residual_times_seconds",
+                    shape=(n_residual_snips,),
+                    maxshape=(n_residual_snips,),
+                    dtype=f_dt,
                 )
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
@@ -431,9 +440,15 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     nrs = s["n_residual_snips"]
                     if not nrs:
                         continue
+                    assert nrs == cast(np.ndarray, s["residual"]).shape[0]
+                    assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
                     residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
                     resid_ix += nrs
+                if resid_ix != n_residual_snips:
+                    residual.resize((resid_ix, *residual.shape[1:]))
+                    residual_times.resize((resid_ix, *residual_times.shape[1:]))
+                assert residual.shape[0] == residual_times.shape[0] == resid_ix
                 assert i1_prev == n
             assert n_injected == n
 
@@ -717,8 +732,10 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         spikes["ptp_amplitudes"] = ptp_vectors.max(axis=1)
         if n_residual_snips:
             rsnips, rtimes = extract_random_snips(
-                self.random_seed,
-                noise_with_margin[self.margin : len(noise_with_margin) - self.margin],
+                rg=self.random_seed,
+                chunk=noise_with_margin[
+                    self.margin : len(noise_with_margin) - self.margin
+                ],
                 n=n_residual_snips,
                 sniplen=self.spike_length_samples,
             )
@@ -726,6 +743,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             rtimes += start_frame
             rtimes = self.sample_index_to_time(rtimes)
             spikes["residual_times"] = rtimes
+            spikes["n_residual_snips"] = rtimes.shape[0]
 
         # extract the background noise which waveforms will be added into
         noise_padded = np.pad(

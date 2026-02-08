@@ -61,6 +61,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
     ns = int(fs)
 
     target = np.zeros((ns, nc), dtype=r_dt)
+    sim = cast(dict, sim)
     st = sim["sorting"]
     target[st.times_samples, st.labels] = st.labels.astype(r_dt) + 1.0
     traces = sim["recording"].get_traces()
@@ -131,6 +132,8 @@ def test_reproducible_and_residual(
     assert np.array_equal(st0.ptp_amplitudes, st1.ptp_amplitudes)
     assert np.array_equal(sim0["unit_info_df"].values, sim1["unit_info_df"].values)
 
+    f = None
+
     tpca_vals = []
     for st in (st0, st1):
         with h5py.File(st.parent_h5_path, "r", locking=False) as h5:
@@ -142,7 +145,7 @@ def test_reproducible_and_residual(
         np.testing.assert_allclose(tpca0, tpca1, atol=0.01)
     else:
         assert np.array_equal(*tpca_vals)
-    del tpca_vals, f
+    del tpca_vals
 
     residuals = []
     for st in (st0, st1):
@@ -152,6 +155,8 @@ def test_reproducible_and_residual(
             residuals.append(f)
     assert np.array_equal(*residuals)
     del residuals
+
+    f = cast(np.ndarray, f)
 
     # check that the residual has the right stats
     if noise_kind == "zero":
@@ -192,6 +197,8 @@ def test_motion(tmp_path, drift_speed, drift_type):
         max_fr_hz=25.0,
         featurization_cfg=FeaturizationConfig(skip=True),
     )
+    assert sim is not None
+    sim = cast(dict, sim)
     if not drift_speed:
         assert sim["motion_est"] is None
         return
@@ -211,8 +218,9 @@ def test_motion(tmp_path, drift_speed, drift_type):
         amplitudes_dataset_name="ptp_amplitudes",
         localizations_dataset_name="localizations",
     )
+    assert me1 is not None
     d1 = me1.displacement.ravel()
-    assert np.array_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)
+    assert np.array_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore
     assert np.isclose(
         np.mean(np.square(np.diff(d0)[1:-1] - np.diff(d1)[1:-1])), 0.0, atol=0.1
     )

@@ -956,16 +956,28 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
 # -- residual
 
 
-def extract_random_snips(rg, chunk, n, sniplen):
+def extract_random_snips(
+    rg: int | np.random.Generator, chunk: np.ndarray, n: int, sniplen: int
+):
+    """Grab n (or as many as can fit) random non-overlapping snips from chunk."""
     rg = np.random.default_rng(rg)
-    if sniplen * n > chunk.shape[0]:
-        warnings.warn("Can't extract this many non-overlapping snips.")
-        times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
-        times.sort()
+
+    # we can extract at most this many snips
+    n = min(n, max(1, chunk.shape[0] // sniplen))
+
+    # how many samples will not be covered
+    empty_len = chunk.shape[0] - sniplen * n
+    assert empty_len >= 0
+
+    # sample points spaced by sniplen + deltaj, where sum of
+    # delta is <= empty_len. use an extra slack diff for the <.
+    if empty_len == 0:
+        delta = np.zeros((n + 1,), dtype=np.int64)
     else:
-        empty_len = chunk.shape[0] - sniplen * n
-        times = rg.choice(empty_len, size=n, replace=False)
-        times += np.arange(n) * sniplen
+        delta = rg.integers(0, empty_len, size=n + 1)
+    delta.sort()
+    delta = np.diff(delta)[:n]
+    times = np.cumsum(delta + sniplen) - sniplen
     tixs = times[:, None] + np.arange(sniplen)
     return chunk[tixs], times
 
