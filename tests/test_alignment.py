@@ -130,7 +130,7 @@ def test_denoiser_alignment(align_sim, align_templates):
             channel_index=ci,
             spike_length_samples=t0.shape[0],
         ),
-        dartsort.transform.Voltage(),
+        dartsort.transform.Voltage(channel_index=ci, trough_offset_samples=trough),
     ]
     featurizer = dartsort.WaveformPipeline(transformers)
     peelers = [

@@ -143,32 +143,33 @@ def tmm_demix(
         stepname = f"tmm00em"
         save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
+    do_split = refinement_cfg.mixture_steps in ("split", "both")
+    do_merge = refinement_cfg.mixture_steps in ("merge", "both")
+
     outer_it = -1
     for outer_it in range(refinement_cfg.n_total_iters):
         # split, maybe, then em.
-        do_split = bool(outer_it) or not refinement_cfg.skip_first_split
-        break_after_split = refinement_cfg.one_split_only
         if do_split:
             run_split(tmm, train_data, val_data, prog_level)
             tmm.em(train_data, show_progress=prog_level)
             if saving:
                 stepname = f"tmm{outer_it}1split"
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
-        if break_after_split:
-            break
 
         # merge, then em.
-        run_merge(tmm, train_data, val_data, prog_level)
-        tmm.em(train_data, show_progress=prog_level)
-        if saving:
-            save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
+        if do_merge:
+            run_merge(tmm, train_data, val_data, prog_level)
+            tmm.em(train_data, show_progress=prog_level)
+            if saving:
+                save_tmm_labels(tmm=tmm, stepname=f"tmm{outer_it}2merge", **save_kw)  # type: ignore
 
-    save_tmm_labels(
-        tmm=tmm,
-        stepname=f"tmm{outer_it + 1}finalkeepnoise",
-        remove_noise=False,
-        **save_kw,  # type: ignore
-    )
+    if saving:
+        save_tmm_labels(
+            tmm=tmm,
+            stepname=f"tmm{outer_it + 1}finalkeepnoise",
+            remove_noise=False,
+            **save_kw,  # type: ignore
+        )
 
     # final assignments
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
@@ -1850,9 +1851,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         seed: int | np.random.Generator,
         refinement_cfg: RefinementConfig,
     ) -> Self:
-        assert refinement_cfg.search_type == "topk"
-        assert refinement_cfg.merge_decision_algorithm == "brute"
-        assert refinement_cfg.split_decision_algorithm == "brute"
         assert refinement_cfg.distance_metric in get_args(ComponentDistanceMetric)
 
         # TODO: remove all unused refinement_cfg parameters
@@ -2421,7 +2419,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
-        debug: bool = False,
+        debug: bool = True,
     ) -> tuple[UnitSplitResult, UnitSplitDebugInfo | None]:
         # get dense train set slice in unit_id
         split_data = train_data.dense_slice_by_unit(
@@ -2677,7 +2675,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         scores: Scores,
         apply_adj_mask: bool = False,
         pair_mask: Tensor | None = None,
-        debug: bool = False,
+        debug: bool = True,
     ) -> GroupMergeResult:
         if group.numel() <= 1:
             return
@@ -2719,7 +2717,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
             skip_full=False,
             skip_single=False,
-            # focus_scoring=True,
+            focus_scoring=True,
             debug=debug,
         )
         return group_res
@@ -3361,7 +3359,7 @@ def get_truncated_datasets(
         sorting.n_units, max(refinement_cfg.merge_group_size, n_candidates)
     )
     max_val_n_candidates = max(val_n_candidates, max_candidates)
-    if refinement_cfg.criterion.startswith("heldout"):
+    if refinement_cfg.hold_out_criterion:
         assert val_ixs is not None
         assert val_neighbs is not None
         val_data = TruncatedSpikeData.initialize_from_labels(

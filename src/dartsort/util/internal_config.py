@@ -599,9 +599,7 @@ class ClusteringConfig:
 
 @cfg_dataclass
 class RefinementConfig:
-    refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
-        "tmm"
-    )
+    refinement_strategy: str = "tmm"
     sampling_cfg: FitSamplingConfig = default_refinement_fit_sampling_cfg
 
     # pcmerge
@@ -617,11 +615,7 @@ class RefinementConfig:
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int | None = None
 
-    # feature params
-    max_avg_units: int = 3
-
     # model params
-    channels_strategy: Literal["count", "all"] = "count"
     neighb_overlap: float = 0.75
     explore_neighb_steps: int = 0
     min_count: int = 25
@@ -634,56 +628,23 @@ class RefinementConfig:
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
-    ppca_inner_em_iter: int = 5
-    distance_metric: Literal[
-        "noise_metric",
-        "kl",
-        "reverse_kl",
-        "symkl",
-        "cosine",
-        "euclidean",
-        "cosinesqrt",
-        "normeuc",
-    ] = "normeuc"
-    search_type: Literal["topk", "random"] = "topk"
+    distance_metric: Literal["cosine", "normeuc"] = "normeuc"
     n_candidates: int = 3
     merge_group_size: int = 5
     n_search: int | None = None
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
-    distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
     split_distance_threshold: float = 1.0
     merge_distance_threshold: float = 1.0
-    criterion_threshold: float | None = 0.0
-    criterion: Literal[
-        "heldout_loglik",
-        "heldout_elbo",
-        "loglik",
-        "elbo",
-        "heldout_ecl",
-        "heldout_ecelbo",
-        "ecl",
-        "ecelbo",
-    ] = "heldout_ecl"
-    refit_before_criteria: bool = False
     criterion_em_iters: int = 3
+    hold_out_criterion: bool = True
     n_em_iters: int = 250
-    em_converged_prop: float = 0.02
-    em_converged_churn: float = 0.01
     em_converged_atol: float = 5e-3
     n_total_iters: int = 1
-    one_split_only: bool = False
-    skip_first_split: bool = False
-    hard_noise: bool = False
-    truncated: bool = True
-    split_decision_algorithm: str = "brute"
-    merge_decision_algorithm: str = "brute"
+    mixture_steps: Literal["neither", "merge", "split", "both"] = "both"
     prior_pseudocount: float = 0.0
-    prior_scales_mean: bool = False
-    laplace_ard: bool = False
     kmeansk: int = 4
-    noise_fp_correction: bool = False
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
 
@@ -753,9 +714,9 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
-default_refinement_cfg = RefinementConfig(skip_first_split=True)
+default_refinement_cfg = RefinementConfig(mixture_steps="merge")
 default_universal_cfg = UniversalMatchingConfig()
-default_initial_refinement_cfg = RefinementConfig(one_split_only=True, n_total_iters=1)
+default_initial_refinement_cfg = RefinementConfig(mixture_steps="split")
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
 
@@ -791,7 +752,6 @@ class DARTsortInternalConfig:
     matching_iterations: int = 1
     recluster_after_first_matching: bool = True
     intermediate_matching_subsampling: float = 1.0
-    overwrite_matching: bool = False
 
     # development / debugging flags
     work_in_tmpdir: bool = False
@@ -890,9 +850,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
-            cumulant_order=cfg.cumulant_order,
-            convexity_radius=cfg.convexity_radius,
-            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
@@ -900,8 +857,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
-            convexity_radius=cfg.convexity_radius,
-            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "match":
         assert cfg.precomputed_templates_npz is not None
@@ -991,8 +946,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         signal_rank=cfg.signal_rank,
         feature_rank=cfg.temporal_pca_rank,
         initialize_at_rank_0=cfg.initialize_at_rank_0,
-        criterion=cfg.criterion,
-        criterion_threshold=cfg.criterion_threshold,
         n_total_iters=cfg.n_refinement_iters,
         n_em_iters=cfg.n_em_iters,
         sampling_cfg=FitSamplingConfig(
@@ -1002,60 +955,24 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         ),
         em_converged_atol=cfg.gmm_em_atol,
         val_proportion=cfg.gmm_val_proportion,
-        channels_strategy=cfg.channels_strategy,
-        truncated=cfg.truncated,
         distance_metric=cfg.gmm_metric,
-        search_type=cfg.gmm_search,
         n_candidates=cfg.gmm_n_candidates,
         n_search=cfg.gmm_n_search,
         merge_distance_threshold=dist_thresh,
-        split_decision_algorithm=cfg.gmm_split_decision_algorithm,
-        merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
-        latent_prior_std=cfg.latent_prior_std,
         initial_basis_shrinkage=cfg.initial_basis_shrinkage,
-        laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
-        glasso_alpha=cfg.glasso_alpha,
-        core_radius=cfg.core_radius,
         interp_params=interp_params,
-        skip_first_split=cfg.later_steps in ("neither", "merge"),
-        one_split_only=cfg.later_steps == "split",
+        mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
-        prior_scales_mean=cfg.prior_scales_mean,
-        noise_fp_correction=cfg.gmm_noise_fp_correction,
         cl_alpha=cfg.gmm_cl_alpha,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
     else:
         irank = cfg.initial_rank
-    if cfg.initial_euclidean_complete_only:
-        assert cfg.initial_rank == 0
-        merge_distance_threshold = cfg.gmm_euclidean_threshold
-        split_decision_algorithm = "complete"
-        merge_decision_algorithm = "complete"
-        distance_metric = "euclidean"
-    elif cfg.initial_cosine_complete_only:
-        assert cfg.initial_rank == 0
-        merge_distance_threshold = cfg.gmm_cosine_threshold
-        split_decision_algorithm = "complete"
-        merge_decision_algorithm = "complete"
-        distance_metric = "cosine"
-    else:
-        merge_distance_threshold = dist_thresh
-        split_decision_algorithm = cfg.gmm_split_decision_algorithm
-        merge_decision_algorithm = cfg.gmm_merge_decision_algorithm
-        distance_metric = cfg.gmm_metric
     initial_refinement_cfg = dataclasses.replace(
-        refinement_cfg,
-        skip_first_split=cfg.initial_steps in ("neither", "merge"),
-        one_split_only=cfg.initial_steps == "split",
-        signal_rank=irank,
-        merge_distance_threshold=merge_distance_threshold,
-        split_decision_algorithm=split_decision_algorithm,
-        merge_decision_algorithm=merge_decision_algorithm,
-        distance_metric=distance_metric,
+        refinement_cfg, mixture_steps=cfg.initial_steps, signal_rank=irank
     )
     if cfg.pre_refinement_merge:
         pre_refinement_cfg = RefinementConfig(
@@ -1124,7 +1041,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
         recluster_after_first_matching=cfg.recluster_after_first_matching,
-        overwrite_matching=cfg.overwrite_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,
         copy_recording_to_tmpdir=cfg.copy_recording_to_tmpdir,
         workdir_copier=cfg.workdir_copier,
