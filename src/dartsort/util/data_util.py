@@ -957,7 +957,10 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
 
 
 def extract_random_snips(
-    rg: int | np.random.Generator, chunk: np.ndarray, n: int, sniplen: int
+    rg: int | np.random.Generator,
+    chunk: np.ndarray | torch.Tensor,
+    n: int,
+    sniplen: int,
 ):
     """Grab n (or as many as can fit) random non-overlapping snips from chunk."""
     rg = np.random.default_rng(rg)

@@ -605,6 +605,7 @@ class NeighborQDAPlot(UnitPlot):
         ) = sorting_analysis.nearby_coarse_templates(
             unit_id, n_neighbors=self.n_neighbors + 1
         )
+        assert sorting_analysis.sorting.labels is not None
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
@@ -620,8 +621,8 @@ class NeighborQDAPlot(UnitPlot):
             in_pair = np.flatnonzero(
                 np.isin(sorting_analysis.sorting.labels, [unit_id, nid])
             )
-            cand = sorting_analysis.sorting.candidates[in_pair]
-            ll = sorting_analysis.sorting.log_liks[in_pair]
+            cand = sorting_analysis.sorting.candidates[in_pair]  # type: ignore
+            ll = sorting_analysis.sorting.log_liks[in_pair]  # type: ignore
 
             my_mask = cand == unit_id
             nid_mask = cand == nid
