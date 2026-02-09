@@ -221,9 +221,7 @@ class InterpolationParams:
         )
 
 
-default_interpolation_params = InterpolationParams(
-    extrap_method="kernel", extrap_kernel="rbf"
-)
+default_interpolation_params = InterpolationParams()
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
