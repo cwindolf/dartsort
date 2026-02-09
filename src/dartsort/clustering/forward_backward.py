@@ -31,7 +31,7 @@ def forward_backward(
     # TODO: this does not allow for overlapping chunks.
     labels_all = np.full_like(times_seconds, -1)
     for ix, sorting in zip(idx_all_chunks, chunk_sortings):
-        if len(ix):
+        if len(ix):  # type: ignore
             assert labels_all[ix].max() < 0  # assert non-overlapping
             labels_all[ix] = sorting.labels[ix]
 
