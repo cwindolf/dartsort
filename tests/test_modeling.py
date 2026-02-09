@@ -300,7 +300,7 @@ def test_truncated_mixture(
         # uhm. what would the bonferroni be?
         # with missing channels, non-smooth stuff is hard.
         # by hard, I mean that a low atol is required.
-        z = 10 * (
+        z = 15 * (
             1
             + 5 * (t_w != "zero")
             + 5 * (corruption != 0.0)

@@ -403,6 +403,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     "residual",
                     shape=(n_residual_snips, *self.segment.wf_shape),
                     maxshape=(n_residual_snips, *self.segment.wf_shape),
+                    chunks=(16, *self.segment.wf_shape),
                     dtype=f_dt,
                 )
                 residual_times = h5.create_dataset(
@@ -739,6 +740,8 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
                 n=n_residual_snips,
                 sniplen=self.spike_length_samples,
             )
+            if torch.is_tensor(rsnips):
+                rsnips = rsnips.numpy(force=True)
             spikes["residual"] = rsnips
             rtimes += start_frame
             rtimes = self.sample_index_to_time(rtimes)
