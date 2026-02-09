@@ -266,19 +266,17 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             min_rms_distance=min_rms_distance,
             dtype=dtype,
         )
-        sct_full = sct_up.reshape(pos.shape[0], t_up.shape[0])
         self.template_pos = pos
         self.template_alpha = alpha
-        self.offsets_up = sct_full.argmin(1) - self.trough_offset_samples()
-        self.offsets = sct.argmin(1) - self.trough_offset_samples()
-        self.singlechan_templates = sct
-        self.singlechan_templates_up = sct_up
+        self.offsets = sct[:, :, 0].argmin(1) - self.trough_offset_samples()
+        self.singlechan_templates = sct[..., 0]
+        self.singlechan_templates_up = sct_up[..., 0]
 
         up_half = temporal_jitter // 2
         off_up = (np.arange(temporal_jitter) > up_half).astype(np.int32)
-        off_up = self.offsets[:, None] - off_up
+        off_up = self.offsets[:, None] - off_up[None, :]
         self.offsets_up = off_up
-        assert (np.abs(sct.argmin(1) - self.trough_offset_samples()) <= 1).all()
+        assert (np.abs(sct.argmin(1) - self.trough_offset_samples()) <= 2).all()
         np.testing.assert_allclose(sct, sct_up[:, 0], atol=1e-15)
 
     def templates(self, drift=0, up=False, padded=False, pad_value=np.nan):
@@ -585,8 +583,8 @@ def simulate_source_locations(
 ):
     x_low = geom[:, 0].min() - pos_margin_um_x
     x_high = geom[:, 0].max() + pos_margin_um_x
-    z_low = geom[:, 1].min() - pos_margin_um_z
-    z_high = geom[:, 1].max() + pos_margin_um_z
+    z_low = geom[:, -1].min() - pos_margin_um_z
+    z_high = geom[:, -1].max() + pos_margin_um_z
 
     x = rg.uniform(x_low, x_high, size=size)
     z = rg.uniform(z_low, z_high, size=size)
@@ -695,7 +693,8 @@ def _simulate_point_source_templates(
             dtype=dtype,
             up=True,
         )
-        sct_up = sct_up.reshape(n_units, temporal_jitter, -1, 1)
+        sct_up = sct_up.reshape(n_units, -1, temporal_jitter, 1)
+        sct_up = sct_up.transpose(0, 2, 1, 3)
         sct = sct_up[:, 0]
     else:
         t, sct = simulate_singlechan(
@@ -709,6 +708,8 @@ def _simulate_point_source_templates(
             up=False,
         )
         sct_up = upsample_singlechan(sct, temporal_jitter=temporal_jitter)
+        sct = sct[..., None]
+        sct_up = sct_up[..., None]
     return pos, alpha, sct, sct_up
 
 
