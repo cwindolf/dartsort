@@ -1024,6 +1024,7 @@ def fit_mixture_for_vis(
     motion_est,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
+    em: bool = True,
     split: bool = False,
 ) -> MixtureVisData:
     # run model to convergence and soft assign train/full sets
@@ -1033,7 +1034,8 @@ def fit_mixture_for_vis(
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
-    mix_data.tmm.em(mix_data.train_data)
+    if em:
+        mix_data.tmm.em(mix_data.train_data)
     if split:
         run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
