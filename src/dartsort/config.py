@@ -87,13 +87,13 @@ class DARTsortUserConfig:
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=15.0,
+        default=10.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
     )
     initial_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=16.0,
+        default=12.0,
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
@@ -224,8 +224,8 @@ class DeveloperConfig(DARTsortUserConfig):
     # interpolation for features
     interp_method: InterpMethod = "kriging"
     interp_kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = "kernel"
-    extrap_kernel: InterpKernel | None = "rbf"
+    extrap_method: InterpMethod | None = None
+    extrap_kernel: InterpKernel | None = None
     kriging_poly_degree: int = 1
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5

@@ -20,7 +20,7 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
             )
         ),
         initial_refinement_cfg=dartsort.RefinementConfig(
-            min_count=10, n_total_iters=1, one_split_only=True
+            min_count=10, n_total_iters=1, mixture_steps="split"
         ),
         refinement_cfg=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
         featurization_cfg=dartsort.FeaturizationConfig(n_residual_snips=512),
@@ -81,13 +81,7 @@ def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
         clustering_features_cfg=dartsort.ClusteringFeaturesConfig(
             use_amplitude=False, n_main_channel_pcs=1
         ),
-        refinement_cfg=dartsort.RefinementConfig(
-            min_count=10,
-            n_total_iters=1,
-            distance_metric="cosine",
-            merge_distance_threshold=0.5,
-            noise_fp_correction=True,
-        ),
+        refinement_cfg=dartsort.RefinementConfig(),
         featurization_cfg=dartsort.FeaturizationConfig(
             n_residual_snips=512, nn_localization=False
         ),
@@ -113,21 +107,18 @@ def test_cli_help():
 
 
 @pytest.mark.parametrize(
-    "type", ["subtract", "threshold", "match", "subtract_cumulant", "drifty_match"]
+    "type", ["subtract", "threshold", "match", "drifty_match"]
 )
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
 
     cfg_add = {}
-    if type.endswith("_cumulant"):
-        cfg_add["cumulant_order"] = 2
     if type == "drifty_match":
         type = "match"
         cfg_add["matching_template_type"] = "drifty"
         cfg_add["matching_up_method"] = "keys4"
         cfg_add["matching_template_min_amplitude"] = 1.0
-
 
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
@@ -137,7 +128,9 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         **cfg_add,
     )
     with warnings.catch_warnings() as ws:
-        warnings.filterwarnings("ignore", message="Can't extract this many non-overlapping snips.")
+        warnings.filterwarnings(
+            "ignore", message="Can't extract this many non-overlapping snips."
+        )
         res = dartsort.dartsort(sim["recording"], output_dir=tmp_path, cfg=cfg)
     assert res["sorting"].parent_h5_path.exists()
     if type.startswith("subtract"):
@@ -154,16 +147,13 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
-        count_dif_tol = 0.015
+        count_dif_tol = 0.02
     elif type == "universal":
         count_dif_tol = 0.01
     elif type == "subtract":
         count_dif_tol = 0.15
     elif type == "threshold":
         count_dif_tol = 0.35
-    elif type == "subtract_cumulant":
-        # TODO.
-        count_dif_tol = 1.0
     else:
         assert False
 

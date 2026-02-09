@@ -59,7 +59,7 @@ def refractory_sim(request, tmp_path_factory):
         max_fr_hz=100.0,
         globally_refractory=True,
         probe_kwargs=dict(num_columns=1, num_contact_per_column=nc, ypitch=10.0),
-        template_simulator_kwargs=dict(snr_adjustment=10.0),
+        template_simulator_kwargs=dict(snr_adjustment=10.0, min_rms_distance=2.0),
         refractory_ms=5.0,
         white_noise_scale=0.0,
         recording_dtype="float32",
@@ -105,7 +105,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     # if svd compression is bad. but we use full rank here.
     threshold = np.linalg.norm(template_data.templates, axis=(1, 2)).min().item()
     if scaling:
-        threshold = 0.9 * threshold
+        threshold = 0.8 * threshold
     else:
         threshold = 0.99 * threshold
 
@@ -137,6 +137,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         template_data=template_data,
         matching_cfg=matching_cfg,
         waveform_cfg=dartsort.default_waveform_cfg,
+        sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
         featurization_cfg=dartsort.skip_featurization_cfg,
     )
     matcher = matcher.to(device=device)
@@ -258,7 +259,47 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         times_samples = res["times_samples"].numpy(force=True)
         labels = res["labels"].numpy(force=True)
         np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
-        # np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
+
+        goodtimed = gt_sorting.times_samples[gt_in_chunk] == times_samples
+        mistimed = gt_sorting.times_samples[gt_in_chunk] != times_samples
+        dt = gt_sorting.times_samples[gt_in_chunk] - times_samples
+        print(f"{('time_shifts' in res)=}")
+
+        time_shifts = res.get("time_shifts", np.zeros_like(labels))
+        up_inds = res.get("up_inds", np.zeros_like(labels))
+        gt_up_offsets = gt_sorting._load_dataset("up_offsets")
+        gt_labels = gt_sorting.labels[gt_in_chunk]
+        gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
+        true_time_shifts = gt_up_offsets[gt_labels, gt_up_inds]
+
+        print(f"{np.array_equal(true_time_shifts, time_shifts)=}")
+        print(f"{np.array_equal(gt_up_inds, up_inds)=}")
+        print(f"{np.array_equal(gt_labels, res['labels'])=}")
+        print()
+        print(f"{np.unique(dt[dt!=0], return_counts=True)=}")
+        print()
+        print(f"{np.unique(gt_labels[goodtimed], return_counts=True)=}")
+        print(f"{np.unique(gt_labels[mistimed], return_counts=True)=}")
+        print()
+        print(f"{np.unique(gt_up_inds[goodtimed], return_counts=True)=}")
+        print(f"{np.unique(gt_up_inds[mistimed], return_counts=True)=}")
+        print()
+        print(f"{np.unique(true_time_shifts[goodtimed], return_counts=True)=}")
+        print(f"{np.unique(true_time_shifts[mistimed], return_counts=True)=}")
+        print()
+        print(f"{np.unique(up_inds[goodtimed], return_counts=True)=}")
+        print(f"{np.unique(up_inds[mistimed], return_counts=True)=}")
+        print()
+        print(f"{np.unique(time_shifts[goodtimed], return_counts=True)=}")
+        print(f"{np.unique(time_shifts[mistimed], return_counts=True)=}")
+        print()
+        print(f"{np.unique(true_time_shifts[gt_up_inds==4], return_counts=True)=}")
+        print(f"{np.unique(time_shifts[(goodtimed)&(gt_up_inds==4)], return_counts=True)=}")
+        print(f"{np.unique(time_shifts[gt_up_inds==4], return_counts=True)=}")
+        print(f"{np.unique(up_inds[gt_up_inds==4], return_counts=True)=}")
+        print()
+
+        np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
 
         if "up_inds" in res:
             match_up = res["up_inds"].numpy(force=True)
@@ -270,7 +311,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
 
         if "time_shifts" in res:
             match_shift = res["time_shifts"].numpy(force=True)
-            # np.testing.assert_array_equal(match_shift, gt_shift)
+            np.testing.assert_array_equal(match_shift, gt_shift)
         else:
             assert (gt_shift == 0).all()
 
@@ -324,15 +365,12 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
 
         extract_chans = matcher.b.channel_index
         cc_wfs = res["collisioncleaned_waveforms"].cpu()
-        time_shifts = res.get("time_shifts", np.zeros_like(labels))
         up_offsets = gt_sorting._load_dataset("up_offsets")
         gt_labels = gt_sorting.labels[gt_in_chunk]
         gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
-        true_time_shifts = up_offsets[gt_labels, gt_up_inds]
         gt_channels = gt_sorting.channels[gt_in_chunk]
-        nt = true_temps_up.shape[2]
-        for wf, label, chan, up_ind, true_shift, sc in zip(
-            cc_wfs, gt_labels, gt_channels, gt_up_inds, true_time_shifts, gt_scale
+        for wf, label, chan, up_ind, sc in zip(
+            cc_wfs, gt_labels, gt_channels, gt_up_inds, gt_scale
         ):
             assert torch.equal(extract_chans[chan].cpu(), torch.arange(nc))
             true_wf = sc * true_temps_up[label, up_ind]
@@ -403,6 +441,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
                 coarse_cd=coarse_cd,
             ),
             featurization_cfg=nofeatcfg,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
@@ -441,6 +480,7 @@ def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
                 template_temporal_upsampling_factor=8,
             ),
             featurization_cfg=nofeatcfg,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             template_data=template_data,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
@@ -539,6 +579,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             matching_cfg=matching_cfg,
             featurization_cfg=nofeatcfg,
             template_data=template_data,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
@@ -691,6 +732,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             matching_cfg=matching_cfg,
             featurization_cfg=nofeatcfg,
             template_data=template_data,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)

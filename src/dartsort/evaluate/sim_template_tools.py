@@ -732,7 +732,7 @@ def _get_separated_group(
         geom3=geom3,
         decay_model=decay_model,
     )
-    d = pdist(x.reshape(n, -1), metric='sqeuclidean')
+    d = pdist(x.reshape(n, -1), metric="sqeuclidean")
     d = np.sqrt(d / np.prod(x.shape[1:]))
     ii, jj = np.triu_indices(n, k=1)
     mask = np.flatnonzero(d >= threshold)

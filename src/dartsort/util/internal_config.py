@@ -269,7 +269,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 16.0
+    residnorm_decrease_threshold: float = 12.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -436,7 +436,7 @@ class MatchingConfig:
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
+    threshold: float | Literal["fp_control"] = 10.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8

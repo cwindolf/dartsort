@@ -457,8 +457,9 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             return peaks
         if not peaks.n_spikes:
             return peaks
+        assert peaks.times is not None
         if self.up_data is not None:
-            scalings, up_inds, time_shifts, objs = _upsampling_fine_match(
+            scalings, up_inds, up_best, objs = _upsampling_fine_match(
                 conv=conv,
                 template_inds=peaks.template_inds,
                 times=peaks.times,
@@ -472,21 +473,22 @@ class DriftyChunkTemplateData(ChunkTemplateData):
                 objective_window=self.up_data.objective_window,
                 up_ix=self.up_data.up_ix,
                 interpolator=self.up_data.interpolator,
-                up_time_shift=self.up_data.up_time_shift,
             )
         else:
             del residual
             raise NotImplementedError
             # scalings, up_inds, time_shifts, objs = _direct_fine_match()
         assert self.scaling == (scalings is not None)
+        subtract_shift = self.up_data.up_time_shift[up_best]
+        extract_shift = self.up_data.up_extract_shift[up_best]
         return MatchingPeaks(
-            times=peaks.times + time_shifts,
+            times=peaks.times + subtract_shift,
             obj_template_inds=peaks.obj_template_inds,
             template_inds=peaks.template_inds,
             up_inds=up_inds,
             scalings=scalings,
             scores=objs,
-            time_shifts=-time_shifts,
+            time_shifts=extract_shift,
         )
 
     def reconstruct_up_templates(self):
@@ -524,8 +526,12 @@ def get_interp_upsampling_indices(
     up_ix = torch.asarray(up_ix, device=device)
 
     # tricky part: at which time should we then subtract the upsampled template?
-    up_time_shift = (up_tt > 0).to(dtype=torch.long)
-    return objective_window, objective_tt, up_tt, up_ix, up_time_shift
+    up_time_shift = (up_tt > 0).long()
+
+    # which is not the same as the featurization window.
+    up_extract_shift = torch.logical_and(up_tt > 0, up_ix > up_half).long().neg()
+
+    return objective_window, objective_tt, up_tt, up_ix, up_time_shift, up_extract_shift
 
 
 @databag
@@ -535,6 +541,7 @@ class UpsamplingData:
     up_tt: Tensor
     up_ix: Tensor
     up_time_shift: Tensor
+    up_extract_shift: Tensor
     interpolator: Tensor
     zpad: int
 
@@ -559,7 +566,7 @@ def get_interp_upsampling_data(
     ixs = get_interp_upsampling_indices(
         up_factor=up_factor, up_radius=up_radius, device=device
     )
-    objective_window, objective_tt, up_tt, up_template_ix, up_time_shift = ixs
+    objective_window, objective_tt, up_tt, up_ix, up_time_shift, up_extract_shift = ixs
     if up_method == "interpolation":
         kernel, zpad = bake_interpolation_1d(objective_tt, up_tt, interp_params)
     elif up_method == "keys3":
@@ -574,8 +581,9 @@ def get_interp_upsampling_data(
         objective_window=objective_window,
         objective_tt=objective_tt,
         up_tt=up_tt,
-        up_ix=up_template_ix,
+        up_ix=up_ix,
         up_time_shift=up_time_shift,
+        up_extract_shift=up_extract_shift,
         interpolator=kernel,
         zpad=zpad,
     )
@@ -676,7 +684,6 @@ def _upsampling_fine_match(
     objective_window: Tensor,
     up_ix: Tensor,
     interpolator: Tensor,
-    up_time_shift: Tensor,
 ) -> tuple[Tensor | None, Tensor, Tensor, Tensor]:
     # extract conv snippets
     conv_snips = conv[
@@ -704,12 +711,11 @@ def _upsampling_fine_match(
     # get best match and figure out what to do
     objs, up_best = obj_up.max(dim=1)
     upsampling_ixs = up_ix[up_best]
-    time_shifts = up_time_shift[up_best]
 
     if scalings is not None:
         scalings = scalings.take_along_dim(dim=1, indices=up_best[:, None])[:, 0]
 
-    return scalings, upsampling_ixs, time_shifts, objs
+    return scalings, upsampling_ixs, up_best, objs
 
 
 # -- Keys' piecewise cubic interpolation impl (order 3 and 4)
