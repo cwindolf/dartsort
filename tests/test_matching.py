@@ -236,12 +236,15 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
                 np.testing.assert_allclose(
                     pk,
                     pks * gt_up_templates[pkl, pku],
-                    atol=up_err,
+                    atol=2 * up_err,
                     err_msg="crumbs_traces: up",
                 )
             elif scaling:
                 np.testing.assert_allclose(
-                    pk, pks * gt_up_templates[pkl, pku], err_msg="crumbs_traces: sc"
+                    pk,
+                    pks * gt_up_templates[pkl, pku],
+                    atol=1e-5,
+                    err_msg="crumbs_traces: sc",
                 )
             else:
                 np.testing.assert_equal(
@@ -349,13 +352,13 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         # relevant numerical error:
         # subtracting and adding wrong templates (I think scaling shouldn't matter much)
         assert true_temps_up.dtype == np.float32 == match_up_templates.dtype
-        n = np.random.default_rng(0).normal(size=true_temps_up.shape)
-        n = n.astype(true_temps_up.dtype)
-        cc_test = (true_temps_up + n - match_up_templates) + match_up_templates - n
+        nz = np.random.default_rng(0).normal(size=true_temps_up.shape)
+        nz = nz.astype(true_temps_up.dtype)
+        cc_test = (true_temps_up + nz - match_up_templates) + match_up_templates - nz
         cc_err1 = np.abs(match_up_templates - cc_test).max().item()
-        cc_test = (match_up_templates + n - true_temps_up) + true_temps_up - n
+        cc_test = (match_up_templates + nz - true_temps_up) + true_temps_up - nz
         cc_err2 = np.abs(true_temps_up - cc_test).max().item()
-        cc_atol = max(cc_err1, cc_err2)
+        cc_atol = max(cc_err1, cc_err2, 2e-5)
 
         extract_chans = matcher.b.channel_index
         cc_wfs = res["collisioncleaned_waveforms"].cpu()

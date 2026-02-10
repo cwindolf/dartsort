@@ -390,7 +390,9 @@ def test_component_initialization(
     subspace_atol = np.abs(emp_cov - true_cov).max() + mean_atol
 
     if not true_mean:
-        np.testing.assert_allclose(mean_, moppca_sim["x"].view(n, -1).mean(0))
+        np.testing.assert_allclose(
+            mean_, moppca_sim["x"].view(n, -1).mean(0).numpy(force=True)
+        )
     np.testing.assert_allclose(mean_, mean, atol=mean_atol)
     np.testing.assert_allclose(subspace_, emp_subspace, atol=mean_atol)
     np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)

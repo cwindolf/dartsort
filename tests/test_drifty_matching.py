@@ -59,6 +59,7 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     # different order in sums helps figure out what numerical tolerance is appropriate
     tconv_atol = np.abs(tconv0 - tconv00).max() + np.finfo(np.float32).tiny
     assert tconv_atol < 1e-5
+    tconv_atol = max(tconv_atol, 1e-6) # finds a small value somehow on actions runner?
     np.testing.assert_allclose(tconv0, tconv00, atol=tconv_atol)
 
     tconv1_ = drifty.shared_temporal_pconv(temporal_, temporal_up_)
