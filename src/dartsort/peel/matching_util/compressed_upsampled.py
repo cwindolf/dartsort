@@ -188,10 +188,12 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
+        whitener: Tensor | None = None,
         overwrite: bool = False,
         dtype: torch.dtype = torch.float,
     ) -> Self:
         assert matching_cfg.up_method == "direct"
+        assert whitener is None
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
@@ -530,7 +532,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
             )
             norms = self.normsq[template_inds]
             objs = convs.new_full(superres_ix.shape, -torch.inf)
-            objs[dup_ix, column_ix] = torch.add(norms._neg_view(), convs, alpha=2.0)
+            objs[dup_ix, column_ix] = torch.add(norms.neg(), convs, alpha=2.0)
             objs, best_column_ix = objs.max(dim=1)
             row_ix = torch.arange(best_column_ix.numel(), device=best_column_ix.device)
             template_inds = superres_ix[row_ix, best_column_ix]

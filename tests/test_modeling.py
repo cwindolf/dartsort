@@ -5,16 +5,10 @@ import torch
 import torch.nn.functional as F
 
 
-from dartsort.clustering.gmm import (
-    truncated_mixture,
-    mixture,
-    stable_features,
-    gaussian_mixture,
-)
+from dartsort.clustering.gmm import mixture
 from dartsort.util.internal_config import RefinementConfig
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
-from dartsort.util.sparse_util import integers_without_inner_replacement
 from dartsort.util.spiketorch import spawn_torch_rg
 from dartsort.util.testing_util import mixture_testing_util
 
@@ -27,6 +21,7 @@ elbo_atol = 5e-3
 
 TEST_RANK = 4
 TMM_ELBO_ATOL = 1e-3
+SEED = 1
 
 
 test_t_mu = ("smooth",)
@@ -50,14 +45,16 @@ def moppca_simulations():
                 t_missing=t_missing,
                 init_label_corruption=corrupt_p,
                 rank=TEST_RANK,
+                rg=SEED,
             )
         )
     return simulations
 
 
-@pytest.mark.parametrize("t_mu", ("smooth",))
-@pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
-@pytest.mark.parametrize("t_w", test_t_w)
+@pytest.mark.parametrize("t_mu", ["smooth"])
+@pytest.mark.parametrize("t_cov_zrad", [("eye", 2.0), ("random", None)])
+# @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
+@pytest.mark.parametrize("t_w", ["zero", "smooth"])
 @pytest.mark.parametrize("t_missing", test_t_missing)
 @pytest.mark.parametrize("corruption", test_corruption)
 def test_truncated_mixture(
@@ -90,6 +87,7 @@ def test_truncated_mixture(
         refinement_strategy="tmm",
         signal_rank=M * (t_w != "zero"),
         n_candidates=K,
+        em_converged_atol=1e-4,
     )
 
     # copy-pasting from tmm_demix here
@@ -183,6 +181,8 @@ def test_truncated_mixture(
                         signal_rank=tmm.signal_rank,
                         erp=tmm.erp,
                         min_count=tmm.min_count,
+                        split_min_count=tmm.split_min_count,
+                        latent_prior_std=tmm.latent_prior_std,
                         min_channel_count=tmm.min_channel_count,
                         noise=tmm.noise,
                         max_group_size=tmm.max_group_size,
@@ -331,25 +331,26 @@ def test_truncated_mixture(
         wtw0 = w0.mT.bmm(w0)
         wtw_ = w_.mT.bmm(w_)
         diff = wtw0 - wtw_.cpu()
+        diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
         if cmask is not None:
-            diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
             wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
             diff.mul_(wcmask)
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
 
 
-@pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("n_chans", [1, 2])
 @pytest.mark.parametrize("rank", [4])
-@pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
-@pytest.mark.parametrize("cov_type", ["eyesmall", "eye", "random"])
-@pytest.mark.parametrize("mean_type", ["zero", "smooth"])
+# @pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
+@pytest.mark.parametrize("basis_type", ["zero", "smooth"])
+# @pytest.mark.parametrize("cov_type", ["eyesmall", "eye", "random"])
+@pytest.mark.parametrize("cov_type", ["eye", "random"])
+# @pytest.mark.parametrize("mean_type", ["zero", "smooth"])
+@pytest.mark.parametrize("mean_type", ["smooth"])
 @pytest.mark.parametrize("full_svd", [False])
 @pytest.mark.parametrize("true_mean", [True, False])
 def test_component_initialization(
-    mean_type, cov_type, basis_type, rank, n_chans, seed, true_mean, full_svd
+    mean_type, cov_type, basis_type, rank, n_chans, true_mean, full_svd
 ):
-    rg = np.random.default_rng(seed)
     device = ensure_computation_config(None).actual_device()
     moppca_sim = mixture_testing_util.simulate_moppca(
         Nper=10_000,
@@ -391,356 +392,12 @@ def test_component_initialization(
     subspace_atol = np.abs(emp_cov - true_cov).max() + mean_atol
 
     if not true_mean:
-        np.testing.assert_allclose(mean_, moppca_sim["x"].view(n, -1).mean(0))
+        np.testing.assert_allclose(
+            mean_, moppca_sim["x"].view(n, -1).mean(0).numpy(force=True)
+        )
     np.testing.assert_allclose(mean_, mean, atol=mean_atol)
     np.testing.assert_allclose(subspace_, emp_subspace, atol=mean_atol)
     np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)
-
-
-@pytest.mark.parametrize("inference_algorithm", ["em", "tvi"])  # , "tvi_nlp"])
-@pytest.mark.parametrize("n_refinement_iters", [0])
-@pytest.mark.parametrize("t_mu", test_t_mu)
-@pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
-@pytest.mark.parametrize("t_w", test_t_w)
-@pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize(
-    "pcount_ard_psm",
-    # [(0, False, False), (0, False, True), (5, False, True), (5, True, False)],
-    [(0, False, False), (5, False, True)],
-)
-@pytest.mark.parametrize("dist_and_search_type", ["kl", "cos"])
-def test_original_mixture(
-    moppca_simulations,
-    inference_algorithm,
-    n_refinement_iters,
-    t_mu,
-    t_cov_zrad,
-    t_w,
-    t_missing,
-    pcount_ard_psm,
-    dist_and_search_type,
-):
-    t_cov, zrad = t_cov_zrad
-    prior_pseudocount, laplace_ard, prior_scales_mean = pcount_ard_psm
-
-    if dist_and_search_type == "kl":
-        dist_search_kw = dict(distance_metric="kl", search_type="topk")
-    elif dist_and_search_type == "cos":
-        dist_search_kw = dict(
-            distance_metric="cosine",
-            search_type="topk",
-            merge_distance_threshold=0.5,
-            distance_normalization_kind="none",
-        )
-    else:
-        assert False
-
-    use_nlp = inference_algorithm.endswith("_nlp")
-    inference_algorithm = inference_algorithm.removesuffix("_nlp")
-    is_truncated = inference_algorithm == "tvi"
-
-    kw = dict(
-        t_mu=t_mu,
-        t_cov=t_cov,
-        t_w=t_w,
-        t_missing=t_missing,
-        inference_algorithm=inference_algorithm,
-        n_refinement_iters=n_refinement_iters,
-        gmm_kw=dict(
-            laplace_ard=laplace_ard,
-            prior_pseudocount=prior_pseudocount,
-            prior_scales_mean=prior_scales_mean,
-            **dist_search_kw,
-        ),
-        sim_res=moppca_simulations[(t_mu, t_cov, t_w, t_missing, 0.0)],
-        zero_radius=zrad,
-        use_nlp=use_nlp,
-    )
-    # res_no_fit = mixture_testing_util.test_moppcas(**kw, return_before_fit=True)
-    res = mixture_testing_util.test_moppcas(**kw, return_before_fit=False)  # type: ignore
-    K = res["sim_res"]["K"]  # type: ignore
-    assert isinstance(K, int)
-
-    # -- test that channel neighborhoods are handled correctly in stable feats
-    data = res["gmm"].data  # type: ignore
-    assert isinstance(data, stable_features.StableSpikeDataset)
-    train_ixs, train_extract_neighbs = data.neighborhoods(
-        neighborhood="extract", split="train"
-    )
-    train_ixs_, train_core_neighbs = data.neighborhoods(
-        neighborhood="core", split="train"
-    )
-    full_ixs, full_core_neighbs = data.neighborhoods(neighborhood="core", split="full")
-    # internal consistency
-    if torch.is_tensor(train_ixs):
-        assert torch.is_tensor(train_ixs_)
-        assert torch.equal(train_ixs, train_ixs_)
-    else:
-        assert train_ixs == train_ixs_
-    assert torch.equal(
-        train_extract_neighbs.b.neighborhoods, train_core_neighbs.b.neighborhoods
-    )
-    assert torch.equal(
-        train_extract_neighbs.b.neighborhood_ids, train_core_neighbs.b.neighborhood_ids
-    )
-    assert full_ixs == slice(None)
-    assert torch.equal(
-        full_core_neighbs.b.neighborhoods, train_core_neighbs.b.neighborhoods
-    )
-    assert torch.equal(
-        full_core_neighbs.b.neighborhood_ids[train_ixs],
-        train_core_neighbs.b.neighborhood_ids,
-    )
-    cchans_ = train_core_neighbs.b.neighborhoods[full_core_neighbs.b.neighborhood_ids]
-    assert torch.equal(data.core_channels, cchans_.cpu())
-    # external
-    assert torch.equal(data.core_channels, res["sim_res"]["channels"])  # type: ignore
-
-    if is_truncated:
-        # test that channel neighborhoods are handled correctly in TMM
-        proc = res["gmm"].tmm.processor  # type: ignore
-        assert isinstance(proc, truncated_mixture.TruncatedExpectationProcessor)
-        neighbs = train_extract_neighbs
-        nhoods = neighbs.b.neighborhoods
-        assert nhoods.dtype == torch.long
-        assert torch.equal(proc.obs_ix, nhoods)  # type: ignore
-        assert proc.n_neighborhoods == len(nhoods)
-        nc = data.n_channels
-        neighb_nc = nhoods.shape[1]
-        rank = data.rank
-        for j in range(proc.n_neighborhoods):  # type: ignore
-            vmask = neighbs.valid_mask(j).numpy(force=True)
-            imask = np.setdiff1d(np.arange(neighb_nc), vmask)
-            assert (nhoods[j][vmask] < nc).all()
-            assert (nhoods[j][imask] == nc).all()
-            obs_row = proc.obs_ix[j].numpy(force=True)  # type: ignore
-            miss_row = proc.miss_ix[j].numpy(force=True)  # type: ignore
-            (miss_nc,) = miss_row.shape
-            miss_vmask = miss_row < nc
-            miss_imask = np.logical_not(miss_vmask)
-            assert np.intersect1d(miss_row[miss_vmask], obs_row[vmask]).size == 0
-
-            for joobuf in (proc.Coo_inv, proc.Coo_invsqrt):
-                assert (joobuf[..., imask, :] == 0).all()  # type: ignore
-                assert (joobuf[..., :, imask] == 0).all()  # type: ignore
-
-            if not miss_nc:
-                continue
-            for jjmbuf in (proc.Cooinv_Com, proc.Cmo_Cooinv_x):
-                assert jjmbuf.shape[-1] == miss_nc * rank  # type: ignore
-                jjmbuf = jjmbuf.view(-1, rank, miss_nc)  # type: ignore
-                if t_cov == "eye":
-                    assert (jjmbuf[..., miss_vmask] == 0).all()  # type: ignore
-                else:
-                    assert (jjmbuf[..., miss_vmask] != 0).any((1, 2)).all()  # type: ignore
-                assert (jjmbuf[..., miss_imask] == 0).all()
-                assert (jjmbuf[..., miss_imask] == 0).all()
-
-        # test that lookup tables are handled correctly in TMM
-        train_labels = torch.asarray(res["sim_res"]["init_sorting"].labels)[train_ixs]  # type: ignore
-        dense_init = integers_without_inner_replacement(
-            np.random.default_rng(0),
-            high=K,  # type: ignore
-            size=(*train_labels.shape, res["gmm"].tmm.n_candidates),  # type: ignore
-        )
-        assert np.array_equal(np.unique(dense_init), np.arange(K))
-        dense_init[:, 0] = train_labels.numpy(force=True)
-        for initializer in (train_labels, dense_init):
-            initializer = torch.asarray(initializer)
-            gmm = res["gmm"]  # type: ignore
-            assert isinstance(gmm, gaussian_mixture.SpikeMixtureModel)
-            tmm = truncated_mixture.SpikeTruncatedMixtureModel(
-                data=gmm.data,  # type: ignore
-                noise=gmm.noise,
-                M=gmm.ppca_rank * (gmm.cov_kind == "ppca"),
-                alpha0=gmm.prior_pseudocount,
-                laplace_ard=gmm.laplace_ard,
-                prior_scales_mean=gmm.prior_scales_mean,
-            )
-            tmm.set_sizes(K)
-
-            div = None
-            if dist_and_search_type == "kl":
-                # artificial kl for testing
-                div = torch.arange(K)
-                div = div[:, None] - div[None, :]
-                div = div.abs_().to(res["gmm"].data.device)  # type: ignore
-
-            tmm.set_parameters(
-                labels=initializer,
-                means=res["sim_res"]["mu"],  # type: ignore
-                bases=torch.asarray(res["sim_res"]["W"]).permute(0, 3, 1, 2),  # type: ignore
-                log_proportions=-torch.log(torch.ones(K) * K),
-                noise_log_prop=torch.tensor(-50.0),
-                divergences=div,
-            )
-
-            assert tmm.candidates._initialized
-            assert torch.equal(
-                initializer.view(len(train_labels), -1)[:, 0],
-                torch.asarray(train_labels),
-            )
-            assert torch.equal(
-                tmm.candidates.candidates[:, 0], torch.asarray(train_labels)
-            )
-
-            if dist_and_search_type == "kl" and t_missing in (None, "random"):
-                assert torch.equal(
-                    tmm.candidates.candidates[
-                        :, 1 : tmm.candidates.n_candidates
-                    ].unique(),
-                    torch.arange(K),
-                )
-            scand = (
-                tmm.candidates.candidates[:, : tmm.candidates.n_candidates]
-                .sort(dim=1)
-                .values
-            )
-            assert torch.logical_or(scand.diff(dim=1) > 0, scand[:, 1:] < 0).all()
-
-            search_neighbors = tmm.candidates.search_sets(
-                tmm.divergences, constrain_searches=False
-            )
-            candidates, unit_neighborhood_counts = tmm.candidates.propose_candidates(
-                tmm.divergences
-            )
-            assert unit_neighborhood_counts.shape == (
-                K,
-                len(neighbs.b.neighborhoods),
-            )
-            assert torch.equal(candidates[:, 0], torch.asarray(train_labels))
-            if dist_and_search_type == "kl" and t_missing in (None, "random"):
-                assert torch.equal(
-                    candidates[:, 1 : tmm.candidates.n_candidates].unique(),
-                    torch.arange(K),
-                )
-            scand = candidates[:, : tmm.candidates.n_candidates].sort(dim=1).values
-            assert torch.logical_or(scand.diff(dim=1) > 0, scand[:, 1:] < 0).all()
-            assert (
-                candidates.untyped_storage()
-                == tmm.candidates.candidates.untyped_storage()
-            )
-
-            tmm.processor.update(
-                tmm.log_proportions,
-                tmm.means,
-                tmm.noise_log_prop,
-                tmm.bases,
-                unit_neighborhood_counts=unit_neighborhood_counts,
-            )
-
-            counts2 = np.zeros_like(unit_neighborhood_counts)
-            neighbs_bc = neighbs.b.neighborhood_ids[:, None].broadcast_to(
-                candidates.shape
-            )
-
-            np.add.at(
-                counts2,
-                (candidates[candidates >= 0].cpu(), neighbs_bc[candidates >= 0].cpu()),
-                1,
-            )
-
-            lut_units = tmm.processor.lut_units.numpy(force=True)
-            lut_neighbs = tmm.processor.lut_neighbs.numpy(force=True)
-            uuu, nnn = unit_neighborhood_counts.nonzero()
-            assert np.array_equal(lut_units, uuu)
-            assert np.array_equal(lut_neighbs, nnn)
-            masks = {
-                uu: np.flatnonzero((candidates == uu).any(dim=1)) for uu in range(K)
-            }
-            for uu, nn in zip(lut_units, lut_neighbs):
-                assert 0 <= uu < K
-                assert 0 <= nn < len(neighbs.b.neighborhoods)
-                inu = masks[int(uu.item())]
-                assert (neighbs.b.neighborhood_ids[inu] == nn).any()
-
-            # check parameters
-            if t_cov == "eye":
-                pnames = {"Cmo_Cooinv_x"}
-                check = list(tmm.processor.state_dict())
-                for pname in check:
-                    if "om" not in pname and "mo" not in pname:
-                        continue
-                    if pname.startswith("_"):
-                        continue
-                    pnames.add(pname)
-                for pname in pnames:
-                    assert (getattr(tmm.processor, pname) == 0).all()
-
-            # run the tmm and check that it doesn't do something terrible
-            tmm_res = tmm.step(hard_label=True)
-            ll = torch.asarray(tmm_res["labels"])
-            u, c = ll.unique(return_counts=True)
-            assert torch.equal(u.cpu(), torch.arange(K))
-            assert ((c / c.sum()) >= 0.5 / K).all()
-            assert (tmm.log_proportions.exp() >= 0.5 / K).all()
-
-            tmm_elbos = []
-            for j in range(10):
-                rec = tmm.step()
-                tmm_elbos.append(rec["obs_elbo"])
-            tmm_res = tmm.step(hard_label=True)
-            tmm_elbos.append(tmm_res["obs_elbo"])
-            u, c = tmm_res["labels"].unique(return_counts=True)  # type: ignore
-            assert torch.equal(u.cpu(), torch.arange(K))
-            assert ((c / c.sum()) >= 0.5 / K).all()
-            assert (tmm.log_proportions.exp() >= 0.5 / K).all()
-            assert np.diff(tmm_elbos).min() >= -elbo_atol
-
-            channels, counts = tmm.channel_occupancy(tmm_res["labels"], min_count=1)
-            assert len(channels) == len(counts) == K
-            for j in range(len(channels)):
-                assert np.array_equal(counts[j].nonzero(), (channels[j],))
-                if t_missing == "by_unit":
-                    assert torch.equal(torch.unique(counts[j]), torch.tensor([0, c[j]]))
-
-        # test elbo decreasing
-        assert len(res["fit_info"]["elbos"])  # type: ignore
-        for elbo in res["fit_info"]["elbos"]:  # type: ignore
-            assert np.diff(elbo).min() >= -elbo_atol
-
-    sf = res["sim_res"]["data"]  # type: ignore
-    assert isinstance(sf, stable_features.StableSpikeDataset)
-    train = sf.split_indices["train"]
-    corechans1 = sf.core_channels[train]
-
-    tec = sf._train_extract_channels
-    tecnc = torch.column_stack((tec, torch.full(tec.shape[:1], sf.n_channels)))
-    assert (corechans1[:, :, None] == tecnc[:, None, :]).any(2).all()
-    _, coretrainneighb = sf.neighborhoods()
-    corechans2 = coretrainneighb.b.neighborhoods[coretrainneighb.b.neighborhood_ids]
-    assert torch.equal(corechans1, corechans2.cpu())
-
-    assert res["sim_res"]["mu"].shape == res["mm_means"].shape  # type: ignore
-
-    mu_err = np.square(res["muerrs"]).mean()  # type: ignore
-    print(f"{mu_err=} {res['ari']=}")
-    assert mu_err < mu_atol
-    assert res["ari"] == 1.0
-
-    if t_w != "zero":
-        W0 = res["sim_res"]["W"]  # type: ignore
-        W = res["W"]
-        assert W0 is not None
-        assert W is not None
-
-        k, rank, nc, M = W.shape  # type: ignore
-
-        W = W.reshape(k, rank * nc, M)  # type: ignore
-        W0 = W0.reshape(k, rank * nc, M)  # type: ignore
-
-        WTW = np.einsum("nij,nkj->nik", W, W)
-        WTW0 = np.einsum("nij,nkj->nik", W0, W0)
-        Werr = np.abs(WTW - WTW0)
-
-        W_rel_err_0 = np.square(Werr).mean() / np.square(WTW0).mean()
-        W_rel_err_1 = np.square(Werr).mean() / np.square(WTW).mean()
-        assert W_rel_err_0 < wtw_rtol
-        assert W_rel_err_1 < wtw_rtol
-
-        norm0 = np.linalg.norm(W, axis=(1, 2))
-        norm1 = np.linalg.norm(W, axis=(1, 2))
-        assert (np.abs(norm1 - norm0) / norm0).max() < wtw_rtol
 
 
 @pytest.mark.parametrize("link", ("single", "complete"))

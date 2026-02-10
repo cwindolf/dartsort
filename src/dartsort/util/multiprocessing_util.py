@@ -10,7 +10,7 @@ from . import job_util
 have_cloudpickle = False
 cloudpickle = None
 try:
-    import cloudpickle
+    import cloudpickle  # type: ignore[reportMissingImports]
 
     have_cloudpickle = True
 except ImportError:
@@ -154,7 +154,10 @@ def get_pool(
     multi_gpu=False,
 ):
     if n_jobs == -1:
-        n_jobs = os.process_cpu_count()
+        try:
+            n_jobs = os.process_cpu_count()  # type: ignore
+        except AttributeError:
+            n_jobs = multiprocessing.cpu_count()
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
 

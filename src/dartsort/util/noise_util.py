@@ -574,23 +574,66 @@ class EmbeddedNoise(torch.nn.Module):
         else:
             assert channels_targ.ndim == 1
 
-        if self.cov_kind != "factorized":
+        if self.cov_kind == "factorized":
+            rank_root = self.rank_vt.T * self.rank_std  # type: ignore
+            rank_cov = cast(torch.Tensor, rank_root @ rank_root.T)
+            rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
+            x = rank_cov.bmm(x)
+
+            chan_root_left = self.channel_vt_zpad.T[channels_src] * self.channel_std  # type: ignore
+            chan_root_right = self.channel_vt_zpad.T[channels_targ] * self.channel_std  # type: ignore
+            if chan_root_right.ndim == 2:
+                targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
+                chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
+            chan_cov = chan_root_left.bmm(chan_root_right.mT)
+            return x.bmm(chan_cov)
+        elif self.cov_kind == "scalar":
+            if channels_targ.ndim == 1:
+                channels_targ = channels_targ[None, :].broadcast_to(
+                    (n, channels_targ.numel())
+                )
+            channels_src = torch.where(channels_src == self.n_channels, -2, channels_src)
+            eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
+            chan_cov = eyes * self.global_std**2  # type: ignore
+            return x.bmm(chan_cov)
+        elif self.cov_kind == "full":
+            # this branch is for debugging. it is slow.
+            if channels_targ.ndim == 1:
+                channels_targ = channels_targ[None, :].broadcast_to(
+                    (n, channels_targ.numel())
+                )
+            cov_zpad = F.pad(self.full_cov, (0, 1, 0, 0, 0, 1))[None]  # type: ignore
+            cov = cov_zpad.take_along_dim(  # type: ignore
+                indices=channels_src[:, None, :, None, None], dim=2
+            )
+            assert cov.shape == (
+                n,
+                self.rank,
+                channels_src.shape[1],
+                self.rank,
+                self.n_channels + 1,
+            )
+            cov = cov.take_along_dim(
+                indices=channels_targ[:, None, None, None, :], dim=4
+            )
+            assert cov.shape == (
+                n,
+                self.rank,
+                channels_src.shape[1],
+                self.rank,
+                channels_targ.shape[1],
+            )
+            cov = cov.view(
+                n,
+                self.rank * channels_src.shape[1],
+                self.rank * channels_targ.shape[1],
+            )
+            x = x.view(n, 1, -1).bmm(cov)
+            return x.view(n, self.rank, channels_targ.shape[1])
+        else:
             raise NotImplementedError(
                 f"Need to implement cov_batch_mul for {self.cov_kind=}."
             )
-
-        rank_root = self.rank_vt.T * self.rank_std  # type: ignore
-        rank_cov = cast(torch.Tensor, rank_root @ rank_root.T)
-        rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
-        x = rank_cov.bmm(x)
-
-        chan_root_left = self.channel_vt_zpad.T[channels_src] * self.channel_std  # type: ignore
-        chan_root_right = self.channel_vt_zpad.T[channels_targ] * self.channel_std  # type: ignore
-        if chan_root_right.ndim == 2:
-            targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
-            chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
-        chan_cov = chan_root_left.bmm(chan_root_right.mT)
-        return x.bmm(chan_cov)
 
     def cov_batch(self, channels_left: torch.Tensor, channels_right: torch.Tensor):
         if self.cov_kind != "factorized":
@@ -1387,8 +1430,6 @@ def whitener_from_hdf5(
         device=device,
         do_tpca=False,
     )
-    print(f"{snippets.shape=}")
-    print(f"{len(rgeom)=}")
 
     x = np.ascontiguousarray(snippets.cpu(), dtype=np.float64)
     x = x.reshape(-1)

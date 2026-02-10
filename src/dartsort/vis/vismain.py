@@ -270,7 +270,7 @@ def visualize_all_sorting_steps(
         nsteps = len(steps)
         steps = reversed(steps)
     else:
-        nsteps = len(steps)
+        nsteps = None
 
     count = 0
     with tqdm(steps, desc="Sorting steps", mininterval=0, total=nsteps) as prog:

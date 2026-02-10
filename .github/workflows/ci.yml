@@ -9,8 +9,6 @@ on:
     branches:
       - "*"
   workflow_dispatch:
-    branches:
-      - "*"
 
 jobs:
 
@@ -46,7 +44,7 @@ jobs:
 
       - name: pytest
         run: |
-          pytest --cache-clear --log-level=15 --cov=dartsort/src/dartsort  --cov-config=dartsort/pyproject.toml --cov-report lcov --cov-report term dartsort/tests/
+          pytest --cache-clear --log-level=15 --durations=100 --cov=dartsort/src/dartsort  --cov-config=dartsort/pyproject.toml --cov-report lcov --cov-report term dartsort/tests/
 
       - name: Coveralls
         uses: coverallsapp/github-action@master

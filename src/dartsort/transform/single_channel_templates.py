@@ -75,11 +75,12 @@ class SingleChannelTemplates(BaseWaveformModule):
             waveforms = waveforms[choices]
             channels = channels[choices]
         singlechan_waveforms = waveform_util.grab_main_channels_torch(
-            waveforms, channels, self.channel_index
+            waveforms, channels, self.channel_index.to(device=waveforms.device)
         )
         assert singlechan_waveforms.ndim == 3
         assert singlechan_waveforms.shape[2] == 1
         singlechan_waveforms = singlechan_waveforms[:, :, 0]
+        singlechan_waveforms = singlechan_waveforms.to(self.b.channel_index.device)
         templates = get_singlechan_centroids(
             singlechan_waveforms=singlechan_waveforms,
             trough_offset_samples=self.template_trough,

@@ -10,7 +10,7 @@ import numpy as np
 import seaborn as sns
 
 try:
-    from matplotlib_venn import venn2
+    from matplotlib_venn import venn2  # type: ignore
 except ImportError:
 
     def venn2(*args, **kwargs) -> Any:
@@ -343,7 +343,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
             if w[kind] is None or not w[kind].size or not np.isfinite(w[kind]).any():
                 continue
             with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+                warnings.filterwarnings("ignore", r"All-NaN (slice|axis) encountered")
                 maxs = np.nanmax(np.abs(w[kind]), axis=(1, 2))
             maxs = np.nan_to_num(maxs, nan=1.0)
             maa = max(maa, np.percentile(maxs, 90))

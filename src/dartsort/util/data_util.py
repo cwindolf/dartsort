@@ -305,6 +305,7 @@ class DARTsortSorting:
         This is done by saving to .npz, with a pointer to the .h5 file if
         it exists.
         """
+        sorting_npz = resolve_path(sorting_npz)
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
@@ -315,7 +316,10 @@ class DARTsortSorting:
 
         have_hdf5 = self.parent_h5_path is not None
         if have_hdf5:
-            data["parent_h5_path"] = np.array(str(self.parent_h5_path))
+            # path needs to be relative to npz path's parent in case user moves stuff
+            h5p = resolve_path(self.parent_h5_path, strict=True)
+            h5p = h5p.relative_to(sorting_npz.parent)
+            data["parent_h5_path"] = np.array(str(h5p))
         for k in self._ephemeral_feature_names:
             data[k] = getattr(self, k)
         data["ephemeral_feature_names"] = np.array(self._ephemeral_feature_names)
@@ -324,6 +328,7 @@ class DARTsortSorting:
 
     @classmethod
     def load(cls, sorting_npz, additional_persistent_features=None) -> Self:
+        sorting_npz = resolve_path(sorting_npz, strict=True)
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -343,6 +348,8 @@ class DARTsortSorting:
         if parent_h5_path is not None:
             parent_h5_path = parent_h5_path.item()
             assert isinstance(parent_h5_path, str)
+            parent_h5_path = sorting_npz.parent / Path(parent_h5_path)
+            parent_h5_path = resolve_path(parent_h5_path, strict=True)
             if additional_persistent_features:
                 loaded_persistent_features = set(
                     loaded_persistent_features + additional_persistent_features
@@ -956,16 +963,31 @@ def yield_masked_chunks(mask, dataset, show_progress=True, desc_prefix=None):
 # -- residual
 
 
-def extract_random_snips(rg, chunk, n, sniplen):
+def extract_random_snips(
+    rg: int | np.random.Generator,
+    chunk: np.ndarray | torch.Tensor,
+    n: int,
+    sniplen: int,
+):
+    """Grab n (or as many as can fit) random non-overlapping snips from chunk."""
     rg = np.random.default_rng(rg)
-    if sniplen * n > chunk.shape[0]:
-        warnings.warn("Can't extract this many non-overlapping snips.")
-        times = rg.choice(chunk.shape[0] - sniplen, size=n, replace=False)
-        times.sort()
+
+    # we can extract at most this many snips
+    n = min(n, max(1, chunk.shape[0] // sniplen))
+
+    # how many samples will not be covered
+    empty_len = chunk.shape[0] - sniplen * n
+    assert empty_len >= 0
+
+    # sample points spaced by sniplen + deltaj, where sum of
+    # delta is <= empty_len. use an extra slack diff for the <.
+    if empty_len == 0:
+        delta = np.zeros((n + 1,), dtype=np.int64)
     else:
-        empty_len = chunk.shape[0] - sniplen * n
-        times = rg.choice(empty_len, size=n, replace=False)
-        times += np.arange(n) * sniplen
+        delta = rg.integers(0, empty_len, size=n + 1)
+    delta.sort()
+    delta = np.diff(delta)[:n]
+    times = np.cumsum(delta + sniplen) - sniplen
     tixs = times[:, None] + np.arange(sniplen)
     return chunk[tixs], times
 

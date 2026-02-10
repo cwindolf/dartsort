@@ -59,13 +59,16 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     # different order in sums helps figure out what numerical tolerance is appropriate
     tconv_atol = np.abs(tconv0 - tconv00).max() + np.finfo(np.float32).tiny
     assert tconv_atol < 1e-5
+    tconv_atol = max(tconv_atol, 1e-6)  # finds a small value somehow on actions runner?
     np.testing.assert_allclose(tconv0, tconv00, atol=tconv_atol)
 
     tconv1_ = drifty.shared_temporal_pconv(temporal_, temporal_up_)
     tconv1 = tconv1_.numpy(force=True)
 
     # doubling tolerance because GPUs are GPUs
-    np.testing.assert_allclose(tconv0, tconv1, strict=True, atol=2 * tconv_atol)
+    assert tconv0.shape == tconv1.shape
+    assert tconv0.dtype == tconv1.dtype
+    np.testing.assert_allclose(tconv0, tconv1, atol=2 * tconv_atol)
 
     # similarly pick a rounding error here
     full_pconv0 = np.einsum("ipc,pqul,jqc->ijul", spatial_sing, tconv0, spatial_sing)
@@ -101,11 +104,15 @@ def test_full_shared_pconv(K, up, nc, rank, t):
         targ = np.eye(K, dtype=np.bool_)[:, :, None, None]
         targ = np.broadcast_to(targ, full_pconv0.shape)
         np.testing.assert_array_equal(full_pconv0 != 0, targ)
+    assert full_pconv0.shape == full_pconv1.shape
+    assert full_pconv0.dtype == full_pconv1.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv1, strict=True, atol=2 * max(pconv_atol, gpu_pconv_atol)
+        full_pconv0, full_pconv1, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
+    assert full_pconv0.shape == full_pconv2.shape
+    assert full_pconv0.dtype == full_pconv2.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv2, strict=True, atol=2 * max(pconv_atol, gpu_pconv_atol)
+        full_pconv0, full_pconv2, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
 
 

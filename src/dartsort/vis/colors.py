@@ -6,7 +6,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files
+        from importlib_resources import files  # type: ignore
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 

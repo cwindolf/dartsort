@@ -85,9 +85,9 @@ def detect_and_deduplicate(
     # to speed up the second step temporal max pooling
     energies, indices = F.max_pool1d_with_indices(
         energies.T.unsqueeze(0),
-        kernel_size=2 * relative_peak_radius + 1,
-        stride=1,
-        padding=relative_peak_radius,
+        kernel_size=(2 * relative_peak_radius + 1,),
+        stride=(1,),
+        padding=(relative_peak_radius,),
     )
 
     # spatial peak criterion
@@ -114,13 +114,13 @@ def detect_and_deduplicate(
     energies = F.max_unpool1d(
         energies,
         indices,
-        kernel_size=2 * relative_peak_radius + 1,
-        stride=1,
-        padding=relative_peak_radius,
+        kernel_size=(2 * relative_peak_radius + 1,),
+        stride=(1,),
+        padding=(relative_peak_radius,),
         output_size=energies.shape,
     )
     # remove peaks smaller than our threshold
-    F.threshold_(energies, threshold, 0.0)
+    F.threshold(energies, threshold, 0.0, inplace=True)
     if trough_priority and peak_sign == "both":
         tp = torch.where(traces.T < 0, trough_priority, 1.0)
         energies.mul_(tp)
@@ -133,9 +133,9 @@ def detect_and_deduplicate(
         del indices
         max_energies, indices = F.max_pool1d_with_indices(
             energies,
-            kernel_size=2 * dedup_temporal_radius + 1,
-            stride=1,
-            padding=dedup_temporal_radius,
+            kernel_size=(2 * dedup_temporal_radius + 1,),
+            stride=(1,),
+            padding=(dedup_temporal_radius,),
         )
         self_ix = torch.arange(indices.shape[-1], device=indices.device)
         remove = indices != self_ix
@@ -243,7 +243,7 @@ def singlechan_template_detect_and_deduplicate(
     obj = conv.square_().amax(dim=1).T
 
     # get peaks
-    times, chans = detect_and_deduplicate(
+    times, chans = detect_and_deduplicate(  # type: ignore
         obj,
         threshold=threshold,
         relative_peak_channel_index=relative_peak_channel_index,

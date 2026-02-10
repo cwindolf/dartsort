@@ -33,6 +33,7 @@ def refractory_simulations(tmp_path_factory):
             probe_kwargs=dict(
                 num_columns=2, num_contact_per_column=12, y_shift_per_column=None
             ),
+            template_simulator_kwargs=dict(force_no_offset=True),
             temporal_jitter=1,
             amplitude_jitter=0,
             common_reference=False,

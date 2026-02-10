@@ -9,7 +9,6 @@ from .clustering import (
     get_clustering_features,
     kmeans,
     merge,
-    ppcalib,
     refinement_strategies,
 )
 from .config import *

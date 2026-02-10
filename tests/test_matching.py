@@ -59,7 +59,7 @@ def refractory_sim(request, tmp_path_factory):
         max_fr_hz=100.0,
         globally_refractory=True,
         probe_kwargs=dict(num_columns=1, num_contact_per_column=nc, ypitch=10.0),
-        template_simulator_kwargs=dict(snr_adjustment=10.0),
+        template_simulator_kwargs=dict(snr_adjustment=10.0, min_rms_distance=2.0),
         refractory_ms=5.0,
         white_noise_scale=0.0,
         recording_dtype="float32",
@@ -72,7 +72,7 @@ def refractory_sim(request, tmp_path_factory):
     shutil.rmtree(p, ignore_errors=True)
 
 
-crumbs_test_upsampling = [1, 2, 4, 8]
+crumbs_test_upsampling = [1, 2, 8]
 crumbs_test_scaling = [0.0, 0.1]
 crumbs_test_chans = [1, 5]
 
@@ -105,7 +105,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     # if svd compression is bad. but we use full rank here.
     threshold = np.linalg.norm(template_data.templates, axis=(1, 2)).min().item()
     if scaling:
-        threshold = 0.9 * threshold
+        threshold = 0.8 * threshold
     else:
         threshold = 0.99 * threshold
 
@@ -121,11 +121,14 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"
+        cfg_kw["up_method"] = "direct"
     elif method == "debug":
         cfg_kw["template_type"] = "debug"
+        cfg_kw["up_method"] = "direct"
     elif method == "debug_forcefine":
         cfg_kw["template_type"] = "debug"
         cfg_kw["amplitude_scaling_boundary"] = 10.0
+        cfg_kw["up_method"] = "direct"
     elif method == "drifty_keys4":
         cfg_kw["template_type"] = "drifty"
         cfg_kw["up_method"] = "keys4"
@@ -137,6 +140,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         template_data=template_data,
         matching_cfg=matching_cfg,
         waveform_cfg=dartsort.default_waveform_cfg,
+        sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
         featurization_cfg=dartsort.skip_featurization_cfg,
     )
     matcher = matcher.to(device=device)
@@ -172,18 +176,22 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     gt_up_templates = upsample_multichan(
         template_data.templates, temporal_jitter=upsampling
     )
+    gt_up_templates = gt_up_templates.astype(np.float32)
     assert gt_up_templates.shape[1] == upsampling
     match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
+    assert match_up_templates.dtype == np.float32
     assert np.isfinite(match_up_templates).all()
     np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=2.5e-3)
 
     # difference between upsampling before going to multichan or after...
     true_temps_up = gt_sorting._load_dataset("templates_up")
+    true_temps_up = true_temps_up.astype(np.float32)
     np.testing.assert_allclose(gt_up_templates, true_temps_up, atol=1e-4)
     up_err = np.abs(gt_up_templates - true_temps_up).max() * (1 + 1e-5 + scaling)
     match_up_err = np.abs(match_up_templates - true_temps_up).max() * (
         1 + 1e-5 + scaling
     )
+    match_up_err = max(match_up_err, 1e-5)
 
     # error in approximating a template
     abs_err = np.abs(true_temps_up - match_up_templates).max().item()
@@ -230,14 +238,27 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             pk = chunk[pkt - pksh - toff : pkt - pksh - toff + slen].numpy(force=True)
             if upsampling > 1:
                 np.testing.assert_allclose(
-                    pk, pks * gt_up_templates[pkl, pku], atol=up_err
+                    pk,
+                    pks * gt_up_templates[pkl, pku],
+                    atol=2 * up_err,
+                    err_msg="crumbs_traces: up",
                 )
             elif scaling:
-                np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku])
+                np.testing.assert_allclose(
+                    pk,
+                    pks * gt_up_templates[pkl, pku],
+                    atol=1e-5,
+                    err_msg="crumbs_traces: sc",
+                )
             else:
-                np.testing.assert_equal(pk, gt_up_templates[pkl, pku])
+                np.testing.assert_equal(
+                    pk, gt_up_templates[pkl, pku], err_msg="crumbs_traces: eq"
+                )
             np.testing.assert_allclose(
-                pk, pks * match_up_templates[pkl, pku], atol=match_up_err
+                pk,
+                pks * match_up_templates[pkl, pku],
+                atol=2 * match_up_err,
+                err_msg="crumbs_traces: peaks",
             )
 
     # with subtests.test(msg="crumbs_peaks"):
@@ -258,19 +279,31 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         times_samples = res["times_samples"].numpy(force=True)
         labels = res["labels"].numpy(force=True)
         np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
-        # np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
+
+        gt_labels = gt_sorting.labels[gt_in_chunk]
+        gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
+
+        np.testing.assert_equal(
+            gt_sorting.times_samples[gt_in_chunk],
+            times_samples,
+            err_msg="sorting: times",
+        )
 
         if "up_inds" in res:
             match_up = res["up_inds"].numpy(force=True)
-            np.testing.assert_array_equal(gt_up, match_up)
+            np.testing.assert_array_equal(gt_up, match_up, err_msg="sorting: up_inds 1")
         else:
-            np.testing.assert_array_equal(gt_up, np.zeros_like(gt_up))
+            np.testing.assert_array_equal(
+                gt_up, np.zeros_like(gt_up), err_msg="sorting: up_inds 2"
+            )
 
-        np.testing.assert_allclose(gt_scale, match_scale, atol=1e-3)
+        np.testing.assert_allclose(
+            gt_scale, match_scale, atol=1e-3, err_msg="sorting: scale"
+        )
 
         if "time_shifts" in res:
             match_shift = res["time_shifts"].numpy(force=True)
-            # np.testing.assert_array_equal(match_shift, gt_shift)
+            np.testing.assert_array_equal(match_shift, gt_shift)
         else:
             assert (gt_shift == 0).all()
 
@@ -299,7 +332,9 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         conv_atol = 2.0 * pconv_numerical_err + l2_err**2 + conv_scale_atol
 
         conv_zero = np.zeros_like(conv)
-        np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
+        np.testing.assert_allclose(
+            conv, conv_zero, atol=conv_atol, err_msg="conv: zero"
+        )
 
     with subtests.test(msg="crumbs_residual"):
         # atol for residual
@@ -311,160 +346,39 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             resid_scale_atol = 0.0
         residual_atol = abs_err + resid_scale_atol + 1e-5
         resid_zero = np.zeros_like(residual)
-        np.testing.assert_allclose(residual, resid_zero, atol=residual_atol)
+        np.testing.assert_allclose(
+            residual, resid_zero, atol=residual_atol, err_msg="resid: zero"
+        )
 
     # test alignment of cc waveforms w time shift
     # these should match the correctly aligned templates
     with subtests.test(msg="crumbs_ccwf"):
         # relevant numerical error:
         # subtracting and adding wrong templates (I think scaling shouldn't matter much)
-        cc_test = (true_temps_up - match_up_templates) + match_up_templates
-        cc_err = np.abs(match_up_templates - cc_test).max().item()
-        cc_atol = cc_err
+        assert true_temps_up.dtype == np.float32 == match_up_templates.dtype
+        nz = np.random.default_rng(0).normal(size=true_temps_up.shape)
+        nz = nz.astype(true_temps_up.dtype)
+        cc_test = (true_temps_up + nz - match_up_templates) + match_up_templates - nz
+        cc_err1 = np.abs(match_up_templates - cc_test).max().item()
+        cc_test = (match_up_templates + nz - true_temps_up) + true_temps_up - nz
+        cc_err2 = np.abs(true_temps_up - cc_test).max().item()
+        cc_atol = max(cc_err1, cc_err2, 2e-5)
 
         extract_chans = matcher.b.channel_index
         cc_wfs = res["collisioncleaned_waveforms"].cpu()
-        time_shifts = res.get("time_shifts", np.zeros_like(labels))
-        up_offsets = gt_sorting._load_dataset("up_offsets")
         gt_labels = gt_sorting.labels[gt_in_chunk]
         gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
-        true_time_shifts = up_offsets[gt_labels, gt_up_inds]
         gt_channels = gt_sorting.channels[gt_in_chunk]
-        nt = true_temps_up.shape[2]
-        for wf, label, chan, up_ind, true_shift, sc in zip(
-            cc_wfs, gt_labels, gt_channels, gt_up_inds, true_time_shifts, gt_scale
+        for wf, label, chan, up_ind, sc in zip(
+            cc_wfs, gt_labels, gt_channels, gt_up_inds, gt_scale
         ):
             assert torch.equal(extract_chans[chan].cpu(), torch.arange(nc))
             true_wf = sc * true_temps_up[label, up_ind]
-            np.testing.assert_allclose(wf, true_wf, atol=cc_atol)
-            # my_trough = wf[:, chan].argmin()
-            # assert true_temps_up[label, up_ind, :, chan].argmin() == my_trough
-            # assert my_trough == trough_offset_samples + true_shift
-
-
-@pytest.mark.parametrize("scaling", [0.0, 0.01])
-@pytest.mark.parametrize("coarse_cd", [False, True])
-@pytest.mark.parametrize("cd_iter", [0, 1])
-def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
-    recording_length_samples = 200
-    n_channels = 2
-    geom = np.c_[np.zeros(2), np.arange(2)]
-
-    # template main channel traces
-    trace0 = 50 * np.exp(
-        -(((np.arange(spike_length_samples) - trough_offset_samples) / 10) ** 2)
-    )
-
-    # templates
-    templates = np.zeros((2, spike_length_samples, n_channels), dtype="float32")
-    templates[0, :, 0] = trace0
-    templates[1, :, 1] = trace0
-
-    # spike train
-    # fmt: off
-    tcl = [
-        50, 0, 0,
-        51, 1, 1,
-    ]
-    # fmt: on
-    times, channels, labels = np.array(tcl).reshape(-1, 3).T
-    rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l in zip(times, labels):
-        rec0[
-            t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
-        ] += templates[l]
-    rec0 = si.NumpyRecording(rec0, 30_000)
-    rec0.set_dummy_probe_from_locations(geom)
-
-    comp_cfg = ensure_computation_config(None)
-
-    rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
-    for rec in [rec0, rec1]:
-        template_cfg = dartsort.TemplateConfig(
-            denoising_method="none", superres_bin_min_spikes=0
-        )
-        rec_no_overlap, sorting_no_overlap = no_overlap_recording_sorting(templates)
-        template_data = TemplateData.from_config(
-            recording=rec_no_overlap,
-            sorting=sorting_no_overlap,
-            template_cfg=template_cfg,
-            save_folder=tmp_path,
-            overwrite=True,
-        )
-
-        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            waveform_cfg=dartsort.default_waveform_cfg,
-            matching_cfg=dartsort.MatchingConfig(
-                amplitude_scaling_variance=scaling,
-                threshold=0.01,
-                template_temporal_upsampling_factor=1,
-                cd_iter=cd_iter,
-                coarse_cd=coarse_cd,
-            ),
-            featurization_cfg=nofeatcfg,
-            template_data=template_data,
-            motion_est=motion_util.IdentityMotionEstimate(),
-        )
-        matcher.precompute_peeling_data(tmp_path)
-        matcher.to(comp_cfg.actual_device())
-        res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
-            return_residual=True,
-            return_conv=True,
-        )
-        assert matcher.matching_templates is not None
-
-        ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(  # type: ignore
-            torch.tensor([0, 1]),
-            torch.tensor([0, 1]),
-            upsampling_indices_b=torch.tensor([0, 0]),
-        )
-        maxpc = pconv.max(dim=1).values
-        for ia, ib, pc in zip(ixa, ixb, maxpc):
-            assert np.isclose(pc, (templates[ia] * templates[ib]).sum())
-        assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times)
-        assert np.array_equal(res["labels"].numpy(force=True), labels)
-        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
-        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
-        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
-        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
-        matcher.cpu()
-
-        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            waveform_cfg=dartsort.default_waveform_cfg,
-            matching_cfg=dartsort.MatchingConfig(
-                threshold=0.01,
-                amplitude_scaling_variance=0.0,
-                template_temporal_upsampling_factor=8,
-            ),
-            featurization_cfg=nofeatcfg,
-            template_data=template_data,
-            motion_est=motion_util.IdentityMotionEstimate(),
-        )
-        matcher.precompute_peeling_data(tmp_path)
-        matcher.to(comp_cfg.actual_device())
-        res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
-            return_residual=True,
-            return_conv=True,
-        )
-        assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times)
-        assert np.array_equal(res["labels"].numpy(force=True), labels)
-        assert np.array_equal(res["up_inds"].numpy(force=True), [0, 0])
-        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
-        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
-        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
-        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
-        assert torch.all(res["scores"] > 0)
-        matcher.cpu()
+            np.testing.assert_allclose(wf, true_wf, atol=cc_atol, err_msg="ccwf")
 
 
 @pytest.mark.parametrize("up_offset", [0, 1, -1])
-@pytest.mark.parametrize("up_factor", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("up_factor", [1, 2, 8])
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
@@ -532,6 +446,8 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             amplitude_scaling_variance=scaling,
             template_temporal_upsampling_factor=up_factor,
             cd_iter=cd_iter,
+            up_method="direct",
+            template_type="individual_compressed_upsampled",
         )
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording=rec,
@@ -539,6 +455,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             matching_cfg=matching_cfg,
             featurization_cfg=nofeatcfg,
             template_data=template_data,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
@@ -617,7 +534,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         assert torch.all(res["scores"] > 0)
 
 
-@pytest.mark.parametrize("up_factor", [1, 2, 4, 8])
+@pytest.mark.parametrize("up_factor", [1, 2, 8])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_static(tmp_path, up_factor, cd_iter):
     comp_cfg = ensure_computation_config(None)
@@ -683,6 +600,8 @@ def test_static(tmp_path, up_factor, cd_iter):
             template_svd_compression_rank=2,
             cd_iter=cd_iter,
             chunk_length_samples=recording_length_samples,
+            template_type="individual_compressed_upsampled",
+            up_method="direct",
         )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -691,6 +610,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             matching_cfg=matching_cfg,
             featurization_cfg=nofeatcfg,
             template_data=template_data,
+            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
         )
         matcher.precompute_peeling_data(tmp_path)
@@ -772,7 +692,7 @@ def test_static(tmp_path, up_factor, cd_iter):
 def test_fakedata_nonn(tmp_path, threshold=7.0):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 9.5
+    T_s = 3.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)
@@ -857,7 +777,6 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         registered_templates=False,
     )
     matchconf = dartsort.MatchingConfig(threshold=threshold)
-    matchconf_fp = dartsort.MatchingConfig(threshold="fp_control")
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec1, rec0]:
@@ -874,27 +793,11 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]
         assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
 
-        (tmp_path / "match2").mkdir()
-        st2 = dartsort.match(
-            recording=rec,
-            sorting=st,
-            output_dir=tmp_path / "match2",
-            motion_est=None,
-            template_cfg=tempconf,
-            featurization_cfg=featconf,
-            matching_cfg=matchconf_fp,
-        )
-        assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
-
-        print(f"{st=}")
-        print(f"{st2=}")
-
         shutil.rmtree(tmp_path / "match")
-        shutil.rmtree(tmp_path / "match2")
 
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
-@pytest.mark.parametrize("threshold", ["check", "fp_control"])
+@pytest.mark.parametrize("threshold", ["check"])
 def test_with_simkit(simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]

@@ -63,6 +63,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
 
         # get peak to peak amplitudes -- (N, c) shaped
         ptps = spiketorch.ptp(waveforms)
+        ptps = ptps.to(self.b.parents_index.device)
 
         # pad with an extra channel to support indexing tricks
         pad_ptps = F.pad(ptps, (0, 1), value=torch.inf)
@@ -85,6 +86,7 @@ class EnforceDecrease(BaseWaveformDenoiser):
 
         # what would we need to multiply by to ensure my amp is <= all parents?
         rescaling = parent_min_ptps.div_(ptps).clamp_(max=1.0)
+        rescaling = rescaling.to(waveforms.device)
         decreasing_waveforms = waveforms.mul_(rescaling[:, None, :])
         return decreasing_waveforms
 

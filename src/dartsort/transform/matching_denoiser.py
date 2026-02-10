@@ -27,13 +27,14 @@ class DebugMatchingPursuitDenoiser(BaseWaveformDenoiser):
         return not hasattr(self, "basis")
 
     def _project_in_probe(self, waveforms_in_probe):
+        dev = waveforms_in_probe.device
         assert self.basis is not None
-        dots = waveforms_in_probe @ self.basis.T
+        dots = waveforms_in_probe.to(device=self.b.basis.device) @ self.basis.T
         best = dots.abs().argmax(dim=1)
         dots = dots.take_along_dim(best[:, None], dim=1)[:, 0]
         denoised = self.b.basis.take_along_dim(best[:, None], dim=0)
         denoised = denoised.mul_(dots.sign()[:, None])
-        return denoised
+        return denoised.to(device=dev)
 
     def forward(self, waveforms, *, channels, **unused):
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(

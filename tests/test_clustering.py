@@ -17,11 +17,24 @@ from dartsort.util.internal_config import (
     SplitConfig,
     TemplateConfig,
     TemplateMergeConfig,
+    FitSamplingConfig,
 )
 from dartsort.util.logging_util import get_logger
 from dartsort.util.spiketorch import ptp
 
 logger = get_logger(__name__)
+
+clu_sampling_cfg = FitSamplingConfig(
+    fit_sampling="random", n_waveforms_fit=500_000, max_waveforms_fit=500_000
+)
+ref_sampling_cfg = FitSamplingConfig(
+    fit_sampling="random", n_waveforms_fit=1000 * 1024, max_waveforms_fit=1000 * 1024
+)
+clukw = dict(sampling_cfg=clu_sampling_cfg)
+refkw = dict(
+    sampling_cfg=ref_sampling_cfg,
+    distance_metric="cosine",
+)
 
 # this is how they are named in simkit...
 global_feature_kwargs = dict(
@@ -39,25 +52,30 @@ clustering_kwargs += [
     dict(cluster_strategy="gmmdpc", hellinger_weak=0.99, mop=True),
     dict(cluster_strategy="gmmdpc", use_hellinger=False),
 ]
+clustering_kwargs = [clukw | ck for ck in clustering_kwargs]
 refinement_kwargs = [dict(refinement_strategy=k) for k in refinement_strategies]
 refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0)] + refinement_kwargs
+refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
 
 # only some methods are good enough to actually test the outcome
 eval_clustering_kwargs = [
     dict(cluster_strategy="none"),  # ground truth
-    dict(cluster_strategy="gmmdpc"),
+    dict(cluster_strategy="dpc"),
 ]
 eval_initial_refinement_kwargs = [
-    dict(refinement_strategy="pcmerge"),
+    dict(refinement_strategy="pcmerge", pc_merge_threshold=0.025),
 ]
 eval_refinement_kwargs = [
-    dict(refinement_strategy="gmm"),
     dict(refinement_strategy="tmm"),
 ]
 
+eval_clustering_kwargs = [clukw | ck for ck in eval_clustering_kwargs]
+eval_initial_refinement_kwargs = [refkw | ck for ck in eval_initial_refinement_kwargs]
+eval_refinement_kwargs = [refkw | ck for ck in eval_refinement_kwargs]
 
-@pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])
+
+@pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
 @pytest.mark.parametrize("featkw", feature_kwargs)
 @pytest.mark.parametrize("cluskw", clustering_kwargs)
 def test_clustering(simulations, sim_name, featkw, cluskw):
@@ -77,12 +95,13 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
     )
     clusterer = get_clusterer(
         clustering_cfg=ClusteringConfig(**cluskw),
-        refinement_cfg=None,
+        refinement_cfgs=None,
     )
     res = clusterer.cluster(
         recording=recording, sorting=sorting, features=features, motion_est=motion_est
     )
     assert res is not None
+    assert res.labels is not None
     # dpcs struggle with this.
     # assert np.unique(res.labels).size > 1
     assert res.labels.shape == sorting.labels.shape
@@ -109,14 +128,20 @@ def test_refinement(simulations, sim_name, refkw):
 
     clusterer = get_clusterer(
         clustering_cfg=None,
-        refinement_cfg=RefinementConfig(**refkw),
+        refinement_cfgs=[RefinementConfig(**refkw)],
     )
     res = clusterer.cluster(
         recording=recording, sorting=sorting, features=features, motion_est=motion_est
     )
     assert res is not None
+    assert res.labels is not None
     assert res.labels.shape == sorting.labels.shape
     assert np.unique(res.labels).size > 1
+
+
+def _nice_unique(x):
+    u, c = np.unique(x, return_counts=True)
+    return u.tolist(), c.tolist()
 
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
@@ -134,21 +159,26 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
         sorting=sorting,
         motion_est=motion_est,
         clustering_cfg=ClusteringConfig(**cluskw),
-        pre_refinement_cfg=RefinementConfig(**initrefkw),
-        refinement_cfg=RefinementConfig(**refkw),
+        refinement_cfgs=[RefinementConfig(**initrefkw), RefinementConfig(**refkw)],
     )
+    assert res_sorting.labels is not None
+
+    logger.warning("Merging view")
     for k in np.unique(res_sorting.labels):
         logger.warning(
-            f"{k=} {np.unique(sorting.labels[res_sorting.labels==k], return_counts=True)=}"
+            f"clu{k.item()} gtu,c:{_nice_unique(sorting.labels[res_sorting.labels == k])}"
         )
+
+    logger.warning("Splitting view")
+    for k in np.unique(sorting.labels):
+        logger.warning(
+            f"GT{k.item()} cluu,c:{_nice_unique(res_sorting.labels[sorting.labels == k])}"
+        )
+
     with subtests.test(msg="rand score"):
-        if refkw["refinement_strategy"] == "gmm":
-            assert rand_score(sorting.labels, res_sorting.labels) > 0.97
-        else:
-            assert rand_score(sorting.labels, res_sorting.labels) > 0.995
+        assert rand_score(sorting.labels, res_sorting.labels) > 0.995
     with subtests.test(msg="unit count"):
-        if refkw["refinement_strategy"] != "gmm":
-            assert sorting.n_units == res_sorting.n_units
+        assert sorting.n_units == res_sorting.n_units
 
 
 @pytest.mark.parametrize("sim_name", ["drifty_szmini", "driftn_szmini"])

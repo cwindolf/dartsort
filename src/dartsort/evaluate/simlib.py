@@ -174,7 +174,9 @@ def generate_geom(
     ypitch=40,
     x_start=59,
     y_start=20,
-    y_shift_per_column: Literal["stagger", "flat"] | tuple[float] | list[float] = "stagger",
+    y_shift_per_column: Literal["stagger", "flat"]
+    | tuple[float]
+    | list[float] = "stagger",
     stagger: float = 20.0,
     sort=True,
     sort_x_down=True,
@@ -243,6 +245,7 @@ def add_features(h5_path, recording, featurization_cfg):
             WaveformConfig(),
             geom=geom,
             channel_index=channel_index,
+            sampling_frequency=recording.sampling_frequency,
         )
         gt_pipeline.fit(recording, waveforms, **fixed_properties)
         models_dir = h5_path.parent / f"{h5_path.stem}_models"
@@ -260,6 +263,8 @@ def add_features(h5_path, recording, featurization_cfg):
         for sli, chunk in yield_chunks(
             h5["collisioncleaned_waveforms"], desc_prefix="Featurize"
         ):
-            _, feats = gt_pipeline(chunk, channels=cast(h5py.Dataset, h5["channels"])[sli])
+            _, feats = gt_pipeline(
+                chunk, channels=cast(h5py.Dataset, h5["channels"])[sli]
+            )
             for k, v in feats.items():
                 f_dsets[k][sli] = v.numpy(force=True)
