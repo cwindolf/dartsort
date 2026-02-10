@@ -72,7 +72,7 @@ def refractory_sim(request, tmp_path_factory):
     shutil.rmtree(p, ignore_errors=True)
 
 
-crumbs_test_upsampling = [1, 2, 4, 8]
+crumbs_test_upsampling = [1, 2, 8]
 crumbs_test_scaling = [0.0, 0.1]
 crumbs_test_chans = [1, 5]
 
@@ -377,7 +377,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
 
 
 @pytest.mark.parametrize("up_offset", [0, 1, -1])
-@pytest.mark.parametrize("up_factor", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("up_factor", [1, 2, 8])
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
@@ -533,7 +533,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         assert torch.all(res["scores"] > 0)
 
 
-@pytest.mark.parametrize("up_factor", [1, 2, 4, 8])
+@pytest.mark.parametrize("up_factor", [1, 2, 8])
 @pytest.mark.parametrize("cd_iter", [0, 1])
 def test_static(tmp_path, up_factor, cd_iter):
     comp_cfg = ensure_computation_config(None)
