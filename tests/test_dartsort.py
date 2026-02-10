@@ -88,7 +88,6 @@ def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=False
         ),
-        matching_cfg=dartsort.MatchingConfig(threshold="fp_control"),
         # test the dev tasks pipeline
         save_intermediate_labels=True,
         save_intermediate_features=False,

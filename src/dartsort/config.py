@@ -196,9 +196,9 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
-        "individual_compressed_upsampled"
+        "drifty"
     )
-    matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
+    matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.025
