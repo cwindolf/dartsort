@@ -305,6 +305,7 @@ class DARTsortSorting:
         This is done by saving to .npz, with a pointer to the .h5 file if
         it exists.
         """
+        sorting_npz = resolve_path(sorting_npz)
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
@@ -315,7 +316,10 @@ class DARTsortSorting:
 
         have_hdf5 = self.parent_h5_path is not None
         if have_hdf5:
-            data["parent_h5_path"] = np.array(str(self.parent_h5_path))
+            # path needs to be relative to npz path's parent in case user moves stuff
+            h5p = resolve_path(self.parent_h5_path, strict=True)
+            h5p = h5p.relative_to(sorting_npz.parent)
+            data["parent_h5_path"] = np.array(str(h5p))
         for k in self._ephemeral_feature_names:
             data[k] = getattr(self, k)
         data["ephemeral_feature_names"] = np.array(self._ephemeral_feature_names)
@@ -324,6 +328,7 @@ class DARTsortSorting:
 
     @classmethod
     def load(cls, sorting_npz, additional_persistent_features=None) -> Self:
+        sorting_npz = resolve_path(sorting_npz, strict=True)
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -343,6 +348,8 @@ class DARTsortSorting:
         if parent_h5_path is not None:
             parent_h5_path = parent_h5_path.item()
             assert isinstance(parent_h5_path, str)
+            parent_h5_path = sorting_npz.parent / Path(parent_h5_path)
+            parent_h5_path = resolve_path(parent_h5_path, strict=True)
             if additional_persistent_features:
                 loaded_persistent_features = set(
                     loaded_persistent_features + additional_persistent_features
