@@ -173,13 +173,16 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     gt_up_templates = upsample_multichan(
         template_data.templates, temporal_jitter=upsampling
     )
+    gt_up_templates = gt_up_templates.astype(np.float32)
     assert gt_up_templates.shape[1] == upsampling
     match_up_templates = chunk_temp_data.reconstruct_up_templates().numpy(force=True)
+    assert match_up_templates.dtype == np.float32
     assert np.isfinite(match_up_templates).all()
     np.testing.assert_allclose(gt_up_templates, match_up_templates, atol=2.5e-3)
 
     # difference between upsampling before going to multichan or after...
     true_temps_up = gt_sorting._load_dataset("templates_up")
+    true_temps_up = true_temps_up.astype(np.float32)
     np.testing.assert_allclose(gt_up_templates, true_temps_up, atol=1e-4)
     up_err = np.abs(gt_up_templates - true_temps_up).max() * (1 + 1e-5 + scaling)
     match_up_err = np.abs(match_up_templates - true_temps_up).max() * (
