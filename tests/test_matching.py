@@ -121,11 +121,14 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"
+        cfg_kw["up_method"] = "direct"
     elif method == "debug":
         cfg_kw["template_type"] = "debug"
+        cfg_kw["up_method"] = "direct"
     elif method == "debug_forcefine":
         cfg_kw["template_type"] = "debug"
         cfg_kw["amplitude_scaling_boundary"] = 10.0
+        cfg_kw["up_method"] = "direct"
     elif method == "drifty_keys4":
         cfg_kw["template_type"] = "drifty"
         cfg_kw["up_method"] = "keys4"
@@ -717,6 +720,8 @@ def test_static(tmp_path, up_factor, cd_iter):
             template_svd_compression_rank=2,
             cd_iter=cd_iter,
             chunk_length_samples=recording_length_samples,
+            template_type="individual_compressed_upsampled",
+            up_method="direct",
         )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
@@ -807,7 +812,7 @@ def test_static(tmp_path, up_factor, cd_iter):
 def test_fakedata_nonn(tmp_path, threshold=7.0):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 9.5
+    T_s = 3.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)

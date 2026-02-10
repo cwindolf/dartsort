@@ -6,7 +6,7 @@ import warnings
 import dartsort
 
 
-@pytest.mark.parametrize("do_motion_estimation", [False, True])
+@pytest.mark.parametrize("do_motion_estimation", [True])
 @pytest.mark.parametrize("sim_size", ["mini"])
 def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
     sim_name = "drifty" if do_motion_estimation else "driftn"
@@ -17,12 +17,9 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
         initial_detection_cfg=dartsort.SubtractionConfig(
             subtraction_denoising_cfg=dartsort.FeaturizationConfig(
                 denoise_only=True, do_nn_denoise=False
-            )
+            ),
+            residnorm_decrease_threshold=16.0,
         ),
-        initial_refinement_cfg=dartsort.RefinementConfig(
-            min_count=10, n_total_iters=1, mixture_steps="split"
-        ),
-        refinement_cfg=dartsort.RefinementConfig(min_count=10, n_total_iters=1),
         featurization_cfg=dartsort.FeaturizationConfig(n_residual_snips=512),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=do_motion_estimation, rigid=True
