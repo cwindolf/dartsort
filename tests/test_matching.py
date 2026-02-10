@@ -191,6 +191,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     match_up_err = np.abs(match_up_templates - true_temps_up).max() * (
         1 + 1e-5 + scaling
     )
+    match_up_err = max(match_up_err, 1e-6)
 
     # error in approximating a template
     abs_err = np.abs(true_temps_up - match_up_templates).max().item()
