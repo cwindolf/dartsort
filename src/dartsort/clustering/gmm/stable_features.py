@@ -619,7 +619,7 @@ class SpikeNeighborhoods(BModule):
             jvalid = nhood < n_channels
             indicators[nhood[jvalid], j] = 1.0
             (jvalid,) = jvalid.nonzero(as_tuple=True)
-            jvalid = jvalid.loing()
+            jvalid = jvalid.long()
             njvalid = jvalid.numel()
             assert njvalid
             masks.append(jvalid)
