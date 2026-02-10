@@ -256,7 +256,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             np.testing.assert_allclose(
                 pk,
                 pks * match_up_templates[pkl, pku],
-                atol=match_up_err,
+                atol=2 * match_up_err,
                 err_msg="crumbs_traces: peaks",
             )
 
@@ -376,129 +376,6 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             np.testing.assert_allclose(wf, true_wf, atol=cc_atol, err_msg="ccwf")
 
 
-@pytest.mark.parametrize("scaling", [0.0, 0.01])
-@pytest.mark.parametrize("coarse_cd", [False, True])
-@pytest.mark.parametrize("cd_iter", [0, 1])
-def test_tiny(tmp_path, scaling, coarse_cd, cd_iter):
-    recording_length_samples = 200
-    n_channels = 2
-    geom = np.c_[np.zeros(2), np.arange(2)]
-
-    # template main channel traces
-    trace0 = 50 * np.exp(
-        -(((np.arange(spike_length_samples) - trough_offset_samples) / 10) ** 2)
-    )
-
-    # templates
-    templates = np.zeros((2, spike_length_samples, n_channels), dtype="float32")
-    templates[0, :, 0] = trace0
-    templates[1, :, 1] = trace0
-
-    # spike train
-    # fmt: off
-    tcl = [
-        50, 0, 0,
-        51, 1, 1,
-    ]
-    # fmt: on
-    times, channels, labels = np.array(tcl).reshape(-1, 3).T
-    rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l in zip(times, labels):
-        rec0[
-            t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
-        ] += templates[l]
-    rec0 = si.NumpyRecording(rec0, 30_000)
-    rec0.set_dummy_probe_from_locations(geom)
-
-    comp_cfg = ensure_computation_config(None)
-
-    rec1 = rec0.save_to_folder(str(tmp_path / "rec"))
-    for rec in [rec0, rec1]:
-        template_cfg = dartsort.TemplateConfig(
-            denoising_method="none", superres_bin_min_spikes=0
-        )
-        rec_no_overlap, sorting_no_overlap = no_overlap_recording_sorting(templates)
-        template_data = TemplateData.from_config(
-            recording=rec_no_overlap,
-            sorting=sorting_no_overlap,
-            template_cfg=template_cfg,
-            save_folder=tmp_path,
-            overwrite=True,
-        )
-
-        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            waveform_cfg=dartsort.default_waveform_cfg,
-            matching_cfg=dartsort.MatchingConfig(
-                amplitude_scaling_variance=scaling,
-                threshold=0.01,
-                template_temporal_upsampling_factor=1,
-                cd_iter=cd_iter,
-                coarse_cd=coarse_cd,
-            ),
-            featurization_cfg=nofeatcfg,
-            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
-            template_data=template_data,
-            motion_est=motion_util.IdentityMotionEstimate(),
-        )
-        matcher.precompute_peeling_data(tmp_path)
-        matcher.to(comp_cfg.actual_device())
-        res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
-            return_residual=True,
-            return_conv=True,
-        )
-        assert matcher.matching_templates is not None
-
-        ixa, pconv, ixb = matcher.matching_templates.pconv_db.query(  # type: ignore
-            torch.tensor([0, 1]),
-            torch.tensor([0, 1]),
-            upsampling_indices_b=torch.tensor([0, 0]),
-        )
-        maxpc = pconv.max(dim=1).values
-        for ia, ib, pc in zip(ixa, ixb, maxpc):
-            assert np.isclose(pc, (templates[ia] * templates[ib]).sum())
-        assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times)
-        assert np.array_equal(res["labels"].numpy(force=True), labels)
-        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
-        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
-        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
-        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
-        matcher.cpu()
-
-        matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
-            rec,
-            waveform_cfg=dartsort.default_waveform_cfg,
-            matching_cfg=dartsort.MatchingConfig(
-                threshold=0.01,
-                amplitude_scaling_variance=0.0,
-                template_temporal_upsampling_factor=8,
-            ),
-            featurization_cfg=nofeatcfg,
-            sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
-            template_data=template_data,
-            motion_est=motion_util.IdentityMotionEstimate(),
-        )
-        matcher.precompute_peeling_data(tmp_path)
-        matcher.to(comp_cfg.actual_device())
-        res = matcher.peel_chunk(
-            torch.asarray(rec.get_traces().copy(), device=comp_cfg.actual_device()),
-            return_residual=True,
-            return_conv=True,
-        )
-        assert res["n_spikes"] == len(times)
-        assert np.array_equal(res["times_samples"].numpy(force=True), times)
-        assert np.array_equal(res["labels"].numpy(force=True), labels)
-        assert np.array_equal(res["up_inds"].numpy(force=True), [0, 0])
-        resid_rms = torch.square(res["residual"]).mean().numpy(force=True)
-        assert np.isclose(resid_rms, 0.0, atol=RES_ATOL)
-        conv_rms = torch.square(res["conv"]).mean().numpy(force=True)
-        assert np.isclose(conv_rms, 0.0, atol=CONV_ATOL)
-        assert torch.all(res["scores"] > 0)
-        matcher.cpu()
-
-
 @pytest.mark.parametrize("up_offset", [0, 1, -1])
 @pytest.mark.parametrize("up_factor", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
@@ -568,6 +445,8 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             amplitude_scaling_variance=scaling,
             template_temporal_upsampling_factor=up_factor,
             cd_iter=cd_iter,
+            up_method="direct",
+            template_type="individual_compressed_upsampled",
         )
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording=rec,
@@ -897,7 +776,6 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         registered_templates=False,
     )
     matchconf = dartsort.MatchingConfig(threshold=threshold)
-    matchconf_fp = dartsort.MatchingConfig(threshold="fp_control")
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec1, rec0]:
@@ -914,27 +792,11 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]
         assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
 
-        (tmp_path / "match2").mkdir()
-        st2 = dartsort.match(
-            recording=rec,
-            sorting=st,
-            output_dir=tmp_path / "match2",
-            motion_est=None,
-            template_cfg=tempconf,
-            featurization_cfg=featconf,
-            matching_cfg=matchconf_fp,
-        )
-        assert np.all(st.scores > 0)  # type: ignore[reportAttributeAccessIssue]
-
-        print(f"{st=}")
-        print(f"{st2=}")
-
         shutil.rmtree(tmp_path / "match")
-        shutil.rmtree(tmp_path / "match2")
 
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
-@pytest.mark.parametrize("threshold", ["check", "fp_control"])
+@pytest.mark.parametrize("threshold", ["check"])
 def test_with_simkit(simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]

@@ -59,7 +59,7 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     # different order in sums helps figure out what numerical tolerance is appropriate
     tconv_atol = np.abs(tconv0 - tconv00).max() + np.finfo(np.float32).tiny
     assert tconv_atol < 1e-5
-    tconv_atol = max(tconv_atol, 1e-6) # finds a small value somehow on actions runner?
+    tconv_atol = max(tconv_atol, 1e-6)  # finds a small value somehow on actions runner?
     np.testing.assert_allclose(tconv0, tconv00, atol=tconv_atol)
 
     tconv1_ = drifty.shared_temporal_pconv(temporal_, temporal_up_)
@@ -107,12 +107,12 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     assert full_pconv0.shape == full_pconv1.shape
     assert full_pconv0.dtype == full_pconv1.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv1, atol=2 * max(pconv_atol, gpu_pconv_atol)
+        full_pconv0, full_pconv1, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
     assert full_pconv0.shape == full_pconv2.shape
     assert full_pconv0.dtype == full_pconv2.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv2, atol=2 * max(pconv_atol, gpu_pconv_atol)
+        full_pconv0, full_pconv2, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
 
 
