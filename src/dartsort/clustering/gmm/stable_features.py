@@ -604,9 +604,9 @@ class SpikeNeighborhoods(BModule):
         super().__init__()
         self.name = name
         self.n_channels = n_channels
-        self.register_buffer("neighborhood_ids", neighborhood_ids)
-        self.register_buffer("chans_arange", torch.arange(n_channels))
-        self.register_buffer("neighborhoods", neighborhoods)
+        self.register_buffer("neighborhood_ids", neighborhood_ids.long())
+        self.register_buffer("chans_arange", torch.arange(n_channels, dtype=torch.long))
+        self.register_buffer("neighborhoods", neighborhoods.long())
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as an indicator matrix
@@ -619,6 +619,7 @@ class SpikeNeighborhoods(BModule):
             jvalid = nhood < n_channels
             indicators[nhood[jvalid], j] = 1.0
             (jvalid,) = jvalid.nonzero(as_tuple=True)
+            jvalid = jvalid.loing()
             njvalid = jvalid.numel()
             assert njvalid
             masks.append(jvalid)
@@ -634,6 +635,7 @@ class SpikeNeighborhoods(BModule):
             neighborhood_members = []
             for j in range(len(neighborhoods)):
                 (in_nhood,) = torch.nonzero(neighborhood_ids == j, as_tuple=True)
+                in_nhood = in_nhood.long()
                 neighborhood_members.append(in_nhood.cpu())
         assert len(neighborhood_members) == self.n_neighborhoods
 
@@ -697,6 +699,8 @@ class SpikeNeighborhoods(BModule):
         neighborhoods, neighborhood_ids = torch.unique(
             channels, dim=0, return_inverse=True
         )
+        neighborhoods = neighborhoods.long()
+        neighborhood_ids = neighborhood_ids.long()
         return cls(
             n_channels=n_channels,
             neighborhoods=neighborhoods,
@@ -718,8 +722,8 @@ class SpikeNeighborhoods(BModule):
         features=None,
         name=None,
     ):
-        neighborhoods = torch.asarray(neighborhoods)
-        neighborhood_ids = torch.asarray(neighborhood_ids)
+        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long)
+        neighborhood_ids = torch.asarray(neighborhood_ids, dtype=torch.long)
         if device is not None:
             neighborhoods = neighborhoods.to(device)
             neighborhood_ids = neighborhood_ids.to(device)
