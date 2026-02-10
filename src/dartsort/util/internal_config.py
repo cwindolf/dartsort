@@ -450,9 +450,9 @@ class MatchingConfig:
     coarse_objective: bool = True
     channel_selection_radius: float | None = None
     template_type: Literal["individual_compressed_upsampled", "drifty", "debug"] = (
-        "individual_compressed_upsampled"
+        "drifty"
     )
-    up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
+    up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
