@@ -169,6 +169,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         temporal_jitter=1,
         temporal_jitter_kind: Literal["exact", "cubic"] = "cubic",
         min_rms_distance=0.0,
+        force_no_offset=False,
         snr_adjustment=1.0,
         # timing params
         tip_before_min=0.1,
@@ -264,11 +265,13 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
             singlechan_kw=self.waveform_kw,
             decay_model=decay_model,
             min_rms_distance=min_rms_distance,
+            force_no_offset=force_no_offset,
             dtype=dtype,
         )
         self.template_pos = pos
         self.template_alpha = alpha
         self.offsets = sct[:, :, 0].argmin(1) - self.trough_offset_samples()
+        print(f"{self.offsets=}")
         self.singlechan_templates = sct[..., 0]
         self.singlechan_templates_up = sct_up[..., 0]
 
@@ -776,6 +779,7 @@ def simulate_point_source_templates(
     sampling_growth: int = 2,
     max_oversampling: int = 40,
     max_tries: int = 512,
+    force_no_offset: bool = False,
     dtype: np.typing.DTypeLike,
 ):
     if not min_rms_distance:
@@ -799,6 +803,19 @@ def simulate_point_source_templates(
                 dtype=dtype,
             )
         )
+
+        # reject misaligned ones
+        if force_no_offset:
+            valid = singlechan_templates[:, :, 0].argmin(1) == trough_offset_samples
+            valid = np.flatnonzero(valid)
+            if valid.size < n_units:
+                continue
+            pos = pos[valid]
+            alpha = alpha[valid]
+            singlechan_templates = singlechan_templates[valid]
+            singlechan_templates_up = singlechan_templates_up[valid]
+
+        # reject too-close pairs
         if min_rms_distance:
             choices = _get_separated_group(
                 n_grab=n_units,
@@ -813,14 +830,10 @@ def simulate_point_source_templates(
             if choices is None:
                 puff = min(max_oversampling, puff * sampling_growth)
                 continue
-        else:
-            choices = slice(None)
-
-        # grab choices
-        pos = pos[choices]
-        alpha = alpha[choices]
-        singlechan_templates = singlechan_templates[choices]
-        singlechan_templates_up = singlechan_templates_up[choices]
+            pos = pos[choices]
+            alpha = alpha[choices]
+            singlechan_templates = singlechan_templates[choices]
+            singlechan_templates_up = singlechan_templates_up[choices]
 
         break
     else:

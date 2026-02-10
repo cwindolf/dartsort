@@ -592,6 +592,7 @@ class EmbeddedNoise(torch.nn.Module):
                 channels_targ = channels_targ[None, :].broadcast_to(
                     (n, channels_targ.numel())
                 )
+            channels_src = torch.where(channels_src == self.n_channels, -2, channels_src)
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
             chan_cov = eyes * self.global_std**2  # type: ignore
             return x.bmm(chan_cov)

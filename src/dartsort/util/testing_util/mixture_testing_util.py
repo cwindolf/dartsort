@@ -113,7 +113,7 @@ def simulate_moppca(
         freq = rg.uniform(0.2, 1.0, size=(K, rank, 1, M))
         amp = rg.uniform(1.0, 2.0, size=(K, rank, 1, M))
         domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
-        W = amp * np.sin(phase + freq * domain[:, None])
+        W = amp * np.exp(-(np.sin(phase + freq * domain[:, None])**2))
     elif t_w == "zero":
         W = np.zeros((K, rank, nc, M))
     else:

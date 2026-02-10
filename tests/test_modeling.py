@@ -21,6 +21,7 @@ elbo_atol = 5e-3
 
 TEST_RANK = 4
 TMM_ELBO_ATOL = 1e-3
+SEED = 1
 
 
 test_t_mu = ("smooth",)
@@ -44,6 +45,7 @@ def moppca_simulations():
                 t_missing=t_missing,
                 init_label_corruption=corrupt_p,
                 rank=TEST_RANK,
+                rg=SEED,
             )
         )
     return simulations
@@ -84,6 +86,7 @@ def test_truncated_mixture(
         refinement_strategy="tmm",
         signal_rank=M * (t_w != "zero"),
         n_candidates=K,
+        em_converged_atol=1e-4,
     )
 
     # copy-pasting from tmm_demix here
@@ -300,7 +303,7 @@ def test_truncated_mixture(
         # uhm. what would the bonferroni be?
         # with missing channels, non-smooth stuff is hard.
         # by hard, I mean that a low atol is required.
-        z = 15 * (
+        z = 10 * (
             1
             + 5 * (t_w != "zero")
             + 5 * (corruption != 0.0)
@@ -327,8 +330,8 @@ def test_truncated_mixture(
         wtw0 = w0.mT.bmm(w0)
         wtw_ = w_.mT.bmm(w_)
         diff = wtw0 - wtw_.cpu()
+        diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
         if cmask is not None:
-            diff = diff.view(K, TEST_RANK, nc, TEST_RANK, nc)
             wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
             diff.mul_(wcmask)
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
