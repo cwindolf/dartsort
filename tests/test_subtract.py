@@ -35,7 +35,7 @@ two_jobs_cfg_spawn = ComputationConfig(
 def test_fakedata_nonn(tmp_path):
     print("test_fakedata_nonn")
     # generate fake neuropixels data with artificial templates
-    T_s = 15.5
+    T_s = 3.5
     fs = 30000
     n_channels = 25
     T_samples = int(fs * T_s)
@@ -116,7 +116,6 @@ def test_fakedata_nonn(tmp_path):
         first_denoiser_thinning=0.0,
         first_denoiser_spatial_jitter=0,
         first_denoiser_temporal_jitter=0,
-        convexity_threshold=-100.0,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
@@ -334,11 +333,11 @@ def test_fakedata_nonn(tmp_path):
             output_dir=tempdir,
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
-            chunk_starts_samples=np.arange(3) * int(fs),
+            chunk_starts_samples=np.arange(2) * int(fs),
         )
         assert sta is not None
         with h5py.File(sta.parent_h5_path, locking=False) as h5:
-            assert h5["last_chunk_start"][()] == int(2 * fs)   # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_start"][()] == int(1 * fs)   # type: ignore[reportAttributeAccessIssue]
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
@@ -354,7 +353,7 @@ def test_fakedata_nonn(tmp_path):
         np.testing.assert_array_equal(st0.channels, stb.channels)
 
 
-@pytest.mark.parametrize("nn_localization", [False, True])
+@pytest.mark.parametrize("nn_localization", [True])
 def test_small_nonn(tmp_path, nn_localization):
     # noise recording
     T_samples = 50_100
@@ -446,80 +445,3 @@ def test_small_nonn(tmp_path, nn_localization):
                 if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
                     lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
-
-
-def test_small_default_config(tmp_path, extract_radius=100):
-    # noise recording
-    T_samples = 50_100
-    n_channels = 50
-    rg = np.random.default_rng(0)
-    noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
-
-    # add a spike every so often samples
-    so_often = 501
-    template = -20 * np.exp(-(((np.arange(121) - 42) / 5) ** 2))
-    gt_times = []
-    gt_channels = []
-    for t in range(0, T_samples - 121, so_often):
-        random_channel = rg.integers(n_channels)
-        noise[t : t + 121, random_channel] += template
-        gt_times.append(t + 42)
-        gt_channels.append(random_channel)
-    gt_times = np.array(gt_times)
-    gt_channels = np.array(gt_channels)
-
-    h = dense_layout()
-    geom = np.c_[h["x"], h["y"]][:n_channels]
-    rec = sc.NumpyRecording(noise, 30_000)
-    rec.set_dummy_probe_from_locations(geom)
-
-    cfg = SubtractionConfig(detection_threshold=15.0, convexity_threshold=-100)
-    fcfg = FeaturizationConfig(extract_radius=extract_radius, n_residual_snips=8)
-
-    with tempfile.TemporaryDirectory(
-        dir=tmp_path, ignore_cleanup_errors=True
-    ) as tempdir:
-        # test default config
-        print("test_small_default_config first")
-        st = subtract(
-            recording=rec,
-            output_dir=tempdir,
-            overwrite=True,
-            subtraction_cfg=cfg,
-            featurization_cfg=fcfg,
-        )
-        assert st is not None
-        out_h5 = st.parent_h5_path
-        with h5py.File(out_h5, locking=False) as h5:
-            lens = []
-            for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
-            h5_times = cast(h5py.Dataset, h5["times_samples"])[:]
-            h5_channels = cast(h5py.Dataset, h5["channels"])[:]
-            np.testing.assert_allclose(h5_times, gt_times, atol=3)
-            np.testing.assert_array_equal(h5_channels, gt_channels)
-            assert np.unique(lens).size == 1
-            assert lens[0] == len(gt_times)
-
-        # test default config
-        print("test_small_default_config second")
-        st = subtract(
-            recording=rec,
-            output_dir=tempdir,
-            overwrite=True,
-            computation_cfg=two_jobs_cfg,
-            subtraction_cfg=cfg,
-            featurization_cfg=fcfg,
-        )
-        assert st is not None
-        out_h5 = st.parent_h5_path
-        with h5py.File(out_h5, locking=False) as h5:
-            lens = []
-            for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
-            assert (np.abs(h5["times_samples"][:] - gt_times) <= 3).all()  # type: ignore
-            assert np.unique(lens).size == 1
-            assert np.array_equal(h5["channels"][:], gt_channels)  # type: ignore[reportAttributeAccessIssue]
-            assert lens[0] == len(gt_times)

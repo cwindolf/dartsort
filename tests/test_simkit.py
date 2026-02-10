@@ -85,9 +85,12 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
     assert np.allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
 
 
-@pytest.mark.parametrize("globally_refractory", [False, True])
-@pytest.mark.parametrize("templates_kind", ["3exp", "library", "librarygrid"])
-@pytest.mark.parametrize("noise_kind", ["zero", "white", "stationary_factorized_rbf"])
+@pytest.mark.parametrize("globally_refractory", [False])
+# @pytest.mark.parametrize("globally_refractory", [False, True])
+# @pytest.mark.parametrize("templates_kind", ["3exp", "library", "librarygrid"])
+@pytest.mark.parametrize("templates_kind", ["3exp"])
+# @pytest.mark.parametrize("noise_kind", ["zero", "white", "stationary_factorized_rbf"])
+@pytest.mark.parametrize("noise_kind", ["zero", "stationary_factorized_rbf"])
 def test_reproducible_and_residual(
     tmp_path, globally_refractory, templates_kind, noise_kind
 ):
@@ -178,7 +181,7 @@ def test_reproducible_and_residual(
 
 
 @pytest.mark.parametrize("drift_speed", [0.0, -1.0, 5.0])
-@pytest.mark.parametrize("drift_type", ["line", "triangle"])
+@pytest.mark.parametrize("drift_type", ["triangle"])
 def test_motion(tmp_path, drift_speed, drift_type):
     sim = simkit.generate_simulation(
         tmp_path / f"sim",

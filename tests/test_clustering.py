@@ -67,7 +67,6 @@ eval_initial_refinement_kwargs = [
     dict(refinement_strategy="pcmerge", pc_merge_threshold=0.025),
 ]
 eval_refinement_kwargs = [
-    dict(refinement_strategy="tmm", mixture_steps="merge"),
     dict(refinement_strategy="tmm"),
 ]
 

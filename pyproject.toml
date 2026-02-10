@@ -31,7 +31,7 @@ omit = ["*/vis/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--log-level=14 --durations=25"
+addopts = "--log-level=14 --durations=100"
 filterwarnings = [
   'ignore:The extractor is not serializable to file. The provenance will not be saved.:UserWarning',
 ]

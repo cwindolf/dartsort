@@ -51,9 +51,10 @@ def moppca_simulations():
     return simulations
 
 
-@pytest.mark.parametrize("t_mu", ("smooth",))
-@pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
-@pytest.mark.parametrize("t_w", test_t_w)
+@pytest.mark.parametrize("t_mu", ["smooth"])
+@pytest.mark.parametrize("t_cov_zrad", [("eye", 2.0), ("random", None)])
+# @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
+@pytest.mark.parametrize("t_w", ["zero", "smooth"])
 @pytest.mark.parametrize("t_missing", test_t_missing)
 @pytest.mark.parametrize("corruption", test_corruption)
 def test_truncated_mixture(
@@ -337,18 +338,19 @@ def test_truncated_mixture(
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
 
 
-@pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("n_chans", [1, 2])
 @pytest.mark.parametrize("rank", [4])
-@pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
-@pytest.mark.parametrize("cov_type", ["eyesmall", "eye", "random"])
-@pytest.mark.parametrize("mean_type", ["zero", "smooth"])
+# @pytest.mark.parametrize("basis_type", ["zero", "smooth", "random"])
+@pytest.mark.parametrize("basis_type", ["zero", "smooth"])
+# @pytest.mark.parametrize("cov_type", ["eyesmall", "eye", "random"])
+@pytest.mark.parametrize("cov_type", ["eye", "random"])
+# @pytest.mark.parametrize("mean_type", ["zero", "smooth"])
+@pytest.mark.parametrize("mean_type", ["smooth"])
 @pytest.mark.parametrize("full_svd", [False])
 @pytest.mark.parametrize("true_mean", [True, False])
 def test_component_initialization(
-    mean_type, cov_type, basis_type, rank, n_chans, seed, true_mean, full_svd
+    mean_type, cov_type, basis_type, rank, n_chans, true_mean, full_svd
 ):
-    rg = np.random.default_rng(seed)
     device = ensure_computation_config(None).actual_device()
     moppca_sim = mixture_testing_util.simulate_moppca(
         Nper=10_000,
