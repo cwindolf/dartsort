@@ -399,19 +399,23 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 }
 
                 # residual snippets
-                residual = h5.create_dataset(
-                    "residual",
-                    shape=(n_residual_snips, *self.segment.wf_shape),
-                    maxshape=(n_residual_snips, *self.segment.wf_shape),
-                    chunks=(16, *self.segment.wf_shape),
-                    dtype=f_dt,
-                )
-                residual_times = h5.create_dataset(
-                    "residual_times_seconds",
-                    shape=(n_residual_snips,),
-                    maxshape=(n_residual_snips,),
-                    dtype=f_dt,
-                )
+                if n_residual_snips:
+                    residual = h5.create_dataset(
+                        "residual",
+                        shape=(n_residual_snips, *self.segment.wf_shape),
+                        maxshape=(n_residual_snips, *self.segment.wf_shape),
+                        chunks=(min(16, n_residual_snips), *self.segment.wf_shape),
+                        dtype=f_dt,
+                    )
+                    residual_times = h5.create_dataset(
+                        "residual_times_seconds",
+                        shape=(n_residual_snips,),
+                        maxshape=(n_residual_snips,),
+                        chunks=(min(16, n_residual_snips),),
+                        dtype=f_dt,
+                    )
+                else:
+                    residual = residual_times = None
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
@@ -443,13 +447,18 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                         continue
                     assert nrs == cast(np.ndarray, s["residual"]).shape[0]
                     assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
+                    assert residual is not None
+                    assert residual_times is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
                     residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
                     resid_ix += nrs
-                if resid_ix != n_residual_snips:
+                if residual is not None and resid_ix != n_residual_snips:
+                    assert residual_times is not None
                     residual.resize((resid_ix, *residual.shape[1:]))
                     residual_times.resize((resid_ix, *residual_times.shape[1:]))
-                assert residual.shape[0] == residual_times.shape[0] == resid_ix
+                if residual is not None:
+                    assert residual_times is not None
+                    assert residual.shape[0] == residual_times.shape[0] == resid_ix
                 assert i1_prev == n
             assert n_injected == n
 
