@@ -34,6 +34,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         n_oversamples=10,
         niter=21,
         max_waveforms=20_000,
+        batch_size=4096,
         fit_dtype=torch.double,
     ):
         if fit_radius is not None:
@@ -49,6 +50,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.centered = centered
         self.whiten = whiten
         self.temporal_slice = temporal_slice
+        self.batch_size = batch_size
 
         # fit control
         self.fit_radius = fit_radius
@@ -61,6 +63,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         # gizmo
         self._needs_fit = True
         self.shape = (rank, channel_index.shape[1])
+        self.nt = None
 
     def initialize_spike_length_dependent_params(self):
         nt = self.spike_length_samples
@@ -70,6 +73,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
             nt = self.b._temporal_ix.numel()
+        self.nt = nt
         self.register_buffer("mean", torch.zeros(nt))
         self.register_buffer("components", torch.zeros(self.rank, nt))
         self.register_buffer("whitener", torch.zeros(self.rank))
@@ -100,21 +104,20 @@ class BaseTemporalPCA(BaseWaveformModule):
             channels = channels[choices]
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         self.dtype = waveforms.dtype
-        train_channel_index = self.b.channel_index
-        if waveforms.device != train_channel_index.device:
-            waveforms = waveforms.to(train_channel_index.device)
-            channels = channels.to(train_channel_index.device)
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
                 channels,
-                self.channel_index,
-                self.geom,
+                self.channel_index.to(device=waveforms.device),
+                self.geom.to(device=waveforms.device),
                 self.fit_radius,
             )
+        else:
+            train_channel_index = self.b.channel_index.to(waveforms.device)
         _, waveforms_fit = get_channels_in_probe(
             waveforms, channels, train_channel_index
         )
+        waveforms_fit = waveforms_fit.to(self.b.channel_index.device)
 
         if self.centered:
             mean = waveforms_fit.mean(0)
@@ -145,7 +148,9 @@ class BaseTemporalPCA(BaseWaveformModule):
     def needs_fit(self):
         return self._needs_fit
 
-    def _temporal_slice(self, waveforms: torch.Tensor, time_shifts=None) -> torch.Tensor:
+    def _temporal_slice(
+        self, waveforms: torch.Tensor, time_shifts=None
+    ) -> torch.Tensor:
         if self.temporal_slice is None:
             return waveforms
 
@@ -163,31 +168,69 @@ class BaseTemporalPCA(BaseWaveformModule):
         return waveforms
 
     def _transform_in_probe(self, waveforms_in_probe):
-        x = waveforms_in_probe
-        if self.centered:
-            x = x - self.mean
-        W = self.components
+        n = waveforms_in_probe.shape[0]
         if self.whiten:
             W = self.b.components / self.b.whitener
-        x = x @ W.T
-        return x
+        else:
+            W = self.b.components
+        out = waveforms_in_probe.new_empty((n, self.rank))
+        dev = self.b.components.device
+        same_dev = out.device == dev
+        for i0 in range(0, n, self.batch_size):
+            i1 = min(n, i0 + self.batch_size)
+            x = waveforms_in_probe[i0:i1].to(device=dev)
+            if self.centered:
+                x = x - self.mean
+            if same_dev:
+                torch.mm(x, W.T, out=out[i0:i1])
+            else:
+                out[i0:i1] = (x @ W.T).to(out)
+        return out
 
     def _inverse_transform_in_probe(self, features):
-        W = self.b.components
         if self.whiten:
-            W = W * self.b.whitener
-        if self.centered:
-            return torch.addmm(self.b.mean, features, W)
-        return torch.mm(features, W)
+            W = self.b.components * self.b.whitener
+        else:
+            W = self.b.components
+        assert self.nt is not None
+        n = features.shape[0]
+        out = features.new_zeros((n, self.nt))
+        dev = self.b.components.device
+        for i0 in range(0, n, self.batch_size):
+            i1 = min(n, i0 + self.batch_size)
+            x = features[i0:i1].to(device=dev)
+            if out.device == dev:
+                if self.centered:
+                    torch.addmm(self.b.mean, x, W, out=out[i0:i1])
+                else:
+                    torch.mm(x, W, out=out[i0:i1])
+            else:
+                if self.centered:
+                    out[i0:i1] = torch.addmm(self.b.mean, x, W).to(out)
+                else:
+                    out[i0:i1] = torch.mm(x, W).to(out)
+        return out
 
     def _project_in_probe(self, waveforms_in_probe):
-        if self.centered:
-            return torch.addmm(
-                self.b.mean,
-                waveforms_in_probe - self.mean,
-                self.b.components.T @ self.b.components,
-            )
-        return torch.mm(waveforms_in_probe, self.b.components.T @ self.b.components)
+        n = waveforms_in_probe.shape[0]
+        out = torch.empty_like(waveforms_in_probe)
+        proj = self.b.components.T @ self.b.components
+        dev = proj.device
+        same_dev = out.device == dev
+        for i0 in range(0, n, self.batch_size):
+            i1 = min(n, i0 + self.batch_size)
+            x = waveforms_in_probe[i0:i1].to(device=dev)
+            if same_dev:
+                if self.centered:
+                    torch.addmm(self.b.mean, x - self.mean, proj, out=out[i0:i1])
+                else:
+                    torch.mm(waveforms_in_probe, proj, out=out[i0:i1])
+            else:
+                if self.centered:
+                    out[i0:i1] = torch.addmm(self.b.mean, x - self.mean, proj).to(out)
+                else:
+                    out[i0:i1] = torch.mm(x, proj).to(out)
+        return out
 
     def force_reconstruct(self, features):
         ndim = features.ndim
@@ -286,8 +329,9 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
+        dev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels, self.channel_index
+            waveforms, channels.to(device=dev), self.channel_index.to(device=dev)
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)
@@ -310,15 +354,13 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
         if channel_index is None:
             channel_index = self.b.channel_index
+        dev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels, channel_index
+            waveforms, channels.to(device=dev), channel_index.to(device=dev)
         )
         features_in_probe = self._transform_in_probe(waveforms_in_probe)
-        features = torch.full(
-            (waveforms.shape[0], self.rank, channel_index.shape[1]),
-            torch.nan,
-            dtype=features_in_probe.dtype,
-            device=features_in_probe.device,
+        features = features_in_probe.new_full(
+            (waveforms.shape[0], self.rank, channel_index.shape[1]), torch.nan
         )
         features = set_channels_in_probe(
             features_in_probe,

@@ -567,8 +567,9 @@ class SubtractionPeeler(BasePeeler):
                     fit_max_reweighting=self.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",
                     waveforms_dataset_name="subtract_fit_waveforms",
-                    device=device,
+                    device="cpu" if which == "denoisers" else device,
                 )
+                # these are on CPU for now.
                 assert fit_feats is not None
                 fit_denoise = WaveformPipeline(fit_feats)
                 fit_denoise = fit_denoise.to(device)
@@ -634,7 +635,6 @@ class SubtractionPeeler(BasePeeler):
                     voltages_dataset_name="voltages",
                     waveforms_dataset_name="waveforms",
                     subsample_by_weighting=True,
-                    device=device,
                 )
 
                 # fit the thing

@@ -111,25 +111,34 @@ def test_all_transformers():
             if name not in skip_me
         ],
     )
+    if torch.cuda.is_available():
+        pipeline = pipeline.to(torch.device("cuda"))
 
+    # Stay on CPU here, for fit.
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
     print(f"{waveforms.requires_grad=}")
     print("-- Precompute")
     pipeline.precompute()
     print("-- Pre-fit check")
-    _check_saveload(geom, channel_index, pipeline)
+    _check_saveload(geom, channel_index, pipeline.cpu())
+    if torch.cuda.is_available():
+        pipeline = pipeline.to(torch.device("cuda"))
     print("-- Fit")
     pipeline.fit(recording=noise_rec, waveforms=waveforms, channels=channels)
     assert not pipeline.needs_fit()
     print("-- Forward")
+    # now to device
+    if torch.cuda.is_available():
+        waveforms = waveforms.cuda()
+        channels = channels.cuda()
     twaveforms, features = pipeline(waveforms, channels=channels)
     assert twaveforms.dtype == waveforms.dtype
     assert twaveforms.shape == waveforms.shape
     assert torch.equal(torch.isnan(twaveforms), torch.isnan(waveforms))
     assert torch.equal(
-        torch.isnan(twaveforms[:, 0]),
-        torch.from_numpy(channel_index[channels] == len(geom)),
+        torch.isnan(twaveforms[:, 0]).cpu(),
+        torch.from_numpy(channel_index[channels.cpu()] == len(geom)),
     )
     for k, v in features.items():
         assert len(v) == n_spikes
@@ -144,7 +153,7 @@ def test_all_transformers():
         else:
             assert v.isfinite().all()
     print("-- Final check")
-    _check_saveload(geom, channel_index, pipeline)
+    _check_saveload(geom, channel_index, pipeline.cpu())
 
 
 if __name__ == "__main__":
