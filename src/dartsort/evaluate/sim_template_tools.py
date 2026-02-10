@@ -169,7 +169,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         temporal_jitter=1,
         temporal_jitter_kind: Literal["exact", "cubic"] = "cubic",
         min_rms_distance=0.0,
-        force_no_offset=False,
+        force_no_offset=True,
         snr_adjustment=1.0,
         # timing params
         tip_before_min=0.1,

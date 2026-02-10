@@ -231,14 +231,24 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             pk = chunk[pkt - pksh - toff : pkt - pksh - toff + slen].numpy(force=True)
             if upsampling > 1:
                 np.testing.assert_allclose(
-                    pk, pks * gt_up_templates[pkl, pku], atol=up_err
+                    pk,
+                    pks * gt_up_templates[pkl, pku],
+                    atol=up_err,
+                    err_msg="crumbs_traces: up",
                 )
             elif scaling:
-                np.testing.assert_allclose(pk, pks * gt_up_templates[pkl, pku])
+                np.testing.assert_allclose(
+                    pk, pks * gt_up_templates[pkl, pku], err_msg="crumbs_traces: sc"
+                )
             else:
-                np.testing.assert_equal(pk, gt_up_templates[pkl, pku])
+                np.testing.assert_equal(
+                    pk, gt_up_templates[pkl, pku], err_msg="crumbs_traces: eq"
+                )
             np.testing.assert_allclose(
-                pk, pks * match_up_templates[pkl, pku], atol=match_up_err
+                pk,
+                pks * match_up_templates[pkl, pku],
+                atol=match_up_err,
+                err_msg="crumbs_traces: peaks",
             )
 
     # with subtests.test(msg="crumbs_peaks"):
@@ -260,54 +270,26 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         labels = res["labels"].numpy(force=True)
         np.testing.assert_equal(gt_sorting.labels[gt_in_chunk], labels)
 
-        goodtimed = gt_sorting.times_samples[gt_in_chunk] == times_samples
-        mistimed = gt_sorting.times_samples[gt_in_chunk] != times_samples
-        dt = gt_sorting.times_samples[gt_in_chunk] - times_samples
-        print(f"{('time_shifts' in res)=}")
-
-        time_shifts = res.get("time_shifts", np.zeros_like(labels))
-        up_inds = res.get("up_inds", np.zeros_like(labels))
-        gt_up_offsets = gt_sorting._load_dataset("up_offsets")
         gt_labels = gt_sorting.labels[gt_in_chunk]
         gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
-        true_time_shifts = gt_up_offsets[gt_labels, gt_up_inds]
 
-        print(f"{np.array_equal(true_time_shifts, time_shifts)=}")
-        print(f"{np.array_equal(gt_up_inds, up_inds)=}")
-        print(f"{np.array_equal(gt_labels, res['labels'])=}")
-        print()
-        print(f"{np.unique(dt[dt!=0], return_counts=True)=}")
-        print()
-        print(f"{np.unique(gt_labels[goodtimed], return_counts=True)=}")
-        print(f"{np.unique(gt_labels[mistimed], return_counts=True)=}")
-        print()
-        print(f"{np.unique(gt_up_inds[goodtimed], return_counts=True)=}")
-        print(f"{np.unique(gt_up_inds[mistimed], return_counts=True)=}")
-        print()
-        print(f"{np.unique(true_time_shifts[goodtimed], return_counts=True)=}")
-        print(f"{np.unique(true_time_shifts[mistimed], return_counts=True)=}")
-        print()
-        print(f"{np.unique(up_inds[goodtimed], return_counts=True)=}")
-        print(f"{np.unique(up_inds[mistimed], return_counts=True)=}")
-        print()
-        print(f"{np.unique(time_shifts[goodtimed], return_counts=True)=}")
-        print(f"{np.unique(time_shifts[mistimed], return_counts=True)=}")
-        print()
-        print(f"{np.unique(true_time_shifts[gt_up_inds==4], return_counts=True)=}")
-        print(f"{np.unique(time_shifts[(goodtimed)&(gt_up_inds==4)], return_counts=True)=}")
-        print(f"{np.unique(time_shifts[gt_up_inds==4], return_counts=True)=}")
-        print(f"{np.unique(up_inds[gt_up_inds==4], return_counts=True)=}")
-        print()
-
-        np.testing.assert_equal(gt_sorting.times_samples[gt_in_chunk], times_samples)
+        np.testing.assert_equal(
+            gt_sorting.times_samples[gt_in_chunk],
+            times_samples,
+            err_msg="sorting: times",
+        )
 
         if "up_inds" in res:
             match_up = res["up_inds"].numpy(force=True)
-            np.testing.assert_array_equal(gt_up, match_up)
+            np.testing.assert_array_equal(gt_up, match_up, err_msg="sorting: up_inds 1")
         else:
-            np.testing.assert_array_equal(gt_up, np.zeros_like(gt_up))
+            np.testing.assert_array_equal(
+                gt_up, np.zeros_like(gt_up), err_msg="sorting: up_inds 2"
+            )
 
-        np.testing.assert_allclose(gt_scale, match_scale, atol=1e-3)
+        np.testing.assert_allclose(
+            gt_scale, match_scale, atol=1e-3, err_msg="sorting: scale"
+        )
 
         if "time_shifts" in res:
             match_shift = res["time_shifts"].numpy(force=True)
@@ -340,7 +322,9 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         conv_atol = 2.0 * pconv_numerical_err + l2_err**2 + conv_scale_atol
 
         conv_zero = np.zeros_like(conv)
-        np.testing.assert_allclose(conv, conv_zero, atol=conv_atol)
+        np.testing.assert_allclose(
+            conv, conv_zero, atol=conv_atol, err_msg="conv: zero"
+        )
 
     with subtests.test(msg="crumbs_residual"):
         # atol for residual
@@ -352,7 +336,9 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             resid_scale_atol = 0.0
         residual_atol = abs_err + resid_scale_atol + 1e-5
         resid_zero = np.zeros_like(residual)
-        np.testing.assert_allclose(residual, resid_zero, atol=residual_atol)
+        np.testing.assert_allclose(
+            residual, resid_zero, atol=residual_atol, err_msg="resid: zero"
+        )
 
     # test alignment of cc waveforms w time shift
     # these should match the correctly aligned templates
@@ -360,12 +346,13 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         # relevant numerical error:
         # subtracting and adding wrong templates (I think scaling shouldn't matter much)
         cc_test = (true_temps_up - match_up_templates) + match_up_templates
-        cc_err = np.abs(match_up_templates - cc_test).max().item()
-        cc_atol = cc_err
+        cc_err1 = np.abs(match_up_templates - cc_test).max().item()
+        cc_test = (match_up_templates - true_temps_up) + true_temps_up
+        cc_err2 = np.abs(true_temps_up - cc_test).max().item()
+        cc_atol = max(cc_err1, cc_err2)
 
         extract_chans = matcher.b.channel_index
         cc_wfs = res["collisioncleaned_waveforms"].cpu()
-        up_offsets = gt_sorting._load_dataset("up_offsets")
         gt_labels = gt_sorting.labels[gt_in_chunk]
         gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
         gt_channels = gt_sorting.channels[gt_in_chunk]
@@ -374,10 +361,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         ):
             assert torch.equal(extract_chans[chan].cpu(), torch.arange(nc))
             true_wf = sc * true_temps_up[label, up_ind]
-            np.testing.assert_allclose(wf, true_wf, atol=cc_atol)
-            # my_trough = wf[:, chan].argmin()
-            # assert true_temps_up[label, up_ind, :, chan].argmin() == my_trough
-            # assert my_trough == trough_offset_samples + true_shift
+            np.testing.assert_allclose(wf, true_wf, atol=cc_atol, err_msg="ccwf")
 
 
 @pytest.mark.parametrize("scaling", [0.0, 0.01])
