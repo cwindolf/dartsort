@@ -178,6 +178,7 @@ def _dartsort_impl(
     # if there are previous results stored, resume where they leave off
     # TODO uhh. overwrite, right?
     next_step, sorting, motion_est = ds_fast_forward(store_dir, cfg)
+    ret["motion_est"] = motion_est
 
     if next_step == 0:
         # first step: initial detection and motion estimation
