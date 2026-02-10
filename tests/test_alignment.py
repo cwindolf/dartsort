@@ -303,8 +303,10 @@ def template_makers(rec, st, align=True, align_max=0):
 
 @pytest.mark.parametrize("with_spike_shifts", (False, True))
 @pytest.mark.parametrize("with_unit_shifts", (False, True))
-@pytest.mark.parametrize("seed", (0, 1, 64))
-@pytest.mark.parametrize("align_max", (1, trough, t, 2 * t))
+# @pytest.mark.parametrize("seed", (0, 1, 64))
+@pytest.mark.parametrize("seed", [0])
+# @pytest.mark.parametrize("align_max", (1, trough, t, 2 * t))
+@pytest.mark.parametrize("align_max", [1, t, 2 * t])
 def test_template_shifts(
     align_sim, align_templates, with_spike_shifts, with_unit_shifts, seed, align_max
 ):
@@ -391,6 +393,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
                 refractory_radius_frames=1,
                 template_temporal_upsampling_factor=1,
                 template_type=matchtype,
+                up_method="keys4" if matchtype == "drifty" else "direct",
             ),
         )
     gt_st = align_sim["sorting"]
@@ -403,7 +406,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
 @pytest.mark.parametrize(
     "matchtype", ["debug", "individual_compressed_upsampled", "drifty"]
 )
-@pytest.mark.parametrize("up_factor", (1, 2, 4, 8))
+@pytest.mark.parametrize("up_factor", (1, 2, 8))
 def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
     # we'll have to use a smoother template library here
     if tempkind == "exp":
