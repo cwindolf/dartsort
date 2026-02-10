@@ -9,8 +9,6 @@ on:
     branches:
       - "*"
   workflow_dispatch:
-    branches:
-      - "*"
 
 jobs:
 
