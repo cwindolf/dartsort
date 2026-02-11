@@ -23,6 +23,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: dartsort
+      
+      - name: Git Describe
+        run: pushd dartsort/ && git describe --tags && popd
 
       - name: Get DREDge
         uses: actions/checkout@v4
