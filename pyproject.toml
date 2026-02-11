@@ -46,7 +46,7 @@ full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykerne
 "dartsort.pretrained" = ["*.pt", "*.npz", "*.npy"]
 
 [tool.versioningit]
-# use their defaults.
+# use their defaults
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
