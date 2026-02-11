@@ -72,7 +72,7 @@ class DARTsortUserConfig:
     )
     alignment_ms: Annotated[float, Field(gt=0)] = argfield(
         default=1.5,
-        doc="Time shift allowed when aligning events.",
+        doc="Largest time shift allowed when re-aligning events.",
     )
 
     # -- thresholds
@@ -158,11 +158,15 @@ class DARTsortUserConfig:
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
     window_scale_um: Annotated[float, Field(gt=0)] = 450.0
-    window_margin_um: Annotated[float, Field(gt=0)] | None = None
+    window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
+        default=None, arg_type=float_or_none
+    )
     max_dt_s: Annotated[float, Field(gt=0)] = 1000.0
-    max_disp_um: Annotated[float, Field(gt=0)] | None = None
+    max_disp_um: Annotated[float, Field(gt=0)] | None = argfield(
+        default=None, arg_type=float_or_none
+    )
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
-    min_amplitude: float | None = argfield(default=None, arg_type=float)
+    min_amplitude: float | None = argfield(default=None, arg_type=float_or_none)
 
 
 @cfg_dataclass
