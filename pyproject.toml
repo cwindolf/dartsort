@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64.0", "setuptools-scm>=8"]
+requires = ["setuptools>=64.0", "setuptools-scm>=8", "versioningit"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "DARTsort"
-version = "0.3.5"
+name = "dartsort"
+dynamic = ["version"]
 authors = [{ name = "Charlie Windolf", email = "ciw2107@columbia.edu" }]
 description = "DARTsort"
 readme = "README.md"
@@ -22,12 +22,12 @@ dependencies = [
   "numpy>=2.0.0;python_version>='3.13'",
   "opt-einsum",
   "pandas",
-  "packaging",
   "probeinterface",
   "pydantic",
   "scipy>=1.13",
   "scikit-learn",
   "spikeinterface>=0.101.2",
+  "sympy",
   "torch>=2.0",
   "tqdm",
 ]
@@ -44,6 +44,9 @@ full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykerne
 
 [tool.setuptools.package-data]
 "dartsort.pretrained" = ["*.pt", "*.npz", "*.npy"]
+
+[tool.versioningit]
+# use their defaults.
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
