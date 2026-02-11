@@ -228,8 +228,8 @@ class DeveloperConfig(DARTsortUserConfig):
     # interpolation for features
     interp_method: InterpMethod = "kriging"
     interp_kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = None
-    extrap_kernel: InterpKernel | None = None
+    extrap_method: InterpMethod | None = argfield(default=None, arg_type=str_or_none)
+    extrap_kernel: InterpKernel | None = argfield(default=None, arg_type=str_or_none)
     kriging_poly_degree: int = 1
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5
