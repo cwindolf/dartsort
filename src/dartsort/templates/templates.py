@@ -481,7 +481,7 @@ def _get_templates_by_chunk_block(
         show_progress=show_progress, computation_cfg=computation_cfg
     )
 
-    assert getrefcount(peeler) == 2, (
+    assert getrefcount(peeler) <= 2, (
         f"Leaking the template peeler {getrefcount(peeler)=}."
     )
     del peeler
