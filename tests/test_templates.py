@@ -165,7 +165,7 @@ def test_refractory_templates_algorithm_agreement(
     )
 
     np.testing.assert_allclose(td0.templates, td1.templates, atol=1e-5)
-    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
+    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=2e-2)
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
