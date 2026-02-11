@@ -271,7 +271,6 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.template_pos = pos
         self.template_alpha = alpha
         self.offsets = sct[:, :, 0].argmin(1) - self.trough_offset_samples()
-        print(f"{self.offsets=}")
         self.singlechan_templates = sct[..., 0]
         self.singlechan_templates_up = sct_up[..., 0]
 
@@ -777,14 +776,15 @@ def simulate_point_source_templates(
     min_rms_distance: float = 0.0,
     oversampling: int = 4,
     sampling_growth: int = 2,
-    max_oversampling: int = 40,
-    max_tries: int = 512,
+    max_oversampling: int = 16,
+    max_tries: int = 10,
     force_no_offset: bool = False,
     dtype: np.typing.DTypeLike,
 ):
-    if not min_rms_distance:
+    if not (min_rms_distance or force_no_offset):
         oversampling = max_oversampling = sampling_growth = 1
     puff = oversampling
+    rg = np.random.default_rng(rg)
 
     for _ in range(max_tries):
         sample_n = min(n_units * max_oversampling, n_units * puff)
@@ -830,10 +830,16 @@ def simulate_point_source_templates(
             if choices is None:
                 puff = min(max_oversampling, puff * sampling_growth)
                 continue
-            pos = pos[choices]
-            alpha = alpha[choices]
-            singlechan_templates = singlechan_templates[choices]
-            singlechan_templates_up = singlechan_templates_up[choices]
+        elif pos.shape[0] > n_units:
+            choices = rg.choice(pos.shape[0], size=n_units, replace=False)
+            choices.sort()
+        else:
+            choices = slice(None)
+
+        pos = pos[choices]
+        alpha = alpha[choices]
+        singlechan_templates = singlechan_templates[choices]
+        singlechan_templates_up = singlechan_templates_up[choices]
 
         break
     else:
