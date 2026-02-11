@@ -24,8 +24,8 @@ jobs:
         with:
           path: dartsort
       
-      - name: Git Describe
-        run: pushd dartsort/ && pwd && ls -lah && git describe --tags && popd
+      - name: Fetch tags and describe
+        run: pushd dartsort/ && git fetch --tags && git describe --tags && popd
 
       - name: Get DREDge
         uses: actions/checkout@v4
