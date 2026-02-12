@@ -55,7 +55,7 @@ class DARTsortUserConfig:
     copy_recording_to_tmpdir: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     workdir_follow_symlinks: bool = False
-    tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
+    tmpdir_parent: str | None = argfield(default=None, arg_type=str_or_none)
     save_intermediates: bool = False
     save_final_features: bool = True
 
@@ -117,7 +117,7 @@ class DARTsortUserConfig:
         "when denoising and subtracting NN-denoised events.",
     )
     deduplication_radius_um: Annotated[float, Field(gt=0)] = argfield(
-        default=100.0,
+        default=50.0,
         doc="During initial detection, if two spike events occur at the "
         "same time within this radius, then the smaller of the two is "
         "ignored. But also all of the secondary channels of the big one, "
@@ -290,3 +290,5 @@ class DeveloperConfig(DARTsortUserConfig):
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
     save_everything_on_error: bool = False
+    link_from: str | None = argfield(default=None, arg_type=str_or_none)
+    link_step: Literal["denoising", "detection", "refined0"] = "refined0"

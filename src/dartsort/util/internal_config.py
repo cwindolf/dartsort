@@ -264,7 +264,7 @@ class SubtractionConfig:
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
-    spatial_dedup_radius: float | None = 100.0
+    spatial_dedup_radius: float | None = 50.0
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
@@ -312,7 +312,7 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
+    spatial_dedup_radius: float = 50.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
@@ -756,7 +756,9 @@ class DARTsortInternalConfig:
     copy_recording_to_tmpdir: bool = False
     workdir_follow_symlinks: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
-    tmpdir_parent: str | Path | None = None
+    tmpdir_parent: str | None = None
+    link_from: str | None = None
+    link_step: Literal["denoising", "detection", "refined0"] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
@@ -1048,6 +1050,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
         save_everything_on_error=cfg.save_everything_on_error,
+        link_from=cfg.link_from,
+        link_step=cfg.link_step,
     )
 
 

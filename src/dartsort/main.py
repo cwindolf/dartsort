@@ -48,6 +48,7 @@ from .util.main_util import (
     ds_dump_config,
     ds_fast_forward,
     ds_handle_delete_intermediate_features,
+    ds_handle_link_from,
     ds_save_features,
     ds_save_intermediate_labels,
     ds_save_motion_est,
@@ -107,6 +108,10 @@ def dartsort(
     # convert cfg to internal format and store it for posterity
     cfg = to_internal_config(cfg)
     ds_dump_config(cfg, output_dir)
+
+    # in benchmarking, it can be useful to resume from initial detection
+    # and/or clustering results stored in elsewhere to avoid rerunning
+    ds_handle_link_from(cfg, output_dir)
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
