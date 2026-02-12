@@ -356,6 +356,11 @@ def _handle_merge(
     new_kept_ixs = np.flatnonzero(uc <= 1)
     # original indices corresponding to kept units
     old_kept_ixs = ui[new_kept_ixs]
+    logger.dartsortverbose(
+        "Merge old unit indices, labels %s, %s",
+        old_kept_ixs.tolist(),
+        template_data.unit_ids[old_kept_ixs],
+    )
     # new indices for recomputed units
     new_recompute_ix = np.flatnonzero(uc > 1)
     # original indices corresponding to recomputed units

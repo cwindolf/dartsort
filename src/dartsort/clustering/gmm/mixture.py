@@ -2419,7 +2419,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
         scores: Scores,
-        debug: bool = True,
+        debug: bool = False,
     ) -> tuple[UnitSplitResult, UnitSplitDebugInfo | None]:
         # get dense train set slice in unit_id
         split_data = train_data.dense_slice_by_unit(
@@ -2675,7 +2675,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         scores: Scores,
         apply_adj_mask: bool = False,
         pair_mask: Tensor | None = None,
-        debug: bool = True,
+        debug: bool = False,
     ) -> GroupMergeResult:
         if group.numel() <= 1:
             return

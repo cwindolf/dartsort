@@ -262,7 +262,10 @@ def greedy_match_counts(
     step = min(1.0 / radius_frames, pdist(geom).min() / radius_um) / 2
 
     test2gt_spike, gt_unmatched = greedy_match(
-        np.c_[gt_t, gt_x], np.c_[tested_t, tested_x], dx=step
+        np.c_[gt_t, gt_x],
+        np.c_[tested_t, tested_x],
+        dx=step,
+        show_progress=show_progress,
     )
     counts = np.zeros(
         (gt_sorting.unit_ids.max() + 1, tested_sorting.unit_ids.max() + 1),
