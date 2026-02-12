@@ -1,10 +1,9 @@
 import gc
 import math
 import warnings
-from dataclasses import dataclass, field, replace
-from logging import getLogger
+from dataclasses import dataclass, field
 from sys import getrefcount
-from typing import Literal
+from typing import ClassVar, Literal
 
 import h5py
 import numpy as np
@@ -13,8 +12,11 @@ import torch.nn.functional as F
 from scipy.special import ndtri
 from spikeinterface.core import BaseRecording
 from torch.distributions import StudentT
+from tqdm.auto import trange
 
+from ..templates.get_templates import fit_tsvd
 from ..templates.superres_util import superres_sorting
+from ..templates.templates import TemplateData
 from ..transform import TemporalPCAFeaturizer, Waveform, WaveformPipeline
 from ..transform.transform_base import BaseWaveformModule
 from ..util import drift_util
@@ -25,13 +27,214 @@ from ..util.data_util import (
     subsample_to_max_count,
     yield_chunks,
 )
-from ..util.internal_config import FitSamplingConfig, TemplateConfig, WaveformConfig
-from ..util.logging_util import DARTsortLogger
+from ..util.internal_config import (
+    ComputationConfig,
+    TemplateConfig,
+    WaveformConfig,
+    default_waveform_cfg,
+)
+from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
 
-logger: DARTsortLogger = getLogger(__name__)  # type: ignore
+logger = get_logger(__name__)
+
+
+# -- TemplateData plugin
+
+
+class RunningTemplateData(TemplateData):
+    _algorithm: ClassVar = "running"
+
+    @classmethod
+    def _from_config(
+        cls,
+        *,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        template_cfg: TemplateConfig,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        overwrite=False,
+        motion_est=None,
+        units_per_job=8,
+        tsvd=None,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> TemplateData:
+        computation_cfg = ensure_computation_config(computation_cfg)
+        return get_templates_by_chunk(
+            sorting=sorting,
+            recording=recording,
+            tsvd=tsvd,
+            motion_est=motion_est,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            template_cfg=template_cfg,
+        )
+
+
+def get_templates_by_chunk(
+    *,
+    sorting: DARTsortSorting,
+    recording: BaseRecording,
+    tsvd,
+    motion_est,
+    waveform_cfg: WaveformConfig,
+    computation_cfg: ComputationConfig,
+    template_cfg: TemplateConfig,
+    show_progress: bool = True,
+    block_size=512,
+    hard_block_size=768,
+    random_seed=0,
+    dtype=np.float32,
+) -> TemplateData:
+    if template_cfg.denoising_method == "none":
+        block_size = hard_block_size = template_cfg.raw_templates_at_once
+    else:
+        block_size = template_cfg.templates_at_once
+        hard_block_size = template_cfg.max_templates_at_once
+
+    assert sorting.labels is not None
+    unit_ids = np.unique(sorting.labels)
+    unit_ids = unit_ids[unit_ids >= 0]
+    n_units = unit_ids.shape[0]
+    n_blocks = max(1, n_units // block_size)
+    n_blocks += n_units / n_blocks > hard_block_size
+    assert n_units / n_blocks <= hard_block_size
+    units_per_block = int(np.ceil(n_units / n_blocks).astype(int).item())
+
+    need_tsvd = template_cfg.denoising_method != "none"
+    if need_tsvd and tsvd is None:
+        logger.dartsortdebug("Fit or load TSVD...")
+        tsvd = fit_tsvd(
+            recording,
+            sorting,
+            dtype=dtype,
+            denoising_rank=template_cfg.denoising_rank,
+            denoising_fit_radius=template_cfg.denoising_fit_radius,
+            denoising_spikes_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
+            recompute_tsvd=template_cfg.recompute_tsvd,
+            trough_offset_samples=waveform_cfg.trough_offset_samples(
+                recording.sampling_frequency
+            ),
+            spike_length_samples=waveform_cfg.spike_length_samples(
+                recording.sampling_frequency
+            ),
+            random_seed=random_seed,
+        )
+
+    labels_tmp = np.full_like(sorting.labels, -1)
+    template_datas = []
+    if n_blocks > 1:
+        block_iter = trange(
+            0, n_units, units_per_block, desc=f"Template blocks [{n_units}:{n_blocks}]"
+        )
+    else:
+        block_iter = range(0, n_units, units_per_block)
+    for block_start in block_iter:
+        block_end = min(block_start + units_per_block, n_units)
+        if n_blocks == 1:
+            assert block_end - block_start == n_units
+
+        ids_in_block = unit_ids[block_start:block_end]
+        spikes_in_block = np.flatnonzero(np.isin(sorting.labels, ids_in_block))
+        labels_tmp[:] = -1
+        labels_tmp[spikes_in_block] = sorting.labels[spikes_in_block]
+
+        block_sorting = sorting.ephemeral_replace(labels=labels_tmp)
+        block_templates = _get_templates_by_chunk_block(
+            sorting=block_sorting,
+            recording=recording,
+            tsvd=tsvd,
+            motion_est=motion_est,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            template_cfg=template_cfg,
+            show_progress=show_progress,
+        )
+        template_datas.append(block_templates)
+        assert np.array_equal(block_templates.unit_ids, ids_in_block)
+
+    template_data = stack_template_datas(template_datas)
+    assert np.array_equal(template_data.unit_ids, unit_ids)
+    assert template_data.templates.shape[0] == unit_ids.shape[0]
+    return template_data
+
+
+def _get_templates_by_chunk_block(
+    sorting: DARTsortSorting,
+    recording,
+    tsvd,
+    motion_est,
+    waveform_cfg,
+    computation_cfg,
+    template_cfg,
+    show_progress: bool,
+):
+    from ..peel.running_template import RunningTemplates
+
+    peeler = RunningTemplates.from_config(
+        sorting=sorting,
+        recording=recording,
+        tsvd=tsvd,
+        motion_est=motion_est,
+        waveform_cfg=waveform_cfg,
+        template_cfg=template_cfg,
+    )
+
+    template_data = peeler.compute_template_data(
+        show_progress=show_progress, computation_cfg=computation_cfg
+    )
+
+    assert getrefcount(peeler) <= 2, (
+        f"Leaking the template peeler {getrefcount(peeler)=}."
+    )
+    del peeler
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return template_data
+
+
+def stack_template_datas(template_datas):
+    if len(template_datas) == 1:
+        return template_datas[0]
+    assert len(template_datas) > 0
+
+    if template_datas[0].spike_counts_by_channel is not None:
+        spike_counts_by_channel = np.concatenate(
+            [td.spike_counts_by_channel for td in template_datas]
+        )
+    else:
+        spike_counts_by_channel = None
+
+    if template_datas[0].raw_std_dev is not None:
+        raw_std_dev = np.concatenate([td.raw_std_dev for td in template_datas])
+    else:
+        raw_std_dev = None
+
+    if template_datas[0].properties is not None:
+        properties = {
+            k: np.concatenate([td.properties[k] for td in template_datas])
+            for k in template_datas[0].properties
+        }
+    else:
+        properties = None
+
+    return TemplateData(
+        templates=np.concatenate([td.templates for td in template_datas]),
+        unit_ids=np.concatenate([td.unit_ids for td in template_datas]),
+        spike_counts=np.concatenate([td.spike_counts for td in template_datas]),
+        spike_counts_by_channel=spike_counts_by_channel,
+        raw_std_dev=raw_std_dev,
+        registered_geom=template_datas[0].registered_geom,
+        trough_offset_samples=template_datas[0].trough_offset_samples,
+        properties=properties,
+    )
+
+
+# -- peeler subclass which does the work
 
 
 # TODO: don't compute things in the zero subspace.

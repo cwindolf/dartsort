@@ -331,7 +331,10 @@ def sorting_from_times_labels(
     template_cfg = dataclasses.replace(template_cfg, spikes_per_unit=spikes_per_unit)
     comp_cfg = ComputationConfig(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
     td = TemplateData.from_config(
-        recording, sorting, template_cfg, computation_cfg=comp_cfg
+        recording=recording,
+        sorting=sorting,
+        template_cfg=template_cfg,
+        computation_cfg=comp_cfg,
     )
 
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
