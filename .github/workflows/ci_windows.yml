@@ -8,7 +8,7 @@ on:
 
 jobs:
 
-  build:
+  tests_windows:
     runs-on: "windows-latest"
     defaults:
       run:

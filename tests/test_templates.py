@@ -1,26 +1,26 @@
+import tempfile
 from itertools import product
 from pathlib import Path
-import pytest
-import tempfile
 
 import numpy as np
+import pytest
 import spikeinterface.core as sc
 import torch
+from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
+from test_util import no_overlap_recording_sorting
 
 import dartsort
-from dartsort.evaluate import simkit, config_grid
+from dartsort.evaluate import config_grid, simkit
 from dartsort.peel.matching_util import pairwise, pairwise_util
 from dartsort.templates import (
+    estimate_template_library,
+    fit_tsvd,
     get_templates,
     template_util,
     templates,
-    TemplateData,
-    estimate_template_library,
 )
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.internal_config import TemplateConfig, TemplateRealignmentConfig
-from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
-from test_util import no_overlap_recording_sorting
 
 
 # simkit fixture based test of all algorithms with a global
@@ -124,7 +124,7 @@ def test_refractory_templates_algorithm_agreement(
 
     tsvd = None
     if denoising_method != "none":
-        tsvd = get_templates.fit_tsvd(sim["recording"], sim["sorting"])
+        tsvd = fit_tsvd(sim["recording"], sim["sorting"])
 
     tds = []
     for algorithm in ("running", "unitextract"):
@@ -216,7 +216,7 @@ def test_static_templates(tmp_path):
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
-            res = get_templates.get_templates(
+            res = get_templates(
                 rec,
                 sorting,
                 trough_offset_samples=0,
@@ -263,7 +263,7 @@ def test_drifting_templates(tmp_path):
                 ),
             )
 
-            res = get_templates.get_templates(
+            res = get_templates(
                 rec,
                 sorting,
                 geom=geom,
