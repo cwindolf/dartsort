@@ -332,7 +332,9 @@ class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
-    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
+    algorithm: Literal["running", "unitextract", "running_if_mean"] | str = (
+        "running_if_mean"
+    )
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
         "exp_weighted"
     )
@@ -376,16 +378,16 @@ class TemplateConfig:
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
 
-    def actual_algorithm(self) -> Literal["by_chunk", "by_unit"]:
-        if self.algorithm == "chunk_if_mean":
+    def actual_algorithm(self) -> str:
+        if self.algorithm == "running_if_mean":
             if self.reduction == "mean":
-                return "by_chunk"
+                return "running"
             else:
-                return "by_unit"
+                return "unitextract"
         return self.algorithm
 
     def __post_init__(self):
-        if self.algorithm in ("t", "loot") and self.reduction == "median":
+        if self.denoising_method in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
 

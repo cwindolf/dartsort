@@ -1,16 +1,14 @@
 import gc
 from dataclasses import dataclass, replace
 from pathlib import Path
-from sys import getrefcount
+from typing import ClassVar
 
 import numpy as np
 import torch
+from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
-from tqdm.auto import trange
-from sklearn.decomposition import TruncatedSVD, PCA
 
 from ..localize.localize_util import localize_waveforms
-from ..util import data_util, drift_util, job_util
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
@@ -19,11 +17,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
-from ..util.spiketorch import fast_nanmedian, nanmean
-from .get_templates import fit_tsvd, get_templates
-from .superres_util import superres_sorting
 from .template_util import weighted_average
-
 
 logger = get_logger(__name__)
 
@@ -51,6 +45,10 @@ class TemplateData:
     #    bin centers for each template.
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
+
+    # plugin registry for classes which actually estimate templates to hook into
+    _registry: ClassVar = {}
+    _algorithm: ClassVar = "base"
 
     def __post_init__(self):
         assert self.trough_offset_samples < self.spike_length_samples
@@ -200,11 +198,16 @@ class TemplateData:
     def unit_templates(self, unit_id):
         return self.templates[self.unit_mask(unit_id)]
 
+    def __init_subclass__(cls):
+        logger.dartsortverbose("Register template engine: %s", cls._algorithm)
+        cls._registry[cls._algorithm] = cls
+
     @classmethod
     def from_config(
         cls,
+        *,
         recording: BaseRecording,
-        sorting: DARTsortSorting,
+        sorting: DARTsortSorting | None,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_folder: Path | None = None,
@@ -214,315 +217,58 @@ class TemplateData:
         units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
-    ):
-        self = _template_data_from_config(
-            cls,
+    ) -> "TemplateData":
+        # load if saved already and not overwriting
+        if save_folder is not None:
+            save_folder = Path(save_folder)
+            if not save_folder.exists():
+                save_folder.mkdir()
+            assert save_npz_name is not None
+            npz_path = save_folder / save_npz_name
+            if npz_path.exists() and not overwrite:
+                return cls.from_npz(npz_path)
+        else:
+            npz_path = None
+
+        if sorting is None:
+            raise ValueError(
+                "TemplateData.from_config needs a sorting when its .npz file "
+                "does not exist."
+            )
+
+        self = cls._registry[template_cfg.actual_algorithm()]._from_config(
             recording=recording,
             sorting=sorting,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
-            save_folder=save_folder,
             overwrite=overwrite,
             motion_est=motion_est,
-            save_npz_name=save_npz_name,
             units_per_job=units_per_job,
             tsvd=tsvd,
             computation_cfg=computation_cfg,
         )
+
         gc.collect()
         torch.cuda.empty_cache()
+
+        if save_folder is not None:
+            assert npz_path is not None
+            self.to_npz(npz_path)
+
         return self
 
-
-def _template_data_from_config(
-    cls,
-    recording: BaseRecording,
-    sorting: DARTsortSorting,
-    template_cfg: TemplateConfig,
-    waveform_cfg: WaveformConfig = default_waveform_cfg,
-    save_folder: str | Path | None = None,
-    overwrite: bool = False,
-    motion_est=None,
-    save_npz_name: str | None = "template_data.npz",
-    units_per_job=8,
-    tsvd=None,
-    computation_cfg: ComputationConfig | None = None,
-    show_progress: bool = True,
-) -> TemplateData:
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
-
-    npz_path = None
-    if save_folder is not None:
-        save_folder = Path(save_folder)
-        if not save_folder.exists():
-            save_folder.mkdir()
-        assert save_npz_name is not None
-        npz_path = save_folder / save_npz_name
-        if npz_path.exists() and not overwrite:
-            return cls.from_npz(npz_path)
-
-    if template_cfg.actual_algorithm() == "by_chunk":
-        template_data = get_templates_by_chunk(
-            sorting=sorting,
-            recording=recording,
-            tsvd=tsvd,
-            motion_est=motion_est,
-            waveform_cfg=waveform_cfg,
-            computation_cfg=computation_cfg,
-            template_cfg=template_cfg,
-            show_progress=show_progress,
-        )
-        return template_data
-
-    if sorting is None:
-        raise ValueError(
-            "TemplateData.from_config needs a sorting when its .npz file "
-            "does not exist."
-        )
-
-    fs = recording.sampling_frequency
-    trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
-    spike_length_samples = waveform_cfg.spike_length_samples(fs)
-
-    if template_cfg.denoising_method in (None, "none"):
-        low_rank_denoising = False
-    else:
-        assert template_cfg.denoising_method == "exp_weighted"
-        low_rank_denoising = True
-
-    # load motion features if necessary
-    geom = recording.get_channel_locations()
-    if template_cfg.registered_templates:
-        motion_kw = dict(
-            motion_est=motion_est,
-            geom=geom,
-            localizations_dataset_name=template_cfg.localizations_dataset_name,
-        )
-    else:
-        motion_kw = dict(geom=geom)
-
-    # handle superresolved templates
-    if template_cfg.superres_templates:
-        superres_data = superres_sorting(
-            sorting=sorting,
-            geom=geom,
-            motion_est=motion_est,
-            strategy=template_cfg.superres_strategy,
-            superres_bin_size_um=template_cfg.superres_bin_size_um,
-            min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
-        )
-        group_ids = superres_data["group_ids"]
-        assert isinstance(superres_data["sorting"], DARTsortSorting)
-        sorting = superres_data["sorting"]
-        properties = superres_data["properties"]
-    else:
-        group_ids = None
-        properties = {}
-
-    # main!
-    results = get_templates(
-        recording=recording,
-        sorting=sorting,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        spikes_per_unit=template_cfg.spikes_per_unit,
-        denoising_rank=template_cfg.denoising_rank,
-        recompute_tsvd=template_cfg.recompute_tsvd,
-        denoising_fit_radius=template_cfg.denoising_fit_radius,
-        denoising_snr_threshold=template_cfg.exp_weight_snr_threshold,
-        units_per_job=units_per_job,
-        with_raw_std_dev=template_cfg.with_raw_std_dev,
-        reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
-        low_rank_denoising=low_rank_denoising,
-        denoising_tsvd=tsvd,
-        device=computation_cfg.actual_device(),
-        n_jobs=computation_cfg.actual_n_jobs(),
-        show_progress=show_progress,
-        **motion_kw,  # type: ignore
-    )
-    if template_cfg.superres_templates:
-        assert group_ids is not None
-        unit_ids = group_ids[results["unit_ids"]]  # type: ignore
-    else:
-        unit_ids = results["unit_ids"]
-    rgeom = results["registered_geom"]
-    if rgeom is None:
-        rgeom = geom
-    if tsvd is None:
-        tsvd = results["denoising_tsvd"]
-    obj = cls(
-        results["templates"],
-        unit_ids=unit_ids,
-        spike_counts=results["spike_counts"],
-        spike_counts_by_channel=results["spike_counts_by_channel"],
-        raw_std_dev=results["raw_std_devs"],
-        registered_geom=rgeom,
-        trough_offset_samples=trough_offset_samples,
-        properties=properties,
-        tsvd=tsvd,
-    )
-    if save_folder is not None:
-        obj.to_npz(npz_path)
-
-    return obj
-
-
-def get_templates_by_chunk(
-    *,
-    sorting: DARTsortSorting,
-    recording: BaseRecording,
-    tsvd,
-    motion_est,
-    waveform_cfg: WaveformConfig,
-    computation_cfg: ComputationConfig,
-    template_cfg: TemplateConfig,
-    show_progress: bool,
-    block_size=384,
-    hard_block_size=512,
-    random_seed=0,
-    dtype=np.float32,
-) -> TemplateData:
-    if template_cfg.denoising_method == "none":
-        block_size = hard_block_size = template_cfg.raw_templates_at_once
-    else:
-        block_size = template_cfg.templates_at_once
-        hard_block_size = template_cfg.max_templates_at_once
-
-    assert sorting.labels is not None
-    unit_ids = np.unique(sorting.labels)
-    unit_ids = unit_ids[unit_ids >= 0]
-    n_units = unit_ids.shape[0]
-    n_blocks = max(1, n_units // block_size)
-    n_blocks += n_units / n_blocks > hard_block_size
-    assert n_units / n_blocks <= hard_block_size
-    units_per_block = int(np.ceil(n_units / n_blocks).astype(int).item())
-
-    need_tsvd = template_cfg.denoising_method != "none"
-    if need_tsvd and tsvd is None:
-        logger.dartsortdebug("Fit or load TSVD...")
-        tsvd = fit_tsvd(
-            recording,
-            sorting,
-            dtype=dtype,
-            denoising_rank=template_cfg.denoising_rank,
-            denoising_fit_radius=template_cfg.denoising_fit_radius,
-            denoising_spikes_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
-            recompute_tsvd=template_cfg.recompute_tsvd,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(
-                recording.sampling_frequency
-            ),
-            spike_length_samples=waveform_cfg.spike_length_samples(
-                recording.sampling_frequency
-            ),
-            random_seed=random_seed,
-        )
-
-    labels_tmp = np.full_like(sorting.labels, -1)
-    template_datas = []
-    if n_blocks > 1:
-        block_iter = trange(
-            0, n_units, units_per_block, desc=f"Template blocks [{n_units}:{n_blocks}]"
-        )
-    else:
-        block_iter = range(0, n_units, units_per_block)
-    for block_start in block_iter:
-        block_end = min(block_start + units_per_block, n_units)
-        if n_blocks == 1:
-            assert block_end - block_start == n_units
-
-        ids_in_block = unit_ids[block_start:block_end]
-        spikes_in_block = np.flatnonzero(np.isin(sorting.labels, ids_in_block))
-        labels_tmp[:] = -1
-        labels_tmp[spikes_in_block] = sorting.labels[spikes_in_block]
-
-        block_sorting = sorting.ephemeral_replace(labels=labels_tmp)
-        block_templates = _get_templates_by_chunk_block(
-            sorting=block_sorting,
-            recording=recording,
-            tsvd=tsvd,
-            motion_est=motion_est,
-            waveform_cfg=waveform_cfg,
-            computation_cfg=computation_cfg,
-            template_cfg=template_cfg,
-            show_progress=show_progress,
-        )
-        template_datas.append(block_templates)
-        assert np.array_equal(block_templates.unit_ids, ids_in_block)
-
-    template_data = stack_template_datas(template_datas)
-    assert np.array_equal(template_data.unit_ids, unit_ids)
-    assert template_data.templates.shape[0] == unit_ids.shape[0]
-    return template_data
-
-
-def _get_templates_by_chunk_block(
-    sorting: DARTsortSorting,
-    recording,
-    tsvd,
-    motion_est,
-    waveform_cfg,
-    computation_cfg,
-    template_cfg,
-    show_progress: bool,
-):
-    from ..peel.running_template import RunningTemplates
-
-    peeler = RunningTemplates.from_config(
-        sorting=sorting,
-        recording=recording,
-        tsvd=tsvd,
-        motion_est=motion_est,
-        waveform_cfg=waveform_cfg,
-        template_cfg=template_cfg,
-    )
-
-    template_data = peeler.compute_template_data(
-        show_progress=show_progress, computation_cfg=computation_cfg
-    )
-
-    assert getrefcount(peeler) <= 2, (
-        f"Leaking the template peeler {getrefcount(peeler)=}."
-    )
-    del peeler
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return template_data
-
-
-def stack_template_datas(template_datas):
-    if len(template_datas) == 1:
-        return template_datas[0]
-    assert len(template_datas) > 0
-
-    if template_datas[0].spike_counts_by_channel is not None:
-        spike_counts_by_channel = np.concatenate(
-            [td.spike_counts_by_channel for td in template_datas]
-        )
-    else:
-        spike_counts_by_channel = None
-
-    if template_datas[0].raw_std_dev is not None:
-        raw_std_dev = np.concatenate([td.raw_std_dev for td in template_datas])
-    else:
-        raw_std_dev = None
-
-    if template_datas[0].properties is not None:
-        properties = {
-            k: np.concatenate([td.properties[k] for td in template_datas])
-            for k in template_datas[0].properties
-        }
-    else:
-        properties = None
-
-    return TemplateData(
-        templates=np.concatenate([td.templates for td in template_datas]),
-        unit_ids=np.concatenate([td.unit_ids for td in template_datas]),
-        spike_counts=np.concatenate([td.spike_counts for td in template_datas]),
-        spike_counts_by_channel=spike_counts_by_channel,
-        raw_std_dev=raw_std_dev,
-        registered_geom=template_datas[0].registered_geom,
-        trough_offset_samples=template_datas[0].trough_offset_samples,
-        properties=properties,
-    )
+    @classmethod
+    def _from_config(
+        cls,
+        *,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        template_cfg: TemplateConfig,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        overwrite=False,
+        motion_est=None,
+        units_per_job=8,
+        tsvd=None,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> "TemplateData":
+        raise NotImplementedError

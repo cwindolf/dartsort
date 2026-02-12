@@ -29,7 +29,7 @@ class MatchingTemplates(BModule):
     spike_length_samples: int
 
     def __init_subclass__(cls):
-        logger.dartsortverbose("Register templates type: %s", cls.template_type)
+        logger.dartsortverbose("Register matching templates type: %s", cls.template_type)
         cls._registry[cls.template_type] = cls
 
     @classmethod
