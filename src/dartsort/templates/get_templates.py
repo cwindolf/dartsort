@@ -5,26 +5,167 @@ where you can get templates using the TemplateConfig in config.py.
 """
 
 import threading
-from typing import cast
+from pathlib import Path
+from typing import ClassVar, cast
 
 import numpy as np
 import torch
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
-from sklearn.decomposition import TruncatedSVD, PCA
+from sklearn.decomposition import PCA, TruncatedSVD
+from spikeinterface.core import BaseRecording
 from tqdm.auto import tqdm
 
+from ..templates import TemplateData
+from ..templates.superres_util import superres_sorting
 from ..util import spikeio
 from ..util.data_util import DARTsortSorting, load_stored_tsvd
 from ..util.drift_util import (
-    registered_template,
-    registered_geometry,
     get_spike_pitch_shifts,
+    registered_geometry,
+    registered_template,
 )
+from ..util.internal_config import (
+    ComputationConfig,
+    TemplateConfig,
+    WaveformConfig,
+    default_waveform_cfg,
+)
+from ..util.job_util import ensure_computation_config
 from ..util.multiprocessing_util import get_pool
-from ..util.spiketorch import fast_nanmedian, ptp
+from ..util.spiketorch import fast_nanmedian, nanmean, ptp
 from ..util.waveform_util import make_channel_index
-from ..util.internal_config import RealignStrategy
+
+# -- TemplateData plugin
+
+
+class UnitExtractTemplateData(TemplateData):
+    _algorithm: ClassVar = "unitextract"
+
+    @classmethod
+    def _from_config(
+        cls,
+        *,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        template_cfg: TemplateConfig,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        overwrite=False,
+        motion_est=None,
+        units_per_job=8,
+        tsvd=None,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> TemplateData:
+        computation_cfg = ensure_computation_config(computation_cfg)
+        return get_templates_unitextract(
+            sorting=sorting,
+            recording=recording,
+            tsvd=tsvd,
+            motion_est=motion_est,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            template_cfg=template_cfg,
+        )
+
+
+def get_templates_unitextract(
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    template_cfg: TemplateConfig,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    motion_est=None,
+    units_per_job=8,
+    tsvd=None,
+    computation_cfg: ComputationConfig | None = None,
+    show_progress: bool = True,
+) -> TemplateData:
+    computation_cfg = ensure_computation_config(computation_cfg)
+
+    fs = recording.sampling_frequency
+    trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
+    spike_length_samples = waveform_cfg.spike_length_samples(fs)
+
+    if template_cfg.denoising_method in (None, "none"):
+        low_rank_denoising = False
+    else:
+        assert template_cfg.denoising_method == "exp_weighted"
+        low_rank_denoising = True
+
+    # load motion features if necessary
+    geom = recording.get_channel_locations()
+    if template_cfg.registered_templates:
+        motion_kw = dict(
+            motion_est=motion_est,
+            geom=geom,
+            localizations_dataset_name=template_cfg.localizations_dataset_name,
+        )
+    else:
+        motion_kw = dict(geom=geom)
+
+    # handle superresolved templates
+    if template_cfg.superres_templates:
+        superres_data = superres_sorting(
+            sorting=sorting,
+            geom=geom,
+            motion_est=motion_est,
+            strategy=template_cfg.superres_strategy,
+            superres_bin_size_um=template_cfg.superres_bin_size_um,
+            min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
+        )
+        group_ids = superres_data["group_ids"]
+        assert isinstance(superres_data["sorting"], DARTsortSorting)
+        sorting = superres_data["sorting"]
+        properties = superres_data["properties"]
+    else:
+        group_ids = None
+        properties = {}
+
+    # main!
+    results = get_templates(
+        recording=recording,
+        sorting=sorting,
+        trough_offset_samples=trough_offset_samples,
+        spike_length_samples=spike_length_samples,
+        spikes_per_unit=template_cfg.spikes_per_unit,
+        denoising_rank=template_cfg.denoising_rank,
+        recompute_tsvd=template_cfg.recompute_tsvd,
+        denoising_fit_radius=template_cfg.denoising_fit_radius,
+        denoising_snr_threshold=template_cfg.exp_weight_snr_threshold,
+        units_per_job=units_per_job,
+        with_raw_std_dev=template_cfg.with_raw_std_dev,
+        reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
+        low_rank_denoising=low_rank_denoising,
+        denoising_tsvd=tsvd,
+        device=computation_cfg.actual_device(),
+        n_jobs=computation_cfg.actual_n_jobs(),
+        show_progress=show_progress,
+        **motion_kw,  # type: ignore
+    )
+    if template_cfg.superres_templates:
+        assert group_ids is not None
+        unit_ids = group_ids[results["unit_ids"]]  # type: ignore
+    else:
+        unit_ids = results["unit_ids"]
+    rgeom = results["registered_geom"]
+    if rgeom is None:
+        rgeom = geom
+    if tsvd is None:
+        tsvd = results["denoising_tsvd"]
+    obj = TemplateData(
+        templates=cast(np.ndarray, results["templates"]),
+        unit_ids=cast(np.ndarray, unit_ids),
+        spike_counts=results["spike_counts"],  # type: ignore
+        spike_counts_by_channel=results["spike_counts_by_channel"],
+        raw_std_dev=results["raw_std_devs"],
+        registered_geom=rgeom,
+        trough_offset_samples=trough_offset_samples,
+        properties=properties,  # type: ignore
+        tsvd=tsvd,
+    )
+    return obj
+
+
+# -- library
 
 
 def get_templates(

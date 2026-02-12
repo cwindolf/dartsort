@@ -160,8 +160,8 @@ def realign_and_chuck_noisy_template_units(
 
     if template_data is None:
         template_data = TemplateData.from_config(
-            recording,
-            sorting,
+            recording=recording,
+            sorting=sorting,
             template_cfg=template_cfg,
             motion_est=motion_est,
             tsvd=tsvd,

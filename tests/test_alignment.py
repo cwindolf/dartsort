@@ -238,10 +238,10 @@ def test_denoiser_alignment(align_sim, align_templates):
 
 def template_makers(rec, st, align=True, align_max=0):
     tcfg0 = dartsort.TemplateConfig(
-        denoising_method="none", algorithm="by_chunk", spikes_per_unit=10000
+        denoising_method="none", algorithm="running", spikes_per_unit=10000
     )
     tcfg1 = dartsort.TemplateConfig(
-        denoising_method="none", algorithm="by_unit", spikes_per_unit=10000
+        denoising_method="none", algorithm="unitextract", spikes_per_unit=10000
     )
     tcfg2 = dartsort.TemplateConfig(
         denoising_method="none", reduction="median", spikes_per_unit=10000
@@ -285,15 +285,15 @@ def template_makers(rec, st, align=True, align_max=0):
     ts = [t0, t1, t2, t3]
     if not align:
         t0_ = dartsort.TemplateData.from_config(
-            rec,
-            st,
+            recording=rec,
+            sorting=st,
             template_cfg=tcfg0,
             waveform_cfg=waveform_cfg,
         )
         ts.append(t0_)
         t1_ = dartsort.TemplateData.from_config(
-            rec,
-            st,
+            recording=rec,
+            sorting=st,
             template_cfg=tcfg1,
             waveform_cfg=waveform_cfg,
         )
