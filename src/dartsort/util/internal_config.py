@@ -295,6 +295,7 @@ class SubtractionConfig:
     first_denoiser_thinning: float = 0.5
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
+    first_denoiser_spatial_dedup_radius: float = 100.0
 
     # for debugging / vis
     save_iteration: bool = False
@@ -851,6 +852,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
         )
     elif cfg.detection_type == "threshold":
