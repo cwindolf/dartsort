@@ -636,6 +636,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
+    split_friend_distance: float = 0.4
     split_distance_threshold: float = 1.0
     merge_distance_threshold: float = 1.0
     criterion_em_iters: int = 3
