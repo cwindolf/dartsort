@@ -121,6 +121,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
         for src in link_from.glob(pattern):
             rel_part = src.relative_to(link_from)
             targ = output_dir / rel_part
+            targ.parent.mkdir(exist_ok=True)
             if targ.exists():
                 logger.dartsortdebug(f"{targ} exists, won't link.")
                 continue

@@ -260,7 +260,6 @@ class DeveloperConfig(DARTsortUserConfig):
     n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
     # gaussian mixture high level
-    truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 5

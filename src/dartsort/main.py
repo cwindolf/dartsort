@@ -131,7 +131,12 @@ def dartsort(
             # the temporary directory if user asked for that.
             try:
                 return _dartsort_impl(
-                    recording, output_dir, cfg, motion_est, work_dir, overwrite
+                    recording=recording,
+                    output_dir=output_dir,
+                    cfg=cfg,
+                    motion_est=motion_est,
+                    work_dir=work_dir,
+                    overwrite=overwrite,
                 )
             except Exception as e:
                 traceback_path = output_dir / "traceback.txt"
@@ -156,7 +161,14 @@ def dartsort(
     # run the sorter regular with no tempdir, log exception to a
     # traceback file in case of a crash for debugging
     try:
-        return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
+        return _dartsort_impl(
+            recording=recording,
+            output_dir=output_dir,
+            cfg=cfg,
+            motion_est=motion_est,
+            work_dir=None,
+            overwrite=overwrite,
+        )
     except Exception as e:
         traceback_path = output_dir / "traceback.txt"
         with open(traceback_path, "w") as f:
@@ -167,6 +179,7 @@ def dartsort(
 
 
 def _dartsort_impl(
+    *,
     recording: BaseRecording,
     output_dir: Path,
     cfg: DARTsortInternalConfig = default_dartsort_cfg,
@@ -182,7 +195,9 @@ def _dartsort_impl(
 
     # if there are previous results stored, resume where they leave off
     # TODO uhh. overwrite, right?
-    next_step, sorting, motion_est = ds_fast_forward(store_dir, cfg)
+    next_step, sorting, _motion_est = ds_fast_forward(store_dir, cfg)
+    if motion_est is None:
+        motion_est = _motion_est
     ret["motion_est"] = motion_est
 
     if next_step == 0:

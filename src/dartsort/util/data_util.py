@@ -318,7 +318,7 @@ class DARTsortSorting:
         if have_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
-            h5p = h5p.relative_to(sorting_npz.parent)
+            h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)
             data["parent_h5_path"] = np.array(str(h5p))
         for k in self._ephemeral_feature_names:
             data[k] = getattr(self, k)
