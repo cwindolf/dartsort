@@ -704,6 +704,24 @@ class UnitRemapping:
     def nuniq(self):
         return self.mapping[self.mapping >= 0].unique().numel()
 
+    def padded_map(self):
+        return F.pad(self.mapping, (0, 1), value=-1)
+
+    @classmethod
+    def discard_mapping(
+        cls,
+        n_units: int,
+        invalidated_ids: list[int] | Tensor,
+        device: torch.device = torch.device("cpu"),
+    ) -> Self:
+        invalidated_ids = torch.asarray(invalidated_ids)
+        mapping = torch.zeros(n_units, dtype=torch.long, device=invalidated_ids.device)
+        mapping[invalidated_ids] = -1
+        (valid_ids,) = (mapping == 0).nonzero(as_tuple=True)
+        mapping[valid_ids] = torch.arange(valid_ids.numel()).to(mapping)
+        mapping = mapping.to(device=device)
+        return cls(mapping=mapping)
+
 
 @databag
 class EMResult:
@@ -1464,16 +1482,25 @@ class TruncatedSpikeData(BatchedSpikeData):
 
         return self.dense_slice(ixs)
 
-    def remap(self, remapping: UnitRemapping, distances: Tensor) -> NeighborhoodLUT:
+    def remap(
+        self, remapping: UnitRemapping, distances: Tensor | None
+    ) -> NeighborhoodLUT | None:
         """Re-map my top candidate labels and re-do LUTs, search, explore."""
         n_units_orig = remapping.mapping.shape[0]
-        assert distances.shape[0] <= n_units_orig
-        assert remapping.mapping.max() + 1 == distances.shape[0]
-        self._update_sizes_from_n_units(distances.shape[0])
+        ids_new = remapping.mapping.unique()
+        ids_new = ids_new[ids_new >= 0]
+        n_units_new = ids_new.shape[0]
+        assert n_units_new <= n_units_orig
+
+        if distances is not None:
+            assert distances.shape[0] == n_units_new
+            assert distances.shape[0] <= n_units_orig
+            assert remapping.mapping.max() + 1 == distances.shape[0]
+
+        self._update_sizes_from_n_units(n_units_new)
 
         # extra -1 for the -1 candidates to index into
-        mapping = F.pad(remapping.mapping, (0, 1), value=-1)
-        mapping = mapping.to(device=self.candidates.device)
+        mapping = remapping.padded_map().to(device=self.candidates.device)
         mapping = mapping[None].broadcast_to((self.N, mapping.shape[0]))
 
         # replace my -1s with n_units_orig in place bc take_along_dim doesn't like -1s
@@ -1489,8 +1516,11 @@ class TruncatedSpikeData(BatchedSpikeData):
             out=self.candidates[:, : self.n_candidates],
         )
         self.candidates[:, self.n_candidates :].fill_(-1)
-        self.update_adjacency(distances.shape[0])
-        _, lut = self.update(new_top_candidates=None, distances=distances)
+        self.update_adjacency(n_units_new)
+        if distances is not None:
+            _, lut = self.update(new_top_candidates=None, distances=distances)
+        else:
+            lut = None
         return lut
 
     def update_from_split(
@@ -1730,7 +1760,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.signal_rank = 0
 
         self.rg = spawn_torch_rg(seed, device=means.device)
-        self.lut_params = None
+        self.lut_params: LUTParams | None = None
 
     def change_rank(
         self, new_signal_rank: int, train_data: TruncatedSpikeData, train_scores: Scores
@@ -2352,7 +2382,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
         group_size = group.numel()
         single = group_size == 1
-        k = min(5, self.p.split_k + (1 - int(single)))
+        # k = min(5, self.p.split_k + (1 - int(single)))
+        k = self.p.split_k
 
         # get dense train set slice in group
         split_data = train_data.dense_slice_by_unit(
@@ -2376,7 +2407,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bail_at=int(single),
             debug=debug,
         )
-        if debug:
+        if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
         else:
             group_str = ""
@@ -2394,6 +2425,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert kmeans_responsibilities.shape[1] >= 1
 
         # initialize dense model with fixed resps
+        group_lp = self.b.log_proportions[group].logsumexp(dim=0).item()
         split_model, _, split_data, any_spikes_discarded, _, keep_spikes = (
             TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                 data=split_data,
@@ -2402,7 +2434,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 erp=self.erp,
                 noise=self.noise,
                 neighb_cov=self.neighb_cov,
-                total_log_proportion=self.b.log_proportions[group].logsumexp(dim=0).item(),
+                total_log_proportion=group_lp,
                 noise_log_prop=self.b.noise_log_prop,
                 p=self.p,
             )
@@ -2579,9 +2611,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.split_group(gp, train_data, eval_data, scores)[0]
             for gp in split_groups
         )
-        split_result = self._apply_splits(
-            split_results, train_data=train_data, eval_data=eval_data
-        )
+        split_result = self._apply_splits(split_results, train_data=train_data)
 
         # split generates a lot of weird small buffers
         gc.collect()
@@ -2739,6 +2769,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if pnoid:
             assert distances.isfinite().all()
         lut = train_data.remap(remapping=flat_map, distances=distances)
+        assert lut is not None
         self.update_lut(lut)
         assert self.lut_params is not None
         if pnoid:
@@ -2837,6 +2868,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
             assert torch.isclose(logsum, targsum, atol=1e-6)
             self.b.log_proportions.add_(targsum - logsum)
+            assert self.b.log_proportions[:new_n_units].isfinite().all()
         else:
             # this case is really only hit in testing. i'm asserting that this is
             # a permutation, because that's all i've got implemented
@@ -2872,78 +2904,81 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return new_remapping
 
     def _apply_splits(
-        self,
-        unit_splits: Iterable[SplitCaseResult],
-        train_data: TruncatedSpikeData,
-        eval_data: TruncatedSpikeData | None,
+        self, unit_splits: Iterable[SplitCaseResult], train_data: TruncatedSpikeData
     ):
         any_split = False
-        train_unit_mask = torch.zeros_like(
-            train_data.candidates[:, 0], dtype=torch.bool
-        )
-        train_split_mask = torch.zeros_like(
-            train_data.candidates[:, 0], dtype=torch.bool
-        )
         train_labels = torch.full_like(train_data.candidates[:, 0], -1)
+        train_candidate_mask = torch.zeros_like(train_labels, dtype=torch.bool)
+        train_labels_mask = torch.zeros_like(train_labels, dtype=torch.bool)
 
         n_new_units = 0
         new_means = []
         new_log_props = []
         new_bases = []
         cur_max_label = self.n_units - 1
+        invalidated_ids = []
 
         for res in unit_splits:
             if res is None:
-                logger.dartsortverbose("Split early exit.")
                 continue
 
             unit_ids = res.unit_ids.tolist()
             n_group = len(unit_ids)
-            logger.dartsortverbose("Applying %s split.", unit_ids)
             any_split = True
 
-            # invalidate thes units
-            train_unit_mask.logical_or_(
-                torch.isin(train_data.candidates[:, 0], res.unit_ids)
+            # invalidate these units
+            train_candidate_mask.logical_or_(
+                torch.isin(
+                    train_data.candidates[:, 0], res.unit_ids.to(train_data.candidates)
+                )
             )
 
             # spikes which will get new labels
-            train_split_mask[res.train_indices] = True
+            train_labels_mask[res.train_indices] = True
 
             # assign labels within the group; split ids 0 through groupsize-1 get orig ids
             for j, unit_id in enumerate(res.unit_ids):
                 for_j = res.train_assignments == j
                 train_labels[res.train_indices[for_j]] = unit_id
 
-            # rest are new ids. these split ids start at 1, so add K-1 rather than K
-            # for the first new id to be K (which is the next label).
-            for_other = res.train_assignments >= n_group
-            other_labels = res.train_assignments[for_other].add_(cur_max_label)
-            train_labels[res.train_indices[for_other]] = other_labels
+            # handle case where unit count decreases
+            out_count = min(res.n_split, n_group)
+            cur_out_ids = res.unit_ids[:out_count]
+            if res.n_split < n_group:
+                # note: train_labels already has -1s for these guys. still, need to invalidate
+                # params, return log proportion, etc. let's mark these as invalid and throw them
+                # away with a rotate later.
+                invalidated_ids.extend(unit_ids[out_count:])
+            else:
+                # making new ids. these split ids start at 1, so add K-1 rather than K
+                # for the first new id to be K (which is the next label).
+                for_other = res.train_assignments >= n_group
+                other_labels = res.train_assignments[for_other].add_(cur_max_label)
+                train_labels[res.train_indices[for_other]] = other_labels
 
-            n_new_units += res.n_split - n_group
-            cur_max_label += res.n_split - n_group
+                n_new_units += res.n_split - n_group
+                cur_max_label += res.n_split - n_group
 
             # divvy up my log proportion
             if pnoid:
                 _lp = res.sub_proportions.sum()
                 assert torch.isclose(_lp, torch.ones_like(_lp))
+                assert res.sub_proportions.shape == (res.n_split,)
             split_log_props = (
                 res.sub_proportions.double().log()
-                + self.b.log_proportions[res.unit_ids].logsumexp(dim=0).double()
+                + self.b.log_proportions[res.unit_ids].double().logsumexp(dim=0)
             )
             split_log_props = split_log_props.clamp_(min=self.LP_MIN)
+            split_log_props = split_log_props.to(self.b.log_proportions)
 
             # assign split result first params to unit_id's spot
             assert res.means.shape[0] == res.n_split
             assert res.sub_proportions.shape == (res.n_split,)
-            self.b.log_proportions[res.unit_ids] = split_log_props[:n_group].to(
-                self.b.log_proportions
-            )
-            self.b.means[res.unit_ids] = res.means[:n_group]
+            self.b.log_proportions[cur_out_ids] = split_log_props[:out_count]
+            self.b.means[cur_out_ids] = res.means[:out_count]
             if self.signal_rank:
                 assert res.bases is not None
-                self.b.bases[res.unit_ids] = res.bases[:n_group]
+                self.b.bases[cur_out_ids] = res.bases[:out_count]
 
             # append rest to new_* lists
             new_means.append(res.means[n_group:])
@@ -2975,6 +3010,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.n_units = Knew
         self.unit_ids = torch.arange(Knew)
 
+        # drop log prop share of invalidated units
+        self.b.log_proportions[invalidated_ids] = -torch.inf
+
         # assign them (can just loop)
         k0 = Korig
         for nm, nlp, nb in zip(new_means, new_log_props, new_bases):
@@ -2987,7 +3025,32 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert k0 == Knew
         if pnoid:
             _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
-            assert torch.isclose(_lp, torch.zeros(()), atol=1e-6)
+            if not torch.isclose(_lp, torch.zeros(()), atol=1e-6):
+                raise ValueError(
+                    f"Post-split unit creation log prop {_lp.item()} should be 0."
+                )
+            assert self.b.means.isfinite().all()
+            if self.signal_rank:
+                assert self.b.bases.isfinite().all()
+
+        # discard invalidated units, so that many labels need to change
+        discard = UnitRemapping.discard_mapping(
+            Knew, invalidated_ids, train_labels.device
+        )
+        self.cleanup(discard)
+        # tell train data about this
+        lut = train_data.remap(remapping=discard, distances=None)
+        # and we will shortly give these labels to train data
+        F.threshold(train_labels, -1, Knew, inplace=True)
+        train_labels = discard.padded_map()[train_labels]
+        assert lut is None
+        del lut
+        if pnoid:
+            _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
+            if not torch.isclose(_lp, torch.zeros(()), atol=1e-6):
+                raise ValueError(
+                    f"Post-split discard log prop {_lp.item()} should be 0."
+                )
             assert self.b.means.isfinite().all()
             assert self.b.log_proportions.isfinite().all()
             if self.signal_rank:
@@ -2997,8 +3060,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         distances = self.unit_distance_matrix()
         if pnoid:
             assert distances.isfinite().all()
+            assert discard.mapping.max() + 1 <= distances.shape[0]
+            assert train_labels.max() + 1 <= distances.shape[0]
         lut = train_data.update_from_split(
-            train_unit_mask, train_split_mask, train_labels, distances
+            train_candidate_mask, train_labels_mask, train_labels, distances
         )
         self.update_lut(lut)
         assert self.lut_params is not None
@@ -3008,8 +3073,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return SplitResult(
             any_split=any_split,
             n_new_units=n_new_units,
-            train_unit_mask=train_unit_mask,
-            train_split_spike_mask=train_split_mask,
+            train_unit_mask=train_candidate_mask,
+            train_split_spike_mask=train_labels_mask,
             train_split_spike_labels=train_labels,
         )
 
@@ -3433,7 +3498,12 @@ def instantiate_and_bootstrap_tmm(
         refinement_cfg=refinement_cfg,
         seed=rg,
     )
-    logger.dartsortdebug(f"Initialize TMM with signal_rank={tmm.signal_rank}")
+    logger.dartsortdebug(
+        "Initialize TMM with %s candidates, rank %s, CLa %s.",
+        train_data.n_candidates,
+        refinement_cfg.signal_rank,
+        refinement_cfg.cl_alpha,
+    )
     D = tmm.unit_distance_matrix()
     lut = train_data.bootstrap_candidates(D)
     tmm.update_lut(lut)
@@ -3756,6 +3826,8 @@ def tree_groups(
     if pnoid and link == "complete":
         for g in groups:
             assert distances[g][:, g].amax() <= max_distance
+    order = torch.argsort(torch.tensor([g[0] for g in groups])).tolist()
+    groups = [groups[j] for j in order]
     return groups
 
 
