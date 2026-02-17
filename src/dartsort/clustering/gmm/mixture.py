@@ -662,6 +662,7 @@ class GroupPartition:
     single_ixs: list[int]
     subset_ids: list[int]
     unit_ids_combined: list[int]
+    single_subset_order: Tensor
 
     def __repr__(self):
         return (
@@ -2728,10 +2729,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             any_merged = True
 
             groups = group_res.grouping.group_ids.unique()
-            groups = groups[groups >= 0]
             assert groups.numel() == group_res.grouping.n_groups
 
-            # log(new_props = props[group].sum() * sub_props)
+            # log(new_props) = props[group].sum() * sub_props)
             group_log_prop = self.b.log_proportions[group].logsumexp(dim=0)
             new_log_props = group_res.sub_proportions.log().add_(group_log_prop)
             assert group_res.sub_proportions.shape == (group_res.grouping.n_groups,)
@@ -2743,9 +2743,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 first = ids_in_group[0]
                 rest = ids_in_group[1:]
 
-                result_map.mapping[ids_in_group] = ids_in_group[0]
-
-                # first is the group, rest are discarded. first retains id for now.
+                # first is the group, rest are discarded
+                # first retains id for now
+                result_map.mapping[ids_in_group] = first
                 # first gets the parameter update
                 self.b.log_proportions[first] = new_log_props[gix]
                 self.b.means[first] = group_res.means[gix]
@@ -4066,10 +4066,12 @@ def brute_merge(
     single_means, single_bases = mm.get_params_at(best_part.single_ixs)
     sub_means, sub_bases = subset_models.get_params_at(best_part.subset_ids)
     means = torch.concatenate((single_means, sub_means), dim=0)
+    means = means[best_part.single_subset_order]
     if mm.signal_rank:
         assert single_bases is not None
         assert sub_bases is not None
         bases = torch.concatenate((single_bases, sub_bases), dim=0)
+        bases = bases[best_part.single_subset_order]
     else:
         assert single_bases is sub_bases is None
         bases = None
@@ -4079,6 +4081,7 @@ def brute_merge(
     single_prop = prop[best_part.single_ixs]
     sub_props = [subset_resps[:, sid].mean(0)[None] for sid in best_part.subset_ids]
     sub_props = torch.concatenate([single_prop] + sub_props, dim=0)
+    sub_props = sub_props[best_part.single_subset_order]
     assert sub_props.shape == (best_part.n_groups,)
     sub_props /= sub_props.sum()
 
@@ -4113,20 +4116,25 @@ def allowed_partitions(
             subset_ids = []
             single_ixs = []
             uids_combined = []
+            single_group_ids = []
+            subset_group_ids = []
             for j, p in enumerate(partition):
                 tp = tuple(p)
                 p = torch.tensor(p)
                 if len(tp) > 1 and tp not in subset_to_id:
                     subset_ids.append(subset_id)
+                    subset_group_ids.append(j)
                     subset_to_id[tp] = subset_id
                     id_to_subset[subset_id] = p
                     subset_id += 1
                     uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) > 1:
                     subset_ids.append(subset_to_id[tp])
+                    subset_group_ids.append(j)
                     uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) == 1:
                     single_ixs.append(tp[0])
+                    single_group_ids.append(j)
                 else:
                     assert False
                 # first, check that this works for the mask
@@ -4143,6 +4151,9 @@ def allowed_partitions(
                     single_ixs=single_ixs,
                     subset_ids=subset_ids,
                     unit_ids_combined=uids_combined,
+                    single_subset_order=torch.argsort(
+                        torch.asarray(single_group_ids + subset_group_ids)
+                    ),
                 )
                 group_partitions.append(group_partition)
 
