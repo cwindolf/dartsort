@@ -714,7 +714,7 @@ class UnitRemapping:
         invalidated_ids: list[int] | Tensor,
         device: torch.device = torch.device("cpu"),
     ) -> Self:
-        invalidated_ids = torch.asarray(invalidated_ids)
+        invalidated_ids = torch.asarray(invalidated_ids, dtype=torch.long)
         mapping = torch.zeros(n_units, dtype=torch.long, device=invalidated_ids.device)
         mapping[invalidated_ids] = -1
         (valid_ids,) = (mapping == 0).nonzero(as_tuple=True)

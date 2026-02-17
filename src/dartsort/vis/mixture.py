@@ -7,18 +7,20 @@ import numpy as np
 import torch
 from dredge.motion_util import MotionEstimate
 from matplotlib.lines import Line2D
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse.csgraph import connected_components
-from scipy.cluster.hierarchy import linkage, fcluster
 from tqdm.auto import tqdm
 
+from ..clustering.cluster_util import maximal_leaf_groups
 from ..clustering.gmm.mixture import (
+    NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
-    NeighborhoodLUT,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
+    run_merge,
     run_split,
     try_kmeans,
 )
@@ -414,25 +416,37 @@ class MergeView(MixtureComponentPlot):
         pass
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        # get pair mask
-        gsize = mix_data.tmm.p.max_group_size - 1
-        dists, neighbors = mix_data.friends(unit_id, count=gsize)
-        d = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
-        d.diagonal().fill_(0.0)
-        pair_mask = d < mix_data.tmm.p.merge_max_distance
+        # -- get actual group used during merge
+        # start by getting local distance matrix D for neighbors within merge distance
+        d0 = mix_data.inf_diag_unit_distance_matrix[unit_id]
+        (neighbors,) = (d0 < mix_data.tmm.p.merge_max_distance).nonzero(as_tuple=True)
+        me = neighbors.new_full((1,), unit_id)
+        neighbors = torch.cat([neighbors, me]).sort().values
+        D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
 
-        # determine connected components and re-order (stably)
-        n_comps, labels = connected_components(pair_mask.numpy(force=True))
-        if n_comps > 1:
-            reorder = [np.flatnonzero(labels == l) for l in range(n_comps)]
-            reorder = np.concatenate(reorder)
-            d = d[reorder][:, reorder]
-            pair_mask = pair_mask[reorder][:, reorder]
-            neighbors = neighbors[reorder]
+        # find my complete linkage cluster within D
+        D = D.fill_diagonal_(0.0).numpy(force=True)
+        pd = D[np.triu_indices(D.shape[0], k=1)]
+        Z = linkage(pd, method="complete")
+        groups = maximal_leaf_groups(
+            Z,
+            distances=D,
+            max_distance=mix_data.tmm.p.merge_max_distance,
+            max_group_size=mix_data.tmm.p.max_group_size,
+        )
+        groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
+        assert len(groups) == 1
+        group_ix = list(groups[0])
+        group = neighbors[group_ix]
+        del neighbors
+
+        # get pair mask
+        D = D[group_ix][:, group_ix]
+        pair_mask = torch.asarray(D < mix_data.tmm.p.merge_max_distance)
 
         # run it
         group_res = mix_data.tmm.try_merge_group(
-            group=torch.asarray(neighbors),
+            group=torch.asarray(group),
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
@@ -441,7 +455,7 @@ class MergeView(MixtureComponentPlot):
             debug=True,
         )
 
-        return neighbors, d, pair_mask, group_res
+        return group, D, pair_mask, group_res
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         neighbors, dist, pair_mask, group_res = self.compute(mix_data, unit_id)
@@ -734,8 +748,10 @@ class SplitView(MixtureComponentPlot):
             D = mix_data.inf_diag_unit_distance_matrix[friends][:, friends].clone()
             D.fill_diagonal_(0.0)
             pd = D.numpy()[np.triu_indices(D.shape[0], k=1)]
-            Z = linkage(pd, method='complete')
-            fcl = fcluster(Z, mix_data.tmm.p.split_friend_distance, criterion="distance")
+            Z = linkage(pd, method="complete")
+            fcl = fcluster(
+                Z, mix_data.tmm.p.split_friend_distance, criterion="distance"
+            )
             group = torch.as_tensor(friends[fcl == fcl[0]])
         else:
             group = torch.tensor([unit_id])
@@ -834,7 +850,9 @@ class SplitView(MixtureComponentPlot):
             txt += f"no allowed partitions\n"
         if debug_info.split_model is not None:
             sprops = debug_info.split_model.b.log_proportions.cpu()
-            sprops = sprops - mix_data.tmm.b.log_proportions[group].logsumexp(dim=0).cpu()
+            sprops = (
+                sprops - mix_data.tmm.b.log_proportions[group].logsumexp(dim=0).cpu()
+            )
             propstr = "+".join(f"{p:0.3f}" for p in sprops.exp())
             txt += f"norm kmeans model props:\n  {propstr}={sprops.exp().sum():.2f}\n"
         if debug_info.merge_res is not None:
@@ -1042,6 +1060,7 @@ def fit_mixture_for_vis(
     computation_cfg: ComputationConfig | None = None,
     em: bool = True,
     split: bool = False,
+    merge: bool = False,
 ) -> MixtureVisData:
     # run model to convergence and soft assign train/full sets
     mix_data = instantiate_and_bootstrap_tmm(
@@ -1054,6 +1073,9 @@ def fit_mixture_for_vis(
         mix_data.tmm.em(mix_data.train_data)
     if split:
         run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
+        mix_data.tmm.em(mix_data.train_data)
+    if merge:
+        run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
 
     train_scores = mix_data.tmm.soft_assign(

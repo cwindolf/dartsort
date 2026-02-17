@@ -234,8 +234,8 @@ def distance_matrix_dendro(
             unit_ids = np.arange(distances.shape[0])
         sc = 10 if show_dendrogram else 1
         so = 5 if show_dendrogram else 0
-        ax_im.set_xticks(so + sc * np.arange(len(order)), unit_ids[order])
-        ax_im.set_yticks(so + sc * np.arange(len(order)), unit_ids[order])
+        ax_im.set_xticks(so + sc * np.arange(len(order)), unit_ids[order].tolist())
+        ax_im.set_yticks(so + sc * np.arange(len(order)), unit_ids[order].tolist())
         for i, (tx, ty) in enumerate(
             zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
         ):
