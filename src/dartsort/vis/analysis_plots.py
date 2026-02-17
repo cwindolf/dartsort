@@ -24,6 +24,7 @@ def scatter_max_channel_waveforms(
     rgeom = template_data.registered_geom
     if rgeom is None:
         rgeom = geom
+    assert rgeom is not None
     dx = np.ptp(waveform_width * rgeom[:, 0])
     dz = np.ptp(rgeom[:, 1])
     max_abs_amp = np.abs(template_data.templates).max()
@@ -74,6 +75,8 @@ def annotated_dendro(
     depth_order = np.argsort(dcoords)
     if brute_indicator is not None:
         leaf_descendants = leafsets(Z)
+    else:
+        leaf_descendants = None
 
     lines = np.zeros((len(Z), 4, 2))
     colors = np.zeros((len(Z), 3))
@@ -86,7 +89,7 @@ def annotated_dendro(
         else:
             colors[j] = above_threshold_color
 
-    lc = LineCollection(lines, colors=colors)
+    lc = LineCollection(lines, colors=colors)  # type: ignore
     ax.add_collection(lc)
     ax.autoscale_view()
     if leaf_labels is None:
@@ -106,6 +109,8 @@ def annotated_dendro(
         fc = colors[j]
         lc = invert(fc)
         if isbrute:
+            assert leaf_descendants is not None
+            assert group_ids is not None
             leaves = leaf_descendants[n + j]
             gids = group_ids[leaves]
             groups = []
@@ -180,6 +185,8 @@ def distance_matrix_dendro(
     ax_im = panel.add_subplot(gs[:, 0])
     if with_colorbar:
         ax_cbar = panel.add_subplot(gs[1, 1])
+    else:
+        ax_cbar = None
     if show_dendrogram:
         scipy.cluster.hierarchy.set_link_color_palette(list(map(to_hex, label_colors)))
         ax_dendro = panel.add_subplot(gs[:, 2], sharey=ax_im)
@@ -246,6 +253,7 @@ def distance_matrix_dendro(
         ax_im.set_yticks([])
 
     if with_colorbar:
+        assert ax_cbar is not None
         plt.colorbar(im, cax=ax_cbar, label=label, pad=0)
         ax_cbar.set_yticks([0, vmax])
         if label:
@@ -280,8 +288,9 @@ def density_peaks_study(
     dims=[0, 1],
     fig=None,
     axes=None,
-    idx=None,
-    inv=None,
+    *,
+    idx,
+    inv,
     **scatter_kw,
 ):
     if inv is None:
@@ -292,6 +301,7 @@ def density_peaks_study(
             ncols=3, layout="constrained", figsize=(9, 3), sharey=True
         )
     elif axes is None:
+        assert fig is not None
         axes = fig.subplots(ncols=3, sharey=True)
 
     scatter_kw = dict(lw=0, s=5) | scatter_kw
