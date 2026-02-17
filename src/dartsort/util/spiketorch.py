@@ -578,19 +578,24 @@ def cosine_distance(means, means_b=None, true_distance=True):
         means_b = means_b.reshape(means_b.shape[0], -1)
     dot = means @ means_b.T
     norm = means.square().sum(1).sqrt_()
-    norm[norm == 0] = 1
+    blank = norm == 0
+    norm[blank] = 1
     if sym:
+        blank_b = blank
         norm_b = norm
     else:
         norm_b = means_b.square().sum(1).sqrt_()
-        norm_b[norm_b == 0] = 1
+        blank_b = norm_b == 0
+        norm_b[blank_b] = 1
     dot /= norm[:, None]
     dot /= norm_b[None, :]
     dist = torch.subtract(_1, dot, out=dot)
-    if sym:
-        dist.diagonal().fill_(0.0)
     if true_distance:
         dist.mul_(2.0).sqrt_()
+    dist[blank] = torch.inf
+    dist[:, blank_b] = torch.inf
+    if sym:
+        dist.diagonal().zero_()
     return dist
 
 
@@ -724,9 +729,12 @@ def normeuc_distance(means):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)
     norms_sqrt = means.square().sum(dim=1).sqrt_().sqrt_()
+    blank = norms_sqrt == 0
     dist = torch.cdist(means, means)
     dist.div_(norms_sqrt[:, None])
     dist.div_(norms_sqrt[None, :])
+    dist[blank] = torch.inf
+    dist[:, blank] = torch.inf
     dist.diagonal().zero_()
     return dist
 

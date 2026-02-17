@@ -304,6 +304,10 @@ class NeighborhoodLUT:
         return torch.equal(self.lut, other.lut)
 
 
+def lut_blank_units(lut: NeighborhoodLUT) -> Tensor:
+    return (lut.lut == lut.unit_ids.shape[0]).all(1)
+
+
 @databag
 class LUTParams:
     """Holds precomputed terms which depend on neighborhood and GMM parameters."""
@@ -1697,6 +1701,11 @@ class BaseMixtureModel(BModule):
         )
 
     def unit_distance_matrix(self) -> Tensor:
+        """Pairwise distance matrix
+
+        These should return something with zero on the diagonal. Some centroids
+        can have 0 norm, and they should have inf distance to other units.
+        """
         if self.p.distance_kind == "cosine":
             return cosine_distance(self.centroids)
         elif self.p.distance_kind == "normeuc":
@@ -2630,6 +2639,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         un_adj = (self.lut.lut < self.lut.unit_ids.shape[0]).float()
         uu_not_adj = un_adj @ un_adj.T == 0
         distances.masked_fill_(uu_not_adj, torch.inf)
+        distances.diagonal().zero_()
         return tree_groups(
             distances, max_group_size=self.p.max_group_size, max_distance=distance
         )
@@ -2700,6 +2710,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         result_map = UnitRemapping.identity(self.n_units)
         any_merged = False
 
+        # this is a good opportunity to discard dead units
+        result_map.mapping[lut_blank_units(self.lut)] = -1
+
         groups = self.group_units_by_distance(distance=self.p.merge_max_distance)
         groups = [g for g in groups if g.numel() > 1]
 
@@ -2759,8 +2772,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 if self.signal_rank:
                     self.b.bases[rest].fill_(torch.nan)
 
-        assert any_merged != result_map.is_identity()
-        if not any_merged:
+        # possible early exit
+        noop = result_map.is_identity()
+        if any_merged:
+            assert not noop
+        if noop:
             return result_map
 
         # fix up my parameters, update the datasets, and update the lut
@@ -3010,8 +3026,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.n_units = Knew
         self.unit_ids = torch.arange(Knew)
 
-        # drop log prop share of invalidated units
+        # poison invalidated units
         self.b.log_proportions[invalidated_ids] = -torch.inf
+        self.b.means[invalidated_ids] = torch.nan
+        if self.signal_rank:
+            self.b.bases[invalidated_ids] = torch.nan
 
         # assign them (can just loop)
         k0 = Korig
@@ -3799,6 +3818,9 @@ def tree_groups(
     if k <= max_group_size and distances.max() <= max_distance:
         # this would be common when splitting.
         return [torch.arange(k, device=device)]
+
+    if pnoid:
+        assert not distances.isnan().any()
 
     # make symmetric
     distances = torch.minimum(distances, distances.T)
