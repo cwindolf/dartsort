@@ -1061,6 +1061,7 @@ def fit_mixture_for_vis(
     em: bool = True,
     split: bool = False,
     merge: bool = False,
+    both: bool = False,
 ) -> MixtureVisData:
     # run model to convergence and soft assign train/full sets
     mix_data = instantiate_and_bootstrap_tmm(
@@ -1071,10 +1072,10 @@ def fit_mixture_for_vis(
     )
     if em:
         mix_data.tmm.em(mix_data.train_data)
-    if split:
+    if split or both:
         run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
-    if merge:
+    if merge or both:
         run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
 

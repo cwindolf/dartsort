@@ -224,6 +224,7 @@ class DeveloperConfig(DARTsortUserConfig):
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
     whiten_matching: bool = False
+    matching_whiten_median_std: bool = False
     matching_fp_control: bool = False
 
     # interpolation for features
@@ -269,6 +270,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # gausian mixture low level
     n_refinement_iters: int = 1
+    n_later_refinement_iters: int = 1
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0

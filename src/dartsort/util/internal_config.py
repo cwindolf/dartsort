@@ -460,6 +460,7 @@ class MatchingConfig:
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whiten: bool = False
+    whiten_median_std: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -625,7 +626,7 @@ class RefinementConfig:
     signal_rank: int = 5
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
-    cl_alpha: float = 1.0
+    cl_alpha: float = 0.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
@@ -636,7 +637,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
-    split_friend_distance: float = 0.4
+    split_friend_distance: float = 0.5
     split_distance_threshold: float = 1.0
     merge_distance_threshold: float = 1.0
     criterion_em_iters: int = 3
@@ -951,7 +952,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         signal_rank=cfg.signal_rank,
         feature_rank=cfg.temporal_pca_rank,
         initialize_at_rank_0=cfg.initialize_at_rank_0,
-        n_total_iters=cfg.n_refinement_iters,
+        n_total_iters=cfg.n_later_refinement_iters,
         n_em_iters=cfg.n_em_iters,
         sampling_cfg=FitSamplingConfig(
             n_waveforms_fit=cfg.gmm_max_spikes,
@@ -977,7 +978,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         irank = cfg.initial_rank
     initial_refinement_cfg = dataclasses.replace(
-        refinement_cfg, mixture_steps=cfg.initial_steps, signal_rank=irank
+        refinement_cfg,
+        mixture_steps=cfg.initial_steps,
+        signal_rank=irank,
+        n_total_iters=cfg.n_refinement_iters,
     )
     if cfg.pre_refinement_merge:
         pre_refinement_cfg = RefinementConfig(
@@ -1009,6 +1013,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
         whiten=cfg.whiten_matching,
+        whiten_median_std=cfg.matching_whiten_median_std,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,

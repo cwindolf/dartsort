@@ -305,7 +305,7 @@ class NeighborhoodLUT:
 
 
 def lut_blank_units(lut: NeighborhoodLUT) -> Tensor:
-    return (lut.lut == lut.unit_ids.shape[0]).all(1)
+    return (lut.lut == lut.unit_ids.shape[0]).all(1).nonzero(as_tuple=True)[0]
 
 
 @databag
@@ -2612,7 +2612,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         show_progress: bool = True,
     ) -> SplitResult:
         split_groups = self.group_units_by_distance(
-            distance=self.p.split_friend_distance
+            distance=self.p.split_friend_distance,
+            max_group_size=max(1, self.p.split_k - 1),
         )
         if show_progress:
             split_groups = tqdm(split_groups, desc="Split", smoothing=0.0)
@@ -2629,7 +2630,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return split_result
 
-    def group_units_by_distance(self, distance: float) -> Iterable[Tensor]:
+    def group_units_by_distance(
+        self, distance: float, max_group_size: int
+    ) -> Iterable[Tensor]:
         if not distance:
             return self.unit_ids[:, None]
         distances = self.unit_distance_matrix()
@@ -2641,7 +2644,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         distances.masked_fill_(uu_not_adj, torch.inf)
         distances.diagonal().zero_()
         return tree_groups(
-            distances, max_group_size=self.p.max_group_size, max_distance=distance
+            distances, max_group_size=max_group_size, max_distance=distance
         )
 
     def try_merge_group(
@@ -2713,7 +2716,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # this is a good opportunity to discard dead units
         result_map.mapping[lut_blank_units(self.lut)] = -1
 
-        groups = self.group_units_by_distance(distance=self.p.merge_max_distance)
+        groups = self.group_units_by_distance(
+            distance=self.p.merge_max_distance, max_group_size=self.p.max_group_size
+        )
         groups = [g for g in groups if g.numel() > 1]
 
         logger.dartsortverbose("Merge groups: %s.", groups)
@@ -2858,6 +2863,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         new_ids = torch.arange(new_n_units)
         new_remapping = UnitRemapping(mapping=torch.full_like(remapping.mapping, -1))
 
+        # handle discarded units. they don't need treatment in the remapping.
+        (discard,) = (remapping.mapping.cpu() == -1).nonzero(as_tuple=True)
+        self.b.log_proportions[discard] = -torch.inf
+        self.b.means[discard] = torch.nan
+        if self.signal_rank:
+            self.b.bases[discard] = torch.nan
+
         # rearrange parameters and delete parameters for destroyed units
         if (uniq_first_inds >= new_ids).all():
             # since we read later indices than are being written, in place is fine
@@ -2878,13 +2890,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.log_proportions[old_id] = -torch.inf
                 if self.signal_rank:
                     self.b.bases[old_id].fill_(torch.nan)
-
-            # double check to fix up log props. should exp-sum to 1-noiseprop
-            logsum = self.b.log_proportions.logsumexp(dim=0)
-            targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
-            assert torch.isclose(logsum, targsum, atol=1e-6)
-            self.b.log_proportions.add_(targsum - logsum)
-            assert self.b.log_proportions[:new_n_units].isfinite().all()
         else:
             # this case is really only hit in testing. i'm asserting that this is
             # a permutation, because that's all i've got implemented
@@ -2898,6 +2903,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases[new_ids] = self.b.bases[uniq_first_inds]
             self.b.log_proportions[new_n_units:] = -torch.inf
 
+        # double check to fix up log props. should exp-sum to 1-noiseprop
+        logsum = self.b.log_proportions.logsumexp(dim=0)
+        targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
+        assert torch.isclose(logsum, targsum, atol=1e-6)
+        self.b.log_proportions.add_(targsum - logsum)
+        assert self.b.log_proportions[:new_n_units].isfinite().all()
         assert self.b.log_proportions[new_n_units:].isneginf().all()
 
         logger.dartsortdebug("Cleanup %s -> %s.", self.n_units, new_n_units)
@@ -2928,6 +2939,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_labels_mask = torch.zeros_like(train_labels, dtype=torch.bool)
 
         n_new_units = 0
+        n_shrink = 0
         new_means = []
         new_log_props = []
         new_bases = []
@@ -2965,6 +2977,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 # params, return log proportion, etc. let's mark these as invalid and throw them
                 # away with a rotate later.
                 invalidated_ids.extend(unit_ids[out_count:])
+                n_shrink += n_group - res.n_split
             else:
                 # making new ids. these split ids start at 1, so add K-1 rather than K
                 # for the first new id to be K (which is the next label).
@@ -3015,7 +3028,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         Korig = self.n_units
         Knew = Korig + n_new_units
         logger.dartsortdebug(
-            f"Split created {n_new_units} new units ({Korig} -> {Knew})."
+            f"Split created {n_new_units} new units ({Korig} -> {Knew}), while "
+            f"removing {n_shrink} units."
         )
         self.b.means.resize_(Knew, *self.b.means.shape[1:])
         self.b.log_proportions.resize_(Knew, *self.b.log_proportions.shape[1:])
@@ -3048,14 +3062,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 raise ValueError(
                     f"Post-split unit creation log prop {_lp.item()} should be 0."
                 )
-            assert self.b.means.isfinite().all()
-            if self.signal_rank:
-                assert self.b.bases.isfinite().all()
 
         # discard invalidated units, so that many labels need to change
         discard = UnitRemapping.discard_mapping(
             Knew, invalidated_ids, train_labels.device
         )
+        # also a good opportunity to discard any dead units
+        discard.mapping[lut_blank_units(self.lut)] = -1
         self.cleanup(discard)
         # tell train data about this
         lut = train_data.remap(remapping=discard, distances=None)
