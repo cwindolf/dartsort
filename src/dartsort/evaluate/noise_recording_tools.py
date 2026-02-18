@@ -34,7 +34,6 @@ def get_background_recording(
         if (noise_recording_folder / "binary.json").exists():
             return read_binary_folder(noise_recording_folder)
 
-
     if geom is None:
         geom = generate_geom(**probe_kwargs or {})
     n_channels = len(geom)
@@ -51,12 +50,14 @@ def get_background_recording(
 
     if noise_kind == "zero":
         return recording
-
+    
     if noise_kind == "white" and in_memory:
         return recording.save_to_memory(n_jobs=1)
     if noise_kind == "white":
         assert noise_recording_folder is not None
-        return recording.save_to_folder(noise_recording_folder, n_jobs=1, overwrite=overwrite)
+        return recording.save_to_folder(
+            noise_recording_folder, n_jobs=1, overwrite=overwrite  # type: ignore
+        )
 
     assert noise_kind == "stationary_factorized_rbf"
     if not isinstance(noise_temporal_kernel, np.ndarray):
@@ -80,13 +81,15 @@ def get_background_recording(
 
     # white noise must be cached before convolving
     with tempfile.TemporaryDirectory() as tdir:
-        recording = recording.save_to_folder(Path(tdir) / "noiserecording", n_jobs=1)
+        recording = recording.save_to_folder(
+            Path(tdir) / "noiserecording", n_jobs=1  # type: ignore
+        )
         recording = UnwhitenPreprocessor(noise, recording)
         recording = recording.save_to_folder(
-            noise_recording_folder,
-            n_jobs=n_jobs,
+            noise_recording_folder,  # type: ignore
+            n_jobs=n_jobs or 1,
             pool_engine="thread",
-            overwrite=overwrite,
+            overwrite=overwrite,  # type: ignore
         )
 
     return recording
@@ -109,7 +112,7 @@ class WhiteNoiseRecording(BaseRecording):
         else:
             channel_ids = np.asarray(channel_ids)
             assert channel_ids.shape == (n_channels,)
-        super().__init__(sampling_frequency, channel_ids, dtype)
+        super().__init__(sampling_frequency, channel_ids=channel_ids, dtype=dtype)  # type: ignore
         self._serializability["json"] = False
         self._serializability["pickle"] = False
         segment = WhiteNoiseRecordingSegment(

@@ -6,7 +6,9 @@ import torch
 import torch.nn.functional as F
 from scipy.interpolate import griddata
 from scipy.spatial import KDTree
-from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist, pdist
+from scipy.sparse.csgraph import connected_components
+from scipy.sparse import coo_array
 
 from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
@@ -71,7 +73,7 @@ def get_template_simulator(
     assert False
 
 
-def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="32"):
+def singlechan_to_probe(pos, alpha, waveforms, geom3, decay_model="squared"):
     dtype = waveforms.dtype
     if decay_model == "pointsource":
         amp = alpha / cdist(pos, geom3).astype(dtype)
@@ -167,6 +169,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         temporal_jitter=1,
         temporal_jitter_kind: Literal["exact", "cubic"] = "cubic",
         min_rms_distance=0.0,
+        force_no_offset=True,
         snr_adjustment=1.0,
         # timing params
         tip_before_min=0.1,
@@ -197,7 +200,6 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         ms_before=1.4,
         ms_after=2.6,
         sampling_frequency=30_000.0,
-        depth_order=True,
         decay_model="squared",
         seed: int | np.random.Generator = 0,
         dtype=np.float32,
@@ -208,6 +210,7 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.temporal_jitter = temporal_jitter
         self.common_reference = common_reference
         self.snr_adjustment = snr_adjustment
+        self.decay_model = decay_model
 
         self.geom = geom
         self.geom3 = geom
@@ -219,96 +222,64 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         self.ms_after = ms_after
         self.sampling_frequency = sampling_frequency
 
-        self.tip_rel_max = tip_rel_max
-        self.peak_rel_max = peak_rel_max
-        self.tip_before_min = tip_before_min
-        self.tip_before_max = tip_before_max
-        self.peak_after_min = peak_after_min
-        self.peak_after_max = peak_after_max
-        self.trough_width_min = trough_width_min
-        self.trough_width_max = trough_width_max
-        self.tip_width_min = tip_width_min
-        self.tip_width_max = tip_width_max
-        self.peak_width_min = peak_width_min
-        self.peak_width_max = peak_width_max
-        self.pos_margin_um_x = pos_margin_um_x
-        self.pos_margin_um_z = pos_margin_um_z
-        self.orthdist_min_um = orthdist_min_um
-        self.orthdist_max_um = orthdist_max_um
-        self.alpha_family = alpha_family
-        self.alpha_min = alpha_min
-        self.alpha_max = alpha_max
-        self.alpha_mean = alpha_mean
-        self.alpha_var = alpha_var
-        theta = alpha_var / alpha_mean
-        k = alpha_mean / theta
-        self.alpha_shape = k
-        self.alpha_scale = theta
-        self.decay_model = decay_model
-        self.depth_order = depth_order
+        self.waveform_kw = dict(
+            snr_adjustment=snr_adjustment,
+            tip_before_min=tip_before_min,
+            tip_before_max=tip_before_max,
+            peak_after_min=peak_after_min,
+            peak_after_max=peak_after_max,
+            trough_width_min=trough_width_min,
+            trough_width_max=trough_width_max,
+            tip_width_min=tip_width_min,
+            tip_width_max=tip_width_max,
+            peak_width_min=peak_width_min,
+            peak_width_max=peak_width_max,
+            tip_rel_max=tip_rel_max,
+            peak_rel_max=peak_rel_max,
+        )
+        alpha_shape = alpha_var / alpha_mean
+        alpha_scale = alpha_mean / alpha_shape
+        self.location_kw = dict(
+            pos_margin_um_x=pos_margin_um_x,
+            pos_margin_um_z=pos_margin_um_z,
+            orthdist_min_um=orthdist_min_um,
+            orthdist_max_um=orthdist_max_um,
+            alpha_shape=alpha_shape,
+            alpha_scale=alpha_scale,
+            alpha_min=alpha_min,
+            alpha_max=alpha_max,
+            alpha_family=alpha_family,
+        )
 
-        pos, alpha = self.simulate_location(size=n_units)
-        assert pos.shape == (n_units, self.geom3.shape[1])
+        t_up = self.time_domain_ms(up=True)
+        pos, alpha, sct, sct_up = simulate_point_source_templates(
+            n_units=n_units,
+            rg=self.rg,
+            temporal_jitter_kind=temporal_jitter_kind,
+            temporal_jitter=temporal_jitter,
+            trough_offset_samples=self.trough_offset_samples(),
+            time_domain=self.time_domain_ms(),
+            time_domain_up=t_up,
+            geom=self.geom3,
+            location_kw=self.location_kw,
+            singlechan_kw=self.waveform_kw,
+            decay_model=decay_model,
+            min_rms_distance=min_rms_distance,
+            force_no_offset=force_no_offset,
+            dtype=dtype,
+        )
         self.template_pos = pos
         self.template_alpha = alpha
-        if temporal_jitter_kind == "exact":
-            _, sct_full = self.simulate_singlechan(size=n_units, up=True)
-            assert sct_full.shape == (
-                n_units,
-                self.spike_length_samples() * temporal_jitter,
-            )
-            offset = sct_full.argmin(1) - self.trough_offset_samples() * temporal_jitter
-            assert np.all(offset >= -temporal_jitter // 2)
-            assert np.all(offset <= temporal_jitter)
-            sct_full = sct_full.reshape(
-                n_units, self.spike_length_samples(), temporal_jitter
-            )
-            self.singlechan_templates_up = sct_full.transpose(0, 2, 1)
-            self.singlechan_templates = sct_full[:, :, 0]
-            self.offsets_up = sct_full.argmin(1) - self.trough_offset_samples()
-            self.offsets = (
-                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
-            )
-        elif temporal_jitter_kind == "cubic":
-            _, sct = self.simulate_singlechan(size=n_units, up=False)
-            self.singlechan_templates = sct
-            self.offsets = (
-                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
-            )
-        else:
-            assert False
-        self.min_rms_distance = min_rms_distance
-        min_dist = min_rms_distance + 0.0
-        n_checks = 0
-        while min_rms_distance and (min_dist <= min_rms_distance):
-            assert temporal_jitter_kind == "cubic"
-            min_dist = self.check_and_fix_distances()
-            n_checks += 1
-            if n_checks > 512:
-                raise ValueError(
-                    f"Couldn't reach min distance {min_rms_distance}, got to {min_dist}."
-                )
-        if temporal_jitter_kind == "cubic":
-            sct_up = upsample_singlechan(
-                self.singlechan_templates, temporal_jitter=temporal_jitter
-            )
-            self.singlechan_templates_up = sct_up
-            self.offsets = (
-                self.singlechan_templates.argmin(1) - self.trough_offset_samples()
-            )
-            assert (self.offsets == 0).all()
-            # atimes = (sct_up.shape[2] - 1) - sct_up[:, :, ::-1].argmin(2)
-            up_half = temporal_jitter // 2
-            off_up = (np.arange(temporal_jitter) > up_half).astype(np.int32)
-            off_up = self.offsets[:, None] - off_up
-            atimes = sct_up.argmin(2)
-            self.offsets_up = off_up
-            assert np.all(
-                self.singlechan_templates.argmin(1) == self.trough_offset_samples()
-            )
-        np.testing.assert_allclose(
-            self.singlechan_templates, self.singlechan_templates_up[:, 0], atol=1e-15
-        )
+        self.offsets = sct[:, :, 0].argmin(1) - self.trough_offset_samples()
+        self.singlechan_templates = sct[..., 0]
+        self.singlechan_templates_up = sct_up[..., 0]
+
+        up_half = temporal_jitter // 2
+        off_up = (np.arange(temporal_jitter) > up_half).astype(np.int32)
+        off_up = self.offsets[:, None] - off_up[None, :]
+        self.offsets_up = off_up
+        assert (np.abs(sct.argmin(1) - self.trough_offset_samples()) <= 2).all()
+        np.testing.assert_allclose(sct, sct_up[:, 0], atol=1e-15)
 
     def templates(self, drift=0, up=False, padded=False, pad_value=np.nan):
         pos = self.template_pos
@@ -334,31 +305,6 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         off = self.offsets_up if up else self.offsets
         return pos, templates, off
 
-    def check_and_fix_distances(self):
-        # make rms distance matrix, check templates that are too close, re-sample
-        # just those ones... hopefully this converges.
-        t = torch.asarray(self.templates()[1]).view(self.n_units, -1)
-        t = F.pad(t, (0, 1), value=0.0)
-        rms = (t[:, None] - t[None, :]).square_().mean(dim=2).sqrt_()
-        rms = rms[:-1, :-1]
-        rms.fill_diagonal_(torch.inf)
-        min_rms = rms.amin()
-        if min_rms > self.min_rms_distance:
-            return min_rms
-
-        close = rms <= self.min_rms_distance
-        isclose = torch.logical_or(close.any(dim=1), close.any(dim=0))
-        (isclose,) = isclose.nonzero(as_tuple=True)
-
-        inum = isclose.numel()
-        ipos, ialpha = self.simulate_location(size=inum)
-        _, isinglechan_templates = self.simulate_singlechan(size=inum)
-        self.template_pos[isclose] = ipos
-        self.template_alpha[isclose] = ialpha
-        self.singlechan_templates[isclose] = isinglechan_templates
-
-        return min_rms
-
     def trough_offset_samples(self):
         return int(self.ms_before * (self.sampling_frequency / 1000))
 
@@ -378,85 +324,6 @@ class PointSource3ExpSimulator(BaseTemplateSimulator):
         t -= self.trough_offset_samples()
         t /= self.sampling_frequency / 1000
         return t
-
-    def expand_size(self, size) -> tuple[int, ...]:
-        if size is not None:
-            if isinstance(size, int):
-                size = (size,)
-            else:
-                assert isinstance(size, (tuple, list))
-            # time will broadcast on inner dimension
-            size = (*size, 1)
-        return size
-
-    def simulate_singlechan(self, size: int | tuple[int, ...], up=False):
-        """Simulate a trough-normalized 3-exp action potential."""
-        t = self.time_domain_ms(up=up)
-        size = self.expand_size(size)
-
-        tip = self.rg.uniform(-self.tip_before_max, -self.tip_before_min, size=size)
-        peak = self.rg.uniform(self.peak_after_min, self.peak_after_max, size=size)
-        tip_height = self.rg.uniform(high=self.tip_rel_max, size=size)
-        peak_height = self.rg.uniform(high=self.peak_rel_max, size=size)
-        trough_width = self.rg.uniform(
-            self.trough_width_min, self.trough_width_max, size=size
-        )
-        tip_width = self.rg.uniform(self.tip_width_min, self.tip_width_max, size=size)
-        peak_width = self.rg.uniform(
-            self.peak_width_min, self.peak_width_max, size=size
-        )
-
-        trough = -np.exp(-np.square(t) / (2 * trough_width))
-        tip = np.exp(-np.square(t - tip) / (2 * tip_width))
-        peak = np.exp(-np.square(t - peak) / (2 * peak_width))
-
-        waveforms = trough + tip_height * tip + peak_height * peak
-        center = self.trough_offset_samples()
-        if up:
-            center = center * self.temporal_jitter
-        waveforms /= -waveforms[..., center, None]
-
-        waveforms = waveforms * self.snr_adjustment
-
-        return t, waveforms.astype(self.dtype)
-
-    def simulate_location(self, size: int | tuple[int, ...]):
-        size = self.expand_size(size)
-        x_low = self.geom[:, 0].min() - self.pos_margin_um_x
-        x_high = self.geom[:, 0].max() + self.pos_margin_um_x
-        z_low = self.geom[:, 1].min() - self.pos_margin_um_z
-        z_high = self.geom[:, 1].max() + self.pos_margin_um_z
-
-        x = self.rg.uniform(x_low, x_high, size=size)
-        z = self.rg.uniform(z_low, z_high, size=size)
-        if self.depth_order:
-            z.sort()
-
-        orth = self.rg.uniform(self.orthdist_min_um, self.orthdist_max_um, size=size)
-
-        if self.alpha_family == "gamma":
-            alpha = self.rg.gamma(
-                shape=self.alpha_shape, scale=self.alpha_scale, size=size
-            )
-        elif self.alpha_family == "uniform":
-            alpha = self.rg.uniform(self.alpha_min, self.alpha_max, size=size)
-        else:
-            assert False
-
-        pos = np.c_[x, orth, z].astype(self.dtype)
-        alpha = alpha.astype(self.dtype)
-        return pos, alpha
-
-    def simulate_template(self, size: int | None):
-        pos, alpha = self.simulate_location(size=size or 1)
-        t, waveforms = self.simulate_singlechan(size=size or 1)
-        templates = singlechan_to_probe(
-            pos, alpha, waveforms, self.geom3, decay_model=self.decay_model
-        )
-        if size is None:
-            assert templates.shape[0] == 1
-            templates = templates[0]
-        return pos, alpha, templates
 
 
 class TemplateLibrarySimulator(BaseTemplateSimulator):
@@ -694,3 +561,288 @@ def griddata_interp(templates, source_pos, target_pos, out, method):
 TemplateSimulator = Union[
     StaticTemplateSimulator, PointSource3ExpSimulator, TemplateLibrarySimulator
 ]
+
+
+# point source library fns
+
+
+def simulate_source_locations(
+    *,
+    size: int,
+    geom: np.ndarray,
+    pos_margin_um_x: float,
+    pos_margin_um_z: float,
+    orthdist_min_um: float,
+    orthdist_max_um: float,
+    alpha_shape: float,
+    alpha_scale: float,
+    alpha_min: float,
+    alpha_max: float,
+    alpha_family: str,
+    rg: np.random.Generator,
+    depth_order: bool = True,
+    dtype: np.typing.DTypeLike,
+):
+    x_low = geom[:, 0].min() - pos_margin_um_x
+    x_high = geom[:, 0].max() + pos_margin_um_x
+    z_low = geom[:, -1].min() - pos_margin_um_z
+    z_high = geom[:, -1].max() + pos_margin_um_z
+
+    x = rg.uniform(x_low, x_high, size=size)
+    z = rg.uniform(z_low, z_high, size=size)
+    if depth_order:
+        z.sort()
+
+    orth = rg.uniform(orthdist_min_um, orthdist_max_um, size=size)
+
+    if alpha_family == "gamma":
+        alpha = rg.gamma(shape=alpha_shape, scale=alpha_scale, size=size)
+    elif alpha_family == "uniform":
+        alpha = rg.uniform(alpha_min, alpha_max, size=size)
+    else:
+        assert False
+
+    pos = np.c_[x, orth, z].astype(dtype)
+    alpha = alpha.astype(dtype)[:, None]
+    return pos, alpha
+
+
+def simulate_singlechan(
+    *,
+    size: int,
+    time_domain: np.ndarray,
+    time_domain_up: np.ndarray,
+    trough_offset_samples: int,
+    snr_adjustment: float = 1.0,
+    temporal_jitter: int = 1,
+    # timing params
+    tip_before_min=0.1,
+    tip_before_max=0.5,
+    peak_after_min=0.2,
+    peak_after_max=0.8,
+    # width params
+    trough_width_min=0.005,
+    trough_width_max=0.025,
+    tip_width_min=0.01,
+    tip_width_max=0.05,
+    peak_width_min=0.05,
+    peak_width_max=0.2,
+    # rel height params
+    tip_rel_max=0.3,
+    peak_rel_max=0.5,
+    rg: np.random.Generator,
+    dtype: np.typing.DTypeLike,
+    up=False,
+):
+    """Simulate a trough-normalized 3-exp action potential."""
+    t = time_domain_up if up else time_domain
+
+    size_pad = (size, 1)
+
+    tip = rg.uniform(-tip_before_max, -tip_before_min, size=size_pad)
+    peak = rg.uniform(peak_after_min, peak_after_max, size=size_pad)
+    tip_height = rg.uniform(high=tip_rel_max, size=size_pad)
+    peak_height = rg.uniform(high=peak_rel_max, size=size_pad)
+    trough_width = rg.uniform(trough_width_min, trough_width_max, size=size_pad)
+    tip_width = rg.uniform(tip_width_min, tip_width_max, size=size_pad)
+    peak_width = rg.uniform(peak_width_min, peak_width_max, size=size_pad)
+
+    trough = -np.exp(-np.square(t) / (2 * trough_width))
+    tip = np.exp(-np.square(t - tip) / (2 * tip_width))
+    peak = np.exp(-np.square(t - peak) / (2 * peak_width))
+
+    waveforms = trough + tip_height * tip + peak_height * peak
+    center = trough_offset_samples
+    if up:
+        center = center * temporal_jitter
+    waveforms /= -waveforms[..., center, None]
+
+    waveforms = waveforms * snr_adjustment
+
+    return t, waveforms.astype(dtype)
+
+
+def _simulate_point_source_templates(
+    *,
+    n_units: int,
+    rg: np.random.Generator,
+    temporal_jitter_kind: str,
+    temporal_jitter: int,
+    trough_offset_samples: int,
+    time_domain: np.ndarray,
+    time_domain_up: np.ndarray,
+    geom: np.ndarray,
+    location_kw: dict,
+    singlechan_kw: dict,
+    dtype: np.typing.DTypeLike,
+):
+    pos, alpha = simulate_source_locations(
+        size=n_units,
+        geom=geom,
+        **location_kw,
+        rg=rg,
+        dtype=dtype,
+    )
+    if temporal_jitter_kind == "exact":
+        t, sct_up = simulate_singlechan(
+            size=n_units,
+            time_domain=time_domain,
+            time_domain_up=time_domain_up,
+            trough_offset_samples=trough_offset_samples,
+            temporal_jitter=temporal_jitter,
+            **singlechan_kw,
+            rg=rg,
+            dtype=dtype,
+            up=True,
+        )
+        sct_up = sct_up.reshape(n_units, -1, temporal_jitter, 1)
+        sct_up = sct_up.transpose(0, 2, 1, 3)
+        sct = sct_up[:, 0]
+    else:
+        t, sct = simulate_singlechan(
+            size=n_units,
+            time_domain=time_domain,
+            time_domain_up=time_domain_up,
+            trough_offset_samples=trough_offset_samples,
+            **singlechan_kw,
+            rg=rg,
+            dtype=dtype,
+            up=False,
+        )
+        sct_up = upsample_singlechan(sct, temporal_jitter=temporal_jitter)
+        sct = sct[..., None]
+        sct_up = sct_up[..., None]
+    return pos, alpha, sct, sct_up
+
+
+def _get_separated_group(
+    *,
+    n_grab: int,
+    pos: np.ndarray,
+    alpha: np.ndarray,
+    singlechan_templates: np.ndarray,
+    threshold: float,
+    geom3: np.ndarray,
+    decay_model: str,
+    rg: np.random.Generator,
+):
+    n = len(pos)
+    x = singlechan_to_probe(
+        pos=pos,
+        alpha=alpha,
+        waveforms=singlechan_templates,
+        geom3=geom3,
+        decay_model=decay_model,
+    )
+    d = pdist(x.reshape(n, -1), metric="sqeuclidean")
+    d = np.sqrt(d / np.prod(x.shape[1:]))
+    ii, jj = np.triu_indices(n, k=1)
+    mask = np.flatnonzero(d >= threshold)
+    ii = ii[mask]
+    jj = jj[mask]
+
+    # largest connected component (connected=separated)
+    v = np.ones(ii.shape)
+    coo = coo_array(((v, (ii, jj))), shape=(n, n))
+    coo = coo + coo.T
+    _, labels = connected_components(coo, directed=False, connection="strong")
+    u, c = np.unique(labels, return_counts=True)
+    ibig = np.argmax(c)
+    if c[ibig] < n_grab:
+        return None
+
+    # grab n random ones in there
+    in_big = np.flatnonzero(labels == u[ibig])
+    if in_big.shape[0] > n_grab:
+        in_big = rg.choice(in_big, size=n_grab, replace=False)
+        in_big.sort()
+
+    return in_big
+
+
+def simulate_point_source_templates(
+    *,
+    n_units: int,
+    rg: np.random.Generator,
+    temporal_jitter_kind: str,
+    temporal_jitter: int,
+    trough_offset_samples: int,
+    time_domain: np.ndarray,
+    time_domain_up: np.ndarray,
+    geom: np.ndarray,
+    location_kw: dict,
+    singlechan_kw: dict,
+    decay_model: str,
+    min_rms_distance: float = 0.0,
+    oversampling: int = 4,
+    sampling_growth: int = 2,
+    max_oversampling: int = 16,
+    max_tries: int = 10,
+    force_no_offset: bool = False,
+    dtype: np.typing.DTypeLike,
+):
+    if not (min_rms_distance or force_no_offset):
+        oversampling = max_oversampling = sampling_growth = 1
+    puff = oversampling
+    rg = np.random.default_rng(rg)
+
+    for _ in range(max_tries):
+        sample_n = min(n_units * max_oversampling, n_units * puff)
+        pos, alpha, singlechan_templates, singlechan_templates_up = (
+            _simulate_point_source_templates(
+                temporal_jitter_kind=temporal_jitter_kind,
+                temporal_jitter=temporal_jitter,
+                trough_offset_samples=trough_offset_samples,
+                time_domain=time_domain,
+                time_domain_up=time_domain_up,
+                geom=geom,
+                location_kw=location_kw,
+                singlechan_kw=singlechan_kw,
+                n_units=sample_n,
+                rg=rg,
+                dtype=dtype,
+            )
+        )
+
+        # reject misaligned ones
+        if force_no_offset:
+            valid = singlechan_templates[:, :, 0].argmin(1) == trough_offset_samples
+            valid = np.flatnonzero(valid)
+            if valid.size < n_units:
+                continue
+            pos = pos[valid]
+            alpha = alpha[valid]
+            singlechan_templates = singlechan_templates[valid]
+            singlechan_templates_up = singlechan_templates_up[valid]
+
+        # reject too-close pairs
+        if min_rms_distance:
+            choices = _get_separated_group(
+                n_grab=n_units,
+                pos=pos,
+                alpha=alpha,
+                singlechan_templates=singlechan_templates,
+                threshold=min_rms_distance,
+                geom3=geom,
+                decay_model=decay_model,
+                rg=rg,
+            )
+            if choices is None:
+                puff = min(max_oversampling, puff * sampling_growth)
+                continue
+        elif pos.shape[0] > n_units:
+            choices = rg.choice(pos.shape[0], size=n_units, replace=False)
+            choices.sort()
+        else:
+            choices = slice(None)
+
+        pos = pos[choices]
+        alpha = alpha[choices]
+        singlechan_templates = singlechan_templates[choices]
+        singlechan_templates_up = singlechan_templates_up[choices]
+
+        break
+    else:
+        raise ValueError(f"Hit max template tries for {min_rms_distance=}.")
+
+    return pos, alpha, singlechan_templates, singlechan_templates_up

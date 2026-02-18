@@ -64,6 +64,7 @@ def get_clusterer(
         **shared_save_kw,
     )
 
+    refinement_cfgs = refinement_cfgs or []
     for j, r_cfg in enumerate(refinement_cfgs):
         if r_cfg is None:
             continue
@@ -77,7 +78,7 @@ def get_clusterer(
 
         R = refinement_strategies[strat]
         rsave = saving_labels and strat != "none"
-        if rsave:
+        if rsave and refine_labels_fmt is not None:
             stepfmt = f"_{j}_{strat}_{{stepname}}"
             r_fmt = refine_labels_fmt.format(stepname=stepfmt)
         else:
@@ -649,30 +650,6 @@ class Refinement(Clusterer):
 
 
 refinement_strategies["none"] = Refinement
-
-
-class GMMRefinement(Refinement):
-    def _refine(
-        self,
-        features: SimpleMatrixFeatures,
-        sorting: DARTsortSorting,
-        recording: BaseRecording,
-        motion_est=None,
-    ):
-        sorting, _ = refine_util.gmm_refine(
-            recording,
-            sorting,
-            motion_est=motion_est,
-            refinement_cfg=self.refinement_cfg,
-            computation_cfg=self.computation_cfg,
-            save_step_labels_format=self.labels_fmt,
-            save_step_labels_dir=self.save_labels_dir,
-            save_cfg=self.save_cfg,
-        )
-        return sorting
-
-
-refinement_strategies["gmm"] = GMMRefinement
 
 
 class TMMRefinement(Refinement):

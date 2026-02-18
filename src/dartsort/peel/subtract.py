@@ -59,6 +59,7 @@ class SubtractionPeeler(BasePeeler):
         denoiser_realignment_shift=5,
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
+        first_denoiser_spatial_dedup_radius: float | None=None,
         relative_peak_radius_samples=5,
         temporal_dedup_radius_samples=7,
         remove_exact_duplicates=True,
@@ -130,7 +131,9 @@ class SubtractionPeeler(BasePeeler):
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
         self.max_iter = max_iter
-        self.decrease_objective: Literal["norm", "normsq", "deconv"] = decrease_objective
+        self.decrease_objective: Literal["norm", "normsq", "deconv"] = (
+            decrease_objective
+        )
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -177,6 +180,7 @@ class SubtractionPeeler(BasePeeler):
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
+        self.first_denoiser_spatial_dedup_radius = first_denoiser_spatial_dedup_radius
 
         # first denoiser fitting parameters
         self.first_denoiser_max_waveforms_fit = first_denoiser_max_waveforms_fit
@@ -344,6 +348,7 @@ class SubtractionPeeler(BasePeeler):
             first_denoiser_thinning=subtraction_cfg.first_denoiser_thinning,
             first_denoiser_temporal_jitter=subtraction_cfg.first_denoiser_temporal_jitter,
             first_denoiser_spatial_jitter=subtraction_cfg.first_denoiser_spatial_jitter,
+            first_denoiser_spatial_dedup_radius=subtraction_cfg.first_denoiser_spatial_dedup_radius,
             growth_tolerance=subtraction_cfg.growth_tolerance,
             trough_priority=subtraction_cfg.trough_priority,
             save_iteration=subtraction_cfg.save_iteration,
@@ -567,8 +572,9 @@ class SubtractionPeeler(BasePeeler):
                     fit_max_reweighting=self.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",
                     waveforms_dataset_name="subtract_fit_waveforms",
-                    device=device,
+                    device="cpu" if which == "denoisers" else device,
                 )
+                # these are on CPU for now.
                 assert fit_feats is not None
                 fit_denoise = WaveformPipeline(fit_feats)
                 fit_denoise = fit_denoise.to(device)
@@ -592,12 +598,20 @@ class SubtractionPeeler(BasePeeler):
                 geom, self.first_denoiser_spatial_jitter, to_torch=True
             )
         waveform_pipeline = WaveformPipeline([Waveform(self.subtract_channel_index)])
+
+        if self.first_denoiser_spatial_dedup_radius:
+            dn_dedup_ci = make_channel_index(
+                geom, self.first_denoiser_spatial_dedup_radius, to_torch=True
+            )
+            dn_dedup_ci = dn_dedup_ci.to(self.b.subtract_channel_index)
+        else:
+            dn_dedup_ci = self.spatial_dedup_channel_index
         trainer = ThresholdAndFeaturize(
             self.recording,
             detection_threshold=self.detection_threshold,
             channel_index=self.subtract_channel_index,
             relative_peak_channel_index=self.relative_peak_channel_index,
-            spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            spatial_dedup_channel_index=dn_dedup_ci,
             relative_peak_radius_samples=self.relative_peak_radius_samples,
             featurization_pipeline=waveform_pipeline,
             temporal_dedup_radius_samples=self.spike_length_samples,
@@ -634,7 +648,6 @@ class SubtractionPeeler(BasePeeler):
                     voltages_dataset_name="voltages",
                     waveforms_dataset_name="waveforms",
                     subsample_by_weighting=True,
-                    device=device,
                 )
 
                 # fit the thing
@@ -1100,7 +1113,7 @@ def check_residual_decrease(
         conv = (orig_wfs * dn_wfs).sum(dim=(1, 2))
         norm = dn_wfs.square_().sum(dim=(1, 2))
         reduction = conv.mul_(2.0).sub_(norm)
-        threshold = threshold ** 2
+        threshold = threshold**2
     elif decrease_objective in ("norm", "normsq"):
         orig_decobj = orig_wfs.square().sum(dim=(1, 2))
         orig_wfs = orig_wfs.sub_(dn_wfs).nan_to_num_()
@@ -1109,7 +1122,7 @@ def check_residual_decrease(
             orig_decobj = orig_decobj.sqrt_()
             new_decobj = new_decobj.sqrt_()
         else:
-            threshold = threshold ** 2
+            threshold = threshold**2
         reduction = orig_decobj - new_decobj
     else:
         assert False

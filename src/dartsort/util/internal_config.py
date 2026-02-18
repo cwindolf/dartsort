@@ -221,9 +221,7 @@ class InterpolationParams:
         )
 
 
-default_interpolation_params = InterpolationParams(
-    extrap_method="kernel", extrap_kernel="rbf"
-)
+default_interpolation_params = InterpolationParams()
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
@@ -266,12 +264,12 @@ class SubtractionConfig:
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
-    spatial_dedup_radius: float | None = 100.0
+    spatial_dedup_radius: float | None = 50.0
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 16.0
+    residnorm_decrease_threshold: float = 12.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -297,6 +295,7 @@ class SubtractionConfig:
     first_denoiser_thinning: float = 0.5
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
+    first_denoiser_spatial_dedup_radius: float = 100.0
 
     # for debugging / vis
     save_iteration: bool = False
@@ -314,7 +313,7 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
+    spatial_dedup_radius: float = 50.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
@@ -334,7 +333,9 @@ class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
-    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
+    algorithm: Literal["running", "unitextract", "running_if_mean"] | str = (
+        "running_if_mean"
+    )
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
         "exp_weighted"
     )
@@ -378,16 +379,16 @@ class TemplateConfig:
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
 
-    def actual_algorithm(self) -> Literal["by_chunk", "by_unit"]:
-        if self.algorithm == "chunk_if_mean":
+    def actual_algorithm(self) -> str:
+        if self.algorithm == "running_if_mean":
             if self.reduction == "mean":
-                return "by_chunk"
+                return "running"
             else:
-                return "by_unit"
+                return "unitextract"
         return self.algorithm
 
     def __post_init__(self):
-        if self.algorithm in ("t", "loot") and self.reduction == "median":
+        if self.denoising_method in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
 
@@ -438,7 +439,7 @@ class MatchingConfig:
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 15.0  # norm, not normsq
+    threshold: float | Literal["fp_control"] = 10.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
@@ -452,13 +453,14 @@ class MatchingConfig:
     coarse_objective: bool = True
     channel_selection_radius: float | None = None
     template_type: Literal["individual_compressed_upsampled", "drifty", "debug"] = (
-        "individual_compressed_upsampled"
+        "drifty"
     )
-    up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
+    up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whiten: bool = False
+    whiten_median_std: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -599,9 +601,7 @@ class ClusteringConfig:
 
 @cfg_dataclass
 class RefinementConfig:
-    refinement_strategy: Literal["tmm", "gmm", "pcmerge", "forwardbackward", "none"] = (
-        "tmm"
-    )
+    refinement_strategy: str = "tmm"
     sampling_cfg: FitSamplingConfig = default_refinement_fit_sampling_cfg
 
     # pcmerge
@@ -617,11 +617,7 @@ class RefinementConfig:
     cov_kind: str = "factorizednoise"
     glasso_alpha: float | int | None = None
 
-    # feature params
-    max_avg_units: int = 3
-
     # model params
-    channels_strategy: Literal["count", "all"] = "count"
     neighb_overlap: float = 0.75
     explore_neighb_steps: int = 0
     min_count: int = 25
@@ -630,60 +626,28 @@ class RefinementConfig:
     signal_rank: int = 5
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
-    cl_alpha: float = 1.0
+    cl_alpha: float = 0.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
-    ppca_inner_em_iter: int = 5
-    distance_metric: Literal[
-        "noise_metric",
-        "kl",
-        "reverse_kl",
-        "symkl",
-        "cosine",
-        "euclidean",
-        "cosinesqrt",
-        "normeuc",
-    ] = "normeuc"
-    search_type: Literal["topk", "random"] = "topk"
+    distance_metric: Literal["cosine", "normeuc"] = "normeuc"
     n_candidates: int = 3
     merge_group_size: int = 5
     n_search: int | None = None
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
-    distance_normalization_kind: Literal["none", "noise", "channels"] = "noise"
+    split_friend_distance: float = 0.5
     split_distance_threshold: float = 1.0
     merge_distance_threshold: float = 1.0
-    criterion_threshold: float | None = 0.0
-    criterion: Literal[
-        "heldout_loglik",
-        "heldout_elbo",
-        "loglik",
-        "elbo",
-        "heldout_ecl",
-        "heldout_ecelbo",
-        "ecl",
-        "ecelbo",
-    ] = "heldout_ecl"
-    refit_before_criteria: bool = False
     criterion_em_iters: int = 3
+    hold_out_criterion: bool = True
     n_em_iters: int = 250
-    em_converged_prop: float = 0.02
-    em_converged_churn: float = 0.01
     em_converged_atol: float = 5e-3
     n_total_iters: int = 1
-    one_split_only: bool = False
-    skip_first_split: bool = False
-    hard_noise: bool = False
-    truncated: bool = True
-    split_decision_algorithm: str = "brute"
-    merge_decision_algorithm: str = "brute"
+    mixture_steps: Literal["neither", "merge", "split", "both"] = "both"
     prior_pseudocount: float = 0.0
-    prior_scales_mean: bool = False
-    laplace_ard: bool = False
     kmeansk: int = 4
-    noise_fp_correction: bool = False
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
 
@@ -753,9 +717,9 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
-default_refinement_cfg = RefinementConfig(skip_first_split=True)
+default_refinement_cfg = RefinementConfig(mixture_steps="merge")
 default_universal_cfg = UniversalMatchingConfig()
-default_initial_refinement_cfg = RefinementConfig(one_split_only=True, n_total_iters=1)
+default_initial_refinement_cfg = RefinementConfig(mixture_steps="split")
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
 
@@ -791,14 +755,15 @@ class DARTsortInternalConfig:
     matching_iterations: int = 1
     recluster_after_first_matching: bool = True
     intermediate_matching_subsampling: float = 1.0
-    overwrite_matching: bool = False
 
     # development / debugging flags
     work_in_tmpdir: bool = False
     copy_recording_to_tmpdir: bool = False
     workdir_follow_symlinks: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
-    tmpdir_parent: str | Path | None = None
+    tmpdir_parent: str | None = None
+    link_from: str | None = None
+    link_step: Literal["denoising", "detection", "refined0"] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
@@ -889,10 +854,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
-            cumulant_order=cfg.cumulant_order,
-            convexity_radius=cfg.convexity_radius,
-            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
@@ -900,8 +863,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
-            convexity_radius=cfg.convexity_radius,
-            convexity_threshold=cfg.convexity_threshold,
         )
     elif cfg.detection_type == "match":
         assert cfg.precomputed_templates_npz is not None
@@ -991,9 +952,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         signal_rank=cfg.signal_rank,
         feature_rank=cfg.temporal_pca_rank,
         initialize_at_rank_0=cfg.initialize_at_rank_0,
-        criterion=cfg.criterion,
-        criterion_threshold=cfg.criterion_threshold,
-        n_total_iters=cfg.n_refinement_iters,
+        n_total_iters=cfg.n_later_refinement_iters,
         n_em_iters=cfg.n_em_iters,
         sampling_cfg=FitSamplingConfig(
             n_waveforms_fit=cfg.gmm_max_spikes,
@@ -1002,60 +961,27 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         ),
         em_converged_atol=cfg.gmm_em_atol,
         val_proportion=cfg.gmm_val_proportion,
-        channels_strategy=cfg.channels_strategy,
-        truncated=cfg.truncated,
         distance_metric=cfg.gmm_metric,
-        search_type=cfg.gmm_search,
         n_candidates=cfg.gmm_n_candidates,
         n_search=cfg.gmm_n_search,
         merge_distance_threshold=dist_thresh,
-        split_decision_algorithm=cfg.gmm_split_decision_algorithm,
-        merge_decision_algorithm=cfg.gmm_merge_decision_algorithm,
         prior_pseudocount=cfg.prior_pseudocount,
-        latent_prior_std=cfg.latent_prior_std,
         initial_basis_shrinkage=cfg.initial_basis_shrinkage,
-        laplace_ard=cfg.laplace_ard,
         cov_kind=cfg.cov_kind,
-        glasso_alpha=cfg.glasso_alpha,
-        core_radius=cfg.core_radius,
         interp_params=interp_params,
-        skip_first_split=cfg.later_steps in ("neither", "merge"),
-        one_split_only=cfg.later_steps == "split",
+        mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
-        prior_scales_mean=cfg.prior_scales_mean,
-        noise_fp_correction=cfg.gmm_noise_fp_correction,
         cl_alpha=cfg.gmm_cl_alpha,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
     else:
         irank = cfg.initial_rank
-    if cfg.initial_euclidean_complete_only:
-        assert cfg.initial_rank == 0
-        merge_distance_threshold = cfg.gmm_euclidean_threshold
-        split_decision_algorithm = "complete"
-        merge_decision_algorithm = "complete"
-        distance_metric = "euclidean"
-    elif cfg.initial_cosine_complete_only:
-        assert cfg.initial_rank == 0
-        merge_distance_threshold = cfg.gmm_cosine_threshold
-        split_decision_algorithm = "complete"
-        merge_decision_algorithm = "complete"
-        distance_metric = "cosine"
-    else:
-        merge_distance_threshold = dist_thresh
-        split_decision_algorithm = cfg.gmm_split_decision_algorithm
-        merge_decision_algorithm = cfg.gmm_merge_decision_algorithm
-        distance_metric = cfg.gmm_metric
     initial_refinement_cfg = dataclasses.replace(
         refinement_cfg,
-        skip_first_split=cfg.initial_steps in ("neither", "merge"),
-        one_split_only=cfg.initial_steps == "split",
+        mixture_steps=cfg.initial_steps,
         signal_rank=irank,
-        merge_distance_threshold=merge_distance_threshold,
-        split_decision_algorithm=split_decision_algorithm,
-        merge_decision_algorithm=merge_decision_algorithm,
-        distance_metric=distance_metric,
+        n_total_iters=cfg.n_refinement_iters,
     )
     if cfg.pre_refinement_merge:
         pre_refinement_cfg = RefinementConfig(
@@ -1087,6 +1013,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
         whiten=cfg.whiten_matching,
+        whiten_median_std=cfg.matching_whiten_median_std,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,
@@ -1124,7 +1051,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,
         recluster_after_first_matching=cfg.recluster_after_first_matching,
-        overwrite_matching=cfg.overwrite_matching,
         work_in_tmpdir=cfg.work_in_tmpdir,
         copy_recording_to_tmpdir=cfg.copy_recording_to_tmpdir,
         workdir_copier=cfg.workdir_copier,
@@ -1134,6 +1060,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
         save_everything_on_error=cfg.save_everything_on_error,
+        link_from=cfg.link_from,
+        link_step=cfg.link_step,
     )
 
 

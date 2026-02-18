@@ -1,19 +1,10 @@
-from tempfile import tempdir
-from typing import Optional
 import warnings
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.sparse import coo_array
-from scipy.sparse.csgraph import maximum_bipartite_matching
-from tqdm.auto import tqdm
 
 
-from ..util.internal_config import (
-    TemplateConfig,
-    TemplateMergeConfig,
-    ComputationConfig,
-)
+from ..util.internal_config import TemplateMergeConfig, ComputationConfig
 from ..util.logging_util import get_logger
 from ..templates import TemplateData, template_util
 from ..peel.matching_util.pairwise_util import (
@@ -477,14 +468,13 @@ def combine_templates(template_data_a, template_data_b):
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )
-    spike_counts_by_channel = None
-    if template_data_a.spike_counts_by_channel is not None:
-        spike_counts_by_channel = np.concatenate(
-            (
-                template_data_a.spike_counts_by_channel,
-                template_data_b.spike_counts_by_channel,
-            )
-        )
+    scbca = template_data_a.spike_counts_by_channel
+    scbcb = template_data_b.spike_counts_by_channel
+    if (scbca is not None) and (scbcb is not None):
+        spike_counts_by_channel = np.concatenate([scbca, scbcb])
+    else:
+        spike_counts_by_channel = None
+
     template_data = TemplateData(
         templates=templates,
         unit_ids=unit_ids,

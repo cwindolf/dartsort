@@ -11,10 +11,10 @@ from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import ComputationConfig, raw_template_cfg
+from ..util.internal_config import ComputationConfig, raw_template_cfg, default_refinement_cfg
 from ..util.job_util import ensure_computation_config
 from ..util.registration_util import try_load_motion_est
-from . import gt, over_time, scatterplots, unit, unit_comparison, versus
+from . import gt, over_time, scatterplots, unit, unit_comparison, versus, mixture
 from .sorting import make_sorting_summary
 
 try:
@@ -45,10 +45,12 @@ def visualize_sorting(
     make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
+    make_mixture_summaries=False,
     make_versus=True,
-    sorting_analysis=None,
+    analysis=None,
     single_unit_ids=None,
     template_cfg=raw_template_cfg,
+    mix_refinement_cfg=default_refinement_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
@@ -93,7 +95,7 @@ def visualize_sorting(
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
-    sorting_analysis, gt_comparison, gt_vs, *paths_or_nones = _plan_vis(
+    analysis, gt_cmp, gt_vs, mix, *paths_or_nones = _plan_vis(
         output_directory,
         recording,
         sorting,
@@ -105,26 +107,27 @@ def visualize_sorting(
         make_gt_overviews=make_gt_overviews,
         make_unit_comparisons=make_unit_comparisons,
         make_versus=make_versus,
-        sorting_analysis=sorting_analysis,
+        make_mixture_summaries=make_mixture_summaries,
+        sorting_analysis=analysis,
         gt_analysis=gt_analysis,
         other_analyses=other_analyses,
         overwrite=overwrite,
         template_cfg=template_cfg,
+        mix_refinement_cfg=mix_refinement_cfg,
         computation_cfg=computation_cfg,
         exhaustive_gt=exhaustive_gt,
         gt_comparison_with_distances=gt_comparison_with_distances,
         n_units=n_units,
         single_unit_ids=single_unit_ids,
     )
-    sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png = paths_or_nones
+    sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png, mix_dir = (
+        paths_or_nones
+    )
 
     try:
         if sum_png is not None:
             if overwrite or not sum_png.exists():
-                fig = make_sorting_summary(
-                    sorting_analysis,
-                    figure=None,
-                )
+                fig = make_sorting_summary(analysis, figure=None)
                 fig.savefig(sum_png, dpi=dpi)
                 plt.close(fig)
     except Exception as e:
@@ -136,7 +139,7 @@ def visualize_sorting(
     if anim_png is not None:
         if overwrite or not anim_png.exists():
             over_time.sorting_scatter_animation(
-                sorting_analysis,
+                analysis,
                 anim_png,
                 chunk_length_samples=chunk_length_s * recording.sampling_frequency,
                 interval=frame_interval,
@@ -145,13 +148,13 @@ def visualize_sorting(
     try:
         if comp_png is not None and gt_analysis is not None:
             if overwrite or not comp_png.exists():
-                assert gt_comparison is not None
+                assert gt_cmp is not None
                 plots = (
                     gt.full_gt_overview_plots
                     if gt_comparison_with_distances
                     else gt.default_gt_overview_plots
                 )
-                fig = gt.make_gt_overview_summary(gt_comparison, plots=plots)
+                fig = gt.make_gt_overview_summary(gt_cmp, plots=plots)
                 fig.savefig(comp_png, dpi=dpi)
                 plt.close(fig)
     except Exception as e:
@@ -162,9 +165,9 @@ def visualize_sorting(
 
     try:
         if unit_comp_dir is not None and gt_analysis is not None:
-            assert gt_comparison is not None
+            assert gt_cmp is not None
             unit_comparison.make_all_unit_comparisons(
-                gt_comparison,
+                gt_cmp,
                 unit_comp_dir,
                 channel_show_radius_um=channel_show_radius_um,
                 amplitude_color_cutoff=amplitude_color_cutoff,
@@ -188,7 +191,7 @@ def visualize_sorting(
 
     if unit_sum_dir is not None:
         unit.make_all_summaries(
-            sorting_analysis,
+            analysis,
             unit_sum_dir,
             channel_show_radius_um=channel_show_radius_um,
             amplitude_color_cutoff=amplitude_color_cutoff,
@@ -200,6 +203,17 @@ def visualize_sorting(
             overwrite=overwrite,
             unit_ids=single_unit_ids,
             n_jobs=computation_cfg.n_jobs_cpu,
+        )
+
+    if mix_dir is not None:
+        mixture.make_mixture_summaries(
+            mix,
+            mix_dir,
+            n_units=n_units,
+            dpi=dpi,
+            show_progress=True,
+            overwrite=overwrite,
+            unit_ids=single_unit_ids,
         )
 
 
@@ -215,9 +229,11 @@ def visualize_all_sorting_steps(
     make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
+    make_mixture_summaries=False,
     make_versus=True,
     step_sortings=None,
     template_cfg=raw_template_cfg,
+    mix_refinement_cfg=default_refinement_cfg,
     gt_comparison_with_distances=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
@@ -303,6 +319,7 @@ def visualize_all_sorting_steps(
                 make_gt_overviews=make_gt_overviews,
                 make_unit_comparisons=make_unit_comparisons,
                 make_versus=make_versus,
+                make_mixture_summaries=make_mixture_summaries,
                 gt_analysis=gt_analysis,
                 other_analyses=other_analyses,
                 n_units=n_units,
@@ -313,6 +330,7 @@ def visualize_all_sorting_steps(
                 amplitude_color_cutoff=amplitude_color_cutoff,
                 pca_radius_um=pca_radius_um,
                 template_cfg=template_cfg,
+                mix_refinement_cfg=mix_refinement_cfg,
                 dpi=dpi,
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
@@ -373,10 +391,12 @@ def _plan_vis(
     make_gt_overviews=False,
     make_unit_comparisons=False,
     make_versus=False,
+    make_mixture_summaries=False,
     sorting_analysis=None,
     other_analyses=None,
     gt_analysis=None,
     template_cfg=raw_template_cfg,
+    mix_refinement_cfg=default_refinement_cfg,
     exhaustive_gt=True,
     gt_comparison_with_distances=True,
     overwrite=False,
@@ -392,9 +412,24 @@ def _plan_vis(
     need_analysis = False
     need_comparison = False
     need_vs = False
+    need_mix = False
 
     # can't compare or analyze units if there aren't any
     is_labeled = sorting.n_units > 1
+
+    if is_labeled:
+        if single_unit_ids is not None:
+            check_ids = single_unit_ids
+        elif n_units:
+            check_ids = sorting.unit_ids
+            if check_ids.shape[0] > n_units:
+                rg = np.random.default_rng(seed)
+                check_ids = rg.choice(check_ids, size=n_units, replace=False)
+                check_ids.sort()
+        else:
+            check_ids = sorting.unit_ids
+    else:
+        check_ids = []
 
     if make_sorting_summaries and is_labeled:
         sorting_summary_png = output_directory / "sorting_summary.png"
@@ -410,16 +445,6 @@ def _plan_vis(
         if overwrite:
             need_summaries = True
         else:
-            if single_unit_ids is not None:
-                check_ids = single_unit_ids
-            elif n_units:
-                check_ids = sorting.unit_ids
-                if check_ids.shape[0] > n_units:
-                    rg = np.random.default_rng(seed)
-                    check_ids = rg.choice(check_ids, size=n_units, replace=False)
-                    check_ids.sort()
-            else:
-                check_ids = sorting.unit_ids
             need_summaries = not unit.all_summaries_done(check_ids, unit_summary_dir)
         need_analysis = need_analysis or need_summaries
         if not need_summaries:
@@ -435,6 +460,15 @@ def _plan_vis(
             animation_png = None
     else:
         animation_png = None
+
+    if make_mixture_summaries and is_labeled:
+        mix_dir = output_directory / "mixture_summaries"
+        if overwrite:
+            need_mix = True
+        else:
+            need_mix = not mixture.all_summaries_done(check_ids, mix_dir)
+    else:
+        mix_dir = None
 
     can_gt = gt_analysis is not None and is_labeled
     if can_gt and make_gt_overviews:
@@ -524,14 +558,25 @@ def _plan_vis(
     else:
         gt_vs = None
 
+    if need_mix:
+        mix = mixture.fit_mixture_for_vis(
+            sorting=sorting,
+            motion_est=motion_est,
+            refinement_cfg=mix_refinement_cfg,
+        )
+    else:
+        mix = None
+
     return (
         sorting_analysis,
         gt_comparison,
         gt_vs,
+        mix,
         sorting_summary_png,
         unit_summary_dir,
         animation_png,
         comparison_png,
         unit_comparison_dir,
         vs_png,
+        mix_dir,
     )

@@ -8,7 +8,7 @@ from .util.internal_config import (
     default_pretrained_path,
     InterpMethod,
     InterpKernel,
-    RealignStrategy
+    RealignStrategy,
 )
 from .util.py_util import (
     cfg_dataclass,
@@ -55,7 +55,7 @@ class DARTsortUserConfig:
     copy_recording_to_tmpdir: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     workdir_follow_symlinks: bool = False
-    tmpdir_parent: str | Path | None = argfield(default=None, arg_type=str_or_none)
+    tmpdir_parent: str | None = argfield(default=None, arg_type=str_or_none)
     save_intermediates: bool = False
     save_final_features: bool = True
 
@@ -72,7 +72,7 @@ class DARTsortUserConfig:
     )
     alignment_ms: Annotated[float, Field(gt=0)] = argfield(
         default=1.5,
-        doc="Time shift allowed when aligning events.",
+        doc="Largest time shift allowed when re-aligning events.",
     )
 
     # -- thresholds
@@ -87,13 +87,13 @@ class DARTsortUserConfig:
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=15.0,
+        default=10.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
     )
     initial_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=16.0,
+        default=12.0,
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
@@ -117,7 +117,7 @@ class DARTsortUserConfig:
         "when denoising and subtracting NN-denoised events.",
     )
     deduplication_radius_um: Annotated[float, Field(gt=0)] = argfield(
-        default=100.0,
+        default=50.0,
         doc="During initial detection, if two spike events occur at the "
         "same time within this radius, then the smaller of the two is "
         "ignored. But also all of the secondary channels of the big one, "
@@ -158,11 +158,15 @@ class DARTsortUserConfig:
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
     window_scale_um: Annotated[float, Field(gt=0)] = 450.0
-    window_margin_um: Annotated[float, Field(gt=0)] | None = None
+    window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
+        default=None, arg_type=float_or_none
+    )
     max_dt_s: Annotated[float, Field(gt=0)] = 1000.0
-    max_disp_um: Annotated[float, Field(gt=0)] | None = None
+    max_disp_um: Annotated[float, Field(gt=0)] | None = argfield(
+        default=None, arg_type=float_or_none
+    )
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
-    min_amplitude: float | None = argfield(default=None, arg_type=float)
+    min_amplitude: float | None = argfield(default=None, arg_type=float_or_none)
 
 
 @cfg_dataclass
@@ -172,10 +176,9 @@ class DeveloperConfig(DARTsortUserConfig):
     # high level behavior
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
     later_steps: Literal["neither", "split", "merge", "both"] = "merge"
+    detection_type: str = "subtract"
     cluster_strategy: str = "dpc"
-    refinement_strategy: Literal["gmm", "pcmerge", "forwardbackward", "none", "tmm"] = (
-        "tmm"
-    )
+    refinement_strategy: str = "tmm"
     recluster_after_first_matching: bool = True
 
     # general peeling
@@ -191,23 +194,19 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.5
+    first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
-    detection_type: str = "subtract"
     use_nn_in_subtraction: bool = True
     use_singlechan_templates: bool = False
-    cumulant_order: int | None = argfield(default=None, arg_type=int_or_none)
-    convexity_threshold: float | None = argfield(default=None, arg_type=float_or_none)
-    convexity_radius: Annotated[int, Field(gt=0)] = 7
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
-        "individual_compressed_upsampled"
+        "drifty"
     )
-    matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "direct"
+    matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.025
-    overwrite_matching: bool = False
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "mean"
     template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
@@ -225,12 +224,14 @@ class DeveloperConfig(DARTsortUserConfig):
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
     whiten_matching: bool = False
+    matching_whiten_median_std: bool = False
+    matching_fp_control: bool = False
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"
     interp_kernel: InterpKernel = "thinplate"
-    extrap_method: InterpMethod | None = "kernel"
-    extrap_kernel: InterpKernel | None = "rbf"
+    extrap_method: InterpMethod | None = argfield(default=None, arg_type=str_or_none)
+    extrap_kernel: InterpKernel | None = argfield(default=None, arg_type=str_or_none)
     kriging_poly_degree: int = 1
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5
@@ -260,60 +261,36 @@ class DeveloperConfig(DARTsortUserConfig):
     n_neighbors_search: int | None = argfield(default=50, arg_type=int_or_none)
 
     # gaussian mixture high level
-    truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 5
-    criterion_threshold: float = 0.0
-    criterion: Literal[
-        "heldout_loglik",
-        "heldout_elbo",
-        "loglik",
-        "elbo",
-        "heldout_ecl",
-        "heldout_ecelbo",
-        "ecl",
-        "ecelbo",
-    ] = "heldout_ecl"
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
     kmeansk: int = 4
     min_cluster_size: int = 25
 
     # gausian mixture low level
     n_refinement_iters: int = 1
+    n_later_refinement_iters: int = 1
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 1.0
     gmm_em_atol: float = 5e-3
-    gmm_metric: Literal["kl", "cosine", "normeuc"] = "normeuc"
-    gmm_search: Literal["topk", "random"] = "topk"
+    gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
     gmm_n_candidates: int = 3
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
-    gmm_split_decision_algorithm: str = "brute"
-    gmm_merge_decision_algorithm: str = "brute"
-    latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
-    prior_scales_mean: bool = False
     cov_kind: str = "factorizednoise"
-    glasso_alpha: float | int | None = argfield(
-        default=None, arg_type=int_or_float_or_none
-    )
     gmm_euclidean_threshold: float = 5.0
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
-
-    # gaussian mixture unused
-    hard_noise: bool = False
-    laplace_ard: bool = False
-    core_radius: float | Literal["extract"] = "extract"
-    gmm_noise_fp_correction: bool = False
-    matching_fp_control: bool = False
 
     # store extra intermediates
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
     save_everything_on_error: bool = False
+    link_from: str | None = argfield(default=None, arg_type=str_or_none)
+    link_step: Literal["denoising", "detection", "refined0"] = "refined0"

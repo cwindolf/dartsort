@@ -7,17 +7,20 @@ import numpy as np
 import torch
 from dredge.motion_util import MotionEstimate
 from matplotlib.lines import Line2D
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.sparse.csgraph import connected_components
 from tqdm.auto import tqdm
 
+from ..clustering.cluster_util import maximal_leaf_groups
 from ..clustering.gmm.mixture import (
+    NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
-    NeighborhoodLUT,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
+    run_merge,
     run_split,
     try_kmeans,
 )
@@ -397,11 +400,11 @@ class NeighborDistances(MixtureComponentPlot):
             unit_ids=neighbors,
             dendrogram_linkage=None,
             show_unit_labels=True,
-            vmax=mix_data.tmm.max_distance,
+            vmax=mix_data.tmm.p.split_max_distance,
             image_cmap=self.cmap,
             show_values=True,
         )
-        panel.suptitle(f"{mix_data.tmm.distance_kind} dists", fontsize="small")
+        panel.suptitle(f"{mix_data.tmm.p.distance_kind} dists", fontsize="small")
 
 
 class MergeView(MixtureComponentPlot):
@@ -413,25 +416,37 @@ class MergeView(MixtureComponentPlot):
         pass
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        # get pair mask
-        gsize = mix_data.tmm.max_group_size - 1
-        dists, neighbors = mix_data.friends(unit_id, count=gsize)
-        d = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
-        d.diagonal().fill_(0.0)
-        pair_mask = d < mix_data.tmm.merge_max_distance
+        # -- get actual group used during merge
+        # start by getting local distance matrix D for neighbors within merge distance
+        d0 = mix_data.inf_diag_unit_distance_matrix[unit_id]
+        (neighbors,) = (d0 < mix_data.tmm.p.merge_max_distance).nonzero(as_tuple=True)
+        me = neighbors.new_full((1,), unit_id)
+        neighbors = torch.cat([neighbors, me]).sort().values
+        D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
 
-        # determine connected components and re-order (stably)
-        n_comps, labels = connected_components(pair_mask.numpy(force=True))
-        if n_comps > 1:
-            reorder = [np.flatnonzero(labels == l) for l in range(n_comps)]
-            reorder = np.concatenate(reorder)
-            d = d[reorder][:, reorder]
-            pair_mask = pair_mask[reorder][:, reorder]
-            neighbors = neighbors[reorder]
+        # find my complete linkage cluster within D
+        D = D.fill_diagonal_(0.0).numpy(force=True)
+        pd = D[np.triu_indices(D.shape[0], k=1)]
+        Z = linkage(pd, method="complete")
+        groups = maximal_leaf_groups(
+            Z,
+            distances=D,
+            max_distance=mix_data.tmm.p.merge_max_distance,
+            max_group_size=mix_data.tmm.p.max_group_size,
+        )
+        groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
+        assert len(groups) == 1
+        group_ix = list(groups[0])
+        group = neighbors[group_ix]
+        del neighbors
+
+        # get pair mask
+        D = D[group_ix][:, group_ix]
+        pair_mask = torch.asarray(D < mix_data.tmm.p.merge_max_distance)
 
         # run it
         group_res = mix_data.tmm.try_merge_group(
-            group=torch.asarray(neighbors),
+            group=torch.asarray(group),
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
@@ -440,7 +455,7 @@ class MergeView(MixtureComponentPlot):
             debug=True,
         )
 
-        return neighbors, d, pair_mask, group_res
+        return group, D, pair_mask, group_res
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         neighbors, dist, pair_mask, group_res = self.compute(mix_data, unit_id)
@@ -615,7 +630,7 @@ class CovarianceView(MixtureComponentPlot):
                 mix_data.tmm.signal_rank, -1, mix_data.tmm.neighb_cov.n_channels
             )
             basis = basis[:, :, chan_set].view(mix_data.tmm.signal_rank, -1)
-            basis = basis * mix_data.tmm.latent_prior_std
+            basis = basis * mix_data.tmm.p.latent_prior_std
             cov_signal = basis.T @ basis
             assert cov_signal.shape == cov_noise.shape
         else:
@@ -724,8 +739,25 @@ class SplitView(MixtureComponentPlot):
         self.dist_cmap = plt.get_cmap(dist_cmap)
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        split_res, debug_info = mix_data.tmm.split_unit(
-            unit_id=unit_id,
+        # my group...
+        if mix_data.tmm.p.split_friend_distance:
+            _, friends = mix_data.friends(
+                unit_id, count=mix_data.tmm.p.max_group_size, me_last=False
+            )
+            friends = torch.as_tensor(friends)
+            D = mix_data.inf_diag_unit_distance_matrix[friends][:, friends].clone()
+            D.fill_diagonal_(0.0)
+            pd = D.numpy()[np.triu_indices(D.shape[0], k=1)]
+            Z = linkage(pd, method="complete")
+            fcl = fcluster(
+                Z, mix_data.tmm.p.split_friend_distance, criterion="distance"
+            )
+            group = torch.as_tensor(friends[fcl == fcl[0]])
+        else:
+            group = torch.tensor([unit_id])
+
+        split_res, debug_info = mix_data.tmm.split_group(
+            group=group,
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
             scores=mix_data.eval_scores,
@@ -806,7 +838,7 @@ class SplitView(MixtureComponentPlot):
             means = None
 
         # compute text info
-        txt = ""
+        txt = f"ids: {group.cpu().tolist()}\n"
         if debug_info.bailed:
             txt += f"bail: {debug_info.bail_reason}\n"
         if debug_info.merge_res is not None:
@@ -818,7 +850,9 @@ class SplitView(MixtureComponentPlot):
             txt += f"no allowed partitions\n"
         if debug_info.split_model is not None:
             sprops = debug_info.split_model.b.log_proportions.cpu()
-            sprops = sprops - mix_data.tmm.b.log_proportions[unit_id].cpu()
+            sprops = (
+                sprops - mix_data.tmm.b.log_proportions[group].logsumexp(dim=0).cpu()
+            )
             propstr = "+".join(f"{p:0.3f}" for p in sprops.exp())
             txt += f"norm kmeans model props:\n  {propstr}={sprops.exp().sum():.2f}\n"
         if debug_info.merge_res is not None:
@@ -870,13 +904,13 @@ class SplitView(MixtureComponentPlot):
         # unit dist matrix / pair mask
         if dists is not None:
             dists_inf = dists.copy()
-            dists_inf[dists > mix_data.tmm.max_distance] = np.inf
+            dists_inf[dists > mix_data.tmm.p.split_max_distance] = np.inf
             distance_matrix_dendro(
                 panel=fig_dist,
                 distances=dists_inf,
                 show_values_from=dists,
                 show_unit_labels=True,
-                vmax=mix_data.tmm.max_distance,
+                vmax=mix_data.tmm.p.split_max_distance,
                 image_cmap=self.dist_cmap,
                 show_values=True,
                 label_colors=self.colors,
@@ -1024,7 +1058,10 @@ def fit_mixture_for_vis(
     motion_est,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
+    em: bool = True,
     split: bool = False,
+    merge: bool = False,
+    both: bool = False,
 ) -> MixtureVisData:
     # run model to convergence and soft assign train/full sets
     mix_data = instantiate_and_bootstrap_tmm(
@@ -1033,9 +1070,13 @@ def fit_mixture_for_vis(
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
-    mix_data.tmm.em(mix_data.train_data)
-    if split:
+    if em:
+        mix_data.tmm.em(mix_data.train_data)
+    if split or both:
         run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
+        mix_data.tmm.em(mix_data.train_data)
+    if merge or both:
+        run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
 
     train_scores = mix_data.tmm.soft_assign(
@@ -1288,18 +1329,18 @@ def vis_split_interpolation(
         erp = mix_data.tmm.erp
 
     split_data = mix_data.train_data.dense_slice_by_unit(
-        unit_id, gen=mix_data.tmm.rg, min_count=2 * mix_data.tmm.min_count
+        unit_id, gen=mix_data.tmm.rg, min_count=2 * mix_data.tmm.p.min_count
     )
     assert split_data is not None
 
     kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
         data=split_data,
-        k=mix_data.tmm.split_k,
+        k=mix_data.tmm.p.split_k,
         erp=erp,
         gen=mix_data.tmm.rg,
         feature_rank=mix_data.tmm.noise.rank,
-        min_count=mix_data.tmm.min_count,
-        min_channel_count=mix_data.tmm.min_channel_count,
+        min_count=mix_data.tmm.p.min_count,
+        min_channel_count=mix_data.tmm.p.min_channel_count,
         debug=True,
         whiten=whiten,
     )

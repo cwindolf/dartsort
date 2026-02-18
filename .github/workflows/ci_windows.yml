@@ -5,12 +5,10 @@ on:
     branches:
       - main
   workflow_dispatch:
-    branches:
-      - "*"
 
 jobs:
 
-  build:
+  tests_windows:
     runs-on: "windows-latest"
     defaults:
       run:
@@ -21,6 +19,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: dartsort
+      
+      - name: Fetch tags and describe
+        run: pushd dartsort/ && git fetch --prune --unshallow --tags && git describe && popd
 
       - name: Get DREDge
         uses: actions/checkout@v4
@@ -30,15 +31,15 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.x'
           cache: 'pip' # caching pip dependencies
           
       - name: Install dependencies
         run: |
           python -m pip install -U pip  # seems necessary to make sure pip is my pip
-          pip install -r dartsort/requirements-ci.txt
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu torch
           pip install dredge/
-          pip install -e dartsort/
+          pip install -e dartsort/[full]
 
       - name: pytest
         run: |

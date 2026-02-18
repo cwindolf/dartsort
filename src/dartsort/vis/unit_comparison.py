@@ -10,7 +10,7 @@ import numpy as np
 import seaborn as sns
 
 try:
-    from matplotlib_venn import venn2
+    from matplotlib_venn import venn2  # type: ignore
 except ImportError:
 
     def venn2(*args, **kwargs) -> Any:
@@ -203,12 +203,7 @@ class MatchVennPlot(UnitComparisonPlot):
     width = 3
     height = 1.5
 
-    def __init__(
-        self,
-        gt_color=None,
-        matched_color=None,
-        tested_color=None,
-    ):
+    def __init__(self, gt_color=None, matched_color=None, tested_color=None):
         self.gt_color = gt_color or _class_colors["fn"]
         self.matched_color = matched_color or _class_colors["tp"]
         self.tested_color = tested_color or _class_colors["fp"]
@@ -226,7 +221,7 @@ class MatchVennPlot(UnitComparisonPlot):
             set_colors=(self.gt_color, self.tested_color),
             set_labels=(
                 f"{comparison.gt_name}#{unit_id}",
-                f"{comparison.tested_name}#{inds['tested_unit']}",
+                f"{comparison.tested_name[-10:]}#{inds['tested_unit']}",
             ),
             ax=ax,
         )
@@ -242,11 +237,7 @@ class UnsortedVennPlot(UnitComparisonPlot):
     width = 3
     height = 1.5
 
-    def __init__(
-        self,
-        unsorted_matched_color=None,
-        unsorted_missed_color=None,
-    ):
+    def __init__(self, unsorted_matched_color=None, unsorted_missed_color=None):
         self.unsorted_matched_color = (
             unsorted_matched_color or _class_colors["unsorted_tp"]
         )
@@ -267,7 +258,7 @@ class UnsortedVennPlot(UnitComparisonPlot):
             set_colors=(self.unsorted_missed_color, "k"),
             set_labels=(
                 f"{comparison.gt_name}#{unit_id}",
-                f"{comparison.tested_name}#unsort",
+                f"{comparison.tested_name[-10:]}#unsort",
             ),
             ax=ax,
         )
@@ -343,7 +334,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
             if w[kind] is None or not w[kind].size or not np.isfinite(w[kind]).any():
                 continue
             with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+                warnings.filterwarnings("ignore", r"All-NaN (slice|axis) encountered")
                 maxs = np.nanmax(np.abs(w[kind]), axis=(1, 2))
             maxs = np.nan_to_num(maxs, nan=1.0)
             maa = max(maa, np.percentile(maxs, 90))

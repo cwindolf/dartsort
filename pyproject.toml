@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64.0", "setuptools-scm>=8"]
+requires = ["setuptools>=64.0", "setuptools-scm>=8", "versioningit"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "DARTsort"
-version = "0.3.4"
+name = "dartsort"
+dynamic = ["version"]
 authors = [{ name = "Charlie Windolf", email = "ciw2107@columbia.edu" }]
 description = "DARTsort"
 readme = "README.md"
@@ -14,6 +14,29 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
+dependencies = [
+  "h5py",
+  "linear_operator",
+  "numba",
+  "numpy>=1.20;python_version<'3.13'",
+  "numpy>=2.0.0;python_version>='3.13'",
+  "opt-einsum",
+  "pandas",
+  "probeinterface",
+  "pydantic",
+  "scipy>=1.13",
+  "scikit-learn",
+  "spikeinterface>=0.101.2",
+  "sympy",
+  "torch>=2.0",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+vis = ["matplotlib", "seaborn"]
+dev = ["pytest", "pytest-cov"]
+gpu = ["cupy"]
+full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykernel", "black"]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"
@@ -21,6 +44,9 @@ classifiers = [
 
 [tool.setuptools.package-data]
 "dartsort.pretrained" = ["*.pt", "*.npz", "*.npy"]
+
+[tool.versioningit]
+# use their defaults
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
@@ -31,7 +57,7 @@ omit = ["*/vis/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--log-level=14"
+addopts = "--log-level=14 --durations=100"
 filterwarnings = [
   'ignore:The extractor is not serializable to file. The provenance will not be saved.:UserWarning',
 ]

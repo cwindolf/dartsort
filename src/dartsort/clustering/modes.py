@@ -5,8 +5,10 @@ from scipy.stats import norm
 from . import density
 
 try:
-    from isosplit import up_down_isotonic_regression, jisotonic5
+    from isosplit import up_down_isotonic_regression, jisotonic5  # type: ignore[reportMissingImports]
 except ImportError:
+    up_down_isotonic_regression = lambda *a, **k: None
+    jisotonic5 = None
     pass
 
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
@@ -14,6 +16,7 @@ except ImportError:
 
 def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     """Unimodal to the right of cut, increasing to the left. Continuity at the border."""
+    assert jisotonic5 is not None
     if weights is None:
         weights = np.ones_like(f)
 
@@ -84,7 +87,7 @@ def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
 
 
 def fit_bimodal_at(x, f, weights=None, cut=0):
-    from isosplit import up_down_isotonic_regression
+    from isosplit import up_down_isotonic_regression  # type: ignore
 
     if weights is None:
         weights = np.ones_like(f)
@@ -105,7 +108,6 @@ def fit_bimodal_at(x, f, weights=None, cut=0):
 def smoothed_dipscore_at(
     cut,
     samples,
-    sample_weights,
     alternative="smoothed",
     dipscore_only=False,
     score_kind="tv",
@@ -116,16 +118,13 @@ def smoothed_dipscore_at(
     if samples.size < 3:
         return 0.0
 
-    if sample_weights is None:
-        sample_weights = np.ones_like(samples)
-    densities = density.get_smoothed_densities(
+    densities = density.get_smoothed_density(
         samples[:, None],
-        sigmas=0.5 * 1.06 * samples.std() * (samples.size**-0.2),
+        sigma=0.5 * 1.06 * samples.std() * (samples.size**-0.2),
         bin_size_ratio=20.0,
         min_bin_size=0.025,
         max_n_bins=512,
         min_n_bins=10,
-        weights=sample_weights,
     )
     spacings = np.diff(samples)
     spacings = np.concatenate(
@@ -149,7 +148,7 @@ def smoothed_dipscore_at(
             cut = samples[candidates][np.argmin(densities[candidates])]
 
     if alternative == "bimodal":
-        densities = fit_bimodal_at(samples, densities, weights=sample_weights, cut=cut)
+        densities = fit_bimodal_at(samples, densities, cut=cut)
         densities /= (densities * spacings).sum()
     else:
         assert alternative == "smoothed"
@@ -173,29 +172,26 @@ def smoothed_dipscore_at(
         for order, sign in zip(orders, signs):
             s = np.ascontiguousarray(samples[order])
             d = np.ascontiguousarray(densities[order])
-            w = np.ascontiguousarray(sample_weights[order])
             if null in ("isotoniconeside", "isotoniconesideunnormed"):
-                dens = fit_unimodal_right(
-                    sign * s, d, weights=w, cut=sign * cut, hard=hard
-                )
+                dens = fit_unimodal_right(sign * s, d, cut=sign * cut, hard=hard)
             elif null == "isotonic":
-                dens = up_down_isotonic_regression(d, weights=w)
+                dens = up_down_isotonic_regression(d)
             elif null == "truncnorm":
-                dens = fit_truncnorm_right(
-                    sign * s, d, weights=w, cut=sign * cut, hard=hard
-                )
+                dens = fit_truncnorm_right(sign * s, d, cut=sign * cut, hard=hard)
             else:
                 assert False
 
-            dens = dens[order]
+            dens = dens[order]  # type: ignore
             if null not in ("isotonic", "isotoniconesideunnormed"):
                 dens /= (dens * spacings).sum()
 
             dens_err = (np.abs(dens - densities) * spacings).sum()
             if score_kind == "ks":
-                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()
+                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()  # type: ignore
             elif score_kind == "tv":
                 my_score = 0.5 * dens_err
+            else:
+                assert False
 
             # if my_score > score:
             if dens_err < best_dens_err:
@@ -210,7 +206,6 @@ def smoothed_dipscore_at(
         debug_info["score"] = score
         debug_info["score_kind"] = score_kind
         debug_info["uni_density"] = best_uni
-        debug_info["sample_weights"] = sample_weights
         debug_info["samples"] = samples
 
     if dipscore_only:

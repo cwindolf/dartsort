@@ -224,6 +224,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 motion_est=motion_est,
                 interp_params=matching_cfg.drift_interp_params,
                 rgeom=template_data.registered_geom,
+                whiten_median_std=matching_cfg.whiten_median_std,
             )
             whitener = torch.tensor(whitener)
         else:

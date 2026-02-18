@@ -908,7 +908,7 @@ def gmmdpc_hellinger(
         strong = np.flatnonzero(coo.data < hellinger_strong)
         ii = np.concatenate([ii, coo.coords[0][strong]])
         jj = np.concatenate([jj, coo.coords[1][strong]])
-        order = np.argsort(ii, stable=True)
+        order = np.argsort(ii, kind="stable")
         ii = ii[order]
         jj = jj[order]
 

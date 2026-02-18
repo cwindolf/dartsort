@@ -48,6 +48,7 @@ from .util.main_util import (
     ds_dump_config,
     ds_fast_forward,
     ds_handle_delete_intermediate_features,
+    ds_handle_link_from,
     ds_save_features,
     ds_save_intermediate_labels,
     ds_save_motion_est,
@@ -108,6 +109,10 @@ def dartsort(
     cfg = to_internal_config(cfg)
     ds_dump_config(cfg, output_dir)
 
+    # in benchmarking, it can be useful to resume from initial detection
+    # and/or clustering results stored in elsewhere to avoid rerunning
+    ds_handle_link_from(cfg, output_dir)
+
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             # copy files and possibly recording to temporary directory
@@ -126,7 +131,12 @@ def dartsort(
             # the temporary directory if user asked for that.
             try:
                 return _dartsort_impl(
-                    recording, output_dir, cfg, motion_est, work_dir, overwrite
+                    recording=recording,
+                    output_dir=output_dir,
+                    cfg=cfg,
+                    motion_est=motion_est,
+                    work_dir=work_dir,
+                    overwrite=overwrite,
                 )
             except Exception as e:
                 traceback_path = output_dir / "traceback.txt"
@@ -151,7 +161,14 @@ def dartsort(
     # run the sorter regular with no tempdir, log exception to a
     # traceback file in case of a crash for debugging
     try:
-        return _dartsort_impl(recording, output_dir, cfg, motion_est, None, overwrite)
+        return _dartsort_impl(
+            recording=recording,
+            output_dir=output_dir,
+            cfg=cfg,
+            motion_est=motion_est,
+            work_dir=None,
+            overwrite=overwrite,
+        )
     except Exception as e:
         traceback_path = output_dir / "traceback.txt"
         with open(traceback_path, "w") as f:
@@ -162,6 +179,7 @@ def dartsort(
 
 
 def _dartsort_impl(
+    *,
     recording: BaseRecording,
     output_dir: Path,
     cfg: DARTsortInternalConfig = default_dartsort_cfg,
@@ -177,7 +195,10 @@ def _dartsort_impl(
 
     # if there are previous results stored, resume where they leave off
     # TODO uhh. overwrite, right?
-    next_step, sorting, motion_est = ds_fast_forward(store_dir, cfg)
+    next_step, sorting, _motion_est = ds_fast_forward(store_dir, cfg)
+    if motion_est is None:
+        motion_est = _motion_est
+    ret["motion_est"] = motion_est
 
     if next_step == 0:
         # first step: initial detection and motion estimation
@@ -270,6 +291,7 @@ def _dartsort_impl(
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite or cfg.overwrite_matching,
+            previous_detection_cfg=previous_detection_cfg,
             computation_cfg=cfg.computation_cfg,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",

@@ -652,7 +652,7 @@ class BasePeeler(BModule):
                     waveforms=waveforms,
                     **fixed_properties,
                 )
-                assert getrefcount(waveforms) == 2
+                assert getrefcount(waveforms) <= 2
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:

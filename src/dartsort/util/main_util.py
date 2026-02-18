@@ -98,6 +98,37 @@ def ds_save_motion_est(
     save_motion_est(motion_est, output_dir, overwrite=overwrite)
 
 
+def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
+    if cfg.link_from is None:
+        return
+
+    link_from = resolve_path(cfg.link_from, strict=True)
+    assert link_from.is_dir()
+
+    link_patterns = []
+    link_refined0 = cfg.link_step == "refined0"
+    link_detection = link_refined0 or cfg.link_step == "detection"
+    link_denoising = link_detection or cfg.link_step == "denoising"
+
+    if link_denoising:
+        link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
+    if link_detection:
+        link_patterns.extend(["subtraction.h5", "motion_est.pkl", "subtraction_models"])
+    if link_refined0:
+        link_patterns.extend(["initial*.npy", "refined0*.npy"])
+
+    for pattern in link_patterns:
+        for src in link_from.glob(pattern):
+            rel_part = src.relative_to(link_from)
+            targ = output_dir / rel_part
+            targ.parent.mkdir(exist_ok=True)
+            if targ.exists():
+                logger.dartsortdebug(f"{targ} exists, won't link.")
+                continue
+            logger.dartsortdebug(f"Link {targ} -> {src}.")
+            targ.symlink_to(src)
+
+
 def ds_save_features(
     cfg: DARTsortInternalConfig,
     sorting: DARTsortSorting,

@@ -160,8 +160,8 @@ def realign_and_chuck_noisy_template_units(
 
     if template_data is None:
         template_data = TemplateData.from_config(
-            recording,
-            sorting,
+            recording=recording,
+            sorting=sorting,
             template_cfg=template_cfg,
             motion_est=motion_est,
             tsvd=tsvd,
@@ -231,9 +231,9 @@ def reorder_by_depth(sorting, template_data):
     meanz = np.sum(template_data.registered_geom[:, 1] * w, axis=1)
 
     # new_to_old[i] = old id for new id i
-    new_to_old = np.argsort(meanz, stable=True)
+    new_to_old = np.argsort(meanz, kind="stable")
     # old_to_new[i] = new id for old id i
-    old_to_new = np.argsort(new_to_old, stable=True)
+    old_to_new = np.argsort(new_to_old, kind="stable")
 
     if template_data.properties:
         properties = {k: v[new_to_old] for k, v in template_data.properties.items()}
@@ -356,6 +356,11 @@ def _handle_merge(
     new_kept_ixs = np.flatnonzero(uc <= 1)
     # original indices corresponding to kept units
     old_kept_ixs = ui[new_kept_ixs]
+    logger.dartsortverbose(
+        "Merge old unit indices, labels %s, %s",
+        old_kept_ixs.tolist(),
+        template_data.unit_ids[old_kept_ixs],
+    )
     # new indices for recomputed units
     new_recompute_ix = np.flatnonzero(uc > 1)
     # original indices corresponding to recomputed units
