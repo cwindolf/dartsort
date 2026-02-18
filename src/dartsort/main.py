@@ -291,7 +291,6 @@ def _dartsort_impl(
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite or cfg.overwrite_matching,
-            previous_detection_cfg=previous_detection_cfg,
             computation_cfg=cfg.computation_cfg,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",

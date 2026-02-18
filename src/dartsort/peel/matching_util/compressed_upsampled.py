@@ -186,7 +186,6 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
-        whitener: Tensor | None,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
         whitener: Tensor | None = None,
