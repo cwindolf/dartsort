@@ -1,12 +1,17 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
+import seaborn as sns
+import torch
 from matplotlib.collections import LineCollection
-from matplotlib.colors import to_hex, Colormap
+from matplotlib.colors import Colormap, to_hex
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
+from spikeinterface.core import BaseRecording
 
-from .colors import glasbey1024
 from ..clustering.cluster_util import leafsets
+from ..util import spikeio
+from ..util.data_util import DARTsortSorting, try_get_denoising_pipeline
+from .colors import glasbey1024
 
 
 def scatter_max_channel_waveforms(
@@ -400,3 +405,89 @@ def plot_correlogram(
     lags, ccg = correlogram(times_a, times_b=times_b, max_lag=max_lag)
     axis.set_xlabel("lag (samples)")
     return bar(axis, lags, ccg, fill=fill, color=color, **stairs_kwargs)
+
+
+def visualize_denoiser(
+    recording: BaseRecording,
+    vis_sorting: DARTsortSorting,
+    vis_mask: np.ndarray | None = None,
+    load_denoiser_from_sorting: DARTsortSorting | None = None,
+    n_show: int = 8,
+    figscale: float = 2.0,
+    seed: int = 0,
+    cmap="seismic",
+    suptitle=None,
+):
+    # load denoiser
+    if load_denoiser_from_sorting is None:
+        load_denoiser_from_sorting = vis_sorting
+    dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
+    assert dn is not None
+    assert channel_index is not None
+    assert geom is not None
+
+    # choose and load examples
+    if vis_mask is None:
+        vis_mask = np.arange(len(vis_sorting))
+    elif vis_mask.dtype.kind == "b":
+        assert vis_mask.shape == (len(vis_sorting),)
+        vis_mask = np.flatnonzero(vis_mask)
+    rg = np.random.default_rng(seed)
+    choices = rg.choice(vis_mask, size=n_show, replace=n_show < len(vis_sorting))
+    times_samples = vis_sorting.times_samples[choices]
+    main_channels = vis_sorting.channels[choices]
+    x = spikeio.read_waveforms_channel_index(
+        recording,
+        times_samples=times_samples,
+        main_channels=main_channels,
+        channel_index=channel_index.numpy(force=True),
+    )
+    x = torch.asarray(x, dtype=torch.float)
+
+    # denoise, compute residuals
+    mc_ = torch.asarray(main_channels)
+    y, _ = dn(waveforms=x, channels=mc_)
+    z = x - y
+
+    # grab out the main channels
+    ismain = channel_index[mc_] == mc_[:, None]
+    _, mcri = ismain.nonzero(as_tuple=True)
+    assert mcri.shape == mc_.shape == (n_show,)
+    xm = x.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
+    ym = y.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
+    zm = z.take_along_dim(dim=2, indices=mcri[:, None, None])[:, :, 0]
+
+    # all to numpy
+    x = x.numpy(force=True)
+    y = y.numpy(force=True)
+    z = z.numpy(force=True)
+    xm = xm.numpy(force=True)
+    ym = ym.numpy(force=True)
+    zm = zm.numpy(force=True)
+
+    # vis part
+    fig = plt.figure(
+        figsize=(figscale * 1.5 * n_show, figscale * 3.75),
+        layout="constrained",
+    )
+    axes = fig.subplots(
+        nrows=4, ncols=n_show, height_ratios=[0.75, 1, 1, 1], sharex=True, sharey="row"
+    )
+
+    for j in range(n_show):
+        for tr, c, l in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
+            axes[0, j].plot(tr[j], color=c, lw=1, label=l)
+        if j == n_show - 1:
+            axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
+        for i, (wf, l) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
+            im = axes[i + 1, j].imshow(
+                wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
+            )
+            sns.despine(ax=axes[i + 1, j], left=bool(j))
+            if j == n_show - 1:
+                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3)
+            if j == 0:
+                axes[i + 1, j].set_ylabel(l)
+    if suptitle:
+        fig.suptitle(suptitle)
+    return fig

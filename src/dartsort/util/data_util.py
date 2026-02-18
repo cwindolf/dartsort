@@ -558,6 +558,27 @@ def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
         return None
 
 
+def try_get_denoising_pipeline(sorting: DARTsortSorting):
+    m_dir = try_get_model_dir(sorting)
+    if m_dir is None:
+        return None, None, None
+
+    candidates = list(m_dir.glob("*denoising_pipeline.pt"))
+    if len(candidates) == 0:
+        return None, None, None
+    elif len(candidates) > 1:
+        raise ValueError(f"Not sure which to load of {candidates}.")
+    assert len(candidates) == 1
+
+    from dartsort.transform import WaveformPipeline
+
+    geom = torch.asarray(getattr(sorting, "geom"))
+    channel_index = torch.asarray(getattr(sorting, "subtract_channel_index"))
+    dn = WaveformPipeline.from_state_dict_pt(geom, channel_index, candidates[0])
+    dn = dn.eval()
+    return dn, geom, channel_index
+
+
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
