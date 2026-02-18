@@ -877,6 +877,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_type=cfg.matching_template_type,
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
+            refractory_radius_frames=cfg.refractory_radius_frames,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -1024,6 +1025,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
                 reduction=cfg.template_reduction,
             ),
         ),
+        refractory_radius_frames=cfg.refractory_radius_frames,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
