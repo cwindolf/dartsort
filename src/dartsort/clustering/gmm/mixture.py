@@ -3584,7 +3584,8 @@ def run_split(tmm, train_data, val_data, prog_level):
     )
     logger.info(
         f"Split created {split_res.n_new_units} new units and combined some to remove "
-        f"{split_res.n_shrink} units, for count change {split_res.n_new_units - split_res.n_shrink}."
+        f"{split_res.n_shrink} units, for count change "
+        f"{split_res.n_new_units - split_res.n_shrink:+}."
     )
 
 
