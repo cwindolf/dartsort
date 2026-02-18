@@ -651,6 +651,7 @@ class SplitResult:
 
     any_split: bool
     n_new_units: int
+    n_shrink: int
     train_unit_mask: Tensor
     train_split_spike_mask: Tensor
     train_split_spike_labels: Tensor
@@ -2972,19 +2973,20 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # handle case where unit count decreases
             out_count = min(res.n_split, n_group)
             cur_out_ids = res.unit_ids[:out_count]
-            if res.n_split < n_group:
+            if res.n_split <= n_group:
                 # note: train_labels already has -1s for these guys. still, need to invalidate
                 # params, return log proportion, etc. let's mark these as invalid and throw them
                 # away with a rotate later.
                 invalidated_ids.extend(unit_ids[out_count:])
                 n_shrink += n_group - res.n_split
             else:
-                # making new ids. these split ids start at 1, so add K-1 rather than K
-                # for the first new id to be K (which is the next label).
-                for_other = res.train_assignments >= n_group
-                other_labels = res.train_assignments[for_other].add_(cur_max_label)
+                # making new ids. start them at 0, offset by K.
+                (for_other,) = (res.train_assignments >= n_group).nonzero(as_tuple=True)
+                assert for_other.numel() > 0
+                other_labels = res.train_assignments[for_other]
+                other_labels -= other_labels.amin()
+                other_labels.add_(cur_max_label + 1)
                 train_labels[res.train_indices[for_other]] = other_labels
-
                 n_new_units += res.n_split - n_group
                 cur_max_label += res.n_split - n_group
 
@@ -3010,6 +3012,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases[cur_out_ids] = res.bases[:out_count]
 
             # append rest to new_* lists
+            if res.n_split <= n_group:
+                continue
             new_means.append(res.means[n_group:])
             new_log_props.append(split_log_props[n_group:])
             if self.signal_rank:
@@ -3105,6 +3109,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return SplitResult(
             any_split=any_split,
             n_new_units=n_new_units,
+            n_shrink=n_shrink,
             train_unit_mask=train_candidate_mask,
             train_split_spike_mask=train_labels_mask,
             train_split_spike_labels=train_labels,
@@ -3577,7 +3582,10 @@ def run_split(tmm, train_data, val_data, prog_level):
     split_res = tmm.split(
         train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
     )
-    logger.info(f"Split created {split_res.n_new_units} new units.")
+    logger.info(
+        f"Split created {split_res.n_new_units} new units and combined some to remove "
+        f"{split_res.n_shrink} units, for count change {split_res.n_new_units - split_res.n_shrink}."
+    )
 
 
 def run_merge(tmm, train_data, val_data, prog_level):
