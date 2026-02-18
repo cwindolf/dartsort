@@ -270,10 +270,12 @@ def _dartsort_impl(
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite or cfg.overwrite_matching,
-            previous_detection_cfg=previous_detection_cfg,
             computation_cfg=cfg.computation_cfg,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",
+            previous_detection_cfg=previous_detection_cfg,
+            prev_step_name=f"refined{step - 1}",
+            save_cfg=cfg,
         )
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
@@ -443,6 +445,8 @@ def match(
     matching_cfg=default_matching_cfg,
     sampling_cfg=default_peeling_fit_sampling_cfg,
     previous_detection_cfg: Any | None = None,
+    prev_step_name: str | None = None,
+    save_cfg: DARTsortInternalConfig | None = None,
     chunk_starts_samples=None,
     overwrite=False,
     residual_filename: str | None = None,
@@ -478,6 +482,13 @@ def match(
             tsvd=template_denoising_tsvd,
             template_npz_path=model_dir / template_npz_filename,
         )
+        if prev_step_name is not None:
+            ds_save_intermediate_labels(
+                step_name=f"{prev_step_name}_9_prematch",
+                step_sorting=sorting,
+                output_dir=output_dir,
+                cfg=save_cfg,
+            )
 
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,

@@ -464,7 +464,7 @@ class MatchingConfig:
     min_template_ptp: float = 1.0
     min_template_snr: float = 40.0
     min_template_count: int = 50
-    max_cc_flag_rate: float = 0.5
+    max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(

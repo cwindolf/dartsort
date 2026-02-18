@@ -66,7 +66,7 @@ class DARTsortGroundTruthComparison:
     def _check(self):
         gt_td = self.gt_analysis.template_data
         tested_td = self.tested_analysis.template_data
-        if gt_td is not None and tested_td is not None:
+        if self.compute_distances and (gt_td is not None and tested_td is not None):
             gt_rg = gt_td.registered_geom
             tested_rg = tested_td.registered_geom
             if gt_rg is None:

@@ -246,7 +246,7 @@ def reorder_by_depth(sorting, template_data):
     sorting = sorting.ephemeral_replace(labels=labels)
 
     uids = np.arange(len(new_to_old))
-    scbc = template_data.raw_std_dev
+    scbc = template_data.spike_counts_by_channel
     if scbc is not None:
         scbc = scbc[new_to_old]
     rsd = template_data.raw_std_dev
@@ -481,7 +481,6 @@ def flag_possible_cc_error_spikes(
     # this is more an adjacency matrix. 0s will be discarded later.
     v = np.ones(sdm["i"].shape, dtype=np.float32)
     coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
-    print(f"{coo=}")
 
     # remove the exclusions by marking their distance as large
     if subtraction_cfg.spatial_dedup_radius:
@@ -496,10 +495,8 @@ def flag_possible_cc_error_spikes(
         coo_dedup = coo_array(
             (v, (sdm_dedup["i"], sdm_dedup["j"])), shape=(n, n), dtype=v.dtype
         )
-        print(f"{coo_dedup=}")
         coo = coo - coo_dedup
         coo = coo.tocoo()
-        print(f"{coo=}")
 
         # dedup neighbors are removed
         coo.sum_duplicates()
@@ -551,5 +548,8 @@ def cc_flag_criterion(
         entropy[j] = -(np.log(friend_p) * friend_p).sum()
 
     bad = (rate > max_cc_flag_rate) & (entropy < cc_flag_entropy_cutoff)
-    logger.dartsortdebug(f"CCG peak criterion flagged {bad.sum().item()} units.")
+    logger.dartsortdebug(
+        f"CCG peak criterion flagged {bad.sum().item()} "
+        f"units ({sorting.unit_ids[np.flatnonzero(bad)].tolist()})."
+    )
     return np.logical_not(bad)

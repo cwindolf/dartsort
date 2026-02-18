@@ -186,12 +186,14 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
+        whitener: Tensor | None,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
         overwrite: bool = False,
         dtype: torch.dtype = torch.float,
     ) -> Self:
         assert matching_cfg.up_method == "direct"
+        assert whitener is None
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
