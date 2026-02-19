@@ -426,18 +426,22 @@ class MergeView(MixtureComponentPlot):
 
         # find my complete linkage cluster within D
         D = D.fill_diagonal_(0.0).numpy(force=True)
-        pd = D[np.triu_indices(D.shape[0], k=1)]
-        Z = linkage(pd, method="complete")
-        groups = maximal_leaf_groups(
-            Z,
-            distances=D,
-            max_distance=mix_data.tmm.p.merge_max_distance,
-            max_group_size=mix_data.tmm.p.max_group_size,
-        )
-        groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
-        assert len(groups) == 1
-        group_ix = list(groups[0])
-        group = neighbors[group_ix]
+        if D.shape[0] > 1:
+            pd = D[np.triu_indices(D.shape[0], k=1)]
+            Z = linkage(pd, method="complete")
+            groups = maximal_leaf_groups(
+                Z,
+                distances=D,
+                max_distance=mix_data.tmm.p.merge_max_distance,
+                max_group_size=mix_data.tmm.p.max_group_size,
+            )
+            groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
+            assert len(groups) == 1
+            group_ix = list(groups[0])
+            group = neighbors[group_ix]
+        else:
+            group_ix = np.arange(neighbors.shape[0])
+            group = neighbors
         del neighbors
 
         # get pair mask

@@ -226,7 +226,7 @@ class DeveloperConfig(DARTsortUserConfig):
     whiten_matching: bool = False
     matching_whiten_median_std: bool = False
     matching_fp_control: bool = False
-    refractory_radius_frames: int = 10
+    refractory_radius_frames: int = 0
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"
@@ -274,7 +274,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_later_refinement_iters: int = 1
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
-    gmm_cl_alpha: float = 0.0
+    gmm_cl_alpha: float = 1.0
     gmm_em_atol: float = 5e-3
     gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
     gmm_n_candidates: int = 3

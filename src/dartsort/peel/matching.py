@@ -240,12 +240,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         logger.info(
             "Constructing a matcher with template kind %s, drift %senabled, "
-            "scaling variance %s, compression rank %s, and upsampling factor %s.",
+            "scaling variance %s, compression rank %s, upsampling factor %s, "
+            "refrac radius %s.",
             matching_cfg.template_type,
             "not " if motion_est is None else "",
             matching_cfg.amplitude_scaling_variance,
             matching_cfg.template_svd_compression_rank,
             matching_cfg.template_temporal_upsampling_factor,
+            matching_cfg.refractory_radius_frames,
         )
 
         return cls(

@@ -444,7 +444,7 @@ class MatchingConfig:
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 0.0
-    refractory_radius_frames: int = 10
+    refractory_radius_frames: int = 0
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
     max_iter: int = 100
@@ -626,7 +626,7 @@ class RefinementConfig:
     signal_rank: int = 5
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
-    cl_alpha: float = 0.0
+    cl_alpha: float = 1.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
