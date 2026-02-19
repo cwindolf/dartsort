@@ -16,7 +16,7 @@ jobs:
       with:
         persist-credentials: false
     - name: Fetch tags and describe
-      run: pushd dartsort/ && git fetch --prune --unshallow --tags && git describe && popd
+      run: git fetch --prune --unshallow --tags && git describe
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
