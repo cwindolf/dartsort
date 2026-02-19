@@ -394,7 +394,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     and previous_peaks is not None
                     and len(previous_peaks)
                 ):
-                    assert prev_refrac_mask is not None
                     assert prev_update_residual is not None
 
                     prev_peaks = previous_peaks.pop()
@@ -408,6 +407,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                             prev_refrac_mask, prev_peaks, offset=self.obj_pad_len
                         )
                     if refrac_mask is not None:
+                        assert prev_refrac_mask is not None
                         apply_refrac_mask = refrac_mask + prev_refrac_mask
                     else:
                         apply_refrac_mask = None
