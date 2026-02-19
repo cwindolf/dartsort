@@ -265,6 +265,7 @@ def test_truncated_mixture(
             # re-bootstrap everything
             distances = tmm.unit_distance_matrix()
             lut = train_data.remap(distances=distances, remapping=flat_map)
+            assert lut is not None
             tmm.update_lut(lut)
 
         em_res = tmm.em(train_data)
