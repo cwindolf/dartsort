@@ -119,10 +119,7 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
         if default is MISSING:
             default = None
 
-        kw = dict(
-            default=default, help=doc, metavar=metavar, dest=field.name, choices=choices
-        )
-
+        kw = dict(default=default, help=doc, dest=field.name)
         try:
             if type_ == bool:
                 parser.add_argument(name, action=FieldBooleanOptionalAction, **kw)  # type: ignore
@@ -132,6 +129,8 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
                     action=FieldStoreAction,
                     type=type_,
                     required=required,
+                    choices=choices,
+                    metavar=metavar,
                     **kw,  # type: ignore
                 )
         except Exception as e:

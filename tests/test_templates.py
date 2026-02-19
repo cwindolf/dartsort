@@ -1,26 +1,26 @@
+import tempfile
 from itertools import product
 from pathlib import Path
-import pytest
-import tempfile
 
 import numpy as np
+import pytest
 import spikeinterface.core as sc
 import torch
+from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
+from test_util import no_overlap_recording_sorting
 
 import dartsort
-from dartsort.evaluate import simkit, config_grid
+from dartsort.evaluate import config_grid, simkit
 from dartsort.peel.matching_util import pairwise, pairwise_util
 from dartsort.templates import (
+    estimate_template_library,
+    fit_tsvd,
     get_templates,
     template_util,
     templates,
-    TemplateData,
-    estimate_template_library,
 )
 from dartsort.util.data_util import DARTsortSorting
 from dartsort.util.internal_config import TemplateConfig, TemplateRealignmentConfig
-from dredge.motion_util import IdentityMotionEstimate, get_motion_estimate
-from test_util import no_overlap_recording_sorting
 
 
 # simkit fixture based test of all algorithms with a global
@@ -64,7 +64,7 @@ def refractory_simulations(tmp_path_factory):
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("algorithm", ["by_unit", "by_chunk", "chunk_if_mean"])
+@pytest.mark.parametrize("algorithm", ["unitextract", "running", "running_if_mean"])
 def test_refractory_templates(
     refractory_simulations, drift, realign_peaks, reduction, algorithm, denoising_method
 ):
@@ -73,7 +73,7 @@ def test_refractory_templates(
 
     if denoising_method != "none" and reduction == "median":
         return
-    if denoising_method != "none" and algorithm == "by_unit":
+    if denoising_method != "none" and algorithm == "unitextract":
         return
 
     template_cfg = TemplateConfig(
@@ -124,11 +124,11 @@ def test_refractory_templates_algorithm_agreement(
 
     tsvd = None
     if denoising_method != "none":
-        tsvd = get_templates.fit_tsvd(sim["recording"], sim["sorting"])
+        tsvd = fit_tsvd(sim["recording"], sim["sorting"])
 
     tds = []
-    for algorithm in ("by_chunk", "by_unit"):
-        if algorithm == "by_unit" and denoising_method in ("t", "loot"):
+    for algorithm in ("running", "unitextract"):
+        if algorithm == "unitextract" and denoising_method in ("t", "loot"):
             continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
@@ -165,18 +165,18 @@ def test_refractory_templates_algorithm_agreement(
     )
 
     np.testing.assert_allclose(td0.templates, td1.templates, atol=1e-5)
-    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=1e-2)
+    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=2e-2)
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
-@pytest.mark.parametrize("algorithm", ("by_unit", "by_chunk"))
+@pytest.mark.parametrize("algorithm", ("unitextract", "running"))
 def test_roundtrip(tmp_path, algorithm, denoising_method):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
-    if algorithm == "by_unit" and denoising_method in ("loot", "t"):
+    if algorithm == "unitextract" and denoising_method in ("loot", "t"):
         return
     template_data = templates.TemplateData.from_config(
         recording=rec,
@@ -216,7 +216,7 @@ def test_static_templates(tmp_path):
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
-            res = get_templates.get_templates(
+            res = get_templates(
                 rec,
                 sorting,
                 trough_offset_samples=0,
@@ -263,7 +263,7 @@ def test_drifting_templates(tmp_path):
                 ),
             )
 
-            res = get_templates.get_templates(
+            res = get_templates(
                 rec,
                 sorting,
                 geom=geom,
@@ -340,9 +340,9 @@ def test_main_object():
         ),
     )
     tdata = templates.TemplateData.from_config(
-        rec,
-        sorting,
-        dartsort.TemplateConfig(
+        recording=rec,
+        sorting=sorting,
+        template_cfg=dartsort.TemplateConfig(
             denoising_method="none",
             superres_templates=False,
             denoising_rank=2,

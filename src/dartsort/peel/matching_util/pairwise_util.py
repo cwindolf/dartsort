@@ -117,11 +117,11 @@ def compressed_convolve_to_h5(
         for chunk_res in chunk_res_iterator:
             if chunk_res is None:
                 continue
+            assert isinstance(chunk_res, CompressedConvResult)
 
             # get shifted template indices for A
             shifted_temp_ix_a = template_shift_index_a.template_shift_index[
-                chunk_res.template_indices_a,
-                chunk_res.shift_indices_a,
+                chunk_res.template_indices_a, chunk_res.shift_indices_a
             ]
 
             # upsampled shifted template indices for B
@@ -163,8 +163,8 @@ def compressed_convolve_to_h5(
 def iterate_compressed_pairwise_convolutions(
     template_data_a: TemplateData,
     low_rank_templates_a: LowRankTemplates,
-    template_data_b: TemplateData,
-    low_rank_templates_b: LowRankTemplates,
+    template_data_b: TemplateData | None,
+    low_rank_templates_b: LowRankTemplates | None,
     compressed_upsampled_temporal: CompressedUpsampledTemplates,
     template_shift_index_a: drift_util.TemplateShiftIndex,
     template_shift_index_b: drift_util.TemplateShiftIndex,
@@ -186,7 +186,7 @@ def iterate_compressed_pairwise_convolutions(
     device=None,
     n_jobs=0,
     show_progress=True,
-) -> Iterator[Optional[CompressedConvResult]]:
+) -> Iterator[CompressedConvResult | DeconvResidResult | None]:
     """A generator of CompressedConvResults capturing all pairs of templates
 
     Runs the function compressed_convolve_pairs on chunks of units.
@@ -374,19 +374,23 @@ def conv_to_resid(
 
     # produce these on common channel sets
     # N, R, C
-    spatial_a = low_rank_templates_a.spatial_components[template_indices_a]
-    spatial_b = low_rank_templates_b.spatial_components[template_indices_b]
+    spatial_a = torch.asarray(
+        low_rank_templates_a.spatial_components[template_indices_a]
+    )
+    spatial_b = torch.asarray(
+        low_rank_templates_b.spatial_components[template_indices_b]
+    )
     # N, R
-    svs_a = low_rank_templates_a.singular_values[template_indices_a]
-    svs_b = low_rank_templates_b.singular_values[template_indices_b]
-    active_a = torch.any(spatial_a > 0, dim=1).to(svs_a)
+    svs_a = torch.asarray(low_rank_templates_a.singular_values[template_indices_a])
+    svs_b = torch.asarray(low_rank_templates_b.singular_values[template_indices_b])
+    active_a = (spatial_a > 0).any(dim=1).to(device=svs_a.device)
     if (
         ignore_empty_channels
         and low_rank_templates_b.spike_counts_by_channel is not None
     ):
         active_b = low_rank_templates_b.spike_counts_by_channel[template_indices_b]
         active_b = active_b > 0
-        active_b = torch.from_numpy(active_b).to(svs_a)
+        active_b = torch.asarray(active_b).to(svs_a)
         active = active_a * active_b
     else:
         active = active_a
@@ -398,11 +402,11 @@ def conv_to_resid(
 
     if distance_kind == "max":
         ta = torch.bmm(
-            low_rank_templates_a.temporal_components[template_indices_a],
+            torch.asarray(low_rank_templates_a.temporal_components[template_indices_a]),
             com_spatial_sing_a,
         ).numpy(force=True)
         tb = torch.bmm(
-            low_rank_templates_b.temporal_components[template_indices_b],
+            torch.asarray(low_rank_templates_b.temporal_components[template_indices_b]),
             com_spatial_sing_b,
         ).numpy(force=True)
         template_a_norms_ret = np.abs(ta).max(axis=(1, 2))
@@ -440,13 +444,13 @@ def conv_to_resid(
 
         if distance_kind in ("rms", "deconv"):
             if amplitude_scaling_variance:
-                norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
+                norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda  # type: ignore
             else:
                 norm_reduction = 2.0 * best_conv - template_b_norms[j]
             deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
             # deconv_resid_norms[j] /= template_a_norms[j]
         elif distance_kind == "max":
-            deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()
+            deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()  # type: ignore
             # deconv_resid_norms[j] /= np.abs(ta[j]).max()
         else:
             assert False
@@ -923,7 +927,7 @@ def shift_deduplicated_pairs(
     active_chans_a = drift_util.get_waveforms_on_static_channels(
         (chan_amp_a > 0).numpy(force=True),
         geom,
-        n_pitches_shift=-shift_a,
+        n_pitches_shift=-shift_a if shift_a is not None else None,
         registered_geom=registered_geom,
         target_kdtree=reg_geom_kdtree,
         match_distance=match_distance,
@@ -932,7 +936,7 @@ def shift_deduplicated_pairs(
     active_chans_b = drift_util.get_waveforms_on_static_channels(
         (chan_amp_b > 0).numpy(force=True),
         geom,
-        n_pitches_shift=-shift_b,
+        n_pitches_shift=-shift_b if shift_b is not None else None,
         registered_geom=registered_geom,
         target_kdtree=reg_geom_kdtree,
         match_distance=match_distance,
@@ -950,8 +954,8 @@ def shift_deduplicated_pairs(
     temp_ix_a = temp_ix_a[pair_ix_a]
     temp_ix_b = temp_ix_b[pair_ix_b]
     # get the relative shifts
-    shift_a = shift_a[pair_ix_a]
-    shift_b = shift_b[pair_ix_b]
+    shift_a = shift_a[pair_ix_a] if shift_a is not None else np.zeros_like(temp_ix_a)
+    shift_b = shift_b[pair_ix_b] if shift_b is not None else np.zeros_like(temp_ix_b)
 
     # figure out combinations
     _, spatial_shift_ids = np.unique(
@@ -1262,30 +1266,37 @@ class ConvWorkerContext:
 
     def __post_init__(self):
         # to device
-        self.compressed_upsampled_temporal.compressed_upsampled_templates = (
-            torch.as_tensor(
-                self.compressed_upsampled_temporal.compressed_upsampled_templates,
-                device=self.device,
-            )
+        # TODO: do this in a better-typed way. or just rewrite this whole file.
+        #
+        cupt = torch.as_tensor(
+            self.compressed_upsampled_temporal.compressed_upsampled_templates,
+            device=self.device,
         )
-        self.low_rank_templates_a.spatial_components = torch.as_tensor(
+        self.compressed_upsampled_temporal.compressed_upsampled_templates = cupt  # type: ignore
+        spatial_components = torch.as_tensor(
             self.low_rank_templates_a.spatial_components, device=self.device
         )
-        self.low_rank_templates_a.singular_values = torch.as_tensor(
+        self.low_rank_templates_a.spatial_components = spatial_components  # type: ignore
+        singular_values = torch.as_tensor(
             self.low_rank_templates_a.singular_values, device=self.device
         )
-        self.low_rank_templates_a.temporal_components = torch.as_tensor(
+        self.low_rank_templates_a.singular_values = singular_values  # type: ignore
+        temporal_components = torch.as_tensor(
             self.low_rank_templates_a.temporal_components, device=self.device
         )
-        self.low_rank_templates_b.spatial_components = torch.as_tensor(
+        self.low_rank_templates_a.temporal_components = temporal_components  # type: ignore
+        spatial_components = torch.as_tensor(
             self.low_rank_templates_b.spatial_components, device=self.device
         )
-        self.low_rank_templates_b.singular_values = torch.as_tensor(
+        self.low_rank_templates_b.spatial_components = spatial_components  # type: ignore
+        singular_values = torch.as_tensor(
             self.low_rank_templates_b.singular_values, device=self.device
         )
-        self.low_rank_templates_b.temporal_components = torch.as_tensor(
+        self.low_rank_templates_b.singular_values = singular_values  # type: ignore
+        temporal_components = torch.as_tensor(
             self.low_rank_templates_b.temporal_components, device=self.device
         )
+        self.low_rank_templates_b.temporal_components = temporal_components  # type: ignore
 
 
 _conv_worker_context = None

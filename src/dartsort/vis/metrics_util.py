@@ -13,11 +13,7 @@ def melt_metrics(
 ):
     if keep_metric_columns is not None:
         keep_metric_columns = metric_columns
+    assert keep_metric_columns is not None
     value_vars = [c for c in keep_metric_columns if c in df.columns]
     id_vars = [c for c in df.columns if c not in metric_columns]
-    return pd.melt(
-        df,
-        id_vars=id_vars,
-        value_vars=value_vars,
-        var_name=var_name,
-    )
+    return pd.melt(df, id_vars=id_vars, value_vars=value_vars, var_name=var_name)

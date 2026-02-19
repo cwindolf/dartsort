@@ -486,7 +486,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             recording = self.save_to_folder(
                 folder=recording_dir,
                 overwrite=overwrite,  # type: ignore
-                n_jobs=n_jobs,
+                n_jobs=n_jobs or 1,
                 pool_engine="thread",
                 chunk_duration=chunk_len_s,
             )

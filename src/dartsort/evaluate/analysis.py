@@ -123,9 +123,9 @@ class DARTsortAnalysis:
 
         if template_data is None and template_cfg is not None:
             template_data = TemplateData.from_config(
-                recording,
-                sorting,
-                template_cfg,
+                recording=recording,
+                sorting=sorting,
+                template_cfg=template_cfg,
                 overwrite=False,
                 motion_est=motion_est,
                 computation_cfg=computation_cfg,

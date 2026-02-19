@@ -1411,6 +1411,7 @@ def whitener_from_hdf5(
     rgeom=None,
     eps=1e-4,
     corr_mode=False,
+    whiten_median_std=False,
 ):
     from dartsort.util.drift_util import registered_geometry
 
@@ -1453,7 +1454,8 @@ def whitener_from_hdf5(
     wstd = 1.0 / std
     # life is easier if we try not to change the units
     # too much in the whitened data domain
-    wstd /= np.median(wstd)
+    if whiten_median_std:
+        wstd /= np.median(wstd)
 
     # using the zca whitener here. symmetry takes a load off the mind.
     whitener = (Vh * wstd) @ Vh.T

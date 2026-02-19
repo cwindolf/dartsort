@@ -431,9 +431,11 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         template_cfg = dartsort.TemplateConfig(
             denoising_method="none", superres_bin_min_spikes=0
         )
+        rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
-            *no_overlap_recording_sorting(templates),
-            template_cfg,
+            recording=rr,
+            sorting=st,
+            template_cfg=template_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
             save_folder=tmp_path,
             overwrite=True,
@@ -584,9 +586,11 @@ def test_static(tmp_path, up_factor, cd_iter):
         template_cfg = dartsort.TemplateConfig(
             denoising_method="none", superres_bin_min_spikes=0
         )
+        rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
-            *no_overlap_recording_sorting(templates),
-            template_cfg,
+            recording=rr,
+            sorting=st,
+            template_cfg=template_cfg,
             motion_est=motion_util.IdentityMotionEstimate(),
             save_folder=tmp_path,
             overwrite=True,

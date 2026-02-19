@@ -224,6 +224,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 motion_est=motion_est,
                 interp_params=matching_cfg.drift_interp_params,
                 rgeom=template_data.registered_geom,
+                whiten_median_std=matching_cfg.whiten_median_std,
             )
             whitener = torch.tensor(whitener)
         else:
@@ -239,12 +240,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         logger.info(
             "Constructing a matcher with template kind %s, drift %senabled, "
-            "scaling variance %s, compression rank %s, and upsampling factor %s.",
+            "scaling variance %s, compression rank %s, upsampling factor %s, "
+            "refrac radius %s.",
             matching_cfg.template_type,
             "not " if motion_est is None else "",
             matching_cfg.amplitude_scaling_variance,
             matching_cfg.template_svd_compression_rank,
             matching_cfg.template_temporal_upsampling_factor,
+            matching_cfg.refractory_radius_frames,
         )
 
         return cls(
@@ -358,7 +361,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_objective = traces.new_zeros(
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
-        refrac_mask = torch.zeros_like(padded_objective)
+        if self.refractory_radius_frames:
+            refrac_mask = torch.zeros_like(padded_objective)
+        else:
+            refrac_mask = None
 
         # initialize convolution
         chunk_template_data.convolve(
@@ -376,7 +382,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             # in "cd iterations", we may not need to update the residual.
             update_residual = not coarse_only
 
-            if not initializing_cd:
+            if not initializing_cd and refrac_mask is not None:
                 refrac_mask = torch.zeros_like(refrac_mask)
 
             current_peaks = []
@@ -388,7 +394,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     and previous_peaks is not None
                     and len(previous_peaks)
                 ):
-                    assert prev_refrac_mask is not None
                     assert prev_update_residual is not None
 
                     prev_peaks = previous_peaks.pop()
@@ -397,10 +402,15 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     chunk_template_data.unsubtract_conv(
                         padded_conv, prev_peaks, padding=self.obj_pad_len
                     )
-                    chunk_template_data.forget_refractory(
-                        prev_refrac_mask, prev_peaks, offset=self.obj_pad_len
-                    )
-                    apply_refrac_mask = refrac_mask + prev_refrac_mask
+                    if self.refractory_radius_frames:
+                        chunk_template_data.forget_refractory(
+                            prev_refrac_mask, prev_peaks, offset=self.obj_pad_len
+                        )
+                    if refrac_mask is not None:
+                        assert prev_refrac_mask is not None
+                        apply_refrac_mask = refrac_mask + prev_refrac_mask
+                    else:
+                        apply_refrac_mask = None
                 else:
                     apply_refrac_mask = refrac_mask
 
@@ -419,9 +429,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     break
 
                 # enforce refractoriness
-                chunk_template_data.enforce_refractory(
-                    refrac_mask, new_peaks, offset=self.obj_pad_len
-                )
+                if self.refractory_radius_frames:
+                    chunk_template_data.enforce_refractory(
+                        refrac_mask, new_peaks, offset=self.obj_pad_len
+                    )
 
                 # subtract them
                 if update_residual:
@@ -499,7 +510,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_conv: Tensor,
         padded_objective: Tensor,
         padded_scalings: Tensor | None,
-        refrac_mask: Tensor,
+        refrac_mask: Tensor | None,
         chunk_template_data: ChunkTemplateData,
         unit_mask=None,
         coarse_only=False,
@@ -510,9 +521,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # enforce refractoriness
-        objective = (padded_objective + refrac_mask)[
-            :-1, self.obj_pad_len : -self.obj_pad_len
-        ]
+        objective = padded_objective[:-1, self.obj_pad_len : -self.obj_pad_len]
+        if refrac_mask is not None:
+            refrac_mask_ = refrac_mask[:-1, self.obj_pad_len : -self.obj_pad_len]
+            objective = objective + refrac_mask_
         if unit_mask is not None:
             objective[torch.logical_not(unit_mask)] = -torch.inf
 

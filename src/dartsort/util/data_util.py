@@ -49,6 +49,11 @@ class DARTsortSorting:
         persistent_features: dict[str, np.ndarray] | None = None,
         ephemeral_features: dict[str, np.ndarray] | None = None,
     ):
+        """Construct a DARTsortSorting directly from times, channels, labels, et cetera.
+
+        It's more common to construct from an HDF5 file with .from_peeling_hdf5() or from
+        a .npz with .load().
+        """
         self.n_spikes = times_samples.shape[0]
         if parent_h5_path is not None:
             parent_h5_path = resolve_path(parent_h5_path)
@@ -89,7 +94,7 @@ class DARTsortSorting:
         return self.unit_ids.shape[0]
 
     def copy(self) -> Self:
-        """Deep-enough copy."""
+        """Shallow copy. Doesn't copy data, but copies references and internal state."""
         other = copy(self)
         other._ephemeral_feature_names = self._ephemeral_feature_names.copy()
         other._loaded_persistent_features = self._loaded_persistent_features.copy()
@@ -98,6 +103,7 @@ class DARTsortSorting:
     def ephemeral_replace(
         self, *, check_shapes=True, **new_features: np.ndarray
     ) -> Self:
+        """Return a shallow copy of self with certain datasets/features replaced by new_features."""
         other = self.copy()
         for k, v in new_features.items():
             if k in ("times_samples", "channels", "labels"):
@@ -296,14 +302,14 @@ class DARTsortSorting:
         )
 
     def save(self, sorting_npz: str | Path):
-        """Support persisting myself in non-h5-supportable cases
+        """Save to npz (usually dartsort_sorting.npz)
 
+        Support persisting myself in non-h5-supportable cases
         Cases:
          - When there is no h5!
-         - When my labels disagree with the .h5 labels.
-
-        This is done by saving to .npz, with a pointer to the .h5 file if
-        it exists.
+         - When I have new labels.
+        This is done by saving to .npz, with a pointer (like a relative symlink)
+        to the .h5 file if it exists.
         """
         sorting_npz = resolve_path(sorting_npz)
         data = dict(
@@ -318,7 +324,7 @@ class DARTsortSorting:
         if have_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
-            h5p = h5p.relative_to(sorting_npz.parent)
+            h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)
             data["parent_h5_path"] = np.array(str(h5p))
         for k in self._ephemeral_feature_names:
             data[k] = getattr(self, k)
@@ -328,6 +334,7 @@ class DARTsortSorting:
 
     @classmethod
     def load(cls, sorting_npz, additional_persistent_features=None) -> Self:
+        """Load from npz (usually dartsort_sorting.npz)."""
         sorting_npz = resolve_path(sorting_npz, strict=True)
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
@@ -375,10 +382,12 @@ class DARTsortSorting:
         )
 
     def to_numpy_sorting(self) -> NumpySorting:
+        """Clean up and produce a spikeinterface NumpySorting object."""
+        st = self.drop_missing().flatten().drop_doubles()
         return NumpySorting.from_samples_and_labels(
-            samples_list=self.times_samples,
-            labels_list=self.labels,
-            sampling_frequency=self.sampling_frequency,
+            samples_list=st.times_samples,
+            labels_list=st.labels,
+            sampling_frequency=st.sampling_frequency,
         )
 
     def mask(self, mask: np.ndarray) -> Self:
@@ -423,10 +432,12 @@ class DARTsortSorting:
         )
 
     def drop_missing(self) -> Self:
+        """Remove spikes with -1 labels."""
         assert self.labels is not None
         return self.mask(self.labels >= 0)
 
     def drop_doubles(self):
+        """Remove spikes detected at the exact same time assigned to the same unit."""
         assert self.labels is not None
         viol_ixs = []
         for uid in self.unit_ids:
@@ -445,6 +456,7 @@ class DARTsortSorting:
             return self
 
     def flatten(self) -> Self:
+        """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
         _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
@@ -539,7 +551,7 @@ class DARTsortSorting:
             dset = h5[dataset_name]
             assert isinstance(dset, h5py.Dataset)
             assert dset.shape[0] == self.n_spikes == h5_mask.shape[0]
-            return _read_by_chunk(mask, dset, show_progress=False)
+            return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
 def load_h5(f: str | Path) -> DARTsortSorting:
@@ -556,6 +568,27 @@ def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
         return model_dir
     else:
         return None
+
+
+def try_get_denoising_pipeline(sorting: DARTsortSorting):
+    m_dir = try_get_model_dir(sorting)
+    if m_dir is None:
+        return None, None, None
+
+    candidates = list(m_dir.glob("*denoising_pipeline.pt"))
+    if len(candidates) == 0:
+        return None, None, None
+    elif len(candidates) > 1:
+        raise ValueError(f"Not sure which to load of {candidates}.")
+    assert len(candidates) == 1
+
+    from dartsort.transform import WaveformPipeline
+
+    geom = torch.asarray(getattr(sorting, "geom"))
+    channel_index = torch.asarray(getattr(sorting, "subtract_channel_index"))
+    dn = WaveformPipeline.from_state_dict_pt(geom, channel_index, candidates[0])
+    dn = dn.eval()
+    return dn, geom, channel_index
 
 
 def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
@@ -897,6 +930,8 @@ def _read_by_chunk(mask, dataset, show_progress=True):
     mask : boolean array of shape dataset.shape[:1]
     dataset : chunked h5py.Dataset
     """
+    assert mask.dtype.kind == "b"
+    assert mask.shape[0] == dataset.shape[0]
     out = np.empty((mask.sum(), *dataset.shape[1:]), dtype=dataset.dtype)
     n = 0
     for sli, dsli in yield_chunks(dataset, show_progress):

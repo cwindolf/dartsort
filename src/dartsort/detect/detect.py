@@ -81,6 +81,10 @@ def detect_and_deduplicate(
         # no need to copy since max pooling will
         energies = traces
 
+    # used later
+    if detection_mask is not None:
+        detection_mask = detection_mask.to(energies)
+
     # we used to implement with max_pool -> unique, but we can use max_unpool
     # to speed up the second step temporal max pooling
     energies, indices = F.max_pool1d_with_indices(
@@ -125,9 +129,11 @@ def detect_and_deduplicate(
         tp = torch.where(traces.T < 0, trough_priority, 1.0)
         energies.mul_(tp)
 
-    # -- temporal deduplication
+    # discard peaks which are blocked by previous detections
     if detection_mask is not None:
-        energies.mul_(detection_mask.T.to(energies))
+        energies.mul_(detection_mask.T)
+
+    # -- temporal deduplication
     remove = None
     if dedup_temporal_radius and remove_exact_duplicates:
         del indices
@@ -140,7 +146,6 @@ def detect_and_deduplicate(
         self_ix = torch.arange(indices.shape[-1], device=indices.device)
         remove = indices != self_ix
         energies.masked_fill_(remove, 0.0)
-
     elif dedup_temporal_radius:
         max_energies = F.max_pool1d(
             energies,

@@ -224,7 +224,7 @@ class BaseTemporalPCA(BaseWaveformModule):
                 if self.centered:
                     torch.addmm(self.b.mean, x - self.mean, proj, out=out[i0:i1])
                 else:
-                    torch.mm(waveforms_in_probe, proj, out=out[i0:i1])
+                    torch.mm(x, proj, out=out[i0:i1])
             else:
                 if self.centered:
                     out[i0:i1] = torch.addmm(self.b.mean, x - self.mean, proj).to(out)

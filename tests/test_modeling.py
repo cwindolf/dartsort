@@ -149,6 +149,7 @@ def test_truncated_mixture(
             # re-bootstrap everything
             distances = tmm.unit_distance_matrix()
             lut = train_data.remap(distances=distances, remapping=flat_map)
+            assert lut is not None
             tmm.update_lut(lut)
             em_res = tmm.em(train_data)
 
@@ -170,39 +171,28 @@ def test_truncated_mixture(
                     erp=tmm.erp,
                     gen=tmm.rg,
                     feature_rank=tmm.noise.rank,
-                    min_count=tmm.min_count,
-                    min_channel_count=tmm.min_channel_count,
+                    min_count=tmm.p.min_count,
+                    min_channel_count=tmm.p.min_channel_count,
                 )
                 assert kmeans_responsibliities is not None
                 split_model, _, _, any_discarded, _, _ = (
                     mixture.TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
                         data=split_data,
                         responsibilities=kmeans_responsibliities,
+                        p=tmm.p,
                         signal_rank=tmm.signal_rank,
                         erp=tmm.erp,
-                        min_count=tmm.min_count,
-                        split_min_count=tmm.split_min_count,
-                        latent_prior_std=tmm.latent_prior_std,
-                        min_channel_count=tmm.min_channel_count,
                         noise=tmm.noise,
-                        max_group_size=tmm.max_group_size,
-                        max_distance=tmm.max_distance,
                         neighb_cov=tmm.neighb_cov,
-                        min_iter=tmm.criterion_em_iters,
-                        max_iter=tmm.em_iters,
-                        elbo_atol=tmm.elbo_atol,
-                        prior_pseudocount=tmm.prior_pseudocount,
-                        cl_alpha=tmm.cl_alpha,
                         total_log_proportion=tmm.b.log_proportions[unit_id].item(),
-                        merge_max_distance=tmm.merge_max_distance,
                     )
                 )
                 assert not any_discarded
                 assert split_model.n_units > 1
                 assert split_model.n_units == kmeans_responsibliities.shape[1]
 
-                split_result = mixture.SuccessfulUnitSplitResult(
-                    unit_id=unit_id,
+                split_result = mixture.SuccessfulSplitCaseResult(
+                    unit_ids=torch.asarray([unit_id]),
                     n_split=split_model.n_units,
                     train_indices=split_data.indices,
                     train_assignments=kmeans_responsibliities.argmax(dim=1),
@@ -275,6 +265,7 @@ def test_truncated_mixture(
             # re-bootstrap everything
             distances = tmm.unit_distance_matrix()
             lut = train_data.remap(distances=distances, remapping=flat_map)
+            assert lut is not None
             tmm.update_lut(lut)
 
         em_res = tmm.em(train_data)

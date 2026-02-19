@@ -264,7 +264,7 @@ class SubtractionConfig:
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
-    spatial_dedup_radius: float | None = 100.0
+    spatial_dedup_radius: float | None = 50.0
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
@@ -295,6 +295,7 @@ class SubtractionConfig:
     first_denoiser_thinning: float = 0.5
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
+    first_denoiser_spatial_dedup_radius: float = 100.0
 
     # for debugging / vis
     save_iteration: bool = False
@@ -312,7 +313,7 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
+    spatial_dedup_radius: float = 50.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
@@ -332,7 +333,9 @@ class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
-    algorithm: Literal["by_chunk", "by_unit", "chunk_if_mean"] = "chunk_if_mean"
+    algorithm: Literal["running", "unitextract", "running_if_mean"] | str = (
+        "running_if_mean"
+    )
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
         "exp_weighted"
     )
@@ -376,16 +379,16 @@ class TemplateConfig:
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
 
-    def actual_algorithm(self) -> Literal["by_chunk", "by_unit"]:
-        if self.algorithm == "chunk_if_mean":
+    def actual_algorithm(self) -> str:
+        if self.algorithm == "running_if_mean":
             if self.reduction == "mean":
-                return "by_chunk"
+                return "running"
             else:
-                return "by_unit"
+                return "unitextract"
         return self.algorithm
 
     def __post_init__(self):
-        if self.algorithm in ("t", "loot") and self.reduction == "median":
+        if self.denoising_method in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
 
@@ -441,7 +444,7 @@ class MatchingConfig:
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 0.0
-    refractory_radius_frames: int = 10
+    refractory_radius_frames: int = 0
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
     max_iter: int = 100
@@ -457,12 +460,13 @@ class MatchingConfig:
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whiten: bool = False
+    whiten_median_std: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
     min_template_snr: float = 0.0
     min_template_count: int = 50
-    max_cc_flag_rate: float = 0.5
+    max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
     template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
@@ -633,6 +637,7 @@ class RefinementConfig:
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
+    split_friend_distance: float = 0.5
     split_distance_threshold: float = 1.0
     merge_distance_threshold: float = 1.0
     criterion_em_iters: int = 3
@@ -756,7 +761,9 @@ class DARTsortInternalConfig:
     copy_recording_to_tmpdir: bool = False
     workdir_follow_symlinks: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
-    tmpdir_parent: str | Path | None = None
+    tmpdir_parent: str | None = None
+    link_from: str | None = None
+    link_step: Literal["denoising", "detection", "refined0"] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
@@ -847,6 +854,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
         )
     elif cfg.detection_type == "threshold":
@@ -869,6 +877,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_type=cfg.matching_template_type,
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
+            refractory_radius_frames=cfg.refractory_radius_frames,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -944,7 +953,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         signal_rank=cfg.signal_rank,
         feature_rank=cfg.temporal_pca_rank,
         initialize_at_rank_0=cfg.initialize_at_rank_0,
-        n_total_iters=cfg.n_refinement_iters,
+        n_total_iters=cfg.n_later_refinement_iters,
         n_em_iters=cfg.n_em_iters,
         sampling_cfg=FitSamplingConfig(
             n_waveforms_fit=cfg.gmm_max_spikes,
@@ -970,7 +979,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         irank = cfg.initial_rank
     initial_refinement_cfg = dataclasses.replace(
-        refinement_cfg, mixture_steps=cfg.initial_steps, signal_rank=irank
+        refinement_cfg,
+        mixture_steps=cfg.initial_steps,
+        signal_rank=irank,
+        n_total_iters=cfg.n_refinement_iters,
     )
     if cfg.pre_refinement_merge:
         pre_refinement_cfg = RefinementConfig(
@@ -1002,6 +1014,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
         whiten=cfg.whiten_matching,
+        whiten_median_std=cfg.matching_whiten_median_std,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,
@@ -1012,6 +1025,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
                 reduction=cfg.template_reduction,
             ),
         ),
+        refractory_radius_frames=cfg.refractory_radius_frames,
     )
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
@@ -1048,6 +1062,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_intermediate_features=cfg.save_intermediates,
         save_final_features=cfg.save_final_features,
         save_everything_on_error=cfg.save_everything_on_error,
+        link_from=cfg.link_from,
+        link_step=cfg.link_step,
     )
 
 

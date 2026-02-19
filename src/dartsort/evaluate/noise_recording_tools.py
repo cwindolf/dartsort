@@ -87,7 +87,7 @@ def get_background_recording(
         recording = UnwhitenPreprocessor(noise, recording)
         recording = recording.save_to_folder(
             noise_recording_folder,  # type: ignore
-            n_jobs=n_jobs,
+            n_jobs=n_jobs or 1,
             pool_engine="thread",
             overwrite=overwrite,  # type: ignore
         )
