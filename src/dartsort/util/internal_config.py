@@ -257,7 +257,7 @@ class SubtractionConfig:
     fit_only: bool = False
 
     # subtraction
-    detection_threshold: float = 4.0
+    detection_threshold: float = 2.5
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
@@ -269,7 +269,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 12.0
+    residnorm_decrease_threshold: float = 9.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -436,7 +436,7 @@ class MatchingConfig:
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 10.0
+    threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
@@ -460,7 +460,7 @@ class MatchingConfig:
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
-    min_template_snr: float = 40.0
+    min_template_snr: float = 0.0
     min_template_count: int = 50
     max_cc_flag_rate: float = 0.5
     cc_flag_entropy_cutoff: float = 2.0
@@ -619,7 +619,7 @@ class RefinementConfig:
     min_count: int = 25
     split_min_count: int = 8
     channels_count_min: int = 1
-    signal_rank: int = 5
+    signal_rank: int = 3
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
     cl_alpha: float = 1.0
@@ -712,7 +712,7 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
-default_refinement_cfg = RefinementConfig(mixture_steps="merge")
+default_refinement_cfg = RefinementConfig()
 default_universal_cfg = UniversalMatchingConfig()
 default_initial_refinement_cfg = RefinementConfig(mixture_steps="split")
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")

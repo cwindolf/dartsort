@@ -82,18 +82,18 @@ class DARTsortUserConfig:
         "crossings during initialization. Or positive only, if that's your thing.",
     )
     voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=4.0,
+        default=2.5,
         doc="Threshold in standardized (SNR) voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=10.0,
+        default=8.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
     )
     initial_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=12.0,
+        default=9.0,
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
@@ -171,7 +171,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # high level behavior
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
-    later_steps: Literal["neither", "split", "merge", "both"] = "merge"
+    later_steps: Literal["neither", "split", "merge", "both"] = "both"
     detection_type: str = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
@@ -209,7 +209,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     template_mix_zero: bool = False
     template_mix_svd: bool = True
-    min_template_snr: float = 40.0
+    min_template_snr: float = 0.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
@@ -258,7 +258,7 @@ class DeveloperConfig(DARTsortUserConfig):
     truncated: bool = True
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
-    signal_rank: Annotated[int, Field(ge=0)] = 5
+    signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
     kmeansk: int = 4
     min_cluster_size: int = 25
