@@ -1469,14 +1469,23 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
 
     def dense_slice_by_unit(
-        self, unit_ids: Tensor | int | None, gen: torch.Generator, min_count: int = 0
+        self,
+        unit_ids: Tensor | int | None,
+        gen: torch.Generator,
+        labels: Tensor | None,
+        min_count: int = 0,
     ):
         assert unit_ids is not None
         unit_ids = torch.as_tensor(unit_ids, device=self.candidates.device)
-        if unit_ids.ndim == 0:
-            mask = self.candidates[:, 0] == unit_ids
+        if labels is None:
+            labels = self.candidates[:, 0]
         else:
-            mask = torch.isin(self.candidates[:, 0], unit_ids)
+            assert labels.shape == self.candidates.shape[:1], f"{labels.shape=} {self.candidates.shape=}"
+            labels = labels.to(device=unit_ids.device)
+        if unit_ids.ndim == 0:
+            mask = labels == unit_ids
+        else:
+            mask = torch.isin(labels, unit_ids)
 
         (ixs,) = mask.nonzero(as_tuple=True)
         if min_count and ixs.numel() < min_count:
@@ -2388,7 +2397,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         group: Tensor,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
-        scores: Scores,
+        eval_scores: Scores,
+        train_labels: Tensor,
+        eval_labels: Tensor,
         debug: bool = False,
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
         group_size = group.numel()
@@ -2398,7 +2409,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # get dense train set slice in group
         split_data = train_data.dense_slice_by_unit(
-            group, gen=self.rg, min_count=self.p.min_count
+            group, gen=self.rg, min_count=self.p.min_count, labels=train_labels
         )
         if split_data is None and debug:
             return None, SplitCaseDebugInfo(bailed=True, bail_reason="count")
@@ -2477,13 +2488,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # see if that dog hunts
         if eval_data is None:
             split_eval_data = None
-            assert scores.log_liks.shape[0] == train_data.N
-            cur_scores_batch = scores.slice(split_data.indices)
+            assert eval_scores.log_liks.shape[0] == train_data.N
+            cur_scores_batch = eval_scores.slice(split_data.indices)
         else:
-            split_eval_data = eval_data.dense_slice_by_unit(group, gen=self.rg)
+            split_eval_data = eval_data.dense_slice_by_unit(
+                group, gen=self.rg, labels=eval_labels
+            )
             assert split_eval_data is not None
-            assert scores.log_liks.shape[0] == eval_data.N
-            cur_scores_batch = scores.slice(split_eval_data.indices)
+            assert eval_scores.log_liks.shape[0] == eval_data.N
+            cur_scores_batch = eval_scores.slice(split_eval_data.indices)
 
         pair_mask = split_model.unit_distance_matrix() <= self.p.split_max_distance
         merge_res = split_model.merge_as_group_on_data_subset(
@@ -2609,7 +2622,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
-        scores: Scores,
+        train_scores: Scores,
+        eval_scores: Scores,
         show_progress: bool = True,
     ) -> SplitResult:
         split_groups = self.group_units_by_distance(
@@ -2619,8 +2633,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if show_progress:
             split_groups = tqdm(split_groups, desc="Split", smoothing=0.0)
 
+        train_labels = labels_from_scores_(train_scores)
+        eval_labels = labels_from_scores_(eval_scores)
         split_results = (
-            self.split_group(gp, train_data, eval_data, scores)[0]
+            self.split_group(
+                gp, train_data, eval_data, eval_scores, train_labels, eval_labels
+            )[0]
             for gp in split_groups
         )
         split_result = self._apply_splits(split_results, train_data=train_data)
@@ -2650,12 +2668,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
     def try_merge_group(
         self,
+        *,
         group: Tensor,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
-        scores: Scores,
+        eval_scores: Scores,
         apply_adj_mask: bool = False,
         pair_mask: Tensor | None = None,
+        train_labels: Tensor,
+        eval_labels: Tensor,
         debug: bool = False,
     ) -> GroupMergeResult:
         if group.numel() <= 1:
@@ -2675,20 +2696,24 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 pair_mask = pair_mask.logical_and_(uu_adj.to(pair_mask))
 
         view = self.unit_slice(group)
-        group_train_data = train_data.dense_slice_by_unit(group, gen=self.rg)
+        group_train_data = train_data.dense_slice_by_unit(
+            group, gen=self.rg, labels=train_labels
+        )
         assert group_train_data is not None
         if pnoid:
             cov = group_train_data.lut_coverage(view.unit_ids, self.lut)
             assert cov.any(dim=1).all()
         if eval_data is None:
             group_eval_data = None
-            assert scores.log_liks.shape[0] == train_data.N
-            group_scores = scores.slice(group_train_data.indices)
+            assert eval_scores.log_liks.shape[0] == train_data.N
+            group_scores = eval_scores.slice(group_train_data.indices)
         else:
-            group_eval_data = eval_data.dense_slice_by_unit(group, gen=self.rg)
+            group_eval_data = eval_data.dense_slice_by_unit(
+                group, gen=self.rg, labels=eval_labels
+            )
             assert group_eval_data is not None
-            assert scores.log_liks.shape[0] == eval_data.N
-            group_scores = scores.slice(group_eval_data.indices)
+            assert eval_scores.log_liks.shape[0] == eval_data.N
+            group_scores = eval_scores.slice(group_eval_data.indices)
         group_res = view.merge_as_group_on_data_subset(
             train_data=group_train_data,
             eval_data=group_eval_data,
@@ -2707,7 +2732,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
-        scores: Scores,
+        train_scores: Scores,
+        eval_scores: Scores,
         show_progress: bool = True,
     ) -> UnitRemapping:
         """Break into subgroups and merge those. This will also modify data objects."""
@@ -2721,6 +2747,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             distance=self.p.merge_max_distance, max_group_size=self.p.max_group_size
         )
         groups = [g for g in groups if g.numel() > 1]
+        train_labels = labels_from_scores_(train_scores)
+        eval_labels = labels_from_scores_(eval_scores)
 
         logger.dartsortverbose("Merge groups: %s.", groups)
         if show_progress:
@@ -2728,7 +2756,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         for group in groups:
             group_res = self.try_merge_group(
-                group=group, train_data=train_data, eval_data=eval_data, scores=scores
+                group=group,
+                train_data=train_data,
+                eval_data=eval_data,
+                eval_scores=eval_scores,
+                train_labels=train_labels,
+                eval_labels=eval_labels,
             )
 
             # no-merge cases
@@ -3564,7 +3597,18 @@ def instantiate_and_bootstrap_tmm(
     return MixtureModelAndDatasets(tmm, train_data, val_data, full_data, train_ixs)
 
 
-def run_split(tmm, train_data, val_data, prog_level):
+def run_split(
+    tmm: TruncatedMixtureModel,
+    train_data: TruncatedSpikeData,
+    val_data: TruncatedSpikeData | None,
+    prog_level: int,
+):
+    train_scores = tmm.soft_assign(
+        data=train_data,
+        full_proposal_view=True,
+        needs_bootstrap=False,
+        show_progress=prog_level,
+    )
     if val_data is not None:
         eval_scores = tmm.soft_assign(
             data=val_data,
@@ -3573,14 +3617,13 @@ def run_split(tmm, train_data, val_data, prog_level):
             show_progress=prog_level,
         )
     else:
-        eval_scores = tmm.soft_assign(
-            data=train_data,
-            full_proposal_view=True,
-            needs_bootstrap=False,
-            show_progress=prog_level,
-        )
+        eval_scores = train_scores
     split_res = tmm.split(
-        train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
+        train_data,
+        val_data,
+        eval_scores=eval_scores,
+        train_scores=train_scores,
+        show_progress=prog_level > 0,
     )
     logger.info(
         f"Split created {split_res.n_new_units} new units and combined some to remove "
@@ -3589,7 +3632,18 @@ def run_split(tmm, train_data, val_data, prog_level):
     )
 
 
-def run_merge(tmm, train_data, val_data, prog_level):
+def run_merge(
+    tmm: TruncatedMixtureModel,
+    train_data: TruncatedSpikeData,
+    val_data: TruncatedSpikeData | None,
+    prog_level: int,
+):
+    train_scores = tmm.soft_assign(
+        data=train_data,
+        full_proposal_view=True,
+        needs_bootstrap=False,
+        show_progress=prog_level,
+    )
     if val_data is not None:
         eval_scores = tmm.soft_assign(
             data=val_data,
@@ -3598,14 +3652,13 @@ def run_merge(tmm, train_data, val_data, prog_level):
             show_progress=prog_level,
         )
     else:
-        eval_scores = tmm.soft_assign(
-            data=train_data,
-            full_proposal_view=True,
-            needs_bootstrap=False,
-            show_progress=prog_level,
-        )
+        eval_scores = train_scores
     merge_map = tmm.merge(
-        train_data, val_data, scores=eval_scores, show_progress=prog_level > 0
+        train_data,
+        val_data,
+        eval_scores=eval_scores,
+        train_scores=train_scores,
+        show_progress=prog_level > 0,
     )
     logger.info(f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units.")
 
@@ -3700,7 +3753,7 @@ def initialize_parameters_by_unit(
         bases = None
 
     for k in units:
-        kdata = data.dense_slice_by_unit(k, gen=gen)
+        kdata = data.dense_slice_by_unit(k, gen=gen, labels=None)
         assert kdata is not None
         if scores is not None:
             assert scores.responsibilities is not None
@@ -4105,6 +4158,7 @@ def brute_merge(
     train_assignments = get_part_assignments(
         best_part, train_full_scores.log_liks, train_subset_scores.log_liks
     )
+    train_assignments = best_part.single_subset_order[train_assignments]
 
     # parameters
     single_means, single_bases = mm.get_params_at(best_part.single_ixs)
