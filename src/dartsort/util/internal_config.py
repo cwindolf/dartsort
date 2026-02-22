@@ -117,6 +117,7 @@ class FeaturizationConfig:
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
+    save_collidedness: bool = True
     save_amplitudes: bool = True
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
@@ -255,7 +256,6 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
     fit_only: bool = False
-    compute_collidedness: bool = True
 
     # subtraction
     detection_threshold: float = 2.5
@@ -438,7 +438,6 @@ class MatchingConfig:
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
-    compute_collidedness: bool = True
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0

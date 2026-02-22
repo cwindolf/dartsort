@@ -395,7 +395,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if save_collision_waveforms:
                     dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
                 if save_collidedness:
-                    dataset_shapes["collidedness"] = ((), f_dt)
+                    dataset_shapes["gt_collidedness"] = ((), f_dt)
                 datasets = {
                     k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
                     for k, (sh, dt) in dataset_shapes.items()
@@ -824,7 +824,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             cwfs -= spikes["collisioncleaned_waveforms"]
             spikes["collision_waveforms"] = cwfs
             cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)
-            spikes["collidedness"] = np.linalg.norm(cwfs, axis=1)
+            spikes["gt_collidedness"] = np.linalg.norm(cwfs, axis=1)
 
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:
