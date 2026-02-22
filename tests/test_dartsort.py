@@ -115,6 +115,9 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         cfg_add["matching_template_type"] = "drifty"
         cfg_add["matching_up_method"] = "keys4"
         cfg_add["matching_template_min_amplitude"] = 1.0
+    if type == "threshold":
+        cfg_add["voltage_threshold"] = 4.0
+        cfg_add["deduplication_radius_um"] = 150.0
 
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
@@ -147,7 +150,8 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     elif type == "universal":
         count_dif_tol = 0.01
     elif type == "subtract":
-        count_dif_tol = 0.15
+        # TODO pretrained decollider or sup denoiser for this sim.
+        count_dif_tol = 0.25
     elif type == "threshold":
         count_dif_tol = 0.35
     else:

@@ -258,7 +258,7 @@ class SubtractionConfig:
     fit_only: bool = False
 
     # subtraction
-    detection_threshold: float = 2.5
+    detection_threshold: float = 3.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
@@ -314,13 +314,13 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 50.0
+    spatial_dedup_radius: float = 150.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     cumulant_order: int | None = None
-    convexity_threshold: float | None = -50.0
+    convexity_threshold: float | None = None
     convexity_radius: int = 7
 
     thinning: float = 0.0

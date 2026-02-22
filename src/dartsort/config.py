@@ -82,7 +82,7 @@ class DARTsortUserConfig:
         "crossings during initialization. Or positive only, if that's your thing.",
     )
     voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=2.5,
+        default=3.0,
         doc="Threshold in standardized (SNR) voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )

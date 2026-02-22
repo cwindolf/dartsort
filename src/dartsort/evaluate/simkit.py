@@ -368,9 +368,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 )
                 h5.create_dataset("labels", data=self.segment.labels)
                 h5.create_dataset("scalings", data=self.segment.scalings)
-                h5.create_dataset(
-                    "collidedness", data=np.ones_like(self.segment.scalings)
-                )
                 h5.create_dataset("jitter_ix", data=self.segment.jitter_ix)
                 pos, temp, off = self.segment.template_simulator.templates(up=True)
                 h5.create_dataset("unit_positions", data=pos)
@@ -394,6 +391,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     dataset_shapes["noise_waveforms"] = (inj_wf_shape, f_dt)
                 if save_collision_waveforms:
                     dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
+                dataset_shapes["collidedness"] = ((), f_dt)
                 if save_collidedness:
                     dataset_shapes["gt_collidedness"] = ((), f_dt)
                 datasets = {
@@ -775,6 +773,9 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         spikes["noise_waveforms"] = noise_waveforms
         spikes["injected_waveforms"] = injected_waveforms
         spikes["collisioncleaned_waveforms"] = collisioncleaned_waveforms
+        spikes["collidedness"] = np.ones(
+            len(collisioncleaned_waveforms), dtype=collisioncleaned_waveforms.dtype
+        )
         spikes["echans"] = echans
 
         return spikes
@@ -824,6 +825,8 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             cwfs -= spikes["collisioncleaned_waveforms"]
             spikes["collision_waveforms"] = cwfs
             cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)
+            # collidedness is what's relevant to the features, which are perfectly
+            # decollided. gt_collidedness is worst case (no cc).
             spikes["gt_collidedness"] = np.linalg.norm(cwfs, axis=1)
 
         traces = traces[self.margin : len(traces) - self.margin]
