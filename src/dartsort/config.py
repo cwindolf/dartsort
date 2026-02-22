@@ -287,6 +287,10 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
+    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_fixed_std_dataset: str = "collidedness"
+    robust_fixed_power: float = 40.0
+    robust_df: float = 4.0
 
     # store extra intermediates
     save_subtracted_waveforms: bool = False

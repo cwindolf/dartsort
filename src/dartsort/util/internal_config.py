@@ -978,6 +978,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,
+        robust_strategy=cfg.robust_strategy,
+        robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
+        robust_fixed_power=cfg.robust_fixed_power,
+        robust_df=cfg.robust_df,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
