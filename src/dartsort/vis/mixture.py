@@ -65,6 +65,7 @@ class MixtureVisData:
     train_times: np.ndarray
     train_labels: np.ndarray
     train_ixs: np.ndarray
+    val_ixs: np.ndarray | None
     full_labels: np.ndarray
     tpca: TemporalPCA
     inf_diag_unit_distance_matrix: torch.Tensor
@@ -899,15 +900,21 @@ class SplitView(MixtureComponentPlot):
 
             cstrs = []
             for uid in range(split_res.n_split):
-                myl = orig_labels[split_res.train_assignments == uid]
+                myl = orig_labels[split_res.train_assignments.cpu() == uid]
                 uu, cc = np.unique(myl, return_counts=True)
                 cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
                 cstrs.append(f"{uid}->[{cc}]")
             cstr = "new:  " + "\n      ".join(cstrs)
             txt += cstr + "\n"
-
-
         txt = txt.rstrip()
+
+        if debug_info.split_data is not None:
+            split_inds = debug_info.split_data.indices.cpu()
+            tw = debug_info.split_data.duties
+            if tw is not None:
+                tw = tw.numpy(force=True)
+        else:
+            tw = split_inds = None
 
         return (
             txt,
@@ -919,11 +926,25 @@ class SplitView(MixtureComponentPlot):
             means,
             mean_chans,
             chans_by_km,
+            split_inds,
+            tw,
         )
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         c = self.compute(mix_data, unit_id)
-        txt, colors, t, amps, loadings, dists, means, mean_chans, chans_by_km = c
+        (
+            txt,
+            colors,
+            t,
+            amps,
+            loadings,
+            dists,
+            means,
+            mean_chans,
+            chans_by_km,
+            split_inds,
+            tw,
+        ) = c
 
         # layout
         amp_info_row, mean_row, dist_pc_row = panel.subfigures(
@@ -979,8 +1000,15 @@ class SplitView(MixtureComponentPlot):
         )
 
         # pc scatter
-        if loadings is not None:
-            ax_pc.scatter(*loadings.T, c=colors, s=5, lw=0, alpha=0.5)
+        if loadings is not None and tw is not None:
+            s = ax_pc.scatter(*loadings.T, c=tw, s=5, lw=0, alpha=1)
+            plt.colorbar(s, ax=ax_pc, shrink=0.3)
+            ax_pc.scatter(
+                *loadings.T, edgecolors=colors, s=10, lw=0.5, facecolor="none", alpha=1
+            )
+            ax_pc.grid()
+        elif loadings is not None and tw is not None:
+            ax_pc.scatter(*loadings.T, c=colors, s=5, alpha=0.5)
             ax_pc.grid()
         else:
             ax_pc.axis("off")
@@ -1150,6 +1178,12 @@ def fit_mixture_for_vis(
     else:
         train_ixs = mix_data.train_ixs.numpy(force=True)
 
+    assert not isinstance(mix_data.val_ixs, slice)
+    if isinstance(mix_data.val_ixs, torch.Tensor):
+        val_ixs = mix_data.val_ixs.numpy(force=True)
+    else:
+        val_ixs = None
+
     times_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
 
     return MixtureVisData(
@@ -1164,6 +1198,7 @@ def fit_mixture_for_vis(
         eval_scores=eval_scores,
         train_times=times_s[mix_data.train_ixs],
         train_ixs=train_ixs,
+        val_ixs=val_ixs,
         train_labels=train_labels.numpy(force=True),
         eval_labels=eval_labels,
         full_labels=full_labels,

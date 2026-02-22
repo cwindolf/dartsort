@@ -117,7 +117,7 @@ def tmm_demix(
         logger.dartsortverbose("Extra TMM asserts are on.")
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    tmm, train_data, val_data, full_data, _ = instantiate_and_bootstrap_tmm(
+    tmm, train_data, val_data, full_data, *_ = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion_est=motion_est,
         refinement_cfg=refinement_cfg,
@@ -185,6 +185,7 @@ def tmm_demix(
 
 
 ComponentDistanceMetric = Literal["cosine", "normeuc"]
+RobustnessStrategy = Literal["none", "fixed"]
 
 
 class MixtureModelAndDatasets(NamedTuple):
@@ -193,6 +194,7 @@ class MixtureModelAndDatasets(NamedTuple):
     val_data: "TruncatedSpikeData | None"
     full_data: "StreamingSpikeData"
     train_ixs: Tensor | slice
+    val_ixs: Tensor | None
 
 
 @databag
@@ -470,16 +472,22 @@ class Scores:
     log_liks: Tensor
     responsibilities: Tensor | None
     candidates: Tensor
+    duties: Tensor | None
 
     def slice(self, indices: Tensor | slice) -> "Scores":
         if self.responsibilities is None:
             r = None
         else:
             r = self.responsibilities[indices]
+        if self.duties is None:
+            d = None
+        else:
+            d = self.duties[indices]
         return Scores(
             log_liks=self.log_liks[indices],
             responsibilities=r,
             candidates=self.candidates[indices],
+            duties=d,
         )
 
 
@@ -586,6 +594,7 @@ class TMMParams:
     split_min_count: int
     full_proposal_every: int
     elbo_atol: float
+    robust_strategy: RobustnessStrategy
 
     @classmethod
     def from_refinement_cfg(cls, refinement_cfg: RefinementConfig):
@@ -608,6 +617,7 @@ class TMMParams:
             full_proposal_every=refinement_cfg.full_proposal_every,
             cl_alpha=refinement_cfg.cl_alpha,
             latent_prior_std=refinement_cfg.latent_prior_std,
+            robust_strategy=refinement_cfg.robust_strategy,
         )
 
 
@@ -749,6 +759,7 @@ class SpikeDataBatch:
     noise_logliks: Tensor
     CmoCooinvx: Tensor | None
     candidate_count: int | None
+    duties: Tensor | None
 
 
 @databag
@@ -764,6 +775,7 @@ class DenseSpikeData:
     whitenedx: Tensor
     CmoCooinvx: Tensor
     noise_logliks: Tensor
+    duties: Tensor | None
     batch_size: int
 
     def to_batches(
@@ -792,6 +804,7 @@ class DenseSpikeData:
                 noise_logliks=self.noise_logliks[sl],
                 CmoCooinvx=self.CmoCooinvx[sl],
                 candidates=candidates[sl],
+                duties=None if self.duties is None else self.duties[sl],
                 candidate_count=int(candidate_counts[sl].sum()),
             )
             batches.append(b)
@@ -812,6 +825,10 @@ class DenseSpikeData:
         return self.slice(covered_inds), covered_inds
 
     def slice(self, indices: Tensor):
+        if self.duties is None:
+            duties = None
+        else:
+            duties = self.duties[indices]
         return DenseSpikeData(
             indices=self.indices[indices],
             neighborhoods=self.neighborhoods,
@@ -822,6 +839,7 @@ class DenseSpikeData:
             whitenedx=self.whitenedx[indices],
             CmoCooinvx=self.CmoCooinvx[indices],
             noise_logliks=self.noise_logliks[indices],
+            duties=duties,
             batch_size=self.batch_size,
         )
 
@@ -876,6 +894,7 @@ class BatchedSpikeData:
         max_n_explore: int | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
+        duties: Tensor | None,
         candidates: Tensor | None = None,
         neighb_adj: Tensor | None = None,
         neighb_supset: Tensor | None = None,
@@ -899,7 +918,9 @@ class BatchedSpikeData:
         self.batch_size = batch_size
         self.proposal_is_complete = proposal_is_complete
 
+        # per-sample approximate posterior data
         self.candidates = candidates
+        self.duties = duties
 
         self.n_candidates = n_candidates
         self.n_search = n_search
@@ -1126,6 +1147,7 @@ class StreamingSpikeData(BatchedSpikeData):
         n_candidates: int,
         max_n_candidates: int,
         x: Tensor,
+        duties: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         device: torch.device,
         neighb_cov: NeighborhoodCovariance,
@@ -1136,6 +1158,7 @@ class StreamingSpikeData(BatchedSpikeData):
         # assignment given a fixed adjacency, so it doesn't.
         super().__init__(
             N=x.shape[0],
+            duties=duties,
             n_candidates=n_candidates,
             n_search=0,
             n_explore=0,
@@ -1203,6 +1226,10 @@ class StreamingSpikeData(BatchedSpikeData):
         neighb_ids = self.neighborhood_ids[spike_indices]
         assert self.proposals is not None
         candidates = self.proposals[neighb_ids]
+        if self.duties is None:
+            duties = None
+        else:
+            duties = self.duties[spike_indices].to(self.device)
         x = self.x[spike_indices].to(self.device)
         wx, noise_loglik = _whiten_and_noise_score_batch(
             x=x, neighb_ids=neighb_ids, neighb_cov=self.neighb_cov
@@ -1217,6 +1244,7 @@ class StreamingSpikeData(BatchedSpikeData):
             neighborhood_ids=neighb_ids,
             whitenedx=wx,
             noise_logliks=noise_loglik,
+            duties=duties,
             CmoCooinvx=None,
             candidate_count=None,
         )
@@ -1243,6 +1271,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         CmoCooinvx: Tensor,
         noise_logliks: Tensor,
         neighborhoods: SpikeNeighborhoods,
+        duties: Tensor | None,
         search_adj: Literal["top", "explore"] = "top",
         seed: int | np.random.Generator = 0,
         batch_size: int = 128,
@@ -1275,6 +1304,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             neighb_overlap=neighb_overlap,
             seed=seed,
             device=device,
+            duties=duties,
         )
         assert self.max_n_explore is not None
         assert self.max_n_total is not None
@@ -1323,6 +1353,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         dense_slice_size_per_unit: int,
         labels: Tensor,
         x: Tensor,
+        duties: Tensor | None,
         neighborhoods: SpikeNeighborhoods,
         neighb_cov: NeighborhoodCovariance,
         search_adj: Literal["top", "explore"] = "top",
@@ -1349,6 +1380,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=CmoCooinvx,
             noise_logliks=noise_logliks,
             neighborhoods=neighborhoods,
+            duties=duties,
             seed=seed,
             batch_size=batch_size,
             explore_neighb_steps=explore_neighb_steps,
@@ -1443,6 +1475,10 @@ class TruncatedSpikeData(BatchedSpikeData):
         self, spike_indices: Tensor | slice, batch_index: int | None = None
     ) -> SpikeDataBatch:
         candidates = self.candidates[spike_indices]
+        if self.duties is None:
+            duties = None
+        else:
+            duties = self.duties[spike_indices]
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
@@ -1451,10 +1487,15 @@ class TruncatedSpikeData(BatchedSpikeData):
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             whitenedx=self.whitenedx[spike_indices],
             noise_logliks=self.noise_logliks[spike_indices],
+            duties=duties,
             candidate_count=int(self.batch_candidate_counts[batch_index]),
         )
 
     def dense_slice(self, spike_indices: Tensor) -> DenseSpikeData:
+        if self.duties is None:
+            duties = None
+        else:
+            duties = self.duties[spike_indices]
         return DenseSpikeData(
             indices=spike_indices,
             neighborhoods=self.neighborhoods,
@@ -1465,6 +1506,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             whitenedx=self.whitenedx[spike_indices],
             CmoCooinvx=self.CmoCooinvx[spike_indices],
             noise_logliks=self.noise_logliks[spike_indices],
+            duties=duties,
             batch_size=self.batch_size,
         )
 
@@ -1480,7 +1522,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         if labels is None:
             labels = self.candidates[:, 0]
         else:
-            assert labels.shape == self.candidates.shape[:1], f"{labels.shape=} {self.candidates.shape=}"
+            assert labels.shape == self.candidates.shape[:1], (
+                f"{labels.shape=} {self.candidates.shape=}"
+            )
             labels = labels.to(device=unit_ids.device)
         if unit_ids.ndim == 0:
             mask = labels == unit_ids
@@ -1579,6 +1623,7 @@ class FullProposalDataView(BatchedSpikeData):
             explore_neighb_steps=0,
             neighb_overlap=0.0,
             proposal_is_complete=True,
+            duties=data.duties,
         )
         self.proposals = proposals.to(self.device)
         self.data = data
@@ -1616,6 +1661,10 @@ class FullProposalDataView(BatchedSpikeData):
     ) -> SpikeDataBatch:
         neighb_ids = self.neighborhood_ids[spike_indices]
         candidates = self.proposals[neighb_ids]
+        if self.duties is None:
+            duties = None
+        else:
+            duties = self.duties[spike_indices]
         return SpikeDataBatch(
             batch=spike_indices,
             neighborhood_ids=self.neighborhood_ids[spike_indices],
@@ -1624,6 +1673,7 @@ class FullProposalDataView(BatchedSpikeData):
             CmoCooinvx=self.data.CmoCooinvx[spike_indices],
             whitenedx=self.data.whitenedx[spike_indices],
             noise_logliks=self.data.noise_logliks[spike_indices],
+            duties=duties,
             candidate_count=None,
         )
 
@@ -1692,6 +1742,8 @@ class BaseMixtureModel(BModule):
         responsibilities: Tensor | None,
         skip_full: bool,
         skip_single: bool,
+        train_weights: Tensor | None = None,
+        eval_weights: Tensor | None = None,
         focus_scoring: bool = False,
         debug: bool = False,
     ) -> GroupMergeResult:
@@ -2147,6 +2199,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         log_liks=bresp,  # unused, just to fill the field.
                         responsibilities=bresp,
                         candidates=batch.candidates,
+                        duties=batch.duties,
                     )
                 batch_stats = self.estep_stats_batch(
                     batch=batch,
@@ -2246,6 +2299,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             lut=self.lut,
             fixed_responsibilities=fixed_responsibilities,
             skip_responsibility=skip_responsibility,
+            duties=batch.duties,
+            robust_strategy=self.p.robust_strategy,
             spike_ixs=spike_ixs,
             candidate_ixs=candidate_ixs,
             unit_ixs=unit_ixs,
@@ -2331,10 +2386,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
             dev = torch.device("cpu")
         else:
             dev = data.candidates.device
+        if self.p.robust_strategy == "none":
+            duties = None
+        else:
+            duties = torch.full((data.N,), torch.nan, device=dev)
         scores = Scores(
             log_liks=torch.empty((data.N, data.n_candidates + 1), device=dev),
             responsibilities=torch.empty((data.N, data.n_candidates + 1), device=dev),
             candidates=torch.full((data.N, data.n_candidates), -1, device=dev),
+            duties=duties,
         )
         assert scores.responsibilities is not None
         assert max_iter >= 1
@@ -2354,6 +2414,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 scores.candidates[bix] = batch_scores.candidates.to(dev)
                 scores.log_liks[bix] = batch_scores.log_liks.to(dev)
                 scores.responsibilities[bix] = batch_scores.responsibilities.to(dev)
+                if self.p.robust_strategy != "none":
+                    assert batch_scores.duties is not None
+                    assert scores.duties is not None
+                    scores.duties[bix] = batch_scores.duties.to(dev)
 
             lut_changed, lut = data.update(
                 scores.candidates, distances, expand_lut=True, skip_explore=True
@@ -2427,6 +2491,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             min_count=self.p.split_min_count,
             min_channel_count=self.p.min_channel_count,
             bail_at=int(single),
+            weights=split_data.duties,
             debug=debug,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
@@ -3316,9 +3381,12 @@ class TMMStack(BaseMixtureModel):
             candidates[:, i0:i1].masked_fill_(score.candidates < 0, -1)
             i0 = i1
         log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
+        log_liks = torch.concatenate([score.log_liks for score in scores], dim=1)
         if pnoid and not allow_blanks:
             assert log_liks.isfinite().any(dim=1).all()
-        return Scores(log_liks=log_liks, candidates=candidates, responsibilities=None)
+        return Scores(
+            log_liks=log_liks, candidates=candidates, responsibilities=None, duties=None
+        )
 
 
 # -- helpers
@@ -3326,14 +3394,14 @@ class TMMStack(BaseMixtureModel):
 
 def get_truncated_datasets(
     *,
-    sorting,
+    sorting: DARTsortSorting,
     motion_est,
-    refinement_cfg,
-    device,
-    rg,
+    refinement_cfg: RefinementConfig,
+    device: torch.device,
+    rg: int | np.random.Generator,
     fit_indices: np.ndarray | None = None,
-    noise=None,
-    stable_data=None,
+    noise: EmbeddedNoise | None = None,
+    stable_data: StableSpikeDataset | None = None,
 ):
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
@@ -3351,6 +3419,17 @@ def get_truncated_datasets(
     )
     full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
     del stable_data
+
+    if refinement_cfg.robust_strategy == "fixed":
+        duties = getattr(sorting, refinement_cfg.robust_fixed_std_dataset)
+        assert isinstance(duties, np.ndarray)
+        duties = torch.asarray(duties)
+        duties = refinement_cfg.robust_df + duties**refinement_cfg.robust_fixed_power
+        duties = (refinement_cfg.robust_df + 1.0) / duties
+    elif refinement_cfg.robust_strategy == "none":
+        duties = None
+    else:
+        assert False
 
     if noise is None:
         noise = EmbeddedNoise.estimate_from_hdf5(
@@ -3373,6 +3452,10 @@ def get_truncated_datasets(
     n_candidates, n_search, n_explore, max_candidates, max_search, max_explore = (
         _pick_search_size(n_units=sorting.n_units, refinement_cfg=refinement_cfg)
     )
+    if duties is None:
+        train_duties = None
+    else:
+        train_duties = duties[train_ixs].to(device=device)
     train_data = TruncatedSpikeData.initialize_from_labels(
         n_candidates=n_candidates,
         n_search=n_search,
@@ -3384,6 +3467,7 @@ def get_truncated_datasets(
         dense_slice_size_per_unit=refinement_cfg.n_spikes_fit,
         labels=labels[train_ixs].to(device=device),
         x=full_features[train_ixs].to(device=device),
+        duties=train_duties,
         neighborhoods=train_neighbs,
         neighb_cov=neighb_cov,
         neighb_overlap=refinement_cfg.neighb_overlap,
@@ -3398,6 +3482,10 @@ def get_truncated_datasets(
     if refinement_cfg.hold_out_criterion:
         assert val_ixs is not None
         assert val_neighbs is not None
+        if duties is None:
+            val_duties = None
+        else:
+            val_duties = duties[val_ixs].to(device=device)
         val_data = TruncatedSpikeData.initialize_from_labels(
             n_candidates=val_n_candidates,
             n_search=n_search,
@@ -3410,6 +3498,7 @@ def get_truncated_datasets(
             explore_neighb_steps=0,
             x=full_features[val_ixs].to(device=device),
             neighborhoods=val_neighbs,
+            duties=val_duties,
             neighb_cov=neighb_cov,
             seed=rg,
             batch_size=refinement_cfg.eval_batch_size,
@@ -3430,6 +3519,7 @@ def get_truncated_datasets(
         neighborhoods=full_neighbs,
         device=device,
         batch_size=refinement_cfg.eval_batch_size,
+        duties=duties,
         neighb_cov=neighb_cov,
     )
     assert torch.equal(
@@ -3448,7 +3538,7 @@ def get_truncated_datasets(
     else:
         assert False
 
-    return neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs
+    return neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs
 
 
 def get_full_neighborhood_data(
@@ -3541,7 +3631,7 @@ def instantiate_and_bootstrap_tmm(
     )
     sorting = sorting.flatten()
 
-    neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs = (
+    neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs = (
         get_truncated_datasets(
             sorting=sorting,
             motion_est=motion_est,
@@ -3594,7 +3684,11 @@ def instantiate_and_bootstrap_tmm(
             f"Update signal rank from 0->{tmm.signal_rank} after first EM round."
         )
 
-    return MixtureModelAndDatasets(tmm, train_data, val_data, full_data, train_ixs)
+    assert not isinstance(val_ixs, slice)
+
+    return MixtureModelAndDatasets(
+        tmm, train_data, val_data, full_data, train_ixs, val_ixs
+    )
 
 
 def run_split(
@@ -4071,27 +4165,24 @@ def brute_merge(
     assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units
     assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
     cur_mask = torch.isin(cur_scores.candidates, cur_unit_ids)
+    cur_log_liks = cur_scores.log_liks
     if pnoid:
         assert cur_mask.any(dim=1).all()
-    rest_logliks = cur_scores.log_liks.clone()
+    rest_logliks = cur_log_liks.clone()
     rest_logliks[:, :-1].masked_fill_(cur_mask, -torch.inf)
 
     # get current model criterion
     if cur_scores.responsibilities is None:
-        cur_resp = F.softmax(cur_scores.log_liks, dim=1)
+        cur_resp = F.softmax(cur_log_liks, dim=1)
     else:
         cur_resp = cur_scores.responsibilities
     assert cur_resp.shape == cur_scores.log_liks.shape
-    cur_ecls = ecl(
-        cur_resp, cur_scores.log_liks, cl_alpha=mm.p.cl_alpha, reduce_mean=False
-    )
+    cur_ecls = ecl(cur_resp, cur_log_liks, cl_alpha=mm.p.cl_alpha, reduce_mean=False)
     if focus_scoring:
         cur_crit = torch.tensor(torch.inf)
         if pnoid:
             Nc = cur_scores.candidates.shape[1]
-            assert (
-                cur_scores.log_liks[:, 0, None] >= cur_scores.log_liks[:, :Nc]
-            ).all()
+            assert (cur_log_liks[:, 0, None] >= cur_log_liks[:, :Nc]).all()
         cur_choice = cur_scores.candidates[:, 0]
         masks = {
             u: (cur_choice == u).nonzero().squeeze()
@@ -4155,21 +4246,22 @@ def brute_merge(
         assert math.isfinite(best_imp)
 
     # spike assignments
+    reorder = best_part.single_subset_order.to(device=train_full_scores.log_liks.device)
     train_assignments = get_part_assignments(
         best_part, train_full_scores.log_liks, train_subset_scores.log_liks
     )
-    train_assignments = best_part.single_subset_order[train_assignments]
+    train_assignments = reorder[train_assignments]
 
     # parameters
     single_means, single_bases = mm.get_params_at(best_part.single_ixs)
     sub_means, sub_bases = subset_models.get_params_at(best_part.subset_ids)
     means = torch.concatenate((single_means, sub_means), dim=0)
-    means = means[best_part.single_subset_order]
+    means = means[reorder]
     if mm.signal_rank:
         assert single_bases is not None
         assert sub_bases is not None
         bases = torch.concatenate((single_bases, sub_bases), dim=0)
-        bases = bases[best_part.single_subset_order]
+        bases = bases[reorder]
     else:
         assert single_bases is sub_bases is None
         bases = None
@@ -4179,7 +4271,7 @@ def brute_merge(
     single_prop = prop[best_part.single_ixs]
     sub_props = [subset_resps[:, sid].mean(0)[None] for sid in best_part.subset_ids]
     sub_props = torch.concatenate([single_prop] + sub_props, dim=0)
-    sub_props = sub_props[best_part.single_subset_order]
+    sub_props = sub_props[reorder]
     assert sub_props.shape == (best_part.n_groups,)
     sub_props /= sub_props.sum()
 
@@ -4287,6 +4379,7 @@ def try_kmeans(
     kmeanspp_initial="random",
     n_kmeans_tries: int = 10,
     n_kmeanspp_tries: int = 25,
+    weights: Tensor | None = None,
     debug: bool = False,
     whiten: bool = False,
     bail_at: int = 1,
@@ -4312,6 +4405,7 @@ def try_kmeans(
         kmeanspp_initial=kmeanspp_initial,
         n_kmeans_tries=n_kmeans_tries,
         n_kmeanspp_tries=n_kmeanspp_tries,
+        weights=weights.to(x) if weights is not None else None,
     )
     resps = kres["responsibilities"]
     if resps is None:
@@ -5049,11 +5143,17 @@ def concatenate_scores(scoress: list[Scores]) -> Scores:
         responsibilities = None
     else:
         responsibilities = torch.concatenate(
-            [s.responsibilities for s in scoress],  # type: ignore
-            dim=0,
+            [cast(Tensor, s.responsibilities) for s in scoress], dim=0
         )
+    if scoress[0].duties is None:
+        duties = None
+    else:
+        duties = torch.concatenate([cast(Tensor, s.duties) for s in scoress], dim=0)
     return Scores(
-        log_liks=log_liks, responsibilities=responsibilities, candidates=candidates
+        log_liks=log_liks,
+        responsibilities=responsibilities,
+        candidates=candidates,
+        duties=duties,
     )
 
 
@@ -5202,6 +5302,7 @@ def _update_lut_ppca_batch(
 
 
 def _score_batch(
+    *,
     candidates: Tensor,
     neighborhood_ids: Tensor,
     n_candidates: int,
@@ -5211,6 +5312,8 @@ def _score_batch(
     noise_log_prop: Tensor,
     lut_params: LUTParams,
     lut: NeighborhoodLUT,
+    robust_strategy: RobustnessStrategy,
+    duties: Tensor | None,
     spike_ixs: Tensor | None = None,
     candidate_ixs: Tensor | None = None,
     unit_ixs: Tensor | None = None,
@@ -5278,6 +5381,15 @@ def _score_batch(
         toplls = torch.concatenate((toplls, lls[:, -1:]), dim=1)
     else:
         toplls = lls
+    del lls
+
+    if robust_strategy == "fixed":
+        assert duties is not None
+        toplls *= duties[:, None]
+    elif robust_strategy == "none":
+        assert duties is None
+    else:
+        assert False
 
     if do_resp:
         responsibilities = torch.softmax(toplls, dim=1)
@@ -5285,7 +5397,10 @@ def _score_batch(
         responsibilities = fixed_responsibilities
 
     return Scores(
-        log_liks=toplls, responsibilities=responsibilities, candidates=candidates
+        log_liks=toplls,
+        responsibilities=responsibilities,
+        candidates=candidates,
+        duties=duties,
     )
 
 

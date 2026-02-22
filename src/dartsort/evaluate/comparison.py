@@ -168,6 +168,11 @@ class DARTsortGroundTruthComparison:
         self._calculate_greedy_confusion_and_detection()
         return self._greedy_iou
 
+    @property
+    def greedy_prec(self):
+        self._calculate_greedy_confusion_and_detection()
+        return self._greedy_prec
+
     def unit_collidedness(self):
         uids = self.gt_analysis.sorting.unit_ids
         c = np.full(len(uids), np.nan)
@@ -286,6 +291,7 @@ class DARTsortGroundTruthComparison:
         self._greedy_confusion = c
         u = (c.sum(0, keepdims=True) + c.sum(1, keepdims=True)) - c
         self._greedy_iou = c / np.maximum(u, 1)
+        self._greedy_prec = c / np.maximum(c.sum(0, keepdims=True), 1)
 
         self._tested_to_gt = greedy_res["test2gt_spike"]
         self._unsorted_detection = np.logical_not(greedy_res["gt_unmatched"])

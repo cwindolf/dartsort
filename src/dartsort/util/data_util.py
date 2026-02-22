@@ -383,7 +383,7 @@ class DARTsortSorting:
 
     def to_numpy_sorting(self) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
-        st = self.drop_missing().flatten().drop_doubles()
+        st = self.drop_missing()
         return NumpySorting.from_samples_and_labels(
             samples_list=st.times_samples,
             labels_list=st.labels,

@@ -64,6 +64,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fit_sampling: Literal["random", "amp_reweighted"] = "random",
         max_iter=1000,
         max_spikes_per_second=16384,
+        compute_collidedness=False,
         cd_iter=0,
         coarse_cd=True,
         parent_sorting_hdf5_path: str | Path | None = None,
@@ -103,6 +104,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.coarse_cd = coarse_cd
         self.max_spikes_per_second = max_spikes_per_second
         self.obj_spike_counts = obj_spike_counts
+        self.compute_collidedness = compute_collidedness
 
         # fp control threshold params (remove?)
         self.max_fp_per_input_spike = max_fp_per_input_spike
@@ -159,12 +161,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             [
                 SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
                 SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
+                SpikeDataset(name="scores", shape_per_spike=(), dtype=np.float32),
             ]
         )
         if self.is_scaling:
             datasets.append(
-                SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
+                SpikeDataset(name="scalings", shape_per_spike=(), dtype=np.float32),
             )
         if self.is_upsampling:
             datasets.append(
@@ -172,6 +174,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
             datasets.append(
                 SpikeDataset(name="time_shifts", shape_per_spike=(), dtype=np.int8),
+            )
+        if self.compute_collidedness:
+            datasets.append(
+                SpikeDataset(name="collidedness", shape_per_spike=(), dtype=np.float32),
             )
         return datasets
 
@@ -275,6 +281,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             cd_iter=matching_cfg.cd_iter,
             coarse_cd=matching_cfg.coarse_cd,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
+            compute_collidedness=matching_cfg.compute_collidedness,
             obj_spike_counts=template_data.coarsen().spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
@@ -479,6 +486,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             trough_shifts=peaks.time_shifts,
         )
         # extract collision-cleaned waveforms on small neighborhoods
+        if self.compute_collidedness:
+            assert return_collisioncleaned_waveforms
         if return_collisioncleaned_waveforms or self.picking_channels:
             cc = chunk_template_data.get_collisioncleaned_waveforms(
                 residual_padded=residual_padded,
@@ -486,8 +495,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 channels=self.channel_selection,
                 channel_index=self.b.channel_index,
                 channel_selection_index=self.channel_selection_index,
+                with_coll=self.compute_collidedness,
             )
-            channels, waveforms = cc
+            channels, waveforms, collidedness = cc
+            if self.compute_collidedness:
+                assert collidedness is not None
+                res["collidedness"] = collidedness
         else:
             assert self.channel_selection == "template"
             channels = chunk_template_data.main_channels[peaks.template_inds]

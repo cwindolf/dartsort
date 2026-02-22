@@ -255,6 +255,7 @@ class SubtractionConfig:
     chunk_length_samples: int = 30_000
     n_seconds_fit: int = 100
     fit_only: bool = False
+    compute_collidedness: bool = True
 
     # subtraction
     detection_threshold: float = 2.5
@@ -437,6 +438,7 @@ class MatchingConfig:
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
+    compute_collidedness: bool = True
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
@@ -650,6 +652,10 @@ class RefinementConfig:
     kmeansk: int = 4
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
+    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_fixed_std_dataset: str = "collidedness"
+    robust_fixed_power: float = 40.0
+    robust_df: float = 4.0
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
