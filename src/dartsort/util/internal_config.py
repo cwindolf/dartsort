@@ -117,6 +117,7 @@ class FeaturizationConfig:
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
+    save_collidedness: bool = True
     save_amplitudes: bool = True
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
@@ -257,7 +258,7 @@ class SubtractionConfig:
     fit_only: bool = False
 
     # subtraction
-    detection_threshold: float = 2.5
+    detection_threshold: float = 3.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
@@ -313,13 +314,13 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 50.0
+    spatial_dedup_radius: float = 150.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     cumulant_order: int | None = None
-    convexity_threshold: float | None = -50.0
+    convexity_threshold: float | None = None
     convexity_radius: int = 7
 
     thinning: float = 0.0
@@ -650,6 +651,10 @@ class RefinementConfig:
     kmeansk: int = 4
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
+    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_fixed_std_dataset: str = "collidedness"
+    robust_fixed_power: float = 40.0
+    robust_df: float = 4.0
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
@@ -973,6 +978,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,
+        robust_strategy=cfg.robust_strategy,
+        robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
+        robust_fixed_power=cfg.robust_fixed_power,
+        robust_df=cfg.robust_df,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank

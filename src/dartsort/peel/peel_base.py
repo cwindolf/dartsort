@@ -459,13 +459,11 @@ class BasePeeler(BModule):
         if "collisioncleaned_waveforms" in peel_result:
             del peel_result["collisioncleaned_waveforms"]
 
-        assert not any(k in features for k in peel_result)
-        chunk_result = {**peel_result, **features}
+        chunk_result = peel_result | features
         if to_cpu:
             chunk_result = {
                 k: v.cpu() if torch.is_tensor(v) else v for k, v in chunk_result.items()
             }
-
             if "residual" in peel_result:
                 if torch.is_tensor(peel_result["residual"]):
                     peel_result["residual"] = peel_result["residual"].cpu()  # type: ignore

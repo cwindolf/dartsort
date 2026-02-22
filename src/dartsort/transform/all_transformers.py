@@ -4,6 +4,7 @@ from .amortized_localization import AmortizedLocalization
 from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude, Voltage
 from .decollider import Decollider
 from .enforce_decrease import EnforceDecrease
+from .fixed_prop import FixedProperty
 from .localize import Localization, PointSourceLocalization
 from .matching_denoiser import DebugMatchingPursuitDenoiser
 from .pipeline import WaveformPipeline
@@ -26,6 +27,7 @@ all_transformers = [
     AmplitudeVector,
     MaxAmplitude,
     EnforceDecrease,
+    FixedProperty,
     SingleChannelWaveformDenoiser,
     BaseTemporalPCA,
     TemporalPCADenoiser,

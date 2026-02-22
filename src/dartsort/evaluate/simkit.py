@@ -391,8 +391,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     dataset_shapes["noise_waveforms"] = (inj_wf_shape, f_dt)
                 if save_collision_waveforms:
                     dataset_shapes["collision_waveforms"] = (inj_wf_shape, f_dt)
+                dataset_shapes["collidedness"] = ((), f_dt)
                 if save_collidedness:
-                    dataset_shapes["collidedness"] = ((), f_dt)
+                    dataset_shapes["gt_collidedness"] = ((), f_dt)
                 datasets = {
                     k: h5.create_dataset(k, dtype=dt, shape=(n, *sh))
                     for k, (sh, dt) in dataset_shapes.items()
@@ -772,6 +773,9 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         spikes["noise_waveforms"] = noise_waveforms
         spikes["injected_waveforms"] = injected_waveforms
         spikes["collisioncleaned_waveforms"] = collisioncleaned_waveforms
+        spikes["collidedness"] = np.ones(
+            len(collisioncleaned_waveforms), dtype=collisioncleaned_waveforms.dtype
+        )
         spikes["echans"] = echans
 
         return spikes
@@ -821,7 +825,9 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             cwfs -= spikes["collisioncleaned_waveforms"]
             spikes["collision_waveforms"] = cwfs
             cwfs = np.nan_to_num(cwfs).reshape(len(cwfs), -1)
-            spikes["collidedness"] = np.linalg.norm(cwfs, axis=1)
+            # collidedness is what's relevant to the features, which are perfectly
+            # decollided. gt_collidedness is worst case (no cc).
+            spikes["gt_collidedness"] = np.linalg.norm(cwfs, axis=1)
 
         traces = traces[self.margin : len(traces) - self.margin]
         if channel_indices is not None:

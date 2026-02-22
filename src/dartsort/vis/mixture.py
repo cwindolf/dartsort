@@ -20,6 +20,7 @@ from ..clustering.gmm.mixture import (
     TruncatedSpikeData,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
+    labels_from_scores_,
     run_merge,
     run_split,
     try_kmeans,
@@ -60,9 +61,11 @@ class MixtureVisData:
     train_scores: Scores
     full_scores: Scores
     eval_scores: Scores
+    eval_labels: torch.Tensor
     train_times: np.ndarray
     train_labels: np.ndarray
     train_ixs: np.ndarray
+    val_ixs: np.ndarray | None
     full_labels: np.ndarray
     tpca: TemporalPCA
     inf_diag_unit_distance_matrix: torch.Tensor
@@ -179,7 +182,7 @@ class TextInfo(MixtureComponentPlot):
         ntot = (mix_data.full_labels == unit_id).sum()
         ntrain = (mix_data.train_labels == unit_id).sum()
 
-        msg = f"$\\mathbf{{unit\\ {unit_id}}}$\n"
+        msg = f"{_bold(f'unit {unit_id}')}\n"
         msg += f"n total: {ntot}\n"
         msg += f"n train: {ntrain}\n"
 
@@ -453,7 +456,9 @@ class MergeView(MixtureComponentPlot):
             group=torch.asarray(group),
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
-            scores=mix_data.eval_scores,
+            eval_scores=mix_data.eval_scores,
+            train_labels=torch.asarray(mix_data.train_labels),
+            eval_labels=mix_data.eval_labels,
             pair_mask=pair_mask,
             apply_adj_mask=True,
             debug=True,
@@ -764,10 +769,16 @@ class SplitView(MixtureComponentPlot):
             group=group,
             train_data=mix_data.train_data,
             eval_data=mix_data.val_data,
-            scores=mix_data.eval_scores,
+            eval_scores=mix_data.eval_scores,
+            train_labels=torch.asarray(mix_data.train_labels),
+            eval_labels=mix_data.eval_labels,
             debug=True,
         )
         assert debug_info is not None
+        if debug_info.split_data is not None:
+            orig_labels = mix_data.train_labels[debug_info.split_data.indices.cpu()]
+        else:
+            orig_labels = None
 
         if debug_info.split_data is not None:
             n_spikes = debug_info.split_data.x.shape[0]
@@ -842,13 +853,14 @@ class SplitView(MixtureComponentPlot):
             means = None
 
         # compute text info
-        txt = f"ids: {group.cpu().tolist()}\n"
+        txt = f"{_bold('ids')}: {group.cpu().tolist()} "
         if debug_info.bailed:
             txt += f"bail: {debug_info.bail_reason}\n"
         if debug_info.merge_res is not None:
+            pstr = ",".join(map(str, debug_info.merge_res.grouping.group_ids.tolist()))
             txt += (
-                f"part: {debug_info.merge_res.grouping.group_ids.tolist()}\n"
-                f"imp: {debug_info.merge_res.improvement:.3f}\n"
+                f"{_bold('part')}: {pstr} "
+                f"{_bold('imp')}: {debug_info.merge_res.improvement:.3f}\n"
             )
         else:
             txt += f"no allowed partitions\n"
@@ -857,12 +869,12 @@ class SplitView(MixtureComponentPlot):
             sprops = (
                 sprops - mix_data.tmm.b.log_proportions[group].logsumexp(dim=0).cpu()
             )
-            propstr = "+".join(f"{p:0.3f}" for p in sprops.exp())
-            txt += f"norm kmeans model props:\n  {propstr}={sprops.exp().sum():.2f}\n"
+            propstr = "+".join(f"{p:0.2f}" for p in sprops.exp())
+            txt += f"kmprops: {propstr}={sprops.exp().sum():.2f}\n"
         if debug_info.merge_res is not None:
             mresprops = debug_info.merge_res.sub_proportions
-            propstr = "+".join(f"{p:0.3f}" for p in mresprops)
-            txt += f"mres props: {propstr}={mresprops.sum():.2f}\n"
+            propstr = "+".join(f"{p:0.2f}" for p in mresprops)
+            txt += f"mresprops: {propstr}={mresprops.sum():.2f}\n"
         if debug_info.kmeans_responsibilities is not None:
             kcountstr = ",".join(
                 str(p.item()) for p in kmeans_labels.unique(return_counts=True)[1]
@@ -876,7 +888,33 @@ class SplitView(MixtureComponentPlot):
             )
             txt += f"props: {propstr}={split_res.sub_proportions.cpu().sum():.2f}\n"
             txt += f"counts: {countstr}\n"
+        if orig_labels is not None and group.numel() > 1 and split_res is not None:
+            cstrs = []
+            for uid in group.tolist():
+                myl = split_res.train_assignments[orig_labels == uid]
+                uu, cc = myl.unique(return_counts=True)
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cstrs.append(f"{uid}->[{cc}]")
+            cstr = "orig: " + "\n      ".join(cstrs)
+            txt += cstr + "\n"
+
+            cstrs = []
+            for uid in range(split_res.n_split):
+                myl = orig_labels[split_res.train_assignments.cpu() == uid]
+                uu, cc = np.unique(myl, return_counts=True)
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cstrs.append(f"{uid}->[{cc}]")
+            cstr = "new:  " + "\n      ".join(cstrs)
+            txt += cstr + "\n"
         txt = txt.rstrip()
+
+        if debug_info.split_data is not None:
+            split_inds = debug_info.split_data.indices.cpu()
+            tw = debug_info.split_data.duties
+            if tw is not None:
+                tw = tw.numpy(force=True)
+        else:
+            tw = split_inds = None
 
         return (
             txt,
@@ -888,11 +926,25 @@ class SplitView(MixtureComponentPlot):
             means,
             mean_chans,
             chans_by_km,
+            split_inds,
+            tw,
         )
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         c = self.compute(mix_data, unit_id)
-        txt, colors, t, amps, loadings, dists, means, mean_chans, chans_by_km = c
+        (
+            txt,
+            colors,
+            t,
+            amps,
+            loadings,
+            dists,
+            means,
+            mean_chans,
+            chans_by_km,
+            split_inds,
+            tw,
+        ) = c
 
         # layout
         amp_info_row, mean_row, dist_pc_row = panel.subfigures(
@@ -948,8 +1000,15 @@ class SplitView(MixtureComponentPlot):
         )
 
         # pc scatter
-        if loadings is not None:
-            ax_pc.scatter(*loadings.T, c=colors, s=5, lw=0, alpha=0.5)
+        if loadings is not None and tw is not None:
+            s = ax_pc.scatter(*loadings.T, c=tw, s=5, lw=0, alpha=1)
+            plt.colorbar(s, ax=ax_pc, shrink=0.3)
+            ax_pc.scatter(
+                *loadings.T, edgecolors=colors, s=10, lw=0.5, facecolor="none", alpha=1
+            )
+            ax_pc.grid()
+        elif loadings is not None and tw is not None:
+            ax_pc.scatter(*loadings.T, c=colors, s=5, alpha=0.5)
             ax_pc.grid()
         else:
             ax_pc.axis("off")
@@ -1088,7 +1147,7 @@ def fit_mixture_for_vis(
         needs_bootstrap=False,
         full_proposal_view=True,
     )
-    train_labels = labels_from_scores(train_scores)
+    train_labels = labels_from_scores_(train_scores)
     full_scores = mix_data.tmm.soft_assign(
         data=mix_data.full_data,
         needs_bootstrap=False,
@@ -1097,12 +1156,14 @@ def fit_mixture_for_vis(
     full_labels = labels_from_scores(full_scores)
     if mix_data.val_data is None:
         eval_scores = train_scores
+        eval_labels = train_labels
     else:
         eval_scores = mix_data.tmm.soft_assign(
             data=mix_data.val_data,
             needs_bootstrap=False,
             full_proposal_view=True,
         )
+        eval_labels = labels_from_scores_(eval_scores)
 
     dists = mix_data.tmm.unit_distance_matrix().cpu().clone()
     dists.diagonal().fill_(torch.inf)
@@ -1117,6 +1178,14 @@ def fit_mixture_for_vis(
     else:
         train_ixs = mix_data.train_ixs.numpy(force=True)
 
+    assert not isinstance(mix_data.val_ixs, slice)
+    if isinstance(mix_data.val_ixs, torch.Tensor):
+        val_ixs = mix_data.val_ixs.numpy(force=True)
+    else:
+        val_ixs = None
+
+    times_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+
     return MixtureVisData(
         tmm=mix_data.tmm,
         train_data=mix_data.train_data,
@@ -1127,9 +1196,11 @@ def fit_mixture_for_vis(
         train_scores=train_scores,
         full_scores=full_scores,
         eval_scores=eval_scores,
-        train_times=sorting.times_seconds[mix_data.train_ixs],  # type: ignore
+        train_times=times_s[mix_data.train_ixs],
         train_ixs=train_ixs,
-        train_labels=train_labels,
+        val_ixs=val_ixs,
+        train_labels=train_labels.numpy(force=True),
+        eval_labels=eval_labels,
         full_labels=full_labels,
         tpca=tpca,
         inf_diag_unit_distance_matrix=dists,
@@ -1333,7 +1404,10 @@ def vis_split_interpolation(
         erp = mix_data.tmm.erp
 
     split_data = mix_data.train_data.dense_slice_by_unit(
-        unit_id, gen=mix_data.tmm.rg, min_count=2 * mix_data.tmm.p.min_count
+        unit_id,
+        gen=mix_data.tmm.rg,
+        min_count=2 * mix_data.tmm.p.min_count,
+        labels=None,
     )
     assert split_data is not None
 
@@ -1408,7 +1482,6 @@ def vis_split_interpolation(
     maa = max([np.abs(w).max() for w in orig_wfs])
 
     for col, iwf, owf, ochans, c in zip(axes, interp_wfs, orig_wfs, orig_chans, "rgb"):
-        print(f"{np.abs(iwf).max()=} {np.abs(owf).max()=}")
         geomplot(
             waveforms=iwf,
             channels=kmeans_chans[None].broadcast_to(iwf.shape[0], *kmeans_chans.shape),
@@ -1530,3 +1603,7 @@ def vis_obs_interpolation(
             ax.axis("off")
 
     return fig
+
+
+def _bold(x):
+    return f"$\\mathbf{{{x}}}$"

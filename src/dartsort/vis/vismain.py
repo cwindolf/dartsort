@@ -11,7 +11,11 @@ from ..evaluate.analysis import DARTsortAnalysis
 from ..evaluate.comparison import DARTsortGroundTruthComparison, DARTsortGTVersus
 from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import ComputationConfig, raw_template_cfg, default_refinement_cfg
+from ..util.internal_config import (
+    ComputationConfig,
+    raw_template_cfg,
+    default_refinement_cfg,
+)
 from ..util.job_util import ensure_computation_config
 from ..util.registration_util import try_load_motion_est
 from . import gt, over_time, scatterplots, unit, unit_comparison, versus, mixture
@@ -255,6 +259,7 @@ def visualize_all_sorting_steps(
     load_step_sortings_kw=None,
     reverse=False,
     computation_cfg=None,
+    errors_to_warnings=True,
 ):
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
@@ -334,6 +339,7 @@ def visualize_all_sorting_steps(
                 dpi=dpi,
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
+                errors_to_warnings=errors_to_warnings,
             )
 
             count += 1

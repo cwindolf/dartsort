@@ -29,7 +29,9 @@ class MatchingTemplates(BModule):
     spike_length_samples: int
 
     def __init_subclass__(cls):
-        logger.dartsortverbose("Register matching templates type: %s", cls.template_type)
+        logger.dartsortverbose(
+            "Register matching templates type: %s", cls.template_type
+        )
         cls._registry[cls.template_type] = cls
 
     @classmethod
@@ -284,23 +286,25 @@ class ChunkTemplateData:
         channels: Tensor | Literal["template", "amplitude"],
         channel_index: Tensor,
         channel_selection_index: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
+        with_coll: bool = False,
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
         if not peaks.n_spikes:
             empty_channels = residual_padded.new_zeros(size=(0,), dtype=torch.long)
             empty_waveforms = residual_padded.new_zeros(size=())
-            return empty_channels, empty_waveforms
+            empty_coll = residual_padded.new_zeros(size=()) if with_coll else None
+            return empty_channels, empty_waveforms, empty_coll
 
         if channels == "template":
             channels = self.main_channels[peaks.template_inds]
             selecting_channels = False
-            active_channel_index = channel_index
+            sel_ci = channel_index
         elif torch.is_tensor(channels):
             selecting_channels = False
-            active_channel_index = channel_index
+            sel_ci = channel_index
         elif channels == "amplitude":
             selecting_channels = True
             assert channel_selection_index is not None
-            active_channel_index = channel_selection_index
+            sel_ci = channel_selection_index
             channels = self.main_channels[peaks.template_inds]
         else:
             assert False
@@ -313,21 +317,22 @@ class ChunkTemplateData:
             residual_padded,
             times,
             channels,
-            active_channel_index,
+            sel_ci,
             trough_offset=0,
             spike_length_samples=self.spike_length_samples,
             buffer=0,
             already_padded=True,
         )
+        if with_coll:
+            coll = waveforms.square().nanmean(dim=(1, 2)).sqrt_()
+        else:
+            coll = None
         waveforms = self.get_clean_waveforms(
-            peaks=peaks,
-            channel_index=active_channel_index,
-            channels=channels,
-            add_into=waveforms,
+            peaks=peaks, channel_index=sel_ci, channels=channels, add_into=waveforms
         )
 
         if not selecting_channels:
-            return channels, waveforms
+            return channels, waveforms, coll
 
         cix = ptp(waveforms).nan_to_num_(nan=-torch.inf).argmax(dim=1)
         assert channel_selection_index is not None
@@ -338,6 +343,7 @@ class ChunkTemplateData:
             peaks=peaks,
             channel_index=channel_index,
             channels=channels,
+            with_coll=with_coll,
         )
 
 

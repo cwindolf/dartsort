@@ -59,7 +59,7 @@ class SubtractionPeeler(BasePeeler):
         denoiser_realignment_shift=5,
         relative_peak_channel_index=None,
         spatial_dedup_channel_index=None,
-        first_denoiser_spatial_dedup_radius: float | None=None,
+        first_denoiser_spatial_dedup_radius: float | None = None,
         relative_peak_radius_samples=5,
         temporal_dedup_radius_samples=7,
         remove_exact_duplicates=True,
@@ -87,6 +87,7 @@ class SubtractionPeeler(BasePeeler):
         first_denoiser_spatial_jitter=35.0,
         save_iteration=False,
         save_residnorm_decrease=False,
+        save_collidedness=False,
         max_iter=100,
         dtype=torch.float,
     ):
@@ -94,6 +95,8 @@ class SubtractionPeeler(BasePeeler):
             fixed_property_keys = ("channels", "time_shifts")
         else:
             fixed_property_keys = ("channels",)
+        if save_collidedness:
+            fixed_property_keys = fixed_property_keys + ("collidedness",)
 
         super().__init__(
             recording=recording,
@@ -134,6 +137,7 @@ class SubtractionPeeler(BasePeeler):
         self.decrease_objective: Literal["norm", "normsq", "deconv"] = (
             decrease_objective
         )
+        self.save_collidedness = save_collidedness
 
         if subtract_channel_index is None:
             subtract_channel_index = channel_index.clone().detach()
@@ -310,6 +314,7 @@ class SubtractionPeeler(BasePeeler):
             subtraction_cfg.singlechan_alignment_padding_ms
             * (recording.sampling_frequency / 1000)
         )
+        save_collidedness = featurization_cfg.save_collidedness and not featurization_cfg.skip
 
         return cls(
             recording=recording,
@@ -353,6 +358,7 @@ class SubtractionPeeler(BasePeeler):
             trough_priority=subtraction_cfg.trough_priority,
             save_iteration=subtraction_cfg.save_iteration,
             save_residnorm_decrease=subtraction_cfg.save_residnorm_decrease,
+            save_collidedness=save_collidedness,
         )
 
     def peel_chunk(
@@ -415,6 +421,7 @@ class SubtractionPeeler(BasePeeler):
             realign_to_denoiser=self.realign_to_denoiser,
             denoiser_realignment_shift=self.denoiser_realignment_shift,
             denoiser_realignment_channel=self.denoiser_realignment_channel,
+            compute_collidedness=self.save_collidedness,
             **singlechan_kw,  # type: ignore
         )
 
@@ -712,6 +719,7 @@ def subtract_chunk(
     cumulant_order=None,
     save_iteration=False,
     save_residnorm_decrease=False,
+    compute_collidedness=False,
 ):
     """Core peeling routine for subtraction"""
     if no_subtraction:
@@ -1011,6 +1019,9 @@ def subtract_chunk(
         buffer=0,
         already_padded=True,
     )
+    if compute_collidedness:
+        coll = collisioncleaned_waveforms.square().nanmean(dim=(1, 2)).sqrt_()
+        spike_features["collidedness"] = coll
     collisioncleaned_waveforms += subtracted_waveforms
 
     # offset spike times_samples according to margin

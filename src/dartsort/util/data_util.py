@@ -383,7 +383,7 @@ class DARTsortSorting:
 
     def to_numpy_sorting(self) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
-        st = self.drop_missing().flatten().drop_doubles()
+        st = self.drop_missing()
         return NumpySorting.from_samples_and_labels(
             samples_list=st.times_samples,
             labels_list=st.labels,
@@ -1069,6 +1069,7 @@ def subsample_waveforms(
             fit_max_reweighting=fit_max_reweighting,
             voltages_dataset_name=voltages_dataset_name,
         )
+        fixed_property_keys = [k for k in fixed_property_keys if k in h5]
         if n_wf > n_waveforms_fit and not subsample_by_weighting:
             choices = random_state.choice(
                 n_wf, p=weights, size=n_waveforms_fit, replace=replace
