@@ -188,22 +188,48 @@ def dartcopy2(icfg, src, dest):
 
 
 def dartcopytree(icfg, src, dest):
-    if icfg.workdir_copier == "shutil":
-        shutil.copytree(
-            src,
-            dest,
-            symlinks=not icfg.workdir_follow_symlinks,
-            dirs_exist_ok=True,
+    try:
+        if icfg.workdir_copier == "shutil":
+            shutil.copytree(
+                src,
+                dest,
+                symlinks=not icfg.workdir_follow_symlinks,
+                dirs_exist_ok=True,
+            )
+        elif icfg.workdir_copier == "rsync":
+            _rsync(
+                f"{src}/",
+                f"{dest}/",
+                archive=True,
+                follow_symlinks=icfg.workdir_follow_symlinks,
+            )
+        else:
+            assert False
+    except shutil.SameFileError:
+        logger.dartsortdebug(
+            f"Skip dartcopytree {src} -> {dest} since shutil says they're the same."
         )
-    elif icfg.workdir_copier == "rsync":
-        _rsync(
-            f"{src}/",
-            f"{dest}/",
-            archive=True,
-            follow_symlinks=icfg.workdir_follow_symlinks,
+    except shutil.Error as e:
+        # Sometimes the same file error is hiding in this.
+        # This is probably not the right way to do this?
+        # It's a weird exception format though...
+        arg = e.args[0]
+        if not all(isinstance(a, str) and len(a) == 1 for a in arg):
+            raise
+        arg = "".join(arg)
+        if not arg.startswith("<DirEntry"):
+            raise
+        if not arg.endswith("are the same file"):
+            raise
+        logger.dartsortdebug(
+            f"shutil.copytree said (re: {src} and {dest}) that {arg}. "
+            "Ignoring that and continuing."
         )
-    else:
-        assert False
+    except Exception as e:
+        raise ValueError(
+            f"dartcopytree {src} -> {dest} failed. "
+            f"{src.exists()=}, {dest.exists()=}."
+        ) from e
 
 
 def _rsync(src, dest, archive=True, follow_symlinks=False):
