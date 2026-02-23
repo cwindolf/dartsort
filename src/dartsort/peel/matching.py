@@ -64,6 +64,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fit_sampling: Literal["random", "amp_reweighted"] = "random",
         max_iter=1000,
         max_spikes_per_second=16384,
+        save_collidedness=False,
         cd_iter=0,
         coarse_cd=True,
         parent_sorting_hdf5_path: str | Path | None = None,
@@ -75,6 +76,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             spike_length_samples = matching_templates_builder.spike_length_samples
         else:
             raise ValueError(f"Need either a MatchingTemplates or a builder.")
+        
+        fixed_prop_keys = ("channels",)
+        if save_collidedness:
+            fixed_prop_keys = fixed_prop_keys + ("collidedness",)
 
         super().__init__(
             recording=recording,
@@ -90,6 +95,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_max_reweighting=fit_max_reweighting,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
+            fixed_property_keys=fixed_prop_keys,
             dtype=dtype,
         )
 
@@ -103,6 +109,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.coarse_cd = coarse_cd
         self.max_spikes_per_second = max_spikes_per_second
         self.obj_spike_counts = obj_spike_counts
+        self.save_collidedness = save_collidedness
 
         # fp control threshold params (remove?)
         self.max_fp_per_input_spike = max_fp_per_input_spike
@@ -159,12 +166,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             [
                 SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
                 SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="scores", shape_per_spike=(), dtype=float),
+                SpikeDataset(name="scores", shape_per_spike=(), dtype=np.float32),
             ]
         )
         if self.is_scaling:
             datasets.append(
-                SpikeDataset(name="scalings", shape_per_spike=(), dtype=float),
+                SpikeDataset(name="scalings", shape_per_spike=(), dtype=np.float32),
             )
         if self.is_upsampling:
             datasets.append(
@@ -249,6 +256,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             matching_cfg.template_temporal_upsampling_factor,
             matching_cfg.refractory_radius_frames,
         )
+        save_collidedness = featurization_cfg.save_collidedness and not featurization_cfg.skip
 
         return cls(
             recording=recording,
@@ -275,6 +283,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             cd_iter=matching_cfg.cd_iter,
             coarse_cd=matching_cfg.coarse_cd,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
+            save_collidedness=save_collidedness,
             obj_spike_counts=template_data.coarsen().spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
@@ -486,8 +495,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 channels=self.channel_selection,
                 channel_index=self.b.channel_index,
                 channel_selection_index=self.channel_selection_index,
+                with_coll=self.save_collidedness,
             )
-            channels, waveforms = cc
+            channels, waveforms, collidedness = cc
+            if self.save_collidedness:
+                assert collidedness is not None
+                res["collidedness"] = collidedness
         else:
             assert self.channel_selection == "template"
             channels = chunk_template_data.main_channels[peaks.template_inds]

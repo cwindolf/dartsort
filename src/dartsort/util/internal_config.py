@@ -117,6 +117,7 @@ class FeaturizationConfig:
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
+    save_collidedness: bool = True
     save_amplitudes: bool = True
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
@@ -257,7 +258,7 @@ class SubtractionConfig:
     fit_only: bool = False
 
     # subtraction
-    detection_threshold: float = 4.0
+    detection_threshold: float = 3.0
     peak_sign: Literal["pos", "neg", "both"] = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
@@ -269,7 +270,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius: float = 200.0
-    residnorm_decrease_threshold: float = 12.0
+    residnorm_decrease_threshold: float = 9.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     use_singlechan_templates: bool = False
@@ -313,13 +314,13 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 50.0
+    spatial_dedup_radius: float = 150.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     cumulant_order: int | None = None
-    convexity_threshold: float | None = -50.0
+    convexity_threshold: float | None = None
     convexity_radius: int = 7
 
     thinning: float = 0.0
@@ -439,7 +440,7 @@ class MatchingConfig:
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 10.0
+    threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
@@ -464,7 +465,7 @@ class MatchingConfig:
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
-    min_template_snr: float = 40.0
+    min_template_snr: float = 0.0
     min_template_count: int = 50
     max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
@@ -623,7 +624,7 @@ class RefinementConfig:
     min_count: int = 25
     split_min_count: int = 8
     channels_count_min: int = 1
-    signal_rank: int = 5
+    signal_rank: int = 3
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
     cl_alpha: float = 1.0
@@ -650,6 +651,10 @@ class RefinementConfig:
     kmeansk: int = 4
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
+    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_fixed_std_dataset: str = "collidedness"
+    robust_fixed_power: float = 40.0
+    robust_df: float = 4.0
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
@@ -717,7 +722,7 @@ default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
-default_refinement_cfg = RefinementConfig(mixture_steps="merge")
+default_refinement_cfg = RefinementConfig()
 default_universal_cfg = UniversalMatchingConfig()
 default_initial_refinement_cfg = RefinementConfig(mixture_steps="split")
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
@@ -973,6 +978,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,
+        robust_strategy=cfg.robust_strategy,
+        robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
+        robust_fixed_power=cfg.robust_fixed_power,
+        robust_df=cfg.robust_df,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank

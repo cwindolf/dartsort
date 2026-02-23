@@ -82,18 +82,18 @@ class DARTsortUserConfig:
         "crossings during initialization. Or positive only, if that's your thing.",
     )
     voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=4.0,
+        default=3.0,
         doc="Threshold in standardized (SNR) voltage units for initial detection; "
         "peaks or troughs larger than this value will be grabbed.",
     )
     matching_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=10.0,
+        default=8.0,
         doc="Template matching threshold. If subtracting a template leads "
         "to at least this great of a decrease in the norm of the residual, "
         "that match will be used.",
     )
     initial_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=12.0,
+        default=9.0,
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
@@ -175,7 +175,7 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # high level behavior
     initial_steps: Literal["neither", "split", "merge", "both"] = "split"
-    later_steps: Literal["neither", "split", "merge", "both"] = "merge"
+    later_steps: Literal["neither", "split", "merge", "both"] = "both"
     detection_type: str = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
@@ -214,7 +214,7 @@ class DeveloperConfig(DARTsortUserConfig):
     )
     template_mix_zero: bool = False
     template_mix_svd: bool = True
-    min_template_snr: float = 40.0
+    min_template_snr: float = 0.0
     min_template_count: int = 50
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
@@ -264,7 +264,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # gaussian mixture high level
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
-    signal_rank: Annotated[int, Field(ge=0)] = 5
+    signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
     kmeansk: int = 4
     min_cluster_size: int = 25
@@ -287,6 +287,10 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
+    robust_strategy: Literal["none", "fixed"] = "none"
+    robust_fixed_std_dataset: str = "collidedness"
+    robust_fixed_power: float = 40.0
+    robust_df: float = 4.0
 
     # store extra intermediates
     save_subtracted_waveforms: bool = False

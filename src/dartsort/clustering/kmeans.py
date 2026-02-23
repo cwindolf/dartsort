@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch import Tensor
 import torch.nn.functional as F
 from tqdm.auto import trange
 
@@ -29,6 +30,7 @@ logger = get_logger(__name__)
 
 def kmeanspp(
     X,
+    weights: Tensor | None = None,
     n_components=10,
     random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
@@ -58,12 +60,15 @@ def kmeanspp(
     centroid_ixs = torch.full((n_components,), n, dtype=torch.long, device=X.device)
     dists = None
     if has_initial_dists:
+        assert weights is None, "Not implemented."
         idists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
     else:
         idists = None
 
     if kmeanspp_initial == "random":
-        if dists is None:
+        if weights is not None:
+            centroid_ixs[0] = torch.multinomial(weights, 1, generator=gen)
+        elif dists is None:
             centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
         else:
             assert idists is not None
@@ -90,12 +95,18 @@ def kmeanspp(
     if not skip_assignment:
         assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
 
-    p = dists.clone()
+    if weights is None:
+        p = dists.clone()
+    else:
+        p = dists * weights
     xrange = trange if show_progress else range
     for j in xrange(1, n_components):
         if has_initial_dists:
             assert idists is not None
+            assert weights is None
             torch.minimum(dists, idists, out=p)
+        elif weights is not None:
+            torch.mul(dists, weights, out=p)
         else:
             p.copy_(dists)
         if min_distance:
@@ -120,7 +131,10 @@ def kmeanspp(
     if not skip_assignment:
         assignments = assignments
         centroid_ixs = centroid_ixs.to(assignments)
-    phi = dists.mean()
+    if weights is None:
+        phi = dists.mean()
+    else:
+        phi = dists.mul_(weights).mean() / weights.mean()
 
     return centroid_ixs, assignments, dists, phi
 
@@ -329,6 +343,7 @@ def kmeans_inner(
     n_iter=100,
     n_components=10,
     random_state: np.random.Generator | torch.Generator | int = 0,
+    weights: Tensor | None = None,
     kmeanspp_initial="random",
     with_proportions=False,
     drop_prop=0.025,
@@ -347,6 +362,7 @@ def kmeans_inner(
     for _ in range(n_kmeanspp_tries):
         _centroid_ixs, _labels, _, phi = kmeanspp(
             X,
+            weights=weights,
             n_components=n_components,
             random_state=random_state,
             kmeanspp_initial=kmeanspp_initial,
@@ -387,6 +403,8 @@ def kmeans_inner(
 
         # e step
         dists = torch.cdist(X, centroids).square_()
+        if weights is not None:
+            dists.mul_(weights[:, None])
         if with_proportions:
             e = F.softmax(-0.5 * dists + proportions.log(), dim=1)
         else:
@@ -414,6 +432,7 @@ def kmeans(
     with_proportions=False,
     drop_prop=0.025,
     drop_sum=5.0,
+    weights: Tensor | None = None,
     test_convergence=True,
 ):
     best_phi = np.inf
@@ -433,6 +452,7 @@ def kmeans(
             drop_prop=drop_prop,
             drop_sum=drop_sum,
             test_convergence=test_convergence,
+            weights=weights,
         )
         if dists is None:
             continue

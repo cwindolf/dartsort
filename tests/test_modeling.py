@@ -91,7 +91,7 @@ def test_truncated_mixture(
     )
 
     # copy-pasting from tmm_demix here
-    neighb_cov, erp, train_data, val_data, full_data, noise, _ = (
+    neighb_cov, erp, train_data, val_data, full_data, noise, *_ = (
         mixture.get_truncated_datasets(
             sorting=init_sorting,
             motion_est=None,
@@ -162,8 +162,15 @@ def test_truncated_mixture(
             print(f"False split: {to_split} into {n_pieces} parts.")
             logger.info(f"False split: {to_split} into {n_pieces} parts.")
             split_results = []
+
+            train_scores = tmm.soft_assign(
+                data=train_data, full_proposal_view=True, needs_bootstrap=False
+            )
+            train_labels = mixture.labels_from_scores_(train_scores)
             for unit_id, kmeansk in zip(to_split, n_pieces):
-                split_data = train_data.dense_slice_by_unit(unit_id, gen=tmm.rg)
+                split_data = train_data.dense_slice_by_unit(
+                    unit_id, gen=tmm.rg, min_count=tmm.p.min_count, labels=train_labels
+                )
                 assert split_data is not None
                 kmeans_responsibliities, *_ = mixture.try_kmeans(
                     data=split_data,
@@ -204,6 +211,9 @@ def test_truncated_mixture(
 
         if it:
             # get scores that split needs
+            train_scores = tmm.soft_assign(
+                data=train_data, full_proposal_view=True, needs_bootstrap=False
+            )
             if val_data is not None:
                 eval_scores = tmm.soft_assign(
                     data=val_data, full_proposal_view=True, needs_bootstrap=False
@@ -216,13 +226,16 @@ def test_truncated_mixture(
                     max_iter=1,
                 )
         else:
-            eval_scores = None
+            train_scores = eval_scores = None
 
         if it in (1, 3):
             print("Split.")
             logger.info("Split.")
+            assert train_scores is not None
             assert eval_scores is not None
-            split_res = tmm.split(train_data, val_data, scores=eval_scores)
+            split_res = tmm.split(
+                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+            )
             logger.info(f"Split created {split_res.n_new_units} new units.")
             if it == 1:
                 assert split_res.n_new_units == 0
@@ -230,8 +243,11 @@ def test_truncated_mixture(
         if it in (2, 4):
             print("Merge.")
             logger.info("Merge.")
+            assert train_scores is not None
             assert eval_scores is not None
-            merge_map = tmm.merge(train_data, val_data, scores=eval_scores)
+            merge_map = tmm.merge(
+                train_data, val_data, train_scores=train_scores, eval_scores=eval_scores
+            )
             logger.info(f"{gt_cosines=}.")
             logger.info(f"{true_labels.unique(return_counts=True)=}.")
             logger.info(

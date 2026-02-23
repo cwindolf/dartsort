@@ -49,8 +49,12 @@ class ThresholdAndFeaturize(BasePeeler):
         time_jitter=0,
         trough_priority=None,
         spatial_jitter_channel_index=None,
+        save_collidedness=False,
         dtype=torch.float,
     ):
+        fixed_prop_keys = ("channels",)
+        if save_collidedness:
+            fixed_prop_keys = fixed_prop_keys + ("collidedness",)
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -65,6 +69,7 @@ class ThresholdAndFeaturize(BasePeeler):
             fit_max_reweighting=fit_max_reweighting,
             dtype=dtype,
             trough_offset_samples=trough_offset_samples,
+            fixed_property_keys=fixed_prop_keys,
             spike_length_samples=spike_length_samples,
         )
 
@@ -76,6 +81,7 @@ class ThresholdAndFeaturize(BasePeeler):
         self.convexity_threshold = convexity_threshold
         self.convexity_radius = convexity_radius
         self.cumulant_order = cumulant_order
+        self.save_collidedness = save_collidedness
         self.dedup_batch_size = self.nearest_batch_length()
         if spatial_dedup_channel_index is not None:
             self.register_buffer(
@@ -165,6 +171,9 @@ class ThresholdAndFeaturize(BasePeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        save_collidedness = (
+            featurization_cfg.save_collidedness and not featurization_cfg.skip
+        )
 
         return cls(
             recording,
@@ -194,6 +203,7 @@ class ThresholdAndFeaturize(BasePeeler):
             time_jitter=thresholding_cfg.time_jitter,
             spatial_jitter_channel_index=spatial_jitter_channel_index,
             trough_priority=thresholding_cfg.trough_priority,
+            save_collidedness=save_collidedness,
         )
 
     def out_datasets(self):
@@ -262,6 +272,10 @@ class ThresholdAndFeaturize(BasePeeler):
         if return_waveforms:
             assert "waveforms" in threshold_res
             peel_result["collisioncleaned_waveforms"] = threshold_res["waveforms"]
+        if return_waveforms and self.save_collidedness:
+            peel_result["collidedness"] = threshold_res["waveforms"].new_full(
+                (int(threshold_res["n_spikes"]),), torch.nan
+            )
         if self.is_random:
             orig_times_rel = threshold_res["orig_times_rel"]
             assert orig_times_rel is not None

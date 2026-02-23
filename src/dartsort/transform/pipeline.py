@@ -226,6 +226,8 @@ def featurization_config_to_class_names_and_kwargs(
         class_names_and_kwargs.append(
             ("Voltage", {"name_prefix": fc.input_waveforms_name, **tos_kw})
         )
+    if do_feats and fc.save_collidedness:
+        class_names_and_kwargs.append(("FixedProperty", {"name": "collidedness"}))
     if fc.save_input_waveforms:
         class_names_and_kwargs.append(
             ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
