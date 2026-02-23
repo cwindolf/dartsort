@@ -93,6 +93,24 @@ class DARTsortSorting:
     def n_units(self) -> int:
         return self.unit_ids.shape[0]
 
+    def to_numpy_sorting(self) -> NumpySorting:
+        """Clean up and produce a spikeinterface NumpySorting object."""
+        st = self.drop_missing().flatten().drop_doubles()
+        return NumpySorting.from_samples_and_labels(
+            samples_list=st.times_samples,
+            labels_list=st.labels,
+            sampling_frequency=st.sampling_frequency,
+        )
+
+    def to_tsgroup(self):
+        """Basic export to pynapple.TsGroup"""
+        from pynapple.core.ts_group import TsGroup
+        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
+        trains = {
+            unit_id: t_s[self.labels == unit_id] for unit_id in self.unit_ids
+        }
+        return TsGroup(trains)
+
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
         other = copy(self)
@@ -379,15 +397,6 @@ class DARTsortSorting:
             sampling_frequency=sampling_frequency,
             parent_h5_path=parent_h5_path,
             ephemeral_features=ephemeral_features,
-        )
-
-    def to_numpy_sorting(self) -> NumpySorting:
-        """Clean up and produce a spikeinterface NumpySorting object."""
-        st = self.drop_missing().flatten().drop_doubles()
-        return NumpySorting.from_samples_and_labels(
-            samples_list=st.times_samples,
-            labels_list=st.labels,
-            sampling_frequency=st.sampling_frequency,
         )
 
     def mask(self, mask: np.ndarray) -> Self:
