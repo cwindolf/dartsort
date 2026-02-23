@@ -70,17 +70,17 @@ class DARTsortSorting:
             assert labels.dtype.kind == "i"
         self.labels = labels
 
-        self._ephemeral_feature_names = []
-        if ephemeral_features is not None:
-            for k, v in ephemeral_features.items():
-                check_shape = not self._no_check_needed(k)
-                self.add_ephemeral_feature(k, v, check_shape=check_shape)
-
         self._loaded_persistent_features = []
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
+
+        self._ephemeral_feature_names = []
+        if ephemeral_features is not None:
+            for k, v in ephemeral_features.items():
+                check_shape = not self._no_check_needed(k)
+                self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
     @property
     def unit_ids(self) -> np.ndarray:
@@ -102,14 +102,70 @@ class DARTsortSorting:
             sampling_frequency=st.sampling_frequency,
         )
 
-    def to_tsgroup(self):
-        """Basic export to pynapple.TsGroup"""
-        from pynapple.core.ts_group import TsGroup
-        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
-        trains = {
-            unit_id: t_s[self.labels == unit_id] for unit_id in self.unit_ids
+    def to_pandas(self, include_1d_features=True, extract_location_if_possible=True):
+        """Export to pandas DataFrame with some per-spike features."""
+        from pandas import DataFrame
+        data = {
+            "times_samples": self.times_samples,
+            "channels": self.channels,
+            "labels": self.labels,
         }
-        return TsGroup(trains)
+        fnames = self._loaded_persistent_features + self._ephemeral_feature_names
+        if include_1d_features:
+            for k in fnames:
+                v = getattr(self, k)
+                if v.shape == self.channels.shape:
+                    data[k] = v
+        if extract_location_if_possible:
+            locfns = [fn for fn in fnames if "localizations" in fn]
+            extract_location_if_possible = len(locfns) == 1
+        if extract_location_if_possible:
+            locfn = [fn for fn in fnames if "localizations" in fn][0]
+            locs = getattr(self, locfn)
+            # naming like IBL DANDI.
+            data["relative_depth"] = np.ascontiguousarray(locs[:, 2])
+            data["relative_x"] = np.ascontiguousarray(locs[:, 0])
+        return DataFrame(data=data)
+
+    def to_tsgroup(
+        self,
+        metadata=None,
+        add_feature_mean_metadata=True,
+        weight_key="soft_assignment_weight",
+    ):
+        """Export to pynapple.TsGroup.
+
+        If there is a weight_key feature, this will produce
+        a TsGroup with Tsd entries. Else, regular Ts.
+        """
+        from pynapple.core.ts_group import TsGroup, Ts, Tsd
+
+        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
+
+        if add_feature_mean_metadata:
+            df = self.to_pandas()
+            float_columns = [k for k in df if df[k].dtype.kind == 'f']
+            df = df[['labels'] + float_columns]
+            means = df.groupby('labels').mean()
+            means = means[means.index >= 0]
+            renamer = {k: "mean_" + k for k in means}
+            means = means.rename(columns=renamer)
+            if metadata is None:
+                metadata = means
+            else:
+                metadata = means | metadata
+
+        w = getattr(self, weight_key, None)
+        trains = {}
+        for unit_id in self.unit_ids:
+            inu = np.flatnonzero(self.labels == unit_id)
+            ut = t_s[inu]
+            if w is None:
+                trains[unit_id] = Ts(t=ut)
+            else:
+                uw = w[inu]
+                trains[unit_id] = Tsd(t=ut, d=uw)
+        return TsGroup(trains, metadata=metadata)
 
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
@@ -175,11 +231,13 @@ class DARTsortSorting:
             )
         if not already_ephemeral:
             self._ephemeral_feature_names.append(feature_name)
+        logger.dartsortdebug(f"Attach ephemeral feature {feature_name} with shape {feature.shape}.")
         setattr(self, feature_name, feature)
 
     def remove_ephemeral_feature(self, feature_name: str):
         assert feature_name in self._ephemeral_feature_names
         assert hasattr(self, feature_name)
+        logger.dartsortdebug(f"Remove ephemeral feature {feature_name}.")
         self._ephemeral_feature_names = [
             k for k in self._ephemeral_feature_names if k != feature_name
         ]
@@ -193,7 +251,12 @@ class DARTsortSorting:
         ]
         delattr(self, feature_name)
 
-    def add_feature(self, feature_name: str, feature: np.ndarray, check_shape=True):
+    def add_feature(
+        self,
+        feature_name: str,
+        feature: np.ndarray,
+        check_shape: bool | None = None,
+    ):
         """Try to save a feature to h5, else register as ephemeral."""
         if self.parent_h5_path is None:
             self.add_ephemeral_feature(feature_name, feature, check_shape)
@@ -209,7 +272,10 @@ class DARTsortSorting:
             raise ValueError(f"Sorting doesn't have {feature_name}.")
 
     def _register_persistent_feature(
-        self, feature_name: str, feature: np.ndarray, check_shape=True
+        self,
+        feature_name: str,
+        feature: np.ndarray,
+        check_shape: bool | None = None,
     ):
         """Persistent features are written to the h5."""
         if self.parent_h5_path is None:
@@ -217,13 +283,20 @@ class DARTsortSorting:
                 f"Can't register persistent feature {feature_name}, because "
                 f"there is no .hdf5 file.",
             )
+        if check_shape is None:
+            check_shape = not self._no_check_needed(feature_name)
         if check_shape:
             self._check_shape(feature_name, feature)
+        if feature_name in self._loaded_persistent_features:
+            raise ValueError(f"Persistent feature {feature_name} already exists.")
+        logger.dartsortdebug(
+            f"Store persistent feature {feature_name} with shape {feature.shape}."
+        )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
         try:
             with h5py.File(
-                self.parent_h5_path, "r", libver="latest", locking=False
+                self.parent_h5_path, "r+", libver="latest", locking=False
             ) as h5:
                 if feature_name not in h5:
                     logger.dartsortdebug(
@@ -234,9 +307,9 @@ class DARTsortSorting:
                     h5.create_dataset(feature_name, data=feature)
         except FileNotFoundError:
             logger.warning(
-                f"Sorting's parent h5 file {self.parent_h5_path} is gone when registering "
-                f"persistent feature {feature_name}. Will continue, but this sorting won't "
-                "persist correctly.",
+                f"Sorting's parent h5 file {self.parent_h5_path} is gone when "
+                f"registering persistent feature {feature_name}. Will continue, "
+                "but this sorting won't persist correctly.",
                 stacklevel=3,
             )
 
@@ -330,6 +403,7 @@ class DARTsortSorting:
         to the .h5 file if it exists.
         """
         sorting_npz = resolve_path(sorting_npz)
+        logger.dartsortdebug(f"Saving {self} to {sorting_npz}.")
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
@@ -659,7 +733,7 @@ def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=Tru
     if to_sklearn:
         tsvd = tsvd.to_sklearn()
     logger.info(
-        f"Loaded stored basis from %s (%s; components shape: %s).",
+        "Loaded stored basis from %s (%s; components shape: %s).",
         pt_path,
         tsvd_name,
         tsvd.components_.shape,
@@ -688,6 +762,86 @@ def sorting_isis(sorting: DARTsortSorting):
         isi = np.minimum(isi[1:], isi[:-1])
         isis_ms[inu] = isi
     return isis_ms
+
+
+def explode_soft_assignment_sorting(
+    sorting: DARTsortSorting,
+    responsibilities_key="gmm_candidates",
+    candidates_key="gmm_candidates",
+) -> DARTsortSorting:
+    """Convert a hard-assigned sorting to a soft-assigned one
+
+    Each spike will be represented multiple times, once in each
+    unit that supports it in the soft assignment candidates array.
+    There will be a "soft_assignment_weight" feature attached to
+    the output sorting.
+    """
+    labels = sorting.labels
+    assert labels is not None
+    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+
+    candidates = cast(np.ndarray, getattr(sorting, candidates_key))
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+
+    notnoise = responsibilities[:, 0] > responsibilities[:, -1]
+    clabels = np.where(notnoise, candidates[:, 0], -1)
+
+    # issue: we usually merge GMM components into new labels
+    # so, need to figure out the merge and remap, and there will be
+    # duplicates to handle
+    lc = np.unique(np.c_[labels, clabels], axis=0)
+    lc = lc[lc[:, 0] >= 0]
+    # each candidate only appears once -- it is a merge.
+    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    Kcand = candidates.max() + 1
+    ctol = np.full((Kcand + 1,), fill_value=labels.max() + 10)
+    ctol[lc[:, 1]] = lc[:, 0]
+
+    # replace candidates -1 with invalid entry, will also become invalid in ctol
+    c = np.where(candidates < 0, Kcand, candidates)
+    # remap to merged ids
+    c = ctol[c]
+
+    # now deduplicate... this can be faster but fine for now.
+    luniq, lcount = np.unique(lc[:, 0], return_counts=True)
+    mergedl = luniq[lcount > 1]
+    mergedr = responsibilities.copy()
+    for ll in mergedl:
+        eql = c == ll
+        six, cix = np.nonzero(eql)
+        sixu, sixfirst, sixflat = np.unique(
+            six, return_index=True, return_inverse=True
+        )
+
+        # sum weight for each spike
+        wsum = np.zeros(sixu.shape)
+        np.add.at(wsum, sixflat, responsibilities[six, cix])
+
+        # delete old
+        c[six, cix] = Kcand
+        mergedr[six, cix] = 0.0
+
+        # write new into first ixs
+        c[sixu, cix[sixfirst]] = ll
+        mergedr[sixu, cix[sixfirst]] = wsum
+
+    # okay, having deduplicated, we are now ready to explode
+    nz = np.logical_and(c < Kcand, mergedr > 0)
+    spike_ix, candidate_ix = np.nonzero(nz)
+
+    # store weight as a feature
+    feats = dict(soft_assignment_weight=mergedr[spike_ix, candidate_ix])
+
+    return DARTsortSorting(
+        times_samples=sorting.times_samples[spike_ix],
+        times_seconds=t_s[spike_ix],
+        channels=sorting.channels[spike_ix],
+        labels=c[spike_ix, candidate_ix],
+        sampling_frequency=sorting.sampling_frequency,
+        ephemeral_features=feats,
+    )
+
+
 
 
 def keep_only_most_recent_spikes(
