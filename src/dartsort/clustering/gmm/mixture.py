@@ -4447,16 +4447,21 @@ def relabel_and_add_scores(
         full_proposal_view=full_proposal_view,
         needs_bootstrap=needs_bootstrap,
     )
+
     labels = labels_from_scores(full_scores)
     neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
     candidates = full_scores.candidates.numpy(force=True).astype(np.int32)
     log_liks = full_scores.log_liks.numpy(force=True)
-    sorting.add_ephemeral_feature("candidates", feature=candidates)
-    sorting.add_ephemeral_feature("log_liks", feature=log_liks)
     assert full_scores.responsibilities is not None
     resp = full_scores.responsibilities.numpy(force=True)
-    sorting.add_ephemeral_feature("responsibilities", feature=resp)
-    sorting = sorting.ephemeral_replace(labels=labels, neighborhood_ids=neighb_ids)
+
+    sorting = sorting.ephemeral_replace(
+        labels=labels,
+        neighborhood_ids=neighb_ids,
+        gmm_candidates=candidates,
+        gmm_log_liks=log_liks,
+        gmm_responsibilities=resp,
+    )
     return sorting
 
 
