@@ -766,7 +766,7 @@ def sorting_isis(sorting: DARTsortSorting):
 
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
-    responsibilities_key="gmm_candidates",
+    responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
 ) -> DARTsortSorting:
     """Convert a hard-assigned sorting to a soft-assigned one
@@ -783,18 +783,24 @@ def explode_soft_assignment_sorting(
     candidates = cast(np.ndarray, getattr(sorting, candidates_key))
     responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
 
-    notnoise = responsibilities[:, 0] > responsibilities[:, -1]
+    notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
     clabels = np.where(notnoise, candidates[:, 0], -1)
+
+    lvalid = labels >= 0
+    cvalid = clabels >= 0
+    assert np.array_equal(lvalid, cvalid)
 
     # issue: we usually merge GMM components into new labels
     # so, need to figure out the merge and remap, and there will be
     # duplicates to handle
-    lc = np.unique(np.c_[labels, clabels], axis=0)
-    lc = lc[lc[:, 0] >= 0]
+    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
+    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
+    lc = lc[(lc >= 0).all(axis=1)]
     # each candidate only appears once -- it is a merge.
     assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
     Kcand = candidates.max() + 1
-    ctol = np.full((Kcand + 1,), fill_value=labels.max() + 10)
+    invalid_label = labels.max() + 10
+    ctol = np.full((Kcand + 1,), fill_value=invalid_label)
     ctol[lc[:, 1]] = lc[:, 0]
 
     # replace candidates -1 with invalid entry, will also become invalid in ctol
@@ -804,8 +810,11 @@ def explode_soft_assignment_sorting(
 
     # now deduplicate... this can be faster but fine for now.
     luniq, lcount = np.unique(lc[:, 0], return_counts=True)
+    luniq_check = np.unique(labels)
+    luniq_check = luniq_check[luniq_check >= 0]
+    assert np.array_equal(luniq_check, luniq)
     mergedl = luniq[lcount > 1]
-    mergedr = responsibilities.copy()
+    mergedr = responsibilities[:, :candidates.shape[1]].copy()
     for ll in mergedl:
         eql = c == ll
         six, cix = np.nonzero(eql)
@@ -826,15 +835,17 @@ def explode_soft_assignment_sorting(
         mergedr[sixu, cix[sixfirst]] = wsum
 
     # okay, having deduplicated, we are now ready to explode
-    nz = np.logical_and(c < Kcand, mergedr > 0)
+    nz = np.logical_and(c < invalid_label, mergedr > 0)
     spike_ix, candidate_ix = np.nonzero(nz)
 
     # store weight as a feature
-    feats = dict(soft_assignment_weight=mergedr[spike_ix, candidate_ix])
+    feats = dict(
+        soft_assignment_weight=mergedr[spike_ix, candidate_ix],
+        times_seconds=t_s[spike_ix],
+    )
 
     return DARTsortSorting(
         times_samples=sorting.times_samples[spike_ix],
-        times_seconds=t_s[spike_ix],
         channels=sorting.channels[spike_ix],
         labels=c[spike_ix, candidate_ix],
         sampling_frequency=sorting.sampling_frequency,
