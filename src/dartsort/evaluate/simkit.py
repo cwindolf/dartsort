@@ -1,6 +1,6 @@
 from pathlib import Path
 import pickle
-from typing import cast
+from typing import cast, Literal
 import warnings
 
 from dredge import motion_util
@@ -29,8 +29,13 @@ from ..util.drift_util import registered_geometry
 from ..util.logging_util import get_logger
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
-from .simlib import simulate_sorting, add_features, default_sim_featurization_cfg
-from .simlib import default_temporal_kernel_npy
+from .simlib import (
+    simulate_sorting,
+    simulate_twostate_switching,
+    add_features,
+    default_sim_featurization_cfg,
+    default_temporal_kernel_npy,
+)
 from .noise_recording_tools import get_background_recording
 from .sim_template_tools import get_template_simulator, TemplateSimulator
 
@@ -51,6 +56,9 @@ def generate_simulation(
     firing_kind="uniform",
     min_fr_hz=1.0,
     max_fr_hz=20.0,
+    state_affinity: float = 0.3,
+    down_max_fr_hz: float = 5.0,
+    up_min_fr_hz: float = 8.0,
     # noise args
     noise_kind="stationary_factorized_rbf",
     noise_spatial_kernel_bandwidth=15.0,
@@ -158,6 +166,9 @@ def generate_simulation(
         firing_kind=firing_kind,
         min_fr_hz=min_fr_hz,
         max_fr_hz=max_fr_hz,
+        state_affinity=state_affinity,
+        down_max_fr_hz=down_max_fr_hz,
+        up_min_fr_hz=up_min_fr_hz,
         template_simulator=template_simulator,
         drift_type=drift_type,
         drift_speed=drift_speed,
@@ -366,6 +377,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     "times_seconds",
                     data=self.sample_index_to_time(times_samples),
                 )
+                h5.create_dataset("states", data=self.segment.states)
                 h5.create_dataset("labels", data=self.segment.labels)
                 h5.create_dataset("scalings", data=self.segment.scalings)
                 h5.create_dataset("jitter_ix", data=self.segment.jitter_ix)
@@ -527,23 +539,26 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
     def __init__(
         self,
         parent_recording_segment,
-        n_channels,
+        n_channels: int,
         *,
-        firing_kind,
-        min_fr_hz,
-        max_fr_hz,
+        firing_kind: Literal["uniform", "switching_two_state"],
+        min_fr_hz: float,
+        max_fr_hz: float,
+        state_affinity: float,
+        down_max_fr_hz: float,
+        up_min_fr_hz: float,
         template_simulator,
-        drift_type,
-        drift_speed,
-        drift_period,
-        amplitude_jitter,
-        amp_jitter_family,
-        temporal_jitter,
-        temporal_jitter_family,
-        random_seed,
-        refractory_ms,
-        globally_refractory,
-        extract_radius,
+        drift_type: Literal["line", "triangle"],
+        drift_speed: float,
+        drift_period: float,
+        amplitude_jitter: float,
+        amp_jitter_family: Literal["gamma", "uniform"],
+        temporal_jitter: int,
+        temporal_jitter_family: Literal["uniform", "by_unit"],
+        random_seed: int | np.random.Generator,
+        refractory_ms: float,
+        globally_refractory: bool,
+        extract_radius: float,
         features_dtype="float32",
         compute_collision_waveforms=False,
     ):
@@ -591,8 +606,21 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
 
         # bake all random stuff
         rg = np.random.default_rng(random_seed)
+        n_bins = int(np.ceil(self.get_num_samples() / self.sampling_frequency))
         if firing_kind == "uniform":
             firing_rates = rg.uniform(min_fr_hz, max_fr_hz, size=self.n_units)
+            states = np.zeros(n_bins, dtype=np.int32)
+        elif firing_kind == "switching_two_state":
+            states, firing_rates = simulate_twostate_switching(
+                rg=rg,
+                n_bins=n_bins,
+                state_affinity=state_affinity,
+                n_units=self.n_units,
+                min_fr=min_fr_hz,
+                down_max_fr=down_max_fr_hz,
+                up_min_fr=up_min_fr_hz,
+                max_fr=max_fr_hz,
+            )
         else:
             assert False
         self.random_seed = random_seed
@@ -608,6 +636,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             globally_refractory=globally_refractory,
         )
         sv = cast(np.recarray, sorting.to_spike_vector())
+        self.states = states
         self.times_samples = sv["sample_index"]
         self.labels = sv["unit_index"]
         self.n_spikes = sorting.count_total_num_spikes()
