@@ -90,7 +90,7 @@ def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwa
     """
     st = []
     for rate, bin in zip(rates, bins):
-        if rate < 0.1:
+        if rate < 0.05:
             continue
         binst = refractory_poisson_spike_train(rate, binsize_samples, **kwargs)
         st.append(bin + binst)
@@ -117,7 +117,38 @@ def simulate_sorting(
     else:
         firing_rates = rg.uniform(1.0, 10.0, num_units)
 
-    if not globally_refractory:
+    if firing_rates.ndim == 2:
+        assert not globally_refractory
+        assert int(sampling_frequency) == sampling_frequency
+        assert firing_rates.shape[1] == num_units
+        Tceil = np.ceil(n_samples / sampling_frequency)
+        assert firing_rates.shape[0] == Tceil
+        bins = np.arange(0, n_samples, sampling_frequency)
+        assert firing_rates.shape[0] == bins.shape[0]
+
+        spike_trains = [
+            piecewise_refractory_poisson_spike_train(
+                rates=firing_rates[i],
+                bins=bins,
+                binsize_samples=int(sampling_frequency),
+                trough_offset_samples=nbefore,
+                spike_length_samples=spike_length_samples,
+                seed=rg,
+                refractory_samples=refractory_samples,
+                sampling_frequency=sampling_frequency,
+            )
+            for i in range(num_units)
+        ]
+        if num_units:
+            spike_times = np.concatenate(spike_trains)
+            spike_labels = np.repeat(
+                np.arange(num_units),
+                np.array([spike_trains[i].shape[0] for i in range(num_units)]),
+            )
+        else:
+            spike_times = np.array([], dtype=np.int64)
+            spike_labels = np.array([], dtype=np.int64)
+    elif not globally_refractory:
         spike_trains = [
             refractory_poisson_spike_train(
                 firing_rates[i],
@@ -269,3 +300,53 @@ def add_features(h5_path, recording, featurization_cfg):
             )
             for k, v in feats.items():
                 f_dsets[k][sli] = v.numpy(force=True)
+
+
+def simulate_twostate_switching(
+    rg: np.random.Generator,
+    n_bins: int,
+    state_affinity: float,
+    n_units: int,
+    min_fr: float,
+    down_max_fr: float,
+    up_min_fr: float,
+    max_fr: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Simulate population firing rates in bins
+
+    There are two latent states (random) and three neural populations.
+    One is up in state 0, down state 1, other is reverse, and pop 3 doesn't
+    care.
+
+    Algorithm:
+     - Simulate states
+     - Simulate state affinities (0, 1, 2=don't care)
+     - Draw per-neuron firing rates in each state according to affinity
+     - Do a one-hot matmul to gather the final firing rates
+    """
+    states = rg.binomial(n=1, p=0.5, size=n_bins).astype(np.int32)
+    states_onehot = np.zeros((n_bins, 2))
+    states_onehot[np.arange(n_bins), states] = 1.0
+
+    assert 2 * state_affinity < 1
+    affinity_p = np.array([state_affinity, state_affinity, 1 - 2 * state_affinity])
+    affinities = rg.choice(3, size=n_units, p=affinity_p)
+
+    frs_by_state = np.zeros((n_units, 2))
+    for aff in range(3):
+        in_aff = np.flatnonzero(affinities == aff)
+        n_aff = in_aff.size
+
+        if aff == 2:
+            frs_by_state[in_aff, :] = rg.uniform(size=n_aff, low=min_fr, high=max_fr)
+        elif aff <= 1:
+            frs_by_state[in_aff, aff] = rg.uniform(
+                size=n_aff, low=up_min_fr, high=max_fr
+            )
+            frs_by_state[in_aff, 1 - aff] = rg.uniform(
+                size=n_aff, low=min_fr, high=down_max_fr
+            )
+        else:
+            assert False
+
+    return states, states_onehot @ frs_by_state.T

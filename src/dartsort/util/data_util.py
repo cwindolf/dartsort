@@ -148,7 +148,7 @@ class DARTsortSorting:
             df = df[['labels'] + float_columns]
             means = df.groupby('labels').mean()
             means = means[means.index >= 0]
-            renamer = {k: "mean_" + k for k in means}
+            renamer = {k: "mean_" + str(k) for k in means}
             means = means.rename(columns=renamer)
             if metadata is None:
                 metadata = means
