@@ -736,15 +736,15 @@ class RunningTemplates(GrabAndFeaturize):
 
     def gather_chunk_result(
         self,
-        cur_n_spikes,
-        chunk_start_samples,
+        *,
+        cur_n_spikes: int,
+        chunk_start_samples: int,
         chunk_result,
-        h5_spike_datasets,
+        h5_spike_datasets: dict[str, h5py.Dataset] | None,
         output_h5,
         residual_file,
-        residual_to_h5,
-        ignore_resuming,
-        skip_features,
+        ignore_resuming: bool,
+        skip_features: bool,
     ):
         if output_h5 is not None:
             # this path is active when fitting models (i.e., temporal svd).
@@ -752,19 +752,17 @@ class RunningTemplates(GrabAndFeaturize):
             # is done in the arrays created during setup().
             # in this branch, to_numpy was True in process_chunk().
             return super().gather_chunk_result(
-                cur_n_spikes,
-                chunk_start_samples,
-                chunk_result,
-                h5_spike_datasets,
-                output_h5,
-                residual_file,
-                residual_to_h5,
-                ignore_resuming,
-                skip_features,
+                cur_n_spikes=cur_n_spikes,
+                chunk_start_samples=chunk_start_samples,
+                chunk_result=chunk_result,
+                h5_spike_datasets=h5_spike_datasets,
+                output_h5=output_h5,
+                residual_file=residual_file,
+                ignore_resuming=ignore_resuming,
+                skip_features=skip_features,
             )
 
         assert residual_file is None
-        assert not residual_to_h5
         assert ignore_resuming
 
         n_spikes = chunk_result["n_spikes"]

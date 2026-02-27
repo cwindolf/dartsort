@@ -462,6 +462,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
                     assert residual is not None
                     assert residual_times is not None
+                    assert resid_ix is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
                     residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
                     resid_ix += nrs

@@ -1002,6 +1002,7 @@ class BatchedSpikeData:
         expand_lut: bool = False,
     ):
         """Update my adjacency either using my labels or just a fixed LUT."""
+        print(f"called with {n_units=} {un_adj_lut=}")
         if n_units is None:
             assert self.candidates is not None
             n_units = int(self.candidates.amax()) + 1
@@ -1013,15 +1014,18 @@ class BatchedSpikeData:
             expand_from_lut = self.un_adj_lut
         else:
             expand_from_lut = None
-        if un_adj_lut is not None:
+        new_lut = un_adj_lut is not None
+        if new_lut:
             assert un_adj_lut.lut.shape[0] == n_units
         if self.candidates is None:
             assert un_adj_lut is not None
             labels = None
         else:
             labels = self.candidates[:, 0]
-        if pnoid and labels is not None:
-            assert labels.max() < n_units
+        count_needs_to_match_my_labels = labels is not None and not new_lut
+        if pnoid and count_needs_to_match_my_labels:
+            assert labels is not None
+            assert labels.amax() < n_units
         self.un_adj_lut, self.un_adj, self.explore_adj = candidate_adjacencies(
             labels=labels,
             neighb_supset=self.neighb_supset,
@@ -1032,7 +1036,6 @@ class BatchedSpikeData:
             neighborhood_ids=self.neighborhood_ids,
             un_adj_lut=un_adj_lut,
             expand_from_lut=expand_from_lut,
-            device=self.device,
         )
         if pnoid:
             assert self.un_adj.max().item() == 1.0
@@ -4873,7 +4876,6 @@ def candidate_adjacencies(
     n_units: int,
     un_adj_lut: NeighborhoodLUT | None,
     expand_from_lut: NeighborhoodLUT | None,
-    device: torch.device,
 ):
     if un_adj_lut is None:
         assert labels is not None

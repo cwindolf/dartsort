@@ -6,8 +6,7 @@ from itertools import repeat
 from pathlib import Path
 from sys import getrefcount
 from threading import Lock, local
-from types import MappingProxyType
-from typing import Any, Literal, TypedDict, overload
+from typing import Any, Literal, TypedDict, overload, Sequence, cast
 
 import h5py
 import numpy as np
@@ -286,15 +285,14 @@ class BasePeeler(BModule):
                     try:
                         for result, chunk_start_samples in zip(results, chunks_to_do):
                             n_new_spikes = self.gather_chunk_result(
-                                n_spikes,
-                                chunk_start_samples,
-                                result,
-                                h5_spike_datasets,
-                                output_h5,
-                                residual_file,
-                                residual_to_h5,
-                                ignore_resuming,
-                                skip_features,
+                                cur_n_spikes=n_spikes,
+                                chunk_start_samples=chunk_start_samples,
+                                chunk_result=result,
+                                h5_spike_datasets=h5_spike_datasets,
+                                output_h5=output_h5,
+                                residual_file=residual_file,
+                                ignore_resuming=ignore_resuming,
+                                skip_features=skip_features,
                             )
                             batch_count += 1
                             n_spikes += n_new_spikes
@@ -485,25 +483,24 @@ class BasePeeler(BModule):
                 n_resid_snips,
                 self.spike_length_samples,
             )
+            resid_times_samples = chunk_start_samples + resid_times_samples
             chunk_result["residual_times_seconds"] = (
-                self.recording.sample_index_to_time(
-                    chunk_start_samples + resid_times_samples
-                )
+                self.recording.sample_index_to_time(resid_times_samples)
             )
 
         return chunk_result  # type: ignore
 
     def gather_chunk_result(
         self,
-        cur_n_spikes,
-        chunk_start_samples,
+        *,
+        cur_n_spikes: int,
+        chunk_start_samples: int,
         chunk_result,
-        h5_spike_datasets,
+        h5_spike_datasets: dict[str, h5py.Dataset] | None,
         output_h5,
         residual_file,
-        residual_to_h5,
-        ignore_resuming,
-        skip_features,
+        ignore_resuming: bool,
+        skip_features: bool,
     ):
         # delay keyboard interrupts so we don't write half a batch
         # of data and leave files in an invalid state after ^C
@@ -530,6 +527,7 @@ class BasePeeler(BModule):
 
             if skip_features:
                 return 0
+            assert h5_spike_datasets is not None
 
             n_new_spikes = chunk_result["n_spikes"]
             if not n_new_spikes:
@@ -824,20 +822,24 @@ class BasePeeler(BModule):
 
         # create per-spike datasets
         # use chunks to support growing the dataset as we find spikes
-        h5_spike_datasets = None
-        if not skip_features:
+        if skip_features:
+            h5_spike_datasets = None
+        else:
             h5_spike_datasets = {}
             for ds in self.out_datasets():
                 if ds.name in output_h5:
-                    h5_spike_datasets[ds.name] = output_h5[ds.name]
+                    dset = output_h5[ds.name]
+                    assert isinstance(dset, h5py.Dataset)
+                    h5_spike_datasets[ds.name] = dset
                 else:
-                    h5_spike_datasets[ds.name] = output_h5.create_dataset(
+                    dset = output_h5.create_dataset(
                         ds.name,
                         dtype=ds.dtype,
                         shape=(n_spikes, *ds.shape_per_spike),
                         maxshape=(None, *ds.shape_per_spike),
                         chunks=(chunk_size, *ds.shape_per_spike),
                     )
+                    h5_spike_datasets[ds.name] = dset
 
         if residual_to_h5:
             if "residual" not in output_h5:
