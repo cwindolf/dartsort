@@ -87,6 +87,7 @@ from .stable_features import (
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
+prop_check_atol = 1e-6
 
 
 # -- main
@@ -733,8 +734,8 @@ class UnitRemapping:
         invalidated_ids = torch.asarray(invalidated_ids, dtype=torch.long)
         mapping = torch.zeros(n_units, dtype=torch.long, device=invalidated_ids.device)
         mapping[invalidated_ids] = -1
-        (valid_ids,) = (mapping == 0).nonzero(as_tuple=True)
-        mapping[valid_ids] = torch.arange(valid_ids.numel()).to(mapping)
+        (nz,) = (mapping == 0).nonzero(as_tuple=True)
+        mapping[nz] = torch.arange(nz.numel()).to(mapping)
         mapping = mapping.to(device=device)
         return cls(mapping=mapping)
 
@@ -1560,6 +1561,7 @@ class TruncatedSpikeData(BatchedSpikeData):
 
         # extra -1 for the -1 candidates to index into
         mapping = remapping.padded_map().to(device=self.candidates.device)
+        assert mapping.shape == (n_units_orig + 1,)
         mapping = mapping[None].broadcast_to((self.N, mapping.shape[0]))
 
         # replace my -1s with n_units_orig in place bc take_along_dim doesn't like -1s
@@ -2364,7 +2366,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
         max_iter: int = 10,
         show_progress: int = 0,
     ) -> Scores:
-        """Run E steps until candidates converge, holding my LUT fixed."""
+        """Run E steps until candidates converge, holding my LUT fixed.
+
+        TODO: full_proposal_view=True is cheap, converges in one iteration, and
+        supports all use cases. It would be best to remove needs_boostrap, and
+        maybe even ONLY support full_proposal_view=True. I think it's all I ever
+        use in this code.
+        """
         # start by telling the data how to search
         distances = self.unit_distance_matrix()
         if full_proposal_view:
@@ -2469,7 +2477,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         group_size = group.numel()
         single = group_size == 1
         # k = min(5, self.p.split_k + (1 - int(single)))
-        k = self.p.split_k
+        k = min(self.p.max_group_size, self.p.split_k)
 
         # get dense train set slice in group
         split_data = train_data.dense_slice_by_unit(
@@ -2930,6 +2938,65 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def unit_slice(self, unit_ids: Tensor) -> "TMMView":
         return TMMView(self, unit_ids)
 
+    def destroy_units(
+        self,
+        unit_ids: Tensor,
+        train_data: TruncatedSpikeData,
+        train_scores: Scores,
+        full_proposal_view: bool = True,
+    ) -> UnitRemapping:
+        """Remove components from the mixture and reallocate their log proportions
+
+        Log proportions are reallocated by removing unit_ids' responsiblities
+        for train spikes, re-normalizing, then comparing the means of those
+        responsibilities to the original means.
+        """
+        # determine mean responsibilities before and after removing units
+        orig_prop = mean_responsibilities(train_scores, n_units=self.n_units)
+        destroy_scores = remove_units_from_scores(train_scores, unit_ids)
+        new_prop = mean_responsibilities(destroy_scores, n_units=self.n_units)
+        assert orig_prop.shape == new_prop.shape == (self.n_units + 1,)
+
+        # this op won't change noise log prop, so remove that factor
+        orig_prop = orig_prop[: self.n_units]
+        orig_prop /= orig_prop.sum()
+        new_prop = new_prop[: self.n_units]
+        new_prop /= new_prop.sum()
+
+        # check some conditions hold
+        assert torch.all(new_prop[unit_ids] == 0)
+        rest_mask = torch.isin(self.unit_ids, unit_ids.to(self.unit_ids)).logical_not_()
+        rest_ids = self.unit_ids[rest_mask]
+        new_rest_prop = new_prop[rest_ids]
+        old_rest_prop = orig_prop[rest_ids]
+        assert torch.all(new_rest_prop >= old_rest_prop - 1e-5)
+
+        # update props
+        non_noise_lp = torch.log1p(-self.b.noise_log_prop.exp())
+        new_log_props = new_prop.log() + non_noise_lp
+        self.b.log_proportions.copy_(new_log_props)
+        logsum = self.b.log_proportions.logsumexp(dim=0)
+        assert torch.isclose(logsum, non_noise_lp, atol=prop_check_atol)
+
+        # now, having done this, re-score train data and do a candidate update
+        # this gives train_data the opportunity to push new units into the top
+        # slot instead of having -1s. if those were -1s, some neighborhoods could
+        # have no top candidates, leading to a crash in update() called in remap()
+        _ = self.soft_assign(
+            data=train_data,
+            full_proposal_view=full_proposal_view,
+            needs_bootstrap=False,
+        )
+
+        # discard the units and notify train data
+        remap = UnitRemapping.discard_mapping(self.n_units, unit_ids)
+        self.cleanup(remap)
+        lut = train_data.remap(remapping=remap, distances=self.unit_distance_matrix())
+        assert lut is not None
+        self.update_lut(lut, no_parameter_changes=True)
+
+        return remap
+
     def cleanup(self, remapping: UnitRemapping) -> UnitRemapping:
         """
         The returned mapping still has the same number of elements as the input
@@ -3005,7 +3072,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # double check to fix up log props. should exp-sum to 1-noiseprop
         logsum = self.b.log_proportions.logsumexp(dim=0)
         targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
-        assert torch.isclose(logsum, targsum, atol=1e-6)
+        assert torch.isclose(logsum, targsum, atol=prop_check_atol)
         self.b.log_proportions.add_(targsum - logsum)
         assert self.b.log_proportions[:new_n_units].isfinite().all()
         assert self.b.log_proportions[new_n_units:].isneginf().all()
@@ -3022,7 +3089,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # final checks (historically easy for me to get this remapping stuff wrong)
         logsum = self.b.log_proportions.logsumexp(dim=0)
         targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
-        assert torch.isclose(logsum, targsum, atol=1e-6)
+        assert torch.isclose(logsum, targsum, atol=prop_check_atol)
         assert self.b.means[:, 0].isfinite().all()
         if self.signal_rank:
             assert self.b.bases[:, 0, 0].isfinite().all()
@@ -3160,7 +3227,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert k0 == Knew
         if pnoid:
             _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
-            if not torch.isclose(_lp, torch.zeros(()), atol=1e-6):
+            if not torch.isclose(_lp, torch.zeros(()), atol=prop_check_atol):
                 raise ValueError(
                     f"Post-split unit creation log prop {_lp.item()} should be 0."
                 )
@@ -3181,7 +3248,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         del lut
         if pnoid:
             _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
-            if not torch.isclose(_lp, torch.zeros(()), atol=1e-6):
+            if not torch.isclose(_lp, torch.zeros(()), atol=prop_check_atol):
                 raise ValueError(
                     f"Post-split discard log prop {_lp.item()} should be 0."
                 )
@@ -3420,12 +3487,16 @@ def get_truncated_datasets(
     full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
     del stable_data
 
+    print(f"{refinement_cfg.robust_strategy=}")
     if refinement_cfg.robust_strategy == "fixed":
         duties = getattr(sorting, refinement_cfg.robust_fixed_std_dataset)
         assert isinstance(duties, np.ndarray)
         duties = torch.asarray(duties)
         duties = refinement_cfg.robust_df + duties**refinement_cfg.robust_fixed_power
         duties = (refinement_cfg.robust_df + 1.0) / duties
+        print(f"{duties.min()=}")
+        print(f"{duties.mean()=}")
+        print(f"{duties.max()=}")
     elif refinement_cfg.robust_strategy == "none":
         duties = None
     else:
@@ -4377,7 +4448,7 @@ def try_kmeans(
     with_proportions: bool = True,
     drop_prop: float = 0.025,
     kmeanspp_initial="random",
-    n_kmeans_tries: int = 10,
+    n_kmeans_tries: int = 25,
     n_kmeanspp_tries: int = 25,
     weights: Tensor | None = None,
     debug: bool = False,
@@ -5155,6 +5226,103 @@ def concatenate_scores(scoress: list[Scores]) -> Scores:
         candidates=candidates,
         duties=duties,
     )
+
+
+def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
+    """Return copy of scores where log_liks for candidates in unit_ids are -inf (and resps are 0)."""
+    bye = torch.isin(scores.candidates, unit_ids.to(scores.candidates))
+    new_cand = scores.candidates.masked_fill(bye, -1)
+    new_log_lik = scores.log_liks.clone()
+    new_log_lik[:, : new_cand.shape[1]].masked_fill_(bye, -torch.inf)
+    new_resp = new_log_lik.softmax(dim=1)
+    return Scores(
+        candidates=new_cand,
+        log_liks=new_log_lik,
+        responsibilities=new_resp,
+        duties=scores.duties,
+    )
+
+
+def mean_responsibilities(
+    scores: Scores | None = None,
+    n_units: int | None = None,
+    responsibilities: torch.Tensor | None = None,
+    candidates: torch.Tensor | None = None,
+    batch_size: int = 128,
+    check_atol: float = prop_check_atol,
+) -> torch.Tensor:
+    """Average per-spike responsibility by unit for scores a Scores object."""
+    if responsibilities is not None:
+        resp = responsibilities
+    elif scores is not None and scores.responsibilities is None:
+        resp = torch.softmax(scores.log_liks, dim=1)
+    elif scores is not None:
+        resp = scores.responsibilities
+    else:
+        assert False
+
+    if candidates is not None:
+        cand = candidates
+    elif scores is not None:
+        cand = scores.candidates
+    else:
+        assert False
+
+    assert resp is not None
+    assert cand is not None
+    ncand = cand.shape[1]
+    assert resp.shape[1] in (ncand, ncand + 1)
+    includes_noise = resp.shape[1] == ncand + 1
+    assert resp.shape[0] == cand.shape[0]
+    batch_size = min(batch_size, resp.shape[0])
+
+    if n_units is None:
+        n_units = int(cand.amax()) + 1
+    assert n_units > 0
+
+    # count candidates per batch
+    ncand = (cand >= 0).sum(1)
+    padlen = batch_size * int(math.ceil(cand.shape[0] / batch_size))
+    if padlen > ncand.shape[0]:
+        ncand = F.pad(ncand, (0, padlen - ncand.shape[0]))
+    ncand = ncand.view(-1, batch_size).sum(1).cpu()
+    assert len(range(0, resp.shape[0], batch_size)) == ncand.shape[0]
+
+    # welford running mean responsiblity by batches
+    resp_mean = resp.new_zeros(n_units + includes_noise, dtype=torch.double)
+    rsum_batch = resp_mean.clone()
+    for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
+        i1 = min(resp.shape[0], i0 + batch_size)
+        rsum_batch.zero_()
+
+        nc = int(ncand[bix].item())
+        cii, cjj = (cand[i0:i1] >= 0).nonzero_static(size=nc).T
+
+        c = cand[i0:i1][cii, cjj]
+        r = resp[i0:i1][cii, cjj].double()
+        rsum_batch.scatter_add_(dim=0, index=c, src=r)
+        if includes_noise:
+            rsum_batch[n_units].add_(resp[i0:i1, -1].double().sum())
+
+        rmean_batch = rsum_batch.div_(i1 - i0)
+        resp_mean += rmean_batch.sub_(resp_mean).div_(i1 / batch_size)
+
+    # check that things didn't explode
+    assert resp_mean.isfinite().all(), "Responsibility mean not finite"
+    assert torch.all(resp_mean >= 0), "Responsiblity mean negative"
+    assert torch.all(resp_mean <= 1.0 + check_atol), (
+        f"Responsiblity mean > 1, largest: {resp_mean.amax()}"
+    )
+    if includes_noise:
+        assert torch.isclose(
+            resp_mean.sum(), resp_mean.new_ones(()), atol=check_atol
+        ), f"Responsiblity sum != 1, to wit {resp_mean.sum()}"
+    else:
+        assert torch.lt(resp_mean.sum(), resp_mean.new_full((), 1.0 + check_atol)), (
+            f"Responsiblity sum > 1, to wit {resp_mean.sum()}"
+        )
+
+    return resp_mean
 
 
 def stack_tmms(tmms: list[TruncatedMixtureModel]) -> BaseMixtureModel:
