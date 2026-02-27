@@ -717,7 +717,7 @@ class PCMergeRefinement(Refinement):
             refinement_cfg=self.refinement_cfg,
             motion_est=motion_est,
             computation_cfg=self.computation_cfg,
-        )
+        ).sorting
 
 
 refinement_strategies["pcmerge"] = PCMergeRefinement
