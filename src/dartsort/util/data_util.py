@@ -1,6 +1,5 @@
 from collections import namedtuple
 from copy import copy
-from dataclasses import replace
 from pathlib import Path
 from typing import Generator, Sequence, cast, Self, Literal
 import warnings
@@ -70,17 +69,17 @@ class DARTsortSorting:
             assert labels.dtype.kind == "i"
         self.labels = labels
 
-        self._ephemeral_feature_names = []
-        if ephemeral_features is not None:
-            for k, v in ephemeral_features.items():
-                check_shape = not self._no_check_needed(k)
-                self.add_ephemeral_feature(k, v, check_shape=check_shape)
-
         self._loaded_persistent_features = []
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
+
+        self._ephemeral_feature_names = []
+        if ephemeral_features is not None:
+            for k, v in ephemeral_features.items():
+                check_shape = not self._no_check_needed(k)
+                self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
     @property
     def unit_ids(self) -> np.ndarray:
@@ -92,6 +91,86 @@ class DARTsortSorting:
     @property
     def n_units(self) -> int:
         return self.unit_ids.shape[0]
+
+    def to_numpy_sorting(self) -> NumpySorting:
+        """Clean up and produce a spikeinterface NumpySorting object."""
+        st = self.drop_missing()
+        order = np.argsort(st.times_samples, kind="stable")
+        return NumpySorting.from_samples_and_labels(
+            samples_list=st.times_samples[order],
+            labels_list=st.labels[order],
+            sampling_frequency=st.sampling_frequency,
+        )
+
+    def to_pandas(self, include_1d_features=True, extract_location_if_possible=True):
+        """Export to pandas DataFrame with some per-spike features."""
+        from pandas import DataFrame
+        data = {
+            "times_samples": self.times_samples,
+            "channels": self.channels,
+            "labels": self.labels,
+        }
+        fnames = self._loaded_persistent_features + self._ephemeral_feature_names
+        if include_1d_features:
+            for k in fnames:
+                v = getattr(self, k)
+                if v.shape == self.channels.shape:
+                    data[k] = v
+        if extract_location_if_possible:
+            locfns = [fn for fn in fnames if "localizations" in fn]
+            extract_location_if_possible = len(locfns) == 1
+        if extract_location_if_possible:
+            locfn = [fn for fn in fnames if "localizations" in fn][0]
+            locs = getattr(self, locfn)
+            # naming like IBL DANDI.
+            data["relative_depth"] = np.ascontiguousarray(locs[:, 2])
+            data["relative_x"] = np.ascontiguousarray(locs[:, 0])
+        return DataFrame(data=data)
+
+    def to_tsgroup(
+        self,
+        metadata=None,
+        add_feature_mean_metadata=True,
+        weight_key="soft_assignment_weight",
+    ):
+        """Export to pynapple.TsGroup.
+
+        If there is a weight_key feature, this will produce
+        a TsGroup with Tsd entries. Else, regular Ts.
+        """
+        from pynapple.core.ts_group import TsGroup, Ts, Tsd
+
+        if add_feature_mean_metadata:
+            df = self.to_pandas()
+            float_columns = [k for k in df if df[k].dtype.kind == 'f']
+            df = df[['labels'] + float_columns]
+            means = df.groupby('labels').mean()
+            means = means[means.index >= 0]
+            renamer = {k: "mean_" + str(k) for k in means}
+            means = means.rename(columns=renamer)
+            if metadata is None:
+                metadata = means
+            else:
+                metadata = means | metadata
+
+        # need to be sorted here
+        w = getattr(self, weight_key, None)
+        trains = {}
+        reorder = np.argsort(self.times_samples, kind="stable")
+        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
+        t_s_reorder = t_s[reorder]
+        l_reorder = self.labels[reorder]
+        if w is not None:
+            w = w[reorder]
+        for unit_id in tqdm(self.unit_ids, desc="TsGroup"):
+            inu = np.flatnonzero(l_reorder == unit_id)
+            ut = t_s_reorder[inu]
+            if w is None:
+                trains[unit_id] = Ts(t=ut)
+            else:
+                uw = w[inu]
+                trains[unit_id] = Tsd(t=ut, d=uw)
+        return TsGroup(trains, metadata=metadata)
 
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
@@ -157,11 +236,13 @@ class DARTsortSorting:
             )
         if not already_ephemeral:
             self._ephemeral_feature_names.append(feature_name)
+        logger.dartsortdebug(f"Attach ephemeral feature {feature_name} with shape {feature.shape}.")
         setattr(self, feature_name, feature)
 
     def remove_ephemeral_feature(self, feature_name: str):
         assert feature_name in self._ephemeral_feature_names
         assert hasattr(self, feature_name)
+        logger.dartsortdebug(f"Remove ephemeral feature {feature_name}.")
         self._ephemeral_feature_names = [
             k for k in self._ephemeral_feature_names if k != feature_name
         ]
@@ -175,7 +256,12 @@ class DARTsortSorting:
         ]
         delattr(self, feature_name)
 
-    def add_feature(self, feature_name: str, feature: np.ndarray, check_shape=True):
+    def add_feature(
+        self,
+        feature_name: str,
+        feature: np.ndarray,
+        check_shape: bool | None = None,
+    ):
         """Try to save a feature to h5, else register as ephemeral."""
         if self.parent_h5_path is None:
             self.add_ephemeral_feature(feature_name, feature, check_shape)
@@ -191,7 +277,10 @@ class DARTsortSorting:
             raise ValueError(f"Sorting doesn't have {feature_name}.")
 
     def _register_persistent_feature(
-        self, feature_name: str, feature: np.ndarray, check_shape=True
+        self,
+        feature_name: str,
+        feature: np.ndarray,
+        check_shape: bool | None = None,
     ):
         """Persistent features are written to the h5."""
         if self.parent_h5_path is None:
@@ -199,13 +288,20 @@ class DARTsortSorting:
                 f"Can't register persistent feature {feature_name}, because "
                 f"there is no .hdf5 file.",
             )
+        if check_shape is None:
+            check_shape = not self._no_check_needed(feature_name)
         if check_shape:
             self._check_shape(feature_name, feature)
+        if feature_name in self._loaded_persistent_features:
+            raise ValueError(f"Persistent feature {feature_name} already exists.")
+        logger.dartsortdebug(
+            f"Store persistent feature {feature_name} with shape {feature.shape}."
+        )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
         try:
             with h5py.File(
-                self.parent_h5_path, "r", libver="latest", locking=False
+                self.parent_h5_path, "r+", libver="latest", locking=False
             ) as h5:
                 if feature_name not in h5:
                     logger.dartsortdebug(
@@ -216,9 +312,9 @@ class DARTsortSorting:
                     h5.create_dataset(feature_name, data=feature)
         except FileNotFoundError:
             logger.warning(
-                f"Sorting's parent h5 file {self.parent_h5_path} is gone when registering "
-                f"persistent feature {feature_name}. Will continue, but this sorting won't "
-                "persist correctly.",
+                f"Sorting's parent h5 file {self.parent_h5_path} is gone when "
+                f"registering persistent feature {feature_name}. Will continue, "
+                "but this sorting won't persist correctly.",
                 stacklevel=3,
             )
 
@@ -249,6 +345,7 @@ class DARTsortSorting:
         load_all_features : bool
         """
         h5_path = resolve_path(h5_path, strict=True)
+        logger.dartsortdebug("Read features %s from %s", list(load_feature_names), h5_path)
 
         with h5py.File(h5_path, "r", libver="latest", locking=False) as h5:
             times_samples = cast(h5py.Dataset, h5[times_samples_dataset])[:]
@@ -312,6 +409,7 @@ class DARTsortSorting:
         to the .h5 file if it exists.
         """
         sorting_npz = resolve_path(sorting_npz)
+        logger.dartsortdebug(f"Saving {self} to {sorting_npz}.")
         data = dict(
             times_samples=self.times_samples,
             channels=self.channels,
@@ -333,7 +431,13 @@ class DARTsortSorting:
         np.savez(sorting_npz, **data, allow_pickle=False)
 
     @classmethod
-    def load(cls, sorting_npz, additional_persistent_features=None) -> Self:
+    def load(
+        cls,
+        sorting_npz,
+        additional_persistent_features=None,
+        load_ephemeral_feature_names=None,
+        load_persistent_feature_names=None,
+    ) -> Self:
         """Load from npz (usually dartsort_sorting.npz)."""
         sorting_npz = resolve_path(sorting_npz, strict=True)
         with np.load(sorting_npz) as data:
@@ -345,8 +449,10 @@ class DARTsortSorting:
                 sampling_frequency = sampling_frequency.item()
             parent_h5_path = data.get("parent_h5_path", None)
             if "ephemeral_feature_names" in data:
+                if load_ephemeral_feature_names is None:
+                    load_ephemeral_feature_names = data["ephemeral_feature_names"]
                 ephemeral_features = {
-                    k: data[k] for k in data["ephemeral_feature_names"]
+                    k: data[k] for k in load_ephemeral_feature_names
                 }
             else:
                 ephemeral_features = {}
@@ -361,9 +467,11 @@ class DARTsortSorting:
                 loaded_persistent_features = set(
                     loaded_persistent_features + additional_persistent_features
                 )
+            if load_persistent_feature_names is None:
+                load_persistent_feature_names = list(loaded_persistent_features)
             self = cls.from_peeling_hdf5(
                 parent_h5_path,
-                load_feature_names=list(loaded_persistent_features),
+                load_feature_names=load_persistent_feature_names,
             )
             if labels is not None:
                 ephemeral_features["labels"] = labels
@@ -379,15 +487,6 @@ class DARTsortSorting:
             sampling_frequency=sampling_frequency,
             parent_h5_path=parent_h5_path,
             ephemeral_features=ephemeral_features,
-        )
-
-    def to_numpy_sorting(self) -> NumpySorting:
-        """Clean up and produce a spikeinterface NumpySorting object."""
-        st = self.drop_missing()
-        return NumpySorting.from_samples_and_labels(
-            samples_list=st.times_samples,
-            labels_list=st.labels,
-            sampling_frequency=st.sampling_frequency,
         )
 
     def mask(self, mask: np.ndarray) -> Self:
@@ -443,9 +542,10 @@ class DARTsortSorting:
         for uid in self.unit_ids:
             inu = np.flatnonzero(self.labels == uid)
             tu = self.times_samples[inu]
+            ti = np.argsort(tu, kind="stable")
             # this has the first indices of each pair. +1 has the second indices.
-            viol = np.flatnonzero(np.diff(tu) == 0)
-            viol_ixs.append(viol + 1)
+            viol = np.flatnonzero(np.diff(tu[ti]) == 0)
+            viol_ixs.append(ti[viol + 1])
         viol_ixs = np.concatenate(viol_ixs)
         if viol_ixs.size:
             logger.dartsortdebug(f"Dropping {viol_ixs.size} duplicates.")
@@ -650,7 +750,7 @@ def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=Tru
     if to_sklearn:
         tsvd = tsvd.to_sklearn()
     logger.info(
-        f"Loaded stored basis from %s (%s; components shape: %s).",
+        "Loaded stored basis from %s (%s; components shape: %s).",
         pt_path,
         tsvd_name,
         tsvd.components_.shape,
@@ -679,6 +779,106 @@ def sorting_isis(sorting: DARTsortSorting):
         isi = np.minimum(isi[1:], isi[:-1])
         isis_ms[inu] = isi
     return isis_ms
+
+
+def explode_soft_assignment_sorting(
+    sorting: DARTsortSorting,
+    responsibilities_key="gmm_responsibilities",
+    candidates_key="gmm_candidates",
+) -> DARTsortSorting:
+    """Convert a hard-assigned sorting to a soft-assigned one
+
+    Each spike will be represented multiple times, once in each
+    unit that supports it in the soft assignment candidates array.
+    There will be a "soft_assignment_weight" feature attached to
+    the output sorting.
+    """
+    from .spiketorch import entropy
+
+    labels = sorting.labels
+    assert labels is not None
+    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+
+    candidates = cast(np.ndarray, getattr(sorting, candidates_key))
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+
+    notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
+    clabels = np.where(notnoise, candidates[:, 0], -1)
+
+    lvalid = labels >= 0
+    cvalid = clabels >= 0
+    assert np.array_equal(lvalid, cvalid)
+
+    # issue: we usually merge GMM components into new labels
+    # so, need to figure out the merge and remap, and there will be
+    # duplicates to handle
+    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
+    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
+    lc = lc[(lc >= 0).all(axis=1)]
+    # each candidate only appears once -- it is a merge.
+    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    Kcand = candidates.max() + 1
+    invalid_label = labels.max() + 10
+    ctol = np.full((Kcand + 1,), fill_value=invalid_label)
+    ctol[lc[:, 1]] = lc[:, 0]
+
+    # replace candidates -1 with invalid entry, will also become invalid in ctol
+    c = np.where(candidates < 0, Kcand, candidates)
+    # remap to merged ids
+    c = ctol[c]
+
+    # now deduplicate... this can be faster but fine for now.
+    luniq, lcount = np.unique(lc[:, 0], return_counts=True)
+    luniq_check = np.unique(labels)
+    luniq_check = luniq_check[luniq_check >= 0]
+    assert np.array_equal(luniq_check, luniq)
+    mergedl = luniq[lcount > 1]
+    mergedr = responsibilities[:, :candidates.shape[1]].copy()
+    for ll in mergedl:
+        eql = c == ll
+        six, cix = np.nonzero(eql)
+        sixu, sixfirst, sixflat = np.unique(
+            six, return_index=True, return_inverse=True
+        )
+
+        # sum weight for each spike
+        wsum = np.zeros(sixu.shape)
+        np.add.at(wsum, sixflat, responsibilities[six, cix])
+
+        # delete old
+        c[six, cix] = Kcand
+        mergedr[six, cix] = 0.0
+
+        # write new into first ixs
+        c[sixu, cix[sixfirst]] = ll
+        mergedr[sixu, cix[sixfirst]] = wsum
+
+    h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
+
+    # okay, having deduplicated, we are now ready to explode
+    nz = np.logical_and(c < invalid_label, mergedr > 0)
+    spike_ix, candidate_ix = np.nonzero(nz)
+
+    reorder = np.argsort(sorting.times_samples[spike_ix], kind="stable")
+    spike_ix = spike_ix[reorder]
+    candidate_ix = candidate_ix[reorder]
+    times_samples = sorting.times_samples[spike_ix]
+
+    # store weight as a feature
+    feats = dict(
+        soft_assignment_weight=mergedr[spike_ix, candidate_ix],
+        times_seconds=t_s[spike_ix],
+        noise_resp=responsibilities[:, -1][spike_ix],
+        entropy=h[spike_ix],
+    )
+
+    return DARTsortSorting(
+        times_samples=times_samples,
+        channels=sorting.channels[spike_ix],
+        labels=c[spike_ix, candidate_ix],
+        sampling_frequency=sorting.sampling_frequency,
+        ephemeral_features=feats,
+    )
 
 
 def keep_only_most_recent_spikes(

@@ -1020,6 +1020,8 @@ class BatchedSpikeData:
             labels = None
         else:
             labels = self.candidates[:, 0]
+        if pnoid and labels is not None:
+            assert labels.max() < n_units
         self.un_adj_lut, self.un_adj, self.explore_adj = candidate_adjacencies(
             labels=labels,
             neighb_supset=self.neighb_supset,
@@ -3236,8 +3238,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         discard = UnitRemapping.discard_mapping(
             Knew, invalidated_ids, train_labels.device
         )
-        # also a good opportunity to discard any dead units
-        discard.mapping[lut_blank_units(self.lut)] = -1
         self.cleanup(discard)
         # tell train data about this
         lut = train_data.remap(remapping=discard, distances=None)
@@ -3260,9 +3260,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # call data methods for processing splits
         distances = self.unit_distance_matrix()
         if pnoid:
-            assert distances.isfinite().all()
-            assert discard.mapping.max() + 1 <= distances.shape[0]
-            assert train_labels.max() + 1 <= distances.shape[0]
+            assert discard.mapping.max() < distances.shape[0]
+            assert train_labels.max() < distances.shape[0]
         lut = train_data.update_from_split(
             train_candidate_mask, train_labels_mask, train_labels, distances
         )
@@ -4519,19 +4518,21 @@ def relabel_and_add_scores(
         full_proposal_view=full_proposal_view,
         needs_bootstrap=needs_bootstrap,
     )
+
     labels = labels_from_scores(full_scores)
     neighb_ids = full_data.neighborhood_ids.numpy(force=True).copy()
-    sorting.add_ephemeral_feature(
-        "candidates", feature=full_scores.candidates.numpy(force=True).astype(np.int32)
-    )
-    sorting.add_ephemeral_feature(
-        "log_liks", feature=full_scores.log_liks.numpy(force=True)
-    )
+    candidates = full_scores.candidates.numpy(force=True).astype(np.int32)
+    log_liks = full_scores.log_liks.numpy(force=True)
     assert full_scores.responsibilities is not None
-    sorting.add_ephemeral_feature(
-        "responsibilities", feature=full_scores.responsibilities.numpy(force=True)
+    resp = full_scores.responsibilities.numpy(force=True)
+
+    sorting = sorting.ephemeral_replace(
+        labels=labels,
+        neighborhood_ids=neighb_ids,
+        gmm_candidates=candidates,
+        gmm_log_liks=log_liks,
+        gmm_responsibilities=resp,
     )
-    sorting = sorting.ephemeral_replace(labels=labels, neighborhood_ids=neighb_ids)
     return sorting
 
 
@@ -4846,6 +4847,12 @@ def coincidence_matrix(
     else:
         assert False
     yy = y[pos_ii]
+
+    if pnoid:
+        assert xx.max() < nx
+        assert yy.max() < ny
+        assert xx.min() >= 0
+        assert yy.min() >= 0
 
     # build coincidence matrix
     co = torch.zeros((nx, ny), dtype=dtype, device=x.device)
