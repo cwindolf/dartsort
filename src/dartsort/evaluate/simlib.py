@@ -42,6 +42,7 @@ def refractory_poisson_spike_train(
     spike_length_samples=121,
     sampling_frequency=30000.0,
     overestimation=2.0,
+    empty_ok=False,
 ):
     """Sample a refractory Poisson spike train
 
@@ -59,7 +60,7 @@ def refractory_poisson_spike_train(
 
     # overestimate the number of spikes needed
     overest_count = int(duration_s * rate_hz * overestimation)
-    overest_count = max(10, overest_count)
+    overest_count = max(50, overest_count)
 
     # generate interspike intervals
     intervals = rg.exponential(scale=1.0 / rate_hz, size=overest_count)
@@ -71,10 +72,10 @@ def refractory_poisson_spike_train(
     spike_samples = np.cumsum(intervals_samples)
     max_spike_time = duration_samples - (spike_length_samples - trough_offset_samples)
     # check that we overestimated enough
-    assert spike_samples.max() > max_spike_time
+    assert spike_samples.max() > max_spike_time, "Not enough overestimation"
     valid = spike_samples == spike_samples.clip(trough_offset_samples, max_spike_time)
     spike_samples = spike_samples[valid]
-    assert spike_samples.size
+    assert empty_ok or spike_samples.size
 
     return spike_samples
 
@@ -92,7 +93,9 @@ def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwa
     for rate, bin in zip(rates, bins):
         if rate < 0.05:
             continue
-        binst = refractory_poisson_spike_train(rate, binsize_samples, **kwargs)
+        binst = refractory_poisson_spike_train(
+            rate, binsize_samples, overestimation=max(2.0, 50.0 / rate), empty_ok=True, **kwargs
+        )
         st.append(bin + binst)
     st = np.concatenate(st)
     return st
@@ -112,8 +115,10 @@ def simulate_sorting(
     rg = np.random.default_rng(rg)
 
     # Default firing rates drawn uniformly from 1-10Hz
-    if firing_rates is not None:
+    if firing_rates is not None and firing_rates.ndim == 1:
         assert firing_rates.shape[0] == num_units
+    if firing_rates is not None and firing_rates.ndim == 2:
+        assert firing_rates.shape[1] == num_units
     else:
         firing_rates = rg.uniform(1.0, 10.0, num_units)
 
@@ -128,7 +133,7 @@ def simulate_sorting(
 
         spike_trains = [
             piecewise_refractory_poisson_spike_train(
-                rates=firing_rates[i],
+                rates=firing_rates[:, i],
                 bins=bins,
                 binsize_samples=int(sampling_frequency),
                 trough_offset_samples=nbefore,
@@ -332,21 +337,21 @@ def simulate_twostate_switching(
     affinity_p = np.array([state_affinity, state_affinity, 1 - 2 * state_affinity])
     affinities = rg.choice(3, size=n_units, p=affinity_p)
 
-    frs_by_state = np.zeros((n_units, 2))
+    frs_by_state = np.zeros((2, n_units))
     for aff in range(3):
         in_aff = np.flatnonzero(affinities == aff)
         n_aff = in_aff.size
 
         if aff == 2:
-            frs_by_state[in_aff, :] = rg.uniform(size=n_aff, low=min_fr, high=max_fr)
+            frs_by_state[:, in_aff] = rg.uniform(size=n_aff, low=min_fr, high=max_fr)
         elif aff <= 1:
-            frs_by_state[in_aff, aff] = rg.uniform(
+            frs_by_state[aff, in_aff] = rg.uniform(
                 size=n_aff, low=up_min_fr, high=max_fr
             )
-            frs_by_state[in_aff, 1 - aff] = rg.uniform(
+            frs_by_state[1 - aff, in_aff] = rg.uniform(
                 size=n_aff, low=min_fr, high=down_max_fr
             )
         else:
             assert False
 
-    return states, states_onehot @ frs_by_state.T
+    return states, states_onehot @ frs_by_state
