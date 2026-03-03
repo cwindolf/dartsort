@@ -1,7 +1,11 @@
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union, TYPE_CHECKING
 
 import torch
-from jaxtyping import Float
+if TYPE_CHECKING:
+    from jaxtyping import Float
+else:
+    # picking something subscriptable here
+    Float = list  # type: ignore
 from linear_operator.operators import to_dense
 from linear_operator.operators._linear_operator import LinearOperator
 from linear_operator.operators.block_linear_operator import BlockLinearOperator

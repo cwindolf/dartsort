@@ -94,7 +94,9 @@ class DARTsortSorting:
 
     def to_numpy_sorting(self) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
+        assert self.labels is not None
         st = self.drop_missing()
+        assert st.labels is not None
         order = np.argsort(st.times_samples, kind="stable")
         return NumpySorting.from_samples_and_labels(
             samples_list=st.times_samples[order],
@@ -105,6 +107,7 @@ class DARTsortSorting:
     def to_pandas(self, include_1d_features=True, extract_location_if_possible=True):
         """Export to pandas DataFrame with some per-spike features."""
         from pandas import DataFrame
+
         data = {
             "times_samples": self.times_samples,
             "channels": self.channels,
@@ -140,11 +143,13 @@ class DARTsortSorting:
         """
         from pynapple.core.ts_group import TsGroup, Ts, Tsd
 
+        assert self.labels is not None
+
         if add_feature_mean_metadata:
             df = self.to_pandas()
-            float_columns = [k for k in df if df[k].dtype.kind == 'f']
-            df = df[['labels'] + float_columns]
-            means = df.groupby('labels').mean()
+            float_columns = [k for k in df if df[k].dtype.kind == "f"]
+            df = df[["labels"] + float_columns]
+            means = df.groupby("labels").mean()
             means = means[means.index >= 0]
             renamer = {k: "mean_" + str(k) for k in means}
             means = means.rename(columns=renamer)
@@ -236,7 +241,9 @@ class DARTsortSorting:
             )
         if not already_ephemeral:
             self._ephemeral_feature_names.append(feature_name)
-        logger.dartsortdebug(f"Attach ephemeral feature {feature_name} with shape {feature.shape}.")
+        logger.dartsortdebug(
+            f"Attach ephemeral feature {feature_name} with shape {feature.shape}."
+        )
         setattr(self, feature_name, feature)
 
     def remove_ephemeral_feature(self, feature_name: str):
@@ -295,7 +302,7 @@ class DARTsortSorting:
         if feature_name in self._loaded_persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
         logger.dartsortdebug(
-            f"Store persistent feature {feature_name} with shape {feature.shape}."
+            f"Register persistent feature {feature_name} with shape {feature.shape}."
         )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
@@ -345,7 +352,7 @@ class DARTsortSorting:
         load_all_features : bool
         """
         h5_path = resolve_path(h5_path, strict=True)
-        logger.dartsortdebug("Read features %s from %s", list(load_feature_names), h5_path)
+        logger.dartsortdebug("Read features %s from %s", load_feature_names, h5_path)
 
         with h5py.File(h5_path, "r", libver="latest", locking=False) as h5:
             times_samples = cast(h5py.Dataset, h5[times_samples_dataset])[:]
@@ -451,9 +458,7 @@ class DARTsortSorting:
             if "ephemeral_feature_names" in data:
                 if load_ephemeral_feature_names is None:
                     load_ephemeral_feature_names = data["ephemeral_feature_names"]
-                ephemeral_features = {
-                    k: data[k] for k in load_ephemeral_feature_names
-                }
+                ephemeral_features = {k: data[k] for k in load_ephemeral_feature_names}
             else:
                 ephemeral_features = {}
             loaded_persistent_features = data.get("loaded_persistent_features", [])
@@ -833,13 +838,11 @@ def explode_soft_assignment_sorting(
     luniq_check = luniq_check[luniq_check >= 0]
     assert np.array_equal(luniq_check, luniq)
     mergedl = luniq[lcount > 1]
-    mergedr = responsibilities[:, :candidates.shape[1]].copy()
+    mergedr = responsibilities[:, : candidates.shape[1]].copy()
     for ll in mergedl:
         eql = c == ll
         six, cix = np.nonzero(eql)
-        sixu, sixfirst, sixflat = np.unique(
-            six, return_index=True, return_inverse=True
-        )
+        sixu, sixfirst, sixflat = np.unique(six, return_index=True, return_inverse=True)
 
         # sum weight for each spike
         wsum = np.zeros(sixu.shape)

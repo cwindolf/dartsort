@@ -172,7 +172,7 @@ def localize_amplitude_vectors(
             y = y.numpy(force=True)
             z_rel = z_rel.numpy(force=True)
             z_abs = z_abs.numpy(force=True)
-            alpha = alpha.numpy(force=True)
+            projected_dist = projected_dist.numpy(force=True)
 
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=projected_dist)
 

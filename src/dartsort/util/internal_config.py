@@ -600,6 +600,9 @@ class ClusteringConfig:
     sklearn_kwargs: dict | None = None
 
 
+MixtureStep = Literal["split", "merge", "demolish"]
+
+
 @cfg_dataclass
 class RefinementConfig:
     refinement_strategy: str = "tmm"
@@ -646,7 +649,7 @@ class RefinementConfig:
     n_em_iters: int = 250
     em_converged_atol: float = 5e-3
     n_total_iters: int = 1
-    mixture_steps: Literal["neither", "merge", "split", "both"] = "both"
+    mixture_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
     full_proposal_every: int = 10
@@ -655,6 +658,9 @@ class RefinementConfig:
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    demolition_min_resp_ratio: float = 1.1
+    demolish_during_selection: bool = True
+    em_after_demolish: bool = False
 
     # TODO... reintroduce this if wanted. or remove
     split_cfg: SplitConfig | None = None
@@ -724,7 +730,7 @@ default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
 default_universal_cfg = UniversalMatchingConfig()
-default_initial_refinement_cfg = RefinementConfig(mixture_steps="split")
+default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish"))
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
 
@@ -982,6 +988,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
         robust_df=cfg.robust_df,
+        demolish_during_selection=cfg.demolish_during_selection,
+        em_after_demolish=cfg.em_after_demolish,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank

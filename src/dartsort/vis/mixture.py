@@ -5,6 +5,7 @@ from typing import Iterable, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from dredge.motion_util import MotionEstimate
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -239,11 +240,24 @@ class ChansHeatmap(MixtureComponentPlot):
         support = uchans[support]
         ptp = ptp[support]
 
-        ax = panel.subplots()
+        left, right = panel.subfigures(
+            ncols=2,
+            width_ratios=[4, 1],
+            wspace=0,
+            hspace=0,
+        )
+        ax = left.subplots()
+        cf0, cf1 = right.subfigures(nrows=2, hspace=0)
+        cax0 = cf0.add_axes((0.01, 0.25, 0.2, 0.5))
+        cax1 = cf1.add_axes((0.01, 0.25, 0.2, 0.5))
         xy = mix_data.tmm.neighb_cov.prgeom.numpy(force=True)
-        ax.scatter(*xy[support].T, c=ptp, lw=2, s=5)
+        s = ax.scatter(*xy[support].T, c=ptp, lw=2, s=5)
+        plt.colorbar(s, cax=cax1, aspect=20, label="ptp", pad=0.0)
         s = ax.scatter(*xy[uchans].T, c=counts, lw=0, cmap=self.cmap, s=5)
-        plt.colorbar(s, ax=ax, shrink=0.3, label="chan count", pad=0.01)
+        plt.colorbar(s, cax=cax0, aspect=20, label="chan count", pad=0.0)
+        for cax in (cax0, cax1):
+            cax.tick_params(labelsize="x-small")
+            cax.yaxis.label.set_size("x-small")
         ax.scatter(*xy[support[ptp.argmax()]].T, color="gold", lw=1, fc="none", s=5)
         ax.set_title(
             f"chans:{chans.min().item()}-{chans.max().item()}", fontsize="small"
@@ -747,7 +761,9 @@ class SplitView(MixtureComponentPlot):
         self.vis_radius = vis_radius
         self.dist_cmap = plt.get_cmap(dist_cmap)
 
-    def compute(self, mix_data: MixtureVisData, unit_id: int):
+    def compute(
+        self, mix_data: MixtureVisData, unit_id: int, split_res=None, debug_info=None
+    ):
         # my group...
         if mix_data.tmm.p.split_friend_distance:
             _, friends = mix_data.friends(
@@ -765,15 +781,20 @@ class SplitView(MixtureComponentPlot):
         else:
             group = torch.tensor([unit_id])
 
-        split_res, debug_info = mix_data.tmm.split_group(
-            group=group,
-            train_data=mix_data.train_data,
-            eval_data=mix_data.val_data,
-            eval_scores=mix_data.eval_scores,
-            train_labels=torch.asarray(mix_data.train_labels),
-            eval_labels=mix_data.eval_labels,
-            debug=True,
-        )
+        if debug_info is None:
+            split_res, debug_info = mix_data.tmm.split_group(
+                group=group,
+                train_data=mix_data.train_data,
+                eval_data=mix_data.val_data,
+                eval_scores=mix_data.eval_scores,
+                train_labels=torch.asarray(mix_data.train_labels),
+                eval_labels=mix_data.eval_labels,
+                debug=True,
+            )
+        else:
+            if split_res is not None:
+                assert torch.equal(split_res.unit_ids, group)
+
         assert debug_info is not None
         if debug_info.split_data is not None:
             orig_labels = mix_data.train_labels[debug_info.split_data.indices.cpu()]
@@ -796,7 +817,8 @@ class SplitView(MixtureComponentPlot):
             colors = np.broadcast_to(np.array([self.bail_color]), (n_spikes,))
 
         # compute channels by kmeans label
-        if debug_info.kmeans_responsibilities is not None:
+        have_kmeans = debug_info.kmeans_responsibilities is not None
+        if have_kmeans:
             assert debug_info.split_data is not None
             chans_by_km = {}
             for l in kmeans_labels.unique():
@@ -888,6 +910,15 @@ class SplitView(MixtureComponentPlot):
             )
             txt += f"props: {propstr}={split_res.sub_proportions.cpu().sum():.2f}\n"
             txt += f"counts: {countstr}\n"
+        if orig_labels is not None and group.numel() > 1 and have_kmeans:
+            cstrs = []
+            for uid in group.tolist():
+                myl = kmeans_labels[orig_labels == uid]
+                uu, cc = myl.unique(return_counts=True)
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cstrs.append(f"{uid}->[{cc}]")
+            cstr = "orig->km: " + "\n      ".join(cstrs)
+            txt += cstr + "\n"
         if orig_labels is not None and group.numel() > 1 and split_res is not None:
             cstrs = []
             for uid in group.tolist():
@@ -895,7 +926,7 @@ class SplitView(MixtureComponentPlot):
                 uu, cc = myl.unique(return_counts=True)
                 cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
                 cstrs.append(f"{uid}->[{cc}]")
-            cstr = "orig: " + "\n      ".join(cstrs)
+            cstr = "orig->sp: " + "\n      ".join(cstrs)
             txt += cstr + "\n"
 
             cstrs = []
@@ -904,7 +935,7 @@ class SplitView(MixtureComponentPlot):
                 uu, cc = np.unique(myl, return_counts=True)
                 cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
                 cstrs.append(f"{uid}->[{cc}]")
-            cstr = "new:  " + "\n      ".join(cstrs)
+            cstr = "sp->orig " + "\n      ".join(cstrs)
             txt += cstr + "\n"
         txt = txt.rstrip()
 
@@ -930,8 +961,17 @@ class SplitView(MixtureComponentPlot):
             tw,
         )
 
-    def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
-        c = self.compute(mix_data, unit_id)
+    def draw(
+        self,
+        panel,
+        mix_data: MixtureVisData,
+        unit_id: int,
+        *,
+        split_res=None,
+        debug_info=None,
+    ):
+        print(f"{debug_info=}")
+        c = self.compute(mix_data, unit_id, split_res=split_res, debug_info=debug_info)
         (
             txt,
             colors,
@@ -1133,9 +1173,9 @@ def fit_mixture_for_vis(
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
-    if em:
+    if em or split or merge or both:
         mix_data.tmm.em(mix_data.train_data)
-    if split or both:
+    for _ in range(max(int(split), int(both))):
         run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
     if merge or both:

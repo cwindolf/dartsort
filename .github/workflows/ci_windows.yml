@@ -4,12 +4,19 @@ on:
   push:
     branches:
       - main
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches:
+      - develop
   workflow_dispatch:
 
 jobs:
-
   tests_windows:
     runs-on: "windows-latest"
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     defaults:
       run:
         shell: bash -el {0}

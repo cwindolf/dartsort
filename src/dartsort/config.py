@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -9,14 +8,9 @@ from .util.internal_config import (
     InterpMethod,
     InterpKernel,
     RealignStrategy,
+    MixtureStep,
 )
-from .util.py_util import (
-    cfg_dataclass,
-    float_or_none,
-    int_or_float_or_none,
-    int_or_none,
-    str_or_none,
-)
+from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
 
 @cfg_dataclass
@@ -174,8 +168,8 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: Literal["neither", "split", "merge", "both"] = "split"
-    later_steps: Literal["neither", "split", "merge", "both"] = "both"
+    initial_steps: tuple[MixtureStep, ...] = ("split", "demolish")
+    later_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
     detection_type: str = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
@@ -291,6 +285,8 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
+    demolish_during_selection: bool = True
+    em_after_demolish: bool = False
 
     # store extra intermediates
     save_subtracted_waveforms: bool = False

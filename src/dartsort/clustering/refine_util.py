@@ -1,13 +1,11 @@
-from dataclasses import replace
-import gc
-
 import torch
+import numpy as np
 import h5py
 
-from ..util.internal_config import default_refinement_cfg
-from ..util import job_util, noise_util, data_util, spiketorch
+from ..util.internal_config import RefinementConfig, ComputationConfig
+from ..util import job_util, data_util, spiketorch
+from ..util.py_util import databag
 from ..util.logging_util import get_logger
-from ..util.main_util import ds_save_intermediate_labels
 from ..transform.temporal_pca import BaseTemporalPCA
 from ..templates import TemplateData
 from .cluster_util import agglomerate, reorder_by_depth
@@ -108,23 +106,42 @@ def get_noise_log_priors(noise, sorting, refinement_cfg):
         return None
 
 
-def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
+@databag
+class PCMergeResult:
+    sorting: data_util.DARTsortSorting
+    means: torch.Tensor | None = None
+    counts: torch.Tensor | None = None
+    dists: torch.Tensor | None = None
+    merge_ids: np.ndarray | None = None
+    x: torch.Tensor | None = None
+    xlabels: torch.Tensor | None = None
+
+
+def pc_merge(
+    sorting: data_util.DARTsortSorting,
+    refinement_cfg: RefinementConfig,
+    motion_est=None,
+    computation_cfg: ComputationConfig | None = None,
+    debug: bool = False,
+) -> PCMergeResult:
     assert refinement_cfg.refinement_strategy == "pcmerge"
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
     if not refinement_cfg.pc_merge_threshold:
-        return sorting
+        return PCMergeResult(sorting=sorting)
 
     # remove blank labels just in case
     sorting = data_util.subset_sorting_by_spike_count(sorting)
+    assert sorting.labels is not None
     nu0 = sorting.labels.max() + 1
     if not nu0:
-        return sorting
+        return PCMergeResult(sorting=sorting)
 
     # subset the sorting to count per unit
     subset_sorting = data_util.subsample_to_max_count(
         sorting, max_spikes=refinement_cfg.pc_merge_spikes_per_unit
     )
+    assert subset_sorting.labels is not None
 
     # make stable features, no need for core features though.
     data = StableSpikeDataset.from_sorting(
@@ -143,9 +160,9 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     n = len(kept)
     x = data._train_extract_features.view(n, -1, data.n_channels_extract)
     x = x[:, : refinement_cfg.pc_merge_rank]
-    labels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
+    xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     means, counts = spiketorch.average_by_label(
-        x, labels, data._train_extract_channels, data.n_channels
+        x, xlabels, data._train_extract_channels, data.n_channels
     )
 
     # compute distances
@@ -154,7 +171,7 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
     elif refinement_cfg.pc_merge_metric == "maxz":
         x = x.square_()
         meansq, _ = spiketorch.average_by_label(
-            x, labels, data._train_extract_channels, data.n_channels
+            x, xlabels, data._train_extract_channels, data.n_channels
         )
         stddev = meansq.sub_(means.square()).sqrt_()
         stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
@@ -183,9 +200,21 @@ def pc_merge(sorting, refinement_cfg, motion_est=None, computation_cfg=None):
         linkage_method=refinement_cfg.pc_merge_linkage,
         threshold=refinement_cfg.pc_merge_threshold,
     )
+    assert labels is not None
+    labels = np.atleast_1d(labels)
     logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
 
     sorting = sorting.ephemeral_replace(labels=labels)
-    sorting = reorder_by_depth(sorting, motion_est=motion_est)
-    return sorting
+    if debug:
+        return PCMergeResult(
+            sorting=sorting,
+            means=means,
+            counts=counts,
+            merge_ids=ids,
+            x=x,
+            xlabels=xlabels,
+            dists=torch.asarray(dists),
+        )
 
+    sorting = reorder_by_depth(sorting, motion_est=motion_est)
+    return PCMergeResult(sorting=sorting)

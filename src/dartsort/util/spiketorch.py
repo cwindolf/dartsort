@@ -602,14 +602,13 @@ def cosine_distance(means, means_b=None, true_distance=True):
 def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
     assert means.ndim == 3
     assert weights.ndim == 2
-    k, p = means.shape[:2]
+    k = means.shape[0]
     assert weights.shape == (k, means.shape[2])
 
     ii, jj = torch.triu_indices(k, k, offset=1)
     npair = ii.shape[0]
 
     pdist = means.new_full((npair,), torch.inf)
-    piou = means.new_zeros(npair)
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
@@ -623,17 +622,17 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
         wj = weights[jjj]
         wmin = torch.minimum(wi, wj)
         wminsum = wmin.sum(1)
-        piou[i0:i1] = wmin.sum(1) / torch.maximum(wi, wj).sum(1)
-        (valid,) = (piou[i0:i1] >= min_iou).nonzero(as_tuple=True)
+        piou = wminsum / torch.maximum(wi, wj).sum(1)
+        (valid,) = (piou >= min_iou).nonzero(as_tuple=True)
 
         xi = means[iii[valid]]
         xj = means[jjj[valid]]
 
-        # w = wi[valid] * wj[valid]
-        w = wmin[valid] / (p * wminsum[valid, None])
-        dist = (xi - xj).square_().mul_(w[:, None]).sum(dim=(1, 2))
-        nmi = (xi.square_().mul_(w[:, None])).sum(dim=(1, 2)).sqrt_()
-        nmj = (xj.square_().mul_(w[:, None])).sum(dim=(1, 2)).sqrt_()
+        w = wmin[valid, None, :] / wminsum[valid, None, None]
+        assert w.shape == (xi.shape[0], 1, xi.shape[2])
+        dist = (xi - xj).square_().mul_(w).mean(dim=(1, 2))
+        nmi = (xi.square_().mul_(w)).mean(dim=(1, 2)).sqrt_()
+        nmj = (xj.square_().mul_(w)).mean(dim=(1, 2)).sqrt_()
 
         dist = dist.div_(nmi).div_(nmj)
         pdist[i0 + valid] = dist

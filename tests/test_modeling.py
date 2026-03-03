@@ -115,7 +115,13 @@ def test_truncated_mixture(
     tmm.update_lut(lut)
     eval_scores = None
 
-    # loop: em, then split+em, then merge+em, then false-merge+split+em, false-split+merge+em.
+    # loop:
+    # 0: em
+    # 1: split+em
+    # 2: merge+em
+    # 3: false-merge+split+em,
+    # 4: false-split+merge+em.
+    # 5: demolish+em
     for it in range(5):
         if it == 3:
             # introduce a false merge, and hope to split it below
@@ -254,6 +260,12 @@ def test_truncated_mixture(
                 f"Merge {merge_map.mapping.shape[0]} -> {merge_map.nuniq()} units."
             )
             assert merge_map.nuniq() == K
+
+        if it == 5:
+            print("Demolish.")
+            logger.info("Demolish.")
+            assert val_data is not None
+            tmm.demolish(train_data=train_data, val_data=val_data)
 
         # the false merges and splits can lead to label permutations. let's quickly fix those here.
         if it in (3, 4):
