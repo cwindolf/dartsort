@@ -988,6 +988,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
         robust_df=cfg.robust_df,
+        demolish_during_selection=cfg.demolish_during_selection,
+        em_after_demolish=cfg.em_after_demolish,
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
