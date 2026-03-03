@@ -1001,6 +1001,33 @@ class BatchedSpikeData:
         )
         self._update_sizes(n_candidates, n_search, n_explore)
 
+    def _fill_missing(self, n_units: int):
+        # fill in missing labels randomly, obeying un_adj
+        if self.candidates is None:
+            return
+        assert self.rg is not None
+        same_adj = _fill_blank_labels(
+            labels=self.candidates[:, 0],
+            un_adj=self.un_adj,
+            explore_adj=self.explore_adj,
+            neighb_adj=self.neighb_adj,
+            neighborhood_ids=self.neighborhood_ids,
+            gen=self.rg,
+        )
+        assert same_adj is not None
+        if not same_adj:
+            logger.dartsortverbose(
+                "_fill_blank_labels used explore adjacency in bootstrap_candidates."
+            )
+            self.update_adjacency(n_units=n_units)
+        if pnoid:
+            assert (self.candidates[:, 0] >= 0).all()
+        if pnoid:
+            assert torch.equal(
+                self.un_adj,
+                (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
+            )
+
     def batches(
         self, show_progress: bool = False, desc: str = "Batches"
     ) -> Iterable[SpikeDataBatch]:
@@ -1084,31 +1111,7 @@ class BatchedSpikeData:
         self, distances: Tensor, un_adj_lut: NeighborhoodLUT | None = None
     ) -> NeighborhoodLUT:
         self.update_adjacency(n_units=distances.shape[0], un_adj_lut=un_adj_lut)
-
-        # fill in missing labels randomly, obeying un_adj
-        if self.candidates is not None:
-            assert self.rg is not None
-            same_adj = _fill_blank_labels(
-                labels=self.candidates[:, 0],
-                un_adj=self.un_adj,
-                explore_adj=self.explore_adj,
-                neighb_adj=self.neighb_adj,
-                neighborhood_ids=self.neighborhood_ids,
-                gen=self.rg,
-            )
-            assert same_adj is not None
-            if not same_adj:
-                logger.dartsortverbose(
-                    "_fill_blank_labels used explore adjacency in bootstrap_candidates."
-                )
-                self.update_adjacency(n_units=distances.shape[0])
-            if pnoid:
-                assert (self.candidates[:, 0] >= 0).all()
-        if pnoid:
-            assert torch.equal(
-                self.un_adj,
-                (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
-            )
+        self._fill_missing(distances.shape[0])
 
         # fill in candidates[:, 1:n_candidates] at random obeying un_adj
         # choosing not to use distances here, since they get used in search sets
@@ -1604,6 +1607,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         self.candidates[:, self.n_candidates :] = -1
         self.update_adjacency(n_units_new)
+        self._fill_missing(n_units_new)
         if distances is not None:
             _, lut = self.update(new_top_candidates=None, distances=distances)
         else:
@@ -2496,11 +2500,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_labels: Tensor,
         debug: bool = False,
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
-        logger.info(f"\n * * * * * * * * * * * * * * * * * * * *\n")
-        logger.info(f"top of split_group {group=}")
         group_size = group.numel()
         single = group_size == 1
-        # k = min(5, self.p.split_k + (1 - int(single)))
         k = min(self.p.max_group_size, self.p.split_k)
 
         # get dense train set slice in group
@@ -2685,23 +2686,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bases = merge_res.bases
             sub_proportions = merge_res.sub_proportions
 
-            logger.info(f"{merge_res.grouping=}")
-            logger.info(f"{merge_res.grouping.group_ids=}")
-
             # handle -1s in group ids: requires flattening the train_assignments
             unflat_group_ids, train_labels = train_labels.unique(return_inverse=True)
-            logger.info(f"{unflat_group_ids=}")
+            unflat_group_ids = unflat_group_ids[unflat_group_ids >= 0]
             if pnoid:
-                assert (unflat_group_ids >= 0).all()
                 _gids = merge_res.grouping.group_ids.unique()
-                logger.info(f"{_gids=}")
                 assert torch.equal(unflat_group_ids, _gids[_gids >= 0])
             n_groups = unflat_group_ids.numel()
             means = means[unflat_group_ids]
             if bases is not None:
                 bases = bases[unflat_group_ids]
-            logger.info(f"{sub_proportions=} {unflat_group_ids=}")
-            logger.info(f"{sub_proportions[unflat_group_ids]=}")
             sub_proportions = sub_proportions[unflat_group_ids]
             if pnoid:
                 assert (sub_proportions > 0).all()
@@ -2905,12 +2899,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
             # demolish case. throw these away.
             ids_discard = group[group_ids == -1]
-            logger.info(" - - ")
-            logger.info(f"{group[group_ids == -1]=}")
-            logger.info(f"{group_res.sub_proportions=}")
-            logger.info(f"{group_res.sub_proportions.sum()=}")
-            logger.info(f"{group_res.sub_proportions.sum().log()=}")
-            logger.info(f"{group_log_prop=}")
             result_map.mapping[ids_discard] = -1
             self.b.log_proportions[ids_discard] = -torch.inf
             self.b.means[ids_discard] = torch.nan
@@ -2923,7 +2911,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 # else, move component to first id in group and throw rest away
                 first = ids_in_group[0]
                 rest = ids_in_group[1:]
-                logger.info(f"{g=} {first=} {rest=}")
 
                 # first retains id (for now, cleanup below remaps to flat)
                 result_map.mapping[ids_in_group] = first
@@ -2941,8 +2928,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 if self.signal_rank:
                     self.b.bases[rest] = torch.nan
             if pnoid:
-                logger.info(f"{self.b.log_proportions[group].logsumexp(dim=0)=}")
-                logger.info(f"{group_log_prop=}")
                 assert torch.isclose(
                     self.b.log_proportions[group].logsumexp(dim=0), group_log_prop
                 )
@@ -3157,11 +3142,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.b.means[discard] = torch.nan
         if self.signal_rank:
             self.b.bases[discard] = torch.nan
-        logger.info(f"{self.b.log_proportions[remapping.mapping.cpu() == -1]=}")
-        logger.info(f"{self.b.log_proportions[remapping.mapping.cpu() >= +0]=}")
-        logger.info(f"{self.b.log_proportions[uniq_first_inds]=}")
-        logger.info(f"{uniq_first_inds.shape=}")
-        logger.info(f"{(remapping.mapping.cpu() >= 0).sum()=}")
 
         # rearrange parameters and delete parameters for destroyed units
         if (uniq_first_inds >= new_ids).all():
@@ -3246,7 +3226,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             unit_ids = res.unit_ids.tolist()
             n_group = len(unit_ids)
             any_split = True
-            print(f"_apply_splits {unit_ids=}")
 
             # invalidate these units
             train_candidate_mask.logical_or_(
@@ -3288,7 +3267,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # divvy up my log proportion
             if pnoid:
                 _lp = res.sub_proportions.sum()
-                logger.info(f"{res.sub_proportions=} {res.sub_proportions.sum()=}")
                 assert torch.isclose(_lp, torch.ones_like(_lp))
                 assert res.sub_proportions.shape == (res.n_split,)
             group_lp = self.b.log_proportions[res.unit_ids].double().logsumexp(dim=0)
@@ -3312,27 +3290,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases[group_invalidated_ids] = torch.nan
 
             if pnoid:
-                logger.info(f"{group_lp=}")
-                logger.info(f"{res.unit_ids=}")
-                logger.info(f"{cur_out_ids=}")
-                logger.info(f"{self.b.log_proportions[res.unit_ids]=}")
-                logger.info(f"{self.b.log_proportions[cur_out_ids]=}")
-                logger.info(f"{split_log_props=}")
-                logger.info(f"{split_log_props[n_group:]=}")
-                logger.info(
-                    f"{self.b.log_proportions[res.unit_ids].double().logsumexp(dim=0)=}"
-                )
-                logger.info(
-                    f"{self.b.log_proportions[cur_out_ids].double().logsumexp(dim=0)=}"
-                )
                 _extra_lp = split_log_props[n_group:].double()
-                logger.info(f"{_extra_lp=}")
                 active_lp0 = self.b.log_proportions[res.unit_ids].double()
                 active_lp0 = torch.concatenate([_extra_lp, active_lp0]).logsumexp(dim=0)
                 active_lp1 = self.b.log_proportions[cur_out_ids].double()
                 active_lp1 = torch.concatenate([_extra_lp, active_lp1]).logsumexp(dim=0)
-                logger.info(f"{active_lp0=}")
-                logger.info(f"{active_lp1=}")
                 assert torch.isclose(group_lp, active_lp0)
                 assert torch.isclose(group_lp, active_lp1)
 
@@ -3638,16 +3600,15 @@ def get_truncated_datasets(
     full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
     del stable_data
 
-    print(f"{refinement_cfg.robust_strategy=}")
     if refinement_cfg.robust_strategy == "fixed":
         duties = getattr(sorting, refinement_cfg.robust_fixed_std_dataset)
         assert isinstance(duties, np.ndarray)
         duties = torch.asarray(duties)
         duties = refinement_cfg.robust_df + duties**refinement_cfg.robust_fixed_power
         duties = (refinement_cfg.robust_df + 1.0) / duties
-        print(f"{duties.min()=}")
-        print(f"{duties.mean()=}")
-        print(f"{duties.max()=}")
+        _abs_log_mean = duties.mean().log().abs().item()
+        if _abs_log_mean > 0.3:
+            logger.warning(f"Mean duty {duties.mean().item():.4f} is not near 1.")
     elif refinement_cfg.robust_strategy == "none":
         duties = None
     else:
@@ -4476,7 +4437,6 @@ def all_demolished_partitions(
                 group_ids=demo_group_ids,
                 single_demolish_ixs=demo_ixs,
             )
-            logger.info(f"{part=} {demo_part=}")
             allp.append(demo_part)
     return allp
 
@@ -4633,7 +4593,6 @@ def _select_partition(
             lp_min=TruncatedMixtureModel.LP_MIN,
             return_entropy=debug,
         )
-        logger.info(f"{j=} {part=} {part_score=}")
         improvements[j] = part_score - cur_crit
         if debug:
             assert part_h is not None
@@ -4681,12 +4640,9 @@ def _determine_part_score(
         train_resp[:, single_demolish_ixs] = 0.0
         train_resp = train_resp.log_().clamp_(min=lp_min).softmax(dim=1)
         mean_resp_adj = train_resp.mean(0)
-        logger.info(f"{mean_resp=}")
-        logger.info(f"{mean_resp_adj=}")
         lp_adj = mean_resp_adj.log_() - mean_resp.log_()
     else:
         lp_adj = None
-    logger.info(f"{lp_adj=}")
     if lp_adj is not None:
         part_logliks[:, -lp_adj.numel() :] += lp_adj
     part_resps = part_logliks.softmax(dim=1)
@@ -4707,19 +4663,13 @@ def _extract_partition(
     mm: BaseMixtureModel,
     subset_models: BaseMixtureModel,
 ):
-    logger.info(f"extract {part=} {part.single_demolish_ixs=}")
     # spike assignments
     invalid, train_assignments = get_part_assignments(
         part, train_full_scores.log_liks, train_subset_scores.log_liks
     )
-    logger.info(f"extract before reorder {train_assignments.unique()=}")
     reorder = part.single_subset_order.to(device=train_assignments.device)
     train_assignments = torch.argsort(reorder)[train_assignments]
-    logger.info(f"{train_assignments[invalid]=}")
-    logger.info(f"{train_full_scores.log_liks[invalid]=}")
-    logger.info(f"{train_subset_scores.log_liks[invalid]=}")
     train_assignments.masked_fill_(invalid, -1)
-    logger.info(f"extract after reorder {train_assignments.unique()=}")
 
     # parameters
     single_means, single_bases = mm.get_params_at(part.single_ixs)
@@ -4740,20 +4690,14 @@ def _extract_partition(
     single_prop = prop[part.single_ixs]
     if part.single_demolish_ixs:
         single_prop[part.single_demolish_ixs] = 0.0
-        logger.info(f"in if {single_prop=}")
-    logger.info(f"out if {single_prop=}")
     sub_props = [subset_resps[:, sid].mean(0)[None] for sid in part.subset_ids]
     sub_props = torch.concatenate([single_prop] + sub_props, dim=0)
-    logger.info(f"aa {sub_props=}")
     sub_props = sub_props[reorder]
-    logger.info(f"bb {sub_props=}")
     assert sub_props.shape == (len(part.single_ixs) + len(part.subset_ids),)
     assert sub_props.shape == (part.n_groups + len(part.single_demolish_ixs),)
     sub_props /= sub_props.sum()
-    logger.info(f"cc {sub_props=}")
     if pnoid:
         assert sub_props.isfinite().all()
-    logger.info(f"extract {sub_props=} {reorder=}")
 
     return train_assignments, means, bases, sub_props
 
@@ -4764,14 +4708,10 @@ def get_part_assignments(
     single_scores = full_scores[:, part.single_ixs]
     if part.single_demolish_ixs:
         single_scores[:, part.single_demolish_ixs] = -torch.inf
-    logger.info(f"{single_scores.shape=}")
-    logger.info(f"{single_scores.isfinite().any(1).sum()=}")
     sub_scores = [subset_scores[:, sid, None] for sid in part.subset_ids]
     sub_scores = torch.concatenate([single_scores] + sub_scores, dim=1)
-    logger.info(f"{sub_scores.isfinite().any(1).sum()=}")
     assignments = sub_scores.argmax(dim=1, keepdim=True)
     neginf = torch.isneginf(sub_scores.take_along_dim(assignments, 1))
-    print(f"{neginf.sum()=}")
     assignments.masked_fill_(neginf, -1)
     neginf = neginf.view(assignments.shape[0])
     assignments = assignments.view(assignments.shape[0])
