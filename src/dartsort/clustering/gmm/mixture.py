@@ -4253,7 +4253,8 @@ def brute_merge(
         mm.unit_ids, pair_mask, skip_full=skip_full, skip_single=skip_single
     )
     assert len(subset_to_id) == len(id_to_subset)
-    logger.dartsortdebug(f"brute_merge: %s partitions.", len(partitions))
+    if debug:
+        logger.dartsortdebug(f"brute_merge: %s partitions.", len(partitions))
     n_subsets = len(subset_to_id)
     if not n_subsets:
         return None

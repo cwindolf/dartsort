@@ -302,7 +302,7 @@ class DARTsortSorting:
         if feature_name in self._loaded_persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
         logger.dartsortdebug(
-            f"Store persistent feature {feature_name} with shape {feature.shape}."
+            f"Register persistent feature {feature_name} with shape {feature.shape}."
         )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
