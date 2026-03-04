@@ -2976,6 +2976,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
 
+        # checking this invariant at the top
+        assert self.b.log_proportions.isfinite().all()
+
         # units in groups may care about demolition of their neighbors, so work in groups
         groups = self.group_units_by_distance(
             distance=self.p.merge_max_distance, max_group_size=self.p.max_group_size
@@ -3076,14 +3079,23 @@ class TruncatedMixtureModel(BaseMixtureModel):
         rest_ids = self.unit_ids[rest_mask]
         new_rest_prop = new_prop[rest_ids]
         old_rest_prop = orig_prop[rest_ids]
-        assert torch.all(new_rest_prop >= old_rest_prop - 1e-5)
+        assert torch.all(new_rest_prop >= old_rest_prop - 1e-7)
+        assert new_rest_prop.isfinite().all()
 
-        # update props
+        # new proportions will have -inf for unit_ids, normalized for rest
+        new_lp = torch.full_like(new_prop, -torch.inf)
+        new_lp[rest_ids] = new_rest_prop.log().clamp(min=TruncatedMixtureModel.LP_MIN)
+        new_lp = new_lp.log_softmax(dim=0)
+
+        # correctly normalize
         non_noise_lp = torch.log1p(-self.b.noise_log_prop.exp())
-        new_log_props = new_prop.log() + non_noise_lp
-        self.b.log_proportions.copy_(new_log_props)
+        new_lp += non_noise_lp
+
+        # apply update
+        self.b.log_proportions.copy_(new_lp.to(self.b.log_proportions))
         logsum = self.b.log_proportions.logsumexp(dim=0)
         assert torch.isclose(logsum, non_noise_lp, atol=prop_check_atol)
+        assert self.b.log_proportions[rest_ids].isfinite().all()
 
         # now, having done this, re-score train data and do a candidate update
         # this gives train_data the opportunity to push new units into the top
@@ -3127,6 +3139,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         uniq_remapped_ids = torch.from_numpy(uniq_remapped_ids)
         uniq_first_inds = torch.from_numpy(uniq_first_inds)
+        assert uniq_first_inds.shape == uniq_remapped_ids.shape
         uniq_first_inds = uniq_first_inds[uniq_remapped_ids >= 0]
         uniq_remapped_ids = uniq_remapped_ids[uniq_remapped_ids >= 0]
 
@@ -3136,12 +3149,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
         new_ids = torch.arange(new_n_units)
         new_remapping = UnitRemapping(mapping=torch.full_like(remapping.mapping, -1))
 
-        # handle discarded units. they don't need treatment in the remapping.
+        # check invariant below holds at the top, else can't guarantee it below
+        assert self.b.log_proportions[uniq_first_inds].isfinite().all()
+
+        # poison discarded units
         (discard,) = (remapping.mapping.cpu() == -1).nonzero(as_tuple=True)
         self.b.log_proportions[discard] = -torch.inf
         self.b.means[discard] = torch.nan
         if self.signal_rank:
             self.b.bases[discard] = torch.nan
+        assert self.b.log_proportions[uniq_first_inds].isfinite().all()
 
         # rearrange parameters and delete parameters for destroyed units
         if (uniq_first_inds >= new_ids).all():
@@ -3163,6 +3180,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.log_proportions[old_id] = -torch.inf
                 if self.signal_rank:
                     self.b.bases[old_id] = torch.nan
+            assert new_id == new_n_units - 1 <= old_id
         else:
             # this case is really only hit in testing. i'm asserting that this is
             # a permutation, because that's all i've got implemented
