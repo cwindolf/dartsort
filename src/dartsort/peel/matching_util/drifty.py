@@ -43,7 +43,7 @@ from ...templates import TemplateData
 from ...templates.template_util import shared_basis_compress_templates
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.interpolation_util import (
-    FullProbeInterpolator,
+    FromFullProbeInterpolator,
     InterpolationParams,
     bake_interpolation_1d,
     default_interpolation_params,
@@ -84,7 +84,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         interp_up_radius: int = 8,
         up_interp_params=default_upsampling_params,
         drift_interp_params: InterpolationParams = default_interpolation_params,
-        interp_neighborhood_radius: float = 150.0,
         refractory_radius_frames: int = 10,
         device: torch.device,
     ):
@@ -112,10 +111,9 @@ class DriftyMatchingTemplates(MatchingTemplates):
         if self.interpolating:
             assert rgeom is not None
             logger.dartsortdebug("Drifty matching will interpolate templates.")
-            self.erp = FullProbeInterpolator(
+            self.erp = FromFullProbeInterpolator(
                 geom=geom,
                 rgeom=rgeom,
-                neighborhood_radius=interp_neighborhood_radius,
                 motion_est=motion_est,
                 params=drift_interp_params,
             )
@@ -234,7 +232,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
             drift_interp_params=matching_cfg.drift_interp_params,
-            interp_neighborhood_radius=matching_cfg.drift_interp_neighborhood_radius,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
             whitener=whitener,
             device=device,

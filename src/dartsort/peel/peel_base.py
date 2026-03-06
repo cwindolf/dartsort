@@ -445,9 +445,14 @@ class BasePeeler(BModule):
         )
 
         if peel_result["n_spikes"] > 0 and return_waveforms:
+            chunk_start_s = self.recording.sample_index_to_time(chunk_start_samples)
+            chunk_end_s = self.recording.sample_index_to_time(chunk_end_samples)
+            chunk_center_s = (chunk_start_s + chunk_end_s) / 2
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             features = self.featurize_collisioncleaned_waveforms(
-                peel_result["collisioncleaned_waveforms"], **fixed_properties
+                peel_result["collisioncleaned_waveforms"],
+                chunk_center_s=chunk_center_s,
+                **fixed_properties,
             )
         else:
             features = {}

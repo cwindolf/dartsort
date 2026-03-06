@@ -271,7 +271,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_selection=channel_selection,
             channel_selection_index=channel_selection_index,
             chunk_length_samples=matching_cfg.chunk_length_samples,
-            n_seconds_fit=matching_cfg.n_seconds_fit,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,

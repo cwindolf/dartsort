@@ -56,11 +56,11 @@ class RunningTemplateData(TemplateData):
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        overwrite=False,
         motion_est=None,
         units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
+        show_progress: bool = True,
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
         return get_templates_by_chunk(
@@ -71,6 +71,7 @@ class RunningTemplateData(TemplateData):
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
             template_cfg=template_cfg,
+            show_progress=show_progress,
         )
 
 
@@ -357,7 +358,7 @@ class RunningTemplates(GrabAndFeaturize):
             featurization_pipeline=featurization_pipeline,
             times_samples=times_samples,
             channels=channels,
-            labels=labels,
+            fixed_properties=dict(labels=labels),
             channel_index=channel_index,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
@@ -527,6 +528,7 @@ class RunningTemplates(GrabAndFeaturize):
             global_sigma=global_sigma,
             trough_offset_samples=waveform_cfg.trough_offset_samples(fs),
             spike_length_samples=waveform_cfg.spike_length_samples(fs),
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_sampling=sampling_cfg.fit_sampling,
@@ -536,6 +538,7 @@ class RunningTemplates(GrabAndFeaturize):
             t_iters=template_cfg.t_iters,
             coll_sorting=coll_sorting,
             mask_indices=mask_indices,
+            chunk_length_samples=template_cfg.grab_chunk_length_samples,
         )
 
     def compute_template_data(
@@ -723,6 +726,8 @@ class RunningTemplates(GrabAndFeaturize):
             )
         else:
             coll_kw = {}
+
+        assert res["labels"].shape == res["waveforms"].shape[:1]
 
         ires = self._process_chunk_main(
             res["waveforms"],  # pyright: ignore

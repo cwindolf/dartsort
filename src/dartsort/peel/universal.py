@@ -174,7 +174,7 @@ class UniversalTemplatesMatchingPeeler(ObjectiveUpdateTemplateMatchingPeeler):
         return cls(
             recording,
             chunk_length_samples=universal_cfg.chunk_length_samples,
-            n_seconds_fit=universal_cfg.n_seconds_fit,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,

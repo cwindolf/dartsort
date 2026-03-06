@@ -335,7 +335,7 @@ class SubtractionPeeler(BasePeeler):
             temporal_dedup_radius_samples=subtraction_cfg.temporal_dedup_radius_samples,
             remove_exact_duplicates=subtraction_cfg.remove_exact_duplicates,
             positive_temporal_dedup_radius_samples=subtraction_cfg.positive_temporal_dedup_radius_samples,
-            n_seconds_fit=subtraction_cfg.n_seconds_fit,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_sampling=sampling_cfg.fit_sampling,
             fit_max_reweighting=sampling_cfg.fit_max_reweighting,

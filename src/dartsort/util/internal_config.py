@@ -154,10 +154,10 @@ class FeaturizationConfig:
 
 
 InterpMethod = Literal[
-    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest"
+    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest", "nan"
 ]
 InterpKernel = Literal[
-    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate"
+    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate", "nan"
 ]
 
 
@@ -171,6 +171,7 @@ class InterpolationParams:
     sigma: float = 10.0
     rq_alpha: float = 0.5
     smoothing_lambda: float = 0.0
+    neighborhood_radius: float = 200.0
 
     @property
     def actual_extrap_method(self):
@@ -209,6 +210,9 @@ class InterpolationParams:
         elif extrap_method == "zero":
             extrap_method = "kernel"
             extrap_kernel = "zero"
+        elif extrap_method == "nan":
+            extrap_method = "kernel"
+            extrap_kernel = "nan"
 
         return self.__class__(
             method=method,
@@ -239,6 +243,7 @@ class FitSamplingConfig:
     fit_subsampling_random_state: int = 0
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
+    n_seconds_fit: int = 100
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
@@ -254,7 +259,6 @@ default_refinement_fit_sampling_cfg = FitSamplingConfig(
 class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     fit_only: bool = False
 
     # subtraction
@@ -307,7 +311,6 @@ class SubtractionConfig:
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
 
     # thresholding
@@ -334,9 +337,16 @@ class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "mean"
-    algorithm: Literal["running", "unitextract", "running_if_mean"] | str = (
-        "running_if_mean"
-    )
+    algorithm: (
+        Literal[
+            "running",
+            "unitextract",
+            "peelreduce",
+            "running_if_mean",
+            "peelreduce_if_mean",
+        ]
+        | str
+    ) = "running_if_mean"
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
         "exp_weighted"
     )
@@ -349,10 +359,15 @@ class TemplateConfig:
     templates_at_once: int = 384
     max_templates_at_once: int = 512
     raw_templates_at_once: int = 1024
+    weighted: bool = False
+    grab_chunk_length_samples: int = 30_000
 
     # -- template construction parameters
     # registered templates?
     registered_templates: bool = True
+    template_interp_params: InterpolationParams = InterpolationParams(
+        extrap_method="nan"
+    )
 
     # superresolved templates
     superres_templates: bool = False
@@ -381,12 +396,12 @@ class TemplateConfig:
     localizations_dataset_name: str = "point_source_localizations"
 
     def actual_algorithm(self) -> str:
-        if self.algorithm == "running_if_mean":
-            if self.reduction == "mean":
-                return "running"
-            else:
-                return "unitextract"
-        return self.algorithm
+        if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
+            return self.algorithm.removesuffix("_if_mean")
+        elif self.algorithm.endswith("_if_mean"):
+            return "unitextract"
+        else:
+            return self.algorithm
 
     def __post_init__(self):
         if self.denoising_method in ("t", "loot") and self.reduction == "median":
@@ -434,7 +449,6 @@ class TemplateMergeConfig:
 class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
@@ -457,7 +471,6 @@ class MatchingConfig:
         "drifty"
     )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
-    drift_interp_neighborhood_radius: float = 200.0
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whiten: bool = False
@@ -482,7 +495,6 @@ class MatchingConfig:
 class UniversalMatchingConfig:
     # peeling common
     chunk_length_samples: int = 1_000
-    n_seconds_fit: int = 100
 
     n_sigmas: int = 5
     n_centroids: int = 6

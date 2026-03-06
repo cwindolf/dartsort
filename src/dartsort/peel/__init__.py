@@ -5,3 +5,4 @@ from .threshold import ThresholdAndFeaturize
 from .universal import UniversalTemplatesMatchingPeeler
 from .matching_util import *
 from .running_template import RunningTemplateData, RunningTemplates
+from .reduction_template import ReductionTemplateData, TemplateReduction

@@ -5,7 +5,6 @@ where you can get templates using the TemplateConfig in config.py.
 """
 
 import threading
-from pathlib import Path
 from typing import ClassVar, cast
 
 import numpy as np
@@ -32,9 +31,12 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import fast_nanmedian, nanmean, ptp
 from ..util.waveform_util import make_channel_index
+
+logger = get_logger(__name__)
 
 # -- TemplateData plugin
 
@@ -50,11 +52,11 @@ class UnitExtractTemplateData(TemplateData):
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        overwrite=False,
         motion_est=None,
         units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
+        show_progress: bool = True,
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
         return get_templates_unitextract(
@@ -65,6 +67,7 @@ class UnitExtractTemplateData(TemplateData):
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
             template_cfg=template_cfg,
+            show_progress=show_progress,
         )
 
 
@@ -345,6 +348,9 @@ def get_templates(
         trough_offset=trough_offset_samples,
         snr_threshold=denoising_snr_threshold,
     )
+    logger.dartsortdebug(
+        f"get_templates: weight mean/max={weights.mean().item()},{weights.max().item()}"
+    )
     templates = weights * raw_templates + (1 - weights) * low_rank_templates
     templates = templates.astype(dtype)
 
@@ -382,7 +388,7 @@ def fit_tsvd(
 ) -> PCA | TruncatedSVD:
     tsvd = None
     if not recompute_tsvd:
-        tsvd = load_stored_tsvd(sorting)
+        tsvd = load_stored_tsvd(sorting, trim_rank_to=denoising_rank)
         assert isinstance(tsvd, (TruncatedSVD, PCA))
     if tsvd is not None:
         return tsvd

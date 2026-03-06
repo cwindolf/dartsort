@@ -56,13 +56,14 @@ from ...util.data_util import DARTsortSorting, subset_sorting_by_spike_count
 from ...util.internal_config import (
     ComputationConfig,
     DARTsortInternalConfig,
-    RefinementConfig,
     MixtureStep,
+    RefinementConfig,
 )
 from ...util.interpolation_util import (
     NeighborhoodFiller,
     NeighborhoodImputer,
     NeighborhoodInterpolator,
+    SpikeNeighborhoods,
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
@@ -81,10 +82,7 @@ from ...util.spiketorch import (
 from ...util.torch_util import BModule
 from ..cluster_util import linkage, maximal_leaf_groups
 from ..kmeans import kmeans
-from .stable_features import (
-    SpikeNeighborhoods,
-    StableSpikeDataset,
-)
+from .stable_features import StableSpikeDataset
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -3165,6 +3163,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # since we read later indices than are being written, in place is fine
             assert torch.equal(uniq_first_inds.sort().values, uniq_first_inds)
             assert torch.equal(new_ids, torch.arange(new_n_units))
+            old_id = new_id = -1
             for old_id, new_id in zip(uniq_first_inds, new_ids):
                 assert old_id >= new_id
                 new_remapping.mapping[remapping.mapping == old_id] = new_id

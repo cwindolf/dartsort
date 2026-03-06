@@ -241,15 +241,15 @@ class DARTsortSorting:
             )
         if not already_ephemeral:
             self._ephemeral_feature_names.append(feature_name)
-        logger.dartsortdebug(
-            f"Attach ephemeral feature {feature_name} with shape {feature.shape}."
+        logger.dartsortverbose(
+            "Attach ephemeral feature %s with shape %s.", feature_name, feature.shape
         )
         setattr(self, feature_name, feature)
 
     def remove_ephemeral_feature(self, feature_name: str):
         assert feature_name in self._ephemeral_feature_names
         assert hasattr(self, feature_name)
-        logger.dartsortdebug(f"Remove ephemeral feature {feature_name}.")
+        logger.dartsortverbose("Remove ephemeral feature %s.", feature_name)
         self._ephemeral_feature_names = [
             k for k in self._ephemeral_feature_names if k != feature_name
         ]
@@ -301,8 +301,8 @@ class DARTsortSorting:
             self._check_shape(feature_name, feature)
         if feature_name in self._loaded_persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
-        logger.dartsortdebug(
-            f"Register persistent feature {feature_name} with shape {feature.shape}."
+        logger.dartsortverbose(
+            "Register persistent feature %s with shape %s.", feature_name, feature.shape
         )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
@@ -311,7 +311,7 @@ class DARTsortSorting:
                 self.parent_h5_path, "r+", libver="latest", locking=False
             ) as h5:
                 if feature_name not in h5:
-                    logger.dartsortdebug(
+                    logger.dartsortverbose(
                         "Registering persistent feature %s to %s.",
                         feature_name,
                         self.parent_h5_path,
@@ -429,7 +429,10 @@ class DARTsortSorting:
         if have_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
-            h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)
+            try:
+                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # pyright: ignore[reportCallIssue]
+            except TypeError:
+                h5p = h5p.relative_to(sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
         for k in self._ephemeral_feature_names:
             data[k] = getattr(self, k)
@@ -741,7 +744,12 @@ def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
     return pipeline.get_transformer(tpca_name)
 
 
-def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=True):
+def load_stored_tsvd(
+    sorting,
+    tsvd_name="collisioncleaned_basis",
+    to_sklearn=True,
+    trim_rank_to: int | None = None,
+):
     from ..transform import BaseTemporalPCA
 
     if sorting.parent_h5_path is None:
@@ -753,7 +761,9 @@ def load_stored_tsvd(sorting, tsvd_name="collisioncleaned_basis", to_sklearn=Tru
     assert tsvd.name == tsvd_name
     assert isinstance(tsvd, BaseTemporalPCA)
     if to_sklearn:
-        tsvd = tsvd.to_sklearn()
+        tsvd = tsvd.to_sklearn(trim_rank_to=trim_rank_to)
+    else:
+        assert not trim_rank_to
     logger.info(
         "Loaded stored basis from %s (%s; components shape: %s).",
         pt_path,
@@ -786,6 +796,15 @@ def sorting_isis(sorting: DARTsortSorting):
     return isis_ms
 
 
+def get_top_assignment_weights(
+    sorting: DARTsortSorting,
+    responsibilities_key="gmm_responsibilities",
+    candidates_key="gmm_candidates",
+) -> np.ndarray:
+    assert sorting.labels is not None
+    raise NotImplementedError  # TODO
+
+
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
     responsibilities_key="gmm_responsibilities",
@@ -814,18 +833,9 @@ def explode_soft_assignment_sorting(
     cvalid = clabels >= 0
     assert np.array_equal(lvalid, cvalid)
 
-    # issue: we usually merge GMM components into new labels
-    # so, need to figure out the merge and remap, and there will be
-    # duplicates to handle
-    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
-    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
-    lc = lc[(lc >= 0).all(axis=1)]
-    # each candidate only appears once -- it is a merge.
-    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    Klabel = labels.max() + 1
     Kcand = candidates.max() + 1
-    invalid_label = labels.max() + 10
-    ctol = np.full((Kcand + 1,), fill_value=invalid_label)
-    ctol[lc[:, 1]] = lc[:, 0]
+    lc, ctol = candidates_to_labels(clabels, labels, Klabel, Kcand)
 
     # replace candidates -1 with invalid entry, will also become invalid in ctol
     c = np.where(candidates < 0, Kcand, candidates)
@@ -859,7 +869,7 @@ def explode_soft_assignment_sorting(
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
     # okay, having deduplicated, we are now ready to explode
-    nz = np.logical_and(c < invalid_label, mergedr > 0)
+    nz = np.logical_and(c < Klabel, mergedr > 0)
     spike_ix, candidate_ix = np.nonzero(nz)
 
     reorder = np.argsort(sorting.times_samples[spike_ix], kind="stable")
@@ -882,6 +892,20 @@ def explode_soft_assignment_sorting(
         sampling_frequency=sorting.sampling_frequency,
         ephemeral_features=feats,
     )
+
+
+def candidates_to_labels(clabels, labels, Klabel, Kcand):
+    # issue: we usually merge GMM components into new labels
+    # so, need to figure out the merge and remap, and there will be
+    # duplicates to handle
+    kept = np.flatnonzero(np.logical_and(labels >= 0, clabels >= 0))
+    lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
+    lc = lc[(lc >= 0).all(axis=1)]
+    # each candidate only appears once -- it is a merge.
+    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    ctol = np.full((Kcand + 1,), fill_value=Klabel)
+    ctol[lc[:, 1]] = lc[:, 0]
+    return lc, ctol
 
 
 def keep_only_most_recent_spikes(
@@ -986,7 +1010,7 @@ def subset_sorting_by_spike_count(sorting, min_spikes=0, max_spikes=np.inf):
 
 
 def subsample_to_max_count(
-    sorting, max_spikes=256, seed: int | np.random.Generator = 0, discard_triaged=False
+    sorting, max_spikes=256, seed: int | np.random.Generator = 0
 ):
     units, counts = np.unique(sorting.labels, return_counts=True)
     if counts.max() <= max_spikes:

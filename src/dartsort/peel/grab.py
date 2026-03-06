@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Mapping
 
 import numpy as np
 import torch
@@ -33,7 +33,7 @@ class GrabAndFeaturize(BasePeeler):
         featurization_pipeline,
         times_samples,
         channels,
-        labels=None,
+        fixed_properties: Mapping[str, np.ndarray | torch.Tensor] | None = None,
         trough_offset_samples=42,
         spike_length_samples=121,
         chunk_length_samples=30_000,
@@ -44,6 +44,8 @@ class GrabAndFeaturize(BasePeeler):
         fit_subsampling_random_state: int | np.random.Generator = 0,
         dtype=torch.float,
     ):
+        fixed_properties = fixed_properties or {}
+        fixed_property_keys = tuple(fixed_properties.keys())
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -59,14 +61,13 @@ class GrabAndFeaturize(BasePeeler):
             n_waveforms_fit=n_waveforms_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_sampling=fit_sampling,
+            fixed_property_keys=fixed_property_keys,
             dtype=dtype,
         )
         self.register_buffer("times_samples", torch.asarray(times_samples))
         self.register_buffer("channels", torch.asarray(channels))
-        if labels is not None:
-            self.register_buffer("labels", torch.asarray(labels))
-        else:
-            self.labels = None
+        for k, v in fixed_properties.items():
+            self.register_buffer(k, torch.asarray(v))
         assert self.times_samples.ndim == 1
         assert self.times_samples.shape == self.channels.shape
 
@@ -118,6 +119,8 @@ class GrabAndFeaturize(BasePeeler):
         recording: BaseRecording,
         *,
         sorting: DARTsortSorting,
+        fixed_property_keys: list[str] | None = None,
+        chunk_length_samples: int = 30_000,
         waveform_cfg: WaveformConfig,
         featurization_cfg: FeaturizationConfig,
         sampling_cfg: FitSamplingConfig,
@@ -139,18 +142,23 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        if fixed_property_keys:
+            fixed_properties = {k: getattr(sorting, k) for k in fixed_property_keys}
+        else:
+            fixed_properties = None
+
         return cls(
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             times_samples=sorting.times_samples,
             channels=sorting.channels,
-            labels=sorting.labels,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            chunk_length_samples=30_000,
-            n_seconds_fit=100,
+            chunk_length_samples=chunk_length_samples,
+            fixed_properties=fixed_properties,
             dtype=torch.float,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
@@ -203,6 +211,7 @@ class GrabAndFeaturize(BasePeeler):
                 already_padded=False,
                 pad_value=torch.nan,
             )
-        if self.labels is not None:
-            res["labels"] = self.labels[in_chunk]
+        dev = times_rel.device
+        for k in self.fixed_property_keys:
+            res[k] = getattr(self.b, k)[in_chunk].to(device=dev)
         return res

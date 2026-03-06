@@ -217,6 +217,7 @@ class TemplateData:
         units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
+        show_progress: bool = True,
     ) -> "TemplateData":
         # load if saved already and not overwriting
         if save_folder is not None:
@@ -241,11 +242,11 @@ class TemplateData:
             sorting=sorting,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
-            overwrite=overwrite,
             motion_est=motion_est,
             units_per_job=units_per_job,
             tsvd=tsvd,
             computation_cfg=computation_cfg,
+            show_progress=show_progress,
         )
 
         gc.collect()
@@ -265,7 +266,6 @@ class TemplateData:
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        overwrite=False,
         motion_est=None,
         units_per_job=8,
         tsvd=None,
