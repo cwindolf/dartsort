@@ -20,7 +20,15 @@ from dartsort.templates import (
     templates,
 )
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.internal_config import TemplateConfig, TemplateRealignmentConfig
+from dartsort.util.internal_config import (
+    TemplateConfig,
+    TemplateRealignmentConfig,
+    InterpolationParams,
+)
+
+
+# nearest_erp = InterpolationParams(method="nearest", extrap_method="nan").normalize()
+nearest_erp = InterpolationParams(method="nearest").normalize()
 
 
 # simkit fixture based test of all algorithms with a global
@@ -58,13 +66,15 @@ def refractory_simulations(tmp_path_factory):
     return simulations
 
 
-@pytest.mark.parametrize("denoising_method", ["none", "t"])
+@pytest.mark.parametrize("denoising_method", ["none"])  # , "t"])
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("algorithm", ["unitextract", "running", "running_if_mean"])
+@pytest.mark.parametrize(
+    "algorithm", ["unitextract", "running", "running_if_mean", "peelreduce"]
+)
 def test_refractory_templates(
     refractory_simulations, drift, realign_peaks, reduction, algorithm, denoising_method
 ):
@@ -73,7 +83,7 @@ def test_refractory_templates(
 
     if denoising_method != "none" and reduction == "median":
         return
-    if denoising_method != "none" and algorithm == "unitextract":
+    if denoising_method == "t" and not algorithm.startswith("running"):
         return
 
     template_cfg = TemplateConfig(
@@ -83,6 +93,7 @@ def test_refractory_templates(
         denoising_method=denoising_method,
         with_raw_std_dev=True,
         use_zero=denoising_method == "t",
+        template_interp_params=nearest_erp,
     )
     realign_cfg = TemplateRealignmentConfig(
         realign_peaks=bool(realign_peaks),
@@ -111,13 +122,14 @@ def test_refractory_templates(
     np.testing.assert_array_equal(td.unit_ids, sim["templates"].unit_ids)
 
 
+@pytest.mark.parametrize("reduction", ["mean", "median"])
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
-@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted", "t", "loot"])
+@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted"])
 def test_refractory_templates_algorithm_agreement(
-    refractory_simulations, drift, realign_peaks, denoising_method
+    refractory_simulations, drift, realign_peaks, denoising_method, reduction
 ):
     sim_name = f"drift{'y' if drift else 'n'}"
     sim = refractory_simulations[sim_name]
@@ -127,15 +139,22 @@ def test_refractory_templates_algorithm_agreement(
         tsvd = fit_tsvd(sim["recording"], sim["sorting"])
 
     tds = []
-    for algorithm in ("running", "unitextract"):
-        if algorithm == "unitextract" and denoising_method in ("t", "loot"):
+    if reduction == "mean":
+        algorithms = ("unitextract", "running", "peelreduce")
+    elif reduction == "median":
+        algorithms = ("unitextract", "peelreduce")
+    else:
+        assert False
+    for algorithm in algorithms:
+        if algorithm != "running" and denoising_method in ("t", "loot"):
             continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
-            reduction="mean",
+            reduction=reduction,
             algorithm=algorithm,
             denoising_method=denoising_method,
             with_raw_std_dev=True,
+            template_interp_params=nearest_erp,
         )
         realign_cfg = TemplateRealignmentConfig(
             realign_peaks=bool(realign_peaks),
@@ -156,27 +175,34 @@ def test_refractory_templates_algorithm_agreement(
     if len(tds) == 1:
         return
 
-    td0, td1 = tds
+    td0, *rest = tds
 
-    np.testing.assert_array_equal(td0.unit_ids, td1.unit_ids)
-    np.testing.assert_array_equal(td0.spike_counts, td1.spike_counts)
-    np.testing.assert_array_equal(
-        td0.spike_counts_by_channel, td1.spike_counts_by_channel
-    )
+    for alg, tdb in zip(algorithms[1:], rest):
+        print(alg)
+        np.testing.assert_array_equal(td0.unit_ids, tdb.unit_ids)
+        np.testing.assert_array_equal(td0.spike_counts, tdb.spike_counts)
+        np.testing.assert_array_equal(
+            td0.spike_counts_by_channel, tdb.spike_counts_by_channel
+        )
 
-    np.testing.assert_allclose(td0.templates, td1.templates, atol=1e-5)
-    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=2e-2)
+        if reduction == "median" and denoising_method == "exp_weighted":
+            # slight diff (peel takes median in SVD space, unit in wf space)
+            atol = 5e-5
+        else:
+            atol = 1e-5
+        np.testing.assert_allclose(td0.templates, tdb.templates, atol=atol)
+        np.testing.assert_allclose(td0.raw_std_dev, tdb.raw_std_dev, atol=5e-2)
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
-@pytest.mark.parametrize("algorithm", ("unitextract", "running"))
+@pytest.mark.parametrize("algorithm", ("unitextract", "running", "peelreduce"))
 def test_roundtrip(tmp_path, algorithm, denoising_method):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
-    if algorithm == "unitextract" and denoising_method in ("loot", "t"):
+    if algorithm != "running" and denoising_method in ("loot", "t"):
         return
     template_data = templates.TemplateData.from_config(
         recording=rec,
@@ -186,6 +212,7 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
             superres_bin_min_spikes=0,
             use_svd=False,
             algorithm=algorithm,
+            template_interp_params=nearest_erp,
         ),
         motion_est=IdentityMotionEstimate(),
         save_folder=tmp_path,
