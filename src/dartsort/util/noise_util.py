@@ -15,8 +15,12 @@ from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from tqdm.auto import trange
 
 from ..util import more_operators, spiketorch
-from ..util.interpolation_util import InterpolationParams, default_interpolation_params
+from ..util.internal_config import (
+    InterpolationParams,
+    default_template_interpolation_params,
+)
 from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..transform.temporal_pca import BaseTemporalPCA
 
 logger = get_logger(__name__)
 
@@ -592,7 +596,9 @@ class EmbeddedNoise(torch.nn.Module):
                 channels_targ = channels_targ[None, :].broadcast_to(
                     (n, channels_targ.numel())
                 )
-            channels_src = torch.where(channels_src == self.n_channels, -2, channels_src)
+            channels_src = torch.where(
+                channels_src == self.n_channels, -2, channels_src
+            )
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
             chan_cov = eyes * self.global_std**2  # type: ignore
             return x.bmm(chan_cov)
@@ -1025,7 +1031,7 @@ class EmbeddedNoise(torch.nn.Module):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion_est=None,
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = default_template_interpolation_params,
         device=None,
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
@@ -1039,7 +1045,7 @@ class EmbeddedNoise(torch.nn.Module):
         )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
-            geom = h5["geom"][:]
+            geom = cast(h5py.Dataset, h5["geom"])[:]
         if rgeom is None:
             rgeom = geom
             if motion_est is not None:
@@ -1119,10 +1125,10 @@ def interpolate_residual_snippets(
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    interp_params: InterpolationParams = default_interpolation_params,
+    interp_params: InterpolationParams = default_template_interpolation_params,
     do_tpca=True,
     workers=None,
-    device=None,
+    device: torch.device | str | None = None,
     batch_size=16,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
@@ -1131,126 +1137,72 @@ def interpolate_residual_snippets(
     assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
 
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else None
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
         snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
-        times_s = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
+        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    times_s = torch.from_numpy(times_s)
+    print(f"aa {snippets.shape}")
+    print(f"{geom.shape=}")
+    print(f"{registered_geom.shape=}")
 
     # tpca project
     if do_tpca:
         tpca = data_util.get_tpca(hdf5_path)
+        assert tpca is not None
+        assert isinstance(tpca, BaseTemporalPCA)
         if device is not None:
             tpca = tpca.to(tpca.b.components.dtype)
         tpca = tpca.to(device=device)
         if tpca.temporal_slice is not None:
+            assert isinstance(tpca.temporal_slice, slice)
             snippets = snippets[:, tpca.temporal_slice]
-        n, t, c = snippets.shape
-        snippets_proj = snippets.new_zeros(n, tpca.rank, c)
-        for i0 in range(0, n, batch_size):
-            i1 = min(n, i0 + batch_size)
-            nb = i1 - i0
-            b = snippets[i0:i1].permute(0, 2, 1).reshape(nb * c, t)
-            b = tpca._transform_in_probe(b.to(tpca.components))
-            snippets_proj[i0:i1] = b.reshape(nb, c, -1).permute(0, 2, 1)
-        snippets = snippets_proj
-    n, dim, c = snippets.shape
-    assert snippets.isfinite().all()
+        dim = tpca.rank
+    else:
+        dim = snippets.shape[1]
+        tpca = None
+    print(f"a {snippets.shape}")
+    print(f"{tpca=}")
+    print(f"{do_tpca=}")
+    print(f"{dim=}")
 
-    # -- interpolate
-    # fill in the registered probe with residual snippets using interpolation,
-    # with possible missing values
-    source_geom = torch.asarray(geom).to(snippets).to(device)
-    source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
-
-    # - precompute
-    interp_params = interp_params.normalize()
-    precomputed_data = interpolation_util.full_probe_precompute(
-        source_geom=source_geom.to(device),
-        channel_index=channel_index.to(device),
+    erp = interpolation_util.ToFullProbeInterpolator(
+        geom=torch.asarray(geom, dtype=snippets.dtype),
+        rgeom=torch.asarray(registered_geom, dtype=snippets.dtype),
+        motion_est=motion_est,
         params=interp_params,
     )
-    if precomputed_data is not None:
-        precomputed_data = precomputed_data.to(device)
-    if motion_est is None:
-        # no drift case, no missing values, but still interpolate to avoid
-        # statistical differences between drifty/no drift versions of the sorter
-        target_geom = torch.asarray(registered_geom).to(device=device)
-        assert torch.equal(source_geom, target_geom)
-        target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
+    erp = erp.to(device=device)
 
-        for bs in range(0, n, batch_size):
-            sl = slice(bs, min(n, bs + batch_size))
-            snippets[sl] = interpolation_util.kernel_interpolate(
-                snippets[sl].to(device),
-                source_pos[sl].to(device),
-                target_pos[sl].to(device),
-                params=interp_params,
-                precomputed_data=precomputed_data,
-                allow_destroy=True,
-            ).to(snippets)
-        return snippets
+    inds = []
+    if motion_est is not None:
+        dbin = np.diff(motion_est.time_bin_centers_s).mean()
+        for tbc in motion_est.time_bin_centers_s:
+            left = tbc - 0.5 * dbin
+            i0 = i0 + np.searchsorted(times_s_np[i0:], left)
+            i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
+            inds.append((i0, i1, tbc))
+    else:
+        for i0 in range(0, len(snippets), batch_size):
+            inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    # goal
-    # - determine what registered channels the shifting source positions
-    #   would land on
-    # - interpolate residual snippets from the shifted source position
-    #   to the target positions
-    # except that's slow, because kriging interpolator would require
-    # inverting a matrix for each shifted source geom. so instead,
-    # let's shift the targets inversely and use the same source geom,
-    # even if that has a bit of a different meaning.
-
-    # determine each channel's drift over time
-    source_depths = source_pos[:, :, 1].reshape(-1)
-    source_t = times_s[:, None].broadcast_to(source_pos[:, :, 1].shape).reshape(-1)
-    source_shifts = motion_est.disp_at_s(source_t.cpu(), source_depths.cpu())
-    source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
-    assert np.isfinite(source_shifts).all()
-    source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
-    source_pos_shifted = source_pos.numpy(force=True) - source_shifts_xy
-
-    # query the target geom for the closest source pos, within reason
-    rg_np = registered_geom
-    if torch.is_tensor(rg_np):
-        rg_np = rg_np.numpy(force=True)
-    kdtree = drift_util.KDTree(rg_np)
-    match_distance = drift_util.pdist(geom).min()
-    _, targ_inds = kdtree.query(
-        source_pos_shifted.reshape(-1, geom.shape[1]),
-        distance_upper_bound=match_distance,
-        workers=workers or -1,
+    i0 = 0
+    snips_out = snippets.new_empty(
+        (snippets.shape[0], dim, registered_geom.shape[0])
     )
-    targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
-    assert (targ_inds < kdtree.n).all()
-    target_pos = torch.asarray(registered_geom[targ_inds], device=device)
-    target_pos_shifted = target_pos + torch.asarray(source_shifts_xy).to(target_pos)
-    target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
-
-    # allocate output storage with an extra channel of NaN needed later
-    for bs in range(0, n, batch_size):
-        sl = slice(bs, min(n, bs + batch_size))
-        snippets[sl] = interpolation_util.kernel_interpolate(
-            snippets[sl].to(device),
-            source_pos[sl].to(device),
-            target_pos_shifted[sl].to(device),
-            params=interp_params,
-            precomputed_data=precomputed_data,
-            allow_destroy=True,
-        ).to(snippets)
-    assert snippets.isfinite().all()
-
-    # now, let's embed these into the full registered probe
-    snippets_full = snippets.new_full((n, dim, len(registered_geom)), torch.nan)
-    targ_inds = targ_inds[:, None].broadcast_to(snippets.shape)
-    snippets_full.scatter_(2, targ_inds.to(snippets.device), snippets)
-
-    return snippets_full
+    for i0, i1, tbc in inds:
+        batch = snippets[i0:i1]
+        if tpca is not None:
+            batch = tpca.force_embed(batch.to(device=device))
+        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(
+            snips_out
+        )
+    print(f"z {snips_out.shape=}")
+    return snips_out
 
 
 def fp_control_threshold(
@@ -1406,7 +1358,7 @@ def fp_control_threshold_from_h5(
 def whitener_from_hdf5(
     hdf5_path,
     motion_est=None,
-    interp_params: InterpolationParams = default_interpolation_params,
+    interp_params: InterpolationParams = default_template_interpolation_params,
     device=None,
     rgeom=None,
     eps=1e-4,

@@ -256,41 +256,12 @@ def full_probe_precompute(
 
     TODO can this be simplified?
     """
-    precomputed_data = interp_precompute(
+    return interp_precompute(
         source_geom=pad_geom(source_geom),
         channel_index=channel_index,
         params=params,
         source_geom_is_padded=True,
     )
-    if precomputed_data is None:
-        return None
-
-    nc, nc_pc, nc_pc_ = precomputed_data.shape
-    assert nc_pc == nc_pc_
-    assert nc_pc >= channel_index.shape[1]
-    extra_dim = nc_pc - channel_index.shape[1]
-    assert extra_dim >= 0
-    # embed into full probe...
-    pc_full = precomputed_data.new_zeros((nc, nc + extra_dim, nc + extra_dim))
-    for j in range(nc):
-        chans = channel_index[j]
-        (valid,) = (chans < nc).nonzero(as_tuple=True)
-        cvalid = chans[valid]
-        pc_full[j, cvalid[:, None], cvalid[None, :]] = precomputed_data[
-            j, valid[:, None], valid[None, :]
-        ]
-        if extra_dim > 0:
-            pc_full[j, -extra_dim:, -extra_dim:] = precomputed_data[
-                j, -extra_dim:, -extra_dim:
-            ]
-            pc_full[j, -extra_dim:, cvalid[None, :]] = precomputed_data[
-                j, -extra_dim:, valid[None, :]
-            ]
-            pc_full[j, cvalid[:, None], -extra_dim:] = precomputed_data[
-                j, valid[:, None], -extra_dim:
-            ]
-    precomputed_data = pc_full[None]
-    return precomputed_data
 
 
 def kernel_interpolate(
@@ -299,6 +270,7 @@ def kernel_interpolate(
     target_pos,
     params: InterpolationParams = default_interpolation_params,
     precomputed_data=None,
+    neighborhoods=None,
     solver_map=None,
     allow_destroy=False,
     out=None,
@@ -352,6 +324,7 @@ def kernel_interpolate(
             kriging_poly_degree=params.kriging_poly_degree,
             smoothing_lambda=params.smoothing_lambda,
             precomputed_data=precomputed_data,
+            neighborhoods=neighborhoods,
             solver_map=solver_map,
         )
     else:
@@ -373,6 +346,7 @@ def kernel_interpolate(
         smoothing_lambda=params.smoothing_lambda,
         precomputed_data=precomputed_data,
         solver_map=solver_map,
+        neighborhoods=neighborhoods,
         allow_destroy=allow_destroy,
         out=out,
     )
@@ -398,6 +372,7 @@ def _kernel_interpolate(
     kriging_poly_degree: int,
     smoothing_lambda: float,
     precomputed_data,
+    neighborhoods,
     solver_map=None,
     allow_destroy=False,
     out=None,
@@ -436,6 +411,7 @@ def _kernel_interpolate(
             features,
             solvers=precomputed_data,
             solver_map=solver_map,
+            neighborhoods=neighborhoods,
             sigma=sigma,
             poly_degree=kriging_poly_degree,
         )
@@ -502,12 +478,64 @@ def get_kernel(
 
 
 def kriging_solve(
-    target_pos, kernels, features, solvers, solver_map=None, sigma=1.0, poly_degree=-1
+    target_pos,
+    kernels,
+    features,
+    solvers,
+    neighborhoods: torch.Tensor | None,
+    solver_map: torch.Tensor | None = None,
+    sigma=1.0,
+    poly_degree=-1,
+):
+    if neighborhoods is None:
+        assert solvers.ndim == 3
+        kernels, y = kriging_poly_expand(
+            target_pos, features, kernels, poly_degree, sigma
+        )
+        return y.bmm(solvers).bmm(kernels)
+
+    # per-channel case (each output chan has its own local neighb)
+    # this is meant to mimic the "neighbors" option to scipy's RBFInterpolator,
+    # but the implementation here is obscure. the rest of the logic is only shown
+    # once, and that's in full_probe_precompute.
+    # assumes that output channels and input channels are the same, and that all
+    # inputs share the same neighborhood-solver per channel.
+    oc = kernels.shape[2]
+    kernels = F.pad(kernels, (0, 0, 0, 1))
+    features = F.pad(features, (0, 1))
+    # c = kernels.shape[2]
+    # if solver_map is None:
+    #     assert c == solvers.shape[0]
+    # c_ = kernels.shape[1]
+    # assert c_ >= c
+    # assert c_ == solvers.shape[1] == solvers.shape[2]
+    out = features.new_zeros((*features.shape[:2], oc))
+    for occ in range(oc):
+        # solver_map brings channels of y (targ chans) to source geom
+        if solver_map is None:
+            sc = occ
+        else:
+            sc = solver_map[occ]
+        neighb = neighborhoods[sc]
+        kc = kernels[:, neighb]
+        y = features[:, :, neighb]
+        solvc = solvers[sc]
+        kc, y = kriging_poly_expand(target_pos, y, kc, poly_degree, sigma)
+        out[:, :, occ] = torch.einsum("ntp,pq,nq->nt", y, solvc, kc[:, :, occ])
+    # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
+    return out
+
+
+def kriging_poly_expand(
+    target_pos: torch.Tensor,
+    features: torch.Tensor,
+    kernels: torch.Tensor,
+    poly_degree: int,
+    sigma: float,
 ):
     n, rank = features.shape[:2]
     n_, n_targ, dim = target_pos.shape
     assert n == n_
-
     if poly_degree == -1:
         y = features
         pass
@@ -544,36 +572,7 @@ def kriging_solve(
         kernels = torch.concatenate([kernels, xy, *xysq, const], dim=1)
     else:
         assert False
-
-    if solvers.ndim == 3:
-        return y.bmm(solvers).bmm(kernels)
-
-    assert solvers.ndim == 4
-    assert solvers.shape[0] == 1
-    # per-channel case (each output chan has its own local neighb)
-    # this is meant to mimic the "neighbors" option to scipy's RBFInterpolator,
-    # but the implementation here is obscure. the rest of the logic is only shown
-    # once, and that's in full_probe_precompute.
-    # assumes that output channels and input channels are the same, and that all
-    # inputs share the same neighborhood-solver per channel.
-    solvers = solvers[0]
-    c = kernels.shape[2]
-    if solver_map is None:
-        assert c == solvers.shape[0]
-    c_ = kernels.shape[1]
-    assert c_ >= c
-    assert c_ == solvers.shape[1] == solvers.shape[2]
-    out = y.new_zeros((*y.shape[:2], c))
-    for cc in range(c):
-        # solver_map brings channels of y (targ chans) to source geom
-        if solver_map is None:
-            sc = cc
-        else:
-            sc = solver_map[cc]
-        # just reducing memory use here relative to the einsum below
-        out[:, :, cc] = torch.einsum("ntp,pq,nq->nt", y, solvers[sc], kernels[:, :, cc])
-    # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
-    return out
+    return kernels, y
 
 
 def bake_interpolation_1d(
@@ -1251,14 +1250,17 @@ class ToFullProbeInterpolator(BModule):
     ):
         super().__init__()
         self.erp_params = params.normalize()
-        rchannel_index = make_channel_index(
-            rgeom, radius=self.erp_params.neighborhood_radius, to_torch=True
+        channel_index = make_channel_index(
+            geom, radius=self.erp_params.neighborhood_radius, to_torch=True
         )
         self.motion_est = motion_est
-        rchannel_index = rchannel_index.to(device=rgeom.device)
+        channel_index = channel_index.to(device=geom.device)
         self.register_buffer_or_none(
-            "data", full_probe_precompute(rgeom, rchannel_index, self.erp_params)
+            "data", full_probe_precompute(geom, channel_index, self.erp_params)
         )
+        if self.b.data is None:
+            channel_index = None
+        self.register_buffer_or_none("channel_index", channel_index)
         self.rg_depths = rgeom[:, 1].numpy(force=True)
         self.register_buffer("geom", geom)
         self.register_buffer("rgeom", rgeom)
@@ -1288,12 +1290,14 @@ class ToFullProbeInterpolator(BModule):
         solver_map = dist.argmin(1)
 
         # interpolate from static geom to shifted rgeom
+        # TODO: kernel is shared here, so no need to separately interp each data point.
         n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
             source_pos=sgeom[None].broadcast_to(n, -1, self.dim),
             target_pos=tgeom[None].broadcast_to(n, -1, self.dim),
             precomputed_data=self.b.data,
+            neighborhoods=self.b.channel_index,
             solver_map=solver_map,
             params=self.erp_params,
         )
@@ -1321,6 +1325,9 @@ class FromFullProbeInterpolator(BModule):
         self.register_buffer_or_none(
             "data", full_probe_precompute(rgeom, rchannel_index, self.erp_params)
         )
+        if self.b.data is None:
+            rchannel_index = None
+        self.register_buffer_or_none("rchannel_index", rchannel_index)
         self.g_depths = geom[:, 1].numpy(force=True)
         self.register_buffer("geom", geom)
         self.register_buffer("rgeom", rgeom)
@@ -1354,6 +1361,7 @@ class FromFullProbeInterpolator(BModule):
             source_pos=self.b.rgeom[None].broadcast_to(n, self.c_src, self.dim),
             target_pos=(self.b.geom - shift).broadcast_to(n, self.c_targ, self.dim),
             precomputed_data=self.b.data,
+            neighborhoods=self.b.rchannel_index,
             solver_map=solver_map,
             params=self.erp_params,
         )

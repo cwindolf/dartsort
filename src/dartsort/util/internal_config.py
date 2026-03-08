@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, float_or_none, int_or_inf, resolve_path
+from .py_util import cfg_dataclass, float_or_none, resolve_path
 
 try:
     from importlib.resources import files
@@ -223,10 +223,12 @@ class InterpolationParams:
             sigma=self.sigma,
             rq_alpha=self.rq_alpha,
             smoothing_lambda=self.smoothing_lambda,
+            neighborhood_radius=self.neighborhood_radius,
         )
 
 
 default_interpolation_params = InterpolationParams()
+default_template_interpolation_params = InterpolationParams(extrap_method="nan")
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
@@ -365,9 +367,7 @@ class TemplateConfig:
     # -- template construction parameters
     # registered templates?
     registered_templates: bool = True
-    template_interp_params: InterpolationParams = InterpolationParams(
-        extrap_method="nan"
-    )
+    template_interp_params: InterpolationParams = default_template_interpolation_params
 
     # superresolved templates
     superres_templates: bool = False
@@ -691,7 +691,7 @@ class RefinementConfig:
     val_proportion: float = 0.25
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
-    noise_interp_params: InterpolationParams = default_interpolation_params
+    noise_interp_params: InterpolationParams = default_template_interpolation_params
 
 
 @cfg_dataclass

@@ -27,8 +27,8 @@ from dartsort.util.internal_config import (
 )
 
 
-# nearest_erp = InterpolationParams(method="nearest", extrap_method="nan").normalize()
-nearest_erp = InterpolationParams(method="nearest").normalize()
+nearest_erp = InterpolationParams(method="nearest", extrap_method="nan").normalize()
+thin_erp_20 = InterpolationParams(extrap_method="nan", neighborhood_radius=20.0).normalize()
 
 
 # simkit fixture based test of all algorithms with a global
@@ -204,25 +204,35 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
     if algorithm != "running" and denoising_method in ("loot", "t"):
         return
-    template_data = templates.TemplateData.from_config(
-        recording=rec,
-        sorting=st,
-        template_cfg=dartsort.TemplateConfig(
-            denoising_method=denoising_method,
-            superres_bin_min_spikes=0,
-            use_svd=False,
-            algorithm=algorithm,
-            template_interp_params=nearest_erp,
-        ),
-        motion_est=IdentityMotionEstimate(),
-        save_folder=tmp_path,
-        overwrite=True,
-    )
-    np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
-    if denoising_method == "none":
-        np.testing.assert_array_equal(template_data.templates, temps)
+    
+    if algorithm == "peelreduce":
+        erps = [thin_erp_20, nearest_erp]
     else:
-        np.testing.assert_allclose(template_data.templates, temps, atol=0.5)
+        erps = [nearest_erp]
+
+    for erp in erps:
+        print(erp.method, erp.kernel, erp.extrap_method, erp.extrap_kernel)
+        template_data = templates.TemplateData.from_config(
+            recording=rec,
+            sorting=st,
+            template_cfg=dartsort.TemplateConfig(
+                denoising_method=denoising_method,
+                superres_bin_min_spikes=0,
+                use_svd=False,
+                algorithm=algorithm,
+                template_interp_params=erp,
+            ),
+            motion_est=IdentityMotionEstimate(),
+            save_folder=tmp_path,
+            overwrite=True,
+        )
+        np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
+        if denoising_method == "none" and erp.method != "nearest":
+            np.testing.assert_allclose(template_data.templates, temps, atol=1e-3)
+        elif denoising_method == "none":
+            np.testing.assert_array_equal(template_data.templates, temps)
+        else:
+            np.testing.assert_allclose(template_data.templates, temps, atol=0.5)
 
 
 def test_static_templates(tmp_path):
