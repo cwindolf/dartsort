@@ -213,6 +213,8 @@ class NeighborhoodCovariance:
     n_channels: int
     # not really used, but helpful to keep it here for vis
     prgeom: Tensor
+    # adjacency of neighborhoods
+    neighb_adj: Tensor
 
     # -- indexing
     # number of observed features (rank*chans) by neighborhood
@@ -251,7 +253,7 @@ class NeighborhoodCovariance:
 
     @classmethod
     def from_noise_and_neighborhoods(
-        cls, prgeom: Tensor, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods
+        cls, prgeom: Tensor, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods, neighb_overlap: float
     ) -> Self:
         dev = cast(torch.device, noise.device)
         neighborhoods = neighborhoods.to(device=dev)
@@ -277,6 +279,7 @@ class NeighborhoodCovariance:
             max_nc_miss_near=miss_near_ix.shape[1],
             n_channels=neighborhoods.n_channels,
             prgeom=prgeom,
+            neighb_adj=neighborhoods.adjacency(neighb_overlap),
             nobs=noise.rank * nc_obs,
             obs_ix=obs_ix,
             miss_near_ix=miss_near_ix,
@@ -2770,7 +2773,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # considered. to trim search, but also because bad solutions can
         # occur in that case.
         un_adj = (self.lut.lut < self.lut.unit_ids.shape[0]).float()
-        uu_not_adj = un_adj @ un_adj.T == 0
+        uu_not_adj = (un_adj @ self.neighb_cov.neighb_adj @ un_adj.T) == 0
         distances.masked_fill_(uu_not_adj, torch.inf)
         distances.diagonal().zero_()
         return tree_groups(
@@ -3165,6 +3168,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # since we read later indices than are being written, in place is fine
             assert torch.equal(uniq_first_inds.sort().values, uniq_first_inds)
             assert torch.equal(new_ids, torch.arange(new_n_units))
+            new_id = old_id = -1
             for old_id, new_id in zip(uniq_first_inds, new_ids):
                 assert old_id >= new_id
                 new_remapping.mapping[remapping.mapping == old_id] = new_id
@@ -3649,6 +3653,7 @@ def get_truncated_datasets(
         prgeom=prgeom,
         noise=noise,
         neighborhoods=full_neighbs,
+        neighb_overlap=refinement_cfg.neighb_overlap,
     )
     n_candidates, n_search, n_explore, max_candidates, max_search, max_explore = (
         _pick_search_size(n_units=sorting.n_units, refinement_cfg=refinement_cfg)

@@ -67,7 +67,7 @@ eval_initial_refinement_kwargs = [
     dict(refinement_strategy="pcmerge", pc_merge_threshold=0.025),
 ]
 eval_refinement_kwargs = [
-    dict(refinement_strategy="tmm"),
+    dict(refinement_strategy="tmm", demolish_during_selection=False),
 ]
 
 eval_clustering_kwargs = [clukw | ck for ck in eval_clustering_kwargs]
@@ -127,8 +127,7 @@ def test_refinement(simulations, sim_name, refkw):
         refkw["merge_template_cfg"] = TemplateConfig(denoising_method="none")
 
     clusterer = get_clusterer(
-        clustering_cfg=None,
-        refinement_cfgs=[RefinementConfig(**refkw)],
+        clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]
     )
     res = clusterer.cluster(
         recording=recording, sorting=sorting, features=features, motion_est=motion_est

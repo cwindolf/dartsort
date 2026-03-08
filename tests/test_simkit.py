@@ -38,7 +38,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
         noise_kind=noise_kind,
         white_noise_scale=1e-8,
         n_units=nu,
-        duration_seconds=1,
+        duration_seconds=3.0,
         sampling_frequency=fs,
         min_fr_hz=minfr,
         amplitude_jitter=0,
@@ -58,7 +58,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
         featurization_cfg=FeaturizationConfig(skip=True),
         common_reference=False,
     )
-    ns = int(fs)
+    ns = int(fs * 3.0)
 
     target = np.zeros((ns, nc), dtype=r_dt)
     sim = cast(dict, sim)
@@ -74,6 +74,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
         assert np.diff(ii).min() >= ((fs / 1000) * refractory_ms)
     else:
         for j in range(nu):
+            print(f"{jj=} {(st.labels==j).sum()=}")
             inj = np.flatnonzero(jj == j)
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
             print(f"{j=} {inj.size=}")

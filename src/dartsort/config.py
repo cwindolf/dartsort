@@ -285,7 +285,7 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
-    demolish_during_selection: bool = True
+    demolish_during_selection: bool = False
     em_after_demolish: bool = False
 
     # store extra intermediates
