@@ -1181,6 +1181,7 @@ def interpolate_residual_snippets(
     inds = []
     if motion_est is not None:
         dbin = np.diff(motion_est.time_bin_centers_s).mean()
+        i0 = 0
         for tbc in motion_est.time_bin_centers_s:
             left = tbc - 0.5 * dbin
             i0 = i0 + np.searchsorted(times_s_np[i0:], left)
@@ -1190,7 +1191,6 @@ def interpolate_residual_snippets(
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    i0 = 0
     snips_out = snippets.new_empty(
         (snippets.shape[0], dim, registered_geom.shape[0])
     )
