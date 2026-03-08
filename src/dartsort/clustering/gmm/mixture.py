@@ -156,9 +156,12 @@ def tmm_demix(
                 tmm.em(train_data, show_progress=prog_level)
             elif step_type == "demolish":
                 assert val_data is not None
-                tmm.demolish(train_data, val_data, bool(prog_level))
                 _not_last = outer_it + 1 < refinement_cfg.n_total_iters
-                if _not_last or refinement_cfg.em_after_demolish:
+                _will_em = _not_last or refinement_cfg.em_after_demolish
+                tmm.demolish(
+                    train_data, val_data, bool(prog_level), allow_uncovered=not _will_em
+                )
+                if _will_em:
                     tmm.em(train_data, show_progress=prog_level)
             else:
                 assert False
@@ -1004,7 +1007,7 @@ class BatchedSpikeData:
         )
         self._update_sizes(n_candidates, n_search, n_explore)
 
-    def _fill_missing(self, n_units: int):
+    def _fill_missing(self, n_units: int, allow_uncovered: bool = False):
         # fill in missing labels randomly, obeying un_adj
         if self.candidates is None:
             return
@@ -1016,6 +1019,7 @@ class BatchedSpikeData:
             neighb_adj=self.neighb_adj,
             neighborhood_ids=self.neighborhood_ids,
             gen=self.rg,
+            allow_uncovered=allow_uncovered,
         )
         assert same_adj is not None
         if not same_adj:
@@ -1091,7 +1095,12 @@ class BatchedSpikeData:
         if pnoid:
             assert self.un_adj.max().item() == 1.0
 
-    def ensure_coverage(self):
+    def ensure_coverage(
+        self,
+        *,
+        allow_new_units: bool,
+        allow_uncovered: bool = False,
+    ):
         self.update_adjacency(n_units=None)
         assert self.candidates is not None
         assert self.rg is not None
@@ -1103,6 +1112,8 @@ class BatchedSpikeData:
             neighborhood_ids=self.neighborhood_ids,
             gen=self.rg,
             ensure_coverage_only=True,
+            allow_new_units=allow_new_units,
+            allow_uncovered=allow_uncovered,
         )
         assert res is None
 
@@ -1575,7 +1586,10 @@ class TruncatedSpikeData(BatchedSpikeData):
         return self.dense_slice(ixs)
 
     def remap(
-        self, remapping: UnitRemapping, distances: Tensor | None
+        self,
+        remapping: UnitRemapping,
+        distances: Tensor | None,
+        allow_uncovered: bool = False,
     ) -> NeighborhoodLUT | None:
         """Re-map my top candidate labels and re-do LUTs, search, explore."""
         n_units_orig = remapping.mapping.shape[0]
@@ -1610,11 +1624,13 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         self.candidates[:, self.n_candidates :] = -1
         self.update_adjacency(n_units_new)
-        self._fill_missing(n_units_new)
+        self.ensure_coverage(
+            allow_new_units=not allow_uncovered, allow_uncovered=allow_uncovered
+        )
         if distances is not None:
             _, lut = self.update(new_top_candidates=None, distances=distances)
         else:
-            lut = None
+            lut = self.un_adj_lut
         return lut
 
     def update_from_split(
@@ -2965,6 +2981,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         val_data: TruncatedSpikeData,
         show_progress: bool = True,
+        allow_uncovered: bool = False,
     ) -> UnitRemapping:
         """Destroy units with bad generalization."""
         # score train and validation sets, determine unit responsibilities in both
@@ -3020,6 +3037,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             unit_ids=self.unit_ids[demolished],
             train_data=train_data,
             train_scores=train_scores,
+            allow_uncovered=allow_uncovered,
         )
 
     def get_params_at(self, indices: Tensor | list[int]):
@@ -3057,6 +3075,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_data: TruncatedSpikeData,
         train_scores: Scores,
         full_proposal_view: bool = True,
+        allow_uncovered: bool = False,
     ) -> UnitRemapping:
         """Remove components from the mixture and reallocate their log proportions
 
@@ -3113,7 +3132,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # discard the units and notify train data
         remap = UnitRemapping.discard_mapping(self.n_units, unit_ids)
         self.cleanup(remap)
-        lut = train_data.remap(remapping=remap, distances=self.unit_distance_matrix())
+        lut = train_data.remap(
+            remapping=remap,
+            distances=None if allow_uncovered else self.unit_distance_matrix(),
+            allow_uncovered=allow_uncovered,
+        )
         assert lut is not None
         self.update_lut(lut, no_parameter_changes=True)
 
@@ -3377,11 +3400,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.cleanup(discard)
         # tell train data about this
         lut = train_data.remap(remapping=discard, distances=None)
+        del lut  # ignoring this LUT, since we'll shortly get another
         # and we will shortly give these labels to train data
         F.threshold(train_labels, -1, Knew, inplace=True)
         train_labels = discard.padded_map()[train_labels]
-        assert lut is None
-        del lut
         if pnoid:
             _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
             if not torch.isclose(_lp, torch.zeros(()), atol=prop_check_atol):
@@ -3853,7 +3875,7 @@ def instantiate_and_bootstrap_tmm(
     # the exploration set. that's a hard assumption: otherwise we get all-neginf columns
     # of the likelihood and things break. i'm not sure if the right way to fix that is
     # to handle that case, or to enforce full coverage here, but i'm doing the latter.
-    train_data.ensure_coverage()
+    train_data.ensure_coverage(allow_new_units=True)
 
     # bootstrapping phase: tmm needs lut, lut needs distances, distances need tmm...
     tmm = TruncatedMixtureModel.from_config(
@@ -5404,6 +5426,8 @@ def _fill_blank_labels(
     gen: torch.Generator,
     batch_size: int = 1024,
     ensure_coverage_only: bool = False,
+    allow_uncovered: bool = False,
+    allow_new_units: bool = False,
     max_steps=2,
 ):
     assert neighborhood_ids.shape == labels.shape
@@ -5440,7 +5464,7 @@ def _fill_blank_labels(
                 break
 
         still_uncovered = adj.sum(0).min().cpu().item() == 0
-        if still_uncovered and ensure_coverage_only:
+        if still_uncovered and ensure_coverage_only and allow_new_units:
             # make new units by getting connected components of the uncovered
             # neighborhood graph
             (uncovered_neighbs,) = (adj.sum(0) == 0).nonzero(as_tuple=True)
@@ -5472,7 +5496,13 @@ def _fill_blank_labels(
 
         if uncovered:
             # raise if still_uncovered, warn or log otherwise
-            _log_warn_or_raise_coverage(uncovered_adj, neighborhood_ids, n_steps, adj)
+            _log_warn_or_raise_coverage(
+                uncovered_adj,
+                neighborhood_ids,
+                n_steps,
+                adj,
+                no_raise=allow_uncovered,
+            )
 
     if ensure_coverage_only:
         return None
@@ -6533,7 +6563,9 @@ def _get_u_from_ulut(lut: NeighborhoodLUT, stats: SufficientStatistics):
     return U
 
 
-def _log_warn_or_raise_coverage(orig_adj, neighborhood_ids, n_steps, final_adj):
+def _log_warn_or_raise_coverage(
+    orig_adj, neighborhood_ids, n_steps, final_adj, no_raise
+):
     n_orig_uncov, orig_uncov_neighbs, pct_orig_uncov, orig_uncov_counts = (
         _check_coverage_stats(orig_adj, neighborhood_ids)
     )
@@ -6548,7 +6580,7 @@ def _log_warn_or_raise_coverage(orig_adj, neighborhood_ids, n_steps, final_adj):
         f"{pct_new_uncov:.3f}% ({n_new_uncov} spikes)."
     )
     needs_raise = n_new_uncov > 0
-    if needs_raise:
+    if needs_raise and not no_raise:
         raise ValueError(message)
     elif pct_orig_uncov < 0.05:
         logger.dartsortverbose(message)

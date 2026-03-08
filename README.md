@@ -1,5 +1,6 @@
 [![badge](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
 [![coveralls](https://coveralls.io/repos/github/cwindolf/dartsort/badge.svg?branch=main)](https://coveralls.io/github/cwindolf/dartsort)
+[![Zenodo DOI](https://zenodo.org/badge/421108722.svg)](https://doi.org/10.5281/zenodo.16943074)
 
 # dartsort
 
