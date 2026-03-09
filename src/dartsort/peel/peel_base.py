@@ -788,8 +788,6 @@ class BasePeeler(BModule):
         residual_filename=None,
         overwrite=False,
         chunk_size=1024,
-        # could also do:
-        # libver=("earliest", "v110"),
         libver="latest",
         residual_to_h5=False,
         skip_features=False,
