@@ -67,17 +67,21 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
     traces = sim["recording"].get_traces()
     assert np.allclose(target, traces, atol=1e-5)
     ii, jj = np.nonzero(np.abs(traces) > 0.1)
+    lltt = np.c_[st.labels, st.times_samples]
+    lltt = lltt[np.lexsort(lltt.T)]
     assert np.array_equal(ii, st.times_samples)
-    assert np.array_equal(jj, st.labels)
-    assert np.array_equal(st.channels, st.labels)
+    assert np.array_equal(ii, lltt[:, 1])
+    assert np.array_equal(jj, lltt[:, 0])
+    cctt = np.c_[st.channels, st.times_samples]
+    cctt = cctt[np.lexsort(cctt.T)]
+    assert np.array_equal(ii, cctt[:, 1])
+    assert np.array_equal(jj, cctt[:, 0])
     if globally_refractory:
         assert np.diff(ii).min() >= ((fs / 1000) * refractory_ms)
     else:
         for j in range(nu):
-            print(f"{jj=} {(st.labels==j).sum()=}")
             inj = np.flatnonzero(jj == j)
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
-            print(f"{j=} {inj.size=}")
             assert inj.size > (minfr * 0.5)
     assert np.allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
     assert sim["motion_est"] is None
