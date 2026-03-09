@@ -41,8 +41,8 @@ def test_grab_and_featurize():
         rec,
         torch.as_tensor(channel_index),
         pipeline,
-        torch.as_tensor(times_samples),
-        torch.as_tensor(channels),
+        times_samples=torch.as_tensor(times_samples),
+        fixed_properties=dict(channels=torch.as_tensor(channels)),
     )
 
     with tempfile.TemporaryDirectory() as tempdir:
@@ -95,8 +95,8 @@ def test_grab_and_featurize():
         rec,
         torch.as_tensor(channel_index),
         pipeline,
-        torch.as_tensor(times_samples),
-        torch.as_tensor(channels),
+        times_samples=torch.as_tensor(times_samples),
+        fixed_properties=dict(channels=torch.as_tensor(channels)),
     )
 
     with tempfile.TemporaryDirectory() as tempdir:

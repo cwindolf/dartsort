@@ -31,8 +31,8 @@ class GrabAndFeaturize(BasePeeler):
         recording,
         channel_index,
         featurization_pipeline,
+        *,
         times_samples,
-        channels,
         fixed_properties: Mapping[str, np.ndarray | torch.Tensor] | None = None,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -65,7 +65,6 @@ class GrabAndFeaturize(BasePeeler):
             dtype=dtype,
         )
         self.register_buffer("times_samples", torch.asarray(times_samples))
-        self.register_buffer("channels", torch.asarray(channels))
         for k, v in fixed_properties.items():
             self.register_buffer(k, torch.asarray(v))
         assert self.times_samples.ndim == 1
@@ -76,10 +75,6 @@ class GrabAndFeaturize(BasePeeler):
         datasets.append(
             SpikeDataset(name="indices", shape_per_spike=(), dtype=np.int64)
         )
-        if self.labels is not None:
-            datasets.append(
-                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64)
-            )
         return datasets
 
     def process_chunk(
@@ -142,17 +137,17 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
-        if fixed_property_keys:
-            fixed_properties = {k: getattr(sorting, k) for k in fixed_property_keys}
-        else:
-            fixed_properties = None
+        fixed_property_keys = fixed_property_keys or []
+        fixed_property_keys = list(fixed_property_keys)
+        if "channels" not in fixed_property_keys:
+            fixed_property_keys.append("channels")
+        fixed_properties = {k: getattr(sorting, k) for k in fixed_property_keys}
 
         return cls(
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             times_samples=sorting.times_samples,
-            channels=sorting.channels,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             chunk_length_samples=chunk_length_samples,

@@ -260,7 +260,6 @@ class TemplateReduction(GrabAndFeaturize):
             channel_index=channel_index,
             recording=recording,
             times_samples=sorting.times_samples,
-            channels=sorting.channels,
             featurization_pipeline=fp,
             fixed_properties=fixed_properties,
             chunk_length_samples=template_cfg.grab_chunk_length_samples,
