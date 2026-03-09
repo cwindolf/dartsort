@@ -101,25 +101,10 @@ class ReductionTemplateData(TemplateData):
             # svd-only templates
             assert svd_mean is not None
             assert raw_std is None
-            return TemplateData(
-                unit_ids=unit_ids,
-                templates=svd_mean,
-                spike_counts=count.max(axis=1),
-                spike_counts_by_channel=count,
-                registered_geom=rgeom,
-                trough_offset_samples=trough,
-            )
+            templates = svd_mean
         elif template_cfg.denoising_method == "none" or not template_cfg.use_svd:
             assert raw_mean is not None
-            return TemplateData(
-                unit_ids=unit_ids,
-                templates=raw_mean,
-                raw_std_dev=raw_std,
-                spike_counts=count.max(axis=1),
-                spike_counts_by_channel=count,
-                registered_geom=rgeom,
-                trough_offset_samples=trough,
-            )
+            templates = raw_mean
         elif template_cfg.denoising_method == "exp_weighted":
             assert raw_mean is not None
             assert svd_mean is not None
@@ -135,19 +120,18 @@ class ReductionTemplateData(TemplateData):
                 f"exp_weighted: weight mean/max={weights.mean().item()},{weights.max().item()}"
             )
             templates = weights * raw_mean + (1 - weights) * svd_mean
-            return TemplateData(
-                unit_ids=unit_ids,
-                templates=templates,
-                raw_std_dev=raw_std,
-                spike_counts=count.max(axis=1),
-                spike_counts_by_channel=count,
-                registered_geom=rgeom,
-                trough_offset_samples=trough,
-            )
         else:
             assert False
 
-        raise NotImplementedError
+        return TemplateData(
+            unit_ids=unit_ids,
+            templates=templates,
+            raw_std_dev=raw_std,
+            spike_counts=count.max(axis=1),
+            spike_counts_by_channel=count,
+            registered_geom=rgeom,
+            trough_offset_samples=trough,
+        )
 
 
 # -- reduction engine
