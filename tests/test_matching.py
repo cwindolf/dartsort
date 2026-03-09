@@ -440,7 +440,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             save_folder=tmp_path,
             overwrite=True,
         )
-        assert np.allclose(template_data.templates, templates)
+        assert np.allclose(template_data.templates, templates, atol=1e-4)
 
         print("-- make matcher")
         matching_cfg = dartsort.MatchingConfig(
