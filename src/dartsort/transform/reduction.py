@@ -93,7 +93,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         # per-spike weight for averaging inside the batch
         spike_w = weights / batch_w[labels]
         x = waveforms.nan_to_num()
-        wx = waveforms * spike_w[:, None, None]
+        wx = x * spike_w[:, None, None]
 
         # channelwise weights for this batch
         nz = waveforms[0, 0].isfinite().to(batch_w)
@@ -113,7 +113,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             assert batch_xsqbar is not None
             batch_xsqbar.scatter_add_(dim=0, index=labels_ix, src=wxx)
             self.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
-        
+
         return {}
 
     def reduction_results(

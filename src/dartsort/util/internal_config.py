@@ -154,11 +154,19 @@ class FeaturizationConfig:
 
 
 InterpMethod = Literal[
-    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest", "nan"
+    "kriging",
+    "kernel",
+    "normalized",
+    "krigingnormalized",
+    "zero",
+    "nearest",
+    "nan",
+    "clampna",
 ]
 InterpKernel = Literal[
-    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate", "nan"
+    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate", "nan", "clampna"
 ]
+_kmethods = {"zero", "nearest", "nan", "clampna"}
 
 
 @cfg_dataclass
@@ -195,30 +203,21 @@ class InterpolationParams:
     def normalize(self) -> Self:
         method = self.method
         kernel = self.kernel
-        if method == "nearest":
+        if method in _kmethods:
+            kernel = method
             method = "kernel"
-            kernel = "nearest"
-        elif method == "zero":
-            method = "kernel"
-            kernel = "zero"
 
         extrap_method = self.extrap_method
         extrap_kernel = self.extrap_kernel
-        if extrap_method == "nearest":
+        if extrap_method in _kmethods:
+            extrap_kernel = extrap_method
             extrap_method = "kernel"
-            extrap_kernel = "nearest"
-        elif extrap_method == "zero":
-            extrap_method = "kernel"
-            extrap_kernel = "zero"
-        elif extrap_method == "nan":
-            extrap_method = "kernel"
-            extrap_kernel = "nan"
 
         return self.__class__(
             method=method,
-            kernel=kernel,
+            kernel=kernel,  # type: ignore
             extrap_method=extrap_method,
-            extrap_kernel=extrap_kernel,
+            extrap_kernel=extrap_kernel,  # type: ignore
             kriging_poly_degree=self.kriging_poly_degree,
             sigma=self.sigma,
             rq_alpha=self.rq_alpha,

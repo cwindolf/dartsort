@@ -378,6 +378,10 @@ def _kernel_interpolate(
     out=None,
 ):
     out_shape = (*features.shape[:2], target_pos.shape[1])
+    is_nearest = method == "nearest" or kernel_name == "nearest"
+    is_clampna = method == "clampna" or kernel_name == "clampna"
+    do_nearest = is_nearest or is_clampna
+    d = None
     if out is not None:
         assert out.shape == out_shape
     if method == "nan" or kernel_name == "nan":
@@ -390,6 +394,18 @@ def _kernel_interpolate(
             return features.new_zeros(out_shape)
         else:
             return out.zero_()
+    elif do_nearest:
+        d = get_rsq(source_pos, target_pos, nan=torch.inf)
+        dmin, nixs = d.min(dim=1, keepdim=True)
+        nixs = nixs.broadcast_to(out_shape)
+        out = torch.take_along_dim(input=features, dim=2, indices=nixs, out=out)
+        if is_nearest:
+            return out
+        elif is_clampna:
+            out.masked_fill_(dmin > (2 * sigma) ** 2, torch.nan)
+            return out
+        else:
+            assert False
 
     kernel = get_kernel(
         source_pos=source_pos,

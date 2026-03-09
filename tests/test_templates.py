@@ -27,8 +27,10 @@ from dartsort.util.internal_config import (
 )
 
 
-nearest_erp = InterpolationParams(method="nearest", extrap_method="nan").normalize()
-thin_erp_20 = InterpolationParams(extrap_method="nan", neighborhood_radius=20.0).normalize()
+nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
+thin_erp_20 = InterpolationParams(
+    extrap_method="clampna", neighborhood_radius=20.0
+).normalize()
 
 
 # simkit fixture based test of all algorithms with a global
@@ -54,9 +56,13 @@ def refractory_simulations(tmp_path_factory):
             globally_refractory=True,
         ),
         config_cls=None,
-        drift={"y": dict(drift_speed=1e-4), "n": dict(drift_speed=0.0)},
+        drift={
+            "y": dict(drift_speed=1e-4),
+            "n": dict(drift_speed=0.0),
+            "v": dict(drift_speed=3.0),
+        },
     )
-    assert len(sim_settings) == 2
+    assert len(sim_settings) == 3
 
     simulations = {}
     for sim_name, kw in sim_settings.items():
@@ -123,7 +129,7 @@ def test_refractory_templates(
 
 
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("drift", [False, 0, True, "v"])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
@@ -194,6 +200,57 @@ def test_refractory_templates_algorithm_agreement(
         np.testing.assert_allclose(td0.raw_std_dev, tdb.raw_std_dev, atol=5e-2)
 
 
+def test_drifting_refractory_templates(refractory_simulations):
+    sim_name = "driftv"
+    sim = refractory_simulations[sim_name]
+    tcfgs = [
+        TemplateConfig(
+            reduction="mean",
+            algorithm="unitextract",
+            denoising_method="none",
+        )
+    ]
+    tcfgs += [
+        TemplateConfig(
+            reduction="mean",
+            algorithm="peelreduce",
+            denoising_method="none",
+            template_interp_params=ep,
+        )
+        for ep in [nearest_erp, thin_erp_20]
+    ]
+    for tcfg in tcfgs:
+        _, td = estimate_template_library(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            motion_est=sim["motion_est"],
+            template_cfg=tcfg,
+            realign_cfg=None,
+        )
+        temps = sim["templates"].templates
+        np.testing.assert_array_equal(td.unit_ids, np.arange(len(temps)))
+
+        sl = slice(2, len(temps) - 2)
+        if tcfg.algorithm == "unitextract":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "nearest":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=4.0)
+        elif tcfg.template_interp_params.kernel == "thinplate":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=4.0)
+        else:
+            assert False
+    
+        sl = slice(None)
+        if tcfg.algorithm == "unitextract":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "nearest":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "thinplate":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        else:
+            assert False
+
+
 @pytest.mark.parametrize("denoising_method", ("none",))
 @pytest.mark.parametrize("algorithm", ("unitextract", "running", "peelreduce"))
 def test_roundtrip(tmp_path, algorithm, denoising_method):
@@ -204,7 +261,7 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
     if algorithm != "running" and denoising_method in ("loot", "t"):
         return
-    
+
     if algorithm == "peelreduce":
         erps = [thin_erp_20, nearest_erp]
     else:
