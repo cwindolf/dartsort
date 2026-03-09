@@ -250,39 +250,33 @@ def template_makers(rec, st, align=True, align_max=0):
         denoising_method="none",
         spikes_per_unit=10000,
     )
+    tcfg4 = dartsort.TemplateConfig(
+        denoising_method="none",
+        algorithm="peelreduce",
+        reduction="mean",
+        spikes_per_unit=10000,
+    )
+    tcfg5 = dartsort.TemplateConfig(
+        denoising_method="none",
+        algorithm="peelreduce",
+        reduction="median",
+        spikes_per_unit=10000,
+    )
     realign_cfg = dartsort.TemplateRealignmentConfig(
         realign_peaks=align,
         realign_shift_ms=align_max,
     )
-    _, t0 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg0,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t1 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg1,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t2 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg2,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t3 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg3,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    ts = [t0, t1, t2, t3]
+    tcfgs = [tcfg0, tcfg1, tcfg2, tcfg3, tcfg4, tcfg5]
+    ts = [
+        dartsort.estimate_template_library(
+            recording=rec,
+            sorting=st,
+            template_cfg=tcfg,
+            realign_cfg=realign_cfg,
+            waveform_cfg=waveform_cfg,
+        )[1]
+        for tcfg in tcfgs
+    ]
     if not align:
         t0_ = dartsort.TemplateData.from_config(
             recording=rec,

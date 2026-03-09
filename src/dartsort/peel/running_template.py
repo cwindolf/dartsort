@@ -57,7 +57,6 @@ class RunningTemplateData(TemplateData):
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
-        units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
@@ -173,8 +172,6 @@ def _get_templates_by_chunk_block(
     template_cfg,
     show_progress: bool,
 ):
-    from ..peel.running_template import RunningTemplates
-
     peeler = RunningTemplates.from_config(
         sorting=sorting,
         recording=recording,

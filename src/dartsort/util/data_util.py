@@ -1038,6 +1038,39 @@ def restrict_to_valid_times(sorting, recording, waveform_cfg, pad=0):
     return sorting.ephemeral_replace(labels=new_labels)
 
 
+def subsample_by_count_and_valid_time(
+    sorting,
+    *,
+    max_spikes: int,
+    seed: int | np.random.Generator = 0,
+    recording,
+    waveform_cfg,
+):
+    # valid time mask
+    trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+    total = waveform_cfg.spike_length_samples(recording.sampling_frequency)
+    t_min = trough
+    t_max = recording.get_total_samples() - (total - trough)
+    t_valid = sorting.times_samples == sorting.times_samples.clip(
+        min=t_min, max=t_max - 1
+    )
+
+    # build new labels by subsampling units within the mask
+    new_labels = np.full_like(sorting.labels, -1)
+    rg = np.random.default_rng(seed)
+    for j in sorting.unit_ids:
+        inj = np.flatnonzero(sorting.labels == j)
+        inj = inj[t_valid[inj]]
+        if inj.size <= max_spikes:
+            new_labels[inj] = j
+            continue
+        inj = rg.choice(inj, size=max_spikes, replace=False)
+        inj.sort()
+        new_labels[inj] = j
+
+    return sorting.ephemeral_replace(labels=new_labels)
+
+
 def subset_sorting_by_time_samples(
     sorting, start_sample=0, end_sample=np.inf, reference_to_start_sample=True
 ):

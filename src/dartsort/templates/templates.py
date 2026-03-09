@@ -214,7 +214,6 @@ class TemplateData:
         overwrite=False,
         motion_est=None,
         save_npz_name: str | None = "template_data.npz",
-        units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
@@ -243,7 +242,6 @@ class TemplateData:
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
             motion_est=motion_est,
-            units_per_job=units_per_job,
             tsvd=tsvd,
             computation_cfg=computation_cfg,
             show_progress=show_progress,
@@ -267,7 +265,6 @@ class TemplateData:
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
-        units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
     ) -> "TemplateData":

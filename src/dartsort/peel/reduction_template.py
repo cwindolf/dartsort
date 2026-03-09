@@ -16,7 +16,7 @@ from ..transform.temporal_pca import FullProbeTemporalPCAEmbedder
 from ..util.data_util import (
     DARTsortSorting,
     get_top_assignment_weights,
-    subsample_to_max_count,
+    subsample_by_count_and_valid_time,
 )
 from ..util.drift_util import registered_geometry
 from ..util.internal_config import (
@@ -49,14 +49,16 @@ class ReductionTemplateData(TemplateData):
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
-        units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
         # subsample sorting
-        sorting = subsample_to_max_count(
-            sorting, max_spikes=template_cfg.spikes_per_unit
+        sorting = subsample_by_count_and_valid_time(
+            sorting,
+            max_spikes=template_cfg.spikes_per_unit,
+            recording=recording,
+            waveform_cfg=waveform_cfg,
         )
         sorting = sorting.drop_missing()
         if motion_est is None:
@@ -282,6 +284,12 @@ class TemplateReduction(GrabAndFeaturize):
             max_waveforms_fit=template_cfg.denoising_fit_sampling_cfg.max_waveforms_fit,
             fit_sampling=template_cfg.denoising_fit_sampling_cfg.fit_sampling,
             n_seconds_fit=template_cfg.denoising_fit_sampling_cfg.n_seconds_fit,
+            trough_offset_samples=waveform_cfg.trough_offset_samples(
+                recording.sampling_frequency
+            ),
+            spike_length_samples=waveform_cfg.spike_length_samples(
+                recording.sampling_frequency
+            ),
         )
 
     def reduction_results(

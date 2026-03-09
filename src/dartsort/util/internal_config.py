@@ -347,7 +347,7 @@ class TemplateConfig:
             "peelreduce_if_mean",
         ]
         | str
-    ) = "running_if_mean"
+    ) = "peelreduce"
     denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
         "exp_weighted"
     )
@@ -362,6 +362,7 @@ class TemplateConfig:
     raw_templates_at_once: int = 1024
     weighted: bool = False
     grab_chunk_length_samples: int = 30_000
+    units_per_job: int = 8
 
     # -- template construction parameters
     # registered templates?
