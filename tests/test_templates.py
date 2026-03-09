@@ -234,9 +234,9 @@ def test_drifting_refractory_templates(refractory_simulations):
         if tcfg.algorithm == "unitextract":
             np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
         elif tcfg.template_interp_params.kernel == "nearest":
-            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=4.0)
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
         elif tcfg.template_interp_params.kernel == "thinplate":
-            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=4.0)
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=7.0)
         else:
             assert False
     

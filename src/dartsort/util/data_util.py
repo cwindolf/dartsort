@@ -1051,9 +1051,7 @@ def subsample_by_count_and_valid_time(
     total = waveform_cfg.spike_length_samples(recording.sampling_frequency)
     t_min = trough
     t_max = recording.get_total_samples() - (total - trough)
-    t_valid = sorting.times_samples == sorting.times_samples.clip(
-        min=t_min, max=t_max - 1
-    )
+    t_valid = sorting.times_samples == sorting.times_samples.clip(min=t_min, max=t_max)
 
     # build new labels by subsampling units within the mask
     new_labels = np.full_like(sorting.labels, -1)
