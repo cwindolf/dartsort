@@ -9,6 +9,7 @@ from .util.internal_config import (
     InterpKernel,
     RealignStrategy,
     MixtureStep,
+    TemplateSVDMethod,
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
@@ -213,7 +214,7 @@ class DeveloperConfig(DARTsortUserConfig):
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
     )
-    always_recompute_tsvd: bool = True
+    template_svd_method: TemplateSVDMethod = "spike_sklearn"
     matching_template_min_amplitude: float = 0.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0

@@ -25,6 +25,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
+from .templib import quick_mean_templates
 
 logger = get_logger(__name__)
 
@@ -70,7 +71,7 @@ def estimate_template_library(
 
     # filter out low-count/snr units
     if templates0 is None and (min_template_count or min_template_snr):
-        templates0 = _quick_mean_templates(
+        templates0 = quick_mean_templates(
             recording=recording,
             sorting=sorting,
             waveform_cfg=waveform_cfg,
@@ -414,19 +415,6 @@ def _handle_merge(
         trough_offset_samples=template_data.trough_offset_samples,
     )
     return sorting, template_data
-
-
-def _quick_mean_templates(
-    recording, sorting, waveform_cfg, computation_cfg, motion_est
-):
-    return TemplateData.from_config(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        waveform_cfg=waveform_cfg,
-        template_cfg=TemplateConfig(denoising_method="none"),
-        computation_cfg=computation_cfg,
-    )
 
 
 def filter_by_unit_mask(

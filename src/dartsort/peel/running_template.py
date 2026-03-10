@@ -108,19 +108,15 @@ def get_templates_by_chunk(
     if need_tsvd and tsvd is None:
         logger.dartsortdebug("Fit or load TSVD...")
         tsvd = fit_tsvd(
-            recording,
-            sorting,
+            recording=recording,
+            sorting=sorting,
             dtype=dtype,
             denoising_rank=template_cfg.denoising_rank,
             denoising_fit_radius=template_cfg.denoising_fit_radius,
             denoising_spikes_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
-            recompute_tsvd=template_cfg.recompute_tsvd,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(
-                recording.sampling_frequency
-            ),
-            spike_length_samples=waveform_cfg.spike_length_samples(
-                recording.sampling_frequency
-            ),
+            svd_method=template_cfg.svd_method,
+            motion_est=motion_est,
+            waveform_cfg=waveform_cfg,
             random_seed=random_seed,
         )
 
@@ -229,6 +225,7 @@ def stack_template_datas(template_datas):
         registered_geom=template_datas[0].registered_geom,
         trough_offset_samples=template_datas[0].trough_offset_samples,
         properties=properties,
+        tsvd=template_datas[0].tsvd,
     )
 
 
@@ -481,7 +478,7 @@ class RunningTemplates(GrabAndFeaturize):
         # try to load denoiser if denoising is happening
         denoising = template_cfg.denoising_method != "none"
         if tsvd is None and template_cfg.use_svd and denoising:
-            if not template_cfg.recompute_tsvd:
+            if template_cfg.svd_method != "peeler":
                 tsvd = load_stored_tsvd(sorting)
 
         loot_or_t = template_cfg.denoising_method in ("loot", "t")
@@ -652,7 +649,7 @@ class RunningTemplates(GrabAndFeaturize):
                 self.b.counts.to(self.raw_means).sqrt()
             )
             weights = denoising_weights(
-                snrs.numpy(force=True),
+                snrs=snrs.numpy(force=True),
                 spike_length_samples=self.spike_length_samples,
                 trough_offset=self.trough_offset_samples,
                 snr_threshold=self.exp_weight_snr_threshold,
@@ -1183,7 +1180,7 @@ class RunningTemplates(GrabAndFeaturize):
             self.b.counts.to(self.raw_means).sqrt()
         )
         w = denoising_weights(
-            snrs.numpy(force=True),
+            snrs=snrs.numpy(force=True),
             spike_length_samples=self.spike_length_samples,
             trough_offset=self.trough_offset_samples,
             snr_threshold=self.exp_weight_snr_threshold,

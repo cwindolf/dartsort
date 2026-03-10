@@ -18,7 +18,7 @@ from tqdm.auto import tqdm
 from ..templates import TemplateData
 from ..templates.superres_util import superres_sorting
 from ..util import spikeio
-from ..util.data_util import DARTsortSorting, load_stored_tsvd
+from ..util.data_util import DARTsortSorting
 from ..util.drift_util import (
     get_spike_pitch_shifts,
     registered_geometry,
@@ -28,13 +28,14 @@ from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
     WaveformConfig,
+    TemplateSVDMethod,
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import fast_nanmedian, nanmean, ptp
-from ..util.waveform_util import make_channel_index
+from .templib import denoising_weights, fit_tsvd
 
 logger = get_logger(__name__)
 
@@ -125,11 +126,10 @@ def get_templates_unitextract(
     results = get_templates(
         recording=recording,
         sorting=sorting,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
+        waveform_cfg=waveform_cfg,
         spikes_per_unit=template_cfg.spikes_per_unit,
         denoising_rank=template_cfg.denoising_rank,
-        recompute_tsvd=template_cfg.recompute_tsvd,
+        svd_method=template_cfg.svd_method,
         denoising_fit_radius=template_cfg.denoising_fit_radius,
         denoising_snr_threshold=template_cfg.exp_weight_snr_threshold,
         units_per_job=template_cfg.units_per_job,
@@ -152,6 +152,7 @@ def get_templates_unitextract(
         rgeom = geom
     if tsvd is None:
         tsvd = results["denoising_tsvd"]
+        assert isinstance(tsvd, (PCA, TruncatedSVD))
     obj = TemplateData(
         templates=cast(np.ndarray, results["templates"]),
         unit_ids=cast(np.ndarray, unit_ids),
@@ -170,10 +171,10 @@ def get_templates_unitextract(
 
 
 def get_templates(
+    *,
     recording,
     sorting,
-    trough_offset_samples=42,
-    spike_length_samples=121,
+    waveform_cfg: WaveformConfig,
     spikes_per_unit=500,
     motion_est=None,
     geom=None,
@@ -184,7 +185,7 @@ def get_templates(
     denoising_rank=5,
     denoising_fit_radius=75.0,
     denoising_spikes_fit=25_000,
-    recompute_tsvd=False,
+    svd_method: TemplateSVDMethod = "spike_sklearn",
     denoising_snr_threshold=50.0,
     min_fraction_at_shift=0.25,
     min_count_at_shift=25,
@@ -280,19 +281,26 @@ def get_templates(
     need_denoiser = denoising_tsvd is None and (low_rank_denoising)
     if need_denoiser:
         denoising_tsvd = fit_tsvd(
-            recording,
-            sorting,
+            recording=recording,
+            sorting=sorting,
+            motion_est=motion_est,
             dtype=dtype,
             denoising_rank=denoising_rank,
             denoising_fit_radius=denoising_fit_radius,
             denoising_spikes_fit=denoising_spikes_fit,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
-            recompute_tsvd=recompute_tsvd,
+            waveform_cfg=waveform_cfg,
+            svd_method=svd_method,
             random_seed=random_seed,
         )
     elif not low_rank_denoising:
         denoising_tsvd = None
+
+    trough_offset_samples = waveform_cfg.trough_offset_samples(
+        recording.sampling_frequency
+    )
+    spike_length_samples = waveform_cfg.spike_length_samples(
+        recording.sampling_frequency
+    )
 
     # template logic
     # for each unit, get shifted raw and denoised averages and channel SNRs
@@ -341,7 +349,7 @@ def get_templates(
         )
 
     weights = denoising_weights(
-        snrs_by_channel,
+        snrs=snrs_by_channel,
         spike_length_samples=spike_length_samples,
         trough_offset=trough_offset_samples,
         snr_threshold=denoising_snr_threshold,
@@ -366,108 +374,6 @@ def get_templates(
         weights=weights,
         **geom_kw,
     )
-
-
-# -- helpers
-
-
-def fit_tsvd(
-    recording,
-    sorting,
-    denoising_rank=5,
-    denoising_fit_radius=75.0,
-    denoising_spikes_fit=25_000,
-    trough_offset_samples=42,
-    spike_length_samples=121,
-    recompute_tsvd=False,
-    dtype=np.float32,
-    random_seed=0,
-    n_iter=15,
-) -> PCA | TruncatedSVD:
-    tsvd = None
-    if not recompute_tsvd:
-        tsvd = load_stored_tsvd(sorting, trim_rank_to=denoising_rank)
-        assert isinstance(tsvd, (TruncatedSVD, PCA))
-    if tsvd is not None:
-        return tsvd
-
-    # read spikes on channel neighborhood
-    geom = recording.get_channel_locations()
-    tsvd_channel_index = make_channel_index(geom, denoising_fit_radius)
-
-    # subset spikes used to fit tsvd
-    rg = np.random.default_rng(random_seed)
-    max_time = recording.get_num_samples() - (
-        spike_length_samples - trough_offset_samples
-    )
-    t_clip = sorting.times_samples.clip(trough_offset_samples, max_time)
-    valid = np.logical_and(
-        sorting.labels >= 0,
-        sorting.times_samples == t_clip,
-    )
-    choices = np.flatnonzero(valid)
-    if choices.size > denoising_spikes_fit:
-        choices = rg.choice(choices, denoising_spikes_fit, replace=False)
-        choices.sort()
-    times = sorting.times_samples[choices]
-    channels = sorting.channels[choices]
-
-    # grab waveforms
-    waveforms = spikeio.read_waveforms_channel_index(
-        recording,
-        times,
-        tsvd_channel_index,
-        channels,
-        trough_offset_samples=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        fill_value=0.0,  # all-0 rows don't change SVD basis
-    )
-    waveforms = waveforms.astype(dtype)
-    waveforms = waveforms.transpose(0, 2, 1)
-    waveforms = waveforms.reshape(len(times) * tsvd_channel_index.shape[1], -1)
-
-    # reshape, fit tsvd, and done
-    tsvd = TruncatedSVD(
-        n_components=denoising_rank, random_state=random_seed, n_iter=n_iter
-    )
-    tsvd.fit(waveforms)
-
-    return tsvd
-
-
-def denoising_weights(
-    snrs,
-    spike_length_samples,
-    trough_offset,
-    snr_threshold,
-    a=12.0,
-    b=12.0,
-    d=6.0,
-    edge_behavior="saturate",
-):
-    """Weights are applied to raw template, 1-weights to low rank"""
-    # v shaped function for time weighting
-    vt = np.abs(np.arange(spike_length_samples) - trough_offset, dtype=float)
-    if trough_offset < spike_length_samples:
-        vt[trough_offset:] /= vt[trough_offset:].max()
-    if trough_offset > 0:
-        vt[:trough_offset] /= vt[:trough_offset].max()
-
-    # snr weighting per channel
-    if edge_behavior == "saturate":
-        snc = np.minimum(snrs, snr_threshold) / snr_threshold
-    elif edge_behavior == "inf":
-        snc = np.minimum(snrs, snr_threshold) / snr_threshold
-        snc[snc >= 1.0] = np.inf
-    elif edge_behavior == "raw":
-        snc = snrs
-    else:
-        assert False
-
-    # pass it through a hand picked squashing function
-    wntc = 1.0 / (1.0 + np.exp(d + a * vt[None, :, None] - b * snc[:, None, :]))
-
-    return wntc
 
 
 # -- main routine which does all the spike loading and computation

@@ -924,6 +924,7 @@ def subtract_chunk(
         if resid_keep is not None:
             if not resid_keep.numel():
                 break
+            assert original_waveforms is not None
             if resid_keep.numel() < len(original_waveforms):
                 waveforms = waveforms[resid_keep]
                 times_samples = times_samples[resid_keep]

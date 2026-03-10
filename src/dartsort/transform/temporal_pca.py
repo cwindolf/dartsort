@@ -281,7 +281,9 @@ class BaseTemporalPCA(BaseWaveformModule):
         pca.mean_ = self.b.mean.numpy(force=True)
         pca.components_ = self.b.components[:rank].numpy(force=True)
         pca.explained_variance_ = np.square(self.b.whitener[:rank].numpy(force=True))
+
         pca.temporal_slice = self.temporal_slice  # this is not standard  # type: ignore
+
         return pca
 
     @classmethod

@@ -333,6 +333,11 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
+TemplateSVDMethod = Literal[
+    "collisioncleaned", "spike_sklearn", "peeler", "raw_template"
+]
+
+
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
@@ -378,8 +383,8 @@ class TemplateConfig:
     # low rank denoising?
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
-    recompute_tsvd: bool = True
     denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
+    svd_method: TemplateSVDMethod = "spike_sklearn"
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -917,7 +922,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         denoising_method=cfg.template_denoising_method,
         use_zero=cfg.template_mix_zero,
         use_svd=cfg.template_mix_svd,
-        recompute_tsvd=cfg.always_recompute_tsvd,
+        svd_method=cfg.template_svd_method,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,

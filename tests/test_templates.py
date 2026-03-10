@@ -24,6 +24,7 @@ from dartsort.util.internal_config import (
     TemplateConfig,
     TemplateRealignmentConfig,
     InterpolationParams,
+    WaveformConfig,
 )
 
 
@@ -142,7 +143,12 @@ def test_refractory_templates_algorithm_agreement(
 
     tsvd = None
     if denoising_method != "none":
-        tsvd = fit_tsvd(sim["recording"], sim["sorting"])
+        tsvd = fit_tsvd(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            motion_est=sim["motion_est"],
+            waveform_cfg=WaveformConfig(),
+        )
 
     tds = []
     if reduction == "mean":
@@ -239,7 +245,7 @@ def test_drifting_refractory_templates(refractory_simulations):
             np.testing.assert_allclose(temps[sl], td.templates[sl], atol=7.0)
         else:
             assert False
-    
+
         sl = slice(None)
         if tcfg.algorithm == "unitextract":
             np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
@@ -306,15 +312,15 @@ def test_static_templates(tmp_path):
         channels=np.array([1, 5]),
         sampling_frequency=1,
     )
+    waveform_cfg = WaveformConfig.from_samples(0, 2, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
             res = get_templates(
-                rec,
-                sorting,
-                trough_offset_samples=0,
-                spike_length_samples=2,
+                recording=rec,
+                sorting=sorting,
+                waveform_cfg=waveform_cfg,
                 low_rank_denoising=False,
             )
             temps = res["raw_templates"]
@@ -338,6 +344,8 @@ def test_drifting_templates(tmp_path):
     rec0 = sc.NumpyRecording(rec0, 1)
     rec0.set_dummy_probe_from_locations(geom)
 
+    waveform_cfg = WaveformConfig.from_samples(0, 2, 1)
+
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
         for rec in [rec0, rec1]:
@@ -358,12 +366,11 @@ def test_drifting_templates(tmp_path):
             )
 
             res = get_templates(
-                rec,
-                sorting,
+                recording=rec,
+                sorting=sorting,
                 geom=geom,
                 motion_est=me,
-                trough_offset_samples=0,
-                spike_length_samples=2,
+                waveform_cfg=waveform_cfg,
                 low_rank_denoising=False,
                 show_progress=False,
             )
