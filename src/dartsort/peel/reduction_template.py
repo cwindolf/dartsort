@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 
 class ReductionTemplateData(TemplateData):
     _algorithm: ClassVar = "peelreduce"
+    peel_kind = "Templates"
 
     @classmethod
     def _from_config(
@@ -85,7 +86,9 @@ class ReductionTemplateData(TemplateData):
         with TemporaryDirectory(
             prefix="dartsorttemplates", ignore_cleanup_errors=True
         ) as tdir:
-            h5p = resolve_path(tdir) / "tmp.h5"
+            tdir = resolve_path(tdir)
+            h5p = tdir / "tmp.h5"
+            p.load_or_fit_and_save_models(tdir / "models")
             p.peel(output_hdf5_filename=h5p, show_progress=show_progress)
 
             # extract outputs and handle denoising method
@@ -194,6 +197,7 @@ class TemplateReduction(GrabAndFeaturize):
             tsvd = FullProbeTemporalPCAEmbedder(
                 channel_index=channel_index,
                 rank=template_cfg.denoising_rank,
+                geom=geom,
                 fit_radius=template_cfg.denoising_fit_radius,
                 max_waveforms=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
             )

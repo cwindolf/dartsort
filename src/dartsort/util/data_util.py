@@ -752,7 +752,7 @@ def load_stored_tsvd(
 ):
     from ..transform import BaseTemporalPCA
 
-    if sorting.parent_h5_path is None:
+    if not isinstance(sorting, Path) and sorting.parent_h5_path is None:
         logger.info("Couldn't load stored basis.")
         return None
     pipeline, pt_path = get_featurization_pipeline(sorting)
