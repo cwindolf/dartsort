@@ -290,18 +290,20 @@ def shared_basis_compress_templates(
         unit_ids = np.arange(len(templates))
 
     n, t, c = templates.shape
+    rank = min(rank, t)
     if precomputed_basis is None:
         temporal_comps = get_shared_temporal_basis(
             templates, rank, dev, min_channel_amplitude
         )
+        assert temporal_comps.shape == (rank, t)
     else:
+        assert precomputed_basis.shape == (rank, t)
         temporal_comps = precomputed_basis
-    assert temporal_comps.shape == (rank, t)
 
     # project templates onto temporal comps (no sparsity here.)
     # spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
     templates_t = templates.transpose(0, 2, 1).reshape(n * c, t)
-    spatial_sing = templates_t @ (temporal_comps).T
+    spatial_sing = templates_t @ temporal_comps.T
     spatial_sing = spatial_sing.reshape(n, c, rank).transpose(0, 2, 1)
     spatial_sing = np.ascontiguousarray(spatial_sing)
 

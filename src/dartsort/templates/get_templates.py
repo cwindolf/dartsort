@@ -152,7 +152,7 @@ def get_templates_unitextract(
         rgeom = geom
     if tsvd is None:
         tsvd = results["denoising_tsvd"]
-        assert isinstance(tsvd, (PCA, TruncatedSVD))
+    assert tsvd is None or isinstance(tsvd, (PCA, TruncatedSVD))
     obj = TemplateData(
         templates=cast(np.ndarray, results["templates"]),
         unit_ids=cast(np.ndarray, unit_ids),

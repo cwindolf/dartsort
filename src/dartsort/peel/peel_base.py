@@ -266,7 +266,7 @@ class BasePeeler(BModule):
                         mininterval=0.25,
                     )
                 else:
-                    n_sec_chunk = None
+                    dtag = n_sec_chunk = None
 
                 # construct h5 after forking to avoid pickling it
                 with self.initialize_files(
