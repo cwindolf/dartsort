@@ -7,6 +7,7 @@ from ..util.internal_config import (
     WaveformConfig,
     TemplateConfig,
     ComputationConfig,
+    default_waveform_cfg,
 )
 from ..util.data_util import DARTsortSorting, load_stored_tsvd
 from ..util.waveform_util import make_channel_index
@@ -22,9 +23,10 @@ def fit_tsvd(
     denoising_rank=5,
     denoising_fit_radius=75.0,
     denoising_spikes_fit=25_000,
-    waveform_cfg: WaveformConfig,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
     svd_method: TemplateSVDMethod = "spike_sklearn",
+    svd_input_templates: TemplateData | None = None,
     dtype=np.float32,
     random_seed=0,
     n_iter=15,
@@ -37,13 +39,16 @@ def fit_tsvd(
     if svd_method == "raw_template":
         from .template_util import shared_basis_compress_templates
 
-        td = quick_mean_templates(
-            recording=recording,
-            sorting=sorting,
-            waveform_cfg=waveform_cfg,
-            computation_cfg=computation_cfg,
-            motion_est=motion_est,
-        )
+        if svd_input_templates is None:
+            td = quick_mean_templates(
+                recording=recording,
+                sorting=sorting,
+                waveform_cfg=waveform_cfg,
+                computation_cfg=computation_cfg,
+                motion_est=motion_est,
+            )
+        else:
+            td = svd_input_templates
         tdc = shared_basis_compress_templates(
             td, rank=denoising_rank, computation_cfg=computation_cfg
         )
@@ -51,6 +56,7 @@ def fit_tsvd(
         pca = PCA(n_components=denoising_rank, random_state=random_seed, whiten=False)
         pca.mean_ = np.zeros_like(td.templates[0, :, 0])
         pca.components_ = basis
+        pca.explained_variance_ = np.full_like(basis[:, 0], np.nan)
         return pca
 
     assert svd_method == "spike_sklearn"

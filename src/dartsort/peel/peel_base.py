@@ -297,7 +297,7 @@ class BasePeeler(BModule):
                             batch_count += 1
                             n_spikes += n_new_spikes
                             if show_progress:
-                                desc = f"{task_name}"
+                                desc = f"{task_name}:{dtag}"
                                 if not skip_features:
                                     assert n_sec_chunk is not None
                                     desc += f" [spk/{n_sec_chunk:g}s={n_spikes / batch_count:0.1f}]"

@@ -78,10 +78,11 @@ class ReductionTemplateData(TemplateData):
             tsvd=tsvd,
         )
 
-        # TODO: reducer doesn't work in parallel
         # TODO: file not always needed
         computation_cfg = ensure_computation_config(computation_cfg)
-        computation_cfg = ComputationConfig(device=computation_cfg.actual_device().type)
+        if template_cfg.reduction == "mean":
+            # TODO: reducer doesn't work in parallel when gathering means, go to single job
+            computation_cfg = ComputationConfig(device=computation_cfg.actual_device().type)
         with TemporaryDirectory(
             prefix="dartsorttemplates", ignore_cleanup_errors=True
         ) as tdir:
@@ -96,6 +97,8 @@ class ReductionTemplateData(TemplateData):
                 output_hdf5_filename=h5p,
                 show_progress=show_progress,
                 task_name=task_name,
+                computation_cfg=computation_cfg,
+                ignore_resuming=True,
             )
 
             # extract outputs and handle denoising method
@@ -283,7 +286,7 @@ class TemplateReduction(GrabAndFeaturize):
             ),
         )
 
-    def temporal_svd(self):
+    def temporal_svd(self) -> PCA | None:
         assert self.featurization_pipeline is not None
         tsvd = None
         for ft in self.featurization_pipeline.transformers:

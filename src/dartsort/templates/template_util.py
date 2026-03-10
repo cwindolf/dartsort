@@ -272,7 +272,11 @@ class SharedBasisTemplates:
 
 
 def shared_basis_compress_templates(
-    template_data, min_channel_amplitude=1.0, rank=5, computation_cfg=None
+    template_data,
+    min_channel_amplitude=1.0,
+    rank=5,
+    computation_cfg=None,
+    precomputed_basis: np.ndarray | None = None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
     dev = computation_cfg.actual_device()
@@ -284,41 +288,15 @@ def shared_basis_compress_templates(
         templates = template_data
         counts = None
         unit_ids = np.arange(len(templates))
+
     n, t, c = templates.shape
-    rank = min(rank, t)
-    amp_vecs = ptp(templates, dim=1)
-    assert np.isfinite(amp_vecs).all()
-    visible = amp_vecs > min_channel_amplitude
-    uu, cc = np.nonzero(visible)
-    nvis = uu.shape[0]
-
-    # put time on the first axis
-    if nvis == visible.size:
-        to_compress = templates.transpose(1, 0, 2)
-        to_compress = to_compress.reshape(t, n * c)
+    if precomputed_basis is None:
+        temporal_comps = get_shared_temporal_basis(
+            templates, rank, dev, min_channel_amplitude
+        )
     else:
-        to_compress = templates[uu, :, cc]
-        assert to_compress.shape == (nvis, t)
-        to_compress = to_compress.T
-
-    # get the temporal basis
-    # we'll use cov->eigh here since we'd project onto U anyway
-    to_compress = torch.asarray(to_compress, device=dev, dtype=torch.double)
-    # U, S, Vh = _svd_helper(to_compress)
-    # assert U.shape == (t, min(t, nvis))
-    cov = torch.cov(to_compress, correction=0)
-    m = to_compress.mean(dim=1, keepdim=True)
-    cov += m * m.T
-    if nvis < t:
-        logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
-        cov.diagonal().add_(1e-5)
-    vals, U = torch.linalg.eigh(cov)
-    temporal_comps = U[:, -rank:]
-    # to rank-major
-    temporal_comps = temporal_comps.T.contiguous()
-    temporal_comps = temporal_comps.numpy(force=True)
-    temporal_comps = temporal_comps[::-1]
-    temporal_comps = np.ascontiguousarray(temporal_comps, dtype=templates.dtype)
+        temporal_comps = precomputed_basis
+    assert temporal_comps.shape == (rank, t)
 
     # project templates onto temporal comps (no sparsity here.)
     # spatial_sing = np.einsum("ntc,rt->nrc", templates, temporal_comps)
@@ -347,6 +325,47 @@ def shared_basis_compress_templates(
         spatial_singular=spatial_sing,
         spike_counts_by_channel=counts,
     )
+
+
+def get_shared_temporal_basis(
+    templates: np.ndarray, rank: int, device: torch.device, min_channel_amplitude: float
+) -> np.ndarray:
+    n, t, c = templates.shape
+    rank = min(rank, t)
+    amp_vecs = ptp(templates, dim=1)
+    assert np.isfinite(amp_vecs).all()
+    visible = amp_vecs > min_channel_amplitude
+    uu, cc = np.nonzero(visible)
+    nvis = uu.shape[0]
+
+    # put time on the first axis
+    if nvis == visible.size:
+        to_compress = templates.transpose(1, 0, 2)
+        to_compress = to_compress.reshape(t, n * c)
+    else:
+        to_compress = templates[uu, :, cc]
+        assert to_compress.shape == (nvis, t)
+        to_compress = to_compress.T
+
+    # get the temporal basis
+    # we'll use cov->eigh here since we'd project onto U anyway
+    to_compress = torch.asarray(to_compress, device=device, dtype=torch.double)
+    # U, S, Vh = _svd_helper(to_compress)
+    # assert U.shape == (t, min(t, nvis))
+    cov = torch.cov(to_compress, correction=0)
+    m = to_compress.mean(dim=1, keepdim=True)
+    cov += m * m.T
+    if nvis < t:
+        logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
+        cov.diagonal().add_(1e-5)
+    vals, U = torch.linalg.eigh(cov)
+    temporal_comps = U[:, -rank:]
+    # to rank-major
+    temporal_comps = temporal_comps.T.contiguous()
+    temporal_comps = temporal_comps.numpy(force=True)
+    temporal_comps = temporal_comps[::-1]
+    temporal_comps = np.ascontiguousarray(temporal_comps, dtype=templates.dtype)
+    return temporal_comps
 
 
 def temporally_upsample_templates(

@@ -6,6 +6,7 @@ from .template_util import (
     CompressedUpsampledTemplates,
     LowRankTemplates,
     templates_at_time,
+    shared_basis_compress_templates,
 )
 from ..peel.matching_util.pairwise import CompressedPairwiseConv, SeparablePairwiseConv
 from .realignment import realign, estimate_offset
