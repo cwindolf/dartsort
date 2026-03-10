@@ -485,7 +485,7 @@ class DARTsortAnalysis:
                 geom=self.geom,
                 registered_geom=self.registered_geom,
                 channels=self.sorting.channels[which],
-                channel_index=self.vis_channel_index,
+                channel_index=self.sorting.channel_index,
                 n_pitches_shift=n_pitches_shift,
             )[0]
         else:
