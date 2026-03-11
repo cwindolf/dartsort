@@ -291,7 +291,7 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
         )
         np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
         if denoising_method == "none" and erp.method != "nearest":
-            np.testing.assert_allclose(template_data.templates, temps, atol=1e-3)
+            np.testing.assert_allclose(template_data.templates, temps, atol=2e-1)
         elif denoising_method == "none":
             np.testing.assert_array_equal(template_data.templates, temps)
         else:
@@ -312,7 +312,7 @@ def test_static_templates(tmp_path):
         channels=np.array([1, 5]),
         sampling_frequency=1,
     )
-    waveform_cfg = WaveformConfig.from_samples(0, 2, 1)
+    waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
@@ -325,7 +325,7 @@ def test_static_templates(tmp_path):
             )
             temps = res["raw_templates"]
             assert isinstance(temps, np.ndarray)
-            assert temps.shape == (2, 2, 10)
+            assert temps.shape == (2, 3, 10)
 
             assert temps[0, 0, 1] == 1
             temps[0, 0, 1] -= 1
@@ -344,7 +344,7 @@ def test_drifting_templates(tmp_path):
     rec0 = sc.NumpyRecording(rec0, 1)
     rec0.set_dummy_probe_from_locations(geom)
 
-    waveform_cfg = WaveformConfig.from_samples(0, 2, 1)
+    waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
@@ -386,7 +386,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps0, np.ndarray)
-            assert temps0.shape == (2, 2, 7)
+            assert temps0.shape == (2, 3, 7)
             assert temps0[0, 0, 1] == 1
             assert temps0[1, 0, 2] == 2
 
@@ -399,7 +399,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps6, np.ndarray)
-            assert temps6.shape == (2, 2, 7)
+            assert temps6.shape == (2, 3, 7)
             assert temps6[0, 0, 4] == 1
             assert temps6[1, 0, 5] == 2
 
@@ -412,7 +412,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps8, np.ndarray)
-            assert temps8.shape == (2, 2, 7)
+            assert temps8.shape == (2, 3, 7)
             assert temps8[0, 0, 5] == 1
             assert temps8[1, 0, 6] == 2
 

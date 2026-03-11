@@ -33,6 +33,7 @@ class WaveformConfig:
     def from_samples(
         cls, samples_before: int, samples_after: int, sampling_frequency=30_000.0
     ) -> Self:
+        sampling_frequency = float(sampling_frequency)
         samples_per_ms = sampling_frequency / 1000
         self = cls(
             ms_before=samples_before / samples_per_ms,
@@ -40,12 +41,17 @@ class WaveformConfig:
         )
         assert self.trough_offset_samples(sampling_frequency) == samples_before
         samples_total = samples_before + samples_after
+        if not samples_total % 2:
+            raise ValueError(f"{samples_before=} plus {samples_after=} should be odd.")
         assert self.spike_length_samples(sampling_frequency) == samples_total
         return self
 
     @staticmethod
     def ms_to_samples(ms, sampling_frequency=30_000.0):
-        return int(ms * (sampling_frequency / 1000))
+        if ms > sampling_frequency:
+            return int((ms / 1000.0) * sampling_frequency)
+        else:
+            return int(ms * (sampling_frequency / 1000.0))
 
     def trough_offset_samples(self, sampling_frequency=30_000.0):
         sampling_frequency = np.round(sampling_frequency)

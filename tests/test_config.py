@@ -22,3 +22,5 @@ def test_waveform_config():
     assert cfg0.spike_length_samples() == 121
     assert cfg1.trough_offset_samples() == 42
     assert cfg1.spike_length_samples() == 121
+    assert cfg0.trough_offset_samples(30_000.1) == 42
+    assert cfg0.spike_length_samples(30_000.1) == 121
