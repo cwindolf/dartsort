@@ -233,7 +233,8 @@ class InterpolationParams:
 
 
 default_interpolation_params = InterpolationParams()
-default_template_interpolation_params = InterpolationParams(extrap_method="nan")
+clampna_interp_params = InterpolationParams(method="clampna")
+default_template_interpolation_params = InterpolationParams(extrap_method="clampna")
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
@@ -438,7 +439,10 @@ class TemplateRealignmentConfig:
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
-    template_cfg: TemplateConfig = TemplateConfig(denoising_method="none")
+    template_cfg: TemplateConfig = TemplateConfig(
+        denoising_method="none",
+        template_interp_params=clampna_interp_params,
+    )
     min_pair_corr: float = 0.8
 
 
@@ -745,6 +749,7 @@ default_waveform_cfg = WaveformConfig()
 default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
+default_template_cfg = TemplateConfig()
 default_template_cfg = TemplateConfig()
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()
@@ -1062,7 +1067,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_cfg=TemplateConfig(
                 denoising_method="none",
                 spikes_per_unit=cfg.template_spikes_per_unit,
-                reduction=cfg.template_reduction,
+                reduction="mean",
+                template_interp_params=clampna_interp_params,
             ),
         ),
         refractory_radius_frames=cfg.refractory_radius_frames,
@@ -1110,7 +1116,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
-raw_template_cfg = TemplateConfig(denoising_method="none")
+raw_template_cfg = TemplateConfig(
+    denoising_method="none", template_interp_params=clampna_interp_params
+)
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
     denoising_method="none",

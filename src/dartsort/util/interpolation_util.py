@@ -354,7 +354,9 @@ def kernel_interpolate(
     if extrap_diff:
         # control over extrapolation with another method...
         assert features_out is not None
-        targ_extrap = extrap_mask(source_pos, target_pos)[:, None]
+        targ_extrap = extrap_mask(source_pos, target_pos)[:, None].broadcast_to(
+            features.shape
+        )
         features = torch.where(targ_extrap, features_out, features, out=features)
 
     return features
@@ -377,6 +379,12 @@ def _kernel_interpolate(
     allow_destroy=False,
     out=None,
 ):
+    shared_kernel = source_pos.ndim == target_pos.ndim == 2
+    if shared_kernel:
+        source_pos = source_pos[None]
+        target_pos = target_pos[None]
+    else:
+        assert source_pos.ndim == target_pos.ndim == 3
     out_shape = (*features.shape[:2], target_pos.shape[1])
     is_nearest = method == "nearest" or kernel_name == "nearest"
     is_clampna = method == "clampna" or kernel_name == "clampna"
@@ -422,9 +430,9 @@ def _kernel_interpolate(
         assert precomputed_data is not None
         precomputed_data = precomputed_data.to(features)
         features = kriging_solve(
-            target_pos,
-            kernel,
-            features,
+            target_pos=target_pos,
+            kernels=kernel,
+            features=features,
             solvers=precomputed_data,
             solver_map=solver_map,
             neighborhoods=neighborhoods,
@@ -494,83 +502,154 @@ def get_kernel(
 
 
 def kriging_solve(
-    target_pos,
-    kernels,
-    features,
-    solvers,
+    target_pos: torch.Tensor,
+    kernels: torch.Tensor,
+    features: torch.Tensor,
+    solvers: torch.Tensor,
     neighborhoods: torch.Tensor | None,
     solver_map: torch.Tensor | None = None,
     sigma=1.0,
     poly_degree=-1,
-):
+) -> torch.Tensor:
     if neighborhoods is None:
         assert solvers.ndim == 3
-        kernels, y = kriging_poly_expand(
+        kernels, y, _ = kriging_poly_expand(
             target_pos, features, kernels, poly_degree, sigma
         )
+        assert y is not None
         return y.bmm(solvers).bmm(kernels)
+    else:
+        return kriging_neighborhood_solve(
+            solvers=solvers,
+            features=features,
+            kernels=kernels,
+            target_pos=target_pos,
+            solver_map=solver_map,
+            neighborhoods=neighborhoods,
+            poly_degree=poly_degree,
+            sigma=sigma,
+        )
 
-    # per-channel case (each output chan has its own local neighb)
-    # this is meant to mimic the "neighbors" option to scipy's RBFInterpolator,
-    # but the implementation here is obscure. the rest of the logic is only shown
-    # once, and that's in full_probe_precompute.
-    # assumes that output channels and input channels are the same, and that all
-    # inputs share the same neighborhood-solver per channel.
-    oc = kernels.shape[2]
-    kernels = F.pad(kernels, (0, 0, 0, 1))
+
+def kriging_neighborhood_solve(
+    solvers: torch.Tensor,
+    features: torch.Tensor,
+    kernels: torch.Tensor,
+    target_pos: torch.Tensor,
+    solver_map: torch.Tensor | None,
+    neighborhoods: torch.Tensor,
+    poly_degree: int,
+    sigma: float,
+) -> torch.Tensor:
+    """This is like the "neighborhoods" option to numpy's RBFInterpolator
+
+    Each output channel is handled independently using a per-neighborhood solver.
+    This is for numerical reasons. It's used in the full-probe interpolation where
+    we'd otherwise be trying to invert large ill-conditioned kriging coefficient
+    matrices.
+    """
+    assert kernels.ndim == 3, 1
+    assert kernels.shape[0] == 1, 2  # shared kernel in this context
+    kernel = kernels[0]
+    assert kernel.shape[0] == features.shape[2], 3
+    del kernels
+    assert target_pos.shape[0] == 1
+    target_pos = target_pos[0]
+
+    input_channels, output_channels = kernel.shape
+    arange_out = torch.arange(output_channels)
+    # add extra row of 0s so that these can be indexed by the neighborhoods array,
+    # which will contain n_channels entries
+    kernel = F.pad(kernel, (0, 0, 0, 1))
     features = F.pad(features, (0, 1))
-    # c = kernels.shape[2]
-    # if solver_map is None:
-    #     assert c == solvers.shape[0]
-    # c_ = kernels.shape[1]
-    # assert c_ >= c
-    # assert c_ == solvers.shape[1] == solvers.shape[2]
-    out = features.new_zeros((*features.shape[:2], oc))
-    for occ in range(oc):
-        # solver_map brings channels of y (targ chans) to source geom
-        if solver_map is None:
-            sc = occ
-        else:
-            sc = solver_map[occ]
-        neighb = neighborhoods[sc]
-        kc = kernels[:, neighb]
-        y = features[:, :, neighb]
-        solvc = solvers[sc]
-        kc, y = kriging_poly_expand(target_pos, y, kc, poly_degree, sigma)
-        out[:, :, occ] = torch.einsum("ntp,pq,nq->nt", y, solvc, kc[:, :, occ])
-    # return torch.einsum("ntp,cpq,nqc->ntc", y, solvers, kernels)
+
+    if solver_map is not None:
+        solvers = solvers[solver_map]
+        neighborhoods = neighborhoods[solver_map]
+    n_neighborhoods, nc_neighb = neighborhoods.shape
+
+    # construct output kernels for each neighborhood
+    # each output channel's kernel is k[:, neighb[outchan], outchan], plus the
+    # expansion that would normally be done by kriging_poly_expand below
+    neighb_kernels = kernel[neighborhoods, arange_out[:, None]]
+    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb), 4
+    neighb_kernels, _, extra_dim = kriging_poly_expand(
+        target_pos=target_pos[:, None],
+        features=None,
+        kernels=neighb_kernels[:, :, None],
+        poly_degree=poly_degree,
+        sigma=sigma,
+    )
+    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb + extra_dim, 1), 5
+    neighb_solved = solvers.bmm(neighb_kernels)
+    assert neighb_solved.shape == (n_neighborhoods, nc_neighb + extra_dim, 1), 6
+    neighb_solved = neighb_solved[:, :, 0]
+
+    # now, pad out neighborhoods with extra_dim `input_channels`s so that the
+    # zero-padding is carried out correctly in the loop
+    neighborhoods_padded = F.pad(neighborhoods, (0, extra_dim), value=input_channels)
+    features_flat = features.view(-1, features.shape[2])
+    assert features_flat.shape[1] == input_channels + 1
+    assert neighborhoods_padded.ndim == 2
+    assert neighborhoods_padded.shape == neighb_solved.shape
+    out_flat = _kneighb_loop(features_flat, neighborhoods_padded, neighb_solved)
+    assert out_flat.shape[1] == output_channels, 7
+    out = out_flat.view(*features.shape[:2], output_channels)
+    return out
+
+
+@torch.jit.script
+def _kneighb_loop(
+    features_padded_flat: torch.Tensor,
+    neighborhoods_padded: torch.Tensor,
+    neighb_solved: torch.Tensor,
+):
+    out = features_padded_flat.new_empty(
+        (features_padded_flat.shape[0], neighborhoods_padded.shape[0])
+    )
+    for j in range(neighborhoods_padded.shape[0]):
+        neighb = neighborhoods_padded[j]
+        fj = features_padded_flat[:, neighb]
+        torch.mv(fj, neighb_solved[j], out=out[:, j])
     return out
 
 
 def kriging_poly_expand(
     target_pos: torch.Tensor,
-    features: torch.Tensor,
+    features: torch.Tensor | None,
     kernels: torch.Tensor,
     poly_degree: int,
     sigma: float,
-):
-    n, rank = features.shape[:2]
-    n_, n_targ, dim = target_pos.shape
-    assert n == n_
+) -> tuple[torch.Tensor, torch.Tensor | None, int]:
+    """Add polynomial basis terms to features and kernels
+
+    Features get extra rows of zeros, and kernels get the basis stuff.
+
+    The zeros get tacked on along the last dimension of features, which is the
+    input channels dimension to the kernel.
+
+    Similarly, the kernels get the basis terms stacked onto their input dimension,
+    which is the first post-batch dimension, dim 1.
+    """
+    n, n_targ, dim = target_pos.shape
+    assert kernels.shape[0] == n
+    assert kernels.shape[2] == n_targ
+    if features is not None:
+        assert n == features.shape[0]
     if poly_degree == -1:
-        y = features
-        pass
+        extra_dim = 0
     elif poly_degree == 0:
-        zero = features.new_zeros((n, rank, 1))
-        y = torch.concatenate([features, zero], dim=2)
-        const = features.new_ones((n, 1, n_targ))
+        extra_dim = 1
+        const = kernels.new_ones((n, 1, n_targ))
         kernels = torch.concatenate([kernels, const], dim=1)
     elif poly_degree == 1:
-        zero = features.new_zeros((n, rank, 1 + dim))
-        y = torch.concatenate([features, zero], dim=2)
-        const = features.new_ones((n, 1, n_targ))
+        extra_dim = 1 + dim
+        const = kernels.new_ones((n, 1, n_targ))
         xy = (target_pos / sigma).nan_to_num_().mT
         kernels = torch.concatenate([kernels, xy, const], dim=1)
     elif poly_degree == 2:
-        ddim = 1 + dim + (dim * (dim + 1)) // 2
-        zero = features.new_zeros((n, rank, ddim))
-        y = torch.concatenate([features, zero], dim=2)
-        const = features.new_ones((n, 1, n_targ))
+        extra_dim = 1 + dim + (dim * (dim + 1)) // 2
+        const = kernels.new_ones((n, 1, n_targ))
         xy = (target_pos / sigma).nan_to_num_().mT
         if dim == 1:
             xysq = (xy.square(),)
@@ -588,7 +667,15 @@ def kriging_poly_expand(
         kernels = torch.concatenate([kernels, xy, *xysq, const], dim=1)
     else:
         assert False
-    return kernels, y
+
+    if extra_dim and features is not None:
+        rank = features.shape[1]
+        zero = features.new_zeros((n, rank, extra_dim))
+        y = torch.concatenate([features, zero], dim=2)
+    else:
+        y = features
+
+    return kernels, y, extra_dim
 
 
 def bake_interpolation_1d(
@@ -727,6 +814,10 @@ def get_rsq(
 
 def extrap_mask(source_pos, target_pos, eps=1e-3):
     """Only works for vertical shift."""
+    if source_pos.ndim == target_pos.ndim == 2:
+        source_pos = source_pos[None]
+        target_pos = target_pos[None]
+    assert source_pos.ndim == target_pos.ndim == 3
     source_x_uniq = source_pos[..., 0].unique()
     source_x_uniq = source_x_uniq[source_x_uniq.isfinite()]
 
@@ -1310,8 +1401,8 @@ class ToFullProbeInterpolator(BModule):
         n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
-            source_pos=sgeom[None].broadcast_to(n, -1, self.dim),
-            target_pos=tgeom[None].broadcast_to(n, -1, self.dim),
+            source_pos=sgeom,
+            target_pos=tgeom,
             precomputed_data=self.b.data,
             neighborhoods=self.b.channel_index,
             solver_map=solver_map,
@@ -1374,8 +1465,8 @@ class FromFullProbeInterpolator(BModule):
         n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
-            source_pos=self.b.rgeom[None].broadcast_to(n, self.c_src, self.dim),
-            target_pos=(self.b.geom - shift).broadcast_to(n, self.c_targ, self.dim),
+            source_pos=self.b.rgeom,
+            target_pos=self.b.geom - shift,
             precomputed_data=self.b.data,
             neighborhoods=self.b.rchannel_index,
             solver_map=solver_map,
