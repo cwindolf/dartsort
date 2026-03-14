@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from scipy.signal import correlate
 from spikeinterface.core import BaseRecording
 from torch import Tensor
+from tqdm.auto import trange
 
 from ...peel.matching import (
     ChunkTemplateData,
@@ -79,6 +80,8 @@ def yield_step_results(
     t_s: float,
     max_iter: int = 5,
     obj_mode=False,
+    sqrt=True,
+    show_progress: bool = False,
 ):
     device = matcher.b.channel_index.device
     chunk = torch.asarray(chunk, device=device)
@@ -92,7 +95,10 @@ def yield_step_results(
     )
 
     cur_residual = chunk.clone()
-    for _ in range(max_iter):
+
+    for it in (
+        trange(max_iter, desc="Match steps") if show_progress else range(max_iter)
+    ):
         pre_conv = chunk_data.convolve(cur_residual.T, padding=matcher.obj_pad_len)
         if obj_mode:
             pre_conv = chunk_data.obj_from_conv(
@@ -122,13 +128,23 @@ def yield_step_results(
             ).numpy(force=True)
         else:
             conv = chk["conv"].numpy(force=True)
+
+        if sqrt:
+            pre_conv_ = np.sign(pre_conv) * np.sqrt(np.abs(pre_conv))
+            conv_ = np.sign(conv) * np.sqrt(np.abs(conv))
+        else:
+            pre_conv_ = pre_conv
+            conv_ = conv
+
         if not chk["n_spikes"]:
+            print(f"Break at {it=}/{max_iter=} because no spikes found.")
             break
+
         times_samples = chk["times_samples"].numpy(force=True)
         labels = chk["labels"].numpy(force=True)
         channels = chk["channels"].numpy(force=True)
 
-        yield resid, pre_conv, conv, times_samples, labels, channels
+        yield it, resid, pre_conv_, conv_, times_samples, labels, channels
 
 
 def visualize_step_results(
@@ -145,6 +161,7 @@ def visualize_step_results(
     obj_mode=False,
     chunk_vis_style: Literal["im", "trace"] = "im",
     gt_sorting: DARTsortSorting | None = None,
+    vis_only_last_step: bool = False,
 ):
     import matplotlib.pyplot as plt
 
@@ -163,7 +180,7 @@ def visualize_step_results(
         gt_t = gt_t[gtvalid] - vis_start
         gt_chan = gt_sorting.channels[gtvalid]
         gt_l = cast(np.ndarray, gt_sorting.labels)[gtvalid]
-        gt_c = glasbey1024[gt_l]
+        gt_c = glasbey1024[gt_l % len(glasbey1024)]
     else:
         gt_t = gt_chan = gt_c = None
 
@@ -178,16 +195,18 @@ def visualize_step_results(
     l_full = np.zeros(chunk.size, dtype=np.int64)
     n = 0
 
-    it = 0
-    for resid, pre_conv, conv, times_samples, labels, channels in yield_step_results(
+    iterator = yield_step_results(
         matcher=matcher,
         chunk=chunk,
         t_s=t_s,
         max_iter=max_iter,
         obj_mode=obj_mode,
-    ):
-        it += 1
+        show_progress=vis_only_last_step,
+    )
+    if vis_only_last_step:
+        iterator = list(iterator)
 
+    for it, resid, pre_conv, conv, times_samples, labels, channels in iterator:
         v = np.flatnonzero(times_samples == times_samples.clip(vis_start, vis_end - 1))
         times_samples = times_samples[v] - vis_start
         labels = labels[v]
@@ -199,6 +218,11 @@ def visualize_step_results(
         t_full[n : n + nnew] = times_samples
         c_full[n : n + nnew] = channels
         l_full[n : n + nnew] = labels
+        nold = n
+        n += nnew
+
+        if vis_only_last_step and it < len(cast(list, iterator)) - 1:
+            continue
 
         panel = plt.figure(figsize=figsize, layout="constrained")
         axes = panel.subplots(nrows=6, sharex=True)
@@ -221,7 +245,12 @@ def visualize_step_results(
                     ax.plot(j, color="k", zorder=1)
                     ax.plot(trace + j, color="k", zorder=2)
             ax.scatter(
-                times_samples, channels, c=glasbey1024[labels], s=s, ec="w", lw=1
+                times_samples,
+                channels,
+                c=glasbey1024[labels % len(glasbey1024)],
+                s=s,
+                ec="w",
+                lw=1,
             )
             ax.set_ylabel(name)
 
@@ -229,27 +258,41 @@ def visualize_step_results(
             axes[-3].scatter(gt_t, gt_chan, c=gt_c, s=4 * s, lw=0, marker="o")
 
         axes[-3].scatter(
-            t_full[:n], c_full[:n], c=glasbey1024[l_full[:n]], s=s, lw=1, ec="k"
+            t_full[:nold],
+            c_full[:nold],
+            c=glasbey1024[l_full[:nold] % len(glasbey1024)],
+            s=s,
+            lw=1,
+            ec="k",
         )
         axes[-3].set_ylabel("channel scatter")
         axes[-3].scatter(
-            times_samples, channels, c=glasbey1024[labels], s=s, ec="w", lw=1
+            times_samples,
+            channels,
+            c=glasbey1024[labels % len(glasbey1024)],
+            s=s,
+            ec="w",
+            lw=1,
         )
-        n += nnew
 
         for j, c in enumerate(pre_conv):
-            axes[-2].plot(obj_domain, c[obj_sl], color=glasbey1024[j], lw=0.5)
+            axes[-2].plot(
+                obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
+            )
         axes[-2].set_ylabel("pre-step " + ("obj" if obj_mode else "conv"))
         for t, l in zip(times_samples, labels):
-            axes[-2].axvline(t, color=glasbey1024[l], lw=1, ls=":")
+            axes[-2].axvline(t, color=glasbey1024[l % len(glasbey1024)], lw=1, ls=":")
         for j, c in enumerate(conv):
-            axes[-1].plot(obj_domain, c[obj_sl], color=glasbey1024[j], lw=0.5)
+            axes[-1].plot(
+                obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
+            )
         axes[-1].set_ylabel("post-step " + ("obj" if obj_mode else "conv"))
         for ax in axes[-2:]:
             ax.grid()
         if obj_mode:
+            vmin = max(-100, pre_conv[:, obj_sl].min(), conv[:, obj_sl].min())
             for ax in axes[-2:]:
-                ax.set_ylim([-100, pre_conv[:, obj_sl].max() * 1.05])
+                ax.set_ylim([vmin, pre_conv[:, obj_sl].max() * 1.05])
 
         panel.suptitle(f"iteration {it}", fontsize=12)
 

@@ -158,6 +158,8 @@ def detect_and_deduplicate(
     # back to TC
     energies = energies[0].T
     max_energies = max_energies[0].T
+    if remove is not None:
+        remove = remove[0].T
 
     # -- spatial deduplication
     # this is max pooling within the channel index's neighborhood's
@@ -166,8 +168,6 @@ def detect_and_deduplicate(
     elif dedup_channel_index is not None and remove_exact_duplicates:
         assert remove is not None
         assert dedup_index_inds is not None
-        remove = remove[0].T
-
         for batch_start in range(0, nsamples, sbs):
             batch_end = min(nsamples, batch_start + sbs)
 
@@ -198,8 +198,13 @@ def detect_and_deduplicate(
     if remove is not None:
         energies.masked_fill_(remove, 0.0)
     if dedup_temporal_radius or (dedup_channel_index is not None):
-        remove = torch.gt(max_energies, energies, out=remove)
-        max_energies.masked_fill_(remove, 0.0)
+        if all_dedup:
+            remove = torch.gt(max_energies, energies, out=remove)
+            keep = remove.logical_not_()
+            max_energies = keep.to(max_energies) * max_energies
+        else:
+            remove = torch.gt(max_energies, energies, out=remove)
+            max_energies.masked_fill_(remove, 0.0)
 
     # this matches the behavior of scipy argrelmax
     if exclude_edges:

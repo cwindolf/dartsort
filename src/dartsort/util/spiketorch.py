@@ -461,11 +461,58 @@ def argrelmax(
     mask = torch.logical_or(x < x1, inds != arange)
     x1.masked_fill_(mask, 0.0)
     F.threshold(x1, threshold, 0.0, inplace=True)
+    x1.masked_fill_(mask, 0.0)
     # exclude edge
     x1[0].zero_()
     x1[-1].zero_()
     ix = torch.nonzero(x1)[:, 0]
     return ix
+
+
+@torch.jit.script
+def argrelmax_dedup(
+    peak_radius: int = 1,
+    *,
+    x: Tensor,
+    dedup_radius: int,
+    threshold: float,
+    arange: Tensor,
+    in_boundary_mask: Tensor,
+):
+    """Modification of scipy's argrelmax for template matching
+
+    This finds peaks>threshold separated by radius, subject to some extra checks.
+     - The peaks will not be in the boundary (`in_boundary_mask`), which in the
+       matching context would mean they could not be subtracted (off the edge)
+     - Exact duplicates will be removed (this is the inds and arange stuff)
+
+    Also, as in scipy, peaks on the very edge (of x itself, or of the non-boundary
+    region) are ignored, since they may not be local maxima. On the edge of the
+    boundary region, they are included when they are local maxima, since we have
+    padding there to check.
+
+    There's also an issue which arises in the usual argrelmax: peaks in the boundary
+    get compared to peaks in the valid region by the max pooling, so that valid peaks
+    get ignored. And this cascades into the interior, so that you eventually see a
+    U-shaped frontier of peaks > threshold which are falsely not included. The impl
+    below handles this case by detecting local maxs without the boundary, excluding
+    the boundary, then deduplicating.
+    """
+    x = x[None, None]
+    xv = x.masked_fill(in_boundary_mask, 0)
+    x1, inds1 = F.max_pool1d_with_indices(
+        x, kernel_size=(2 * peak_radius + 1,), padding=(peak_radius,), stride=(1,)
+    )
+    remove1 = torch.logical_or(xv < x1, inds1 != arange)
+    x1.masked_fill_(remove1, 0.0)
+    F.threshold(x1, threshold, 0.0, inplace=True)
+    x2, inds2 = F.max_pool1d_with_indices(
+        x1, kernel_size=(2 * dedup_radius + 1,), padding=(dedup_radius,), stride=(1,)
+    )
+    remove2 = torch.logical_or(x1 < x2, inds2 != arange)
+    x2.masked_fill_(remove2, 0.0)
+    x2 = x2[0, 0]
+    return x2.nonzero()[:, 0]
 
 
 _cdtypes = {torch.float32: torch.complex64, torch.float64: torch.complex128}
@@ -673,7 +720,6 @@ def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
         # w = wi[valid] * wj[valid]
         w = wmin[valid] / (p * wminsum[valid, None])
         dist = (xi - xj).abs_().mul_(w[:, None]).amax(dim=(1, 2))
-
 
         nmi = (xi.abs_().mul_(w[:, None])).amax(dim=(1, 2))
         nmj = (xj.abs_().mul_(w[:, None])).amax(dim=(1, 2))

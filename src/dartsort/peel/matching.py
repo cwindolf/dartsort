@@ -76,7 +76,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             spike_length_samples = matching_templates_builder.spike_length_samples
         else:
             raise ValueError(f"Need either a MatchingTemplates or a builder.")
-        
+
         fixed_prop_keys = ("channels",)
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
@@ -135,7 +135,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.amp_scale_max = 1.0 + amplitude_scaling_boundary
         self.amp_scale_min = 1.0 / self.amp_scale_max
-        self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples - 1)
+        self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples)
 
         conv_len = (
             self.chunk_length_samples
@@ -256,7 +256,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             matching_cfg.template_temporal_upsampling_factor,
             matching_cfg.refractory_radius_frames,
         )
-        save_collidedness = featurization_cfg.save_collidedness and not featurization_cfg.skip
+        save_collidedness = (
+            featurization_cfg.save_collidedness and not featurization_cfg.skip
+        )
 
         return cls(
             recording=recording,
@@ -374,6 +376,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             refrac_mask = torch.zeros_like(padded_objective)
         else:
             refrac_mask = None
+        in_boundary_mask = torch.zeros(
+            padded_obj_len, dtype=torch.bool, device=residual.device
+        )
+        in_boundary_mask[: self.obj_pad_len] = True
+        in_boundary_mask[-self.obj_pad_len :] = True
 
         # initialize convolution
         chunk_template_data.convolve(
@@ -432,6 +439,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     refrac_mask=apply_refrac_mask,
                     chunk_template_data=chunk_template_data,
                     unit_mask=unit_mask,
+                    in_boundary_mask=in_boundary_mask,
                     coarse_only=coarse_only,
                 )
                 if new_peaks is None or not new_peaks.n_spikes:
@@ -524,6 +532,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_objective: Tensor,
         padded_scalings: Tensor | None,
         refrac_mask: Tensor | None,
+        in_boundary_mask: Tensor,
         chunk_template_data: ChunkTemplateData,
         unit_mask=None,
         coarse_only=False,
@@ -534,24 +543,22 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # enforce refractoriness
-        objective = padded_objective[:-1, self.obj_pad_len : -self.obj_pad_len]
+        objective = padded_objective[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
         if refrac_mask is not None:
-            refrac_mask_ = refrac_mask[:-1, self.obj_pad_len : -self.obj_pad_len]
+            refrac_mask_ = refrac_mask[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
             objective = objective + refrac_mask_
         if unit_mask is not None:
             objective[torch.logical_not(unit_mask)] = -torch.inf
 
         # find peaks in the coarse objective
         assert self.thresholdsq is not None
-        if padded_scalings is None:
-            scalings = None
-        else:
-            scalings = padded_scalings[:, self.obj_pad_len : -self.obj_pad_len]
         coarse_peaks = chunk_template_data.coarse_match(
             objective=objective,
-            scalings=scalings,
+            scalings=padded_scalings,
             thresholdsq=self.thresholdsq,
             obj_arange=self.b.obj_arange,
+            in_boundary_mask=in_boundary_mask,
+            padding=self.obj_pad_len,
         )
         if coarse_only or not coarse_peaks.n_spikes:
             return coarse_peaks

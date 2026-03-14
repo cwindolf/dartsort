@@ -12,7 +12,7 @@ from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
 from ...util.py_util import databag
-from ...util.spiketorch import argrelmax, grab_spikes, ptp
+from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule
 
 logger = get_logger(__name__)
@@ -245,13 +245,16 @@ class ChunkTemplateData:
         scalings: Tensor | None,
         thresholdsq: float,
         obj_arange: Tensor,
+        in_boundary_mask: Tensor,
+        padding: int,
     ) -> "MatchingPeaks":
         objective_max, max_obj_template = objective.max(dim=0)
-        times = argrelmax(
+        times = argrelmax_dedup(
             x=objective_max,
-            radius=self.spike_length_samples,
+            dedup_radius=self.spike_length_samples,
             threshold=thresholdsq,
             arange=obj_arange[: objective_max.numel()],
+            in_boundary_mask=in_boundary_mask,
         )
         n_spikes = times.numel()
         if not n_spikes:
@@ -272,7 +275,7 @@ class ChunkTemplateData:
             assert (scalings >= self.scale_min).all()
             assert (scalings <= self.scale_max).all()
         return MatchingPeaks(
-            times=times,
+            times=times - padding,
             obj_template_inds=template_inds,
             template_inds=template_inds,
             scalings=scalings,
