@@ -1397,8 +1397,6 @@ class ToFullProbeInterpolator(BModule):
         solver_map = dist.argmin(1)
 
         # interpolate from static geom to shifted rgeom
-        # TODO: kernel is shared here, so no need to separately interp each data point.
-        n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
             source_pos=sgeom,

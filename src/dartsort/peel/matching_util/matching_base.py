@@ -605,21 +605,3 @@ def _scaled_coarse_objective(
     torch.addcmul(-inv_lambda, -a, out, out=out)
     out.addcmul_(scalings, b, value=2.0)
     return out
-
-
-@torch.jit.script
-def _coarse_match_scaled(
-    conv: Tensor,
-    template_inds: Tensor,
-    times: Tensor,
-    obj_normsq: Tensor,
-    inv_lambda: Tensor,
-    scale_min: Tensor,
-    scale_max: Tensor,
-):
-    b = conv[template_inds, times] + inv_lambda
-    a = obj_normsq[template_inds] + inv_lambda
-    scalings = b.div(a).clamp_(min=scale_min, max=scale_max)
-    objs = scalings.square().mul_(-a)
-    objs.addcmul_(scalings, b, value=2.0).sub_(inv_lambda)
-    return scalings, objs

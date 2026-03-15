@@ -1,5 +1,6 @@
 import warnings
 from typing import cast
+from pathlib import Path
 
 import h5py
 import linear_operator
@@ -12,7 +13,8 @@ from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
-from tqdm.auto import trange
+from sklearn.decomposition import PCA
+from tqdm.auto import trange, tqdm
 
 from ..util import more_operators, spiketorch
 from ..util.internal_config import (
@@ -1051,12 +1053,13 @@ class EmbeddedNoise(torch.nn.Module):
             if motion_est is not None:
                 rgeom = registered_geometry(geom, motion_est=motion_est)
         snippets = interpolate_residual_snippets(
-            motion_est,
-            hdf5_path,
-            geom,
-            rgeom,
+            motion_est=motion_est,
+            hdf5_path=hdf5_path,
+            geom=geom,
+            registered_geom=rgeom,
             interp_params=interp_params,
             device=device,
+            do_tpca=True,
         )
         return cls.estimate(
             snippets,
@@ -1119,17 +1122,19 @@ class EmbeddedNoise(torch.nn.Module):
 
 
 def interpolate_residual_snippets(
+    *,
     motion_est,
-    hdf5_path,
+    hdf5_path: str | Path,
     geom,
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     interp_params: InterpolationParams = default_template_interpolation_params,
-    do_tpca=True,
-    workers=None,
+    do_tpca: bool,
+    tpca: PCA | BaseTemporalPCA | None = None,
     device: torch.device | str | None = None,
-    batch_size=16,
+    batch_size=64,
+    show_progress=True,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from dartsort.util import data_util, drift_util, interpolation_util
@@ -1146,13 +1151,14 @@ def interpolate_residual_snippets(
         times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    print(f"aa {snippets.shape}")
-    print(f"{geom.shape=}")
-    print(f"{registered_geom.shape=}")
 
     # tpca project
     if do_tpca:
-        tpca = data_util.get_tpca(hdf5_path)
+        if tpca is None:
+            tpca = cast(BaseTemporalPCA, data_util.get_tpca(hdf5_path))
+        elif not isinstance(tpca, BaseTemporalPCA):
+            tpca = BaseTemporalPCA.from_sklearn(channel_index=channel_index, pca=tpca)
+
         assert tpca is not None
         assert isinstance(tpca, BaseTemporalPCA)
         if device is not None:
@@ -1165,10 +1171,6 @@ def interpolate_residual_snippets(
     else:
         dim = snippets.shape[1]
         tpca = None
-    print(f"a {snippets.shape}")
-    print(f"{tpca=}")
-    print(f"{do_tpca=}")
-    print(f"{dim=}")
 
     erp = interpolation_util.ToFullProbeInterpolator(
         geom=torch.asarray(geom, dtype=snippets.dtype),
@@ -1180,28 +1182,31 @@ def interpolate_residual_snippets(
 
     inds = []
     if motion_est is not None:
-        dbin = np.diff(motion_est.time_bin_centers_s).mean()
-        i0 = 0
+        if motion_est.time_bin_centers_s.size <= 1:
+            dbin = 3 * np.ptp(times_s_np)
+        else:
+            dbin = np.diff(motion_est.time_bin_centers_s).mean()
+        i0 = i1 = 0
         for tbc in motion_est.time_bin_centers_s:
             left = tbc - 0.5 * dbin
             i0 = i0 + np.searchsorted(times_s_np[i0:], left)
             i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
-            inds.append((i0, i1, tbc))
+            if len(inds):
+                assert i0 == inds[-1][1]
+            for i00 in range(i0, i1, batch_size):
+                i11 = min(i1, i00 + batch_size)
+                inds.append((i00, i11, tbc))
+        assert i1 == len(times_s_np)
     else:
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    snips_out = snippets.new_empty(
-        (snippets.shape[0], dim, registered_geom.shape[0])
-    )
-    for i0, i1, tbc in inds:
-        batch = snippets[i0:i1]
+    snips_out = snippets.new_empty((snippets.shape[0], dim, registered_geom.shape[0]))
+    for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
+        batch = snippets[i0:i1].to(device=device)
         if tpca is not None:
-            batch = tpca.force_embed(batch.to(device=device))
-        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(
-            snips_out
-        )
-    print(f"z {snips_out.shape=}")
+            batch = tpca.force_embed(batch)
+        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(snips_out)
     return snips_out
 
 
@@ -1375,10 +1380,10 @@ def whitener_from_hdf5(
             rgeom = registered_geometry(geom, motion_est=motion_est)
 
     snippets = interpolate_residual_snippets(
-        motion_est,
-        hdf5_path,
-        geom.astype(np.float32),
-        rgeom.astype(np.float32),
+        motion_est=motion_est,
+        hdf5_path=hdf5_path,
+        geom=geom.astype(np.float32),
+        registered_geom=rgeom.astype(np.float32),
         interp_params=interp_params,
         device=device,
         do_tpca=False,
