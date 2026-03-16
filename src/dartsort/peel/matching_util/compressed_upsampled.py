@@ -405,6 +405,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     pconv_db: PconvBase
     shifts_a: Tensor | None
     shifts_b: Tensor | None
+    prewhiten: bool = False
 
     def convolve(self, traces, padding=0, out=None):
         """Convolve the objective templates with traces."""

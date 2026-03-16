@@ -170,10 +170,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.register_buffer_or_none("norm_spatial_sing", norm_spatial_sing)
         self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
 
-        if self.whitening and not self.interpolating:
-            pconv = full_shared_pconv(self.b.temporal_pconv, self.b.pconv_spatial_sing)
+        # full pconv can be precomputed when not interpolating
+        if self.whiten_strategy == "postwhiten" and not self.interpolating:
+            pconv = full_shared_pconv(self.b.temporal_pconv, self.b.norm_spatial_sing)
         if not self.interpolating:
-            # can precompute the full pconv in this case.
             pconv = full_shared_pconv(self.b.temporal_pconv, self.b.spatial_sing)
         else:
             pconv = None

@@ -408,6 +408,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
     up_factor: int
     needs_fine_pass: bool
     coarse_objective: bool = False
+    prewhiten: bool = False
 
     def convolve(self, traces: Tensor, padding: int = 0, out: Tensor | None = None):
         assert traces.shape[0] == self.templates_up.shape[3]

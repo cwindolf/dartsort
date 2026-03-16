@@ -1074,7 +1074,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         whitening=WhiteningConfig(
             strategy=cfg.whiten_strategy,
             estimator=cfg.whiten_estimator,
-            radius=cfg.featurization_radius_um,
+            radius=cfg.subtraction_radius_um,
         ),
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
