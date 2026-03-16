@@ -576,7 +576,7 @@ def nancov(
     nan_free=False,
     return_nobs=False,
     force_posdef=False,
-    eps=0,
+    eps=0.0,
 ):
     """Pairwise covariance estimate
 

@@ -53,6 +53,7 @@ from .util.main_util import (
     ds_save_intermediate_labels,
     ds_save_motion_est,
 )
+from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.py_util import dartcopytree, resolve_path
 from .util.registration_util import estimate_motion
@@ -478,9 +479,21 @@ def match(
     template_npz_filename="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
+    whitener: SpatialWhitener | None = None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
+
+    if matching_cfg.whitening.strategy != "none" and whitener is None:
+        assert sorting is not None
+        whitener = SpatialWhitener.from_config(
+            sorting=sorting,
+            motion_est=motion_est,
+            whiten_cfg=matching_cfg.whitening,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        whitener = None
 
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
@@ -501,6 +514,7 @@ def match(
             computation_cfg=computation_cfg,
             detection_cfg=previous_detection_cfg,
             tsvd=template_denoising_tsvd,
+            whitener=whitener,
             template_npz_path=model_dir / template_npz_filename,
         )
         if prev_step_name is not None:
@@ -519,6 +533,7 @@ def match(
         featurization_cfg=featurization_cfg,
         template_data=template_data,
         motion_est=motion_est,
+        whitener=whitener,
         parent_sorting_hdf5_path=getattr(sorting, "parent_h5_path", None),
     )
     sorting = run_peeler(

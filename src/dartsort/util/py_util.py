@@ -227,8 +227,7 @@ def dartcopytree(icfg, src, dest):
         )
     except Exception as e:
         raise ValueError(
-            f"dartcopytree {src} -> {dest} failed. "
-            f"{src.exists()=}, {dest.exists()=}."
+            f"dartcopytree {src} -> {dest} failed. {src.exists()=}, {dest.exists()=}."
         ) from e
 
 

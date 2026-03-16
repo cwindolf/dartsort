@@ -4,12 +4,14 @@ from pydantic import Field
 
 from .util.cli_util import argfield
 from .util.internal_config import (
-    default_pretrained_path,
-    InterpMethod,
     InterpKernel,
-    RealignStrategy,
+    InterpMethod,
     MixtureStep,
+    RealignStrategy,
     TemplateSVDMethod,
+    WhiteningEstimator,
+    WhiteningStrategy,
+    default_pretrained_path,
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
@@ -218,8 +220,8 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_template_min_amplitude: float = 0.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
-    whiten_matching: bool = False
-    matching_whiten_median_std: bool = False
+    whiten_strategy: WhiteningStrategy = "none"
+    whiten_estimator: WhiteningEstimator = "fullzca"
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
 

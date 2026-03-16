@@ -106,6 +106,7 @@ def test_all_transformers():
         "WaveformInterpolator",
         "TemplateWaveformReducer",
         "FullProbeTemporalPCAEmbedder",
+        "WaveformWhitener",
     }
 
     pipeline = WaveformPipeline.from_class_names_and_kwargs(

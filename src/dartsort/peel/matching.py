@@ -21,7 +21,7 @@ from ..util.internal_config import (
     WaveformConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.noise_util import whitener_from_hdf5
+from ..util.noise_util import SpatialWhitener
 from ..util.waveform_util import make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -193,6 +193,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         sampling_cfg: FitSamplingConfig,
         template_data: TemplateData | None,
         motion_est=None,
+        whitener: SpatialWhitener | None = None,
         parent_sorting_hdf5_path=None,
     ) -> Self:
         geom = torch.tensor(recording.get_channel_locations())
@@ -223,19 +224,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 matching_cfg.precomputed_templates_npz
             )
         assert trough_offset_samples == template_data.trough_offset_samples
-
-        if matching_cfg.whiten:
-            # TODO defer computation of this
-            whitener = whitener_from_hdf5(
-                parent_sorting_hdf5_path,
-                motion_est=motion_est,
-                interp_params=matching_cfg.drift_interp_params,
-                rgeom=template_data.registered_geom,
-                whiten_median_std=matching_cfg.whiten_median_std,
-            )
-            whitener = torch.tensor(whitener)
-        else:
-            whitener = None
 
         builder = MatchingTemplatesBuilder(
             recording=recording,
@@ -354,7 +342,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # initialize residual, it needs to be padded to support our channel
         # indexing convention (used later to extract small channel
         # neighborhoods). this copies the input.
-        residual_padded = F.pad(traces, (0, 1), value=torch.nan)
+        if chunk_template_data.prewhiten:
+            residual_padded = traces.new_empty((traces.shape[0], traces.shape[1] + 1))
+            chunk_template_data.whiten_traces(traces=traces, out=residual_padded[:, :-1])
+            residual_padded[:, -1] = torch.nan
+        else:
+            residual_padded = F.pad(traces, (0, 1), value=torch.nan)
         residual = residual_padded[:, :-1]
 
         # name objective variables so that we can update them in-place later

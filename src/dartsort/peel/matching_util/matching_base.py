@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Self, Sequence, cast
+from typing import Literal, Self, cast
 
 import torch
 import torch.nn.functional as F
@@ -11,6 +10,7 @@ from torch import Tensor
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule
@@ -43,7 +43,7 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
-        whitener: Tensor | None = None,
+        whitener: SpatialWhitener | None = None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -66,15 +66,16 @@ class MatchingTemplates(BModule):
     @classmethod
     def _from_config(
         cls,
+        *,
         save_folder: Path,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
-        computation_cfg: ComputationConfig | None = None,
-        motion_est=None,
-        whitener=None,
-        overwrite: bool = False,
-        dtype=torch.float,
+        computation_cfg: ComputationConfig | None,
+        motion_est,
+        whitener: SpatialWhitener | None,
+        overwrite: bool,
+        dtype: torch.dtype,
     ) -> Self:
         raise NotImplementedError
 
@@ -89,7 +90,7 @@ class MatchingTemplates(BModule):
         raise NotImplementedError
 
 
-@dataclass(kw_only=True, frozen=True)
+@databag
 class MatchingTemplatesBuilder:
     """Helper so that the matching peeler can be a little lazy
 
@@ -104,7 +105,7 @@ class MatchingTemplatesBuilder:
     template_data: TemplateData
     matching_cfg: MatchingConfig
     motion_est: MotionEstimate | None = None
-    whitener: Tensor | None = None
+    whitener: SpatialWhitener | None = None
     dtype: torch.dtype = torch.float
 
     def build(
@@ -144,6 +145,7 @@ class ChunkTemplateData:
     scaling: bool
     needs_fine_pass: bool
     up_factor: int
+    prewhiten: bool
     inv_lambda: Tensor
     scale_min: Tensor
     scale_max: Tensor
@@ -184,6 +186,13 @@ class ChunkTemplateData:
         padding: int = 0,
     ) -> "MatchingPeaks":
         raise NotImplementedError
+
+    def whiten_traces(self, traces: Tensor, out: Tensor | None = None):
+        assert not self.prewhiten
+        if out is not None:
+            return out.copy_(traces)
+        else:
+            return traces
 
     # this one is just for debugging / unit testing
     def reconstruct_up_templates(self):

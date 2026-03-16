@@ -35,6 +35,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from ..util.spiketorch import ptp
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
@@ -58,10 +59,13 @@ class RunningTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
         tsvd=None,
+        whitener: SpatialWhitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
+        assert whitener is None
+        assert template_cfg.whitening == "none"
         return get_templates_by_chunk(
             sorting=sorting,
             recording=recording,

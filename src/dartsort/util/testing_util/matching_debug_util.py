@@ -329,15 +329,16 @@ class DebugMatchingTemplates(MatchingTemplates):
     @classmethod
     def _from_config(
         cls,
+        *,
         save_folder: Path,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
-        computation_cfg: ComputationConfig | None = None,
-        motion_est=None,
-        whitener: Tensor | None = None,
-        overwrite: bool = False,
-        dtype=torch.float,
+        computation_cfg: ComputationConfig | None,
+        motion_est,
+        whitener,
+        overwrite: bool,
+        dtype: torch.dtype,
     ) -> Self:
         assert motion_est is None
         assert whitener is None

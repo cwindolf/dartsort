@@ -340,6 +340,18 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
+WhiteningStrategy = Literal["none", "prewhiten", "postwhiten"]
+WhiteningEstimator = Literal["fullzca", "winterlocal", "vecchia"]
+
+
+@cfg_dataclass
+class WhiteningConfig:
+    strategy: WhiteningStrategy = "none"
+    estimator: WhiteningEstimator = "fullzca"
+    interp_params: InterpolationParams = default_template_interpolation_params
+    radius: float = 200.0
+
+
 TemplateSVDMethod = Literal[
     "collisioncleaned", "spike_sklearn", "peeler", "raw_template"
 ]
@@ -375,6 +387,7 @@ class TemplateConfig:
     weighted: bool = False
     grab_chunk_length_samples: int = 30_000
     units_per_job: int = 8
+    whitening: WhiteningStrategy = "none"
 
     # -- template construction parameters
     # registered templates?
@@ -488,8 +501,7 @@ class MatchingConfig:
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     drift_interp_params: InterpolationParams = default_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    whiten: bool = False
-    whiten_median_std: bool = False
+    whitening: WhiteningConfig = WhiteningConfig()
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -934,6 +946,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         use_zero=cfg.template_mix_zero,
         use_svd=cfg.template_mix_svd,
         svd_method=cfg.template_svd_method,
+        whitening=cfg.whiten_strategy,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -1058,8 +1071,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
-        whiten=cfg.whiten_matching,
-        whiten_median_std=cfg.matching_whiten_median_std,
+        whitening=WhiteningConfig(
+            strategy=cfg.whiten_strategy,
+            estimator=cfg.whiten_estimator,
+            radius=cfg.featurization_radius_um,
+        ),
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,

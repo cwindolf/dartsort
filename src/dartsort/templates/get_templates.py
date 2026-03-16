@@ -27,13 +27,14 @@ from ..util.drift_util import (
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
-    WaveformConfig,
     TemplateSVDMethod,
+    WaveformConfig,
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import get_pool
+from ..util.noise_util import SpatialWhitener
 from ..util.spiketorch import fast_nanmedian, nanmean, ptp
 from .templib import denoising_weights, fit_tsvd
 
@@ -55,10 +56,13 @@ class UnitExtractTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
         tsvd=None,
+        whitener: SpatialWhitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
+        assert whitener is None
+        assert template_cfg.whitening == "none"
         return get_templates_unitextract(
             sorting=sorting,
             recording=recording,

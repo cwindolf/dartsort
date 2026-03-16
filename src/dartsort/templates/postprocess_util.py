@@ -22,6 +22,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
+from ..util.noise_util import SpatialWhitener
 from ..util.logging_util import get_logger
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
@@ -44,6 +45,7 @@ def estimate_template_library(
     realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
+    whitener: SpatialWhitener | None = None,
     computation_cfg: ComputationConfig | None = None,
     detection_cfg: Any | None = None,
     depth_order: bool = False,
@@ -109,6 +111,7 @@ def estimate_template_library(
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
         tsvd=tsvd,
+        whitener=whitener,
     )
     gc.collect()
     torch.cuda.empty_cache()

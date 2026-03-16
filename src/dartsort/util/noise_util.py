@@ -1,6 +1,6 @@
 import warnings
-from typing import cast
 from pathlib import Path
+from typing import Self, cast
 
 import h5py
 import linear_operator
@@ -10,19 +10,27 @@ import torch
 import torch.nn.functional as F
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
+from scipy.linalg import eigh
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from sklearn.decomposition import PCA
-from tqdm.auto import trange, tqdm
+from torch import Tensor
+from tqdm.auto import tqdm, trange
 
+from ..transform.temporal_pca import BaseTemporalPCA
 from ..util import more_operators, spiketorch
+from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
+    ComputationConfig,
     InterpolationParams,
+    WhiteningConfig,
     default_template_interpolation_params,
 )
+from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
-from ..transform.temporal_pca import BaseTemporalPCA
+from ..util.torch_util import BModule
+from ..util.waveform_util import make_channel_index
 
 logger = get_logger(__name__)
 
@@ -399,7 +407,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         )
 
 
-class EmbeddedNoise(torch.nn.Module):
+class EmbeddedNoise(BModule):
     """Handles computations related to noise in TPCA space.
 
     Can have a couple of kinds of mean. mean_kind == ...
@@ -483,26 +491,24 @@ class EmbeddedNoise(torch.nn.Module):
         self.to(device)
 
     @property
-    def logdet(self):
+    def logdet(self) -> Tensor:
         if self._logdet is None:
             self.marginal_covariance()
-        return self._logdet
+        return cast(Tensor, self._logdet)
 
     @property
-    def device(self):
-        return self.chans_arange.device
+    def device(self) -> torch.device:
+        return self.b.chans_arange.device
 
-    def mean_rc(self) -> torch.Tensor:
+    def mean_rc(self) -> Tensor:
         """Return noise mean as a rank x channels tensor"""
         shape = self.rank, self.n_channels
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         elif self.mean_kind == "by_rank":
-            return (
-                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-            )
+            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         elif self.mean_kind == "full":
-            return cast(torch.Tensor, self.mean)
+            return cast(Tensor, self.mean)
         else:
             assert False
 
@@ -512,9 +518,7 @@ class EmbeddedNoise(torch.nn.Module):
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         if self.mean_kind == "by_rank":
-            return (
-                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-            )
+            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         if self.mean_kind == "full":
             return self.mean
         assert False
@@ -567,9 +571,7 @@ class EmbeddedNoise(torch.nn.Module):
             self._full_inverse = self._full_inverse.to(device)
         return self._full_inverse
 
-    def cov_batch_mul(
-        self, x: torch.Tensor, channels_src: torch.Tensor, channels_targ: torch.Tensor
-    ):
+    def cov_batch_mul(self, x: Tensor, channels_src: Tensor, channels_targ: Tensor):
         assert x.ndim == 3
         n = x.shape[0]
         assert x.shape[2] == channels_src.shape[1]
@@ -581,13 +583,15 @@ class EmbeddedNoise(torch.nn.Module):
             assert channels_targ.ndim == 1
 
         if self.cov_kind == "factorized":
-            rank_root = self.rank_vt.T * self.rank_std  # type: ignore
-            rank_cov = cast(torch.Tensor, rank_root @ rank_root.T)
+            rank_root = self.b.rank_vt.T * self.b.rank_std  # type: ignore
+            rank_cov = cast(Tensor, rank_root @ rank_root.T)
             rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
             x = rank_cov.bmm(x)
 
-            chan_root_left = self.channel_vt_zpad.T[channels_src] * self.channel_std  # type: ignore
-            chan_root_right = self.channel_vt_zpad.T[channels_targ] * self.channel_std  # type: ignore
+            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std  # type: ignore
+            chan_root_right = (
+                self.b.channel_vt_zpad.T[channels_targ] * self.b.channel_std
+            )  # type: ignore
             if chan_root_right.ndim == 2:
                 targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
                 chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
@@ -602,7 +606,7 @@ class EmbeddedNoise(torch.nn.Module):
                 channels_src == self.n_channels, -2, channels_src
             )
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
-            chan_cov = eyes * self.global_std**2  # type: ignore
+            chan_cov = eyes * self.b.global_std**2  # type: ignore
             return x.bmm(chan_cov)
         elif self.cov_kind == "full":
             # this branch is for debugging. it is slow.
@@ -643,15 +647,15 @@ class EmbeddedNoise(torch.nn.Module):
                 f"Need to implement cov_batch_mul for {self.cov_kind=}."
             )
 
-    def cov_batch(self, channels_left: torch.Tensor, channels_right: torch.Tensor):
+    def cov_batch(self, channels_left: Tensor, channels_right: Tensor):
         if self.cov_kind != "factorized":
             raise NotImplementedError(
                 f"Need to implement cov_batch for {self.cov_kind=}."
             )
-        rank_root = self.rank_vt.T * self.rank_std
+        rank_root = self.b.rank_vt.T * self.b.rank_std
         rank_cov = rank_root @ rank_root.T
-        chan_root_left = self.channel_vt_zpad.T[channels_left] * self.channel_std
-        chan_root_right = self.channel_vt_zpad.T[channels_right] * self.channel_std
+        chan_root_left = self.b.channel_vt_zpad.T[channels_left] * self.b.channel_std
+        chan_root_right = self.b.channel_vt_zpad.T[channels_right] * self.b.channel_std
         if chan_root_right.ndim == 2:
             chan_root_right = chan_root_right[None].broadcast_to(
                 chan_root_left.shape[0], *chan_root_right.shape
@@ -664,7 +668,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     def marginal_covariance(
         self,
-        channels: torch.Tensor | slice | None = slice(None),
+        channels: Tensor | slice = slice(None),
         cache_prefix=None,
         cache_key=None,
         device=None,
@@ -689,12 +693,12 @@ class EmbeddedNoise(torch.nn.Module):
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
                 if not isinstance(fcov, operators.ConstantDiagLinearOperator):
-                    fcov = operators.CholLinearOperator(fcov.cholesky())
+                    fcov = operators.CholLinearOperator(fcov.cholesky())  # type: ignore
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
                 self._full_cov = self._full_cov.to(device)
-                self._logdet = self._logdet.to(device)
+                self._logdet = cast(Tensor, self._logdet).to(device)
             return self._full_cov
         cov = self._marginal_covariance(channels)
         if device is not None and device != cov.device:
@@ -713,8 +717,10 @@ class EmbeddedNoise(torch.nn.Module):
             odc = odc.to(device)
         return odc
 
-    def _marginal_covariance(self, channels=slice(None), channels_left=None):
-        channels = self.chans_arange[channels]
+    def _marginal_covariance(
+        self, channels: Tensor | slice = slice(None), channels_left=None
+    ):
+        channels = self.b.chans_arange[channels]
         have_left = channels_left is not None
         if channels_left is None:
             channels_left = channels
@@ -730,54 +736,54 @@ class EmbeddedNoise(torch.nn.Module):
                 #         "with the diagonal."
                 #     )
                 sz = self.rank * ncl, self.rank * nc
-                return operators.ZeroLinearOperator(*sz, dtype=self.global_std.dtype)
+                return operators.ZeroLinearOperator(*sz, dtype=self.b.global_std.dtype)
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
-            return self.global_std.square() * eye
+            return self.b.global_std.square() * eye
 
         if self.cov_kind == "diagonal_by_rank":
-            rank_diag = operators.DiagLinearOperator(self.rank_std**2)
+            rank_diag = operators.DiagLinearOperator(self.b.rank_std**2)
             chans_eye = operators.IdentityLinearOperator(nc, device=self.device)
-            return torch.kron(rank_diag, chans_eye)
+            return torch.kron(rank_diag, chans_eye)  # type: ignore
 
         if self.cov_kind == "diagonal":
-            chans_std = self.full_std[:, channels]
+            chans_std = self.b.full_std[:, channels]
             return operators.DiagLinearOperator(chans_std**2)
 
         if self.cov_kind == "full":
-            marg_cov = self.full_cov[:, channels_left][..., channels]
+            marg_cov = self.b.full_cov[:, channels_left][..., channels]
             r = marg_cov.shape[0]
             marg_cov = marg_cov.reshape(r * ncl, r * nc)
             return linear_operator.to_linear_operator(marg_cov)
 
         if self.cov_kind in "factorized":
-            rank_root = self.rank_vt.T * self.rank_std
+            rank_root = self.b.rank_vt.T * self.b.rank_std
             rank_cov = rank_root @ rank_root.T
-            chan_root = self.channel_vt.T[channels] * self.channel_std
+            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
             chan_root_right = chan_root.T
             if have_left:
-                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
             chan_cov = chan_root @ chan_root_right
             return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
 
         if self.cov_kind == "factorized_rank_diag":
-            rank_cov = operators.DiagLinearOperator(self.rank_std.square())
-            chan_root = self.channel_vt.T[channels] * self.channel_std
+            rank_cov = operators.DiagLinearOperator(self.b.rank_std.square())
+            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
             chan_root_right = chan_root.T
             if have_left:
-                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
             chan_cov = chan_root @ chan_root_right
-            return torch.kron(rank_cov, chan_cov)
+            return torch.kron(rank_cov, chan_cov)  # type: ignore
 
         if self.cov_kind == "factorized_by_rank_rank_diag":
-            rank_std = self.rank_std.view(self.rank, 1, 1)
-            chans_std = self.channel_std[:, :, None]  # no slice here!
+            rank_std = self.b.rank_std.view(self.rank, 1, 1)
+            chans_std = self.b.channel_std[:, :, None]  # no slice here!
             rc_std = rank_std * chans_std
-            chans_vt = self.channel_vt[:, :, channels]
+            chans_vt = self.b.channel_vt[:, :, channels]
             chan_rootl = chan_root = rc_std * chans_vt
             if have_left:
-                chans_vtl = self.channel_vt[:, :, channels_left]
+                chans_vtl = self.b.channel_vt[:, :, channels_left]
                 chan_rootl = rc_std * chans_vtl
             blocks = torch.bmm(chan_rootl.mT, chan_root)
             blocks = linear_operator.to_linear_operator(blocks)
@@ -866,6 +872,7 @@ class EmbeddedNoise(torch.nn.Module):
             present = torch.isfinite(x).any(dim=0)
             cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
             vcov = spiketorch.nancov(x[:, present], force_posdef=True, eps=eps)
+            assert torch.is_tensor(vcov)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
             return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
@@ -925,6 +932,7 @@ class EmbeddedNoise(torch.nn.Module):
                 xq = x_spatial[:, q]
                 validq = xq.isfinite().any(0)
                 covq = spiketorch.nancov(xq[:, validq])
+                assert torch.is_tensor(covq)
                 if shrinkage:
                     covq = F.softshrink(covq, shrinkage)
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
@@ -958,6 +966,7 @@ class EmbeddedNoise(torch.nn.Module):
                 init_kw["cov_kind"] = cov_kind.removesuffix("noise")
 
             cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
+            assert torch.is_tensor(cov)
             cov.diagonal().add_(eps)
             if shrinkage:
                 cov = F.softshrink(cov, shrinkage)
@@ -972,7 +981,6 @@ class EmbeddedNoise(torch.nn.Module):
                     n_jobs=1,
                     verbose=logger.isEnabledFor(DARTSORTDEBUG),
                     assume_centered=True,
-                    eps=eps,
                 )
                 xx = x_spatial[:, valid].double().numpy(force=True)
                 invalid = np.isnan(xx)
@@ -996,6 +1004,7 @@ class EmbeddedNoise(torch.nn.Module):
             cov_spatial = cov = cov.to(x_spatial)
             assert cov_spatial.isfinite().all()
             if valid != slice(None):
+                assert torch.is_tensor(valid)
                 cov_spatial = torch.eye(
                     x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
                 )
@@ -1112,7 +1121,8 @@ class EmbeddedNoise(torch.nn.Module):
         samples = rg.normal(size=(n_samples, self.rank))
         tmp = samples.copy()
         for channel in range(self.n_channels):
-            marginal_cov = self.marginal_covariance(channels=[channel]).to_dense()
+            chan = torch.atleast_1d(torch.tensor(channel))
+            marginal_cov = self.marginal_covariance(channels=chan).to_dense()
             marginal_cov = marginal_cov.numpy(force=True).astype(np.float64)
             eigs = np.linalg.eigvalsh(marginal_cov)
             stds = np.sqrt(eigs)
@@ -1360,61 +1370,138 @@ def fp_control_threshold_from_h5(
     )
 
 
-def whitener_from_hdf5(
-    hdf5_path,
+def residual_covariance(
+    sorting: DARTsortSorting,
+    do_interpolation: bool,
     motion_est=None,
     interp_params: InterpolationParams = default_template_interpolation_params,
-    device=None,
+    device: torch.device | None = None,
     rgeom=None,
-    eps=1e-4,
-    corr_mode=False,
-    whiten_median_std=False,
+    residual_times_s_dataset_name="residual_times_seconds",
+    residual_dataset_name="residual",
+    seed: int = 0,
 ):
     from dartsort.util.drift_util import registered_geometry
 
-    with h5py.File(hdf5_path, "r", locking=False) as h5:
-        geom = cast(h5py.Dataset, h5["geom"])[:]
-    if rgeom is None:
-        rgeom = geom
-        if motion_est is not None:
-            rgeom = registered_geometry(geom, motion_est=motion_est)
+    assert sorting.parent_h5_path is not None
 
-    snippets = interpolate_residual_snippets(
-        motion_est=motion_est,
-        hdf5_path=hdf5_path,
-        geom=geom.astype(np.float32),
-        registered_geom=rgeom.astype(np.float32),
-        interp_params=interp_params,
-        device=device,
-        do_tpca=False,
-    )
+    if do_interpolation:
+        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+            geom = cast(h5py.Dataset, h5["geom"])[:].astype(np.float32)
+        if rgeom is None:
+            rgeom = geom
+            if motion_est is not None:
+                rgeom = registered_geometry(geom, motion_est=motion_est)
+            rgeom = rgeom.astype(np.float32)
+        snippets = interpolate_residual_snippets(
+            motion_est=motion_est,
+            hdf5_path=sorting.parent_h5_path,
+            geom=geom,
+            registered_geom=rgeom,
+            interp_params=interp_params,
+            device=device,
+            do_tpca=False,
+            residual_times_s_dataset_name=residual_times_s_dataset_name,
+            residual_dataset_name=residual_dataset_name,
+        )
+    else:
+        snippets = sorting._load_dataset(residual_dataset_name)
+    snippets = torch.asarray(snippets, device=device)
+    isna = snippets.isnan()
+    nna = isna.sum()
+    if nna:
+        rvs = np.random.default_rng(seed).normal(size=nna)
+        rvs = torch.asarray(rvs).to(snippets)
+        snippets[isna] = rvs
+    return torch.cov(snippets.view(-1, snippets.shape[2]).T)
 
-    x = np.ascontiguousarray(snippets.cpu(), dtype=np.float64)
-    x = x.reshape(-1)
-    invalid = np.flatnonzero(np.isnan(x))
-    if invalid.size:
-        rg = np.random.default_rng(0)
-        x[invalid] = rg.normal(size=invalid.size).astype(x.dtype)
-    x = x.reshape(-1, len(rgeom))
-    if corr_mode:
-        std = np.std(x, axis=0)
-        x /= std
-    _, S, Vh = np.linalg.svd(x, full_matrices=False)
-    assert Vh.shape == (len(rgeom), len(rgeom))
-    assert S.shape == (len(rgeom),)
-    std = S / np.sqrt(len(x) - 1.0) + eps
-    logger.dartsortdebug(
-        "Whitening standard deviations: min,mean,max="
-        f"{std.min().item():0.5f},{std.mean().item():0.5f},{std.max().item():0.5f}"
-    )
 
-    wstd = 1.0 / std
-    # life is easier if we try not to change the units
-    # too much in the whitened data domain
-    if whiten_median_std:
-        wstd /= np.median(wstd)
+def fullzca_whitener(
+    cov: np.ndarray, channel_index: np.ndarray | None = None, eps=1e-6
+) -> np.ndarray:
+    del channel_index
+    vals, vecs = eigh(cov, driver="ev")
+    wv = 1.0 / (np.sqrt(vals + eps))
+    return (vecs * wv) @ vecs.T
 
-    # using the zca whitener here. symmetry takes a load off the mind.
-    whitener = (Vh * wstd) @ Vh.T
 
-    return whitener.astype(np.float32)
+def winterlocal_whitener(
+    cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
+) -> np.ndarray:
+    """Olivier Winter's local whitener developed for iblsorter, also used in Kilosort 4"""
+    w = np.zeros_like(cov)
+    for j, chans in enumerate(channel_index):
+        (ixj,) = np.flatnonzero(chans == j)
+        cj = cov[chans][:, chans]
+        wj = fullzca_whitener(cj, eps=eps)
+        w[j, chans] = wj[ixj]
+    return w
+
+
+def vecchia_whitener(
+    cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
+) -> np.ndarray:
+    """(Transpose of) whitener of Schäfer et al., https://arxiv.org/pdf/2004.14455."""
+    w = np.zeros_like(cov)
+    for j, chans in enumerate(channel_index):
+        (ixj,) = np.flatnonzero(chans == j)
+        cj = cov[chans][:, chans]
+        vals, vecs = eigh(cj, driver="ev")
+        pj = (vecs * (1.0 / (vals + eps))) @ vecs.T
+        w[j, chans] = pj[:, ixj] / np.sqrt(pj[ixj, ixj])
+    return w
+
+
+# these should be left-side whiteners, meaning precision = W'W
+whitening_estimators = {
+    "fullzca": fullzca_whitener,
+    "winterlocal": winterlocal_whitener,
+    "vecchia": vecchia_whitener,
+}
+
+
+class SpatialWhitener(BModule):
+    def __init__(self, whitener: Tensor):
+        super().__init__()
+        self.register_buffer("whitener", whitener)
+
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        sorting: DARTsortSorting,
+        motion_est=None,
+        whiten_cfg: WhiteningConfig,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> Self:
+        device = ensure_computation_config(computation_cfg).actual_device()
+        cov = residual_covariance(
+            sorting=sorting,
+            do_interpolation=whiten_cfg.strategy == "postwhiten",
+            motion_est=motion_est,
+            interp_params=whiten_cfg.interp_params,
+            device=device,
+        )
+        geom = getattr(sorting, "geom", None)
+        assert geom is not None
+        neighbs = make_channel_index(geom, radius=whiten_cfg.radius)
+        cov_np = cov.numpy(force=True).astype(np.float64)
+        whitener = whitening_estimators[whiten_cfg.estimator](
+            cov_np, channel_index=neighbs
+        )
+        whitener = torch.asarray(whitener).to(cov)
+        return cls(whitener=whitener)
+
+    def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = torch.mm(x, self.b.whitener.T, out=out)
+        x = x.reshape(*shp, c)
+        return x
+
+    def prec_mul(self, x: Tensor) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = x @ (self.b.whitener.T @ self.b.whitener)
+        x = x.reshape(*shp, c)
+        return x

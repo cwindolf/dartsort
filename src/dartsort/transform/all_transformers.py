@@ -17,12 +17,13 @@ from .single_channel_templates import SingleChannelTemplates
 from .supervised_denoiser import SupervisedDenoiser
 from .temporal_pca import (
     BaseTemporalPCA,
+    FullProbeTemporalPCAEmbedder,
     TemporalPCA,
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
-    FullProbeTemporalPCAEmbedder,
 )
 from .transform_base import Passthrough, Waveform
+from .whiten import WaveformWhitener
 
 all_transformers = [
     Waveform,
@@ -47,6 +48,7 @@ all_transformers = [
     DebugMatchingPursuitDenoiser,
     WaveformInterpolator,
     FullProbeTemporalPCAEmbedder,
+    WaveformWhitener,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

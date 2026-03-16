@@ -10,6 +10,7 @@ from spikeinterface.core import BaseRecording
 
 from ..localize.localize_util import localize_waveforms
 from ..util.data_util import DARTsortSorting
+from ..util.noise_util import SpatialWhitener
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
@@ -213,6 +214,7 @@ class TemplateData:
         save_folder: Path | None = None,
         overwrite=False,
         motion_est=None,
+        whitener: SpatialWhitener | None = None,
         save_npz_name: str | None = "template_data.npz",
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
@@ -230,6 +232,9 @@ class TemplateData:
         else:
             npz_path = None
 
+        if template_cfg.whitening != "none":
+            assert whitener is not None
+
         if sorting is None:
             raise ValueError(
                 "TemplateData.from_config needs a sorting when its .npz file "
@@ -243,6 +248,7 @@ class TemplateData:
             waveform_cfg=waveform_cfg,
             motion_est=motion_est,
             tsvd=tsvd,
+            whitener=whitener,
             computation_cfg=computation_cfg,
             show_progress=show_progress,
         )
@@ -265,6 +271,7 @@ class TemplateData:
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
+        whitener: SpatialWhitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
     ) -> "TemplateData":

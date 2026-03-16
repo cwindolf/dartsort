@@ -13,6 +13,7 @@ from ..transform.interp import WaveformInterpolator
 from ..transform.pipeline import WaveformPipeline
 from ..transform.reduction import TemplateWaveformReducer
 from ..transform.temporal_pca import FullProbeTemporalPCAEmbedder
+from ..transform.whiten import WaveformWhitener
 from ..util.data_util import (
     DARTsortSorting,
     get_top_assignment_weights,
@@ -27,6 +28,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
@@ -50,6 +52,7 @@ class ReductionTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion_est=None,
         tsvd=None,
+        whitener: SpatialWhitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
@@ -75,6 +78,7 @@ class ReductionTemplateData(TemplateData):
             motion_est=motion_est,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
+            whitener=whitener,
             tsvd=tsvd,
         )
 
@@ -82,7 +86,9 @@ class ReductionTemplateData(TemplateData):
         computation_cfg = ensure_computation_config(computation_cfg)
         if template_cfg.reduction == "mean":
             # TODO: reducer doesn't work in parallel when gathering means, go to single job
-            computation_cfg = ComputationConfig(device=computation_cfg.actual_device().type)
+            computation_cfg = ComputationConfig(
+                device=computation_cfg.actual_device().type
+            )
         with TemporaryDirectory(
             prefix="dartsorttemplates", ignore_cleanup_errors=True
         ) as tdir:
@@ -163,6 +169,7 @@ class TemplateReduction(GrabAndFeaturize):
         sorting: DARTsortSorting,
         waveform_cfg: WaveformConfig,
         template_cfg: TemplateConfig,
+        whitener: SpatialWhitener | None = None,
     ):
         assert template_cfg.use_raw or template_cfg.use_svd
         assert not template_cfg.use_outlier
@@ -214,6 +221,17 @@ class TemplateReduction(GrabAndFeaturize):
         # build a featurization pipeline which handles interpolation and
         # raw/svd waveform statistics
         transformers = []
+        if whitener is None:
+            assert template_cfg.whitening == "none"
+        else:
+            assert template_cfg.whitening in ("prewhiten", "postwhiten")
+        if template_cfg.whitening == "prewhiten":
+            assert whitener is not None
+            transformers.append(
+                WaveformWhitener(
+                    geom=geom, channel_index=channel_index, whitener=whitener
+                )
+            )
         interp = WaveformInterpolator(
             geom=geom,
             channel_index=channel_index,
@@ -240,11 +258,19 @@ class TemplateReduction(GrabAndFeaturize):
                 reduction=template_cfg.reduction,
             )
             transformers.append(raw_reduce)
-        if interp_late:
-            transformers.append(interp)
         if template_cfg.use_svd:
             assert tsvd is not None
             transformers.append(tsvd)
+        if interp_late:
+            transformers.append(interp)
+        if template_cfg.whitening == "postwhiten":
+            assert whitener is not None
+            transformers.append(
+                WaveformWhitener(
+                    geom=geom, channel_index=channel_index, whitener=whitener
+                )
+            )
+        if template_cfg.use_svd:
             svd_reduce = TemplateWaveformReducer(
                 geom=geom,
                 channel_index=channel_index,
