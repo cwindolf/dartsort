@@ -477,12 +477,12 @@ def argrelmax_dedup(
     dedup_radius: int,
     threshold: float,
     arange: Tensor,
-    in_boundary_mask: Tensor,
+    padding: int,
 ):
     """Modification of scipy's argrelmax for template matching
 
     This finds peaks>threshold separated by radius, subject to some extra checks.
-     - The peaks will not be in the boundary (`in_boundary_mask`), which in the
+     - The peaks will not be in the boundary (`padding`), which in the
        matching context would mean they could not be subtracted (off the edge)
      - Exact duplicates will be removed (this is the inds and arange stuff)
 
@@ -497,9 +497,17 @@ def argrelmax_dedup(
     U-shaped frontier of peaks > threshold which are falsely not included. The impl
     below handles this case by detecting local maxs without the boundary, excluding
     the boundary, then deduplicating.
+
+    NB: exclude region is padding + 1, because later matching steps may adjust the
+    peak time by +/- 1 (temporal upsampling stuff). Make your chunk margin 1 sample
+    bigger if you care about that.
     """
+    nt = x.shape[0]
+    xv = x.clone()
     x = x[None, None]
-    xv = x.masked_fill(in_boundary_mask, 0)
+    xv[: padding + 1].zero_()
+    xv[nt - padding - 1 :].zero_()
+    xv = xv[None, None]
     x1, inds1 = F.max_pool1d_with_indices(
         x, kernel_size=(2 * peak_radius + 1,), padding=(peak_radius,), stride=(1,)
     )

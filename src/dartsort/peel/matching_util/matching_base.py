@@ -218,6 +218,9 @@ class ChunkTemplateData:
         out: Tensor,
         scalings_out: Tensor | None = None,
     ) -> Tensor:
+        assert conv.shape == out.shape
+        if scalings_out is not None:
+            assert scalings_out.shape == out.shape
         if self.scaling and self.inv_lambda == 0.0:
             assert scalings_out is not None
             return _free_coarse_objective(
@@ -245,16 +248,17 @@ class ChunkTemplateData:
         scalings: Tensor | None,
         thresholdsq: float,
         obj_arange: Tensor,
-        in_boundary_mask: Tensor,
         padding: int,
     ) -> "MatchingPeaks":
         objective_max, max_obj_template = objective.max(dim=0)
+        nt = objective_max.numel()
+        assert nt > 2 * padding
         times = argrelmax_dedup(
             x=objective_max,
             dedup_radius=self.spike_length_samples,
             threshold=thresholdsq,
-            arange=obj_arange[: objective_max.numel()],
-            in_boundary_mask=in_boundary_mask,
+            arange=obj_arange[:nt],
+            padding=padding,
         )
         n_spikes = times.numel()
         if not n_spikes:
@@ -262,18 +266,21 @@ class ChunkTemplateData:
 
         objs = objective_max[times]
         template_inds = max_obj_template[times]
-        if _extra_checks:
-            assert (objective_max[times] >= thresholdsq).all()
         if self.scaling:
             assert scalings is not None
             scalings = scalings[template_inds, times]
         else:
             scalings = None
+
         if _extra_checks:
+            assert times.amin() >= padding
+            assert times.amax() < nt - padding
+            assert (objective_max[times] >= thresholdsq).all()
             assert (objs >= thresholdsq).all()
-        if _extra_checks and scalings is not None:
-            assert (scalings >= self.scale_min).all()
-            assert (scalings <= self.scale_max).all()
+            if scalings is not None:
+                assert (scalings >= self.scale_min).all()
+                assert (scalings <= self.scale_max).all()
+
         return MatchingPeaks(
             times=times - padding,
             obj_template_inds=template_inds,

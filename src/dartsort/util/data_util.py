@@ -19,8 +19,7 @@ logger = get_logger(__name__)
 
 # this is a data type used in the peeling code to store info about
 # the datasets which are being computed
-# the featurizers in transform have a .spike_dataset property which
-# is this type
+# the featurizers in transform/ have a .spike_dataset property of this type
 SpikeDataset = namedtuple("SpikeDataset", ["name", "shape_per_spike", "dtype"])
 
 

@@ -86,7 +86,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=margin_factor * spike_length_samples,
+            chunk_margin_samples=margin_factor * spike_length_samples + 1,
             n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
@@ -376,11 +376,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             refrac_mask = torch.zeros_like(padded_objective)
         else:
             refrac_mask = None
-        in_boundary_mask = torch.zeros(
-            padded_obj_len, dtype=torch.bool, device=residual.device
-        )
-        in_boundary_mask[: self.obj_pad_len] = True
-        in_boundary_mask[-self.obj_pad_len :] = True
 
         # initialize convolution
         chunk_template_data.convolve(
@@ -439,7 +434,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     refrac_mask=apply_refrac_mask,
                     chunk_template_data=chunk_template_data,
                     unit_mask=unit_mask,
-                    in_boundary_mask=in_boundary_mask,
                     coarse_only=coarse_only,
                 )
                 if new_peaks is None or not new_peaks.n_spikes:
@@ -532,7 +526,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_objective: Tensor,
         padded_scalings: Tensor | None,
         refrac_mask: Tensor | None,
-        in_boundary_mask: Tensor,
         chunk_template_data: ChunkTemplateData,
         unit_mask=None,
         coarse_only=False,
@@ -557,7 +550,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             scalings=padded_scalings,
             thresholdsq=self.thresholdsq,
             obj_arange=self.b.obj_arange,
-            in_boundary_mask=in_boundary_mask,
             padding=self.obj_pad_len,
         )
         if coarse_only or not coarse_peaks.n_spikes:
