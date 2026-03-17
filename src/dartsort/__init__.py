@@ -44,18 +44,25 @@ from .templates import (
     realign,
 )
 from .transform import WaveformPipeline
-from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
-from .util.job_util import ensure_computation_config, set_global_computation_config
+from .util import (
+    data_util,
+    logging_util,
+    noise_util,
+    spikeio,
+    spiketorch,
+    waveform_util,
+)
 from .util.data_util import (
     DARTsortSorting,
-    get_featurization_pipeline,
-    load_h5,
-    get_tpca,
-    load_stored_tsvd,
     check_recording,
+    get_featurization_pipeline,
+    get_tpca,
+    load_h5,
+    load_stored_tsvd,
 )
 from .util.drift_util import registered_geometry
 from .util.internal_config import *
+from .util.job_util import ensure_computation_config, set_global_computation_config
 from .util.logging_util import (
     DARTSORTDEBUG,
     DARTSORTVERBOSE,
@@ -63,7 +70,7 @@ from .util.logging_util import (
     get_logger,
 )
 from .util.noise_util import EmbeddedNoise
-from .util.py_util import resolve_path, databag
+from .util.py_util import databag, resolve_path
 from .util.registration_util import try_load_motion_est
 from .util.waveform_util import make_channel_index
 

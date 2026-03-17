@@ -37,6 +37,7 @@ class MatchingTemplates(BModule):
     @classmethod
     def from_config(
         cls,
+        *,
         save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
