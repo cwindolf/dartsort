@@ -344,16 +344,30 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     coarse_objective: bool = False
 
     def convolve(self, traces: Tensor, padding: int = 0, out: Tensor | None = None):
-        out_len = traces.shape[1] + 2 * padding - self.spike_length_samples + 1
+        """
+        traces: channels, [batch,], time
+            Odd to have batch come second, but it makes things simpler here (and it's
+            only something used for debugging: usually traces.ndim == 2).
+        """
+        out_len = traces.shape[-1] + 2 * padding - self.spike_length_samples + 1
         if out is not None:
             assert out.shape == (self.obj_n_templates, out_len)
-        return convolve_lowrank_shared(
-            traces=traces,
+        if traces.ndim == 2:
+            traces_batched = traces[:, None]
+        else:
+            traces_batched = traces
+        conv = convolve_lowrank_shared(
+            traces=traces_batched,
             spatial_singular=self.spatial_sing,
             temporal_components=self.temporal_comps,
             padding=padding,
             out=out,
         )
+        assert conv.ndim == 2
+        if traces.ndim == 3:
+            # reshape to put the batch dim back
+            conv = conv.reshape(self.obj_n_templates, traces.shape[1], conv.shape[1])
+        return conv
 
     def subtract(self, traces: Tensor, peaks: "MatchingPeaks", sign: int = -1):
         if not peaks.n_spikes:
@@ -647,15 +661,16 @@ def convolve_lowrank_shared(
     padding: int = 0,
     out: Tensor | None = None,
 ):
-    for q in range(temporal_components.shape[0]):
+    rank = temporal_components.shape[0]
+    channels = traces.shape[0]
+    for q in range(rank):
         # convolve recording with this rank's basis element
-        tconv = F.conv1d(
-            traces[:, None, :], temporal_components[q, None, None], padding=padding
-        )
-        assert tconv.shape[1] == 1
-        tconv = tconv[:, 0]
+        # traces: channels, batch, time. temporal comps: 1,1,ktime. thus tconv: channels, batch, ctime.
+        tconv = F.conv1d(traces, temporal_components[q, None, None], padding=padding)
+        tconv = tconv.view(channels, -1)
 
         # multiply spatially and add into output
+        # spatial term: units, channels. tconv: channels, batch*ctime. out: units, batch*ctime.
         if out is None:
             out = torch.mm(spatial_singular[:, q, :], tconv)
         else:
