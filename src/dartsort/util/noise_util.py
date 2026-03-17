@@ -1466,6 +1466,14 @@ class SpatialWhitener(BModule):
         self.register_buffer("whitener", whitener)
 
     @classmethod
+    def from_numpy(cls, whitener: np.ndarray):
+        logger.dartsortdebug(f"Load whitener from numpy.")
+        return cls(whitener=torch.asarray(whitener))
+
+    def to_numpy(self) -> np.ndarray:
+        return self.b.whitener.numpy(force=True)
+
+    @classmethod
     def from_config(
         cls,
         *,
@@ -1474,6 +1482,9 @@ class SpatialWhitener(BModule):
         whiten_cfg: WhiteningConfig,
         computation_cfg: ComputationConfig | None = None,
     ) -> Self:
+        logger.dartsortdebug(
+            "Estimating %s-%s whitener.", whiten_cfg.strategy, whiten_cfg.estimator
+        )
         device = ensure_computation_config(computation_cfg).actual_device()
         cov = residual_covariance(
             sorting=sorting,

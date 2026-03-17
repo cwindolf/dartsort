@@ -484,17 +484,6 @@ def match(
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
 
-    if matching_cfg.whitening.strategy != "none" and whitener is None:
-        assert sorting is not None
-        whitener = SpatialWhitener.from_config(
-            sorting=sorting,
-            motion_est=motion_est,
-            whiten_cfg=matching_cfg.whitening,
-            computation_cfg=computation_cfg,
-        )
-    else:
-        whitener = None
-
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
         sorting, template_data = estimate_template_library(
@@ -533,7 +522,6 @@ def match(
         featurization_cfg=featurization_cfg,
         template_data=template_data,
         motion_est=motion_est,
-        whitener=whitener,
         parent_sorting_hdf5_path=getattr(sorting, "parent_h5_path", None),
     )
     sorting = run_peeler(

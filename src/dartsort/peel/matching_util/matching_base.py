@@ -43,7 +43,6 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
-        whitener: SpatialWhitener | None = None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -59,7 +58,6 @@ class MatchingTemplates(BModule):
             computation_cfg=computation_cfg,
             motion_est=motion_est,
             overwrite=overwrite,
-            whitener=whitener,
             dtype=dtype,
         )
 
@@ -73,7 +71,6 @@ class MatchingTemplates(BModule):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
         motion_est,
-        whitener: SpatialWhitener | None,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
@@ -105,7 +102,6 @@ class MatchingTemplatesBuilder:
     template_data: TemplateData
     matching_cfg: MatchingConfig
     motion_est: MotionEstimate | None = None
-    whitener: SpatialWhitener | None = None
     dtype: torch.dtype = torch.float
 
     def build(
@@ -121,7 +117,6 @@ class MatchingTemplatesBuilder:
             matching_cfg=self.matching_cfg,
             computation_cfg=computation_cfg,
             motion_est=self.motion_est,
-            whitener=self.whitener,
             dtype=self.dtype,
             overwrite=overwrite,
         )

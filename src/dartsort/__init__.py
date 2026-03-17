@@ -61,7 +61,7 @@ from .util.logging_util import (
     get_logger,
 )
 from .util.noise_util import EmbeddedNoise
-from .util.py_util import resolve_path
+from .util.py_util import resolve_path, databag
 from .util.registration_util import try_load_motion_est
 from .util.waveform_util import make_channel_index
 

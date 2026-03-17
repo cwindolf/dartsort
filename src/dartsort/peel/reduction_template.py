@@ -142,6 +142,11 @@ class ReductionTemplateData(TemplateData):
         else:
             assert False
 
+        if whitener is None:
+            whitener_np = None
+        else:
+            whitener_np = whitener.to_numpy()
+
         return TemplateData(
             unit_ids=unit_ids,
             templates=templates,
@@ -151,6 +156,7 @@ class ReductionTemplateData(TemplateData):
             registered_geom=rgeom,
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
+            whitener=whitener_np,
         )
 
 
@@ -222,10 +228,10 @@ class TemplateReduction(GrabAndFeaturize):
         # raw/svd waveform statistics
         transformers = []
         if whitener is None:
-            assert template_cfg.whitening == "none"
+            assert template_cfg.whitening.strategy == "none"
         else:
-            assert template_cfg.whitening in ("prewhiten", "postwhiten")
-        if template_cfg.whitening == "prewhiten":
+            assert template_cfg.whitening.strategy in ("prewhiten", "postwhiten")
+        if template_cfg.whitening.strategy == "prewhiten":
             assert whitener is not None
             transformers.append(
                 WaveformWhitener(

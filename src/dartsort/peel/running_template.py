@@ -65,7 +65,7 @@ class RunningTemplateData(TemplateData):
     ) -> TemplateData:
         computation_cfg = ensure_computation_config(computation_cfg)
         assert whitener is None
-        assert template_cfg.whitening == "none"
+        assert template_cfg.whitening.strategy == "none"
         return get_templates_by_chunk(
             sorting=sorting,
             recording=recording,

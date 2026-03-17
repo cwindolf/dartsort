@@ -189,12 +189,10 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
         motion_est,
-        whitener,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
         assert matching_cfg.up_method == "direct"
-        assert whitener is None
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)

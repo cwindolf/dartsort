@@ -336,12 +336,10 @@ class DebugMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
         motion_est,
-        whitener,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
         assert motion_est is None
-        assert whitener is None
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
         templates_up = upsample_multichan(

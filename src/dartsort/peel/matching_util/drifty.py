@@ -84,9 +84,9 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
-        up_interp_params=default_upsampling_params,
+        up_interp_params: InterpolationParams = default_upsampling_params,
         drift_interp_params: InterpolationParams = default_interpolation_params,
-        refractory_radius_frames: int = 10,
+        refractory_radius_frames: int = 0,
         device: torch.device,
     ):
         """
@@ -200,7 +200,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
         motion_est,
-        whitener: SpatialWhitener | None,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
@@ -224,6 +223,13 @@ class DriftyMatchingTemplates(MatchingTemplates):
         temporal_comps = torch.asarray(shared_basis_temps.temporal_components)
         spatial_sing = torch.asarray(shared_basis_temps.spatial_singular)
 
+        if matching_cfg.whitening.strategy == "none":
+            assert template_data.whitener is None
+            whitener = None
+        else:
+            assert template_data.whitener is not None
+            whitener = SpatialWhitener.from_numpy(template_data.whitener)
+
         return cls(
             temporal_comps=temporal_comps.to(device=device, dtype=dtype),
             spatial_sing=spatial_sing.to(device=device, dtype=dtype),
@@ -238,6 +244,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             drift_interp_params=matching_cfg.drift_interp_params,
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
             whitener=whitener,
+            whiten_strategy=matching_cfg.whitening.strategy,
             device=device,
         )
 

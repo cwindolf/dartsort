@@ -193,7 +193,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         sampling_cfg: FitSamplingConfig,
         template_data: TemplateData | None,
         motion_est=None,
-        whitener: SpatialWhitener | None = None,
         parent_sorting_hdf5_path=None,
     ) -> Self:
         geom = torch.tensor(recording.get_channel_locations())
@@ -230,7 +229,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             template_data=template_data,
             matching_cfg=matching_cfg,
             motion_est=motion_est,
-            whitener=whitener,
         )
 
         logger.info(
@@ -344,7 +342,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # neighborhoods). this copies the input.
         if chunk_template_data.prewhiten:
             residual_padded = traces.new_empty((traces.shape[0], traces.shape[1] + 1))
-            chunk_template_data.whiten_traces(traces=traces, out=residual_padded[:, :-1])
+            chunk_template_data.whiten_traces(
+                traces=traces, out=residual_padded[:, :-1]
+            )
             residual_padded[:, -1] = torch.nan
         else:
             residual_padded = F.pad(traces, (0, 1), value=torch.nan)

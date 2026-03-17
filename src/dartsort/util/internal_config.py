@@ -387,7 +387,7 @@ class TemplateConfig:
     weighted: bool = False
     grab_chunk_length_samples: int = 30_000
     units_per_job: int = 8
-    whitening: WhiteningStrategy = "none"
+    whitening: WhiteningConfig = WhiteningConfig()
 
     # -- template construction parameters
     # registered templates?
@@ -938,6 +938,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
+    whiten_cfg = WhiteningConfig(
+        strategy=cfg.whiten_strategy,
+        estimator=cfg.whiten_estimator,
+        radius=cfg.subtraction_radius_um,
+    )
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um,
         spikes_per_unit=cfg.template_spikes_per_unit,
@@ -946,7 +951,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         use_zero=cfg.template_mix_zero,
         use_svd=cfg.template_mix_svd,
         svd_method=cfg.template_svd_method,
-        whitening=cfg.whiten_strategy,
+        whitening=whiten_cfg,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -1071,11 +1076,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
-        whitening=WhiteningConfig(
-            strategy=cfg.whiten_strategy,
-            estimator=cfg.whiten_estimator,
-            radius=cfg.subtraction_radius_um,
-        ),
+        whitening=whiten_cfg,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,
