@@ -330,7 +330,7 @@ class DebugMatchingTemplates(MatchingTemplates):
     def _from_config(
         cls,
         *,
-        save_folder: Path,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
@@ -340,6 +340,7 @@ class DebugMatchingTemplates(MatchingTemplates):
         dtype: torch.dtype,
     ) -> Self:
         assert motion_est is None
+        del save_folder
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
         templates_up = upsample_multichan(

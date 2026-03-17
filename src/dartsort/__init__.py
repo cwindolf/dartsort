@@ -36,6 +36,7 @@ from .main import (
     universal_match,
 )
 from .peel.grab import GrabAndFeaturize
+from .peel.matching import MatchingTemplates
 from .templates import (
     TemplateData,
     estimate_template_library,
@@ -44,6 +45,7 @@ from .templates import (
 )
 from .transform import WaveformPipeline
 from .util import data_util, logging_util, noise_util, spiketorch, waveform_util
+from .util.job_util import ensure_computation_config, set_global_computation_config
 from .util.data_util import (
     DARTsortSorting,
     get_featurization_pipeline,

@@ -194,7 +194,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
     def _from_config(
         cls,
         *,
-        save_folder: Path,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,

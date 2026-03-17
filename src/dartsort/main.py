@@ -486,6 +486,7 @@ def match(
 
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
+        assert template_cfg.whitening == matching_cfg.whitening
         sorting, template_data = estimate_template_library(
             recording=recording,
             sorting=sorting,

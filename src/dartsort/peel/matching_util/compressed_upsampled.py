@@ -183,7 +183,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
     def _from_config(
         cls,
         *,
-        save_folder: Path,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
@@ -193,6 +193,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         dtype: torch.dtype,
     ) -> Self:
         assert matching_cfg.up_method == "direct"
+        assert save_folder is not None
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
