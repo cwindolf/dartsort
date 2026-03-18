@@ -194,7 +194,6 @@ class DeveloperConfig(DARTsortUserConfig):
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
-    use_singlechan_templates: bool = False
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (

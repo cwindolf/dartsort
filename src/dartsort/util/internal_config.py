@@ -262,6 +262,8 @@ default_refinement_fit_sampling_cfg = FitSamplingConfig(
     max_waveforms_fit=1000 * 1024, n_waveforms_fit=1000 * 1024
 )
 
+PeakSign = Literal["pos", "neg", "both"]
+
 
 @cfg_dataclass
 class SubtractionConfig:
@@ -271,24 +273,20 @@ class SubtractionConfig:
 
     # subtraction
     detection_threshold: float = 3.0
-    peak_sign: Literal["pos", "neg", "both"] = "both"
+    peak_sign: PeakSign = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
-    spatial_dedup_radius: float | None = 50.0
+    spatial_dedup_radius_um: float | None = 50.0
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
-    subtract_radius: float = 200.0
+    subtract_radius_um: float = 200.0
     residnorm_decrease_threshold: float = 9.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
-    use_singlechan_templates: bool = False
-    singlechan_threshold: float = 50.0
-    n_singlechan_templates: int = 10
-    singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
     convexity_threshold: float | None = None
     convexity_radius: int = 7
@@ -325,7 +323,7 @@ class ThresholdingConfig:
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
+    spatial_dedup_radius_um: float = 150.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
@@ -886,11 +884,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = SubtractionConfig(
             peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
-            spatial_dedup_radius=cfg.deduplication_radius_um,
-            subtract_radius=cfg.subtraction_radius_um,
+            spatial_dedup_radius_um=cfg.deduplication_radius_um,
+            subtract_radius_um=cfg.subtraction_radius_um,
             realign_to_denoiser=cfg.realign_to_denoiser,
-            singlechan_alignment_padding_ms=cfg.alignment_ms,
-            use_singlechan_templates=cfg.use_singlechan_templates,
             residnorm_decrease_threshold=cfg.initial_threshold,
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
@@ -902,7 +898,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = ThresholdingConfig(
             peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
-            spatial_dedup_radius=cfg.deduplication_radius_um,
+            spatial_dedup_radius_um=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
         )
     elif cfg.detection_type == "match":
