@@ -361,7 +361,7 @@ TemplateSVDMethod = Literal[
 class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "mean"
+    reduction: Literal["median", "mean"] = "median"
     algorithm: (
         Literal[
             "unitextract",
@@ -421,7 +421,9 @@ class TemplateConfig:
 
 
 raw_template_cfg = TemplateConfig(
-    denoising_method="none", template_interp_params=clampna_interp_params
+    reduction="mean",
+    denoising_method="none",
+    template_interp_params=clampna_interp_params,
 )
 
 RealignStrategy = Literal[
@@ -487,7 +489,7 @@ class MatchingConfig:
         "drifty"
     )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
-    drift_interp_params: InterpolationParams = default_interpolation_params
+    drift_interp_params: InterpolationParams = default_template_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whitening: WhiteningConfig = WhiteningConfig()
 
