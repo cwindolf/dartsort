@@ -8,6 +8,7 @@ from ..util.internal_config import (
     TemplateConfig,
     ComputationConfig,
     default_waveform_cfg,
+    raw_template_cfg,
 )
 from ..util.data_util import DARTsortSorting, load_stored_tsvd
 from ..util.waveform_util import make_channel_index
@@ -152,6 +153,7 @@ def quick_mean_templates(
     sorting: DARTsortSorting,
     waveform_cfg: WaveformConfig,
     computation_cfg: ComputationConfig | None,
+    template_cfg: TemplateConfig = raw_template_cfg,
     motion_est,
 ):
     return TemplateData.from_config(
@@ -159,6 +161,6 @@ def quick_mean_templates(
         sorting=sorting,
         motion_est=motion_est,
         waveform_cfg=waveform_cfg,
-        template_cfg=TemplateConfig(denoising_method="none"),
+        template_cfg=template_cfg,
         computation_cfg=computation_cfg,
     )

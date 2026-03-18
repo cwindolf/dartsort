@@ -10,7 +10,6 @@ from spikeinterface.core import BaseRecording
 
 from ..localize.localize_util import localize_waveforms
 from ..util.data_util import DARTsortSorting
-from ..util.noise_util import SpatialWhitener
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
@@ -18,6 +17,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from .template_util import weighted_average
 
 logger = get_logger(__name__)

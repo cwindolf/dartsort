@@ -210,14 +210,17 @@ class DeveloperConfig(DARTsortUserConfig):
         "exp_weighted"
     )
     template_mix_zero: bool = False
+    template_mix_raw: bool = True
     template_mix_svd: bool = True
     min_template_snr: float = 0.0
     min_template_count: int = 50
+    template_interp_kind: Literal["tps", "clampna"] = "tps"
+    matching_svd_rank: int = 10
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
     )
-    template_svd_method: TemplateSVDMethod = "spike_sklearn"
-    matching_template_min_amplitude: float = 0.0
+    template_svd_method: TemplateSVDMethod = "raw_template"
+    matching_template_min_amplitude: float = 1.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "none"

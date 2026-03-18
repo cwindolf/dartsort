@@ -1,31 +1,31 @@
+import gc
 from pathlib import Path
 from typing import Any
-import gc
 
 import numpy as np
+import torch
+from scipy.sparse import coo_array
+from scipy.spatial import KDTree
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
-from scipy.spatial import KDTree
-from scipy.sparse import coo_array
-import torch
 
-from . import TemplateData, realign
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
+    SubtractionConfig,
     TemplateConfig,
     TemplateMergeConfig,
     TemplateRealignmentConfig,
     WaveformConfig,
-    SubtractionConfig,
     default_template_cfg,
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.noise_util import SpatialWhitener
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
+from . import TemplateData, realign
 from .templib import quick_mean_templates
 
 logger = get_logger(__name__)
@@ -208,6 +208,8 @@ def realign_and_chuck_noisy_template_units(
         spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
         properties=properties,
     )
     if template_save_folder is not None:
@@ -264,6 +266,8 @@ def reorder_by_depth(sorting, template_data):
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
         properties=properties,
     )
     return sorting, template_data
@@ -416,6 +420,8 @@ def _handle_merge(
         raw_std_dev=raw_std_dev,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
     )
     return sorting, template_data
 

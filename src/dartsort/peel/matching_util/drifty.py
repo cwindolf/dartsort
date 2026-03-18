@@ -159,15 +159,15 @@ class DriftyMatchingTemplates(MatchingTemplates):
         if self.whiten_strategy == "postwhiten":
             assert whitener is not None
             self.whitener = whitener.to(spatial_sing.device)
-            conv_spatial_sing = self.whitener.prec_mul(spatial_sing)
-            norm_spatial_sing = self.whitener.whiten(spatial_sing)
+            conv_spatial_sing = self.whitener.transpose_whiten(spatial_sing)
         elif self.whiten_strategy == "prewhiten":
-            self.whitener = norm_spatial_sing = conv_spatial_sing = None
+            assert whitener is not None
+            self.whitener = whitener.to(spatial_sing.device)
+            conv_spatial_sing = None
         elif self.whiten_strategy == "none":
-            self.whitener = norm_spatial_sing = conv_spatial_sing = None
+            self.whitener = conv_spatial_sing = None
         else:
             assert False
-        self.register_buffer_or_none("norm_spatial_sing", norm_spatial_sing)
         self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
 
         # full pconv can be precomputed when not interpolating
@@ -255,9 +255,9 @@ class DriftyMatchingTemplates(MatchingTemplates):
 
     def spatial_at_time(self, t_s: float) -> tuple[Tensor, ...]:
         if self.whiten_strategy == "postwhiten":
+            spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
             conv_spatial_sing = self.interp_at_time(t_s, self.b.conv_spatial_sing)
-            spatial_sing = self.interp_at_time(t_s, self.b.norm_spatial_sing)
-        elif self.whiten_strategy in ("prewhiten", "none"):
+        elif self.whiten_strategy in ("none", "prewhiten"):
             spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
             conv_spatial_sing = spatial_sing
         else:
@@ -359,22 +359,34 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         out_len = traces.shape[-1] + 2 * padding - self.spike_length_samples + 1
         if out is not None:
             assert out.shape == (self.obj_n_templates, out_len)
-        if traces.ndim == 2:
-            traces_batched = traces[:, None]
-        else:
-            traces_batched = traces
         conv = convolve_lowrank_shared(
-            traces=traces_batched,
+            traces=traces,
             spatial_singular=self.spatial_sing,
             temporal_components=self.temporal_comps,
             padding=padding,
             out=out,
         )
         assert conv.ndim == 2
-        if traces.ndim == 3:
-            # reshape to put the batch dim back
-            conv = conv.reshape(self.obj_n_templates, traces.shape[1], conv.shape[1])
         return conv
+
+    def score(self, spikes: Tensor) -> Tensor:
+        """For test purposes, compute the objective for a batch of spikes (incl whitening)."""
+        n, t, c = spikes.shape
+        spikes = self.whiten_traces(spikes)
+        spikes_t = spikes.mT.reshape(n * c, t)
+        rank = self.temporal_comps.shape[0]
+        tconv = spikes_t @ self.temporal_comps.T
+        spatial_t = self.spatial_sing.permute(2, 1, 0)  # now chan,rank,unit
+        conv = tconv.view(n, c * rank) @ spatial_t.reshape(
+            c * rank, self.obj_n_templates
+        )
+        assert conv.shape == (n, self.obj_n_templates)
+        conv = conv.T
+        obj = self.obj_from_conv(
+            conv=conv, out=torch.empty_like(conv), scalings_out=torch.empty_like(conv)
+        )
+        obj = obj.T
+        return obj
 
     def subtract(self, traces: Tensor, peaks: "MatchingPeaks", sign: int = -1):
         if not peaks.n_spikes:
@@ -515,8 +527,10 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         if self.prewhiten:
             assert self.spatial_whitener is not None
             return self.spatial_whitener.whiten(traces, out=out)
+        elif out is not None:
+            return out.copy_(traces)
         else:
-            return super().whiten_traces(traces, out)
+            return traces
 
 
 # -- helpers
@@ -669,12 +683,13 @@ def convolve_lowrank_shared(
     out: Tensor | None = None,
 ):
     rank = temporal_components.shape[0]
-    channels = traces.shape[0]
     for q in range(rank):
         # convolve recording with this rank's basis element
-        # traces: channels, batch, time. temporal comps: 1,1,ktime. thus tconv: channels, batch, ctime.
-        tconv = F.conv1d(traces, temporal_components[q, None, None], padding=padding)
-        tconv = tconv.view(channels, -1)
+        tconv = F.conv1d(
+            traces[:, None], temporal_components[q, None, None], padding=padding
+        )
+        # assert tconv.shape[1] == 1
+        tconv = tconv[:, 0]
 
         # multiply spatially and add into output
         # spatial term: units, channels. tconv: channels, batch*ctime. out: units, batch*ctime.

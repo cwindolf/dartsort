@@ -1407,12 +1407,15 @@ def residual_covariance(
     else:
         snippets = sorting._load_dataset(residual_dataset_name)
     snippets = torch.asarray(snippets, device=device)
-    isna = snippets.isnan()
-    nna = isna.sum()
-    if nna:
-        rvs = np.random.default_rng(seed).normal(size=nna)
-        rvs = torch.asarray(rvs).to(snippets)
-        snippets[isna] = rvs
+
+    if do_interpolation:
+        isna = snippets.isnan()
+        nna = isna.sum()
+        if nna:
+            rvs = np.random.default_rng(seed).normal(size=nna)
+            rvs = torch.asarray(rvs).to(snippets)
+            snippets[isna] = rvs
+
     return torch.cov(snippets.view(-1, snippets.shape[2]).T)
 
 
@@ -1431,6 +1434,7 @@ def winterlocal_whitener(
     """Olivier Winter's local whitener developed for iblsorter, also used in Kilosort 4"""
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
+        chans = chans[chans < len(channel_index)]
         (ixj,) = np.flatnonzero(chans == j)
         cj = cov[chans][:, chans]
         wj = fullzca_whitener(cj, eps=eps)
@@ -1438,16 +1442,22 @@ def winterlocal_whitener(
     return w
 
 
-def vecchia_whitener(
+def sparsechol_whitener(
     cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
 ) -> np.ndarray:
-    """(Transpose of) whitener of Schäfer et al., https://arxiv.org/pdf/2004.14455."""
+    """(Transpose of) whitener of Schäfer et al., https://arxiv.org/pdf/2004.14455.
+
+    This one's actually bad, don't use it. (It is not zero-phase and does bad stuff
+    to spatial dimension.)
+    """
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
+        chans = chans[chans <= j]
         (ixj,) = np.flatnonzero(chans == j)
         cj = cov[chans][:, chans]
         vals, vecs = eigh(cj, driver="ev")
-        pj = (vecs * (1.0 / (vals + eps))) @ vecs.T
+        pj = (vecs / (vals + eps)) @ vecs.T
+        # pj = np.linalg.inv(cj)
         w[j, chans] = pj[:, ixj] / np.sqrt(pj[ixj, ixj])
     return w
 
@@ -1456,7 +1466,7 @@ def vecchia_whitener(
 whitening_estimators = {
     "fullzca": fullzca_whitener,
     "winterlocal": winterlocal_whitener,
-    "vecchia": vecchia_whitener,
+    "sparsechol": sparsechol_whitener,
 }
 
 
@@ -1507,6 +1517,13 @@ class SpatialWhitener(BModule):
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener.T, out=out)
+        x = x.reshape(*shp, c)
+        return x
+
+    def transpose_whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = torch.mm(x, self.b.whitener, out=out)
         x = x.reshape(*shp, c)
         return x
 

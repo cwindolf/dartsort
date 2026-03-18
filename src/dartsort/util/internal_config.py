@@ -341,7 +341,7 @@ class ThresholdingConfig:
 
 
 WhiteningStrategy = Literal["none", "prewhiten", "postwhiten"]
-WhiteningEstimator = Literal["fullzca", "winterlocal", "vecchia"]
+WhiteningEstimator = Literal["fullzca", "winterlocal", "sparsechol"]
 
 
 @cfg_dataclass
@@ -404,7 +404,7 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
     denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
-    svd_method: TemplateSVDMethod = "spike_sklearn"
+    svd_method: TemplateSVDMethod = "raw_template"
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -455,6 +455,7 @@ class TemplateRealignmentConfig:
     template_cfg: TemplateConfig = TemplateConfig(
         denoising_method="none",
         template_interp_params=clampna_interp_params,
+        use_svd=False,
     )
     min_pair_corr: float = 0.8
 
@@ -486,7 +487,7 @@ class MatchingConfig:
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
-    template_min_channel_amplitude: float = 0.0
+    template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 0
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
@@ -929,6 +930,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
             refractory_radius_frames=cfg.refractory_radius_frames,
+            template_svd_compression_rank=cfg.matching_svd_rank,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -938,10 +940,17 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
+    if cfg.template_interp_kind == "tps":
+        temp_interp_params = default_template_interpolation_params
+    elif cfg.template_interp_kind == "clampna":
+        temp_interp_params = clampna_interp_params
+    else:
+        assert False
     whiten_cfg = WhiteningConfig(
         strategy=cfg.whiten_strategy,
         estimator=cfg.whiten_estimator,
         radius=cfg.subtraction_radius_um,
+        interp_params=temp_interp_params,
     )
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um,
@@ -949,9 +958,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
         use_zero=cfg.template_mix_zero,
+        use_raw=cfg.template_mix_raw,
         use_svd=cfg.template_mix_svd,
         svd_method=cfg.template_svd_method,
         whitening=whiten_cfg,
+        template_interp_params=temp_interp_params,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -1088,6 +1099,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
                 template_interp_params=clampna_interp_params,
             ),
         ),
+        template_svd_compression_rank=cfg.matching_svd_rank,
+        drift_interp_params=temp_interp_params,
         refractory_radius_frames=cfg.refractory_radius_frames,
     )
     computation_cfg = ComputationConfig(
@@ -1134,7 +1147,7 @@ default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
 raw_template_cfg = TemplateConfig(
-    denoising_method="none", template_interp_params=clampna_interp_params
+    denoising_method="none", template_interp_params=clampna_interp_params, use_svd=False
 )
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,

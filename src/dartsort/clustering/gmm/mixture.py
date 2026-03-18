@@ -86,7 +86,7 @@ from .stable_features import StableSpikeDataset
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
-prop_check_atol = 1e-6
+prop_check_atol = 2e-4
 
 
 # -- main

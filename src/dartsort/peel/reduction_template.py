@@ -116,6 +116,8 @@ class ReductionTemplateData(TemplateData):
         assert not template_cfg.use_zero
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
         unit_ids = sorting.unit_ids
+        if template_cfg.denoising_method == "none":
+            assert template_cfg.use_raw != template_cfg.use_svd
         if not template_cfg.use_raw:
             # svd-only templates
             assert svd_mean is not None
@@ -291,6 +293,7 @@ class TemplateReduction(GrabAndFeaturize):
 
         # assemble pipeline
         fp = WaveformPipeline(transformers=transformers)
+        logger.dartsortverbose("Template pipeline: %s", fp)
 
         # grab weights and labels for fixed_properties
         assert sorting.labels is not None
