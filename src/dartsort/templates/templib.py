@@ -21,19 +21,18 @@ def fit_tsvd(
     recording: BaseRecording,
     sorting: DARTsortSorting,
     motion_est,
-    denoising_rank=5,
-    denoising_fit_radius=75.0,
-    denoising_spikes_fit=25_000,
+    template_cfg: TemplateConfig,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
-    svd_method: TemplateSVDMethod = "spike_sklearn",
     svd_input_templates: TemplateData | None = None,
     dtype=np.float32,
     random_seed=0,
     n_iter=15,
 ) -> PCA | TruncatedSVD:
+    svd_method = template_cfg.svd_method
+
     if svd_method == "collisioncleaned":
-        tsvd = load_stored_tsvd(sorting, trim_rank_to=denoising_rank)
+        tsvd = load_stored_tsvd(sorting, trim_rank_to=template_cfg.denoising_rank)
         assert isinstance(tsvd, (TruncatedSVD, PCA))
         return tsvd
 
@@ -51,10 +50,17 @@ def fit_tsvd(
         else:
             td = svd_input_templates
         tdc = shared_basis_compress_templates(
-            td, rank=denoising_rank, computation_cfg=computation_cfg
+            td,
+            rank=template_cfg.denoising_rank,
+            computation_cfg=computation_cfg,
+            min_channel_amplitude=template_cfg.template_min_channel_amplitude,
         )
         basis = tdc.temporal_components
-        pca = PCA(n_components=denoising_rank, random_state=random_seed, whiten=False)
+        pca = PCA(
+            n_components=template_cfg.denoising_rank,
+            random_state=random_seed,
+            whiten=False,
+        )
         pca.mean_ = np.zeros_like(td.templates[0, :, 0])
         pca.components_ = basis
         pca.explained_variance_ = np.full_like(basis[:, 0], np.nan)
@@ -72,7 +78,7 @@ def fit_tsvd(
 
     # read spikes on channel neighborhood
     geom = recording.get_channel_locations()
-    tsvd_channel_index = make_channel_index(geom, denoising_fit_radius)
+    tsvd_channel_index = make_channel_index(geom, template_cfg.denoising_fit_radius)
 
     # subset spikes used to fit tsvd
     rg = np.random.default_rng(random_seed)
@@ -82,8 +88,8 @@ def fit_tsvd(
     t_clip = sorting.times_samples.clip(trough_offset_samples, max_time)
     valid = np.logical_and(sorting.labels >= 0, sorting.times_samples == t_clip)
     choices = np.flatnonzero(valid)
-    if choices.size > denoising_spikes_fit:
-        choices = rg.choice(choices, denoising_spikes_fit, replace=False)
+    if choices.size > template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit:
+        choices = rg.choice(choices, template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit, replace=False)
         choices.sort()
     times = sorting.times_samples[choices]
     channels = sorting.channels[choices]
@@ -104,7 +110,9 @@ def fit_tsvd(
 
     # reshape, fit tsvd, and done
     tsvd = TruncatedSVD(
-        n_components=denoising_rank, random_state=random_seed, n_iter=n_iter
+        n_components=template_cfg.denoising_rank,
+        random_state=random_seed,
+        n_iter=n_iter,
     )
     tsvd.fit(waveforms)
 

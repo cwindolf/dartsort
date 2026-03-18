@@ -364,26 +364,13 @@ class TemplateConfig:
     reduction: Literal["median", "mean"] = "mean"
     algorithm: (
         Literal[
-            "running",
             "unitextract",
             "peelreduce",
-            "running_if_mean",
             "peelreduce_if_mean",
         ]
         | str
     ) = "peelreduce"
-    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
-        "exp_weighted"
-    )
-    use_raw: bool = True
-    use_svd: bool = True
-    use_zero: bool = False
-    use_outlier: bool = False
-    use_raw_outlier: bool = False
-    use_svd_outlier: bool = False
-    templates_at_once: int = 384
-    max_templates_at_once: int = 512
-    raw_templates_at_once: int = 1024
+    denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     weighted: bool = False
     grab_chunk_length_samples: int = 30_000
     units_per_job: int = 8
@@ -392,6 +379,8 @@ class TemplateConfig:
     # -- template construction parameters
     # registered templates?
     registered_templates: bool = True
+    min_fraction_at_shift: float = 0.25
+    min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = default_template_interpolation_params
 
     # superresolved templates
@@ -404,21 +393,19 @@ class TemplateConfig:
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
     denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
+    template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
 
-    # t denoising
-    initial_t_df: float = 3.0
-    fixed_t_df: float | tuple[float, ...] | None = (float("inf"), 1.0, 1.0)
-    t_iters: int = 1
-    svd_inside_t: bool = False
-    loot_cov: Literal["diag", "global"] = "global"
-
     # where to find data if needed
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
+
+    @property
+    def use_svd(self) -> bool:
+        return self.denoising_method in ("svd", "exp_weighted")
 
     def actual_algorithm(self) -> str:
         if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
@@ -432,6 +419,10 @@ class TemplateConfig:
         if self.denoising_method in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
+
+raw_template_cfg = TemplateConfig(
+    denoising_method="none", template_interp_params=clampna_interp_params
+)
 
 RealignStrategy = Literal[
     "mainchan_trough_factor",
@@ -452,11 +443,7 @@ class TemplateRealignmentConfig:
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
-    template_cfg: TemplateConfig = TemplateConfig(
-        denoising_method="none",
-        template_interp_params=clampna_interp_params,
-        use_svd=False,
-    )
+    template_cfg: TemplateConfig = raw_template_cfg
     min_pair_corr: float = 0.8
 
 
@@ -957,9 +944,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         spikes_per_unit=cfg.template_spikes_per_unit,
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
-        use_zero=cfg.template_mix_zero,
-        use_raw=cfg.template_mix_raw,
-        use_svd=cfg.template_mix_svd,
         svd_method=cfg.template_svd_method,
         whitening=whiten_cfg,
         template_interp_params=temp_interp_params,
@@ -1146,9 +1130,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
-raw_template_cfg = TemplateConfig(
-    denoising_method="none", template_interp_params=clampna_interp_params, use_svd=False
-)
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
     denoising_method="none",

@@ -205,13 +205,8 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.025
     template_spikes_per_unit: int = 500
-    template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
-        "exp_weighted"
-    )
-    template_mix_zero: bool = False
-    template_mix_raw: bool = True
-    template_mix_svd: bool = True
+    template_reduction: Literal["mean", "median"] = "median"
+    template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 50
     template_interp_kind: Literal["tps", "clampna"] = "tps"

@@ -625,7 +625,6 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         else:
             assert False
         self.random_seed = random_seed
-        print(f"x {firing_rates=}")
         sorting = simulate_sorting(
             self.n_units,
             self.get_num_samples(),

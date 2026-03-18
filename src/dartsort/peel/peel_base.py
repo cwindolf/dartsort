@@ -794,10 +794,9 @@ class BasePeeler(BModule):
     ):
         """Create, overwrite, or re-open output files"""
         if output_hdf5_filename is None:
+            # Supports subclasses which specifically avoid doing any saving.
             assert residual_filename is None
             assert not residual_to_h5
-            # this is not usually the case, but it is used by the
-            # RunningTemplates peeler.
             yield None, None, None, 0
             return
 

@@ -25,6 +25,7 @@ from dartsort.util.internal_config import (
     TemplateRealignmentConfig,
     InterpolationParams,
     WaveformConfig,
+    raw_template_cfg,
 )
 
 
@@ -32,6 +33,8 @@ nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").nor
 thin_erp_20 = InterpolationParams(
     extrap_method="clampna", neighborhood_radius=20.0
 ).normalize()
+
+spike_sklearn_tsvd_template_cfg = TemplateConfig(svd_method="spike_sklearn")
 
 
 # simkit fixture based test of all algorithms with a global
@@ -73,15 +76,13 @@ def refractory_simulations(tmp_path_factory):
     return simulations
 
 
-@pytest.mark.parametrize("denoising_method", ["none"])  # , "t"])
+@pytest.mark.parametrize("denoising_method", ["none"])
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize(
-    "algorithm", ["unitextract", "running", "running_if_mean", "peelreduce"]
-)
+@pytest.mark.parametrize("algorithm", ["unitextract", "peelreduce"])
 def test_refractory_templates(
     refractory_simulations, drift, realign_peaks, reduction, algorithm, denoising_method
 ):
@@ -90,8 +91,6 @@ def test_refractory_templates(
 
     if denoising_method != "none" and reduction == "median":
         return
-    if denoising_method == "t" and not algorithm.startswith("running"):
-        return
 
     template_cfg = TemplateConfig(
         registered_templates=drift is not False,
@@ -99,7 +98,6 @@ def test_refractory_templates(
         algorithm=algorithm,
         denoising_method=denoising_method,
         with_raw_std_dev=True,
-        use_zero=denoising_method == "t",
         template_interp_params=nearest_erp,
     )
     realign_cfg = TemplateRealignmentConfig(
@@ -148,18 +146,12 @@ def test_refractory_templates_algorithm_agreement(
             sorting=sim["sorting"],
             motion_est=sim["motion_est"],
             waveform_cfg=WaveformConfig(),
+            template_cfg=spike_sklearn_tsvd_template_cfg,
         )
 
     tds = []
-    if reduction == "mean":
-        algorithms = ("unitextract", "running", "peelreduce")
-    elif reduction == "median":
-        algorithms = ("unitextract", "peelreduce")
-    else:
-        assert False
+    algorithms = ("unitextract", "peelreduce")
     for algorithm in algorithms:
-        if algorithm != "running" and denoising_method in ("t", "loot"):
-            continue
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
             reduction=reduction,
@@ -258,15 +250,13 @@ def test_drifting_refractory_templates(refractory_simulations):
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
-@pytest.mark.parametrize("algorithm", ("unitextract", "running", "peelreduce"))
+@pytest.mark.parametrize("algorithm", ("unitextract", "peelreduce"))
 def test_roundtrip(tmp_path, algorithm, denoising_method):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
-    if algorithm != "running" and denoising_method in ("loot", "t"):
-        return
 
     if algorithm == "peelreduce":
         erps = [thin_erp_20, nearest_erp]
@@ -281,7 +271,6 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
             template_cfg=dartsort.TemplateConfig(
                 denoising_method=denoising_method,
                 superres_bin_min_spikes=0,
-                use_svd=False,
                 algorithm=algorithm,
                 template_interp_params=erp,
             ),
@@ -321,7 +310,7 @@ def test_static_templates(tmp_path):
                 recording=rec,
                 sorting=sorting,
                 waveform_cfg=waveform_cfg,
-                low_rank_denoising=False,
+                template_cfg=raw_template_cfg,
             )
             temps = res["raw_templates"]
             assert isinstance(temps, np.ndarray)
@@ -371,8 +360,8 @@ def test_drifting_templates(tmp_path):
                 geom=geom,
                 motion_est=me,
                 waveform_cfg=waveform_cfg,
-                low_rank_denoising=False,
                 show_progress=False,
+                template_cfg=raw_template_cfg,
             )
             reg_temps = res["templates"]
             registered_geom = res["registered_geom"]

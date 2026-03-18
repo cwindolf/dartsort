@@ -91,10 +91,10 @@ def get_templates_unitextract(
     trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
     spike_length_samples = waveform_cfg.spike_length_samples(fs)
 
-    if template_cfg.denoising_method in (None, "none"):
+    if template_cfg.denoising_method == "none":
         low_rank_denoising = False
     else:
-        assert template_cfg.denoising_method == "exp_weighted"
+        assert template_cfg.use_svd
         low_rank_denoising = True
 
     # load motion features if necessary
@@ -131,15 +131,7 @@ def get_templates_unitextract(
         recording=recording,
         sorting=sorting,
         waveform_cfg=waveform_cfg,
-        spikes_per_unit=template_cfg.spikes_per_unit,
-        denoising_rank=template_cfg.denoising_rank,
-        svd_method=template_cfg.svd_method,
-        denoising_fit_radius=template_cfg.denoising_fit_radius,
-        denoising_snr_threshold=template_cfg.exp_weight_snr_threshold,
-        units_per_job=template_cfg.units_per_job,
-        with_raw_std_dev=template_cfg.with_raw_std_dev,
-        reducer=nanmean if template_cfg.reduction == "mean" else fast_nanmedian,
-        low_rank_denoising=low_rank_denoising,
+        template_cfg=template_cfg,
         denoising_tsvd=tsvd,
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
@@ -179,24 +171,13 @@ def get_templates(
     recording,
     sorting,
     waveform_cfg: WaveformConfig,
-    spikes_per_unit=500,
     motion_est=None,
     geom=None,
     pitch_shifts=None,
     registered_geom=None,
-    low_rank_denoising=True,
     denoising_tsvd=None,
-    denoising_rank=5,
-    denoising_fit_radius=75.0,
-    denoising_spikes_fit=25_000,
-    svd_method: TemplateSVDMethod = "spike_sklearn",
-    denoising_snr_threshold=50.0,
-    min_fraction_at_shift=0.25,
-    min_count_at_shift=25,
-    with_raw_std_dev=False,
-    reducer=fast_nanmedian,
+    template_cfg: TemplateConfig,
     random_seed=0,
-    units_per_job=8,
     n_jobs=0,
     dtype=np.float32,
     show_progress=True,
@@ -258,7 +239,9 @@ def get_templates(
 
     """
     # validate arguments
-    raw_only = not low_rank_denoising
+    raw_only = template_cfg.denoising_method == "none"
+    low_rank_denoising = not raw_only
+    reducer = nanmean if template_cfg.reduction == "mean" else fast_nanmedian
 
     # use geometry and motion estimate to get pitch shifts and reg geom
     if pitch_shifts is None and motion_est is not None:
@@ -282,18 +265,15 @@ def get_templates(
         geom_kw = dict(registered_geom=geom)
 
     # fit tsvd
-    need_denoiser = denoising_tsvd is None and (low_rank_denoising)
+    need_denoiser = denoising_tsvd is None and low_rank_denoising
     if need_denoiser:
         denoising_tsvd = fit_tsvd(
             recording=recording,
             sorting=sorting,
             motion_est=motion_est,
             dtype=dtype,
-            denoising_rank=denoising_rank,
-            denoising_fit_radius=denoising_fit_radius,
-            denoising_spikes_fit=denoising_spikes_fit,
+            template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
-            svd_method=svd_method,
             random_seed=random_seed,
         )
     elif not low_rank_denoising:
@@ -314,18 +294,18 @@ def get_templates(
         registered_geom=registered_geom,
         denoising_tsvd=denoising_tsvd,
         pitch_shifts=pitch_shifts,
-        spikes_per_unit=spikes_per_unit,
+        spikes_per_unit=template_cfg.spikes_per_unit,
         reducer=reducer,
         n_jobs=n_jobs,
-        units_per_job=units_per_job,
+        units_per_job=template_cfg.units_per_job,
         random_seed=random_seed,
         show_progress=show_progress,
         dtype=dtype,
         trough_offset_samples=trough_offset_samples,
         spike_length_samples=spike_length_samples,
-        min_fraction_at_shift=min_fraction_at_shift,
-        min_count_at_shift=min_count_at_shift,
-        with_raw_std_dev=with_raw_std_dev,
+        min_fraction_at_shift=template_cfg.min_fraction_at_shift,
+        min_count_at_shift=template_cfg.min_count_at_shift,
+        with_raw_std_dev=template_cfg.with_raw_std_dev,
         device=device,
     )
     (
@@ -356,7 +336,7 @@ def get_templates(
         snrs=snrs_by_channel,
         spike_length_samples=spike_length_samples,
         trough_offset=trough_offset_samples,
-        snr_threshold=denoising_snr_threshold,
+        snr_threshold=template_cfg.exp_weight_snr_threshold,
     )
     logger.dartsortdebug(
         f"get_templates: weight mean/max={weights.mean().item()},{weights.max().item()}"

@@ -110,20 +110,14 @@ class ReductionTemplateData(TemplateData):
             # extract outputs and handle denoising method
             count, raw_mean, raw_std, svd_mean = p.reduction_results(h5p)
 
-        assert template_cfg.use_raw or template_cfg.use_svd
-        assert not template_cfg.use_outlier
-        assert not template_cfg.use_svd_outlier
-        assert not template_cfg.use_zero
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
         unit_ids = sorting.unit_ids
-        if template_cfg.denoising_method == "none":
-            assert template_cfg.use_raw != template_cfg.use_svd
-        if not template_cfg.use_raw:
+        if template_cfg.denoising_method == "svd":
             # svd-only templates
             assert svd_mean is not None
             assert raw_std is None
             templates = svd_mean
-        elif template_cfg.denoising_method == "none" or not template_cfg.use_svd:
+        elif template_cfg.denoising_method == "none":
             assert raw_mean is not None
             templates = raw_mean
         elif template_cfg.denoising_method == "exp_weighted":
@@ -179,11 +173,6 @@ class TemplateReduction(GrabAndFeaturize):
         template_cfg: TemplateConfig,
         whitener: SpatialWhitener | None = None,
     ):
-        assert template_cfg.use_raw or template_cfg.use_svd
-        assert not template_cfg.use_outlier
-        assert not template_cfg.use_svd_outlier
-        assert not template_cfg.use_zero
-
         # geom processing
         geom = recording.get_channel_locations()
         rgeom = torch.asarray(rgeom)
@@ -205,11 +194,8 @@ class TemplateReduction(GrabAndFeaturize):
                 recording=recording,
                 sorting=sorting,
                 motion_est=motion_est,
-                denoising_rank=template_cfg.denoising_rank,
-                denoising_fit_radius=template_cfg.denoising_fit_radius,
+                template_cfg=template_cfg,
                 waveform_cfg=waveform_cfg,
-                denoising_spikes_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
-                svd_method=template_cfg.svd_method,
             )
             assert tsvd.components_.shape[0] == template_cfg.denoising_rank
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
@@ -248,11 +234,11 @@ class TemplateReduction(GrabAndFeaturize):
             params=template_cfg.template_interp_params,
         )
         # if raw is included, interp at beginning, else after SVD (cheaper)
-        interp_early = drifting and template_cfg.use_raw
+        interp_early = drifting and template_cfg.denoising_method == "none"
         interp_late = drifting and not interp_early
         if interp_early:
             transformers.append(interp)
-        if template_cfg.use_raw:
+        if template_cfg.denoising_method in ("none", "exp_weighted"):
             raw_reduce = TemplateWaveformReducer(
                 geom=geom,
                 channel_index=channel_index,
