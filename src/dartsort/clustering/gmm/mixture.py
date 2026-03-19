@@ -254,7 +254,11 @@ class NeighborhoodCovariance:
 
     @classmethod
     def from_noise_and_neighborhoods(
-        cls, prgeom: Tensor, noise: EmbeddedNoise, neighborhoods: SpikeNeighborhoods, neighb_overlap: float
+        cls,
+        prgeom: Tensor,
+        noise: EmbeddedNoise,
+        neighborhoods: SpikeNeighborhoods,
+        neighb_overlap: float,
     ) -> Self:
         dev = cast(torch.device, noise.device)
         neighborhoods = neighborhoods.to(device=dev)
@@ -2753,11 +2757,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_scores: Scores,
         eval_scores: Scores,
         show_progress: bool = True,
+        _stop_after: int | None = None,
     ) -> SplitResult:
         split_groups = self.group_units_by_distance(
             distance=self.p.split_friend_distance,
             max_group_size=max(1, self.p.split_k - 1),
         )
+        if _stop_after:
+            split_groups = list(sg for _, sg in zip(range(_stop_after), split_groups))
         if show_progress:
             split_groups = tqdm(split_groups, desc="Split", smoothing=0.0)
 
@@ -2769,7 +2776,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )[0]
             for gp in split_groups
         )
-        split_result = self._apply_splits(split_results, train_data=train_data)
+        split_result = self._apply_splits(
+            split_results, train_data=train_data, _early_stop=bool(_stop_after)
+        )
 
         # split generates a lot of weird small buffers
         gc.collect()
@@ -3247,7 +3256,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return new_remapping
 
     def _apply_splits(
-        self, unit_splits: Iterable[SplitCaseResult], train_data: TruncatedSpikeData
+        self,
+        unit_splits: Iterable[SplitCaseResult],
+        train_data: TruncatedSpikeData,
+        _early_stop: bool = False,
     ):
         any_split = False
         train_labels = torch.full_like(train_data.candidates[:, 0], -1)
@@ -3261,6 +3273,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         new_bases = []
         cur_max_label = self.n_units - 1
         invalidated_ids = []
+
+        new_lp = self.b.log_proportions.clone()
 
         for res in unit_splits:
             if res is None:
@@ -3320,23 +3334,23 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # assign split result first params to unit_id's spot
             assert res.means.shape[0] == res.n_split
             assert res.sub_proportions.shape == (res.n_split,)
-            self.b.log_proportions[cur_out_ids] = split_log_props[:out_count]
+            new_lp[cur_out_ids] = split_log_props[:out_count]
             self.b.means[cur_out_ids] = res.means[:out_count]
             if self.signal_rank:
                 assert res.bases is not None
                 self.b.bases[cur_out_ids] = res.bases[:out_count]
 
             # poison invalidated units
-            self.b.log_proportions[group_invalidated_ids] = -torch.inf
+            new_lp[group_invalidated_ids] = -torch.inf
             self.b.means[group_invalidated_ids] = torch.nan
             if self.signal_rank:
                 self.b.bases[group_invalidated_ids] = torch.nan
 
             if pnoid:
                 _extra_lp = split_log_props[n_group:].double()
-                active_lp0 = self.b.log_proportions[res.unit_ids].double()
+                active_lp0 = new_lp[res.unit_ids].double()
                 active_lp0 = torch.concatenate([_extra_lp, active_lp0]).logsumexp(dim=0)
-                active_lp1 = self.b.log_proportions[cur_out_ids].double()
+                active_lp1 = new_lp[cur_out_ids].double()
                 active_lp1 = torch.concatenate([_extra_lp, active_lp1]).logsumexp(dim=0)
                 assert torch.isclose(group_lp, active_lp0)
                 assert torch.isclose(group_lp, active_lp1)
@@ -3350,6 +3364,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 new_bases.append(res.bases[n_group:])  # type: ignore
             else:
                 new_bases.append(None)
+
+        if _early_stop:
+            # this is for profiling.
+            return cast(SplitResult, None)
 
         assert cur_max_label + 1 == self.n_units + n_new_units
         assert train_labels.max() <= cur_max_label
@@ -3366,6 +3384,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             f"removing {n_shrink} units."
         )
         self.b.means.resize_(Knew, *self.b.means.shape[1:])
+        self.b.log_proportions.copy_(new_lp)
         self.b.log_proportions.resize_(Knew, *self.b.log_proportions.shape[1:])
         if self.signal_rank:
             self.b.bases.resize_(Knew, *self.b.bases.shape[1:])
@@ -3926,6 +3945,7 @@ def run_split(
     train_data: TruncatedSpikeData,
     val_data: TruncatedSpikeData | None,
     prog_level: int,
+    _stop_after: int | None = None,
 ):
     train_scores = tmm.soft_assign(
         data=train_data,
@@ -3948,7 +3968,10 @@ def run_split(
         eval_scores=eval_scores,
         train_scores=train_scores,
         show_progress=prog_level > 0,
+        _stop_after=_stop_after,
     )
+    if _stop_after:
+        return
     logger.info(
         f"Split created {split_res.n_new_units} new units and combined some to remove "
         f"{split_res.n_shrink} units, for count change "

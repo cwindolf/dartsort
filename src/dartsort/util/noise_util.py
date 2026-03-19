@@ -1072,6 +1072,8 @@ class EmbeddedNoise(BModule):
             rank=rank,
             do_tpca=True,
         )
+        if rank is not None:
+            assert snippets.shape[1] == rank
         return cls.estimate(
             snippets,
             shrinkage=shrinkage,

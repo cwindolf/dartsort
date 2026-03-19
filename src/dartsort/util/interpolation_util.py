@@ -101,7 +101,11 @@ def interpolate_by_chunk(
 
     # allocate output
     storage_device = device if store_on_device else "cpu"
-    out_shape = n_spikes, feature_dim, n_target_chans
+    if trim_to_rank:
+        out_feature_dim = min(trim_to_rank, feature_dim)
+    else:
+        out_feature_dim = feature_dim
+    out_shape = n_spikes, out_feature_dim, n_target_chans
     out = torch.empty(out_shape, dtype=dtype, device=storage_device)
 
     # build data needed for interpolation
