@@ -150,9 +150,9 @@ class ThresholdAndFeaturize(BasePeeler):
         else:
             relative_peak_channel_index = None
 
-        if thresholding_cfg.spatial_dedup_radius:
+        if thresholding_cfg.spatial_dedup_radius_um:
             spatial_dedup_channel_index = make_channel_index(
-                geom, thresholding_cfg.spatial_dedup_radius, to_torch=True
+                geom, thresholding_cfg.spatial_dedup_radius_um, to_torch=True
             )
         else:
             spatial_dedup_channel_index = None
