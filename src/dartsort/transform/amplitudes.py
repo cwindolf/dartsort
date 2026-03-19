@@ -182,11 +182,14 @@ class Voltage(BaseWaveformFeaturizer):
             name = self.default_name
             if name_prefix:
                 name = f"{name_prefix}_{name}"
-        super().__init__(name=name, name_prefix=name_prefix)
+        super().__init__(
+            name=name, name_prefix=name_prefix, channel_index=channel_index
+        )
         self.dtype = dtype
         self.trough_offset_samples = trough_offset_samples
-        chans_arange = torch.arange(len(channel_index)).to(channel_index)
-        cix, rel_inds = (channel_index == chans_arange[:, None]).nonzero(as_tuple=True)
+        chans_arange = torch.arange(len(self.b.channel_index)).to(self.b.channel_index)
+        my_ix = self.b.channel_index == chans_arange[:, None]
+        cix, rel_inds = my_ix.nonzero(as_tuple=True)
         assert torch.equal(chans_arange, cix)
         self.register_buffer("main_channel_relative_inds", rel_inds)
 

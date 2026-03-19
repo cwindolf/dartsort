@@ -26,7 +26,7 @@ from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
-from .templib import quick_mean_templates
+from .templib import quick_mean_templates, fit_tsvd
 
 logger = get_logger(__name__)
 
@@ -70,6 +70,19 @@ def estimate_template_library(
         computation_cfg=computation_cfg,
         motion_est=motion_est,
     )
+
+    # use templates0 to fit tsvd if relevant
+    need_tsvd = template_cfg.use_svd and tsvd is None
+    if need_tsvd and template_cfg.svd_method == "raw_template":
+        tsvd = fit_tsvd(
+            recording=recording,
+            sorting=sorting,
+            motion_est=motion_est,
+            template_cfg=template_cfg,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            svd_input_templates=templates0,
+        )
 
     # filter out low-count/snr units
     if templates0 is None and (min_template_count or min_template_snr):
@@ -452,7 +465,7 @@ def filter_by_unit_mask(
 
 def flag_possible_cc_error_spikes(
     sorting: DARTsortSorting,
-    subtraction_cfg,
+    subtraction_cfg: SubtractionConfig,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     from ..util.py_util import timer
@@ -465,7 +478,7 @@ def flag_possible_cc_error_spikes(
 
     # rescale units so that the max allowed temporal and spatial dists are 10
     times = times / subtraction_cfg.temporal_dedup_radius_samples
-    xy_subtract = xy / subtraction_cfg.subtract_radius
+    xy_subtract = xy / subtraction_cfg.subtract_radius_um
     kdt_subtract = KDTree(np.c_[times, xy_subtract])
 
     # get all possible neighbors
@@ -478,8 +491,8 @@ def flag_possible_cc_error_spikes(
     coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
 
     # remove the exclusions by marking their distance as large
-    if subtraction_cfg.spatial_dedup_radius:
-        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius
+    if subtraction_cfg.spatial_dedup_radius_um:
+        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius_um
         kdt_dedup = KDTree(np.c_[times, xy_dedup])
         with timer("b"):
             sdm_dedup = kdt_dedup.sparse_distance_matrix(

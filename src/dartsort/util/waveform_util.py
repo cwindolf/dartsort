@@ -557,6 +557,7 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
     npx = torch if is_tensor else np
 
     if is_tensor:
+        geom = torch.asarray(geom)
         subset = torch.zeros(
             size=channel_index.shape, device=channel_index.device, dtype=torch.bool
         )

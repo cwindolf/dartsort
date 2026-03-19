@@ -13,7 +13,6 @@ from .single_channel_denoiser import (
     SingleChannelDenoiser,
     SingleChannelWaveformDenoiser,
 )
-from .single_channel_templates import SingleChannelTemplates
 from .supervised_denoiser import SupervisedDenoiser
 from .temporal_pca import (
     BaseTemporalPCA,
@@ -44,7 +43,6 @@ all_transformers = [
     Decollider,
     SupervisedDenoiser,
     Passthrough,
-    SingleChannelTemplates,
     DebugMatchingPursuitDenoiser,
     WaveformInterpolator,
     FullProbeTemporalPCAEmbedder,

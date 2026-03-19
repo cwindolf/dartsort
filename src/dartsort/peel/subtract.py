@@ -197,7 +197,7 @@ class SubtractionPeeler(BasePeeler):
         self.first_denoiser_max_waveforms_fit = first_denoiser_max_waveforms_fit
         thinning_length_cond = (
             recording.get_total_duration()
-            >= fit_sampling_cfg.n_seconds_fit / first_denoiser_thinning
+            >= fit_sampling_cfg.n_seconds_fit / (1.0 - first_denoiser_thinning)
         )
         self.first_denoiser_thinning = (
             first_denoiser_thinning if thinning_length_cond else 0.0

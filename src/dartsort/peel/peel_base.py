@@ -79,6 +79,7 @@ class BasePeeler(BModule):
         self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
         if channel_index is not None:
+            channel_index = torch.asarray(channel_index, copy=True).contiguous()
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
         self.fit_sampling: Literal["random", "amp_reweighted"] = fit_sampling
