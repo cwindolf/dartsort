@@ -433,8 +433,8 @@ class EmbeddedNoise(BModule):
 
     def __init__(
         self,
-        rank,
-        n_channels,
+        rank: int,
+        n_channels: int,
         mean_kind="zero",
         cov_kind="factorized_by_rank_rank_diag",
         mean=None,
@@ -448,8 +448,8 @@ class EmbeddedNoise(BModule):
         zero_radius=None,
     ):
         super().__init__()
-        self.rank = rank
-        self.n_channels = n_channels
+        self.rank: int = rank
+        self.n_channels: int = n_channels
         self.mean_kind = mean_kind
         self.cov_kind = cov_kind
         self.D = rank * n_channels
@@ -1044,6 +1044,7 @@ class EmbeddedNoise(BModule):
         motion_est=None,
         interp_params: InterpolationParams = default_template_interpolation_params,
         device=None,
+        rank: int | None = None,
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
@@ -1068,6 +1069,7 @@ class EmbeddedNoise(BModule):
             registered_geom=rgeom,
             interp_params=interp_params,
             device=device,
+            rank=rank,
             do_tpca=True,
         )
         return cls.estimate(
@@ -1143,6 +1145,7 @@ def interpolate_residual_snippets(
     do_tpca: bool,
     tpca: PCA | BaseTemporalPCA | None = None,
     device: torch.device | str | None = None,
+    rank: int | None = None,
     batch_size=64,
     show_progress=True,
 ):
@@ -1167,7 +1170,9 @@ def interpolate_residual_snippets(
         if tpca is None:
             tpca = cast(BaseTemporalPCA, data_util.get_tpca(hdf5_path))
         elif not isinstance(tpca, BaseTemporalPCA):
-            tpca = BaseTemporalPCA.from_sklearn(channel_index=channel_index, pca=tpca)
+            tpca = BaseTemporalPCA.from_sklearn(
+                channel_index=channel_index, pca=tpca, trim_rank_to=rank
+            )
 
         assert tpca is not None
         assert isinstance(tpca, BaseTemporalPCA)
@@ -1178,6 +1183,8 @@ def interpolate_residual_snippets(
             assert isinstance(tpca.temporal_slice, slice)
             snippets = snippets[:, tpca.temporal_slice]
         dim = tpca.rank
+        if rank is not None:
+            dim = min(dim, rank)
     else:
         dim = snippets.shape[1]
         tpca = None
@@ -1215,7 +1222,7 @@ def interpolate_residual_snippets(
     for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
         batch = snippets[i0:i1].to(device=device)
         if tpca is not None:
-            batch = tpca.force_embed(batch)
+            batch = tpca.force_embed(batch)[:, :dim]
         snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(snips_out)
     return snips_out
 

@@ -1,13 +1,15 @@
+from typing import Self, cast
+
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
+from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
     get_channels_in_probe,
     set_channels_in_probe,
 )
-from ..util.spiketorch import svd_lowrank_helper
 from .transform_base import (
     BaseWaveformAutoencoder,
     BaseWaveformDenoiser,
@@ -287,18 +289,24 @@ class BaseTemporalPCA(BaseWaveformModule):
         return pca
 
     @classmethod
-    def from_sklearn(cls, channel_index, pca: PCA | TruncatedSVD, temporal_slice=None):
+    def from_sklearn(
+        cls,
+        channel_index,
+        pca: PCA | TruncatedSVD,
+        temporal_slice=None,
+        trim_rank_to: int | None = None,
+    ) -> Self:
         if isinstance(pca, PCA):
             whiten = pca.whiten  # type: ignore
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
             assert False
+        rank = cast(int, getattr(pca, "n_components"))
+        if trim_rank_to:
+            rank = min(rank, trim_rank_to)
         self = cls(
-            channel_index,
-            rank=pca.n_components,  # type: ignore
-            whiten=whiten,
-            temporal_slice=temporal_slice,
+            channel_index, rank=rank, whiten=whiten, temporal_slice=temporal_slice
         )
         self.initialize_from_sklearn(pca)
         return self
@@ -337,8 +345,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             self.b.mean.zero_()
             self.center = False
-        self.b.components.copy_(torch.from_numpy(pca.components_))
-        self.b.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
+        self.b.components.copy_(torch.from_numpy(pca.components_[: self.rank]))
+        self.b.whitener.copy_(
+            torch.from_numpy(pca.explained_variance_[: self.rank])
+        ).sqrt_()
         self._needs_fit = False
 
 

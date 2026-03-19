@@ -7,16 +7,15 @@ import torch
 
 from ...transform.temporal_pca import TemporalPCAFeaturizer
 from ...util import drift_util, interpolation_util, spiketorch
-from ...util.interpolation_util import SpikeNeighborhoods
+from ...util.data_util import DARTsortSorting, get_tpca
 from ...util.internal_config import (
     InterpolationParams,
-    default_interpolation_params,
     default_extrapolation_params,
+    default_interpolation_params,
 )
-from ...util.data_util import DARTsortSorting, get_tpca
+from ...util.interpolation_util import SpikeNeighborhoods
 from ...util.job_util import get_global_computation_config
 from ...util.torch_util import BModule
-
 
 # -- main class
 

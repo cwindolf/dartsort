@@ -3660,6 +3660,7 @@ def get_truncated_datasets(
         noise = EmbeddedNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
             motion_est=motion_est,
+            rank=refinement_cfg.feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
             glasso_alpha=refinement_cfg.glasso_alpha,
@@ -3669,6 +3670,7 @@ def get_truncated_datasets(
         )
     assert isinstance(noise, EmbeddedNoise)
     noise.to(device=device)
+    assert noise.rank == refinement_cfg.feature_rank
     neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
         prgeom=prgeom,
         noise=noise,
@@ -3798,6 +3800,7 @@ def get_full_neighborhood_data(
             motion_est=motion_est,
             _core_feature_splits=(),  # turn off feat cache
             core_radius="extract",
+            feature_rank=refinement_cfg.feature_rank,
             kept_indices=fit_indices,
             max_n_spikes=refinement_cfg.sampling_cfg.n_waveforms_fit,
             split_proportions=(1.0 - vp, vp),
@@ -3817,6 +3820,7 @@ def get_full_neighborhood_data(
     del stable_data  # TODO: just compute above stuff directly.
 
     assert xfull.shape[2] == full_neighborhoods.b.neighborhoods.shape[1]
+    assert xfull.shape[1] == refinement_cfg.feature_rank
     assert xfull.shape[0] == full_neighborhoods.b.neighborhood_ids.shape[0]
     xfull = xfull.view(len(xfull), -1)
     xfull = xfull.nan_to_num_()
