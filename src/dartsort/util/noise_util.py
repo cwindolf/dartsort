@@ -1,5 +1,6 @@
 import warnings
-from typing import cast
+from pathlib import Path
+from typing import Self, cast
 
 import h5py
 import linear_operator
@@ -9,14 +10,27 @@ import torch
 import torch.nn.functional as F
 from linear_operator import operators
 from scipy.fftpack import next_fast_len
+from scipy.linalg import eigh
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
-from tqdm.auto import trange
+from sklearn.decomposition import PCA
+from torch import Tensor
+from tqdm.auto import tqdm, trange
 
+from ..transform.temporal_pca import BaseTemporalPCA
 from ..util import more_operators, spiketorch
-from ..util.interpolation_util import InterpolationParams, default_interpolation_params
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import (
+    ComputationConfig,
+    InterpolationParams,
+    WhiteningConfig,
+    default_template_interpolation_params,
+)
+from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..util.torch_util import BModule
+from ..util.waveform_util import make_channel_index
 
 logger = get_logger(__name__)
 
@@ -393,7 +407,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         )
 
 
-class EmbeddedNoise(torch.nn.Module):
+class EmbeddedNoise(BModule):
     """Handles computations related to noise in TPCA space.
 
     Can have a couple of kinds of mean. mean_kind == ...
@@ -419,8 +433,8 @@ class EmbeddedNoise(torch.nn.Module):
 
     def __init__(
         self,
-        rank,
-        n_channels,
+        rank: int,
+        n_channels: int,
         mean_kind="zero",
         cov_kind="factorized_by_rank_rank_diag",
         mean=None,
@@ -434,8 +448,8 @@ class EmbeddedNoise(torch.nn.Module):
         zero_radius=None,
     ):
         super().__init__()
-        self.rank = rank
-        self.n_channels = n_channels
+        self.rank: int = rank
+        self.n_channels: int = n_channels
         self.mean_kind = mean_kind
         self.cov_kind = cov_kind
         self.D = rank * n_channels
@@ -477,26 +491,24 @@ class EmbeddedNoise(torch.nn.Module):
         self.to(device)
 
     @property
-    def logdet(self):
+    def logdet(self) -> Tensor:
         if self._logdet is None:
             self.marginal_covariance()
-        return self._logdet
+        return cast(Tensor, self._logdet)
 
     @property
-    def device(self):
-        return self.chans_arange.device
+    def device(self) -> torch.device:
+        return self.b.chans_arange.device
 
-    def mean_rc(self) -> torch.Tensor:
+    def mean_rc(self) -> Tensor:
         """Return noise mean as a rank x channels tensor"""
         shape = self.rank, self.n_channels
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         elif self.mean_kind == "by_rank":
-            return (
-                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-            )
+            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         elif self.mean_kind == "full":
-            return cast(torch.Tensor, self.mean)
+            return cast(Tensor, self.mean)
         else:
             assert False
 
@@ -506,9 +518,7 @@ class EmbeddedNoise(torch.nn.Module):
         if self.mean_kind == "zero":
             return torch.zeros(shape)
         if self.mean_kind == "by_rank":
-            return (
-                cast(torch.Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
-            )
+            return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         if self.mean_kind == "full":
             return self.mean
         assert False
@@ -561,9 +571,7 @@ class EmbeddedNoise(torch.nn.Module):
             self._full_inverse = self._full_inverse.to(device)
         return self._full_inverse
 
-    def cov_batch_mul(
-        self, x: torch.Tensor, channels_src: torch.Tensor, channels_targ: torch.Tensor
-    ):
+    def cov_batch_mul(self, x: Tensor, channels_src: Tensor, channels_targ: Tensor):
         assert x.ndim == 3
         n = x.shape[0]
         assert x.shape[2] == channels_src.shape[1]
@@ -575,13 +583,15 @@ class EmbeddedNoise(torch.nn.Module):
             assert channels_targ.ndim == 1
 
         if self.cov_kind == "factorized":
-            rank_root = self.rank_vt.T * self.rank_std  # type: ignore
-            rank_cov = cast(torch.Tensor, rank_root @ rank_root.T)
+            rank_root = self.b.rank_vt.T * self.b.rank_std  # type: ignore
+            rank_cov = cast(Tensor, rank_root @ rank_root.T)
             rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
             x = rank_cov.bmm(x)
 
-            chan_root_left = self.channel_vt_zpad.T[channels_src] * self.channel_std  # type: ignore
-            chan_root_right = self.channel_vt_zpad.T[channels_targ] * self.channel_std  # type: ignore
+            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std  # type: ignore
+            chan_root_right = (
+                self.b.channel_vt_zpad.T[channels_targ] * self.b.channel_std
+            )  # type: ignore
             if chan_root_right.ndim == 2:
                 targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
                 chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
@@ -592,9 +602,11 @@ class EmbeddedNoise(torch.nn.Module):
                 channels_targ = channels_targ[None, :].broadcast_to(
                     (n, channels_targ.numel())
                 )
-            channels_src = torch.where(channels_src == self.n_channels, -2, channels_src)
+            channels_src = torch.where(
+                channels_src == self.n_channels, -2, channels_src
+            )
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
-            chan_cov = eyes * self.global_std**2  # type: ignore
+            chan_cov = eyes * self.b.global_std**2  # type: ignore
             return x.bmm(chan_cov)
         elif self.cov_kind == "full":
             # this branch is for debugging. it is slow.
@@ -635,15 +647,15 @@ class EmbeddedNoise(torch.nn.Module):
                 f"Need to implement cov_batch_mul for {self.cov_kind=}."
             )
 
-    def cov_batch(self, channels_left: torch.Tensor, channels_right: torch.Tensor):
+    def cov_batch(self, channels_left: Tensor, channels_right: Tensor):
         if self.cov_kind != "factorized":
             raise NotImplementedError(
                 f"Need to implement cov_batch for {self.cov_kind=}."
             )
-        rank_root = self.rank_vt.T * self.rank_std
+        rank_root = self.b.rank_vt.T * self.b.rank_std
         rank_cov = rank_root @ rank_root.T
-        chan_root_left = self.channel_vt_zpad.T[channels_left] * self.channel_std
-        chan_root_right = self.channel_vt_zpad.T[channels_right] * self.channel_std
+        chan_root_left = self.b.channel_vt_zpad.T[channels_left] * self.b.channel_std
+        chan_root_right = self.b.channel_vt_zpad.T[channels_right] * self.b.channel_std
         if chan_root_right.ndim == 2:
             chan_root_right = chan_root_right[None].broadcast_to(
                 chan_root_left.shape[0], *chan_root_right.shape
@@ -656,7 +668,7 @@ class EmbeddedNoise(torch.nn.Module):
 
     def marginal_covariance(
         self,
-        channels: torch.Tensor | slice | None = slice(None),
+        channels: Tensor | slice = slice(None),
         cache_prefix=None,
         cache_key=None,
         device=None,
@@ -681,12 +693,12 @@ class EmbeddedNoise(torch.nn.Module):
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
                 if not isinstance(fcov, operators.ConstantDiagLinearOperator):
-                    fcov = operators.CholLinearOperator(fcov.cholesky())
+                    fcov = operators.CholLinearOperator(fcov.cholesky())  # type: ignore
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
                 self._full_cov = self._full_cov.to(device)
-                self._logdet = self._logdet.to(device)
+                self._logdet = cast(Tensor, self._logdet).to(device)
             return self._full_cov
         cov = self._marginal_covariance(channels)
         if device is not None and device != cov.device:
@@ -705,8 +717,10 @@ class EmbeddedNoise(torch.nn.Module):
             odc = odc.to(device)
         return odc
 
-    def _marginal_covariance(self, channels=slice(None), channels_left=None):
-        channels = self.chans_arange[channels]
+    def _marginal_covariance(
+        self, channels: Tensor | slice = slice(None), channels_left=None
+    ):
+        channels = self.b.chans_arange[channels]
         have_left = channels_left is not None
         if channels_left is None:
             channels_left = channels
@@ -722,54 +736,54 @@ class EmbeddedNoise(torch.nn.Module):
                 #         "with the diagonal."
                 #     )
                 sz = self.rank * ncl, self.rank * nc
-                return operators.ZeroLinearOperator(*sz, dtype=self.global_std.dtype)
+                return operators.ZeroLinearOperator(*sz, dtype=self.b.global_std.dtype)
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
-            return self.global_std.square() * eye
+            return self.b.global_std.square() * eye
 
         if self.cov_kind == "diagonal_by_rank":
-            rank_diag = operators.DiagLinearOperator(self.rank_std**2)
+            rank_diag = operators.DiagLinearOperator(self.b.rank_std**2)
             chans_eye = operators.IdentityLinearOperator(nc, device=self.device)
-            return torch.kron(rank_diag, chans_eye)
+            return torch.kron(rank_diag, chans_eye)  # type: ignore
 
         if self.cov_kind == "diagonal":
-            chans_std = self.full_std[:, channels]
+            chans_std = self.b.full_std[:, channels]
             return operators.DiagLinearOperator(chans_std**2)
 
         if self.cov_kind == "full":
-            marg_cov = self.full_cov[:, channels_left][..., channels]
+            marg_cov = self.b.full_cov[:, channels_left][..., channels]
             r = marg_cov.shape[0]
             marg_cov = marg_cov.reshape(r * ncl, r * nc)
             return linear_operator.to_linear_operator(marg_cov)
 
         if self.cov_kind in "factorized":
-            rank_root = self.rank_vt.T * self.rank_std
+            rank_root = self.b.rank_vt.T * self.b.rank_std
             rank_cov = rank_root @ rank_root.T
-            chan_root = self.channel_vt.T[channels] * self.channel_std
+            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
             chan_root_right = chan_root.T
             if have_left:
-                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
             chan_cov = chan_root @ chan_root_right
             return operators.KroneckerProductLinearOperator(rank_cov, chan_cov)
 
         if self.cov_kind == "factorized_rank_diag":
-            rank_cov = operators.DiagLinearOperator(self.rank_std.square())
-            chan_root = self.channel_vt.T[channels] * self.channel_std
+            rank_cov = operators.DiagLinearOperator(self.b.rank_std.square())
+            chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
             chan_root_right = chan_root.T
             if have_left:
-                chan_root = self.channel_vt.T[channels_left] * self.channel_std
+                chan_root = self.b.channel_vt.T[channels_left] * self.b.channel_std
             chan_cov = chan_root @ chan_root_right
-            return torch.kron(rank_cov, chan_cov)
+            return torch.kron(rank_cov, chan_cov)  # type: ignore
 
         if self.cov_kind == "factorized_by_rank_rank_diag":
-            rank_std = self.rank_std.view(self.rank, 1, 1)
-            chans_std = self.channel_std[:, :, None]  # no slice here!
+            rank_std = self.b.rank_std.view(self.rank, 1, 1)
+            chans_std = self.b.channel_std[:, :, None]  # no slice here!
             rc_std = rank_std * chans_std
-            chans_vt = self.channel_vt[:, :, channels]
+            chans_vt = self.b.channel_vt[:, :, channels]
             chan_rootl = chan_root = rc_std * chans_vt
             if have_left:
-                chans_vtl = self.channel_vt[:, :, channels_left]
+                chans_vtl = self.b.channel_vt[:, :, channels_left]
                 chan_rootl = rc_std * chans_vtl
             blocks = torch.bmm(chan_rootl.mT, chan_root)
             blocks = linear_operator.to_linear_operator(blocks)
@@ -858,6 +872,7 @@ class EmbeddedNoise(torch.nn.Module):
             present = torch.isfinite(x).any(dim=0)
             cov = torch.eye(x.shape[1], device=x.device, dtype=x.dtype)
             vcov = spiketorch.nancov(x[:, present], force_posdef=True, eps=eps)
+            assert torch.is_tensor(vcov)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
             return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
@@ -917,6 +932,7 @@ class EmbeddedNoise(torch.nn.Module):
                 xq = x_spatial[:, q]
                 validq = xq.isfinite().any(0)
                 covq = spiketorch.nancov(xq[:, validq])
+                assert torch.is_tensor(covq)
                 if shrinkage:
                     covq = F.softshrink(covq, shrinkage)
                 fullcovq = torch.eye(xq.shape[1], dtype=covq.dtype, device=covq.device)
@@ -950,6 +966,7 @@ class EmbeddedNoise(torch.nn.Module):
                 init_kw["cov_kind"] = cov_kind.removesuffix("noise")
 
             cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
+            assert torch.is_tensor(cov)
             cov.diagonal().add_(eps)
             if shrinkage:
                 cov = F.softshrink(cov, shrinkage)
@@ -964,7 +981,6 @@ class EmbeddedNoise(torch.nn.Module):
                     n_jobs=1,
                     verbose=logger.isEnabledFor(DARTSORTDEBUG),
                     assume_centered=True,
-                    eps=eps,
                 )
                 xx = x_spatial[:, valid].double().numpy(force=True)
                 invalid = np.isnan(xx)
@@ -988,6 +1004,7 @@ class EmbeddedNoise(torch.nn.Module):
             cov_spatial = cov = cov.to(x_spatial)
             assert cov_spatial.isfinite().all()
             if valid != slice(None):
+                assert torch.is_tensor(valid)
                 cov_spatial = torch.eye(
                     x_spatial.shape[1], dtype=x_spatial.dtype, device=x_spatial.device
                 )
@@ -1025,8 +1042,9 @@ class EmbeddedNoise(torch.nn.Module):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion_est=None,
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = default_template_interpolation_params,
         device=None,
+        rank: int | None = None,
         shrinkage=0.0,
         glasso_alpha: int | float | None = None,
         zero_radius: float | None = None,
@@ -1039,19 +1057,23 @@ class EmbeddedNoise(torch.nn.Module):
         )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
-            geom = h5["geom"][:]
+            geom = cast(h5py.Dataset, h5["geom"])[:]
         if rgeom is None:
             rgeom = geom
             if motion_est is not None:
                 rgeom = registered_geometry(geom, motion_est=motion_est)
         snippets = interpolate_residual_snippets(
-            motion_est,
-            hdf5_path,
-            geom,
-            rgeom,
+            motion_est=motion_est,
+            hdf5_path=hdf5_path,
+            geom=geom,
+            registered_geom=rgeom,
             interp_params=interp_params,
             device=device,
+            rank=rank,
+            do_tpca=True,
         )
+        if rank is not None:
+            assert snippets.shape[1] == rank
         return cls.estimate(
             snippets,
             shrinkage=shrinkage,
@@ -1103,7 +1125,8 @@ class EmbeddedNoise(torch.nn.Module):
         samples = rg.normal(size=(n_samples, self.rank))
         tmp = samples.copy()
         for channel in range(self.n_channels):
-            marginal_cov = self.marginal_covariance(channels=[channel]).to_dense()
+            chan = torch.atleast_1d(torch.tensor(channel))
+            marginal_cov = self.marginal_covariance(channels=chan).to_dense()
             marginal_cov = marginal_cov.numpy(force=True).astype(np.float64)
             eigs = np.linalg.eigvalsh(marginal_cov)
             stds = np.sqrt(eigs)
@@ -1113,17 +1136,20 @@ class EmbeddedNoise(torch.nn.Module):
 
 
 def interpolate_residual_snippets(
+    *,
     motion_est,
-    hdf5_path,
+    hdf5_path: str | Path,
     geom,
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    interp_params: InterpolationParams = default_interpolation_params,
-    do_tpca=True,
-    workers=None,
-    device=None,
-    batch_size=16,
+    interp_params: InterpolationParams = default_template_interpolation_params,
+    do_tpca: bool,
+    tpca: PCA | BaseTemporalPCA | None = None,
+    device: torch.device | str | None = None,
+    rank: int | None = None,
+    batch_size=64,
+    show_progress=True,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from dartsort.util import data_util, drift_util, interpolation_util
@@ -1131,126 +1157,76 @@ def interpolate_residual_snippets(
     assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
 
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else None
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
         snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
-        times_s = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
+        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    times_s = torch.from_numpy(times_s)
 
     # tpca project
     if do_tpca:
-        tpca = data_util.get_tpca(hdf5_path)
+        if tpca is None:
+            tpca = cast(BaseTemporalPCA, data_util.get_tpca(hdf5_path))
+        elif not isinstance(tpca, BaseTemporalPCA):
+            tpca = BaseTemporalPCA.from_sklearn(
+                channel_index=channel_index, pca=tpca, trim_rank_to=rank
+            )
+
+        assert tpca is not None
+        assert isinstance(tpca, BaseTemporalPCA)
         if device is not None:
             tpca = tpca.to(tpca.b.components.dtype)
         tpca = tpca.to(device=device)
         if tpca.temporal_slice is not None:
+            assert isinstance(tpca.temporal_slice, slice)
             snippets = snippets[:, tpca.temporal_slice]
-        n, t, c = snippets.shape
-        snippets_proj = snippets.new_zeros(n, tpca.rank, c)
-        for i0 in range(0, n, batch_size):
-            i1 = min(n, i0 + batch_size)
-            nb = i1 - i0
-            b = snippets[i0:i1].permute(0, 2, 1).reshape(nb * c, t)
-            b = tpca._transform_in_probe(b.to(tpca.components))
-            snippets_proj[i0:i1] = b.reshape(nb, c, -1).permute(0, 2, 1)
-        snippets = snippets_proj
-    n, dim, c = snippets.shape
-    assert snippets.isfinite().all()
+        dim = tpca.rank
+        if rank is not None:
+            dim = min(dim, rank)
+    else:
+        dim = snippets.shape[1]
+        tpca = None
 
-    # -- interpolate
-    # fill in the registered probe with residual snippets using interpolation,
-    # with possible missing values
-    source_geom = torch.asarray(geom).to(snippets).to(device)
-    source_pos = source_geom[None].broadcast_to(n, *geom.shape).contiguous()
-
-    # - precompute
-    interp_params = interp_params.normalize()
-    precomputed_data = interpolation_util.full_probe_precompute(
-        source_geom=source_geom.to(device),
-        channel_index=channel_index.to(device),
+    erp = interpolation_util.ToFullProbeInterpolator(
+        geom=torch.asarray(geom, dtype=snippets.dtype),
+        rgeom=torch.asarray(registered_geom, dtype=snippets.dtype),
+        motion_est=motion_est,
         params=interp_params,
     )
-    if precomputed_data is not None:
-        precomputed_data = precomputed_data.to(device)
-    if motion_est is None:
-        # no drift case, no missing values, but still interpolate to avoid
-        # statistical differences between drifty/no drift versions of the sorter
-        target_geom = torch.asarray(registered_geom).to(device=device)
-        assert torch.equal(source_geom, target_geom)
-        target_pos = target_geom[None].broadcast_to(n, *geom.shape).contiguous()
+    erp = erp.to(device=device)
 
-        for bs in range(0, n, batch_size):
-            sl = slice(bs, min(n, bs + batch_size))
-            snippets[sl] = interpolation_util.kernel_interpolate(
-                snippets[sl].to(device),
-                source_pos[sl].to(device),
-                target_pos[sl].to(device),
-                params=interp_params,
-                precomputed_data=precomputed_data,
-                allow_destroy=True,
-            ).to(snippets)
-        return snippets
+    inds = []
+    if motion_est is not None:
+        if motion_est.time_bin_centers_s.size <= 1:
+            dbin = 3 * np.ptp(times_s_np)
+        else:
+            dbin = np.diff(motion_est.time_bin_centers_s).mean()
+        i0 = i1 = 0
+        for tbc in motion_est.time_bin_centers_s:
+            left = tbc - 0.5 * dbin
+            i0 = i0 + np.searchsorted(times_s_np[i0:], left)
+            i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
+            if len(inds):
+                assert i0 == inds[-1][1]
+            for i00 in range(i0, i1, batch_size):
+                i11 = min(i1, i00 + batch_size)
+                inds.append((i00, i11, tbc))
+        assert i1 == len(times_s_np)
+    else:
+        for i0 in range(0, len(snippets), batch_size):
+            inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    # goal
-    # - determine what registered channels the shifting source positions
-    #   would land on
-    # - interpolate residual snippets from the shifted source position
-    #   to the target positions
-    # except that's slow, because kriging interpolator would require
-    # inverting a matrix for each shifted source geom. so instead,
-    # let's shift the targets inversely and use the same source geom,
-    # even if that has a bit of a different meaning.
-
-    # determine each channel's drift over time
-    source_depths = source_pos[:, :, 1].reshape(-1)
-    source_t = times_s[:, None].broadcast_to(source_pos[:, :, 1].shape).reshape(-1)
-    source_shifts = motion_est.disp_at_s(source_t.cpu(), source_depths.cpu())
-    source_shifts = source_shifts.reshape(source_pos[:, :, 1].shape).astype("float32")
-    assert np.isfinite(source_shifts).all()
-    source_shifts_xy = np.stack([np.zeros_like(source_shifts), source_shifts], axis=-1)
-    source_pos_shifted = source_pos.numpy(force=True) - source_shifts_xy
-
-    # query the target geom for the closest source pos, within reason
-    rg_np = registered_geom
-    if torch.is_tensor(rg_np):
-        rg_np = rg_np.numpy(force=True)
-    kdtree = drift_util.KDTree(rg_np)
-    match_distance = drift_util.pdist(geom).min()
-    _, targ_inds = kdtree.query(
-        source_pos_shifted.reshape(-1, geom.shape[1]),
-        distance_upper_bound=match_distance,
-        workers=workers or -1,
-    )
-    targ_inds = torch.from_numpy(targ_inds).reshape(source_pos.shape[:2])
-    assert (targ_inds < kdtree.n).all()
-    target_pos = torch.asarray(registered_geom[targ_inds], device=device)
-    target_pos_shifted = target_pos + torch.asarray(source_shifts_xy).to(target_pos)
-    target_pos_shifted = torch.asarray(target_pos_shifted).to(snippets)
-
-    # allocate output storage with an extra channel of NaN needed later
-    for bs in range(0, n, batch_size):
-        sl = slice(bs, min(n, bs + batch_size))
-        snippets[sl] = interpolation_util.kernel_interpolate(
-            snippets[sl].to(device),
-            source_pos[sl].to(device),
-            target_pos_shifted[sl].to(device),
-            params=interp_params,
-            precomputed_data=precomputed_data,
-            allow_destroy=True,
-        ).to(snippets)
-    assert snippets.isfinite().all()
-
-    # now, let's embed these into the full registered probe
-    snippets_full = snippets.new_full((n, dim, len(registered_geom)), torch.nan)
-    targ_inds = targ_inds[:, None].broadcast_to(snippets.shape)
-    snippets_full.scatter_(2, targ_inds.to(snippets.device), snippets)
-
-    return snippets_full
+    snips_out = snippets.new_empty((snippets.shape[0], dim, registered_geom.shape[0]))
+    for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
+        batch = snippets[i0:i1].to(device=device)
+        if tpca is not None:
+            batch = tpca.force_embed(batch)[:, :dim]
+        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(snips_out)
+    return snips_out
 
 
 def fp_control_threshold(
@@ -1403,61 +1379,166 @@ def fp_control_threshold_from_h5(
     )
 
 
-def whitener_from_hdf5(
-    hdf5_path,
+def residual_covariance(
+    sorting: DARTsortSorting,
+    do_interpolation: bool,
     motion_est=None,
-    interp_params: InterpolationParams = default_interpolation_params,
-    device=None,
+    interp_params: InterpolationParams = default_template_interpolation_params,
+    device: torch.device | None = None,
     rgeom=None,
-    eps=1e-4,
-    corr_mode=False,
-    whiten_median_std=False,
+    residual_times_s_dataset_name="residual_times_seconds",
+    residual_dataset_name="residual",
+    seed: int = 0,
 ):
     from dartsort.util.drift_util import registered_geometry
 
-    with h5py.File(hdf5_path, "r", locking=False) as h5:
-        geom = cast(h5py.Dataset, h5["geom"])[:]
-    if rgeom is None:
-        rgeom = geom
-        if motion_est is not None:
-            rgeom = registered_geometry(geom, motion_est=motion_est)
+    assert sorting.parent_h5_path is not None
 
-    snippets = interpolate_residual_snippets(
-        motion_est,
-        hdf5_path,
-        geom.astype(np.float32),
-        rgeom.astype(np.float32),
-        interp_params=interp_params,
-        device=device,
-        do_tpca=False,
-    )
+    if do_interpolation:
+        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+            geom = cast(h5py.Dataset, h5["geom"])[:].astype(np.float32)
+        if rgeom is None:
+            rgeom = geom
+            if motion_est is not None:
+                rgeom = registered_geometry(geom, motion_est=motion_est)
+            rgeom = rgeom.astype(np.float32)
+        snippets = interpolate_residual_snippets(
+            motion_est=motion_est,
+            hdf5_path=sorting.parent_h5_path,
+            geom=geom,
+            registered_geom=rgeom,
+            interp_params=interp_params,
+            device=device,
+            do_tpca=False,
+            residual_times_s_dataset_name=residual_times_s_dataset_name,
+            residual_dataset_name=residual_dataset_name,
+        )
+    else:
+        snippets = sorting._load_dataset(residual_dataset_name)
+    snippets = torch.asarray(snippets, device=device)
 
-    x = np.ascontiguousarray(snippets.cpu(), dtype=np.float64)
-    x = x.reshape(-1)
-    invalid = np.flatnonzero(np.isnan(x))
-    if invalid.size:
-        rg = np.random.default_rng(0)
-        x[invalid] = rg.normal(size=invalid.size).astype(x.dtype)
-    x = x.reshape(-1, len(rgeom))
-    if corr_mode:
-        std = np.std(x, axis=0)
-        x /= std
-    _, S, Vh = np.linalg.svd(x, full_matrices=False)
-    assert Vh.shape == (len(rgeom), len(rgeom))
-    assert S.shape == (len(rgeom),)
-    std = S / np.sqrt(len(x) - 1.0) + eps
-    logger.dartsortdebug(
-        "Whitening standard deviations: min,mean,max="
-        f"{std.min().item():0.5f},{std.mean().item():0.5f},{std.max().item():0.5f}"
-    )
+    if do_interpolation:
+        isna = snippets.isnan()
+        nna = isna.sum()
+        if nna:
+            rvs = np.random.default_rng(seed).normal(size=nna)
+            rvs = torch.asarray(rvs).to(snippets)
+            snippets[isna] = rvs
 
-    wstd = 1.0 / std
-    # life is easier if we try not to change the units
-    # too much in the whitened data domain
-    if whiten_median_std:
-        wstd /= np.median(wstd)
+    return torch.cov(snippets.view(-1, snippets.shape[2]).T)
 
-    # using the zca whitener here. symmetry takes a load off the mind.
-    whitener = (Vh * wstd) @ Vh.T
 
-    return whitener.astype(np.float32)
+def fullzca_whitener(
+    cov: np.ndarray, channel_index: np.ndarray | None = None, eps=1e-6
+) -> np.ndarray:
+    del channel_index
+    vals, vecs = eigh(cov, driver="ev")
+    wv = 1.0 / (np.sqrt(vals + eps))
+    return (vecs * wv) @ vecs.T
+
+
+def winterlocal_whitener(
+    cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
+) -> np.ndarray:
+    """Olivier Winter's local whitener developed for iblsorter, also used in Kilosort 4"""
+    w = np.zeros_like(cov)
+    for j, chans in enumerate(channel_index):
+        chans = chans[chans < len(channel_index)]
+        (ixj,) = np.flatnonzero(chans == j)
+        cj = cov[chans][:, chans]
+        wj = fullzca_whitener(cj, eps=eps)
+        w[j, chans] = wj[ixj]
+    return w
+
+
+def sparsechol_whitener(
+    cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
+) -> np.ndarray:
+    """(Transpose of) whitener of Schäfer et al., https://arxiv.org/pdf/2004.14455.
+
+    This one's actually bad, don't use it. (It is not zero-phase and does bad stuff
+    to spatial dimension.)
+    """
+    w = np.zeros_like(cov)
+    for j, chans in enumerate(channel_index):
+        chans = chans[chans <= j]
+        (ixj,) = np.flatnonzero(chans == j)
+        cj = cov[chans][:, chans]
+        vals, vecs = eigh(cj, driver="ev")
+        pj = (vecs / (vals + eps)) @ vecs.T
+        # pj = np.linalg.inv(cj)
+        w[j, chans] = pj[:, ixj] / np.sqrt(pj[ixj, ixj])
+    return w
+
+
+# these should be left-side whiteners, meaning precision = W'W
+whitening_estimators = {
+    "fullzca": fullzca_whitener,
+    "winterlocal": winterlocal_whitener,
+    "sparsechol": sparsechol_whitener,
+}
+
+
+class SpatialWhitener(BModule):
+    def __init__(self, whitener: Tensor):
+        super().__init__()
+        self.register_buffer("whitener", whitener)
+
+    @classmethod
+    def from_numpy(cls, whitener: np.ndarray):
+        logger.dartsortdebug(f"Load whitener from numpy.")
+        return cls(whitener=torch.asarray(whitener))
+
+    def to_numpy(self) -> np.ndarray:
+        return self.b.whitener.numpy(force=True)
+
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        sorting: DARTsortSorting,
+        motion_est=None,
+        whiten_cfg: WhiteningConfig,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> Self:
+        logger.dartsortdebug(
+            "Estimating %s-%s whitener.", whiten_cfg.strategy, whiten_cfg.estimator
+        )
+        device = ensure_computation_config(computation_cfg).actual_device()
+        cov = residual_covariance(
+            sorting=sorting,
+            do_interpolation=whiten_cfg.strategy == "postwhiten",
+            motion_est=motion_est,
+            interp_params=whiten_cfg.interp_params,
+            device=device,
+        )
+        geom = getattr(sorting, "geom", None)
+        assert geom is not None
+        neighbs = make_channel_index(geom, radius=whiten_cfg.radius)
+        cov_np = cov.numpy(force=True).astype(np.float64)
+        whitener = whitening_estimators[whiten_cfg.estimator](
+            cov_np, channel_index=neighbs
+        )
+        whitener = torch.asarray(whitener).to(cov)
+        return cls(whitener=whitener)
+
+    def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = torch.mm(x, self.b.whitener.T, out=out)
+        x = x.reshape(*shp, c)
+        return x
+
+    def transpose_whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = torch.mm(x, self.b.whitener, out=out)
+        x = x.reshape(*shp, c)
+        return x
+
+    def prec_mul(self, x: Tensor) -> Tensor:
+        *shp, c = x.shape
+        x = x.reshape(-1, c)
+        x = x @ (self.b.whitener.T @ self.b.whitener)
+        x = x.reshape(*shp, c)
+        return x

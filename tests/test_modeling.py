@@ -88,6 +88,7 @@ def test_truncated_mixture(
         signal_rank=M * (t_w != "zero"),
         n_candidates=K,
         em_converged_atol=1e-4,
+        feature_rank=TEST_RANK,
     )
 
     # copy-pasting from tmm_demix here

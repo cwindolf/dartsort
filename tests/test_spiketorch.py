@@ -51,8 +51,8 @@ def test_isin_sorted():
     # edge cases with empties
     empty = torch.arange(0)
     full = torch.arange(5)
-    empty_b = torch.zeros((0,), dtype=bool)
-    full_b = torch.zeros((5,), dtype=bool)
+    empty_b = torch.zeros((0,), dtype=torch.bool)
+    full_b = torch.zeros((5,), dtype=torch.bool)
     assert torch.equal(spiketorch.isin_sorted(empty, full), empty_b)
     assert torch.equal(spiketorch.isin_sorted(full, empty), full_b)
 
@@ -171,7 +171,9 @@ def test_resample():
     rg = np.random.default_rng(0)
     x = rg.normal(size=(10, 101, 3))
     xup_scipy = resample(x, 80)
+    assert isinstance(xup_scipy, np.ndarray)
     xup_torch = spiketorch.real_resample(torch.as_tensor(x), 80)
+    xup_torch = xup_torch.numpy(force=True)
     assert np.isclose(xup_scipy, xup_torch).all()
 
 

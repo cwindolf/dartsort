@@ -125,7 +125,8 @@ class WaveformPipeline(torch.nn.Module):
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
-            assert v.shape[0] == waveforms.shape[0]
+            # allow scalars or spike-len vectors
+            assert v.shape == () or v.shape[0] == waveforms.shape[0]
 
         features = {}
 

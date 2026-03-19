@@ -79,6 +79,7 @@ class BasePeeler(BModule):
         self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
         if channel_index is not None:
+            channel_index = torch.asarray(channel_index, copy=True).contiguous()
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
         self.fit_sampling: Literal["random", "amp_reweighted"] = fit_sampling
@@ -266,7 +267,7 @@ class BasePeeler(BModule):
                         mininterval=0.25,
                     )
                 else:
-                    n_sec_chunk = None
+                    dtag = n_sec_chunk = None
 
                 # construct h5 after forking to avoid pickling it
                 with self.initialize_files(
@@ -297,7 +298,7 @@ class BasePeeler(BModule):
                             batch_count += 1
                             n_spikes += n_new_spikes
                             if show_progress:
-                                desc = f"{task_name}"
+                                desc = f"{task_name}:{dtag}"
                                 if not skip_features:
                                     assert n_sec_chunk is not None
                                     desc += f" [spk/{n_sec_chunk:g}s={n_spikes / batch_count:0.1f}]"
@@ -445,9 +446,14 @@ class BasePeeler(BModule):
         )
 
         if peel_result["n_spikes"] > 0 and return_waveforms:
+            chunk_start_s = self.recording.sample_index_to_time(chunk_start_samples)
+            chunk_end_s = self.recording.sample_index_to_time(chunk_end_samples)
+            chunk_center_s = (chunk_start_s + chunk_end_s) / 2
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
             features = self.featurize_collisioncleaned_waveforms(
-                peel_result["collisioncleaned_waveforms"], **fixed_properties
+                peel_result["collisioncleaned_waveforms"],
+                chunk_center_s=chunk_center_s,
+                **fixed_properties,
             )
         else:
             features = {}
@@ -783,18 +789,15 @@ class BasePeeler(BModule):
         residual_filename=None,
         overwrite=False,
         chunk_size=1024,
-        # could also do:
-        # libver=("earliest", "v110"),
         libver="latest",
         residual_to_h5=False,
         skip_features=False,
     ):
         """Create, overwrite, or re-open output files"""
         if output_hdf5_filename is None:
+            # Supports subclasses which specifically avoid doing any saving.
             assert residual_filename is None
             assert not residual_to_h5
-            # this is not usually the case, but it is used by the
-            # RunningTemplates peeler.
             yield None, None, None, 0
             return
 

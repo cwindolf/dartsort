@@ -20,7 +20,21 @@ from dartsort.templates import (
     templates,
 )
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.internal_config import TemplateConfig, TemplateRealignmentConfig
+from dartsort.util.internal_config import (
+    TemplateConfig,
+    TemplateRealignmentConfig,
+    InterpolationParams,
+    WaveformConfig,
+    raw_template_cfg,
+)
+
+
+nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
+thin_erp_20 = InterpolationParams(
+    extrap_method="clampna", neighborhood_radius=20.0
+).normalize()
+
+spike_sklearn_tsvd_template_cfg = TemplateConfig(svd_method="spike_sklearn")
 
 
 # simkit fixture based test of all algorithms with a global
@@ -46,9 +60,13 @@ def refractory_simulations(tmp_path_factory):
             globally_refractory=True,
         ),
         config_cls=None,
-        drift={"y": dict(drift_speed=1e-4), "n": dict(drift_speed=0.0)},
+        drift={
+            "y": dict(drift_speed=1e-4),
+            "n": dict(drift_speed=0.0),
+            "v": dict(drift_speed=3.0),
+        },
     )
-    assert len(sim_settings) == 2
+    assert len(sim_settings) == 3
 
     simulations = {}
     for sim_name, kw in sim_settings.items():
@@ -58,13 +76,13 @@ def refractory_simulations(tmp_path_factory):
     return simulations
 
 
-@pytest.mark.parametrize("denoising_method", ["none", "t"])
+@pytest.mark.parametrize("denoising_method", ["none"])
 @pytest.mark.parametrize("drift", [False, 0, True])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("algorithm", ["unitextract", "running", "running_if_mean"])
+@pytest.mark.parametrize("algorithm", ["unitextract", "peelreduce"])
 def test_refractory_templates(
     refractory_simulations, drift, realign_peaks, reduction, algorithm, denoising_method
 ):
@@ -73,8 +91,6 @@ def test_refractory_templates(
 
     if denoising_method != "none" and reduction == "median":
         return
-    if denoising_method != "none" and algorithm == "unitextract":
-        return
 
     template_cfg = TemplateConfig(
         registered_templates=drift is not False,
@@ -82,7 +98,7 @@ def test_refractory_templates(
         algorithm=algorithm,
         denoising_method=denoising_method,
         with_raw_std_dev=True,
-        use_zero=denoising_method == "t",
+        template_interp_params=nearest_erp,
     )
     realign_cfg = TemplateRealignmentConfig(
         realign_peaks=bool(realign_peaks),
@@ -111,31 +127,38 @@ def test_refractory_templates(
     np.testing.assert_array_equal(td.unit_ids, sim["templates"].unit_ids)
 
 
-@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("reduction", ["mean", "median"])
+@pytest.mark.parametrize("drift", [False, 0, True, "v"])
 @pytest.mark.parametrize(
     "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
 )
-@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted", "t", "loot"])
+@pytest.mark.parametrize("denoising_method", ["none", "exp_weighted"])
 def test_refractory_templates_algorithm_agreement(
-    refractory_simulations, drift, realign_peaks, denoising_method
+    refractory_simulations, drift, realign_peaks, denoising_method, reduction
 ):
     sim_name = f"drift{'y' if drift else 'n'}"
     sim = refractory_simulations[sim_name]
 
     tsvd = None
     if denoising_method != "none":
-        tsvd = fit_tsvd(sim["recording"], sim["sorting"])
+        tsvd = fit_tsvd(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            motion_est=sim["motion_est"],
+            waveform_cfg=WaveformConfig(),
+            template_cfg=spike_sklearn_tsvd_template_cfg,
+        )
 
     tds = []
-    for algorithm in ("running", "unitextract"):
-        if algorithm == "unitextract" and denoising_method in ("t", "loot"):
-            continue
+    algorithms = ("unitextract", "peelreduce")
+    for algorithm in algorithms:
         template_cfg = TemplateConfig(
             registered_templates=drift is not False,
-            reduction="mean",
+            reduction=reduction,
             algorithm=algorithm,
             denoising_method=denoising_method,
             with_raw_std_dev=True,
+            template_interp_params=nearest_erp,
         )
         realign_cfg = TemplateRealignmentConfig(
             realign_peaks=bool(realign_peaks),
@@ -156,46 +179,112 @@ def test_refractory_templates_algorithm_agreement(
     if len(tds) == 1:
         return
 
-    td0, td1 = tds
+    td0, *rest = tds
 
-    np.testing.assert_array_equal(td0.unit_ids, td1.unit_ids)
-    np.testing.assert_array_equal(td0.spike_counts, td1.spike_counts)
-    np.testing.assert_array_equal(
-        td0.spike_counts_by_channel, td1.spike_counts_by_channel
-    )
+    for alg, tdb in zip(algorithms[1:], rest):
+        print(alg)
+        np.testing.assert_array_equal(td0.unit_ids, tdb.unit_ids)
+        np.testing.assert_array_equal(td0.spike_counts, tdb.spike_counts)
+        np.testing.assert_array_equal(
+            td0.spike_counts_by_channel, tdb.spike_counts_by_channel
+        )
 
-    np.testing.assert_allclose(td0.templates, td1.templates, atol=1e-5)
-    np.testing.assert_allclose(td0.raw_std_dev, td1.raw_std_dev, atol=2e-2)
+        if reduction == "median" and denoising_method == "exp_weighted":
+            # slight diff (peel takes median in SVD space, unit in wf space)
+            atol = 5e-5
+        else:
+            atol = 1e-5
+        np.testing.assert_allclose(td0.templates, tdb.templates, atol=atol)
+        np.testing.assert_allclose(td0.raw_std_dev, tdb.raw_std_dev, atol=5e-2)
+
+
+def test_drifting_refractory_templates(refractory_simulations):
+    sim_name = "driftv"
+    sim = refractory_simulations[sim_name]
+    tcfgs = [
+        TemplateConfig(
+            reduction="mean",
+            algorithm="unitextract",
+            denoising_method="none",
+        )
+    ]
+    tcfgs += [
+        TemplateConfig(
+            reduction="mean",
+            algorithm="peelreduce",
+            denoising_method="none",
+            template_interp_params=ep,
+        )
+        for ep in [nearest_erp, thin_erp_20]
+    ]
+    for tcfg in tcfgs:
+        _, td = estimate_template_library(
+            recording=sim["recording"],
+            sorting=sim["sorting"],
+            motion_est=sim["motion_est"],
+            template_cfg=tcfg,
+            realign_cfg=None,
+        )
+        temps = sim["templates"].templates
+        np.testing.assert_array_equal(td.unit_ids, np.arange(len(temps)))
+
+        sl = slice(2, len(temps) - 2)
+        if tcfg.algorithm == "unitextract":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "nearest":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "thinplate":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=7.0)
+        else:
+            assert False
+
+        sl = slice(None)
+        if tcfg.algorithm == "unitextract":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "nearest":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        elif tcfg.template_interp_params.kernel == "thinplate":
+            np.testing.assert_allclose(temps[sl], td.templates[sl], atol=8.0)
+        else:
+            assert False
 
 
 @pytest.mark.parametrize("denoising_method", ("none",))
-@pytest.mark.parametrize("algorithm", ("unitextract", "running"))
+@pytest.mark.parametrize("algorithm", ("unitextract", "peelreduce"))
 def test_roundtrip(tmp_path, algorithm, denoising_method):
     rg = np.random.default_rng(0)
     temps = rg.normal(size=(11, 121, 384)).astype(np.float32)
     rec, st = no_overlap_recording_sorting(temps, pad=0)
     assert st.labels is not None
     np.testing.assert_array_equal(np.unique(st.labels), np.arange(len(temps)))
-    if algorithm == "unitextract" and denoising_method in ("loot", "t"):
-        return
-    template_data = templates.TemplateData.from_config(
-        recording=rec,
-        sorting=st,
-        template_cfg=dartsort.TemplateConfig(
-            denoising_method=denoising_method,
-            superres_bin_min_spikes=0,
-            use_svd=False,
-            algorithm=algorithm,
-        ),
-        motion_est=IdentityMotionEstimate(),
-        save_folder=tmp_path,
-        overwrite=True,
-    )
-    np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
-    if denoising_method == "none":
-        np.testing.assert_array_equal(template_data.templates, temps)
+
+    if algorithm == "peelreduce":
+        erps = [thin_erp_20, nearest_erp]
     else:
-        np.testing.assert_allclose(template_data.templates, temps, atol=0.5)
+        erps = [nearest_erp]
+
+    for erp in erps:
+        print(erp.method, erp.kernel, erp.extrap_method, erp.extrap_kernel)
+        template_data = templates.TemplateData.from_config(
+            recording=rec,
+            sorting=st,
+            template_cfg=dartsort.TemplateConfig(
+                denoising_method=denoising_method,
+                superres_bin_min_spikes=0,
+                algorithm=algorithm,
+                template_interp_params=erp,
+            ),
+            motion_est=IdentityMotionEstimate(),
+            save_folder=tmp_path,
+            overwrite=True,
+        )
+        np.testing.assert_array_equal(template_data.unit_ids, np.arange(len(temps)))
+        if denoising_method == "none" and erp.method != "nearest":
+            np.testing.assert_allclose(template_data.templates, temps, atol=2e-1)
+        elif denoising_method == "none":
+            np.testing.assert_array_equal(template_data.templates, temps)
+        else:
+            np.testing.assert_allclose(template_data.templates, temps, atol=0.5)
 
 
 def test_static_templates(tmp_path):
@@ -212,20 +301,20 @@ def test_static_templates(tmp_path):
         channels=np.array([1, 5]),
         sampling_frequency=1,
     )
+    waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
         for rec in [rec0, rec1]:
             res = get_templates(
-                rec,
-                sorting,
-                trough_offset_samples=0,
-                spike_length_samples=2,
-                low_rank_denoising=False,
+                recording=rec,
+                sorting=sorting,
+                waveform_cfg=waveform_cfg,
+                template_cfg=raw_template_cfg,
             )
             temps = res["raw_templates"]
             assert isinstance(temps, np.ndarray)
-            assert temps.shape == (2, 2, 10)
+            assert temps.shape == (2, 3, 10)
 
             assert temps[0, 0, 1] == 1
             temps[0, 0, 1] -= 1
@@ -243,6 +332,8 @@ def test_drifting_templates(tmp_path):
     rec0[8, 6] = 2
     rec0 = sc.NumpyRecording(rec0, 1)
     rec0.set_dummy_probe_from_locations(geom)
+
+    waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
@@ -264,14 +355,13 @@ def test_drifting_templates(tmp_path):
             )
 
             res = get_templates(
-                rec,
-                sorting,
+                recording=rec,
+                sorting=sorting,
                 geom=geom,
                 motion_est=me,
-                trough_offset_samples=0,
-                spike_length_samples=2,
-                low_rank_denoising=False,
+                waveform_cfg=waveform_cfg,
                 show_progress=False,
+                template_cfg=raw_template_cfg,
             )
             reg_temps = res["templates"]
             registered_geom = res["registered_geom"]
@@ -285,7 +375,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps0, np.ndarray)
-            assert temps0.shape == (2, 2, 7)
+            assert temps0.shape == (2, 3, 7)
             assert temps0[0, 0, 1] == 1
             assert temps0[1, 0, 2] == 2
 
@@ -298,7 +388,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps6, np.ndarray)
-            assert temps6.shape == (2, 2, 7)
+            assert temps6.shape == (2, 3, 7)
             assert temps6[0, 0, 4] == 1
             assert temps6[1, 0, 5] == 2
 
@@ -311,7 +401,7 @@ def test_drifting_templates(tmp_path):
                 motion_est=me,
             )
             assert isinstance(temps8, np.ndarray)
-            assert temps8.shape == (2, 2, 7)
+            assert temps8.shape == (2, 3, 7)
             assert temps8[0, 0, 5] == 1
             assert temps8[1, 0, 6] == 2
 

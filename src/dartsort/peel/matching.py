@@ -21,7 +21,7 @@ from ..util.internal_config import (
     WaveformConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.noise_util import whitener_from_hdf5
+from ..util.noise_util import SpatialWhitener
 from ..util.waveform_util import make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -76,7 +76,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             spike_length_samples = matching_templates_builder.spike_length_samples
         else:
             raise ValueError(f"Need either a MatchingTemplates or a builder.")
-        
+
         fixed_prop_keys = ("channels",)
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
@@ -86,7 +86,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=margin_factor * spike_length_samples,
+            chunk_margin_samples=margin_factor * spike_length_samples + 1,
             n_seconds_fit=n_seconds_fit,
             max_waveforms_fit=max_waveforms_fit,
             fit_subsampling_random_state=fit_subsampling_random_state,
@@ -135,7 +135,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.amp_scale_max = 1.0 + amplitude_scaling_boundary
         self.amp_scale_min = 1.0 / self.amp_scale_max
-        self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples - 1)
+        self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples)
 
         conv_len = (
             self.chunk_length_samples
@@ -224,25 +224,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
         assert trough_offset_samples == template_data.trough_offset_samples
 
-        if matching_cfg.whiten:
-            # TODO defer computation of this
-            whitener = whitener_from_hdf5(
-                parent_sorting_hdf5_path,
-                motion_est=motion_est,
-                interp_params=matching_cfg.drift_interp_params,
-                rgeom=template_data.registered_geom,
-                whiten_median_std=matching_cfg.whiten_median_std,
-            )
-            whitener = torch.tensor(whitener)
-        else:
-            whitener = None
-
         builder = MatchingTemplatesBuilder(
             recording=recording,
             template_data=template_data,
             matching_cfg=matching_cfg,
             motion_est=motion_est,
-            whitener=whitener,
         )
 
         logger.info(
@@ -256,7 +242,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             matching_cfg.template_temporal_upsampling_factor,
             matching_cfg.refractory_radius_frames,
         )
-        save_collidedness = featurization_cfg.save_collidedness and not featurization_cfg.skip
+        save_collidedness = (
+            featurization_cfg.save_collidedness and not featurization_cfg.skip
+        )
 
         return cls(
             recording=recording,
@@ -271,7 +259,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_selection=channel_selection,
             channel_selection_index=channel_selection_index,
             chunk_length_samples=matching_cfg.chunk_length_samples,
-            n_seconds_fit=matching_cfg.n_seconds_fit,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             max_waveforms_fit=sampling_cfg.max_waveforms_fit,
             fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,
@@ -352,7 +340,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # initialize residual, it needs to be padded to support our channel
         # indexing convention (used later to extract small channel
         # neighborhoods). this copies the input.
-        residual_padded = F.pad(traces, (0, 1), value=torch.nan)
+        if chunk_template_data.prewhiten:
+            residual_padded = traces.new_empty((traces.shape[0], traces.shape[1] + 1))
+            chunk_template_data.whiten_traces(
+                traces=traces, out=residual_padded[:, :-1]
+            )
+            residual_padded[:, -1] = torch.nan
+        else:
+            residual_padded = F.pad(traces, (0, 1), value=torch.nan)
         residual = residual_padded[:, :-1]
 
         # name objective variables so that we can update them in-place later
@@ -534,24 +529,21 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # enforce refractoriness
-        objective = padded_objective[:-1, self.obj_pad_len : -self.obj_pad_len]
+        objective = padded_objective[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
         if refrac_mask is not None:
-            refrac_mask_ = refrac_mask[:-1, self.obj_pad_len : -self.obj_pad_len]
+            refrac_mask_ = refrac_mask[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
             objective = objective + refrac_mask_
         if unit_mask is not None:
             objective[torch.logical_not(unit_mask)] = -torch.inf
 
         # find peaks in the coarse objective
         assert self.thresholdsq is not None
-        if padded_scalings is None:
-            scalings = None
-        else:
-            scalings = padded_scalings[:, self.obj_pad_len : -self.obj_pad_len]
         coarse_peaks = chunk_template_data.coarse_match(
             objective=objective,
-            scalings=scalings,
+            scalings=padded_scalings,
             thresholdsq=self.thresholdsq,
             obj_arange=self.b.obj_arange,
+            padding=self.obj_pad_len,
         )
         if coarse_only or not coarse_peaks.n_spikes:
             return coarse_peaks

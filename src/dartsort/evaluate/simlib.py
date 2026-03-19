@@ -117,10 +117,12 @@ def simulate_sorting(
     # Default firing rates drawn uniformly from 1-10Hz
     if firing_rates is not None and firing_rates.ndim == 1:
         assert firing_rates.shape[0] == num_units
-    if firing_rates is not None and firing_rates.ndim == 2:
+    elif firing_rates is not None and firing_rates.ndim == 2:
         assert firing_rates.shape[1] == num_units
-    else:
+    elif firing_rates is None:
         firing_rates = rg.uniform(1.0, 10.0, num_units)
+    else:
+        assert False
 
     if firing_rates.ndim == 2:
         assert not globally_refractory

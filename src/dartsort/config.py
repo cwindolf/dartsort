@@ -4,11 +4,14 @@ from pydantic import Field
 
 from .util.cli_util import argfield
 from .util.internal_config import (
-    default_pretrained_path,
-    InterpMethod,
     InterpKernel,
-    RealignStrategy,
+    InterpMethod,
     MixtureStep,
+    RealignStrategy,
+    TemplateSVDMethod,
+    WhiteningEstimator,
+    WhiteningStrategy,
+    default_pretrained_path,
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
@@ -191,7 +194,6 @@ class DeveloperConfig(DARTsortUserConfig):
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
-    use_singlechan_templates: bool = False
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
@@ -202,23 +204,21 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_coarse_cd: bool = True
     postprocessing_merge_threshold: float = 0.025
     template_spikes_per_unit: int = 500
-    template_reduction: Literal["mean", "median"] = "mean"
-    template_denoising_method: Literal["none", "exp_weighted", "t", "loot"] = (
-        "exp_weighted"
-    )
-    template_mix_zero: bool = False
-    template_mix_svd: bool = True
+    template_reduction: Literal["mean", "median"] = "median"
+    template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 50
+    template_interp_kind: Literal["tps", "clampna"] = "tps"
+    matching_svd_rank: int = 10
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
     )
-    always_recompute_tsvd: bool = True
-    matching_template_min_amplitude: float = 0.0
+    template_svd_method: TemplateSVDMethod = "raw_template"
+    matching_template_min_amplitude: float = 1.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
-    whiten_matching: bool = False
-    matching_whiten_median_std: bool = False
+    whiten_strategy: WhiteningStrategy = "none"
+    whiten_estimator: WhiteningEstimator = "fullzca"
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
 

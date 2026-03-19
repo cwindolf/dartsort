@@ -1,30 +1,32 @@
+import gc
 from pathlib import Path
 from typing import Any
-import gc
 
 import numpy as np
+import torch
+from scipy.sparse import coo_array
+from scipy.spatial import KDTree
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
-from scipy.spatial import KDTree
-from scipy.sparse import coo_array
-import torch
 
-from . import TemplateData, realign
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
+    SubtractionConfig,
     TemplateConfig,
     TemplateMergeConfig,
     TemplateRealignmentConfig,
     WaveformConfig,
-    SubtractionConfig,
     default_template_cfg,
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
+from . import TemplateData, realign
+from .templib import quick_mean_templates, fit_tsvd
 
 logger = get_logger(__name__)
 
@@ -43,6 +45,7 @@ def estimate_template_library(
     realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
+    whitener: SpatialWhitener | None = None,
     computation_cfg: ComputationConfig | None = None,
     detection_cfg: Any | None = None,
     depth_order: bool = False,
@@ -68,9 +71,22 @@ def estimate_template_library(
         motion_est=motion_est,
     )
 
+    # use templates0 to fit tsvd if relevant
+    need_tsvd = template_cfg.use_svd and tsvd is None
+    if need_tsvd and template_cfg.svd_method == "raw_template":
+        tsvd = fit_tsvd(
+            recording=recording,
+            sorting=sorting,
+            motion_est=motion_est,
+            template_cfg=template_cfg,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            svd_input_templates=templates0,
+        )
+
     # filter out low-count/snr units
     if templates0 is None and (min_template_count or min_template_snr):
-        templates0 = _quick_mean_templates(
+        templates0 = quick_mean_templates(
             recording=recording,
             sorting=sorting,
             waveform_cfg=waveform_cfg,
@@ -108,6 +124,7 @@ def estimate_template_library(
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
         tsvd=tsvd,
+        whitener=whitener,
     )
     gc.collect()
     torch.cuda.empty_cache()
@@ -204,6 +221,8 @@ def realign_and_chuck_noisy_template_units(
         spike_counts_by_channel=template_data.spike_counts_by_channel[good_templates],
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
         properties=properties,
     )
     if template_save_folder is not None:
@@ -260,6 +279,8 @@ def reorder_by_depth(sorting, template_data):
         raw_std_dev=rsd,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
         properties=properties,
     )
     return sorting, template_data
@@ -412,21 +433,10 @@ def _handle_merge(
         raw_std_dev=raw_std_dev,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
+        whitener=template_data.whitener,
+        tsvd=template_data.tsvd,
     )
     return sorting, template_data
-
-
-def _quick_mean_templates(
-    recording, sorting, waveform_cfg, computation_cfg, motion_est
-):
-    return TemplateData.from_config(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        waveform_cfg=waveform_cfg,
-        template_cfg=TemplateConfig(denoising_method="none"),
-        computation_cfg=computation_cfg,
-    )
 
 
 def filter_by_unit_mask(
@@ -455,7 +465,7 @@ def filter_by_unit_mask(
 
 def flag_possible_cc_error_spikes(
     sorting: DARTsortSorting,
-    subtraction_cfg,
+    subtraction_cfg: SubtractionConfig,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     from ..util.py_util import timer
@@ -468,7 +478,7 @@ def flag_possible_cc_error_spikes(
 
     # rescale units so that the max allowed temporal and spatial dists are 10
     times = times / subtraction_cfg.temporal_dedup_radius_samples
-    xy_subtract = xy / subtraction_cfg.subtract_radius
+    xy_subtract = xy / subtraction_cfg.subtract_radius_um
     kdt_subtract = KDTree(np.c_[times, xy_subtract])
 
     # get all possible neighbors
@@ -481,8 +491,8 @@ def flag_possible_cc_error_spikes(
     coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
 
     # remove the exclusions by marking their distance as large
-    if subtraction_cfg.spatial_dedup_radius:
-        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius
+    if subtraction_cfg.spatial_dedup_radius_um:
+        xy_dedup = xy / subtraction_cfg.spatial_dedup_radius_um
         kdt_dedup = KDTree(np.c_[times, xy_dedup])
         with timer("b"):
             sdm_dedup = kdt_dedup.sparse_distance_matrix(

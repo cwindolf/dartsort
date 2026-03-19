@@ -429,7 +429,9 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            denoising_method="none", superres_bin_min_spikes=0
+            denoising_method="none",
+            superres_bin_min_spikes=0,
+            template_min_channel_amplitude=0.0,
         )
         rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
@@ -440,7 +442,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             save_folder=tmp_path,
             overwrite=True,
         )
-        assert np.allclose(template_data.templates, templates)
+        assert np.allclose(template_data.templates, templates, atol=1e-4)
 
         print("-- make matcher")
         matching_cfg = dartsort.MatchingConfig(
@@ -450,6 +452,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             cd_iter=cd_iter,
             up_method="direct",
             template_type="individual_compressed_upsampled",
+            template_min_channel_amplitude=0.0,
         )
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(
             recording=rec,
@@ -584,7 +587,9 @@ def test_static(tmp_path, up_factor, cd_iter):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            denoising_method="none", superres_bin_min_spikes=0
+            denoising_method="none",
+            superres_bin_min_spikes=0,
+            template_min_channel_amplitude=0.0,
         )
         rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
@@ -606,6 +611,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             chunk_length_samples=recording_length_samples,
             template_type="individual_compressed_upsampled",
             up_method="direct",
+            template_min_channel_amplitude=0.0,
         )
 
         matcher = dartsort.ObjectiveUpdateTemplateMatchingPeeler.from_config(

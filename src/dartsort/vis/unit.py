@@ -674,6 +674,20 @@ default_plots = (
     NeighborCCGPlot(),
 )
 
+no_pca_unit_plots = (
+    UnitTextInfo(),
+    ACG(),
+    ISIHistogram(),
+    XZScatter(),
+    TimeZScatter(),
+    TimeRegZScatter(),
+    TimeAmpScatter(),
+    RawWaveformPlot(),
+    NearbyCoarseTemplatesPlot(),
+    CoarseTemplateDistancePlot(),
+    NeighborCCGPlot(),
+)
+
 
 template_assignment_plots = (
     UnitTextInfo(),

@@ -17,6 +17,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
+from ..util.noise_util import SpatialWhitener
 from .template_util import weighted_average
 
 logger = get_logger(__name__)
@@ -45,6 +46,7 @@ class TemplateData:
     #    bin centers for each template.
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
+    whitener: np.ndarray | None = None
 
     # plugin registry for classes which actually estimate templates to hook into
     _registry: ClassVar = {}
@@ -138,6 +140,8 @@ class TemplateData:
             to_save["spike_counts_by_channel"] = self.spike_counts_by_channel
         if self.raw_std_dev is not None:
             to_save["raw_std_dev"] = self.raw_std_dev
+        if self.whitener is not None:
+            to_save["whitener"] = self.whitener
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
         if self.properties is not None:
@@ -213,10 +217,11 @@ class TemplateData:
         save_folder: Path | None = None,
         overwrite=False,
         motion_est=None,
+        whitener: SpatialWhitener | None = None,
         save_npz_name: str | None = "template_data.npz",
-        units_per_job=8,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
+        show_progress: bool = True,
     ) -> "TemplateData":
         # load if saved already and not overwriting
         if save_folder is not None:
@@ -229,6 +234,16 @@ class TemplateData:
                 return cls.from_npz(npz_path)
         else:
             npz_path = None
+        if template_cfg.whitening.strategy != "none" and whitener is None:
+            assert sorting is not None
+            whitener = SpatialWhitener.from_config(
+                sorting=sorting,
+                motion_est=motion_est,
+                whiten_cfg=template_cfg.whitening,
+                computation_cfg=computation_cfg,
+            )
+        else:
+            whitener = None
 
         if sorting is None:
             raise ValueError(
@@ -241,11 +256,11 @@ class TemplateData:
             sorting=sorting,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
-            overwrite=overwrite,
             motion_est=motion_est,
-            units_per_job=units_per_job,
             tsvd=tsvd,
+            whitener=whitener,
             computation_cfg=computation_cfg,
+            show_progress=show_progress,
         )
 
         gc.collect()
@@ -265,9 +280,8 @@ class TemplateData:
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        overwrite=False,
         motion_est=None,
-        units_per_job=8,
+        whitener: SpatialWhitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
     ) -> "TemplateData":

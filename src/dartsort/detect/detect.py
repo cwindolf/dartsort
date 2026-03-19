@@ -158,6 +158,8 @@ def detect_and_deduplicate(
     # back to TC
     energies = energies[0].T
     max_energies = max_energies[0].T
+    if remove is not None:
+        remove = remove[0].T
 
     # -- spatial deduplication
     # this is max pooling within the channel index's neighborhood's
@@ -166,8 +168,6 @@ def detect_and_deduplicate(
     elif dedup_channel_index is not None and remove_exact_duplicates:
         assert remove is not None
         assert dedup_index_inds is not None
-        remove = remove[0].T
-
         for batch_start in range(0, nsamples, sbs):
             batch_end = min(nsamples, batch_start + sbs)
 
@@ -198,8 +198,13 @@ def detect_and_deduplicate(
     if remove is not None:
         energies.masked_fill_(remove, 0.0)
     if dedup_temporal_radius or (dedup_channel_index is not None):
-        remove = torch.gt(max_energies, energies, out=remove)
-        max_energies.masked_fill_(remove, 0.0)
+        if all_dedup:
+            remove = torch.gt(max_energies, energies, out=remove)
+            keep = remove.logical_not_()
+            max_energies = keep.to(max_energies) * max_energies
+        else:
+            remove = torch.gt(max_energies, energies, out=remove)
+            max_energies.masked_fill_(remove, 0.0)
 
     # this matches the behavior of scipy argrelmax
     if exclude_edges:
@@ -210,60 +215,6 @@ def detect_and_deduplicate(
 
     if return_energies:
         return times, chans, energies[times, chans]
-
-    return times, chans
-
-
-def singlechan_template_detect_and_deduplicate(
-    traces,
-    singlechan_templates,
-    threshold=40.0,
-    trough_offset_samples=42,
-    relative_peak_channel_index=None,
-    dedup_channel_index=None,
-    relative_peak_radius=5,
-    dedup_temporal_radius=7,
-    spatial_dedup_batch_size=512,
-    exclude_edges=True,
-    return_energies=False,
-    detection_mask=None,
-):
-    """Detect spikes by per-channel matching with normalized templates
-
-    See peel/universal_util.py to get some templates.
-    """
-    # convolve with templates
-    conv_traces = traces.T.unsqueeze(1)
-    conv_filt = singlechan_templates.unsqueeze(1)
-    full = 2 * (singlechan_templates.shape[1] // 2)
-    conv = F.conv1d(conv_traces, conv_filt, padding=full)
-
-    # exactly align the convolution with the original traces
-    offset = full - trough_offset_samples
-    conv = conv[:, :, offset : offset + len(traces)]
-
-    # convert to scaled deconvolution objective
-    # when templates are normalized, the decrease in residual normsq
-    # due to subtracting a scaled template is just the conv squared.
-    obj = conv.square_().amax(dim=1).T
-
-    # get peaks
-    times, chans = detect_and_deduplicate(  # type: ignore
-        obj,
-        threshold=threshold,
-        relative_peak_channel_index=relative_peak_channel_index,
-        dedup_channel_index=dedup_channel_index,
-        peak_sign="pos",
-        relative_peak_radius=relative_peak_radius,
-        dedup_temporal_radius=dedup_temporal_radius,
-        spatial_dedup_batch_size=spatial_dedup_batch_size,
-        exclude_edges=exclude_edges,
-        return_energies=False,
-        detection_mask=detection_mask,
-    )
-
-    if return_energies:
-        return times, chans, traces[times, chans]
 
     return times, chans
 

@@ -1,6 +1,7 @@
 """Helper functions for localizing things other than torch Tensors"""
 
 import threading
+from typing import cast
 
 import h5py
 import numpy as np
@@ -72,7 +73,7 @@ def localize_hdf5(
         return
 
     try:
-        n_jobs, Executor, context, queue = get_pool(
+        n_jobs, Executor, context, queue = get_pool(  # type: ignore
             n_jobs,
             with_rank_queue=True,
             rank_queue_empty=True,
@@ -97,8 +98,8 @@ def localize_hdf5(
                 logbarrier,
             ),
         ) as pool:
-            with h5py.File(hdf5_filename, "r+", locking=False) as h5:
-                n_spikes = h5[main_channels_dataset_name].shape[0]
+            with h5py.File(hdf5_filename, "r+", locking=False, libver="latest") as h5:
+                n_spikes = cast(h5py.Dataset, h5[main_channels_dataset_name]).shape[0]
                 if do_delete:
                     del h5[output_dataset_name]
                 localizations_dataset = h5.require_dataset(
@@ -114,7 +115,7 @@ def localize_hdf5(
                 if not h5.swmr_mode:
                     h5.swmr_mode = True
                 for rank in range(n_jobs):
-                    queue.put(rank)
+                    queue.put(rank)  # type: ignore
 
                 batches = range(next_batch_start, n_spikes, spikes_per_batch)
                 results = pool.map(_h5_localize_job, batches)
@@ -139,8 +140,9 @@ def check_resume_or_overwrite(
     next_batch_start = 0
     with h5py.File(hdf5_filename, "r", locking=False) as h5:
         if output_dataset_name in h5:
-            n_spikes = h5[main_channels_dataset_name].shape[0]
-            shape = h5[output_dataset_name].shape
+            n_spikes = cast(h5py.Dataset, h5[main_channels_dataset_name]).shape[0]
+            out_ds = cast(h5py.Dataset, h5[output_dataset_name])
+            shape = out_ds.shape
             if overwrite and shape != (n_spikes, 4):
                 do_delete = True
             elif shape != (n_spikes, 4):
@@ -150,7 +152,7 @@ def check_resume_or_overwrite(
                 )
             else:
                 # else, we are resuming
-                nan_ix = np.flatnonzero(np.isnan(h5[output_dataset_name][:, 0]))
+                nan_ix = np.flatnonzero(np.isnan(out_ds[:, 0]))
                 if nan_ix.size:
                     next_batch_start = nan_ix[0]
                 else:
@@ -174,10 +176,10 @@ class H5LocalizationContext:
         logbarrier,
     ):
         h5 = h5py.File(hdf5_filename, "r", swmr=True, locking=False)
-        channels = h5[main_channels_dataset_name][:]
-        amp_vecs = h5[amplitude_vectors_dataset_name]
-        channel_index = h5[channel_index_dataset_name][:]
-        geom = h5[geometry_dataset_name][:]
+        channels = cast(h5py.Dataset, h5[main_channels_dataset_name])[:]
+        amp_vecs = cast(h5py.Dataset, h5[amplitude_vectors_dataset_name])
+        channel_index = cast(h5py.Dataset, h5[channel_index_dataset_name])[:]
+        geom = cast(h5py.Dataset, h5[geometry_dataset_name])[:]
 
         assert geom.shape == (channel_index.shape[0], 2)
         assert amp_vecs.shape == (*channels.shape, channel_index.shape[1])
@@ -254,10 +256,10 @@ def _h5_localize_job(start_ix):
             logbarrier=p.logbarrier,
         )
     xyza_batch = np.c_[
-        locs["x"].cpu().numpy(),
-        locs["y"].cpu().numpy(),
-        locs["z_abs"].cpu().numpy(),
-        locs["alpha"].cpu().numpy(),
+        locs["x"].numpy(force=True),  # type: ignore
+        locs["y"].numpy(force=True),  # type: ignore
+        locs["z_abs"].numpy(force=True),  # type: ignore
+        locs["alpha"].numpy(force=True),  # type: ignore
     ]
     return start_ix, end_ix, xyza_batch
 

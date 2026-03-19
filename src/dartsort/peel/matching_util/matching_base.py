@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Self, Sequence, cast
+from typing import Literal, Self, cast
 
 import torch
 import torch.nn.functional as F
@@ -11,8 +10,9 @@ from torch import Tensor
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
-from ...util.spiketorch import argrelmax, grab_spikes, ptp
+from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule
 
 logger = get_logger(__name__)
@@ -37,13 +37,13 @@ class MatchingTemplates(BModule):
     @classmethod
     def from_config(
         cls,
-        save_folder: Path,
+        *,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
         motion_est=None,
-        whitener: Tensor | None = None,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -59,22 +59,21 @@ class MatchingTemplates(BModule):
             computation_cfg=computation_cfg,
             motion_est=motion_est,
             overwrite=overwrite,
-            whitener=whitener,
             dtype=dtype,
         )
 
     @classmethod
     def _from_config(
         cls,
-        save_folder: Path,
+        *,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
-        computation_cfg: ComputationConfig | None = None,
-        motion_est=None,
-        whitener=None,
-        overwrite: bool = False,
-        dtype=torch.float,
+        computation_cfg: ComputationConfig | None,
+        motion_est,
+        overwrite: bool,
+        dtype: torch.dtype,
     ) -> Self:
         raise NotImplementedError
 
@@ -89,7 +88,7 @@ class MatchingTemplates(BModule):
         raise NotImplementedError
 
 
-@dataclass(kw_only=True, frozen=True)
+@databag
 class MatchingTemplatesBuilder:
     """Helper so that the matching peeler can be a little lazy
 
@@ -104,7 +103,6 @@ class MatchingTemplatesBuilder:
     template_data: TemplateData
     matching_cfg: MatchingConfig
     motion_est: MotionEstimate | None = None
-    whitener: Tensor | None = None
     dtype: torch.dtype = torch.float
 
     def build(
@@ -120,7 +118,6 @@ class MatchingTemplatesBuilder:
             matching_cfg=self.matching_cfg,
             computation_cfg=computation_cfg,
             motion_est=self.motion_est,
-            whitener=self.whitener,
             dtype=self.dtype,
             overwrite=overwrite,
         )
@@ -144,6 +141,7 @@ class ChunkTemplateData:
     scaling: bool
     needs_fine_pass: bool
     up_factor: int
+    prewhiten: bool
     inv_lambda: Tensor
     scale_min: Tensor
     scale_max: Tensor
@@ -185,6 +183,13 @@ class ChunkTemplateData:
     ) -> "MatchingPeaks":
         raise NotImplementedError
 
+    def whiten_traces(self, traces: Tensor, out: Tensor | None = None):
+        assert not self.prewhiten
+        if out is not None:
+            return out.copy_(traces)
+        else:
+            return traces
+
     # this one is just for debugging / unit testing
     def reconstruct_up_templates(self):
         raise NotImplementedError
@@ -218,6 +223,9 @@ class ChunkTemplateData:
         out: Tensor,
         scalings_out: Tensor | None = None,
     ) -> Tensor:
+        assert conv.shape == out.shape
+        if scalings_out is not None:
+            assert scalings_out.shape == out.shape
         if self.scaling and self.inv_lambda == 0.0:
             assert scalings_out is not None
             return _free_coarse_objective(
@@ -245,13 +253,17 @@ class ChunkTemplateData:
         scalings: Tensor | None,
         thresholdsq: float,
         obj_arange: Tensor,
+        padding: int,
     ) -> "MatchingPeaks":
         objective_max, max_obj_template = objective.max(dim=0)
-        times = argrelmax(
+        nt = objective_max.numel()
+        assert nt > 2 * padding
+        times = argrelmax_dedup(
             x=objective_max,
-            radius=self.spike_length_samples,
+            dedup_radius=self.spike_length_samples,
             threshold=thresholdsq,
-            arange=obj_arange[: objective_max.numel()],
+            arange=obj_arange[:nt],
+            padding=padding,
         )
         n_spikes = times.numel()
         if not n_spikes:
@@ -259,20 +271,23 @@ class ChunkTemplateData:
 
         objs = objective_max[times]
         template_inds = max_obj_template[times]
-        if _extra_checks:
-            assert (objective_max[times] >= thresholdsq).all()
         if self.scaling:
             assert scalings is not None
             scalings = scalings[template_inds, times]
         else:
             scalings = None
+
         if _extra_checks:
+            assert times.amin() >= padding
+            assert times.amax() < nt - padding
+            assert (objective_max[times] >= thresholdsq).all()
             assert (objs >= thresholdsq).all()
-        if _extra_checks and scalings is not None:
-            assert (scalings >= self.scale_min).all()
-            assert (scalings <= self.scale_max).all()
+            if scalings is not None:
+                assert (scalings >= self.scale_min).all()
+                assert (scalings <= self.scale_max).all()
+
         return MatchingPeaks(
-            times=times,
+            times=times - padding,
             obj_template_inds=template_inds,
             template_inds=template_inds,
             scalings=scalings,
@@ -602,21 +617,3 @@ def _scaled_coarse_objective(
     torch.addcmul(-inv_lambda, -a, out, out=out)
     out.addcmul_(scalings, b, value=2.0)
     return out
-
-
-@torch.jit.script
-def _coarse_match_scaled(
-    conv: Tensor,
-    template_inds: Tensor,
-    times: Tensor,
-    obj_normsq: Tensor,
-    inv_lambda: Tensor,
-    scale_min: Tensor,
-    scale_max: Tensor,
-):
-    b = conv[template_inds, times] + inv_lambda
-    a = obj_normsq[template_inds] + inv_lambda
-    scalings = b.div(a).clamp_(min=scale_min, max=scale_max)
-    objs = scalings.square().mul_(-a)
-    objs.addcmul_(scalings, b, value=2.0).sub_(inv_lambda)
-    return scalings, objs

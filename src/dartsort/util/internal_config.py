@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, float_or_none, int_or_inf, resolve_path
+from .py_util import cfg_dataclass, float_or_none, resolve_path
 
 try:
     from importlib.resources import files
@@ -33,6 +33,7 @@ class WaveformConfig:
     def from_samples(
         cls, samples_before: int, samples_after: int, sampling_frequency=30_000.0
     ) -> Self:
+        sampling_frequency = float(sampling_frequency)
         samples_per_ms = sampling_frequency / 1000
         self = cls(
             ms_before=samples_before / samples_per_ms,
@@ -40,12 +41,17 @@ class WaveformConfig:
         )
         assert self.trough_offset_samples(sampling_frequency) == samples_before
         samples_total = samples_before + samples_after
+        if not samples_total % 2:
+            raise ValueError(f"{samples_before=} plus {samples_after=} should be odd.")
         assert self.spike_length_samples(sampling_frequency) == samples_total
         return self
 
     @staticmethod
     def ms_to_samples(ms, sampling_frequency=30_000.0):
-        return int(ms * (sampling_frequency / 1000))
+        if ms > sampling_frequency:
+            return int((ms / 1000.0) * sampling_frequency)
+        else:
+            return int(ms * (sampling_frequency / 1000.0))
 
     def trough_offset_samples(self, sampling_frequency=30_000.0):
         sampling_frequency = np.round(sampling_frequency)
@@ -154,11 +160,19 @@ class FeaturizationConfig:
 
 
 InterpMethod = Literal[
-    "kriging", "kernel", "normalized", "krigingnormalized", "zero", "nearest"
+    "kriging",
+    "kernel",
+    "normalized",
+    "krigingnormalized",
+    "zero",
+    "nearest",
+    "nan",
+    "clampna",
 ]
 InterpKernel = Literal[
-    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate"
+    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate", "nan", "clampna"
 ]
+_kmethods = {"zero", "nearest", "nan", "clampna"}
 
 
 @cfg_dataclass
@@ -171,6 +185,7 @@ class InterpolationParams:
     sigma: float = 10.0
     rq_alpha: float = 0.5
     smoothing_lambda: float = 0.0
+    neighborhood_radius: float = 200.0
 
     @property
     def actual_extrap_method(self):
@@ -194,35 +209,32 @@ class InterpolationParams:
     def normalize(self) -> Self:
         method = self.method
         kernel = self.kernel
-        if method == "nearest":
+        if method in _kmethods:
+            kernel = method
             method = "kernel"
-            kernel = "nearest"
-        elif method == "zero":
-            method = "kernel"
-            kernel = "zero"
 
         extrap_method = self.extrap_method
         extrap_kernel = self.extrap_kernel
-        if extrap_method == "nearest":
+        if extrap_method in _kmethods:
+            extrap_kernel = extrap_method
             extrap_method = "kernel"
-            extrap_kernel = "nearest"
-        elif extrap_method == "zero":
-            extrap_method = "kernel"
-            extrap_kernel = "zero"
 
         return self.__class__(
             method=method,
-            kernel=kernel,
+            kernel=kernel,  # type: ignore
             extrap_method=extrap_method,
-            extrap_kernel=extrap_kernel,
+            extrap_kernel=extrap_kernel,  # type: ignore
             kriging_poly_degree=self.kriging_poly_degree,
             sigma=self.sigma,
             rq_alpha=self.rq_alpha,
             smoothing_lambda=self.smoothing_lambda,
+            neighborhood_radius=self.neighborhood_radius,
         )
 
 
 default_interpolation_params = InterpolationParams()
+clampna_interp_params = InterpolationParams(method="clampna")
+default_template_interpolation_params = InterpolationParams(extrap_method="clampna")
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
@@ -239,6 +251,7 @@ class FitSamplingConfig:
     fit_subsampling_random_state: int = 0
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
+    n_seconds_fit: int = 100
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
@@ -249,34 +262,31 @@ default_refinement_fit_sampling_cfg = FitSamplingConfig(
     max_waveforms_fit=1000 * 1024, n_waveforms_fit=1000 * 1024
 )
 
+PeakSign = Literal["pos", "neg", "both"]
+
 
 @cfg_dataclass
 class SubtractionConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     fit_only: bool = False
 
     # subtraction
     detection_threshold: float = 3.0
-    peak_sign: Literal["pos", "neg", "both"] = "both"
+    peak_sign: PeakSign = "both"
     realign_to_denoiser: bool = True
     denoiser_realignment_channel: Literal["detection", "denoised"] = "detection"
     denoiser_realignment_shift: int = 5
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
-    spatial_dedup_radius: float | None = 50.0
+    spatial_dedup_radius_um: float | None = 50.0
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
-    subtract_radius: float = 200.0
+    subtract_radius_um: float = 200.0
     residnorm_decrease_threshold: float = 9.0
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
-    use_singlechan_templates: bool = False
-    singlechan_threshold: float = 50.0
-    n_singlechan_templates: int = 10
-    singlechan_alignment_padding_ms: float = 1.5
     cumulant_order: int | None = None
     convexity_threshold: float | None = None
     convexity_radius: int = 7
@@ -307,14 +317,13 @@ class SubtractionConfig:
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
 
     # thresholding
     detection_threshold: float = 5.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
-    spatial_dedup_radius: float = 150.0
+    spatial_dedup_radius_um: float = 150.0
     relative_peak_radius_um: float = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
@@ -329,30 +338,48 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
+WhiteningStrategy = Literal["none", "prewhiten", "postwhiten"]
+WhiteningEstimator = Literal["fullzca", "winterlocal", "sparsechol"]
+
+
+@cfg_dataclass
+class WhiteningConfig:
+    strategy: WhiteningStrategy = "none"
+    estimator: WhiteningEstimator = "fullzca"
+    interp_params: InterpolationParams = default_template_interpolation_params
+    radius: float = 200.0
+
+
+TemplateSVDMethod = Literal[
+    "collisioncleaned", "spike_sklearn", "peeler", "raw_template"
+]
+
+
 @cfg_dataclass
 class TemplateConfig:
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
-    reduction: Literal["median", "mean"] = "mean"
-    algorithm: Literal["running", "unitextract", "running_if_mean"] | str = (
-        "running_if_mean"
-    )
-    denoising_method: Literal["none", "exp_weighted", "loot", "t", "coll"] = (
-        "exp_weighted"
-    )
-    use_raw: bool = True
-    use_svd: bool = True
-    use_zero: bool = False
-    use_outlier: bool = False
-    use_raw_outlier: bool = False
-    use_svd_outlier: bool = False
-    templates_at_once: int = 384
-    max_templates_at_once: int = 512
-    raw_templates_at_once: int = 1024
+    reduction: Literal["median", "mean"] = "median"
+    algorithm: (
+        Literal[
+            "unitextract",
+            "peelreduce",
+            "peelreduce_if_mean",
+        ]
+        | str
+    ) = "peelreduce"
+    denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
+    weighted: bool = False
+    grab_chunk_length_samples: int = 30_000
+    units_per_job: int = 8
+    whitening: WhiteningConfig = WhiteningConfig()
 
     # -- template construction parameters
     # registered templates?
     registered_templates: bool = True
+    min_fraction_at_shift: float = 0.25
+    min_count_at_shift: int = 25
+    template_interp_params: InterpolationParams = default_template_interpolation_params
 
     # superresolved templates
     superres_templates: bool = False
@@ -363,35 +390,39 @@ class TemplateConfig:
     # low rank denoising?
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
-    recompute_tsvd: bool = True
     denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
+    template_min_channel_amplitude: float = 1.0
+    svd_method: TemplateSVDMethod = "raw_template"
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
-
-    # t denoising
-    initial_t_df: float = 3.0
-    fixed_t_df: float | tuple[float, ...] | None = (float("inf"), 1.0, 1.0)
-    t_iters: int = 1
-    svd_inside_t: bool = False
-    loot_cov: Literal["diag", "global"] = "global"
 
     # where to find data if needed
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     localizations_dataset_name: str = "point_source_localizations"
 
+    @property
+    def use_svd(self) -> bool:
+        return self.denoising_method in ("svd", "exp_weighted")
+
     def actual_algorithm(self) -> str:
-        if self.algorithm == "running_if_mean":
-            if self.reduction == "mean":
-                return "running"
-            else:
-                return "unitextract"
-        return self.algorithm
+        if self.algorithm.endswith("_if_mean") and self.reduction == "mean":
+            return self.algorithm.removesuffix("_if_mean")
+        elif self.algorithm.endswith("_if_mean"):
+            return "unitextract"
+        else:
+            return self.algorithm
 
     def __post_init__(self):
         if self.denoising_method in ("t", "loot") and self.reduction == "median":
             raise ValueError("Median reduction not supported for 't' templates.")
 
+
+raw_template_cfg = TemplateConfig(
+    reduction="mean",
+    denoising_method="none",
+    template_interp_params=clampna_interp_params,
+)
 
 RealignStrategy = Literal[
     "mainchan_trough_factor",
@@ -412,7 +443,7 @@ class TemplateRealignmentConfig:
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
     trough_factor: float = 3.0
-    template_cfg: TemplateConfig = TemplateConfig(denoising_method="none")
+    template_cfg: TemplateConfig = raw_template_cfg
     min_pair_corr: float = 0.8
 
 
@@ -434,7 +465,6 @@ class TemplateMergeConfig:
 class MatchingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    n_seconds_fit: int = 100
     max_spikes_per_second: int = 16384
     cd_iter: int = 0
     coarse_cd: bool = True
@@ -444,7 +474,7 @@ class MatchingConfig:
     template_svd_compression_rank: int = 10
     template_temporal_upsampling_factor: int = 8
     upsampling_radius: int = 8
-    template_min_channel_amplitude: float = 0.0
+    template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 0
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 0.333
@@ -457,11 +487,9 @@ class MatchingConfig:
         "drifty"
     )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
-    drift_interp_neighborhood_radius: float = 200.0
-    drift_interp_params: InterpolationParams = default_interpolation_params
+    drift_interp_params: InterpolationParams = default_template_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    whiten: bool = False
-    whiten_median_std: bool = False
+    whitening: WhiteningConfig = WhiteningConfig()
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -482,7 +510,6 @@ class MatchingConfig:
 class UniversalMatchingConfig:
     # peeling common
     chunk_length_samples: int = 1_000
-    n_seconds_fit: int = 100
 
     n_sigmas: int = 5
     n_centroids: int = 6
@@ -652,6 +679,8 @@ class RefinementConfig:
     mixture_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
+    kmeans_tries: int = 25
+    kmeanspp_tries: int = 25
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
     robust_strategy: Literal["none", "fixed"] = "none"
@@ -679,7 +708,7 @@ class RefinementConfig:
     val_proportion: float = 0.25
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
-    noise_interp_params: InterpolationParams = default_interpolation_params
+    noise_interp_params: InterpolationParams = default_template_interpolation_params
 
 
 @cfg_dataclass
@@ -722,6 +751,7 @@ default_waveform_cfg = WaveformConfig()
 default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
+default_template_cfg = TemplateConfig()
 default_template_cfg = TemplateConfig()
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()
@@ -856,11 +886,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = SubtractionConfig(
             peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
-            spatial_dedup_radius=cfg.deduplication_radius_um,
-            subtract_radius=cfg.subtraction_radius_um,
+            spatial_dedup_radius_um=cfg.deduplication_radius_um,
+            subtract_radius_um=cfg.subtraction_radius_um,
             realign_to_denoiser=cfg.realign_to_denoiser,
-            singlechan_alignment_padding_ms=cfg.alignment_ms,
-            use_singlechan_templates=cfg.use_singlechan_templates,
             residnorm_decrease_threshold=cfg.initial_threshold,
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
@@ -872,7 +900,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initial_detection_cfg = ThresholdingConfig(
             peak_sign=cfg.peak_sign,
             detection_threshold=cfg.voltage_threshold,
-            spatial_dedup_radius=cfg.deduplication_radius_um,
+            spatial_dedup_radius_um=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
         )
     elif cfg.detection_type == "match":
@@ -889,6 +917,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             up_method=cfg.matching_up_method,
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
             refractory_radius_frames=cfg.refractory_radius_frames,
+            template_svd_compression_rank=cfg.matching_svd_rank,
         )
     elif cfg.detection_type == "universal":
         initial_detection_cfg = UniversalMatchingConfig(
@@ -898,14 +927,26 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
+    if cfg.template_interp_kind == "tps":
+        temp_interp_params = default_template_interpolation_params
+    elif cfg.template_interp_kind == "clampna":
+        temp_interp_params = clampna_interp_params
+    else:
+        assert False
+    whiten_cfg = WhiteningConfig(
+        strategy=cfg.whiten_strategy,
+        estimator=cfg.whiten_estimator,
+        radius=cfg.subtraction_radius_um,
+        interp_params=temp_interp_params,
+    )
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um,
         spikes_per_unit=cfg.template_spikes_per_unit,
         reduction=cfg.template_reduction,
         denoising_method=cfg.template_denoising_method,
-        use_zero=cfg.template_mix_zero,
-        use_svd=cfg.template_mix_svd,
-        recompute_tsvd=cfg.always_recompute_tsvd,
+        svd_method=cfg.template_svd_method,
+        whitening=whiten_cfg,
+        template_interp_params=temp_interp_params,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -1030,8 +1071,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         template_min_channel_amplitude=cfg.matching_template_min_amplitude,
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
-        whiten=cfg.whiten_matching,
-        whiten_median_std=cfg.matching_whiten_median_std,
+        whitening=whiten_cfg,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,
@@ -1039,9 +1079,12 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_cfg=TemplateConfig(
                 denoising_method="none",
                 spikes_per_unit=cfg.template_spikes_per_unit,
-                reduction=cfg.template_reduction,
+                reduction="mean",
+                template_interp_params=clampna_interp_params,
             ),
         ),
+        template_svd_compression_rank=cfg.matching_svd_rank,
+        drift_interp_params=temp_interp_params,
         refractory_radius_frames=cfg.refractory_radius_frames,
     )
     computation_cfg = ComputationConfig(
@@ -1087,7 +1130,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
-raw_template_cfg = TemplateConfig(denoising_method="none")
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
     denoising_method="none",

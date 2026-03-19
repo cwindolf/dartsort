@@ -150,9 +150,9 @@ class ThresholdAndFeaturize(BasePeeler):
         else:
             relative_peak_channel_index = None
 
-        if thresholding_cfg.spatial_dedup_radius:
+        if thresholding_cfg.spatial_dedup_radius_um:
             spatial_dedup_channel_index = make_channel_index(
-                geom, thresholding_cfg.spatial_dedup_radius, to_torch=True
+                geom, thresholding_cfg.spatial_dedup_radius_um, to_torch=True
             )
         else:
             spatial_dedup_channel_index = None
@@ -193,7 +193,7 @@ class ThresholdAndFeaturize(BasePeeler):
             cumulant_order=thresholding_cfg.cumulant_order,
             convexity_threshold=thresholding_cfg.convexity_threshold,
             convexity_radius=thresholding_cfg.convexity_radius,
-            n_seconds_fit=thresholding_cfg.n_seconds_fit,
+            n_seconds_fit=sampling_cfg.n_seconds_fit,
             fit_sampling=sampling_cfg.fit_sampling,
             fit_max_reweighting=sampling_cfg.fit_max_reweighting,
             n_waveforms_fit=sampling_cfg.n_waveforms_fit,

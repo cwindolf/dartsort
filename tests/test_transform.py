@@ -100,7 +100,14 @@ def test_all_transformers():
         "Decollider": dict(n_epochs=1, epoch_size=n_spikes),
         "AmortizedLocalization": dict(n_epochs=1, epoch_size=n_spikes),
     }
-    skip_me = {"SupervisedDenoiser", "FixedProperty"}
+    skip_me = {
+        "SupervisedDenoiser",
+        "FixedProperty",
+        "WaveformInterpolator",
+        "TemplateWaveformReducer",
+        "FullProbeTemporalPCAEmbedder",
+        "WaveformWhitener",
+    }
 
     pipeline = WaveformPipeline.from_class_names_and_kwargs(
         geom,

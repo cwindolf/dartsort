@@ -23,6 +23,7 @@ from ..util.internal_config import (
     ComputationConfig,
     ClusteringFeaturesConfig,
     default_clustering_features_cfg,
+    raw_template_cfg,
 )
 from ..templates import TemplateData
 from ..util.data_util import (
@@ -87,7 +88,7 @@ class DARTsortAnalysis:
         motion_est=None,
         name: str | None = None,
         template_data: TemplateData | None = None,
-        template_cfg: TemplateConfig | None = TemplateConfig(denoising_method="none"),
+        template_cfg: TemplateConfig | None = raw_template_cfg,
         template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(
             min_spatial_cosine=0.8
         ),

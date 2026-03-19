@@ -237,9 +237,6 @@ def test_denoiser_alignment(align_sim, align_templates):
 
 
 def template_makers(rec, st, align=True, align_max=0):
-    tcfg0 = dartsort.TemplateConfig(
-        denoising_method="none", algorithm="running", spikes_per_unit=10000
-    )
     tcfg1 = dartsort.TemplateConfig(
         denoising_method="none", algorithm="unitextract", spikes_per_unit=10000
     )
@@ -250,47 +247,34 @@ def template_makers(rec, st, align=True, align_max=0):
         denoising_method="none",
         spikes_per_unit=10000,
     )
+    tcfg4 = dartsort.TemplateConfig(
+        denoising_method="none",
+        algorithm="peelreduce",
+        reduction="mean",
+        spikes_per_unit=10000,
+    )
+    tcfg5 = dartsort.TemplateConfig(
+        denoising_method="none",
+        algorithm="peelreduce",
+        reduction="median",
+        spikes_per_unit=10000,
+    )
     realign_cfg = dartsort.TemplateRealignmentConfig(
         realign_peaks=align,
         realign_shift_ms=align_max,
     )
-    _, t0 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg0,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t1 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg1,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t2 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg2,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    _, t3 = dartsort.estimate_template_library(
-        recording=rec,
-        sorting=st,
-        template_cfg=tcfg3,
-        realign_cfg=realign_cfg,
-        waveform_cfg=waveform_cfg,
-    )
-    ts = [t0, t1, t2, t3]
-    if not align:
-        t0_ = dartsort.TemplateData.from_config(
+    tcfgs = [tcfg1, tcfg2, tcfg3, tcfg4, tcfg5]
+    ts = [
+        dartsort.estimate_template_library(
             recording=rec,
             sorting=st,
-            template_cfg=tcfg0,
+            template_cfg=tcfg,
+            realign_cfg=realign_cfg,
             waveform_cfg=waveform_cfg,
-        )
-        ts.append(t0_)
+        )[1]
+        for tcfg in tcfgs
+    ]
+    if not align:
         t1_ = dartsort.TemplateData.from_config(
             recording=rec,
             sorting=st,
@@ -404,7 +388,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
 
 @pytest.mark.parametrize("tempkind", ["exp", "parabola"])
 @pytest.mark.parametrize(
-    "matchtype", ["debug", "individual_compressed_upsampled", "drifty"]
+    "matchtype", ["debug", "drifty", "individual_compressed_upsampled"]
 )
 @pytest.mark.parametrize("up_factor", (1, 2, 8))
 def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
@@ -494,7 +478,9 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
                 upsampling_compression_map="none",
                 template_type=matchtype,
                 up_method="keys4" if matchtype == "drifty" else "direct",
+                template_min_channel_amplitude=0.0,
             ),
+            template_cfg=dartsort.TemplateConfig(template_min_channel_amplitude=0.0),
         )
 
     assert gt_st.labels is not None

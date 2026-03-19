@@ -182,18 +182,18 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
     @classmethod
     def _from_config(
         cls,
-        save_folder: Path,
+        *,
+        save_folder: Path | None,
         recording: BaseRecording,
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
-        computation_cfg: ComputationConfig | None = None,
-        motion_est=None,
-        whitener: Tensor | None = None,
-        overwrite: bool = False,
-        dtype: torch.dtype = torch.float,
+        computation_cfg: ComputationConfig | None,
+        motion_est,
+        overwrite: bool,
+        dtype: torch.dtype,
     ) -> Self:
         assert matching_cfg.up_method == "direct"
-        assert whitener is None
+        assert save_folder is not None
         computation_cfg = ensure_computation_config(computation_cfg)
 
         unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
@@ -404,6 +404,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     pconv_db: PconvBase
     shifts_a: Tensor | None
     shifts_b: Tensor | None
+    prewhiten: bool = False
 
     def convolve(self, traces, padding=0, out=None):
         """Convolve the objective templates with traces."""

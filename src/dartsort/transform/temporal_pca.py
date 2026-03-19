@@ -1,13 +1,15 @@
+from typing import Self, cast
+
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
+from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
     get_channels_in_probe,
     set_channels_in_probe,
 )
-from ..util.spiketorch import svd_lowrank_helper
 from .transform_base import (
     BaseWaveformAutoencoder,
     BaseWaveformDenoiser,
@@ -68,6 +70,9 @@ class BaseTemporalPCA(BaseWaveformModule):
     def initialize_spike_length_dependent_params(self):
         nt = self.spike_length_samples
         assert nt is not None
+        if self.nt is not None:
+            assert nt == self.nt
+            return
         if self.temporal_slice is None:
             self._temporal_ix = None
         else:
@@ -244,43 +249,64 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms = waveforms[0]
         return waveforms
 
-    def force_project(self, features):
-        ndim = features.ndim
+    def force_embed(self, waveforms):
+        ndim = waveforms.ndim
         if ndim == 2:
-            features = features.unsqueeze(0)
-        n, t, c = features.shape
-        waveforms = features.mT.reshape(n * c, t)
+            waveforms = waveforms.unsqueeze(0)
+        n, t, c = waveforms.shape
+        waveforms = waveforms.mT.reshape(n * c, t)
+        waveforms = self._transform_in_probe(waveforms)
+        waveforms = waveforms.view(n, c, self.rank).mT
+        if ndim == 2:
+            waveforms = waveforms[0]
+        return waveforms
+
+    def force_project(self, waveforms):
+        ndim = waveforms.ndim
+        if ndim == 2:
+            waveforms = waveforms.unsqueeze(0)
+        n, t, c = waveforms.shape
+        waveforms = waveforms.mT.reshape(n * c, t)
         waveforms = self._project_in_probe(waveforms)
         waveforms = waveforms.reshape(n, c, t).mT
         if ndim == 2:
             waveforms = waveforms[0]
         return waveforms
 
-    def to_sklearn(self) -> PCA:
+    def to_sklearn(self, trim_rank_to: int | None = None) -> PCA:
+        rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
-            n_components=self.rank,
+            n_components=rank,
             random_state=self.random_state,  # type: ignore
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)
-        pca.components_ = self.b.components.numpy(force=True)
-        pca.explained_variance_ = np.square(self.b.whitener.numpy(force=True))
+        pca.components_ = self.b.components[:rank].numpy(force=True)
+        pca.explained_variance_ = np.square(self.b.whitener[:rank].numpy(force=True))
+
         pca.temporal_slice = self.temporal_slice  # this is not standard  # type: ignore
+
         return pca
 
     @classmethod
-    def from_sklearn(cls, channel_index, pca: PCA | TruncatedSVD, temporal_slice=None):
+    def from_sklearn(
+        cls,
+        channel_index,
+        pca: PCA | TruncatedSVD,
+        temporal_slice=None,
+        trim_rank_to: int | None = None,
+    ) -> Self:
         if isinstance(pca, PCA):
             whiten = pca.whiten  # type: ignore
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
             assert False
+        rank = cast(int, getattr(pca, "n_components"))
+        if trim_rank_to:
+            rank = min(rank, trim_rank_to)
         self = cls(
-            channel_index,
-            rank=pca.n_components,  # type: ignore
-            whiten=whiten,
-            temporal_slice=temporal_slice,
+            channel_index, rank=rank, whiten=whiten, temporal_slice=temporal_slice
         )
         self.initialize_from_sklearn(pca)
         return self
@@ -319,8 +345,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             self.b.mean.zero_()
             self.center = False
-        self.b.components.copy_(torch.from_numpy(pca.components_))
-        self.b.whitener.copy_(torch.from_numpy(pca.explained_variance_)).sqrt_()
+        self.b.components.copy_(torch.from_numpy(pca.components_[: self.rank]))
+        self.b.whitener.copy_(
+            torch.from_numpy(pca.explained_variance_[: self.rank])
+        ).sqrt_()
         self._needs_fit = False
 
 
@@ -335,6 +363,14 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)
+
+
+class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
+    default_name = "temporal_pca"
+
+    def forward(self, waveforms, *, time_shifts=None, **unused):
+        waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
+        return self.force_embed(waveforms)
 
 
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
