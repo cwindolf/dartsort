@@ -90,7 +90,7 @@ class DARTsortUserConfig:
         "that match will be used.",
     )
     initial_threshold: Annotated[float, Field(gt=0)] = argfield(
-        default=9.0,
+        default=10.0,
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",

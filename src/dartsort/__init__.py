@@ -33,7 +33,6 @@ from .main import (
     run_peeler,
     subtract,
     threshold,
-    universal_match,
 )
 from .peel.grab import GrabAndFeaturize
 from .peel.matching import MatchingTemplates

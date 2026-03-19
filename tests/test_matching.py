@@ -111,7 +111,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
 
     # instantiate matcher
     cfg_kw: dict[str, Any] = dict(
-        template_temporal_upsampling_factor=upsampling,
+        up_factor=upsampling,
         # free scaling here.
         amplitude_scaling_variance=100.0 if scaling else 0.0,
         template_svd_compression_rank=121,
@@ -448,7 +448,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
         matching_cfg = dartsort.MatchingConfig(
             threshold=0.01,
             amplitude_scaling_variance=scaling,
-            template_temporal_upsampling_factor=up_factor,
+            up_factor=up_factor,
             cd_iter=cd_iter,
             up_method="direct",
             template_type="individual_compressed_upsampled",
@@ -602,7 +602,7 @@ def test_static(tmp_path, up_factor, cd_iter):
         )
         matching_cfg = dartsort.MatchingConfig(
             threshold=0.01,
-            template_temporal_upsampling_factor=up_factor,
+            up_factor=up_factor,
             amplitude_scaling_variance=0.0,
             coarse_approx_error_threshold=0.0,
             conv_ignore_threshold=0.0,

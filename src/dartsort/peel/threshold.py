@@ -14,7 +14,9 @@ from ..util.internal_config import (
     FitSamplingConfig,
     ThresholdingConfig,
     WaveformConfig,
+    PeakSign,
     default_peeling_fit_sampling_cfg,
+    default_thresholding_cfg,
 )
 from ..util.waveform_util import get_channel_index_rel_inds, make_channel_index
 from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
@@ -23,29 +25,18 @@ from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
 class ThresholdAndFeaturize(BasePeeler):
     def __init__(
         self,
-        recording,
-        channel_index,
-        featurization_pipeline=None,
+        recording: BaseRecording,
+        channel_index: np.ndarray | torch.Tensor,
+        featurization_pipeline: WaveformPipeline | None = None,
         trough_offset_samples=42,
         spike_length_samples=121,
-        detection_threshold=5.0,
-        chunk_length_samples=30_000,
-        max_spikes_per_chunk=None,
-        peak_sign="both",
-        relative_peak_channel_index=None,
-        spatial_dedup_channel_index=None,
-        relative_peak_radius_samples=5,
-        temporal_dedup_radius_samples=7,
-        cumulant_order=None,
-        convexity_threshold=None,
-        convexity_radius=3,
-        remove_exact_duplicates=True,
+        p: ThresholdingConfig = default_thresholding_cfg,
+        peak_channel_index=None,
+        dedup_channel_index=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        thinning=0.0,
-        time_jitter=0,
-        trough_priority=None,
         spatial_jitter_channel_index=None,
         save_collidedness=False,
+        thinning: float | None = None,
         dtype=torch.float,
     ):
         fixed_prop_keys = ("channels",)
@@ -55,7 +46,7 @@ class ThresholdAndFeaturize(BasePeeler):
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
-            chunk_length_samples=chunk_length_samples,
+            chunk_length_samples=p.chunk_length_samples,
             chunk_margin_samples=self.next_margin(spike_length_samples, factor=5),
             fit_sampling_cfg=fit_sampling_cfg,
             dtype=dtype,
@@ -63,52 +54,49 @@ class ThresholdAndFeaturize(BasePeeler):
             fixed_property_keys=fixed_prop_keys,
             spike_length_samples=spike_length_samples,
         )
-
-        self.relative_peak_radius_samples = relative_peak_radius_samples
-        self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
-        self.remove_exact_duplicates = remove_exact_duplicates
-        self.peak_sign = peak_sign
-        self.trough_priority = trough_priority
-        self.convexity_threshold = convexity_threshold
-        self.convexity_radius = convexity_radius
-        self.cumulant_order = cumulant_order
+        self.p = p
+        self.peel_kind = f"Threshold {p.detection_threshold}"
         self.save_collidedness = save_collidedness
         self.dedup_batch_size = self.nearest_batch_length()
-        if spatial_dedup_channel_index is not None:
-            self.register_buffer(
-                "spatial_dedup_channel_index", spatial_dedup_channel_index
-            )
-            self.register_buffer(
-                "spatial_dedup_rel_inds",
-                get_channel_index_rel_inds(spatial_dedup_channel_index),
+
+        geom = recording.get_channel_locations()
+        if peak_channel_index is None and p.relative_peak_radius_um:
+            peak_channel_index = make_channel_index(
+                geom, p.relative_peak_radius_um, to_torch=True
             )
         else:
-            self.spatial_dedup_channel_index = None
-        if relative_peak_channel_index is not None:
-            self.register_buffer(
-                "relative_peak_channel_index", relative_peak_channel_index
+            peak_channel_index = None
+        if dedup_channel_index is None and p.spatial_dedup_radius_um:
+            dedup_channel_index = make_channel_index(
+                geom, p.spatial_dedup_radius_um, to_torch=True
             )
         else:
-            self.relative_peak_channel_index = None
-        self.detection_threshold = detection_threshold
-        self.max_spikes_per_chunk = max_spikes_per_chunk
-        self.peel_kind = f"Threshold {detection_threshold}"
+            dedup_channel_index = None
+        if spatial_jitter_channel_index is None and p.spatial_jitter_radius:
+            spatial_jitter_channel_index = make_channel_index(
+                geom, p.spatial_jitter_radius, to_torch=True
+            )
+        else:
+            spatial_jitter_channel_index = None
+        self.register_buffer_or_none(
+            "spatial_jitter_channel_index", spatial_jitter_channel_index
+        )
+
+        self.register_buffer_or_none("dedup_channel_index", dedup_channel_index)
+        if dedup_channel_index is not None:
+            dedup_rel_inds = get_channel_index_rel_inds(dedup_channel_index)
+        else:
+            dedup_rel_inds = None
+        self.register_buffer_or_none("dedup_rel_inds", dedup_rel_inds)
+        self.register_buffer_or_none("peak_channel_index", peak_channel_index)
 
         # parameters for random perturbation of detections
-        if thinning:
-            assert thinning < min(
-                trough_offset_samples, spike_length_samples - trough_offset_samples
-            )
-        self.thinning = thinning
-        self.time_jitter = time_jitter
-        if spatial_jitter_channel_index is not None:
-            self.register_buffer(
-                "spatial_jitter_channel_index", spatial_jitter_channel_index
-            )
+        if thinning is None:
+            self.thinning = p.thinning
         else:
-            self.spatial_jitter_channel_index = None
+            self.thinning = thinning
         self.is_random = (
-            thinning or time_jitter or spatial_jitter_channel_index is not None
+            thinning or p.time_jitter or spatial_jitter_channel_index is not None
         )
 
     @classmethod
@@ -134,27 +122,6 @@ class ThresholdAndFeaturize(BasePeeler):
             sampling_frequency=recording.sampling_frequency,
         )
 
-        if thresholding_cfg.relative_peak_radius_um:
-            relative_peak_channel_index = make_channel_index(
-                geom, thresholding_cfg.relative_peak_radius_um, to_torch=True
-            )
-        else:
-            relative_peak_channel_index = None
-
-        if thresholding_cfg.spatial_dedup_radius_um:
-            spatial_dedup_channel_index = make_channel_index(
-                geom, thresholding_cfg.spatial_dedup_radius_um, to_torch=True
-            )
-        else:
-            spatial_dedup_channel_index = None
-
-        if thresholding_cfg.spatial_jitter_radius:
-            spatial_jitter_channel_index = make_channel_index(
-                geom, thresholding_cfg.spatial_jitter_radius, to_torch=True
-            )
-        else:
-            spatial_jitter_channel_index = None
-
         # waveform logic
         trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
@@ -172,23 +139,8 @@ class ThresholdAndFeaturize(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            detection_threshold=thresholding_cfg.detection_threshold,
-            chunk_length_samples=thresholding_cfg.chunk_length_samples,
-            max_spikes_per_chunk=thresholding_cfg.max_spikes_per_chunk,
-            peak_sign=thresholding_cfg.peak_sign,
-            relative_peak_channel_index=relative_peak_channel_index,
-            spatial_dedup_channel_index=spatial_dedup_channel_index,
-            relative_peak_radius_samples=thresholding_cfg.relative_peak_radius_samples,
-            temporal_dedup_radius_samples=thresholding_cfg.temporal_dedup_radius_samples,
-            remove_exact_duplicates=thresholding_cfg.remove_exact_duplicates,
-            cumulant_order=thresholding_cfg.cumulant_order,
-            convexity_threshold=thresholding_cfg.convexity_threshold,
-            convexity_radius=thresholding_cfg.convexity_radius,
+            p=thresholding_cfg,
             fit_sampling_cfg=sampling_cfg,
-            thinning=thresholding_cfg.thinning,
-            time_jitter=thresholding_cfg.time_jitter,
-            spatial_jitter_channel_index=spatial_jitter_channel_index,
-            trough_priority=thresholding_cfg.trough_priority,
             save_collidedness=save_collidedness,
         )
 
@@ -216,29 +168,29 @@ class ThresholdAndFeaturize(BasePeeler):
     ) -> PeelingBatchResult:
         threshold_res = threshold_chunk(
             traces,
-            self.channel_index,
-            detection_threshold=self.detection_threshold,
-            peak_sign=self.peak_sign,
-            spatial_dedup_channel_index=self.spatial_dedup_channel_index,
-            spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
+            self.b.channel_index,
+            detection_threshold=self.p.detection_threshold,
+            peak_sign=self.p.peak_sign,
+            dedup_channel_index=self.b.dedup_channel_index,
+            dedup_rel_inds=self.b.dedup_rel_inds,
             dedup_batch_size=self.dedup_batch_size,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            relative_peak_channel_index=self.relative_peak_channel_index,
-            temporal_dedup_radius_samples=self.temporal_dedup_radius_samples,
-            remove_exact_duplicates=self.remove_exact_duplicates,
-            cumulant_order=self.cumulant_order,
-            convexity_threshold=self.convexity_threshold,
-            convexity_radius=self.convexity_radius,
+            peak_channel_index=self.b.peak_channel_index,
+            temporal_dedup_radius_samples=self.p.temporal_dedup_radius_samples,
+            remove_exact_duplicates=self.p.remove_exact_duplicates,
+            cumulant_order=self.p.cumulant_order,
+            convexity_threshold=self.p.convexity_threshold,
+            convexity_radius=self.p.convexity_radius,
             thinning=self.thinning,
-            time_jitter=self.time_jitter,
+            time_jitter=self.p.time_jitter,
             spatial_jitter_channel_index=self.spatial_jitter_channel_index,
             rg=self.rg if self.is_random else None,
             max_spikes_per_chunk=None,
             return_waveforms=return_waveforms,
-            trough_priority=self.trough_priority,
+            trough_priority=self.p.trough_priority,
             quiet=False,
         )
         if not threshold_res["n_spikes"]:
@@ -279,10 +231,10 @@ def threshold_chunk(
     traces,
     channel_index,
     detection_threshold=4.0,
-    peak_sign="both",
-    relative_peak_channel_index=None,
-    spatial_dedup_channel_index=None,
-    spatial_dedup_rel_inds=None,
+    peak_sign: PeakSign = "both",
+    peak_channel_index=None,
+    dedup_channel_index=None,
+    dedup_rel_inds=None,
     dedup_batch_size=512,
     trough_offset_samples=42,
     spike_length_samples=121,
@@ -307,9 +259,9 @@ def threshold_chunk(
     times_rel, channels, energies = detect_and_deduplicate(  # type: ignore
         traces,
         detection_threshold,
-        relative_peak_channel_index=relative_peak_channel_index,
-        dedup_channel_index=spatial_dedup_channel_index,
-        dedup_index_inds=spatial_dedup_rel_inds,
+        peak_channel_index=peak_channel_index,
+        dedup_channel_index=dedup_channel_index,
+        dedup_index_inds=dedup_rel_inds,
         spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
         dedup_temporal_radius=temporal_dedup_radius_samples,

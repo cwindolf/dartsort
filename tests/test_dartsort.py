@@ -136,8 +136,6 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         h5_name = "subtraction"
     elif type == "threshold":
         h5_name = "threshold"
-    elif type == "universal":
-        h5_name = "universal"
     elif type == "match":
         h5_name = "matching0"
     else:
@@ -147,8 +145,6 @@ def test_initial_detection_swap(tmp_path, simulations, type):
 
     if type == "match":
         count_dif_tol = 0.035
-    elif type == "universal":
-        count_dif_tol = 0.01
     elif type == "subtract":
         # TODO pretrained decollider or sup denoiser for this sim.
         count_dif_tol = 0.25

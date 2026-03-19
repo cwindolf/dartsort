@@ -41,7 +41,6 @@ import torch
 
 import dartsort
 from dartsort.util.spiketorch import taper
-from dartsort.util.testing_util import matching_debug_util
 
 # constants
 fs = 1000
@@ -141,12 +140,14 @@ def test_denoiser_alignment(align_sim, align_templates):
             featurization_pipeline=featurizer,
             trough_offset_samples=trough,
             spike_length_samples=t,
-            realign_to_denoiser=rtd,
-            denoiser_realignment_shift=3,
-            detection_threshold=15.0,
-            relative_peak_radius_samples=1,
-            temporal_dedup_radius_samples=3,
-            positive_temporal_dedup_radius_samples=0,
+            p=dartsort.SubtractionConfig(
+                realign_to_denoiser=rtd,
+                denoiser_realignment_shift=3,
+                detection_threshold=15.0,
+                relative_peak_radius_samples=1,
+                temporal_dedup_radius_samples=3,
+                positive_temporal_dedup_radius_samples=0,
+            ),
         )
         for rtd in (False, True)
     ]
@@ -375,7 +376,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
             matching_cfg=dartsort.MatchingConfig(
                 refractory_radius_frames=1,
-                template_temporal_upsampling_factor=1,
+                up_factor=1,
                 template_type=matchtype,
                 up_method="keys4" if matchtype == "drifty" else "direct",
             ),
@@ -474,7 +475,7 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
             matching_cfg=dartsort.MatchingConfig(
                 threshold=1.0,
                 amplitude_scaling_variance=0.0,
-                template_temporal_upsampling_factor=up_factor,
+                up_factor=up_factor,
                 upsampling_compression_map="none",
                 template_type=matchtype,
                 up_method="keys4" if matchtype == "drifty" else "direct",

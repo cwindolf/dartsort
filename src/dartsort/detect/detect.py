@@ -1,23 +1,25 @@
+from typing import Literal
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
 
 def detect_and_deduplicate(
-    traces,
-    threshold,
-    peak_sign="neg",
+    traces: Tensor,
+    threshold: float,
+    peak_sign: Literal["pos", "neg", "both"] = "neg",
     relative_peak_radius=5,
-    relative_peak_channel_index=None,
+    peak_channel_index: Tensor | None = None,
     dedup_temporal_radius=11,
     dedup_channel_index: torch.Tensor | None = None,
     spatial_dedup_batch_size=550,
     exclude_edges=True,
     remove_exact_duplicates=False,
-    dedup_index_inds=None,
+    dedup_index_inds: Tensor | None = None,
     return_energies=False,
-    detection_mask=None,
-    trough_priority=None,
-    cumulant_order=None,
+    detection_mask: Tensor | None = None,
+    trough_priority: float | None = None,
+    cumulant_order: int | None = None,
 ):
     """Detect and deduplicate peaks
 
@@ -95,7 +97,7 @@ def detect_and_deduplicate(
     )
 
     # spatial peak criterion
-    if relative_peak_channel_index is not None:
+    if peak_channel_index is not None:
         # we are in 1CT right now
         batch_buffer = energies.new_zeros((nchans + 1, sbs))
         batch_max = energies.new_zeros((nchans, sbs))
@@ -105,7 +107,7 @@ def detect_and_deduplicate(
             batch_buffer[:nchans, : batch_end - batch_start] = batch
             batch = batch_buffer[:, : batch_end - batch_start]
             torch.amax(
-                batch[relative_peak_channel_index],
+                batch[peak_channel_index],
                 dim=1,
                 out=batch_max[:, : batch_end - batch_start],
             )
@@ -296,7 +298,7 @@ def detect_and_deduplicate_2d_filters(
     cumulant_order=2,
     cumulant_win_size=11,
     radiality=None,
-    threshold=4,
+    threshold=4.0,
     dedup_channel_index=None,
     peak_sign="neg",
     relative_peak_radius=5,

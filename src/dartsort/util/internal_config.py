@@ -252,7 +252,6 @@ class FitSamplingConfig:
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
-    chunk_sampling: Literal["random", "qmc"] = "qmc"
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
@@ -285,12 +284,14 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0
-    residnorm_decrease_threshold: float = 9.0
+    residnorm_decrease_threshold: float = 10.0
+    decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv"
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
     cumulant_order: int | None = None
     convexity_threshold: float | None = None
     convexity_radius: int = 7
+    max_iter: int = 100
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -318,7 +319,6 @@ class SubtractionConfig:
 class ThresholdingConfig:
     # peeling common
     chunk_length_samples: int = 30_000
-    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
 
     # thresholding
     detection_threshold: float = 5.0
@@ -473,7 +473,7 @@ class MatchingConfig:
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 10
-    template_temporal_upsampling_factor: int = 8
+    up_factor: int = 8
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 0
@@ -483,6 +483,7 @@ class MatchingConfig:
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
     coarse_objective: bool = True
+    channel_selection: Literal["template", "amplitude"] = "template"
     channel_selection_radius: float | None = None
     template_type: Literal["individual_compressed_upsampled", "drifty", "debug"] = (
         "drifty"
@@ -491,6 +492,8 @@ class MatchingConfig:
     drift_interp_params: InterpolationParams = default_template_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whitening: WhiteningConfig = WhiteningConfig()
+    margin_factor: int = 2
+    max_fp_per_input_spike: float = 2.5
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -505,20 +508,6 @@ class MatchingConfig:
     template_realignment_cfg: TemplateRealignmentConfig = TemplateRealignmentConfig()
     precomputed_templates_npz: str | None = None
     delete_pconv: bool = True
-
-
-@cfg_dataclass
-class UniversalMatchingConfig:
-    # peeling common
-    chunk_length_samples: int = 1_000
-
-    n_sigmas: int = 5
-    n_centroids: int = 6
-    threshold: float = 10.0
-    detection_threshold: float = 6.0
-    alignment_padding_ms: float = 1.5
-
-    waveform_cfg: WaveformConfig = WaveformConfig(ms_before=0.75, ms_after=1.25)
 
 
 @cfg_dataclass
@@ -760,7 +749,6 @@ default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
-default_universal_cfg = UniversalMatchingConfig()
 default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish"))
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 
@@ -772,12 +760,9 @@ class DARTsortInternalConfig:
     waveform_cfg: WaveformConfig = default_waveform_cfg
     featurization_cfg: FeaturizationConfig = default_featurization_cfg
     peeler_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
-    initial_detection_cfg: (
-        SubtractionConfig
-        | MatchingConfig
-        | ThresholdingConfig
-        | UniversalMatchingConfig
-    ) = default_subtraction_cfg
+    initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig = (
+        default_subtraction_cfg
+    )
     template_cfg: TemplateConfig = default_template_cfg
     clustering_cfg: ClusteringConfig = default_clustering_cfg
     clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
@@ -792,7 +777,7 @@ class DARTsortInternalConfig:
     # high level behavior
     detect_only: bool = False
     dredge_only: bool = False
-    detection_type: Literal["subtract", "match", "threshold", "universal"] = "subtract"
+    detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     final_refinement: bool = True
     matching_iterations: int = 1
     recluster_after_first_matching: bool = True
@@ -910,7 +895,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             threshold=cfg.matching_threshold,
             amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
             amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
-            template_temporal_upsampling_factor=cfg.temporal_upsamples,
+            up_factor=cfg.temporal_upsamples,
             chunk_length_samples=cfg.chunk_length_samples,
             precomputed_templates_npz=cfg.precomputed_templates_npz,
             channel_selection_radius=cfg.channel_selection_radius,
@@ -919,11 +904,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
             refractory_radius_frames=cfg.refractory_radius_frames,
             template_svd_compression_rank=cfg.matching_svd_rank,
-        )
-    elif cfg.detection_type == "universal":
-        initial_detection_cfg = UniversalMatchingConfig(
-            waveform_cfg=tpca_waveform_cfg,
-            threshold=cfg.initial_threshold,
         )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
@@ -1059,7 +1039,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,
         amplitude_scaling_boundary=cfg.amplitude_scaling_boundary,
-        template_temporal_upsampling_factor=cfg.temporal_upsamples,
+        up_factor=cfg.temporal_upsamples,
         chunk_length_samples=cfg.chunk_length_samples,
         template_merge_cfg=TemplateMergeConfig(
             merge_distance_threshold=cfg.postprocessing_merge_threshold,

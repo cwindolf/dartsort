@@ -11,10 +11,10 @@ from typing import Any, TypedDict
 import h5py
 import numpy as np
 import torch
+from spikeinterface.core import BaseRecording
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from tqdm.auto import tqdm
-from scipy.stats.qmc import MultinomialQMC
 
 from ..transform import WaveformPipeline
 from ..util import job_util
@@ -48,11 +48,11 @@ class BasePeeler(BModule):
 
     def __init__(
         self,
-        recording,
-        channel_index,
+        recording: BaseRecording,
+        channel_index: np.ndarray | torch.Tensor,
         featurization_pipeline: WaveformPipeline | None = None,
-        chunk_length_samples=30_000,
-        chunk_margin_samples=0,
+        chunk_length_samples: int = 30_000,
+        chunk_margin_samples: int = 0,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         trough_offset_samples=42,
         spike_length_samples=121,
@@ -687,27 +687,16 @@ class BasePeeler(BModule):
             return chunk_starts_samples
 
         if n_chunks is None:
-            chunks_per_second = self.recording.sampling_frequency / chunk_length_samples
-            n_chunks = int(np.ceil(self.n_seconds_fit * chunks_per_second))
+            chk_per_s = self.recording.sampling_frequency / chunk_length_samples
+            n_chunks = int(np.ceil(self.fit_sampling_cfg.n_seconds_fit * chk_per_s))
         n_chunks = min(len(chunk_starts_samples), n_chunks)
 
         # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         self.fit_subsampling_random_state = rg
-        if self.fit_sampling_cfg.chunk_sampling == "random":
-            chunk_starts_samples = rg.choice(
-                chunk_starts_samples, size=n_chunks, replace=False
-            )
-        elif self.fit_sampling_cfg.chunk_sampling == "qmc":
-            # avoid unlucky bunching. this is just for fun.
-            p = np.full(len(chunk_starts_samples), 1.0 / len(chunk_starts_samples))
-            x = MultinomialQMC(pvals=p, n_trials=1, rng=rg).random(n_chunks)
-            _, ichunk = x.nonzero()
-            assert ichunk.shape == (n_chunks,)
-            assert np.unique(ichunk).shape == (n_chunks,)
-            chunk_starts_samples = chunk_starts_samples[ichunk]
-        else:
-            assert False
+        chunk_starts_samples = rg.choice(
+            chunk_starts_samples, size=n_chunks, replace=False
+        )
         if ordered:
             chunk_starts_samples.sort()
         return chunk_starts_samples
@@ -743,7 +732,7 @@ class BasePeeler(BModule):
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
             chunk_length_samples=chunk_length_samples,
-            stop_after_n_waveforms=self.max_waveforms_fit,
+            stop_after_n_waveforms=self.fit_sampling_cfg.max_waveforms_fit,
             ignore_resuming=ignore_resuming,
             residual_to_h5=residual_to_h5,
             skip_features=skip_features,

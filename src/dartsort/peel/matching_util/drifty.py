@@ -238,7 +238,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             trough_offset_samples=template_data.trough_offset_samples,
             unit_ids=unit_ids,
             rgeom=rgeom,
-            up_factor=matching_cfg.template_temporal_upsampling_factor,
+            up_factor=matching_cfg.up_factor,
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
             drift_interp_params=matching_cfg.drift_interp_params,

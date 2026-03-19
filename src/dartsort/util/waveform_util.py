@@ -86,7 +86,7 @@ def fill_geom_holes(geom):
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
-    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2  # type: ignore
 
     # find all shifted site positions
     # TODO make this not quadratic
@@ -123,7 +123,7 @@ def regularize_geom(geom, radius=0, depth_only=False):
     Used in make_regular_channel_index. That docstring has some info about what's
     going on here.
     """
-    eps = pdist(geom).min() / 2.0
+    eps = pdist(geom, metric="euclidean").min() / 2.0
     radius = np.atleast_1d(radius)
     radius = np.broadcast_to(radius, geom.shape[1:])
 

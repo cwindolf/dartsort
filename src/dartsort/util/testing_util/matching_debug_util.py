@@ -344,10 +344,10 @@ class DebugMatchingTemplates(MatchingTemplates):
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
         templates_up = upsample_multichan(
-            template_data.templates, matching_cfg.template_temporal_upsampling_factor
+            template_data.templates, matching_cfg.up_factor
         )
         assert templates_up.shape[0] == template_data.templates.shape[0]
-        assert templates_up.shape[1] == matching_cfg.template_temporal_upsampling_factor
+        assert templates_up.shape[1] == matching_cfg.up_factor
         assert templates_up.shape[3] == recording.get_num_channels()
         assert template_data.templates.shape[2] == recording.get_num_channels()
         templates_up = torch.asarray(templates_up, device=device, dtype=dtype)

@@ -10,7 +10,6 @@ from torch import Tensor
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
-from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule

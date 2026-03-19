@@ -15,7 +15,6 @@ from .peel import (
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
     ThresholdAndFeaturize,
-    UniversalTemplatesMatchingPeeler,
 )
 from .templates import TemplateData, estimate_template_library
 from .util.data_util import DARTsortSorting, check_recording
@@ -28,7 +27,6 @@ from .util.internal_config import (
     RefinementConfig,
     SubtractionConfig,
     ThresholdingConfig,
-    UniversalMatchingConfig,
     default_clustering_cfg,
     default_clustering_features_cfg,
     default_dartsort_cfg,
@@ -38,7 +36,6 @@ from .util.internal_config import (
     default_subtraction_cfg,
     default_template_cfg,
     default_thresholding_cfg,
-    default_universal_cfg,
     default_waveform_cfg,
     to_internal_config,
 )
@@ -400,18 +397,6 @@ def initial_detection(
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
         )
-    elif cfg.detection_type == "universal":
-        assert isinstance(cfg.initial_detection_cfg, UniversalMatchingConfig)
-        return universal_match(
-            output_dir=output_dir,
-            recording=recording,
-            universal_cfg=cfg.initial_detection_cfg,
-            sampling_cfg=cfg.peeler_sampling_cfg,
-            featurization_cfg=cfg.featurization_cfg,
-            overwrite=overwrite,
-            show_progress=show_progress,
-            computation_cfg=cfg.computation_cfg,
-        )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
@@ -655,38 +640,3 @@ def cluster(
     torch.cuda.empty_cache()
 
     return result
-
-
-def universal_match(
-    output_dir: str | Path,
-    recording: BaseRecording,
-    universal_cfg=default_universal_cfg,
-    featurization_cfg=default_featurization_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
-    chunk_starts_samples=None,
-    overwrite=False,
-    show_progress=True,
-    hdf5_filename="universal.h5",
-    model_subdir="universal_models",
-    computation_cfg: ComputationConfig | None = None,
-) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
-    universal_matcher = UniversalTemplatesMatchingPeeler.from_config(
-        recording=recording,
-        universal_cfg=universal_cfg,
-        waveform_cfg=universal_cfg.waveform_cfg,  # TODO...
-        featurization_cfg=featurization_cfg,
-        sampling_cfg=sampling_cfg,
-    )
-    sorting = run_peeler(
-        universal_matcher,
-        output_directory=output_dir,
-        hdf5_filename=hdf5_filename,
-        model_subdir=model_subdir,
-        featurization_cfg=featurization_cfg,
-        chunk_starts_samples=chunk_starts_samples,
-        overwrite=overwrite,
-        show_progress=show_progress,
-        computation_cfg=computation_cfg,
-    )
-    return sorting

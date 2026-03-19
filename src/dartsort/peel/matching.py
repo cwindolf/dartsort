@@ -1,7 +1,7 @@
 """A simple residual updating template matcher."""
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Self, cast
 
 import numpy as np
 import torch
@@ -20,9 +20,9 @@ from ..util.internal_config import (
     MatchingConfig,
     WaveformConfig,
     default_peeling_fit_sampling_cfg,
+    default_matching_cfg,
 )
 from ..util.logging_util import get_logger
-from ..util.noise_util import SpatialWhitener
 from ..util.waveform_util import make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -45,24 +45,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         featurization_pipeline,
         matching_templates: MatchingTemplates | None = None,
         matching_templates_builder: MatchingTemplatesBuilder | None = None,
-        refractory_radius_frames=10,
-        amplitude_scaling_variance=0.0,
-        amplitude_scaling_boundary=0.5,
-        margin_factor=2,
-        up_factor: int = 1,
+        p: MatchingConfig = default_matching_cfg,
         trough_offset_samples=42,
-        threshold: float | Literal["fp_control"] = 100.0,
-        obj_spike_counts=None,
-        max_fp_per_input_spike=2.5,
-        chunk_length_samples=30_000,
+        fpctrl_spike_counts=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        channel_selection: Literal["template", "amplitude"] = "template",
-        channel_selection_index: Tensor | None = None,
-        max_iter=1000,
-        max_spikes_per_second=16384,
         save_collidedness=False,
-        cd_iter=0,
-        coarse_cd=True,
         parent_sorting_hdf5_path: str | Path | None = None,
         dtype=torch.float,
     ):
@@ -81,53 +68,46 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
-            chunk_length_samples=chunk_length_samples,
-            chunk_margin_samples=margin_factor * spike_length_samples + 1,
+            chunk_length_samples=p.chunk_length_samples,
+            chunk_margin_samples=p.margin_factor * spike_length_samples + 1,
             fit_sampling_cfg=fit_sampling_cfg,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             fixed_property_keys=fixed_prop_keys,
             dtype=dtype,
         )
-
+        self.p = p
         self.matching_templates = matching_templates
         self.matching_templates_builder = matching_templates_builder
-        self.threshold = threshold
-        self.thresholdsq = None  # set in precompute. usually just ^ squared.
-        self.refractory_radius_frames = refractory_radius_frames
-        self.max_iter = max_iter
-        self.cd_iter = cd_iter
-        self.coarse_cd = coarse_cd
-        self.max_spikes_per_second = max_spikes_per_second
-        self.obj_spike_counts = obj_spike_counts
+        self.thresholdsq: float | None = None  # set in precompute
         self.save_collidedness = save_collidedness
 
-        # fp control threshold params (remove?)
-        self.max_fp_per_input_spike = max_fp_per_input_spike
+        # fp control threshold stuff (TODO: remove?)
+        self.fpctrl_spike_counts = fpctrl_spike_counts
         self.parent_sorting_hdf5_path = parent_sorting_hdf5_path
 
-        assert channel_selection in ("template", "amplitude")
-        self.channel_selection: Literal["template", "amplitude"] = channel_selection
-        if channel_selection_index is None:
-            assert self.channel_selection == "template"
-            self.channel_selection_index = None
+        geom = recording.get_channel_locations()
+        self.picking_channels = p.channel_selection != "template"
+        if p.channel_selection == "amplitude":
+            assert p.channel_selection_radius is not None
+            channel_selection_index = make_channel_index(
+                geom, p.channel_selection_radius, to_torch=True
+            )
+        elif p.channel_selection == "template":
+            channel_selection_index = None
         else:
-            self.register_buffer("channel_selection_index", channel_selection_index)
-        self.picking_channels = self.channel_selection != "template"
-
-        self.up_factor = up_factor
-        self.is_upsampling = up_factor > 1
+            assert False
+        self.register_buffer_or_none("channel_selection_index", channel_selection_index)
+        self.is_upsampling = p.up_factor > 1
 
         # amplitude scaling properties
-        self.is_scaling = amplitude_scaling_variance > 0
-        self.amplitude_scaling_variance = amplitude_scaling_variance
+        self.is_scaling = p.amplitude_scaling_variance > 0
         self.inv_lambda = (
-            1.0 / amplitude_scaling_variance if self.is_scaling else float("inf")
+            1.0 / p.amplitude_scaling_variance if self.is_scaling else float("inf")
         )
-        self.amp_scale_max = 1.0 + amplitude_scaling_boundary
+        self.amp_scale_max = 1.0 + p.amplitude_scaling_boundary
         self.amp_scale_min = 1.0 / self.amp_scale_max
-        self.obj_pad_len = max(refractory_radius_frames, self.spike_length_samples)
-
+        self.obj_pad_len = max(p.refractory_radius_frames, self.spike_length_samples)
         conv_len = (
             self.chunk_length_samples
             + 2 * self.chunk_margin_samples
@@ -190,13 +170,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
-        channel_selection = "template"
-        channel_selection_index = None
-        if matching_cfg.channel_selection_radius:
-            channel_selection = "amplitude"
-            channel_selection_index = make_channel_index(
-                geom, matching_cfg.channel_selection_radius, to_torch=True
-            )
         featurization_pipeline = WaveformPipeline.from_config(
             geom=geom,
             channel_index=channel_index,
@@ -230,7 +203,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             "not " if motion_est is None else "",
             matching_cfg.amplitude_scaling_variance,
             matching_cfg.template_svd_compression_rank,
-            matching_cfg.template_temporal_upsampling_factor,
+            matching_cfg.up_factor,
             matching_cfg.refractory_radius_frames,
         )
         save_collidedness = (
@@ -242,23 +215,12 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             matching_templates_builder=builder,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
-            refractory_radius_frames=matching_cfg.refractory_radius_frames,
-            amplitude_scaling_variance=matching_cfg.amplitude_scaling_variance,
-            amplitude_scaling_boundary=matching_cfg.amplitude_scaling_boundary,
+            p=matching_cfg,
             trough_offset_samples=trough_offset_samples,
-            threshold=matching_cfg.threshold,
-            channel_selection=channel_selection,
-            channel_selection_index=channel_selection_index,
-            chunk_length_samples=matching_cfg.chunk_length_samples,
             fit_sampling_cfg=sampling_cfg,
-            up_factor=matching_cfg.template_temporal_upsampling_factor,
-            max_iter=matching_cfg.max_iter,
-            max_spikes_per_second=matching_cfg.max_spikes_per_second,
-            cd_iter=matching_cfg.cd_iter,
-            coarse_cd=matching_cfg.coarse_cd,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             save_collidedness=save_collidedness,
-            obj_spike_counts=template_data.coarsen().spike_counts
+            fpctrl_spike_counts=template_data.coarsen().spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
         )
@@ -278,7 +240,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # get chunk center time and template info at that time
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
         segment = self.recording._recording_segments[0]
-        chunk_center_seconds = segment.sample_index_to_time(chunk_center_samples)
+        chunk_center_seconds = float(segment.sample_index_to_time(chunk_center_samples))
         chunk_template_data = self.matching_templates.data_at_time(
             t_s=chunk_center_seconds,
             scaling=self.is_scaling,
@@ -300,8 +262,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # process spike times and create return result
         if match_results["n_spikes"]:
-            match_results["times_samples"] += chunk_start_samples - left_margin  # type: ignore
-        if match_results["n_spikes"] > self.max_spikes_per_second:  # type: ignore
+            match_results["times_samples"] += chunk_start_samples - left_margin
+        if match_results["n_spikes"] > self.p.max_spikes_per_second:
             raise ValueError(
                 f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}."
             )
@@ -322,7 +284,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
     ) -> PeelingBatchResult:
         """Core peeling routine for subtraction"""
         if max_iter is None:
-            max_iter = self.max_iter
+            max_iter = self.p.max_iter
         # initialize residual, it needs to be padded to support our channel
         # indexing convention (used later to extract small channel
         # neighborhoods). this copies the input.
@@ -351,7 +313,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_objective = traces.new_zeros(
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
-        if self.refractory_radius_frames:
+        if self.p.refractory_radius_frames:
             refrac_mask = torch.zeros_like(padded_objective)
         else:
             refrac_mask = None
@@ -364,9 +326,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # main loop
         previous_peaks = current_peaks = prev_refrac_mask = None
         prev_update_residual = None
-        for cd_it in range(self.cd_iter + 1):
+        for cd_it in range(self.p.cd_iter + 1):
             initializing_cd = not cd_it
-            coarse_only = self.coarse_cd and cd_it < self.cd_iter
+            coarse_only = self.p.coarse_cd and cd_it < self.p.cd_iter
 
             # we always need to update the residual in the final iteration
             # in "cd iterations", we may not need to update the residual.
@@ -392,7 +354,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     chunk_template_data.unsubtract_conv(
                         padded_conv, prev_peaks, padding=self.obj_pad_len
                     )
-                    if self.refractory_radius_frames:
+                    if self.p.refractory_radius_frames:
                         chunk_template_data.forget_refractory(
                             prev_refrac_mask, prev_peaks, offset=self.obj_pad_len
                         )
@@ -419,7 +381,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     break
 
                 # enforce refractoriness
-                if self.refractory_radius_frames:
+                if self.p.refractory_radius_frames:
                     chunk_template_data.enforce_refractory(
                         refrac_mask, new_peaks, offset=self.obj_pad_len
                     )
@@ -473,9 +435,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             cc = chunk_template_data.get_collisioncleaned_waveforms(
                 residual_padded=residual_padded,
                 peaks=peaks,
-                channels=self.channel_selection,
+                channels=self.p.channel_selection,
                 channel_index=self.b.channel_index,
-                channel_selection_index=self.channel_selection_index,
+                channel_selection_index=self.b.channel_selection_index,
                 with_coll=self.save_collidedness,
             )
             channels, waveforms, collidedness = cc
@@ -483,7 +445,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 assert collidedness is not None
                 res["collidedness"] = collidedness
         else:
-            assert self.channel_selection == "template"
+            assert self.p.channel_selection == "template"
             channels = chunk_template_data.main_channels[peaks.template_inds]
             waveforms = None
         res["channels"] = channels
@@ -515,10 +477,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
 
         # enforce refractoriness
-        objective = padded_objective[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
+        objective = padded_objective[:-1]
         if refrac_mask is not None:
-            refrac_mask_ = refrac_mask[:-1]  # , self.obj_pad_len : -self.obj_pad_len]
-            objective = objective + refrac_mask_
+            objective = objective + refrac_mask[:-1]
         if unit_mask is not None:
             objective[torch.logical_not(unit_mask)] = -torch.inf
 
@@ -545,10 +506,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return fine_peaks
 
     def pick_threshold(self):
-        if self.is_scaling and self.amplitude_scaling_variance < torch.inf:
+        # TODO: remove?
+        if self.is_scaling and self.p.amplitude_scaling_variance < torch.inf:
             # adjust threshold by the scaling prior's constant term
             # nb, everything is x2 so halves are gone.
-            scstd = np.sqrt(self.amplitude_scaling_variance)
+            scstd = np.sqrt(self.p.amplitude_scaling_variance)
             norm_const = -(np.log(2.0) + np.log(np.pi) + 2.0 * np.log(scstd))
 
             # adjust by boundary
@@ -559,9 +521,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
             scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
 
-            if isinstance(self.threshold, float):
-                tb = np.sqrt(self.threshold**2 - scale_const)
-                _msg = f"In norm units, that's from {self.threshold:0.2f}->{tb:0.2f}"
+            if isinstance(self.p.threshold, float):
+                tb = np.sqrt(self.p.threshold**2 - scale_const)
+                _msg = f"In norm units, that's from {self.p.threshold:0.2f}->{tb:0.2f}"
             else:
                 _msg = ""
             logger.dartsortdebug(
@@ -571,29 +533,30 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         else:
             scale_const = 0.0
 
-        if isinstance(self.threshold, float):
-            self.thresholdsq = self.threshold**2 - scale_const
+        if isinstance(self.p.threshold, float):
+            self.thresholdsq = self.p.threshold**2 - scale_const
             return
 
-        assert self.threshold == "fp_control"
+        assert self.p.threshold == "fp_control"
         from ..util import noise_util
 
         # fit noise to residuals from the previous detection step
         assert self.parent_sorting_hdf5_path is not None
         assert self.matching_templates is not None
-        lrt: LowRankTemplates = self.matching_templates.obj_lrts  # type: ignore
+        lrt = cast(LowRankTemplates, self.matching_templates.obj_lrts)
         self.thresholdsq = noise_util.fp_control_threshold_from_h5(
             hdf5_path=self.parent_sorting_hdf5_path,
             low_rank_templates=lrt.shift_to_best_channels(
                 self.recording.get_channel_locations(), self.matching_templates.rgeom
             ),
             rg=self.fit_subsampling_random_state,
-            refractory_radius_frames=self.refractory_radius_frames,
+            refractory_radius_frames=self.p.refractory_radius_frames,
             num_frames=self.recording.get_num_samples(),  # TODO: wrong in subsampled case.
-            max_fp_per_input_spike=self.max_fp_per_input_spike,
+            max_fp_per_input_spike=self.p.max_fp_per_input_spike,
             unit_ids=self.matching_templates.obj_unit_ids,
-            spike_counts=self.obj_spike_counts,
+            spike_counts=self.fpctrl_spike_counts,
         )
+        assert isinstance(self.thresholdsq, float)
         self.thresholdsq -= scale_const
         logger.info(
             f"Matcher picked threshold^2 {self.thresholdsq} for strategy fp_control."

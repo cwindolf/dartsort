@@ -209,7 +209,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         cupt = compressed_upsampled_templates(
             lrt.temporal_components,
             ptps=np.ptp(template_data.templates, axis=1).max(1),
-            max_upsample=matching_cfg.template_temporal_upsampling_factor,
+            max_upsample=matching_cfg.up_factor,
             n_upsamples_map=matching_cfg.upsampling_compression_map,
         )
 

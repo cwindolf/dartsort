@@ -5,6 +5,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from spikeinterface.core import BaseRecording
@@ -19,10 +20,9 @@ from ..util.internal_config import (
     PeakSign,
     SubtractionConfig,
     WaveformConfig,
+    ThresholdingConfig,
     default_peeling_fit_sampling_cfg,
-)
-from ..util.internal_config import (
-    default_subtraction_cfg as defaults,
+    default_subtraction_cfg,
 )
 from ..util.spiketorch import grab_spikes, ptp, subtract_spikes_
 from ..util.waveform_util import (
@@ -41,58 +41,29 @@ class SubtractionPeeler(BasePeeler):
     def __init__(
         self,
         recording: BaseRecording,
-        channel_index,
-        subtraction_denoising_pipeline,
-        featurization_pipeline,
-        subtract_radius_um: float = defaults.subtract_radius_um,
+        channel_index: np.ndarray | torch.Tensor,
+        subtraction_denoising_pipeline: WaveformPipeline,
+        featurization_pipeline: WaveformPipeline | None,
+        p: SubtractionConfig = default_subtraction_cfg,
         trough_offset_samples=42,
         spike_length_samples=121,
-        detection_threshold: float = defaults.detection_threshold,
-        chunk_length_samples: int = defaults.chunk_length_samples,
-        peak_sign: PeakSign = defaults.peak_sign,
-        realign_to_denoiser: bool = defaults.realign_to_denoiser,
-        denoiser_realignment_channel: Literal[
-            "detection", "denoised"
-        ] = defaults.denoiser_realignment_channel,
-        denoiser_realignment_shift=defaults.denoiser_realignment_shift,
-        relative_peak_radius_um: float | None = defaults.relative_peak_radius_um,
-        spatial_dedup_radius_um: float | None = defaults.spatial_dedup_radius_um,
-        first_denoiser_spatial_dedup_radius: float
-        | None = defaults.first_denoiser_spatial_dedup_radius,
-        relative_peak_radius_samples=defaults.relative_peak_radius_samples,
-        temporal_dedup_radius_samples=defaults.temporal_dedup_radius_samples,
-        remove_exact_duplicates=defaults.remove_exact_duplicates,
-        positive_temporal_dedup_radius_samples=defaults.positive_temporal_dedup_radius_samples,
-        trough_priority: float | None = defaults.trough_priority,
-        convexity_threshold: float | None = defaults.convexity_threshold,
-        convexity_radius=defaults.convexity_radius,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        residnorm_decrease_threshold: float = defaults.residnorm_decrease_threshold,
-        growth_tolerance: float | None = defaults.growth_tolerance,
-        cumulant_order=defaults.cumulant_order,
-        first_denoiser_max_waveforms_fit=defaults.first_denoiser_max_waveforms_fit,
-        first_denoiser_thinning=defaults.first_denoiser_thinning,
-        first_denoiser_temporal_jitter=defaults.first_denoiser_temporal_jitter,
-        first_denoiser_spatial_jitter=defaults.first_denoiser_spatial_jitter,
-        decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
         save_iteration=False,
         save_residnorm_decrease=False,
         save_collidedness=False,
-        max_iter=100,
         dtype=torch.float,
     ):
-        if realign_to_denoiser:
+        if p.realign_to_denoiser:
             fixed_property_keys = ("channels", "time_shifts")
         else:
             fixed_property_keys = ("channels",)
         if save_collidedness:
             fixed_property_keys = fixed_property_keys + ("collidedness",)
-
         super().__init__(
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
-            chunk_length_samples=chunk_length_samples,
+            chunk_length_samples=p.chunk_length_samples,
             chunk_margin_samples=self.next_margin(2 * spike_length_samples),
             fit_sampling_cfg=fit_sampling_cfg,
             trough_offset_samples=trough_offset_samples,
@@ -100,113 +71,70 @@ class SubtractionPeeler(BasePeeler):
             fixed_property_keys=fixed_property_keys,
             dtype=dtype,
         )
-
-        geom = recording.get_channel_locations()
-        subtract_channel_index = make_channel_index(
-            geom, subtract_radius_um, to_torch=True
-        )
-        if spatial_dedup_radius_um:
-            spatial_dedup_channel_index = make_channel_index(
-                geom, spatial_dedup_radius_um, to_torch=True
-            )
-        else:
-            spatial_dedup_channel_index = None
-        if relative_peak_radius_um:
-            relative_peak_channel_index = make_channel_index(
-                geom, relative_peak_radius_um, to_torch=True
-            )
-        else:
-            relative_peak_channel_index = None
-
-        self.relative_peak_radius_samples = relative_peak_radius_samples
-        self.peak_sign = peak_sign
-        self.realign_to_denoiser = realign_to_denoiser
-        self.denoiser_realignment_shift = denoiser_realignment_shift
-        self.detection_threshold = detection_threshold
-        self.residnorm_decrease_threshold = residnorm_decrease_threshold
-        self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
-        self.remove_exact_duplicates = remove_exact_duplicates
-        self.pos_dedup_samples = positive_temporal_dedup_radius_samples
-        self.trough_priority = trough_priority
-        self.growth_tolerance = growth_tolerance
-        self.convexity_threshold = convexity_threshold
-        self.convexity_radius = convexity_radius
+        self.p = p
         self.save_iteration = save_iteration
         self.save_residnorm_decrease = save_residnorm_decrease
-        self.max_iter = max_iter
-        self.decrease_objective: Literal["norm", "normsq", "deconv"] = (
-            decrease_objective
-        )
         self.save_collidedness = save_collidedness
+        self.dedup_batch_size = self.nearest_batch_length()
 
-        if subtract_channel_index is None:
-            subtract_channel_index = channel_index.clone().detach()
-        self.register_buffer("subtract_channel_index", subtract_channel_index)
-        self.denoiser_realignment_channel = denoiser_realignment_channel
+        geom = recording.get_channel_locations()
+        sub_channel_index = make_channel_index(
+            geom, p.subtract_radius_um, to_torch=True
+        )
+        self.register_buffer("sub_channel_index", sub_channel_index)
         self.register_buffer(
-            "subtract_index_rel_inds",
-            get_channel_index_rel_inds(subtract_channel_index),
+            "subtract_index_rel_inds", get_channel_index_rel_inds(sub_channel_index)
         )
         self.fixed_output_data.append(
             (
-                "subtract_channel_index",
-                self.b.subtract_channel_index.numpy(force=True).copy(),
+                "sub_channel_index",
+                self.b.sub_channel_index.numpy(force=True).copy(),
             ),
         )
         self.extract_subtract_same = torch.equal(
-            self.b.subtract_channel_index, self.b.channel_index
+            self.b.sub_channel_index, self.b.channel_index
         )
         if not self.extract_subtract_same:
             esmask = relative_channel_subset_index(
-                self.subtract_channel_index, self.channel_index
+                self.sub_channel_index, self.channel_index
             )
             self.register_buffer("extract_subtract_mask", torch.asarray(esmask))
         else:
             self.extract_subtract_mask = None
-        self.dedup_batch_size = self.nearest_batch_length()
-        if spatial_dedup_channel_index is not None:
-            self.register_buffer(
-                "spatial_dedup_channel_index", spatial_dedup_channel_index
-            )
-            self.register_buffer(
-                "spatial_dedup_rel_inds",
-                get_channel_index_rel_inds(spatial_dedup_channel_index),
+        if p.spatial_dedup_radius_um:
+            dedup_channel_index = make_channel_index(
+                geom, p.spatial_dedup_radius_um, to_torch=True
             )
         else:
-            self.spatial_dedup_channel_index = None
-            self.spatial_dedup_rel_inds = None
-        if relative_peak_channel_index is not None:
-            self.register_buffer(
-                "relative_peak_channel_index", relative_peak_channel_index
+            dedup_channel_index = None
+        self.register_buffer_or_none("dedup_channel_index", dedup_channel_index)
+        if p.relative_peak_radius_um:
+            peak_channel_index = make_channel_index(
+                geom, p.relative_peak_radius_um, to_torch=True
             )
         else:
-            self.relative_peak_channel_index = None
+            peak_channel_index = None
+        self.register_buffer_or_none("peak_channel_index", peak_channel_index)
+        if dedup_channel_index is not None:
+            dedup_rel_inds = get_channel_index_rel_inds(dedup_channel_index)
+        else:
+            dedup_rel_inds = None
+        self.register_buffer_or_none("dedup_rel_inds", dedup_rel_inds)
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
-        self.first_denoiser_spatial_dedup_radius = first_denoiser_spatial_dedup_radius
 
         # first denoiser fitting parameters
-        self.first_denoiser_max_waveforms_fit = first_denoiser_max_waveforms_fit
-        thinning_length_cond = (
-            recording.get_total_duration()
-            >= fit_sampling_cfg.n_seconds_fit / (1.0 - first_denoiser_thinning)
-        )
-        self.first_denoiser_thinning = (
-            first_denoiser_thinning if thinning_length_cond else 0.0
-        )
-        self.first_denoiser_temporal_jitter = first_denoiser_temporal_jitter
-        self.first_denoiser_spatial_jitter = first_denoiser_spatial_jitter
-
-        # cumulant detection
-        self.cumulant_order = cumulant_order
+        _p = 1.0 - p.first_denoiser_thinning
+        can_thin = recording.get_total_duration() > fit_sampling_cfg.n_seconds_fit / _p
+        self.first_denoiser_thinning = p.first_denoiser_thinning if can_thin else 0.0
 
     def out_datasets(self):
         datasets = super().out_datasets()
 
         if self.save_iteration:
             datasets.append(SpikeDataset("iteration", (), "int32"))
-        if self.realign_to_denoiser:
+        if self.p.realign_to_denoiser:
             datasets.append(SpikeDataset("time_shifts", (), "int16"))
         if self.save_residnorm_decrease:
             datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
@@ -249,14 +177,14 @@ class SubtractionPeeler(BasePeeler):
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
-        subtract_channel_index = make_channel_index(
+        sub_channel_index = make_channel_index(
             geom, subtraction_cfg.subtract_radius_um, to_torch=True
         )
 
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
             geom=geom,
-            channel_index=subtract_channel_index,
+            channel_index=sub_channel_index,
             featurization_cfg=subtraction_cfg.subtraction_denoising_cfg,
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
@@ -292,32 +220,10 @@ class SubtractionPeeler(BasePeeler):
             channel_index=channel_index,
             subtraction_denoising_pipeline=subtraction_denoising_pipeline,
             featurization_pipeline=featurization_pipeline,
-            subtract_radius_um=subtraction_cfg.subtract_radius_um,
+            p=subtraction_cfg,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            detection_threshold=subtraction_cfg.detection_threshold,
-            chunk_length_samples=subtraction_cfg.chunk_length_samples,
-            peak_sign=subtraction_cfg.peak_sign,
-            relative_peak_radius_samples=subtraction_cfg.relative_peak_radius_samples,
-            realign_to_denoiser=subtraction_cfg.realign_to_denoiser,
-            denoiser_realignment_shift=subtraction_cfg.denoiser_realignment_shift,
-            relative_peak_radius_um=subtraction_cfg.relative_peak_radius_um,
-            spatial_dedup_radius_um=subtraction_cfg.spatial_dedup_radius_um,
-            temporal_dedup_radius_samples=subtraction_cfg.temporal_dedup_radius_samples,
-            remove_exact_duplicates=subtraction_cfg.remove_exact_duplicates,
-            positive_temporal_dedup_radius_samples=subtraction_cfg.positive_temporal_dedup_radius_samples,
             fit_sampling_cfg=sampling_cfg,
-            residnorm_decrease_threshold=subtraction_cfg.residnorm_decrease_threshold,
-            convexity_threshold=subtraction_cfg.convexity_threshold,
-            convexity_radius=subtraction_cfg.convexity_radius,
-            cumulant_order=subtraction_cfg.cumulant_order,
-            first_denoiser_max_waveforms_fit=subtraction_cfg.first_denoiser_max_waveforms_fit,
-            first_denoiser_thinning=subtraction_cfg.first_denoiser_thinning,
-            first_denoiser_temporal_jitter=subtraction_cfg.first_denoiser_temporal_jitter,
-            first_denoiser_spatial_jitter=subtraction_cfg.first_denoiser_spatial_jitter,
-            first_denoiser_spatial_dedup_radius=subtraction_cfg.first_denoiser_spatial_dedup_radius,
-            growth_tolerance=subtraction_cfg.growth_tolerance,
-            trough_priority=subtraction_cfg.trough_priority,
             save_iteration=subtraction_cfg.save_iteration,
             save_residnorm_decrease=subtraction_cfg.save_residnorm_decrease,
             save_collidedness=save_collidedness,
@@ -340,7 +246,7 @@ class SubtractionPeeler(BasePeeler):
 
         subtraction_result = subtract_chunk(
             traces,
-            self.subtract_channel_index,
+            self.sub_channel_index,
             self.subtraction_denoising_pipeline,
             extract_index=extract_index,
             extract_mask=self.extract_subtract_mask,
@@ -348,30 +254,30 @@ class SubtractionPeeler(BasePeeler):
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
-            detection_threshold=self.detection_threshold,
-            relative_peak_radius=self.relative_peak_radius_samples,
-            peak_sign=self.peak_sign,
-            relative_peak_channel_index=self.relative_peak_channel_index,
-            spatial_dedup_channel_index=self.spatial_dedup_channel_index,
+            detection_threshold=self.p.detection_threshold,
+            relative_peak_radius=self.p.relative_peak_radius_samples,
+            peak_sign=self.p.peak_sign,
+            peak_channel_index=self.b.peak_channel_index,
+            dedup_channel_index=self.b.dedup_channel_index,
             dedup_batch_size=self.dedup_batch_size,
-            dedup_temporal_radius=self.temporal_dedup_radius_samples,
-            remove_exact_duplicates=self.remove_exact_duplicates,
-            pos_dedup_temporal_radius=self.pos_dedup_samples,
-            residnorm_decrease_threshold=self.residnorm_decrease_threshold,
-            decrease_objective=self.decrease_objective,
-            trough_priority=self.trough_priority,
-            growth_tolerance=self.growth_tolerance,
-            cumulant_order=self.cumulant_order,
-            convexity_threshold=self.convexity_threshold,
-            convexity_radius=self.convexity_radius,
+            dedup_temporal_radius=self.p.temporal_dedup_radius_samples,
+            remove_exact_duplicates=self.p.remove_exact_duplicates,
+            pos_dedup_temporal_radius=self.p.positive_temporal_dedup_radius_samples,
+            residnorm_decrease_threshold=self.p.residnorm_decrease_threshold,
+            decrease_objective=self.p.decrease_objective,
+            trough_priority=self.p.trough_priority,
+            growth_tolerance=self.p.growth_tolerance,
+            cumulant_order=self.p.cumulant_order,
+            convexity_threshold=self.p.convexity_threshold,
+            convexity_radius=self.p.convexity_radius,
             save_iteration=self.save_iteration,
             save_residnorm_decrease=self.save_residnorm_decrease,
-            max_iter=self.max_iter,
+            max_iter=self.p.max_iter,
             subtract_rel_inds=self.subtract_index_rel_inds,
-            spatial_dedup_rel_inds=self.spatial_dedup_rel_inds,
-            realign_to_denoiser=self.realign_to_denoiser,
-            denoiser_realignment_shift=self.denoiser_realignment_shift,
-            denoiser_realignment_channel=self.denoiser_realignment_channel,
+            dedup_rel_inds=self.dedup_rel_inds,
+            realign_to_denoiser=self.p.realign_to_denoiser,
+            denoiser_realignment_shift=self.p.denoiser_realignment_shift,
+            denoiser_realignment_channel=self.p.denoiser_realignment_channel,
             compute_collidedness=self.save_collidedness,
         )
 
@@ -461,11 +367,11 @@ class SubtractionPeeler(BasePeeler):
 
         orig_denoise = self.subtraction_denoising_pipeline
         init_voltage_feature = Voltage(
-            channel_index=self.subtract_channel_index,
+            channel_index=self.sub_channel_index,
             name="subtract_fit_voltages",
         )
         init_waveform_feature = Waveform(
-            channel_index=self.subtract_channel_index,
+            channel_index=self.sub_channel_index,
             name="subtract_fit_waveforms",
         )
         ifeats = [init_voltage_feature, init_waveform_feature]
@@ -542,38 +448,37 @@ class SubtractionPeeler(BasePeeler):
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         geom = self.recording.get_channel_locations()
-        spatial_jitter_index = None
-        if self.first_denoiser_spatial_jitter:
-            spatial_jitter_index = make_channel_index(
-                geom, self.first_denoiser_spatial_jitter, to_torch=True
-            )
-        waveform_pipeline = WaveformPipeline([Waveform(self.subtract_channel_index)])
+        waveform_pipeline = WaveformPipeline([Waveform(self.sub_channel_index)])
 
-        if self.first_denoiser_spatial_dedup_radius:
+        if self.p.first_denoiser_spatial_dedup_radius:
             dn_dedup_ci = make_channel_index(
-                geom, self.first_denoiser_spatial_dedup_radius, to_torch=True
+                geom, self.p.first_denoiser_spatial_dedup_radius, to_torch=True
             )
-            dn_dedup_ci = dn_dedup_ci.to(self.b.subtract_channel_index)
+            dn_dedup_ci = dn_dedup_ci.to(self.b.sub_channel_index)
         else:
-            dn_dedup_ci = self.spatial_dedup_channel_index
+            dn_dedup_ci = self.dedup_channel_index
         trainer = ThresholdAndFeaturize(
-            self.recording,
-            detection_threshold=self.detection_threshold,
-            channel_index=self.subtract_channel_index,
-            relative_peak_channel_index=self.relative_peak_channel_index,
-            spatial_dedup_channel_index=dn_dedup_ci,
-            relative_peak_radius_samples=self.relative_peak_radius_samples,
+            recording=self.recording,
+            channel_index=self.b.sub_channel_index,
             featurization_pipeline=waveform_pipeline,
-            temporal_dedup_radius_samples=self.spike_length_samples,
-            thinning=self.first_denoiser_thinning,
-            time_jitter=self.first_denoiser_temporal_jitter,
-            spatial_jitter_channel_index=spatial_jitter_index,
-            peak_sign=self.peak_sign,
-            trough_priority=self.trough_priority,
-            convexity_radius=self.convexity_radius,
-            convexity_threshold=self.convexity_threshold,
-            cumulant_order=self.cumulant_order,
-            remove_exact_duplicates=self.remove_exact_duplicates,
+            p=ThresholdingConfig(
+                detection_threshold=self.p.detection_threshold,
+                peak_sign=self.p.peak_sign,
+                relative_peak_radius_samples=self.p.relative_peak_radius_samples,
+                temporal_dedup_radius_samples=self.spike_length_samples,
+                time_jitter=self.p.first_denoiser_temporal_jitter,
+                thinning=self.first_denoiser_thinning,
+                cumulant_order=self.p.cumulant_order,
+                remove_exact_duplicates=self.p.remove_exact_duplicates,
+                convexity_threshold=self.p.convexity_threshold,
+                trough_priority=self.p.trough_priority,
+                convexity_radius=self.p.convexity_radius,
+                spatial_jitter_radius=self.p.first_denoiser_spatial_jitter,
+            ),
+            trough_offset_samples=self.trough_offset_samples,
+            spike_length_samples=self.spike_length_samples,
+            peak_channel_index=self.peak_channel_index,
+            dedup_channel_index=dn_dedup_ci,
         )
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
@@ -582,7 +487,7 @@ class SubtractionPeeler(BasePeeler):
                 trainer.peel(
                     temp_hdf5_filename,
                     shuffle=True,
-                    stop_after_n_waveforms=self.first_denoiser_max_waveforms_fit,
+                    stop_after_n_waveforms=self.p.first_denoiser_max_waveforms_fit,
                     task_name=f"Load examples for initial denoiser fitting",
                     computation_cfg=computation_cfg,
                 )
@@ -593,7 +498,7 @@ class SubtractionPeeler(BasePeeler):
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling_cfg.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
-                    n_waveforms_fit=self.first_denoiser_max_waveforms_fit,
+                    n_waveforms_fit=self.p.first_denoiser_max_waveforms_fit,
                     fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="voltages",
                     waveforms_dataset_name="waveforms",
@@ -635,16 +540,16 @@ def subtract_chunk(
     left_margin=0,
     right_margin=0,
     detection_threshold=4.0,
-    peak_sign="both",
+    peak_sign: PeakSign = "both",
     realign_to_denoiser=False,
     denoiser_realignment_shift=5,
     denoiser_realignment_channel="detection",
     convexity_threshold=None,
     convexity_radius=3,
-    relative_peak_channel_index=None,
-    spatial_dedup_channel_index=None,
+    peak_channel_index=None,
+    dedup_channel_index=None,
     subtract_rel_inds=None,
-    spatial_dedup_rel_inds=None,
+    dedup_rel_inds=None,
     residnorm_decrease_threshold=16.0,
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
     relative_peak_radius=5,
@@ -668,9 +573,9 @@ def subtract_chunk(
             channel_index,
             detection_threshold=detection_threshold,
             peak_sign=peak_sign,
-            relative_peak_channel_index=relative_peak_channel_index,
-            spatial_dedup_channel_index=spatial_dedup_channel_index,
-            spatial_dedup_rel_inds=spatial_dedup_rel_inds,
+            peak_channel_index=peak_channel_index,
+            dedup_channel_index=dedup_channel_index,
+            dedup_rel_inds=dedup_rel_inds,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             left_margin=left_margin,
@@ -706,8 +611,8 @@ def subtract_chunk(
     assert 0 <= left_margin < traces.shape[0]
     assert 0 <= right_margin < traces.shape[0]
     assert traces.shape[1] == channel_index.shape[0]
-    if spatial_dedup_channel_index is not None:
-        assert traces.shape[1] == spatial_dedup_channel_index.shape[0]
+    if dedup_channel_index is not None:
+        assert traces.shape[1] == dedup_channel_index.shape[0]
 
     # can only subtract spikes with trough time >=trough_offset and <max_trough
     post_trough_samples = spike_length_samples - trough_offset_samples
@@ -746,7 +651,7 @@ def subtract_chunk(
         times_samples, channels = detect_and_deduplicate(  # type: ignore
             residual_det,
             detection_threshold,
-            relative_peak_channel_index=relative_peak_channel_index,
+            peak_channel_index=peak_channel_index,
             dedup_channel_index=channel_index,
             peak_sign=peak_sign,
             relative_peak_radius=relative_peak_radius,
@@ -787,8 +692,8 @@ def subtract_chunk(
         # never look at these again.
         time_ix = times_samples.unsqueeze(1) + dedup_temporal_ix
         time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
-        if spatial_dedup_channel_index is not None:
-            chan_ix = spatial_dedup_channel_index[channels]
+        if dedup_channel_index is not None:
+            chan_ix = dedup_channel_index[channels]
         else:
             chan_ix = channels.unsqueeze(1)
         detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
@@ -799,8 +704,8 @@ def subtract_chunk(
             (neg,) = (voltages < 0).nonzero(as_tuple=True)
             time_ix = times_samples[neg].unsqueeze(1) + pos_dedup_temporal_ix
             time_ix = time_ix.clamp_(0, traces.shape[0] - 1)
-            if spatial_dedup_channel_index is not None:
-                chan_ix = spatial_dedup_channel_index[channels[neg]]
+            if dedup_channel_index is not None:
+                chan_ix = dedup_channel_index[channels[neg]]
             else:
                 chan_ix = channels[neg].unsqueeze(1)
 

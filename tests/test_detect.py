@@ -39,7 +39,7 @@ def test_detect_and_deduplicate(dedup_exact):
     desired_times = np.concatenate([desired_times, desired_times + 10000])
     desired_times.sort()
 
-    times, chans = detect_and_deduplicate(
+    times, chans = detect_and_deduplicate(  # type: ignore
         torch.tensor(x),
         threshold=threshold,
         peak_sign="both",
@@ -53,7 +53,7 @@ def test_detect_and_deduplicate(dedup_exact):
     assert times.shape == chans.shape
     assert len(times.shape) == 1
 
-    times2, chans2 = detect_and_deduplicate(
+    times2, chans2 = detect_and_deduplicate(  # type: ignore
         torch.tensor(x),
         threshold=threshold,
         peak_sign="pos",
@@ -65,7 +65,7 @@ def test_detect_and_deduplicate(dedup_exact):
     assert np.array_equal(times.numpy(), times2.numpy())
     assert np.array_equal(chans.numpy(), chans2.numpy())
 
-    times, chans = detect_and_deduplicate(
+    times, chans = detect_and_deduplicate(  # type: ignore
         torch.tensor(x),
         threshold=threshold,
         peak_sign="neg",
