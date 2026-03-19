@@ -6,7 +6,7 @@ from itertools import repeat
 from pathlib import Path
 from sys import getrefcount
 from threading import Lock, local
-from typing import Any, Literal, TypedDict, overload, Sequence, cast
+from typing import Any, TypedDict
 
 import h5py
 import numpy as np
@@ -14,6 +14,7 @@ import torch
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from tqdm.auto import tqdm
+from scipy.stats.qmc import MultinomialQMC
 
 from ..transform import WaveformPipeline
 from ..util import job_util
@@ -23,6 +24,7 @@ from ..util.data_util import (
     extract_random_snips,
     subsample_waveforms,
 )
+from ..util.internal_config import FitSamplingConfig, default_peeling_fit_sampling_cfg
 from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
@@ -51,12 +53,7 @@ class BasePeeler(BModule):
         featurization_pipeline: WaveformPipeline | None = None,
         chunk_length_samples=30_000,
         chunk_margin_samples=0,
-        n_seconds_fit=40,
-        max_waveforms_fit=50_000,
-        n_waveforms_fit=20_000,
-        fit_max_reweighting=4.0,
-        fit_sampling: Literal["random", "amp_reweighted"] = "random",
-        fit_subsampling_random_state: int | np.random.Generator = 0,
+        fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         trough_offset_samples=42,
         spike_length_samples=121,
         fixed_property_keys=("channels",),
@@ -68,13 +65,11 @@ class BasePeeler(BModule):
         self.recording = recording
         self.chunk_length_samples: int = chunk_length_samples
         self.chunk_margin_samples: int = chunk_margin_samples
-        self.n_seconds_fit: int = n_seconds_fit
-        self.max_waveforms_fit: int = max_waveforms_fit
-        self.n_waveforms_fit: int = n_waveforms_fit
         self.trough_offset_samples: int = trough_offset_samples
         self.spike_length_samples: int = spike_length_samples
+        self.fit_sampling_cfg = fit_sampling_cfg
         self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
-            fit_subsampling_random_state
+            fit_sampling_cfg.fit_subsampling_random_state
         )
         self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
@@ -82,8 +77,6 @@ class BasePeeler(BModule):
             channel_index = torch.asarray(channel_index, copy=True).contiguous()
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
-        self.fit_sampling: Literal["random", "amp_reweighted"] = fit_sampling
-        self.fit_max_reweighting: float = fit_max_reweighting
         self.featurization_pipeline: WaveformPipeline | None = featurization_pipeline
         self.fixed_property_keys: tuple[str] | list[str] = fixed_property_keys
 
@@ -636,10 +629,10 @@ class BasePeeler(BModule):
                 # in case of an issue or a keyboard interrupt
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
-                    fit_sampling=self.fit_sampling,
+                    fit_sampling=self.fit_sampling_cfg.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
-                    n_waveforms_fit=self.n_waveforms_fit,
-                    fit_max_reweighting=self.fit_max_reweighting,
+                    n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
+                    fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="peeled_voltages_fit",
                     waveforms_dataset_name="peeled_waveforms_fit",
                     fixed_property_keys=self.fixed_property_keys,
@@ -685,9 +678,8 @@ class BasePeeler(BModule):
             t_end = T_samples
         if t_start is None:
             t_start = 0
-        chunk_starts_samples = range(t_start, t_end, chunk_length_samples)
+        chunk_starts_samples = np.arange(t_start, t_end, chunk_length_samples)
         if skip_last:
-            chunk_starts_samples = list(chunk_starts_samples)
             if t_end - chunk_starts_samples[-1] < chunk_length_samples:
                 chunk_starts_samples = chunk_starts_samples[:-1]
 
@@ -697,15 +689,25 @@ class BasePeeler(BModule):
         if n_chunks is None:
             chunks_per_second = self.recording.sampling_frequency / chunk_length_samples
             n_chunks = int(np.ceil(self.n_seconds_fit * chunks_per_second))
+        n_chunks = min(len(chunk_starts_samples), n_chunks)
 
         # make a random subset of chunks to use for fitting
         rg = np.random.default_rng(self.fit_subsampling_random_state)
         self.fit_subsampling_random_state = rg
-        chunk_starts_samples = rg.choice(
-            chunk_starts_samples,
-            size=min(len(chunk_starts_samples), n_chunks),
-            replace=False,
-        )
+        if self.fit_sampling_cfg.chunk_sampling == "random":
+            chunk_starts_samples = rg.choice(
+                chunk_starts_samples, size=n_chunks, replace=False
+            )
+        elif self.fit_sampling_cfg.chunk_sampling == "qmc":
+            # avoid unlucky bunching. this is just for fun.
+            p = np.full(len(chunk_starts_samples), 1.0 / len(chunk_starts_samples))
+            x = MultinomialQMC(pvals=p, n_trials=1, rng=rg).random(n_chunks)
+            _, ichunk = x.nonzero()
+            assert ichunk.shape == (n_chunks,)
+            assert np.unique(ichunk).shape == (n_chunks,)
+            chunk_starts_samples = chunk_starts_samples[ichunk]
+        else:
+            assert False
         if ordered:
             chunk_starts_samples.sort()
         return chunk_starts_samples

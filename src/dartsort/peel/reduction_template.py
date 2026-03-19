@@ -295,10 +295,7 @@ class TemplateReduction(GrabAndFeaturize):
             featurization_pipeline=fp,
             fixed_properties=fixed_properties,
             chunk_length_samples=template_cfg.grab_chunk_length_samples,
-            n_waveforms_fit=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
-            max_waveforms_fit=template_cfg.denoising_fit_sampling_cfg.max_waveforms_fit,
-            fit_sampling=template_cfg.denoising_fit_sampling_cfg.fit_sampling,
-            n_seconds_fit=template_cfg.denoising_fit_sampling_cfg.n_seconds_fit,
+            fit_sampling_cfg=template_cfg.denoising_fit_sampling_cfg,
             trough_offset_samples=waveform_cfg.trough_offset_samples(
                 recording.sampling_frequency
             ),

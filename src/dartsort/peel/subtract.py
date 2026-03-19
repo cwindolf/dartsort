@@ -94,12 +94,7 @@ class SubtractionPeeler(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=chunk_length_samples,
             chunk_margin_samples=self.next_margin(2 * spike_length_samples),
-            n_seconds_fit=fit_sampling_cfg.n_seconds_fit,
-            max_waveforms_fit=fit_sampling_cfg.max_waveforms_fit,
-            fit_subsampling_random_state=fit_sampling_cfg.fit_subsampling_random_state,
-            n_waveforms_fit=fit_sampling_cfg.n_waveforms_fit,
-            fit_max_reweighting=fit_sampling_cfg.fit_max_reweighting,
-            fit_sampling=fit_sampling_cfg.fit_sampling,
+            fit_sampling_cfg=fit_sampling_cfg,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             fixed_property_keys=fixed_property_keys,
@@ -131,9 +126,7 @@ class SubtractionPeeler(BasePeeler):
         self.residnorm_decrease_threshold = residnorm_decrease_threshold
         self.temporal_dedup_radius_samples = temporal_dedup_radius_samples
         self.remove_exact_duplicates = remove_exact_duplicates
-        self.positive_temporal_dedup_radius_samples = (
-            positive_temporal_dedup_radius_samples
-        )
+        self.pos_dedup_samples = positive_temporal_dedup_radius_samples
         self.trough_priority = trough_priority
         self.growth_tolerance = growth_tolerance
         self.convexity_threshold = convexity_threshold
@@ -363,7 +356,7 @@ class SubtractionPeeler(BasePeeler):
             dedup_batch_size=self.dedup_batch_size,
             dedup_temporal_radius=self.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.remove_exact_duplicates,
-            pos_dedup_temporal_radius=self.positive_temporal_dedup_radius_samples,
+            pos_dedup_temporal_radius=self.pos_dedup_samples,
             residnorm_decrease_threshold=self.residnorm_decrease_threshold,
             decrease_objective=self.decrease_objective,
             trough_priority=self.trough_priority,
@@ -523,10 +516,10 @@ class SubtractionPeeler(BasePeeler):
                 # in case of an issue or a keyboard interrupt
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
-                    fit_sampling=self.fit_sampling,
-                    random_state=self.fit_subsampling_random_state,
-                    n_waveforms_fit=self.n_waveforms_fit,
-                    fit_max_reweighting=self.fit_max_reweighting,
+                    fit_sampling=self.fit_sampling_cfg.fit_sampling,
+                    random_state=self.fit_sampling_cfg.fit_subsampling_random_state,
+                    n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
+                    fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",
                     waveforms_dataset_name="subtract_fit_waveforms",
                     device="cpu" if which == "denoisers" else device,
@@ -598,10 +591,10 @@ class SubtractionPeeler(BasePeeler):
                 device = computation_cfg.actual_device()
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
-                    fit_sampling=self.fit_sampling,
+                    fit_sampling=self.fit_sampling_cfg.fit_sampling,
                     random_state=self.fit_subsampling_random_state,
                     n_waveforms_fit=self.first_denoiser_max_waveforms_fit,
-                    fit_max_reweighting=self.fit_max_reweighting,
+                    fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="voltages",
                     waveforms_dataset_name="waveforms",
                     subsample_by_weighting=True,

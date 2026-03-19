@@ -11,6 +11,7 @@ from ..util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
     WaveformConfig,
+    default_peeling_fit_sampling_cfg,
 )
 from ..util.waveform_util import make_channel_index
 from .peel_base import (
@@ -37,11 +38,7 @@ class GrabAndFeaturize(BasePeeler):
         trough_offset_samples=42,
         spike_length_samples=121,
         chunk_length_samples=30_000,
-        n_waveforms_fit=20_000,
-        max_waveforms_fit=50_000,
-        fit_sampling: Literal["random", "amp_reweighted"] = "random",
-        n_seconds_fit=40,
-        fit_subsampling_random_state: int | np.random.Generator = 0,
+        fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         dtype=torch.float,
     ):
         fixed_properties = fixed_properties or {}
@@ -56,11 +53,7 @@ class GrabAndFeaturize(BasePeeler):
             ),
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
-            n_seconds_fit=n_seconds_fit,
-            fit_subsampling_random_state=fit_subsampling_random_state,
-            n_waveforms_fit=n_waveforms_fit,
-            max_waveforms_fit=max_waveforms_fit,
-            fit_sampling=fit_sampling,
+            fit_sampling_cfg=fit_sampling_cfg,
             fixed_property_keys=fixed_property_keys,
             dtype=dtype,
         )
@@ -153,11 +146,7 @@ class GrabAndFeaturize(BasePeeler):
             chunk_length_samples=chunk_length_samples,
             fixed_properties=fixed_properties,
             dtype=torch.float,
-            n_seconds_fit=sampling_cfg.n_seconds_fit,
-            n_waveforms_fit=sampling_cfg.n_waveforms_fit,
-            max_waveforms_fit=sampling_cfg.max_waveforms_fit,
-            fit_subsampling_random_state=sampling_cfg.fit_subsampling_random_state,
-            fit_sampling=sampling_cfg.fit_sampling,
+            fit_sampling_cfg=sampling_cfg,
         )
 
     def peel_chunk(

@@ -252,6 +252,7 @@ class FitSamplingConfig:
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
+    chunk_sampling: Literal["random", "qmc"] = "qmc"
 
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
