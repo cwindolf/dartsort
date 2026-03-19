@@ -608,6 +608,8 @@ class TMMParams:
     robust_strategy: RobustnessStrategy
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
+    kmeans_tries: int
+    kmeanspp_tries: int
 
     @classmethod
     def from_refinement_cfg(cls, refinement_cfg: RefinementConfig):
@@ -620,6 +622,8 @@ class TMMParams:
             min_count=refinement_cfg.min_count,
             split_min_count=refinement_cfg.split_min_count,
             split_k=refinement_cfg.kmeansk,
+            kmeans_tries=refinement_cfg.kmeans_tries,
+            kmeanspp_tries=refinement_cfg.kmeanspp_tries,
             min_channel_count=refinement_cfg.channels_count_min,
             em_iters=refinement_cfg.n_em_iters,
             criterion_em_iters=refinement_cfg.criterion_em_iters,
@@ -2544,6 +2548,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
             feature_rank=self.noise.rank,
             min_count=self.p.split_min_count,
             min_channel_count=self.p.min_channel_count,
+            n_kmeans_tries=self.p.kmeans_tries,
+            n_kmeanspp_tries=self.p.kmeanspp_tries,
             bail_at=int(single),
             weights=split_data.duties,
             debug=debug,

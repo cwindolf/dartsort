@@ -679,6 +679,8 @@ class RefinementConfig:
     mixture_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
+    kmeans_tries: int = 25
+    kmeanspp_tries: int = 25
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
     robust_strategy: Literal["none", "fixed"] = "none"
