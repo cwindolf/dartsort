@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dartsort"
 dynamic = ["version"]
-authors = [{ name = "Charlie Windolf", email = "ciw2107@columbia.edu" }]
+authors = [{ name = "Charlie Windolf", email = "ciw2048@gmail.com" }]
 description = "DARTsort"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
+  "dredge-ephys",
   "h5py",
   "jaxtyping",
   "linear_operator",
