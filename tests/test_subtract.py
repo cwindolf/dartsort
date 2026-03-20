@@ -19,6 +19,7 @@ from test_util import dense_layout
 
 fixedlenkeys = (
     "subtract_channel_index",
+    "sub_channel_index",
     "channel_index",
     "geom",
     "residual",
@@ -397,11 +398,15 @@ def test_small_nonn(tmp_path, nn_localization):
         )
         assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
-            lens = []
+            l = None
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
-            assert np.unique(lens).size == 1
+                if k in fixedlenkeys: continue
+                ds = cast(h5py.Dataset, h5[k])
+                if ds.ndim < 1:
+                    continue
+                if l is None:
+                    l = ds.shape[0]
+                assert l == ds.shape[0], f"{k} {l}, {ds}"
 
     print("CPU parallel")
     with tempfile.TemporaryDirectory(
