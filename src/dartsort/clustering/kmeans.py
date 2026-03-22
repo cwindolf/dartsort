@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 
 def kmeanspp(
-    X,
+    X: Tensor,
     weights: Tensor | None = None,
     n_components=10,
     random_state: np.random.Generator | torch.Generator | int = 0,
@@ -37,7 +37,6 @@ def kmeanspp(
     mode_dim=2,
     skip_assignment=False,
     min_distance=None,
-    initial_distances=None,
     Xnormsq: Tensor | None = None,
 ):
     """K-means++ initialization
@@ -45,34 +44,17 @@ def kmeanspp(
     Start at a random point (kmeanspp_initial=='random') or at the point
     farthest from the mean (kmeanspp_initial=='mean').
     """
-    X = torch.asarray(X)
     n, p = X.shape
     n_components = min(n, n_components)
-
-    if isinstance(random_state, torch.Generator):
-        gen = random_state
-    else:
-        rg = np.random.default_rng(random_state)
-        gen = spawn_torch_rg(rg, device=X.device)
-
-    has_initial_dists = initial_distances is not None
+    gen = spawn_torch_rg(random_state, device=X.device)
 
     centroid_ixs = torch.full((n_components,), n, dtype=torch.long, device=X.device)
-    dists = None
-    if has_initial_dists:
-        assert weights is None, "Not implemented."
-        idists = torch.asarray(initial_distances, dtype=X.dtype, device=X.device)
-    else:
-        idists = None
 
     if kmeanspp_initial == "random":
         if weights is not None:
             centroid_ixs[0] = torch.multinomial(weights, 1, generator=gen)
-        elif dists is None:
-            centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
         else:
-            assert idists is not None
-            centroid_ixs[0] = torch.multinomial(idists, 1, generator=gen)
+            centroid_ixs[0] = torch.randint(n, size=(), device=X.device, generator=gen)
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
@@ -91,23 +73,19 @@ def kmeanspp(
     if Xnormsq is None:
         Xnormsq = torch.square(X).sum(1)
 
-    if dists is None:
-        dists = X.new_zeros(len(X))
-    dists = _sqeuc(X, Xnormsq[:, None], Y=X[centroid_ixs[0]][None], out=dists[:, None])[
-        :, 0
-    ]
-    assignments = None
-    if not skip_assignment:
-        assignments = torch.zeros((n,), dtype=torch.long, device=X.device)
+    dists_ = X.new_zeros(len(X))[:, None]
+    dists = _sqeuc(X, Xnormsq[:, None], Y=X[centroid_ixs[0]][None], out=dists_)[:, 0]
+    if skip_assignment:
+        assignments = None
+    else:
+        assignments = X.new_zeros((n,), dtype=torch.long)
 
     if weights is None:
         p = dists.clone()
     else:
         p = dists * weights
 
-    simple_case = (
-        (not has_initial_dists) and (not min_distance) and (not skip_assignment)
-    )
+    simple_case = (not min_distance) and (not skip_assignment)
     if simple_case:
         _kmeanspp_simple_loop(
             X=X,
@@ -120,13 +98,20 @@ def kmeanspp(
             assignments=assignments,
         )
         j = n_components
+    elif not min_distance:
+        _kmeanspp_noassign_loop(
+            X=X,
+            Xnormsq=Xnormsq,
+            dists=dists,
+            p=p,
+            weights=weights,
+            centroid_ixs=centroid_ixs,
+            gen=gen,
+        )
+        j = n_components
     else:
         for j in range(1, n_components):
-            if has_initial_dists:
-                assert idists is not None
-                assert weights is None
-                torch.minimum(dists, idists, out=p)
-            elif weights is not None:
+            if weights is not None:
                 torch.mul(dists, weights, out=p)
             else:
                 p.copy_(dists)
@@ -152,7 +137,6 @@ def kmeanspp(
 
     centroid_ixs = centroid_ixs[:j]
     if not skip_assignment:
-        assignments = assignments
         centroid_ixs = centroid_ixs.to(assignments)
     if weights is None:
         phi = dists.mean()
@@ -175,7 +159,6 @@ def truncated_kmeans(
     sigma_atol=1e-3,
     batch_size=2048,
     dcc_batch_size=64,
-    noise_const_dims=None,
     with_log_likelihoods=False,
     device=None,
     show_progress=False,
@@ -199,10 +182,6 @@ def truncated_kmeans(
         it = trange(n_initializations, desc="kmeans++")
     else:
         it = range(n_initializations)
-    initial_distances = None
-    if noise_const_dims is not None:
-        noise_dims = np.setdiff1d(np.arange(X.shape[1]), noise_const_dims)
-        initial_distances = X[:, noise_dims].square().sum(1)
     for _ in it:
         _c, _l, _d, _p = kmeanspp(
             X,
@@ -210,7 +189,6 @@ def truncated_kmeans(
             random_state=gen,
             kmeanspp_initial="random",
             min_distance=kmeanspp_min_dist,
-            initial_distances=initial_distances,
         )
         if _p < sigmasq:
             sigmasq = _p
@@ -362,6 +340,7 @@ def truncated_kmeans(
 
 def kmeans_inner(
     X,
+    *,
     n_kmeanspp_tries=5,
     n_iter=100,
     n_components=10,
@@ -369,7 +348,7 @@ def kmeans_inner(
     weights: Tensor | None = None,
     kmeanspp_initial="random",
     with_proportions=False,
-    drop_prop=0.025,
+    drop_prop: Tensor,
     test_convergence_every=10,
     atol=1e-5,
     X_normsq: Tensor | None = None,
@@ -390,12 +369,12 @@ def kmeans_inner(
             random_state=random_state,
             kmeanspp_initial=kmeanspp_initial,
             Xnormsq=X_normsq,
+            skip_assignment=bool(n_iter),
         )
         if phi < best_phi:
             centroid_ixs = _centroid_ixs
             labels = _labels
             best_phi = phi
-    assert labels is not None
 
     centroids = X[centroid_ixs]
 
@@ -408,6 +387,7 @@ def kmeans_inner(
     # responsibilities, sum to 1 over centroids
     e = F.softmax(-0.5 * dists, dim=1)
     if not n_iter:
+        assert labels is not None
         return labels, e, centroids, dists
 
     e, centroids, dists, proportions = _kmeans_main_loop(
@@ -425,7 +405,7 @@ def kmeans_inner(
     )
     (keep,) = proportions.nonzero(as_tuple=True)
     if not keep.numel():
-        return torch.full_like(labels, 0), None, None, None
+        return X.new_full(X.shape[0], 0, dtype=torch.long), None, None, None
     e = e[:, keep]
     e.div_(e.sum(1, keepdim=True))
     centroids = centroids[keep]
@@ -436,7 +416,7 @@ def kmeans_inner(
 
 
 def kmeans(
-    X,
+    X: Tensor,
     n_kmeans_tries=5,
     n_kmeanspp_tries=5,
     n_iter=100,
@@ -452,10 +432,14 @@ def kmeans(
     best_phi = np.inf
     if isinstance(random_state, int):
         random_state = np.random.default_rng(random_state)
-    assignments = torch.zeros(len(X), dtype=torch.long)
+    random_state = spawn_torch_rg(random_state, device=X.device)
+    assignments = X.new_zeros(X.shape[:1], dtype=torch.long)
     e = centroids = dists = None
     X_normsq = torch.linalg.norm(X, dim=1).square_()
     drop_prop = max(drop_prop, drop_sum / len(X))
+    drop_prop = X.new_full((), drop_prop)
+    if weights is not None:
+        weights = weights.to(device=X.device)
     with torch.jit.optimized_execution(True):  # type: ignore
         for j in range(n_kmeans_tries):
             aa, ee, cc, dists = kmeans_inner(
@@ -477,7 +461,7 @@ def kmeans(
             phi = (ee * dists).sum(1).mean().numpy(force=True)
             if phi < best_phi:
                 best_phi = phi
-                assignments = aa
+                assignments = aa.clone()
                 e = ee
                 centroids = cc
     return dict(
@@ -485,17 +469,33 @@ def kmeans(
     )
 
 
+def subylogneglog_(x, z):
+    return x.sub_(z.log_().neg_().log_())
+
+
+subylogneglog_ = torch.func.vmap(subylogneglog_, chunk_size=1)
+
+
 @torch.jit.script
 def _one_gumbel_nolog(p: Tensor, gen: torch.Generator, buf: Tensor):
-    x = p.log_()
-    z = torch.rand(size=x.shape, generator=gen, out=buf)
-    return x.sub_(z.log_().neg_().log_()).argmax()
+    z = buf.uniform_(generator=gen).log_()
+    return torch.divide(p, z, out=z).argmin(dim=0)
+    # return p.log_().sub_(z.log_().neg_().log_()).argmax()
 
 
 @torch.jit.script
 def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
-    out = torch.addmm(Xnormsq, X, Y.t(), alpha=-2.0, out=out)
-    Ynormsq = Y.square().sum(1)
+    torch.addmm(Xnormsq, X, Y.transpose(0, 1), alpha=-2.0, out=out)
+    Ynormsq = (Y**2).sum(dim=1)
+    out.add_(Ynormsq)
+    return out
+
+
+@torch.jit.script
+def _sqeuc_ysqknown(
+    X: Tensor, Xnormsq: Tensor, Y: Tensor, Ynormsq: Tensor, out: Tensor
+):
+    torch.addmm(Xnormsq, X, Y.transpose(0, 1), alpha=-2.0, out=out)
     out.add_(Ynormsq)
     return out
 
@@ -515,9 +515,12 @@ def _kmeanspp_simple_loop(
     buf = torch.empty_like(p)
     buf_ = buf[:, None]
     Xnormsq = Xnormsq[:, None]
+    closer = X.new_zeros(X.shape[:1], dtype=torch.bool)
+    cent = torch.zeros_like(X[:1])
+    cnormsq = torch.zeros_like(Xnormsq[:1])
     for j in range(1, centroid_ixs.shape[0]):
         if weights is None:
-            p.copy_(dists)
+            p = dists
         else:
             torch.mul(dists, weights, out=p)
 
@@ -525,11 +528,45 @@ def _kmeanspp_simple_loop(
         cj = _one_gumbel_nolog(p, gen, buf)
         centroid_ixs[j] = cj
 
-        cent = X[cj : cj + 1]
-        newdists = _sqeuc(X, Xnormsq, cent, out=buf_)[:, 0]
+        torch.index_select(X, dim=0, index=cj, out=cent)
+        torch.index_select(Xnormsq, dim=0, index=cj, out=cnormsq)
+        newdists = _sqeuc_ysqknown(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
 
-        closer = newdists < dists
+        torch.lt(newdists, dists, out=closer)
         assignments.masked_fill_(closer, j)
+        torch.minimum(dists, newdists, out=dists)
+
+
+@torch.jit.script
+def _kmeanspp_noassign_loop(
+    *,
+    X: Tensor,
+    Xnormsq: Tensor,
+    dists: Tensor,
+    p: Tensor,
+    weights: Tensor | None,
+    centroid_ixs: Tensor,
+    gen: torch.Generator,
+):
+    buf = torch.empty_like(p)
+    buf_ = buf[:, None]
+    Xnormsq = Xnormsq[:, None]
+    cent = torch.zeros_like(X[:1])
+    cnormsq = torch.zeros_like(Xnormsq[:1])
+    for j in range(1, centroid_ixs.shape[0]):
+        if weights is None:
+            p = dists
+        else:
+            torch.mul(dists, weights, out=p)
+
+        # centroid_ixs[j : j + 1] = torch.multinomial(p, 1, generator=gen)
+        cj = _one_gumbel_nolog(p, gen, buf)
+        centroid_ixs[j] = cj
+
+        torch.index_select(X, dim=0, index=cj, out=cent)
+        torch.index_select(Xnormsq, dim=0, index=cj, out=cnormsq)
+        newdists = _sqeuc_ysqknown(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
+
         torch.minimum(dists, newdists, out=dists)
 
 
@@ -537,7 +574,7 @@ def _kmeanspp_simple_loop(
 def _kmeans_main_loop(
     n_iter: int,
     e: Tensor,
-    drop_prop: float,
+    drop_prop: Tensor,
     test_convergence_every: int,
     atol: float,
     X: Tensor,
@@ -547,14 +584,19 @@ def _kmeans_main_loop(
     with_proportions: bool,
     centroids: Tensor,
 ):
-    K = e.shape[1]
     check_prop = bool(drop_prop)
-    proportions = e.mean(0)
-    phi = e.new_full((), torch.inf)
+    phi = e.new_full((), torch.nan)
+    N = e.sum(dim=0)
+    Ntot = e.new_full((), float(e.shape[0]))
+    proportions = N / Ntot
+    maskb = torch.zeros(proportions.shape, dtype=torch.bool, device=X.device)
+    mask = proportions.clone()
+    _1 = torch.ones_like(mask)
+    _0 = torch.zeros_like(mask)
     for j in range(n_iter):
         # update centroids
-        w = e / e.sum(0)
-        centroids = torch.mm(w.T, X, out=centroids)
+        w = e.div_(N)
+        centroids = torch.mm(w.transpose(0, 1), X, out=centroids)
 
         # e step
         dists = _sqeuc(X, Xnormsq, centroids, dists)
@@ -562,25 +604,29 @@ def _kmeans_main_loop(
             dists.mul_(weights)
 
         if with_proportions:
-            e = F.softmax(-0.5 * dists + proportions.log(), dim=1)
+            torch.add(proportions.log_(), dists, alpha=-0.5, out=e)
+            e = F.softmax(e, dim=1)
         else:
-            e = F.softmax(-0.5 * dists, dim=1)
-        proportions = e.mean(0)
+            e = F.softmax(dists.mul_(-0.5), dim=1)
+        N = torch.sum(e, dim=0, out=N)
+        torch.div(N, Ntot, out=proportions)
 
         if check_prop:
-            maskb = proportions > drop_prop
-            mask = maskb.to(e)
+            torch.gt(proportions, drop_prop, out=maskb)
+            torch.where(maskb, _1, _0, out=mask)
             e.mul_(mask)
             proportions.mul_(mask)
 
-        if test_convergence_every and j:
-            test = (not j % test_convergence_every) or (
-                not (j + 1) % test_convergence_every
-            )
-            if test:
-                phi_ = (e @ dists.T).mean()
-                done = torch.isclose(phi, phi_, atol=atol) or phi_.abs() < atol
-                phi = phi_
-                if done:
-                    break
+        if not test_convergence_every:
+            continue
+        elif j == 0:
+            phi = dists.mul_(e).sum(1).mean()
+            continue
+        elif j % test_convergence_every in (0, test_convergence_every - 1):
+            phi_ = dists.mul_(e).sum(1).mean()
+            done = torch.isclose(phi, phi_, atol=atol) or phi_.abs() < atol
+            phi = phi_
+            if done:
+                break
+    dists = _sqeuc(X, Xnormsq, centroids, dists)
     return e, centroids, dists, proportions
