@@ -470,7 +470,7 @@ class DARTsortAnalysis:
         assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
 
         which = self.in_unit(unit_id)
-        if self.motion_est is not None:
+        if self.motion_est is not None and hasattr(self.sorting, "channel_index"):
             assert self.z is not None
             assert self.registered_z is not None
             times_seconds = getattr(self.sorting, "times_seconds", None)
@@ -486,7 +486,7 @@ class DARTsortAnalysis:
                 geom=self.geom,
                 registered_geom=self.registered_geom,
                 channels=self.sorting.channels[which],
-                channel_index=self.sorting.channel_index,
+                channel_index=self.sorting.channel_index,  # type: ignore
                 n_pitches_shift=n_pitches_shift,
             )[0]
         else:

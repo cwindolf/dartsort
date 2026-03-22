@@ -108,7 +108,9 @@ class ReductionTemplateData(TemplateData):
             )
 
             # extract outputs and handle denoising method
-            count, raw_mean, raw_std, svd_mean = p.reduction_results(h5p)
+            count, raw_mean, raw_std, svd_mean = p.reduction_results(
+                h5p, show_progress=show_progress
+            )
 
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
         unit_ids = sorting.unit_ids
@@ -314,7 +316,7 @@ class TemplateReduction(GrabAndFeaturize):
         return tsvd
 
     def reduction_results(
-        self, hdf5_path: Path
+        self, hdf5_path: Path, show_progress: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
         # get raw and svd transformers
         assert self.featurization_pipeline is not None
@@ -340,13 +342,13 @@ class TemplateReduction(GrabAndFeaturize):
 
         if raw_f is not None:
             counts, raw_mean, raw_std = raw_f.reduction_results(
-                hdf5_path=hdf5_path, labels=self.b.labels
+                hdf5_path=hdf5_path, labels=self.b.labels, show_progress=show_progress
             )
         else:
             counts = raw_mean = raw_std = None
         if svd_f is not None:
             svd_counts, svd_mean, svd_std = svd_f.reduction_results(
-                hdf5_path=hdf5_path, labels=self.b.labels
+                hdf5_path=hdf5_path, labels=self.b.labels, show_progress=show_progress
             )
         else:
             svd_counts = svd_mean = svd_std = None

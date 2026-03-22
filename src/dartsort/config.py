@@ -138,7 +138,7 @@ class DARTsortUserConfig:
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
     amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
-    temporal_upsamples: Annotated[int, Field(ge=1)] = 8
+    temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
     do_motion_estimation: bool = argfield(
@@ -218,7 +218,7 @@ class DeveloperConfig(DARTsortUserConfig):
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "none"
-    whiten_estimator: WhiteningEstimator = "fullzca"
+    whiten_estimator: WhiteningEstimator = "localzca"
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
 
@@ -268,7 +268,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_later_refinement_iters: int = 1
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
-    gmm_cl_alpha: float = 1.0
+    gmm_cl_alpha: float = 0.0
     gmm_em_atol: float = 5e-3
     gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
     gmm_n_candidates: int = 3

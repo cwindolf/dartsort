@@ -340,13 +340,13 @@ class ThresholdingConfig:
 
 
 WhiteningStrategy = Literal["none", "prewhiten", "postwhiten"]
-WhiteningEstimator = Literal["fullzca", "winterlocal", "sparsechol"]
+WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 
 
 @cfg_dataclass
 class WhiteningConfig:
     strategy: WhiteningStrategy = "none"
-    estimator: WhiteningEstimator = "fullzca"
+    estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = default_template_interpolation_params
     radius: float = 200.0
 
@@ -473,7 +473,7 @@ class MatchingConfig:
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 10
-    up_factor: int = 8
+    up_factor: int = 4
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 0
@@ -647,7 +647,7 @@ class RefinementConfig:
     signal_rank: int = 3
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
-    cl_alpha: float = 1.0
+    cl_alpha: float = 0.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
@@ -669,8 +669,8 @@ class RefinementConfig:
     mixture_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
-    kmeans_tries: int = 25
-    kmeanspp_tries: int = 25
+    kmeans_tries: int = 5
+    kmeanspp_tries: int = 5
     full_proposal_every: int = 10
     search_adj: Literal["top", "explore"] = "top"
     robust_strategy: Literal["none", "fixed"] = "none"

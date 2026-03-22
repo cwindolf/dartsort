@@ -34,7 +34,7 @@ class WaveformInterpolator(BaseWaveformDenoiser):
         geom = torch.asarray(geom, dtype=torch.float)
         rgeom = torch.asarray(rgeom, dtype=torch.float)
         params = params.normalize()
-        logger.dartsortdebug(
+        logger.dartsortverbose(
             "Make WaveformInterpolator with method=%s, kernel=%s, and %s extrap.",
             params.method,
             params.kernel,

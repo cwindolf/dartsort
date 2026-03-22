@@ -1437,10 +1437,10 @@ def fullzca_whitener(
     return (vecs * wv) @ vecs.T
 
 
-def winterlocal_whitener(
+def localzca_whitener(
     cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
 ) -> np.ndarray:
-    """Olivier Winter's local whitener developed for iblsorter, also used in Kilosort 4"""
+    """"""
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
         chans = chans[chans < len(channel_index)]
@@ -1474,7 +1474,7 @@ def sparsechol_whitener(
 # these should be left-side whiteners, meaning precision = W'W
 whitening_estimators = {
     "fullzca": fullzca_whitener,
-    "winterlocal": winterlocal_whitener,
+    "localzca": localzca_whitener,
     "sparsechol": sparsechol_whitener,
 }
 
@@ -1486,7 +1486,7 @@ class SpatialWhitener(BModule):
 
     @classmethod
     def from_numpy(cls, whitener: np.ndarray):
-        logger.dartsortdebug(f"Load whitener from numpy.")
+        logger.dartsortverbose(f"Load whitener from numpy.")
         return cls(whitener=torch.asarray(whitener))
 
     def to_numpy(self) -> np.ndarray:

@@ -300,9 +300,6 @@ class DARTsortSorting:
             self._check_shape(feature_name, feature)
         if feature_name in self._loaded_persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
-        logger.dartsortverbose(
-            "Register persistent feature %s with shape %s.", feature_name, feature.shape
-        )
         self._loaded_persistent_features.append(feature_name)
         setattr(self, feature_name, feature)
         try:
@@ -310,11 +307,6 @@ class DARTsortSorting:
                 self.parent_h5_path, "r+", libver="latest", locking=False
             ) as h5:
                 if feature_name not in h5:
-                    logger.dartsortverbose(
-                        "Registering persistent feature %s to %s.",
-                        feature_name,
-                        self.parent_h5_path,
-                    )
                     h5.create_dataset(feature_name, data=feature)
         except FileNotFoundError:
             logger.warning(
