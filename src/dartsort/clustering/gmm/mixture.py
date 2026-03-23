@@ -145,23 +145,29 @@ def tmm_demix(
         refinement_cfg.n_total_iters,
     )
     outer_it = -1
+    n_inner_iters = len(refinement_cfg.mixture_steps)
+    allow_blanks = False
     for outer_it in range(refinement_cfg.n_total_iters):
         for inner_it, step_type in enumerate(refinement_cfg.mixture_steps):
             if step_type == "split":
                 run_split(tmm, train_data, val_data, prog_level)
-                tmm.em(train_data, show_progress=prog_level)
+                tmm.em(train_data, show_progress=prog_level, allow_blanks=allow_blanks)
             elif step_type == "merge":
                 run_merge(tmm, train_data, val_data, prog_level)
-                tmm.em(train_data, show_progress=prog_level)
+                tmm.em(train_data, show_progress=prog_level, allow_blanks=allow_blanks)
             elif step_type == "demolish":
                 assert val_data is not None
                 _not_last = outer_it + 1 < refinement_cfg.n_total_iters
+                _not_last = _not_last or (inner_it + 1 < n_inner_iters)
                 _will_em = _not_last or refinement_cfg.em_after_demolish
                 tmm.demolish(
                     train_data, val_data, bool(prog_level), allow_uncovered=not _will_em
                 )
                 if _will_em:
-                    tmm.em(train_data, show_progress=prog_level)
+                    allow_blanks = True
+                    tmm.em(
+                        train_data, show_progress=prog_level, allow_blanks=allow_blanks
+                    )
             else:
                 assert False
             if saving:
@@ -938,6 +944,7 @@ class BatchedSpikeData:
         seed: int | np.random.Generator | None = 0,
         batch_size: int = 128,
         explore_neighb_steps: int = 1,
+        coverage_steps: int = 2,
         neighb_overlap: float = 0.75,
         proposal_is_complete: bool = False,
     ):
@@ -972,6 +979,7 @@ class BatchedSpikeData:
         self.neighborhoods = neighborhoods
         self.neighborhood_ids = neighborhoods.b.neighborhood_ids
         self.explore_neighb_steps = explore_neighb_steps
+        self.coverage_steps = coverage_steps
         if neighb_adj is None:
             self.neighb_adj = neighborhoods.adjacency(neighb_overlap)
         else:
@@ -1108,6 +1116,7 @@ class BatchedSpikeData:
         *,
         allow_new_units: bool,
         allow_uncovered: bool = False,
+        max_steps: int | None = None,
     ):
         self.update_adjacency(n_units=None)
         assert self.candidates is not None
@@ -1122,6 +1131,7 @@ class BatchedSpikeData:
             ensure_coverage_only=True,
             allow_new_units=allow_new_units,
             allow_uncovered=allow_uncovered,
+            max_steps=max_steps if max_steps is not None else self.coverage_steps,
         )
         assert res is None
 
@@ -1633,7 +1643,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         self.candidates[:, self.n_candidates :] = -1
         self.update_adjacency(n_units_new)
         self.ensure_coverage(
-            allow_new_units=not allow_uncovered, allow_uncovered=allow_uncovered
+            allow_new_units=not allow_uncovered,
+            allow_uncovered=allow_uncovered,
+            max_steps=0 if allow_uncovered else None,
         )
         if distances is not None:
             _, lut = self.update(new_top_candidates=None, distances=distances)
@@ -2088,7 +2100,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.fixed_weight_em(data=data, responsibilities=responsibilities)
         return self, valid, data, any_spikes_discarded, keep_mask, keep_spikes
 
-    def em(self, data: TruncatedSpikeData, show_progress: int = 1):
+    def em(
+        self,
+        data: TruncatedSpikeData,
+        show_progress: int = 1,
+        allow_blanks: bool = False,
+    ):
         assert self.lut_params is not None
         if show_progress:
             iters = trange(self.p.em_iters, desc="EM")
@@ -2102,7 +2119,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 step_data = data.full_proposal_view(self.lut)
             else:
                 step_data = data
-            eres = self.e_step(step_data, show_progress=show_progress > 2)
+            eres = self.e_step(
+                step_data, show_progress=show_progress > 2, allow_blanks=allow_blanks
+            )
             elb = eres.stats.elbo.cpu().item()
             assert math.isfinite(elb)
             elbos.append(elb)
@@ -2137,6 +2156,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self,
         data: TruncatedSpikeData | FullProposalDataView,
         show_progress: bool = False,
+        allow_blanks: bool = False,
     ) -> TruncatedEStepResult:
         assert self.lut_params is not None
         candidates = torch.empty(
@@ -2152,8 +2172,13 @@ class TruncatedMixtureModel(BaseMixtureModel):
             skip_noise=False,
         )
         for batch in data.batches(show_progress=show_progress, desc="E"):
-            batch_scores = self.score_batch(batch, data.n_candidates)
-            stats.combine(self.estep_stats_batch(batch, batch_scores), eps=self.eps)
+            batch_scores = self.score_batch(
+                batch, data.n_candidates, allow_blanks=allow_blanks
+            )
+            batch_stats = self.estep_stats_batch(
+                batch, batch_scores, allow_blanks=allow_blanks
+            )
+            stats.combine(batch_stats, eps=self.eps)
             candidates[batch.batch] = batch_scores.candidates
         _finalize_e_stats(
             means=self.b.means,
@@ -2379,6 +2404,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighb_ixs: Tensor | None = None,
         lut_ixs: Tensor | None = None,
         static_size: int | None = None,
+        allow_blanks: bool = False,
     ):
         assert self.lut_params is not None
         assert batch.CmoCooinvx is not None
@@ -2386,7 +2412,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert scores.responsibilities is not None
         if spike_ixs is None:
             spike_ixs, candidate_ixs, unit_ixs, neighb_ixs = _sparsify_candidates(
-                scores.candidates, batch.neighborhood_ids, static_size=static_size
+                scores.candidates,
+                batch.neighborhood_ids,
+                static_size=static_size,
+                allow_blanks=allow_blanks,
             )
             lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
         else:
