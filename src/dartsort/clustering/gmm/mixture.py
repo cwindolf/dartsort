@@ -600,6 +600,7 @@ class TMMParams:
     initial_basis_shrinkage: float
     criterion_em_iters: int
     cl_alpha: float
+    cl_split_only: bool
     latent_prior_std: float
     min_count: int
     min_channel_count: int
@@ -634,6 +635,7 @@ class TMMParams:
             initial_basis_shrinkage=refinement_cfg.initial_basis_shrinkage,
             full_proposal_every=refinement_cfg.full_proposal_every,
             cl_alpha=refinement_cfg.cl_alpha,
+            cl_split_only=refinement_cfg.cl_split_only,
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
@@ -1799,6 +1801,7 @@ class BaseMixtureModel(BModule):
         responsibilities: Tensor | None,
         skip_full: bool = False,
         skip_single: bool = False,
+        use_cl_alpha: bool = True,
         debug: bool = False,
     ) -> GroupMergeResult:
         """Find an optimal partition of this model's units as a whole."""
@@ -1812,6 +1815,7 @@ class BaseMixtureModel(BModule):
             responsibilities=responsibilities,
             skip_full=skip_full,
             skip_single=skip_single,
+            use_cl_alpha=use_cl_alpha,
             debug=debug,
         )
 
@@ -2684,7 +2688,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cix = train_scores.log_liks[:, :n_candidates].argmax(1, keepdim=True)
             train_labels = train_scores.candidates.take_along_dim(cix, dim=1)[:, 0]
             train_indices = split_data.indices
-            n_groups = split_model.n_units
+            n_split = split_model.n_units
             means = split_model.b.means
             bases = split_model.b.bases
             sub_proportions = split_model.b.log_proportions.softmax(dim=0)
@@ -2708,49 +2712,50 @@ class TruncatedMixtureModel(BaseMixtureModel):
         else:
             train_labels = merge_res.train_assignments
             train_indices = merge_res.train_indices
-            n_groups = merge_res.grouping.n_groups
-            means = merge_res.means
-            bases = merge_res.bases
-            sub_proportions = merge_res.sub_proportions
 
             # handle -1s in group ids: requires flattening the train_assignments
             gids = merge_res.grouping.group_ids
-            (gkeep,) = (gids >= 0).nonzero(as_tuple=True)
-            unflat_group_ids, flat_group_ids = gids[gkeep].unique(return_inverse=True)
-            flatspace = torch.full_like(gids, -1)
-            flatspace[gkeep] = flat_group_ids
+            gkeep = (gids >= 0).logical_and_((train_labels == gids.unsqueeze(1)).any(1))
+            (gkeep,) = gkeep.nonzero(as_tuple=True)
+            unflat_group_ids = gids[gkeep].unique()
+            flatspace = gids.new_full((merge_res.grouping.n_groups,), -1)
+            flat_group_ids = torch.arange(unflat_group_ids.numel(), device=gids.device)
+            flatspace[unflat_group_ids] = flat_group_ids
             if pnoid:
-                assert flat_group_ids.max() == unflat_group_ids.numel() - 1
                 assert torch.isin(train_labels, unflat_group_ids).all()
             train_labels = flatspace[train_labels]
             if pnoid:
                 assert (train_labels >= 0).all()
 
-            n_groups = unflat_group_ids.numel()
-            means = means[unflat_group_ids]
-            if bases is not None:
-                bases = bases[unflat_group_ids]
-            sub_proportions = sub_proportions[unflat_group_ids]
+            n_split = unflat_group_ids.numel()
+            means = merge_res.means[unflat_group_ids]
+            if merge_res.bases is not None:
+                bases = merge_res.bases[unflat_group_ids]
+            else:
+                bases = None
+            sub_proportions = merge_res.sub_proportions[unflat_group_ids]
+            sub_proportions /= sub_proportions.sum()
             if pnoid:
                 assert (sub_proportions > 0).all()
                 _psum = sub_proportions.sum()
                 _assert_propclose(_psum, torch.ones_like(_psum))
+                assert train_labels.max() == n_split - 1
 
         if logger.isEnabledFor(DARTSORTVERBOSE):
             _l, _c = train_labels.unique(return_counts=True)
             imp = None if merge_res is None else merge_res.improvement
             logger.dartsortverbose(
-                f"Split {group_str}: {n_groups} parts with improvement {imp}, "
+                f"Split {group_str}: {n_split} parts with improvement {imp}, "
                 f"assigned to {_l.tolist()} with counts {_c.tolist()}."
             )
         if pnoid:
             _lp = sub_proportions.sum()
-            assert sub_proportions.shape == (n_groups,)
+            assert sub_proportions.shape == (n_split,)
             _assert_propclose(_lp, torch.ones_like(_lp))
 
         split_res = SuccessfulSplitCaseResult(
             unit_ids=group,
-            n_split=n_groups,
+            n_split=n_split,
             train_indices=train_indices,
             train_assignments=train_labels,
             means=means,
@@ -2881,6 +2886,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             cur_scores=group_scores,
             responsibilities=None,
             cur_unit_ids=torch.as_tensor(group, device=train_data.x.device),
+            use_cl_alpha=not self.p.cl_split_only,
             debug=debug,
         )
         return group_res
@@ -3027,10 +3033,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
             scores=train_scores, n_units=self.n_units
         )
         mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
+        alpha = 0.0 if self.p.cl_split_only else self.p.cl_alpha
         cur_crit = ecl(
             resps=val_scores.responsibilities,
             log_liks=val_scores.log_liks,
-            cl_alpha=self.p.cl_alpha,
+            cl_alpha=alpha,
         ).item()
 
         # checking this invariant at the top
@@ -3156,6 +3163,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # apply update
         self.b.log_proportions[:] = new_lp.to(self.b.log_proportions)
+        self.b.log_proportions.clamp_(min=self.LP_MIN)
         self._check_logprop()
 
         # now, having done this, re-score train data and do a candidate update
@@ -3418,7 +3426,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 self.b.bases[k0 : k0 + newk] = nb
             k0 += newk
         assert k0 == Knew
-        self._check_logprop()
+        self._check_logprop(allow_neginf=True)
 
         # discard invalidated units, so that many labels need to change
         discard = UnitRemapping.discard_mapping(
@@ -3459,8 +3467,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             train_split_spike_labels=train_labels,
         )
 
-    def _check_logprop(self):
-        assert self.b.log_proportions.isfinite().all()
+    def _check_logprop(self, allow_neginf: bool = False):
+        if not allow_neginf:
+            assert self.b.log_proportions.isfinite().all()
         assert self.noise_log_prop.isfinite()
         _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
         _assert_propclose(_lp, torch.zeros_like(_lp))
@@ -4303,6 +4312,7 @@ def brute_merge(
     cur_unit_ids: Tensor,
     skip_full: bool = False,
     skip_single: bool = False,
+    use_cl_alpha: bool = True,
     max_fit_at_once: int = 16,
     debug: bool = False,
 ) -> GroupMergeResult:
@@ -4403,6 +4413,7 @@ def brute_merge(
     assert crit_full_scores.log_liks.shape[1] in (mm.n_units, mm.n_units + 1)
     assert crit_subset_scores.log_liks.shape[1] == subset_models.n_units
     assert cur_scores.log_liks.shape[0] == crit_full_scores.log_liks.shape[0]
+    alpha = mm.p.cl_alpha if use_cl_alpha else 0.0
     best_part, best_imp = _select_partition(
         cur_unit_ids=cur_unit_ids,
         partitions=partitions,
@@ -4411,7 +4422,7 @@ def brute_merge(
         crit_subset_scores=crit_subset_scores,
         train_full_responsibilities=responsibilities,
         train_subset_responsibilities=subset_resps,
-        cl_alpha=mm.p.cl_alpha,
+        cl_alpha=alpha,
         can_demolish_mask=can_demolish_mask,
         debug=debug,
     )
@@ -4890,11 +4901,12 @@ def evaluate_group_demolitions(
 
     # criterion:
     # loop over possible demolitions, evaluate their improvements, track best
+    alpha = 0.0 if mm.p.cl_split_only else mm.p.cl_alpha
     if cur_crit is None:
         cur_crit = ecl(
             resps=eval_scores.responsibilities,
             log_liks=eval_scores.log_liks,
-            cl_alpha=mm.p.cl_alpha,
+            cl_alpha=alpha,
         ).item()
     assert isinstance(cur_crit, float)
     best_demo = GroupDemolition(
@@ -4904,7 +4916,7 @@ def evaluate_group_demolitions(
         crit = _evaluate_single_demolition(
             orig_log_props=mm.b.log_proportions,
             noise_log_prop=mm.b.noise_log_prop,
-            cl_alpha=mm.p.cl_alpha,
+            cl_alpha=alpha,
             group=group_,
             demolish_mask=demo_mask,
             train_scores=train_scores,

@@ -695,7 +695,6 @@ def gmm_density_peaks(
     max_sigma=5.0,
     sigma_atol=1e-4,
     max_samples=2_000_000,
-    noise_const_dims=None,
     show_progress=True,
     use_hellinger=False,
     mop=True,
@@ -779,7 +778,6 @@ def gmm_density_peaks(
         kmeanspp_min_dist=kmeanspp_min_dist,
         device=device,
         show_progress=show_progress,
-        noise_const_dims=noise_const_dims,
         with_log_likelihoods=mop or not use_hellinger,
         sigma_atol=sigma_atol,
     )

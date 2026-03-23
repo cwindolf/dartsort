@@ -259,7 +259,7 @@ default_clustering_fit_sampling_cfg = FitSamplingConfig(
     max_waveforms_fit=500_000, n_waveforms_fit=500_000
 )
 default_refinement_fit_sampling_cfg = FitSamplingConfig(
-    max_waveforms_fit=1000 * 1024, n_waveforms_fit=1000 * 1024
+    max_waveforms_fit=1500 * 1024, n_waveforms_fit=1500 * 1024
 )
 
 PeakSign = Literal["pos", "neg", "both"]
@@ -647,7 +647,8 @@ class RefinementConfig:
     signal_rank: int = 3
     feature_rank: int = 8
     initialize_at_rank_0: bool = False
-    cl_alpha: float = 0.0
+    cl_alpha: float = 0.05
+    cl_split_only: bool = True
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
@@ -682,6 +683,8 @@ class RefinementConfig:
     em_after_demolish: bool = False
 
     # TODO... reintroduce this if wanted. or remove
+    # TODO the way to make it a real plugin would be to have a sidecar cfg thing here that took
+    # the actual method's params and was weakly typed... so gmm params would move to their own config
     split_cfg: SplitConfig | None = None
     merge_cfg: TemplateMergeConfig | None = None
     merge_template_cfg: TemplateConfig | None = None
@@ -695,7 +698,7 @@ class RefinementConfig:
     # stable waveform feature controls
     cov_radius: float = 500.0
     core_radius: float | Literal["extract"] = "extract"
-    val_proportion: float = 0.25
+    val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
     interp_params: InterpolationParams = default_interpolation_params
     noise_interp_params: InterpolationParams = default_template_interpolation_params
@@ -790,7 +793,7 @@ class DARTsortInternalConfig:
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     tmpdir_parent: str | None = None
     link_from: str | None = None
-    link_step: Literal["denoising", "detection", "refined0"] = "refined0"
+    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True

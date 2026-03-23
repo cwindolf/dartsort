@@ -259,7 +259,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 3
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 1000 * 1024
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 1500 * 1024
     kmeansk: int = 4
     min_cluster_size: int = 25
 
@@ -268,12 +268,12 @@ class DeveloperConfig(DARTsortUserConfig):
     n_later_refinement_iters: int = 1
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
-    gmm_cl_alpha: float = 0.0
+    gmm_cl_alpha: float = 0.05
     gmm_em_atol: float = 5e-3
     gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
     gmm_n_candidates: int = 3
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
-    gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.25
+    gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
@@ -294,4 +294,4 @@ class DeveloperConfig(DARTsortUserConfig):
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
     save_everything_on_error: bool = False
     link_from: str | None = argfield(default=None, arg_type=str_or_none)
-    link_step: Literal["denoising", "detection", "refined0"] = "refined0"
+    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
