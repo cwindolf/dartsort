@@ -64,24 +64,17 @@ class ThresholdAndFeaturize(BasePeeler):
             peak_channel_index = make_channel_index(
                 geom, p.relative_peak_radius_um, to_torch=True
             )
-        else:
-            peak_channel_index = None
         if dedup_channel_index is None and p.spatial_dedup_radius_um:
             dedup_channel_index = make_channel_index(
                 geom, p.spatial_dedup_radius_um, to_torch=True
             )
-        else:
-            dedup_channel_index = None
         if spatial_jitter_channel_index is None and p.spatial_jitter_radius:
             spatial_jitter_channel_index = make_channel_index(
                 geom, p.spatial_jitter_radius, to_torch=True
             )
-        else:
-            spatial_jitter_channel_index = None
         self.register_buffer_or_none(
             "spatial_jitter_channel_index", spatial_jitter_channel_index
         )
-
         self.register_buffer_or_none("dedup_channel_index", dedup_channel_index)
         if dedup_channel_index is not None:
             dedup_rel_inds = get_channel_index_rel_inds(dedup_channel_index)
