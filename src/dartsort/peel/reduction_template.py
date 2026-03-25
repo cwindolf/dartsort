@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
@@ -64,7 +65,7 @@ class ReductionTemplateData(TemplateData):
             recording=recording,
             waveform_cfg=waveform_cfg,
         )
-        sorting = sorting.drop_missing()
+        sorting = sorting.ensure_no_missing()
 
         # build engine object
         sorting_flat = sorting.flatten()
@@ -83,7 +84,8 @@ class ReductionTemplateData(TemplateData):
         if template_cfg.reduction == "mean":
             # TODO: reducer doesn't work in parallel when gathering means, go to single job
             computation_cfg = ComputationConfig(
-                device=computation_cfg.actual_device().type
+                device=computation_cfg.actual_device().type,
+                n_jobs_small=computation_cfg.n_jobs_small,
             )
         with TemporaryDirectory(
             prefix="dartsorttemplates", ignore_cleanup_errors=True
@@ -101,11 +103,16 @@ class ReductionTemplateData(TemplateData):
                 task_name=task_name,
                 computation_cfg=computation_cfg,
                 ignore_resuming=True,
+                known_spike_count=len(sorting_flat),
             )
 
             # extract outputs and handle denoising method
             count, raw_mean, raw_std, svd_mean = p.reduction_results(
-                h5p, show_progress=show_progress
+                h5p,
+                computation_cfg=replace(
+                    computation_cfg, executor="ProcessPoolExecutor"
+                ),
+                show_progress=show_progress,
             )
 
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
@@ -122,6 +129,8 @@ class ReductionTemplateData(TemplateData):
             assert raw_mean is not None
             assert svd_mean is not None
             snrs_by_channel = np.ptp(raw_mean, 1) * np.sqrt(count)
+            assert np.isfinite(snrs_by_channel).all()
+            assert snrs_by_channel.max() > 0
             weights = denoising_weights(
                 snrs=snrs_by_channel,
                 spike_length_samples=raw_mean.shape[1],
@@ -313,7 +322,10 @@ class TemplateReduction(GrabAndFeaturize):
         return tsvd
 
     def reduction_results(
-        self, hdf5_path: Path, show_progress: bool = False
+        self,
+        hdf5_path: Path,
+        show_progress: bool = False,
+        computation_cfg: ComputationConfig | None = None,
     ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
         # get raw and svd transformers
         assert self.featurization_pipeline is not None
@@ -339,13 +351,19 @@ class TemplateReduction(GrabAndFeaturize):
 
         if raw_f is not None:
             counts, raw_mean, raw_std = raw_f.reduction_results(
-                hdf5_path=hdf5_path, labels=self.b.labels, show_progress=show_progress
+                hdf5_path=hdf5_path,
+                labels=self.b.labels,
+                show_progress=show_progress,
+                computation_cfg=computation_cfg,
             )
         else:
             counts = raw_mean = raw_std = None
         if svd_f is not None:
             svd_counts, svd_mean, svd_std = svd_f.reduction_results(
-                hdf5_path=hdf5_path, labels=self.b.labels, show_progress=show_progress
+                hdf5_path=hdf5_path,
+                labels=self.b.labels,
+                show_progress=show_progress,
+                computation_cfg=computation_cfg,
             )
         else:
             svd_counts = svd_mean = svd_std = None
@@ -359,14 +377,9 @@ class TemplateReduction(GrabAndFeaturize):
             (tsvd,) = [
                 f for f in transformers if isinstance(f, FullProbeTemporalPCAEmbedder)
             ]
+            svd_mean = torch.asarray(svd_mean)
             svd_mean = tsvd.force_reconstruct(svd_mean)
-
-        counts = counts.numpy(force=True)
-        if raw_mean is not None:
-            raw_mean = raw_mean.numpy(force=True)
-        if raw_std is not None:
-            raw_std = raw_std.numpy(force=True)
-        if svd_mean is not None:
+            assert svd_mean.isfinite().all()
             svd_mean = svd_mean.numpy(force=True)
 
         return counts, raw_mean, raw_std, svd_mean
