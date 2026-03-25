@@ -37,6 +37,10 @@ class DARTsortUserConfig:
         doc="Number of parallel workers to use when running on GPU. "
         "0 means everything runs on the main thread.",
     )
+    n_jobs_small: int = argfield(
+        default=8,
+        doc="Max workers to use for small jobs (will not exceed #cores).",
+    )
     device: str | None = argfield(
         default=None,
         arg_type=str,

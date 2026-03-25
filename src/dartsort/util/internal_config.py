@@ -710,12 +710,12 @@ class RefinementConfig:
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
-    n_jobs_small: int = -1
+    n_jobs_small: int = 8
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
 
     @classmethod
-    def from_n_jobs(cls, n_jobs, n_jobs_small=-1):
+    def from_n_jobs(cls, n_jobs, n_jobs_small=8):
         return cls(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs, n_jobs_small=n_jobs_small)
 
     def actual_device(self):
