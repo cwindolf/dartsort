@@ -10,8 +10,8 @@ from scipy.spatial import KDTree
 from ..util import drift_util, waveform_util
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTVERBOSE, get_logger
+from ..util.motion import MotionInfo
 from ..util.spiketorch import ptp
-from ..util.waveform_util import full_channel_index
 
 logger = get_logger(__name__)
 
@@ -39,45 +39,39 @@ def weighted_average(unit_ids, templates, weights):
 
 
 def templates_at_time(
+    *,
     t_s,
     registered_templates,
-    geom,
     registered_template_depths_um=None,
-    registered_geom=None,
-    motion_est=None,
+    motion: MotionInfo,
     return_pitch_shifts=False,
-    geom_kdtree=None,
-    match_distance=None,
     return_padded=False,
     fill_value=torch.nan,
 ):
-    if registered_geom is None and not return_padded:
+    if not motion.drifting and not return_padded:
         return registered_templates
-    if registered_geom is None and return_padded:
+    if not motion.drifting and return_padded:
         assert torch.is_tensor(registered_templates)
         return F.pad(registered_templates, (0, 1), value=fill_value)
-    assert motion_est is not None
+    assert motion.drifting
     assert registered_template_depths_um is not None
 
     # for each unit, extract relevant channels at time t_s
     # how many pitches to shift each unit relative to registered pos at time t_s?
-    unregistered_depths_um = drift_util.invert_motion_estimate(
-        motion_est, t_s, registered_template_depths_um
-    )
+    unregistered_depths_um = motion.uncorrect_s(t_s, registered_template_depths_um)
     # reverse arguments to pitch shifts since we are going the other direction
-    pitch_shifts = drift_util.get_spike_pitch_shifts(
+    _, pitch_shifts = motion.pitch_shifts(
         depths_um=registered_template_depths_um,
-        geom=geom,
-        registered_depths_um=unregistered_depths_um,
+        reg_depths_um=unregistered_depths_um,
     )
     # extract relevant channel neighborhoods, also by reversing args to a drift helper
     unregistered_templates = drift_util.get_waveforms_on_static_channels(
-        registered_templates,
-        registered_geom,
+        waveforms=registered_templates,
+        geom=motion.rgeom,
         n_pitches_shift=pitch_shifts,
-        registered_geom=geom,
-        target_kdtree=geom_kdtree,
-        match_distance=match_distance,
+        registered_geom=motion.geom,
+        target_kdtree=motion.geom_kdt,
+        match_distance=motion.min_dist,
         fill_value=fill_value,
         return_padded=return_padded,
     )

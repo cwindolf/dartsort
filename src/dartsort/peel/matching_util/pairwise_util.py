@@ -13,21 +13,23 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from tqdm.auto import tqdm
 
-from ...templates.template_util import LowRankTemplates, CompressedUpsampledTemplates
+from ...templates.template_util import CompressedUpsampledTemplates, LowRankTemplates
 from ...templates.templates import TemplateData
 from ...util import drift_util
+from ...util.motion import MotionInfo
 from ...util.multiprocessing_util import get_pool
 
 
 def compressed_convolve_to_h5(
     output_hdf5_filename,
+    *,
     template_data: TemplateData,
     low_rank_templates: LowRankTemplates,
     compressed_upsampled_temporal: CompressedUpsampledTemplates,
     template_data_b: Optional[TemplateData] = None,
     low_rank_templates_b: Optional[LowRankTemplates] = None,
     chunk_time_centers_s: Optional[np.ndarray] = None,
-    motion_est=None,
+    motion: MotionInfo,
     geom: Optional[np.ndarray] = None,
     conv_ignore_threshold=0.0,
     coarse_approx_error_threshold=0.0,
@@ -69,7 +71,7 @@ def compressed_convolve_to_h5(
         template_data,
         compressed_upsampled_temporal,
         template_data_b=template_data_b,
-        motion_est=motion_est,
+        motion=motion,
     )
 
     chunk_res_iterator = iterate_compressed_pairwise_convolutions(
@@ -82,7 +84,7 @@ def compressed_convolve_to_h5(
         template_shift_index_b=template_shift_index_b,
         cooccurrence=cooccurrence,
         upsampled_shifted_template_index=upsampled_shifted_template_index,
-        do_shifting=motion_est is not None,
+        do_shifting=motion.drifting,
         geom=geom,
         conv_ignore_threshold=conv_ignore_threshold,
         min_spatial_cosine=min_spatial_cosine,
@@ -760,7 +762,7 @@ def construct_shift_indices(
     template_data_a,
     compressed_upsampled_temporal,
     template_data_b=None,
-    motion_est=None,
+    motion=None,
 ):
     (
         template_shift_index_a,
@@ -771,7 +773,7 @@ def construct_shift_indices(
         geom,
         template_data_a,
         template_data_b=template_data_b,
-        motion_est=motion_est,
+        motion=motion,
     )
     upsampled_shifted_template_index = get_upsampled_shifted_template_index(
         template_shift_index_b, compressed_upsampled_temporal

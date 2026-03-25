@@ -1,6 +1,6 @@
 import gc
-from dataclasses import replace
 import math
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -18,6 +18,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.spiketorch import ptp
 from .templates import TemplateData
 
@@ -31,7 +32,7 @@ def realign(
     realign_cfg: TemplateRealignmentConfig | None = None,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
-    motion_est=None,
+    motion: MotionInfo | None = None,
 ) -> tuple[DARTsortSorting, TemplateData | None]:
     if realign_cfg is None:
         return sorting, None
@@ -50,7 +51,7 @@ def realign(
         template_cfg=realign_cfg.template_cfg,
         waveform_cfg=realignment_waveform_cfg,
         computation_cfg=computation_cfg,
-        motion_est=motion_est,
+        motion=motion,
     )
     trough_offset_samples = waveform_cfg.trough_offset_samples(
         sampling_frequency=recording.sampling_frequency

@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from dartsort.evaluate import simkit, simlib
-from dartsort.util.internal_config import FeaturizationConfig
+from dartsort.util.internal_config import FeaturizationConfig, MotionEstimationConfig
+from dartsort.util.motion import get_motion_info
 from dartsort.util.noise_util import StationaryFactorizedNoise
-from dartsort.util.registration_util import estimate_motion
 
 f_dt = "float32"
 r_dt = "float16"
@@ -84,7 +84,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
             assert inj.size > (minfr * 0.5)
     assert np.allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
-    assert sim["motion_est"] is None
+    assert not sim["motion"].drifting
     u, c = np.unique(st.labels, return_counts=True)
     assert np.array_equal(c, sim["unit_info_df"].gt_spike_count.values)
     assert np.allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
@@ -208,10 +208,10 @@ def test_motion(tmp_path, drift_speed, drift_type):
     assert sim is not None
     sim = cast(dict, sim)
     if not drift_speed:
-        assert sim["motion_est"] is None
+        assert not sim["motion"].drifting
         return
 
-    me0 = sim["motion_est"]
+    me0 = sim["motion"].dredge_motion_est
     d0 = me0.displacement.ravel()
     if drift_type == "line":
         assert np.allclose(np.diff(d0), drift_speed)
@@ -219,13 +219,13 @@ def test_motion(tmp_path, drift_speed, drift_type):
         assert np.allclose(np.abs(np.diff(d0)), abs(drift_speed))
     else:
         assert False
-    me1 = estimate_motion(
-        sim["recording"],
-        sim["sorting"],
-        rigid=True,
+    me1 = get_motion_info(
+        recording=sim["recording"],
+        sorting=sim["sorting"],
+        motion_cfg=MotionEstimationConfig(rigid=True),
         amplitudes_dataset_name="ptp_amplitudes",
         localizations_dataset_name="localizations",
-    )
+    ).dredge_motion_est
     assert me1 is not None
     d1 = me1.displacement.ravel()
     assert np.array_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore

@@ -1,18 +1,17 @@
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import transforms
 from matplotlib.patches import Ellipse
 from scipy.spatial import KDTree
 
-from .colors import glasbey1024, gray
-from dartsort.clustering.density import kdtree_inliers
+from ..clustering.density import kdtree_inliers
+from .colors import glasbey1024
 
 
 def scatter_spike_features(
     hdf5_filename=None,
     sorting=None,
-    motion_est=None,
+    motion=None,
     registered=False,
     times_s=None,
     depths_um=None,
@@ -27,7 +26,7 @@ def scatter_spike_features(
     show_geom=True,
     geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
     amplitude_color_cutoff=15.0,
-    amplitude_cmap=plt.cm.viridis,
+    amplitude_cmap="viridis",
     max_spikes_plot=500_000,
     probe_margin_um=100,
     t_min=-np.inf,
@@ -136,7 +135,7 @@ def scatter_spike_features(
         show_geom=show_geom,
         geom_scatter_kw=geom_scatter_kw,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
@@ -164,7 +163,7 @@ def scatter_spike_features(
         times_s=times_s,
         semilog_amplitudes=semilog_amplitudes,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
@@ -194,7 +193,7 @@ def scatter_spike_features(
             labels=labels,
             sorting=sorting,
             times_s=times_s,
-            motion_est=motion_est,
+            motion=motion,
             registered=registered,
             geom=geom,
             ax=axes.flat[2 + j],
@@ -221,7 +220,7 @@ def scatter_spike_features(
         amplitudes=amplitudes,
         labels=labels,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         probe_margin_um=probe_margin_um,
@@ -253,7 +252,7 @@ def scatter_spike_features(
 def scatter_time_vs_depth(
     hdf5_filename=None,
     sorting=None,
-    motion_est=None,
+    motion=None,
     registered=False,
     times_s=None,
     depths_um=None,
@@ -317,7 +316,7 @@ def scatter_time_vs_depth(
         amplitudes=amplitudes,
         labels=labels,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         ax=ax,
@@ -345,7 +344,7 @@ def scatter_time_vs_depth(
 def scatter_x_vs_depth(
     hdf5_filename=None,
     sorting=None,
-    motion_est=None,
+    motion=None,
     registered=False,
     x=None,
     depths_um=None,
@@ -359,7 +358,7 @@ def scatter_x_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
-    amplitude_cmap=plt.cm.viridis,
+    amplitude_cmap="viridis",
     limits="probe_margin",
     random_seed=0,
     s=1,
@@ -393,7 +392,7 @@ def scatter_x_vs_depth(
         amplitudes=amplitudes,
         labels=labels,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         ax=ax,
@@ -426,7 +425,7 @@ def scatter_x_vs_depth(
 def scatter_amplitudes_vs_depth(
     hdf5_filename=None,
     sorting=None,
-    motion_est=None,
+    motion=None,
     registered=False,
     depths_um=None,
     amplitudes=None,
@@ -438,7 +437,7 @@ def scatter_amplitudes_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
-    amplitude_cmap=plt.cm.viridis,
+    amplitude_cmap="viridis",
     limits="probe_margin",
     random_seed=0,
     s=1,
@@ -479,7 +478,7 @@ def scatter_amplitudes_vs_depth(
         amplitudes=amplitudes,
         labels=labels,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         registered=registered,
         geom=geom,
         ax=ax,
@@ -509,13 +508,13 @@ def scatter_feature_vs_depth(
     sorting=None,
     times_s=None,
     labels=None,
-    motion_est=None,
+    motion=None,
     registered=False,
     geom=None,
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
-    amplitude_cmap=plt.cm.viridis,
+    amplitude_cmap="viridis",
     probe_margin_um=100,
     s=1,
     linewidth=0,
@@ -569,10 +568,9 @@ def scatter_feature_vs_depth(
         to_show = rg.choice(to_show, size=to_show.size, replace=False)
 
     if registered:
-        assert motion_est is not None
         assert times_s is not None
         depths_um = depths_um.copy()
-        depths_um[to_show] = motion_est.correct_s(times_s[to_show], depths_um[to_show])
+        depths_um[to_show] = motion.correct_s(times_s[to_show], depths_um[to_show])
 
     # order by amplitude so that high amplitude units show up
     if amplitudes is not None:
@@ -584,6 +582,7 @@ def scatter_feature_vs_depth(
 
     if labels is None:
         c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
+        amplitude_cmap = plt.get_cmap(amplitude_cmap)
         c = amplitude_cmap(c / amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False

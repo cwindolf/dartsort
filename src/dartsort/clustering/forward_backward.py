@@ -8,7 +8,7 @@ def forward_backward(
     log_c=5.0,
     feature_scales=(1, 1, 50),
     adaptive_feature_scales=False,
-    motion_est=None,
+    motion=None,
     verbose=True,
     min_cluster_size=25,
 ):
@@ -51,8 +51,8 @@ def forward_backward(
             / np.median(np.abs(np.log(log_c + amps) - np.median(np.log(log_c + amps)))),
         )
 
-    if motion_est is not None:
-        z_reg = motion_est.correct_s(times_seconds, z_reg)
+    if motion is not None:
+        z_reg = motion.correct_s(times_seconds, z_reg)
 
     if verbose is True:
         tbar = trange(len(chunk_sortings) - 1, desc="Ensembling chunks")

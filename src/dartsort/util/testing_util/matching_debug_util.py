@@ -335,11 +335,11 @@ class DebugMatchingTemplates(MatchingTemplates):
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
-        motion_est,
+        motion,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
-        assert motion_est is None
+        assert not motion.drifting
         del save_folder
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()

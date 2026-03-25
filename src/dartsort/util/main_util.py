@@ -8,8 +8,8 @@ from spikeinterface.core import BaseRecording
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import DARTsortInternalConfig
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo, try_load_motion_info
 from ..util.py_util import dartcopy2, dartcopytree, resolve_path
-from ..util.registration_util import save_motion_est, try_load_motion_est
 
 logger = get_logger(__name__)
 
@@ -90,12 +90,15 @@ def ds_all_to_workdir(
     return recording, sort_dir
 
 
-def ds_save_motion_est(
-    motion_est, output_dir: Path, work_dir: Path | None = None, overwrite: bool = False
+def ds_save_motion(
+    motion: MotionInfo,
+    output_dir: Path,
+    work_dir: Path | None = None,
+    overwrite: bool = False,
 ):
     if work_dir is None:
         return
-    save_motion_est(motion_est, output_dir, overwrite=overwrite)
+    motion.save(output_directory=output_dir, overwrite=overwrite)
 
 
 def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
@@ -114,7 +117,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if link_denoising:
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
-        link_patterns.extend(["subtraction.h5", "motion_est.pkl", "subtraction_models"])
+        link_patterns.extend(["subtraction.h5", "motion.pkl", "subtraction_models"])
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
     if link_matching1:
@@ -197,7 +200,9 @@ def ds_handle_delete_intermediate_features(
             shutil.rmtree(models_path)
 
 
-def ds_fast_forward(store_dir, cfg):
+def ds_fast_forward(
+    store_dir: Path, cfg: DARTsortInternalConfig
+) -> tuple[int, DARTsortSorting | None, MotionInfo | None]:
     """Fast-forward to the where sorting left off
 
     # TODO: error if there is a saved cfg which differs? Maybe just optionally?
@@ -214,8 +219,8 @@ def ds_fast_forward(store_dir, cfg):
         return cur_step, None, None
 
     # if subtraction is finished, we can try to load a motion estimate
-    motion_est = try_load_motion_est(store_dir)
-    mstr = ", and a loaded motion estimate" if motion_est is not None else ""
+    motion = try_load_motion_info(store_dir)
+    mstr = ", with loaded motion info." if motion is not None else ""
 
     matching_h5s = sorted(store_dir.glob("matching*.h5"))
     for cur_step, cur_h5 in enumerate(matching_h5s, start=1):
@@ -238,7 +243,7 @@ def ds_fast_forward(store_dir, cfg):
                 f"Resuming at step {cur_step + 1} with previous sorting from "
                 f"{cur_h5.name} and {cur_labels_npy.name}{mstr}."
             )
-            return cur_step + 1, sorting, motion_est
+            return cur_step + 1, sorting, motion
 
     # at this point, either the last round of peeling finished, or it
     # didn't. we need to run peeler_is_done to check. but that's something
@@ -246,7 +251,7 @@ def ds_fast_forward(store_dir, cfg):
     # sorting for the PREVIOUS step which is the one we need to resume at
     # the CURRENT step aka cur_step.
     if cur_step == 0:
-        return cur_step, None, motion_est
+        return cur_step, None, motion
 
     prev_labels_npy = store_dir / f"refined{cur_step - 1}_labels.npy"
     prev_labels = None
@@ -266,4 +271,4 @@ def ds_fast_forward(store_dir, cfg):
     if prev_labels is not None:
         prev_sorting = prev_sorting.ephemeral_replace(labels=prev_labels)
 
-    return cur_step, prev_sorting, motion_est
+    return cur_step, prev_sorting, motion

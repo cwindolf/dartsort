@@ -28,6 +28,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.waveform_util import full_channel_index
@@ -50,7 +51,7 @@ class ReductionTemplateData(TemplateData):
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        motion_est=None,
+        motion: MotionInfo,
         tsvd=None,
         whitener: SpatialWhitener | None = None,
         computation_cfg: ComputationConfig | None = None,
@@ -64,18 +65,13 @@ class ReductionTemplateData(TemplateData):
             waveform_cfg=waveform_cfg,
         )
         sorting = sorting.drop_missing()
-        if motion_est is None:
-            rgeom = recording.get_channel_locations()
-        else:
-            rgeom = registered_geometry(recording.get_channel_locations(), motion_est)
 
         # build engine object
         sorting_flat = sorting.flatten()
         p = TemplateReduction.from_config(
             recording=recording,
-            rgeom=rgeom,
             sorting=sorting_flat,
-            motion_est=motion_est,
+            motion=motion,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
             whitener=whitener,
@@ -151,7 +147,7 @@ class ReductionTemplateData(TemplateData):
             raw_std_dev=raw_std,
             spike_counts=count.max(axis=1),
             spike_counts_by_channel=count,
-            registered_geom=rgeom,
+            registered_geom=motion.rgeom,
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
@@ -166,9 +162,8 @@ class TemplateReduction(GrabAndFeaturize):
     def from_config(  # type: ignore[override]
         cls,
         recording: BaseRecording,
-        rgeom: np.ndarray | torch.Tensor,
         *,
-        motion_est,
+        motion: MotionInfo,
         tsvd: TruncatedSVD | PCA | FullProbeTemporalPCAEmbedder | None,
         sorting: DARTsortSorting,
         waveform_cfg: WaveformConfig,
@@ -176,11 +171,9 @@ class TemplateReduction(GrabAndFeaturize):
         whitener: SpatialWhitener | None = None,
     ):
         # geom processing
-        geom = recording.get_channel_locations()
-        rgeom = torch.asarray(rgeom)
-        geom = torch.asarray(geom)
+        rgeom = torch.asarray(motion.rgeom)
+        geom = torch.asarray(motion.geom)
         channel_index = full_channel_index(len(geom), to_torch=True)
-        drifting = motion_est is not None
 
         # handle tsvd fit preferences
         if template_cfg.use_svd and tsvd is not None:
@@ -195,7 +188,7 @@ class TemplateReduction(GrabAndFeaturize):
             tsvd = fit_tsvd(
                 recording=recording,
                 sorting=sorting,
-                motion_est=motion_est,
+                motion=motion,
                 template_cfg=template_cfg,
                 waveform_cfg=waveform_cfg,
             )
@@ -228,17 +221,20 @@ class TemplateReduction(GrabAndFeaturize):
                     geom=geom, channel_index=channel_index, whitener=whitener
                 )
             )
-        interp = WaveformInterpolator(
-            geom=geom,
-            channel_index=channel_index,
-            rgeom=rgeom,
-            motion_est=motion_est,
-            params=template_cfg.template_interp_params,
-        )
+        if motion.drifting:
+            interp = WaveformInterpolator(
+                geom=geom,
+                channel_index=channel_index,
+                motion=motion,
+                params=template_cfg.template_interp_params,
+            )
+        else:
+            interp = None
         # if raw is included, interp at beginning, else after SVD (cheaper)
-        interp_early = drifting and template_cfg.denoising_method == "none"
-        interp_late = drifting and not interp_early
+        interp_early = motion.drifting and template_cfg.denoising_method == "none"
+        interp_late = motion.drifting and not interp_early
         if interp_early:
+            assert interp is not None
             transformers.append(interp)
         if template_cfg.denoising_method in ("none", "exp_weighted"):
             raw_reduce = TemplateWaveformReducer(
@@ -258,6 +254,7 @@ class TemplateReduction(GrabAndFeaturize):
             assert tsvd is not None
             transformers.append(tsvd)
         if interp_late:
+            assert interp is not None
             transformers.append(interp)
         if template_cfg.whitening == "postwhiten":
             assert whitener is not None

@@ -5,14 +5,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.interpolate import griddata
+from scipy.sparse import coo_array
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist
-from scipy.sparse.csgraph import connected_components
-from scipy.sparse import coo_array
 
+from ..templates.realignment import get_main_channels_and_alignments
 from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
-from ..templates.realignment import get_main_channels_and_alignments
 from ..util.interpolation_util import (
     InterpolationParams,
     default_interpolation_params,

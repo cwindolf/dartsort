@@ -164,6 +164,17 @@ class DARTsortUserConfig:
     )
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
     min_amplitude: float | None = argfield(default=None, arg_type=float_or_none)
+    speed_limit_um_per_s: float = argfield(
+        default=500.0,
+        arg_type=float,
+        doc="Motion bins exceeding this speed will be replaced by interpolation.",
+    )
+    max_dist_from_median_um: float = argfield(
+        default=500.0,
+        arg_type=float,
+        doc="Motion bins farther than this from the local median will be replaced by interpolation.",
+    )
+    median_neighborhood_bins: int = 51
 
 
 @cfg_dataclass

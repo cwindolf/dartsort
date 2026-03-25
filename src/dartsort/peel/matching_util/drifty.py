@@ -48,18 +48,18 @@ from ...util.interpolation_util import (
     bake_interpolation_1d,
     default_interpolation_params,
 )
-from ...util.logging_util import get_logger
 from ...util.job_util import ensure_computation_config
+from ...util.logging_util import get_logger
+from ...util.motion import MotionInfo
+from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
 from ...util.waveform_util import upsample_singlechan_torch
-from ...util.noise_util import SpatialWhitener
 from .matching_base import (
     ChunkTemplateData,
     MatchingPeaks,
     MatchingTemplates,
     subtract_precomputed_pconv,
 )
-
 
 logger = get_logger(__name__)
 
@@ -74,7 +74,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         *,
         temporal_comps: Tensor,
         spatial_sing: Tensor,
-        motion_est,
+        motion: MotionInfo,
         geom: Tensor,
         trough_offset_samples: int,
         unit_ids: Tensor | None = None,
@@ -99,12 +99,11 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.up_factor = up_factor
         self.upsampling = up_factor > 1
         self.up_method = up_method
-        self.interpolating = motion_est is not None
+        self.interpolating = motion.drifting
         self.whiten_strategy = whiten_strategy
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
-        assert self.interpolating == (motion_est is not None)
         self.n_units, rank, n_channels = spatial_sing.shape
         assert rank == temporal_comps.shape[0]
         self.spike_length_samples = temporal_comps.shape[1]
@@ -114,10 +113,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             assert rgeom is not None
             logger.dartsortdebug("Drifty matching will interpolate templates.")
             self.erp = FromFullProbeInterpolator(
-                geom=geom,
-                rgeom=rgeom,
-                motion_est=motion_est,
-                params=drift_interp_params,
+                motion=motion, params=drift_interp_params, device=device
             )
         else:
             logger.dartsortdebug("No interpolation in matching.")
@@ -199,7 +195,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
-        motion_est,
+        motion: MotionInfo,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
@@ -233,7 +229,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         return cls(
             temporal_comps=temporal_comps.to(device=device, dtype=dtype),
             spatial_sing=spatial_sing.to(device=device, dtype=dtype),
-            motion_est=motion_est,
+            motion=motion,
             geom=geom,
             trough_offset_samples=template_data.trough_offset_samples,
             unit_ids=unit_ids,

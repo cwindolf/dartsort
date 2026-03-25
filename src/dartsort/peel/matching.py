@@ -19,10 +19,11 @@ from ..util.internal_config import (
     FitSamplingConfig,
     MatchingConfig,
     WaveformConfig,
-    default_peeling_fit_sampling_cfg,
     default_matching_cfg,
+    default_peeling_fit_sampling_cfg,
 )
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.waveform_util import make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -163,7 +164,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         featurization_cfg: FeaturizationConfig,
         sampling_cfg: FitSamplingConfig,
         template_data: TemplateData | None,
-        motion_est=None,
+        motion: MotionInfo | None = None,
         parent_sorting_hdf5_path=None,
     ) -> Self:
         geom = torch.tensor(recording.get_channel_locations())
@@ -188,11 +189,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
         assert trough_offset_samples == template_data.trough_offset_samples
 
+        if motion is None:
+            motion = MotionInfo.from_motion_est(geom=geom.numpy())
+
         builder = MatchingTemplatesBuilder(
             recording=recording,
             template_data=template_data,
             matching_cfg=matching_cfg,
-            motion_est=motion_est,
+            motion=motion,
         )
 
         logger.info(
@@ -200,7 +204,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             "scaling variance %s, compression rank %s, upsampling factor %s, "
             "refrac radius %s.",
             matching_cfg.template_type,
-            "not " if motion_est is None else "",
+            "" if motion.drifting else "not ",
             matching_cfg.amplitude_scaling_variance,
             matching_cfg.template_svd_compression_rank,
             matching_cfg.up_factor,

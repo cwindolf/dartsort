@@ -17,6 +17,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
 from .template_util import weighted_average
 
@@ -216,7 +217,7 @@ class TemplateData:
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_folder: Path | None = None,
         overwrite=False,
-        motion_est=None,
+        motion: MotionInfo | None = None,
         whitener: SpatialWhitener | None = None,
         save_npz_name: str | None = "template_data.npz",
         tsvd=None,
@@ -234,11 +235,13 @@ class TemplateData:
                 return cls.from_npz(npz_path)
         else:
             npz_path = None
+        if motion is None:
+            motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
         if template_cfg.whitening.strategy != "none" and whitener is None:
             assert sorting is not None
             whitener = SpatialWhitener.from_config(
                 sorting=sorting,
-                motion_est=motion_est,
+                motion=motion,
                 whiten_cfg=template_cfg.whitening,
                 computation_cfg=computation_cfg,
             )
@@ -256,7 +259,7 @@ class TemplateData:
             sorting=sorting,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
-            motion_est=motion_est,
+            motion=motion,
             tsvd=tsvd,
             whitener=whitener,
             computation_cfg=computation_cfg,
@@ -280,7 +283,7 @@ class TemplateData:
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        motion_est=None,
+        motion: MotionInfo,
         whitener: SpatialWhitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,

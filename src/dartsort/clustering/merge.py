@@ -3,17 +3,15 @@ import warnings
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 
-
-from ..util.internal_config import TemplateMergeConfig, ComputationConfig
-from ..util.logging_util import get_logger
-from ..templates import TemplateData, template_util
 from ..peel.matching_util.pairwise_util import (
     construct_shift_indices,
     iterate_compressed_pairwise_convolutions,
 )
-from ..util.data_util import DARTsortSorting, combine_sortings
+from ..templates import TemplateData, template_util
 from ..util import job_util
-
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import ComputationConfig, TemplateMergeConfig
+from ..util.logging_util import get_logger
 
 logger = get_logger(__name__)
 
@@ -419,7 +417,7 @@ def get_deconv_resid_decrease_iter(
         None,
         template_data,
         compressed_upsampled_temporal,
-        motion_est=None,
+        motion=None,
     )
     if cooccurrence_mask is not None:
         cooccurrence = cooccurrence & cooccurrence_mask

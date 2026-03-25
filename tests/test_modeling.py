@@ -11,6 +11,7 @@ from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
 from dartsort.util.spiketorch import spawn_torch_rg
 from dartsort.util.testing_util import mixture_testing_util
+from dartsort.util.motion import MotionInfo
 
 
 logger = get_logger(__name__)
@@ -90,12 +91,13 @@ def test_truncated_mixture(
         em_converged_atol=1e-4,
         feature_rank=TEST_RANK,
     )
+    no_motion = MotionInfo.from_motion_est(geom=stable_data.prgeom[:-1])
 
     # copy-pasting from tmm_demix here
     neighb_cov, erp, train_data, val_data, full_data, noise, *_ = (
         mixture.get_truncated_datasets(
             sorting=init_sorting,
-            motion_est=None,
+            motion=no_motion,
             refinement_cfg=ref_cfg,
             device=device,
             rg=rg,

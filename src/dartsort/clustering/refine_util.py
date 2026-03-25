@@ -1,58 +1,17 @@
-import torch
-import numpy as np
 import h5py
+import numpy as np
+import torch
 
-from ..util.internal_config import RefinementConfig, ComputationConfig
-from ..util import job_util, data_util, spiketorch
-from ..util.py_util import databag
-from ..util.logging_util import get_logger
 from ..transform.temporal_pca import BaseTemporalPCA
-from ..templates import TemplateData
+from ..util import data_util, job_util, spiketorch
+from ..util.internal_config import ComputationConfig, RefinementConfig
+from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
+from ..util.py_util import databag
 from .cluster_util import agglomerate, reorder_by_depth
-from .split import split_clusters
-from .merge import merge_templates
 from .gmm.stable_features import StableSpikeDataset
 
-
 logger = get_logger(__name__)
-
-
-def split_merge(
-    *,
-    recording,
-    sorting,
-    motion_est=None,
-    split_cfg,
-    merge_cfg,
-    merge_template_cfg,
-    computation_cfg=None,
-):
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
-
-    split_sorting = split_clusters(
-        sorting,
-        split_strategy=split_cfg.split_strategy,
-        recursive=split_cfg.recursive_split,
-        n_jobs=computation_cfg.actual_n_jobs(),
-        motion_est=motion_est,
-    )
-    template_data = TemplateData.from_config(
-        recording=recording,
-        sorting=sorting,
-        motion_est=motion_est,
-        template_cfg=merge_template_cfg,
-    )
-    merge_sorting = merge_templates(
-        sorting=split_sorting,
-        template_data=template_data,
-        merge_distance_threshold=merge_cfg.merge_distance_threshold,
-        min_spatial_cosine=merge_cfg.min_spatial_cosine,
-        linkage=merge_cfg.linkage,
-        computation_cfg=computation_cfg,
-    )["sorting"]
-
-    return merge_sorting
 
 
 def get_noise_log_priors(noise, sorting, refinement_cfg):
@@ -118,9 +77,10 @@ class PCMergeResult:
 
 
 def pc_merge(
+    *,
     sorting: data_util.DARTsortSorting,
     refinement_cfg: RefinementConfig,
-    motion_est=None,
+    motion: MotionInfo,
     computation_cfg: ComputationConfig | None = None,
     debug: bool = False,
 ) -> PCMergeResult:
@@ -146,7 +106,7 @@ def pc_merge(
     # make stable features, no need for core features though.
     data = StableSpikeDataset.from_sorting(
         subset_sorting,
-        motion_est=motion_est,
+        motion=motion,
         core_radius=None,
         discard_triaged=True,
         interp_params=refinement_cfg.interp_params.normalize(),
@@ -216,5 +176,5 @@ def pc_merge(
             dists=torch.asarray(dists),
         )
 
-    sorting = reorder_by_depth(sorting, motion_est=motion_est)
+    sorting = reorder_by_depth(sorting, motion=motion)
     return PCMergeResult(sorting=sorting)

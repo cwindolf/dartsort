@@ -1,14 +1,13 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
-from dataclasses import replace
-
 
 import h5py
 import numpy as np
 import probeinterface
+import torch
 from scipy.spatial.distance import cdist
 from spikeinterface.core import NumpySorting
-import torch
 
 try:
     from importlib.resources import files
@@ -19,9 +18,8 @@ except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
 from ..transform import WaveformPipeline
-from ..util.internal_config import FeaturizationConfig, WaveformConfig
 from ..util.data_util import subsample_waveforms, yield_chunks
-
+from ..util.internal_config import FeaturizationConfig, WaveformConfig
 
 default_temporal_kernel_npy = files("dartsort.pretrained")
 default_temporal_kernel_npy = default_temporal_kernel_npy.joinpath(
@@ -94,7 +92,11 @@ def piecewise_refractory_poisson_spike_train(rates, bins, binsize_samples, **kwa
         if rate < 0.05:
             continue
         binst = refractory_poisson_spike_train(
-            rate, binsize_samples, overestimation=max(2.0, 50.0 / rate), empty_ok=True, **kwargs
+            rate,
+            binsize_samples,
+            overestimation=max(2.0, 50.0 / rate),
+            empty_ok=True,
+            **kwargs,
         )
         st.append(bin + binst)
     st = np.concatenate(st)

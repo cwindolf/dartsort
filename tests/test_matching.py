@@ -425,6 +425,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
     trough_shifts = np.array(trough_shifts)
+    no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
@@ -438,7 +439,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             recording=rr,
             sorting=st,
             template_cfg=template_cfg,
-            motion_est=motion_util.IdentityMotionEstimate(),
+            motion=no_motion,
             save_folder=tmp_path,
             overwrite=True,
         )
@@ -461,7 +462,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
             featurization_cfg=nofeatcfg,
             template_data=template_data,
             sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
-            motion_est=motion_util.IdentityMotionEstimate(),
+            motion=no_motion,
         )
         matcher.precompute_peeling_data(tmp_path)
         matcher.to(dev)
@@ -583,6 +584,7 @@ def test_static(tmp_path, up_factor, cd_iter):
         ] += templates[l]
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
+    no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
@@ -596,7 +598,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             recording=rr,
             sorting=st,
             template_cfg=template_cfg,
-            motion_est=motion_util.IdentityMotionEstimate(),
+            motion=no_motion,
             save_folder=tmp_path,
             overwrite=True,
         )
@@ -621,7 +623,7 @@ def test_static(tmp_path, up_factor, cd_iter):
             featurization_cfg=nofeatcfg,
             template_data=template_data,
             sampling_cfg=dartsort.default_peeling_fit_sampling_cfg,
-            motion_est=motion_util.IdentityMotionEstimate(),
+            motion=no_motion,
         )
         matcher.precompute_peeling_data(tmp_path)
         matcher.to(dev)
@@ -787,6 +789,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         registered_templates=False,
     )
     matchconf = dartsort.MatchingConfig(threshold=threshold)
+    no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec1, rec0]:
@@ -795,7 +798,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             recording=rec,
             sorting=gts,
             output_dir=tmp_path / "match",
-            motion_est=None,
+            motion=no_motion,
             template_cfg=tempconf,
             featurization_cfg=featconf,
             matching_cfg=matchconf,
@@ -812,7 +815,7 @@ def test_with_simkit(simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]
     template_data = sim["templates"]
-    motion_est = sim["motion_est"]
+    motion = sim["motion"]
     gt_st = sim["sorting"]
 
     with tempfile.TemporaryDirectory() as tdir:
@@ -824,7 +827,7 @@ def test_with_simkit(simulations, sim_name, threshold):
             recording=rec,
             sorting=gt_st,
             output_dir=tdir,
-            motion_est=motion_est,
+            motion=motion,
             template_data=template_data,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
             matching_cfg=dartsort.MatchingConfig(threshold=threshold),

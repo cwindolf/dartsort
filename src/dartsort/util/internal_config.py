@@ -516,21 +516,34 @@ class MotionEstimationConfig:
 
     do_motion_estimation: bool = True
 
-    # sometimes spikes can be localized far away from the probe, causing
-    # issues with motion estimation, we will ignore such spikes
-    probe_boundary_padding_um: float = 100.0
-
     # DREDge parameters
+    probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: float = 1.0
     temporal_bin_length_s: float = 1.0
     window_step_um: float = 400.0
     window_scale_um: float = 450.0
     window_margin_um: float | None = argfield(default=None, arg_type=float)
-    max_dt_s: float = 1000.0
-    max_disp_um: float | None = argfield(default=None, arg_type=float)
+    max_dt_s: float = 500.0
+    max_disp_um: float | None = argfield(
+        default=None,
+        arg_type=float,
+        doc="Will be set to win_scale_um / 4 if left blank.",
+    )
     correlation_threshold: float = 0.1
+    weight_threshold: float = 0.2
     min_amplitude: float | None = argfield(default=None, arg_type=float)
     rigid: bool = False
+    speed_limit_um_per_s: float = argfield(
+        default=500.0,
+        arg_type=float,
+        doc="Motion bins exceeding this speed will be replaced by interpolation.",
+    )
+    max_dist_from_median_um: float = argfield(
+        default=500.0,
+        arg_type=float,
+        doc="Motion bins farther than this from the local median will be replaced by interpolation.",
+    )
+    median_neighborhood_bins: int = 51
 
 
 @cfg_dataclass

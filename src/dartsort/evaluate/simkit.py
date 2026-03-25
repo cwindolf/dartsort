@@ -1,44 +1,43 @@
-from pathlib import Path
-import pickle
-from typing import cast, Literal
 import warnings
+from pathlib import Path
+from typing import Literal, cast
 
-from dredge import motion_util
 import h5py
 import numpy as np
 import pandas as pd
+import torch
+from dredge import motion_util
 from scipy.signal import sawtooth
-from spikeinterface.core import read_binary_folder, BaseRecording
+from spikeinterface.core import BaseRecording, read_binary_folder
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessor,
     BasePreprocessorSegment,
+    BaseRecordingSegment,
 )
-import torch
 from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util.data_util import (
     DARTsortSorting,
+    divide_randomly,
     extract_random_snips,
     resolve_path,
-    divide_randomly,
 )
-from ..util.multiprocessing_util import get_pool
-from ..util.drift_util import registered_geometry
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
+from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import ptp
 from ..util.waveform_util import make_channel_index
+from .noise_recording_tools import get_background_recording
+from .sim_template_tools import TemplateSimulator, get_template_simulator
 from .simlib import (
-    simulate_sorting,
-    simulate_twostate_switching,
     add_features,
     default_sim_featurization_cfg,
     default_temporal_kernel_npy,
+    simulate_sorting,
+    simulate_twostate_switching,
 )
-from .noise_recording_tools import get_background_recording
-from .sim_template_tools import get_template_simulator, TemplateSimulator
-
 
 logger = get_logger(__name__)
 
@@ -215,21 +214,20 @@ def load_simulation(folder):
     recording_dir = folder / "recording"
     templates_npz = folder / "templates.npz"
     sorting_h5 = folder / "dartsort_sorting.h5"
-    motion_est_pkl = folder / "motion_est.pkl"
     unit_info_csv = folder / "unit_information.csv"
 
     recording = read_binary_folder(recording_dir)
     templates = TemplateData.from_npz(templates_npz)
     sorting = DARTsortSorting.from_peeling_hdf5(sorting_h5)
-    with open(motion_est_pkl, "rb") as jar:
-        motion_est = pickle.load(jar)
+    motion = MotionInfo.try_load(folder)
+    assert motion is not None
     unit_info_df = pd.read_csv(unit_info_csv)
 
     return dict(
         recording=recording,
         templates=templates,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         unit_info_df=unit_info_df,
     )
 
@@ -262,23 +260,13 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def templates(self, t_samples=None, up=False):
         return self.segment.templates(t_samples, up)
 
-    def motion_estimate(self):
-        if not self.segment.drift_speed:
-            return None
-
-        duration_s = np.ceil(self.get_duration())
-        t = np.arange(duration_s)
-        time_bin_centers = t + 0.5 * np.diff(t).mean()
-        tbc_samples = time_bin_centers * self.sampling_frequency
-        displacement = self.drift(tbc_samples)
-        return motion_util.get_motion_estimate(
-            displacement=displacement, time_bin_centers_s=time_bin_centers
-        )
+    def motion(self) -> MotionInfo:
+        return self.segment.motion
 
     def registered_geom(self):
-        me = self.motion_estimate()
+        motion = self.motion()
         geom = self.get_channel_locations()
-        rgeom = registered_geometry(geom, motion_est=me)
+        rgeom = motion.rgeom
         matches = np.square(geom[None] - rgeom[:, None]).sum(2).argmin(0)
         return rgeom, matches
 
@@ -493,7 +481,6 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         recording_dir = folder / "recording"
         templates_npz = folder / "templates.npz"
         sorting_h5 = folder / "dartsort_sorting.h5"
-        motion_est_pkl = folder / "motion_est.pkl"
         unit_info_csv = folder / "unit_information.csv"
 
         with warnings.catch_warnings(record=True) as ws:
@@ -531,17 +518,17 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             add_features(sorting_h5, recording, featurization_cfg)
 
         self.gt_unit_information().to_csv(unit_info_csv)
-        with open(motion_est_pkl, "wb") as jar:
-            pickle.dump(self.motion_estimate(), jar)
+        self.motion().save(folder)
         self.template_data(sorting_h5).to_npz(templates_npz)
 
 
 class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
     def __init__(
         self,
-        parent_recording_segment,
+        parent_recording_segment: BaseRecordingSegment,
         n_channels: int,
         *,
+        geom: np.ndarray,
         firing_kind: Literal["uniform", "switching_two_state"],
         min_fr_hz: float,
         max_fr_hz: float,
@@ -577,6 +564,24 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         self.refractory_samples = int(
             refractory_ms * (self.sampling_frequency / 1000.0)
         )
+
+        # store motion
+
+        if not self.drift_speed:
+            self.motion = MotionInfo.from_motion_est(geom=geom)
+        else:
+            duration_s = np.ceil(self.get_end_time() - self.get_start_time())
+            t = np.arange(duration_s)
+            time_bin_centers = t + 0.5 * np.diff(t).mean()
+            tbc_samples = time_bin_centers * self.sampling_frequency
+            displacement = self.drift(tbc_samples)
+            dredge_me = motion_util.get_motion_estimate(
+                displacement=displacement, time_bin_centers_s=time_bin_centers
+            )
+            self.motion = MotionInfo.from_motion_est(
+                geom=geom,
+                dredge_motion_est=dredge_me,
+            )
 
         # shapes
         self.n_units = self.template_simulator.n_units

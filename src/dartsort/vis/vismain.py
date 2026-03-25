@@ -5,6 +5,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from dredge import motion_util
 from tqdm.auto import tqdm
 
 from ..evaluate.analysis import DARTsortAnalysis
@@ -13,22 +14,13 @@ from ..evaluate.hybrid_util import load_dartsort_step_sortings
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
-    raw_template_cfg,
     default_refinement_cfg,
+    raw_template_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.registration_util import try_load_motion_est
-from . import gt, over_time, scatterplots, unit, unit_comparison, versus, mixture
+from ..util.motion import try_load_motion_info
+from . import gt, mixture, scatterplots, unit, unit_comparison, versus
 from .sorting import make_sorting_summary
-
-try:
-    from dredge import motion_util
-
-    have_dredge = True
-except ImportError:
-    have_dredge = False
-    motion_util = None
-
 
 logger = getLogger(__name__)
 
@@ -39,14 +31,13 @@ def visualize_sorting(
     output_directory,
     sorting_name=None,
     sorting_path=None,
-    motion_est=None,
+    motion=None,
     gt_analysis=None,
     other_analyses=None,
     gt_comparison_with_distances=True,
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
-    make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
     make_mixture_summaries=False,
@@ -84,7 +75,7 @@ def visualize_sorting(
             sorting_scatterplots(
                 output_directory,
                 sorting,
-                motion_est=motion_est,
+                motion=motion,
                 amplitude_color_cutoff=amplitude_color_cutoff,
                 amplitudes_dataset_name=amplitudes_dataset_name,
                 dpi=dpi,
@@ -104,10 +95,9 @@ def visualize_sorting(
         recording,
         sorting,
         sorting_name=sorting_name,
-        motion_est=motion_est,
+        motion=motion,
         make_sorting_summaries=make_sorting_summaries,
         make_unit_summaries=make_unit_summaries,
-        make_animations=make_animations,
         make_gt_overviews=make_gt_overviews,
         make_unit_comparisons=make_unit_comparisons,
         make_versus=make_versus,
@@ -124,9 +114,7 @@ def visualize_sorting(
         n_units=n_units,
         single_unit_ids=single_unit_ids,
     )
-    sum_png, unit_sum_dir, anim_png, comp_png, unit_comp_dir, vs_png, mix_dir = (
-        paths_or_nones
-    )
+    sum_png, unit_sum_dir, comp_png, unit_comp_dir, vs_png, mix_dir = paths_or_nones
 
     try:
         if sum_png is not None:
@@ -139,15 +127,6 @@ def visualize_sorting(
             warnings.warn(str(e))
         else:
             raise
-
-    if anim_png is not None:
-        if overwrite or not anim_png.exists():
-            over_time.sorting_scatter_animation(
-                analysis,
-                anim_png,
-                chunk_length_samples=chunk_length_s * recording.sampling_frequency,
-                interval=frame_interval,
-            )
 
     try:
         if comp_png is not None and gt_analysis is not None:
@@ -230,7 +209,6 @@ def visualize_all_sorting_steps(
     make_scatterplots=True,
     make_sorting_summaries=True,
     make_unit_summaries=True,
-    make_animations=False,
     make_gt_overviews=True,
     make_unit_comparisons=True,
     make_mixture_summaries=False,
@@ -244,8 +222,8 @@ def visualize_all_sorting_steps(
     step_name_filter: Callable | None = None,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     amp_vecs_dataset_name="denoised_ptp_amplitude_vectors",
-    motion_est=None,
-    motion_est_pkl="motion_est.pkl",
+    motion=None,
+    motion_pkl="motion.pkl",
     channel_show_radius_um=50.0,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
@@ -264,8 +242,8 @@ def visualize_all_sorting_steps(
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
 
-    if motion_est is None:
-        motion_est = try_load_motion_est(dartsort_dir, motion_est_pkl)
+    if motion is None:
+        motion = try_load_motion_info(dartsort_dir, motion_pkl)
 
     fnames = ["times_seconds", "geom", "channel_index"]
     if make_scatterplots or make_sorting_summaries:
@@ -316,11 +294,10 @@ def visualize_all_sorting_steps(
                 sorting=step_sorting,
                 sorting_name=step_name,
                 output_directory=visualizations_dir / step_dir_name,
-                motion_est=motion_est,
+                motion=motion,
                 make_scatterplots=make_scatterplots,
                 make_sorting_summaries=make_sorting_summaries,
                 make_unit_summaries=make_unit_summaries,
-                make_animations=make_animations,
                 make_gt_overviews=make_gt_overviews,
                 make_unit_comparisons=make_unit_comparisons,
                 make_versus=make_versus,
@@ -353,7 +330,7 @@ def visualize_all_sorting_steps(
 def sorting_scatterplots(
     output_directory,
     sorting,
-    motion_est=None,
+    motion=None,
     amplitude_color_cutoff=15.0,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     dpi=200,
@@ -366,17 +343,18 @@ def sorting_scatterplots(
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
-        if have_dredge and motion_est is not None:
-            assert motion_util is not None
-            motion_util.plot_me_traces(motion_est, axes[2], color="r", lw=1)
+        if motion is not None and motion.dredge_motion_est is not None:
+            motion_util.plot_me_traces(
+                motion.dredge_motion_est, axes[2], color="r", lw=1
+            )
         fig.savefig(scatter_unreg, dpi=dpi)
         plt.close(fig)
 
     scatter_reg = output_directory / "scatter_reg.png"
-    if motion_est is not None and (overwrite or not scatter_reg.exists()):
+    if motion is not None and (overwrite or not scatter_reg.exists()):
         fig, axes, scatters = scatterplots.scatter_spike_features(
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             registered=True,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
@@ -390,10 +368,9 @@ def _plan_vis(
     recording,
     sorting,
     sorting_name=None,
-    motion_est=None,
+    motion=None,
     make_sorting_summaries=False,
     make_unit_summaries=False,
-    make_animations=False,
     make_gt_overviews=False,
     make_unit_comparisons=False,
     make_versus=False,
@@ -458,15 +435,6 @@ def _plan_vis(
     else:
         unit_summary_dir = None
 
-    if make_animations and is_labeled:
-        animation_png = output_directory / "animation.mp4"
-        need_anim = overwrite or not animation_png.exists()
-        need_analysis = need_analysis or need_anim
-        if not need_anim:
-            animation_png = None
-    else:
-        animation_png = None
-
     if make_mixture_summaries and is_labeled:
         mix_dir = output_directory / "mixture_summaries"
         if overwrite:
@@ -526,7 +494,7 @@ def _plan_vis(
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             name=sorting_name,
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,
@@ -566,9 +534,7 @@ def _plan_vis(
 
     if need_mix:
         mix = mixture.fit_mixture_for_vis(
-            sorting=sorting,
-            motion_est=motion_est,
-            refinement_cfg=mix_refinement_cfg,
+            sorting=sorting, motion=motion, refinement_cfg=mix_refinement_cfg
         )
     else:
         mix = None
@@ -580,7 +546,6 @@ def _plan_vis(
         mix,
         sorting_summary_png,
         unit_summary_dir,
-        animation_png,
         comparison_png,
         unit_comparison_dir,
         vs_png,

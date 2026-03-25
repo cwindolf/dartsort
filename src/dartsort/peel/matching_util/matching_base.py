@@ -3,13 +3,13 @@ from typing import Literal, Self, cast
 
 import torch
 import torch.nn.functional as F
-from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording
 from torch import Tensor
 
 from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.motion import MotionInfo
 from ...util.py_util import databag
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule
@@ -42,7 +42,7 @@ class MatchingTemplates(BModule):
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None = None,
-        motion_est=None,
+        motion: MotionInfo,
         overwrite: bool = False,
         dtype=torch.float,
     ) -> Self:
@@ -56,7 +56,7 @@ class MatchingTemplates(BModule):
             template_data=template_data,
             matching_cfg=matching_cfg,
             computation_cfg=computation_cfg,
-            motion_est=motion_est,
+            motion=motion,
             overwrite=overwrite,
             dtype=dtype,
         )
@@ -70,7 +70,7 @@ class MatchingTemplates(BModule):
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
-        motion_est,
+        motion: MotionInfo,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
@@ -101,7 +101,7 @@ class MatchingTemplatesBuilder:
     recording: BaseRecording
     template_data: TemplateData
     matching_cfg: MatchingConfig
-    motion_est: MotionEstimate | None = None
+    motion: MotionInfo
     dtype: torch.dtype = torch.float
 
     def build(
@@ -116,7 +116,7 @@ class MatchingTemplatesBuilder:
             template_data=self.template_data,
             matching_cfg=self.matching_cfg,
             computation_cfg=computation_cfg,
-            motion_est=self.motion_est,
+            motion=self.motion,
             dtype=self.dtype,
             overwrite=overwrite,
         )
