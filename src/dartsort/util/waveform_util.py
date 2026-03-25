@@ -56,7 +56,7 @@ def get_pitch(geom, direction=1, allow_horizontal=False):
         if allow_horizontal:
             return 0
         else:
-            raise ValueError("Horizontal probe.")
+            raise ValueError(f"Horizontal probe: {geom=}")
 
     assert all_unique_y.size > 1
     return np.diff(all_unique_y).min()

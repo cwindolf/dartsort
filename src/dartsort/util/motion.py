@@ -45,8 +45,14 @@ class MotionInfo:
         have_si = si_motion is not None
         drifting = have_dredge or have_si
 
-        pitch = get_pitch(geom)
-        min_dist = float(np.sqrt(pdist(geom, metric="sqeuclidean").min()))
+        pitch = get_pitch(geom, allow_horizontal=True)
+        if pitch == 0.0:
+            assert not drifting
+        if geom.shape[0] > 1:
+            min_dist = float(np.sqrt(pdist(geom, metric="sqeuclidean").min()))
+        else:
+            assert not drifting
+            min_dist = 0.0
 
         # get rgeom and its KDTree
         geom_kdt = KDTree(geom)

@@ -19,14 +19,10 @@ from ..templates import TemplateData
 from ..templates.superres_util import superres_sorting
 from ..util import spikeio
 from ..util.data_util import DARTsortSorting
-from ..util.drift_util import (
-    registered_geometry,
-    registered_template,
-)
+from ..util.drift_util import registered_template
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
-    TemplateSVDMethod,
     WaveformConfig,
     default_waveform_cfg,
 )
@@ -137,9 +133,6 @@ def get_templates_unitextract(
         unit_ids = group_ids[results["unit_ids"]]  # type: ignore
     else:
         unit_ids = results["unit_ids"]
-    rgeom = results["registered_geom"]
-    if rgeom is None:
-        rgeom = geom
     if tsvd is None:
         tsvd = results["denoising_tsvd"]
     assert tsvd is None or isinstance(tsvd, (PCA, TruncatedSVD))
@@ -276,6 +269,7 @@ def get_templates(
     res = get_all_shifted_raw_and_low_rank_templates(
         recording,
         sorting,
+        drifting=motion.drifting,
         registered_geom=motion.rgeom,
         denoising_tsvd=denoising_tsvd,
         pitch_shifts=pitch_shifts,
@@ -284,6 +278,7 @@ def get_templates(
         n_jobs=n_jobs,
         units_per_job=template_cfg.units_per_job,
         random_seed=random_seed,
+        match_distance=motion.min_dist / 1.5,
         show_progress=show_progress,
         dtype=dtype,
         trough_offset_samples=trough_offset_samples,
@@ -349,11 +344,13 @@ def get_templates(
 def get_all_shifted_raw_and_low_rank_templates(
     recording,
     sorting,
+    drifting: bool,
     registered_geom=None,
     denoising_tsvd=None,
     pitch_shifts=None,
     with_raw_std_dev=False,
     spikes_per_unit=500,
+    match_distance=0.0,
     reducer=fast_nanmedian,
     n_jobs=0,
     units_per_job=8,
@@ -411,7 +408,9 @@ def get_all_shifted_raw_and_low_rank_templates(
             random_seed,
             recording,
             sorting,
+            drifting,
             registered_kdtree,
+            match_distance,
             denoising_tsvd,
             pitch_shifts,
             spikes_per_unit,
@@ -483,7 +482,9 @@ class TemplateProcessContext:
         rg,
         recording,
         sorting,
+        drifting,
         registered_kdtree,
+        match_distance,
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,
@@ -498,7 +499,7 @@ class TemplateProcessContext:
         dtype,
     ):
         self.n_channels = recording.get_num_channels()
-        self.registered = registered_kdtree is not None
+        self.registered = drifting
 
         self.rg = rg
         self.device = device
@@ -535,7 +536,7 @@ class TemplateProcessContext:
         self.n_template_channels = self.n_channels
         if self.registered:
             self.geom = recording.get_channel_locations()
-            self.match_distance = pdist(self.geom).min() / 2
+            self.match_distance = match_distance
             self.registered_geom = registered_kdtree.data
             self.registered_kdtree = registered_kdtree
             self.pitch_shifts = pitch_shifts
@@ -550,7 +551,9 @@ def _template_process_init(
     random_seed,
     recording,
     sorting,
+    drifting,
     registered_kdtree,
+    match_distance,
     denoising_tsvd,
     pitch_shifts,
     spikes_per_unit,
@@ -580,7 +583,9 @@ def _template_process_init(
         rg,
         recording,
         sorting,
+        drifting,
         registered_kdtree,
+        match_distance,
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,

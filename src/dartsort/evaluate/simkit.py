@@ -244,6 +244,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             InjectSpikesPreprocessorSegment(
                 recording._recording_segments[0],
                 n_channels=self.get_num_channels(),
+                geom=recording.get_channel_locations(),
                 **simulation_kwargs,
             )
         )
