@@ -37,8 +37,6 @@ def fit_tsvd(
         return tsvd
 
     if svd_method == "raw_template":
-        from .template_util import shared_basis_compress_templates
-
         if svd_input_templates is None:
             td = quick_mean_templates(
                 recording=recording,
@@ -49,21 +47,13 @@ def fit_tsvd(
             )
         else:
             td = svd_input_templates
-        tdc = shared_basis_compress_templates(
+        pca = pca_from_templates(
             td,
             rank=template_cfg.denoising_rank,
-            computation_cfg=computation_cfg,
             min_channel_amplitude=template_cfg.template_min_channel_amplitude,
+            random_seed=random_seed,
+            computation_cfg=computation_cfg,
         )
-        basis = tdc.temporal_components
-        pca = PCA(
-            n_components=template_cfg.denoising_rank,
-            random_state=random_seed,
-            whiten=False,
-        )
-        pca.mean_ = np.zeros_like(td.templates[0, :, 0])
-        pca.components_ = basis
-        pca.explained_variance_ = np.full_like(basis[:, 0], np.nan)
         return pca
 
     assert svd_method == "spike_sklearn"
@@ -89,7 +79,11 @@ def fit_tsvd(
     valid = np.logical_and(sorting.labels >= 0, sorting.times_samples == t_clip)
     choices = np.flatnonzero(valid)
     if choices.size > template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit:
-        choices = rg.choice(choices, template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit, replace=False)
+        choices = rg.choice(
+            choices,
+            template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
+            replace=False,
+        )
         choices.sort()
     times = sorting.times_samples[choices]
     channels = sorting.channels[choices]
@@ -117,6 +111,33 @@ def fit_tsvd(
     tsvd.fit(waveforms)
 
     return tsvd
+
+
+def pca_from_templates(
+    td: TemplateData,
+    rank: int,
+    min_channel_amplitude: float = 1.0,
+    random_seed: int = 0,
+    computation_cfg: ComputationConfig | None = None,
+) -> PCA:
+    from .template_util import shared_basis_compress_templates
+
+    tdc = shared_basis_compress_templates(
+        td,
+        rank=rank,
+        computation_cfg=computation_cfg,
+        min_channel_amplitude=min_channel_amplitude,
+    )
+    basis = tdc.temporal_components
+    pca = PCA(
+        n_components=rank,
+        random_state=random_seed,
+        whiten=False,
+    )
+    pca.mean_ = np.zeros_like(td.templates[0, :, 0])
+    pca.components_ = basis
+    pca.explained_variance_ = np.full_like(basis[:, 0], np.nan)
+    return pca
 
 
 def denoising_weights(

@@ -1,4 +1,5 @@
 import gc
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from spikeinterface.core import BaseRecording
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
+    FeaturizationConfig,
     SubtractionConfig,
     TemplateConfig,
     TemplateMergeConfig,
@@ -26,7 +28,7 @@ from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
-from .templib import quick_mean_templates, fit_tsvd
+from .templib import fit_tsvd, pca_from_templates, quick_mean_templates
 
 logger = get_logger(__name__)
 
@@ -47,6 +49,8 @@ def estimate_template_library(
     tsvd: PCA | TruncatedSVD | None = None,
     whitener: SpatialWhitener | None = None,
     computation_cfg: ComputationConfig | None = None,
+    fit_featurization_tsvd: bool = False,
+    featurization_cfg: FeaturizationConfig | None = None,
     detection_cfg: Any | None = None,
     depth_order: bool = False,
     template_npz_path=None,
@@ -83,6 +87,21 @@ def estimate_template_library(
             computation_cfg=computation_cfg,
             svd_input_templates=templates0,
         )
+
+    if fit_featurization_tsvd:
+        assert featurization_cfg is not None
+        assert templates0 is not None
+        featurization_basis = featurization_basis_from_templates(
+            templates0,
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=waveform_cfg,
+            rank=featurization_cfg.tpca_rank,
+            min_channel_amplitude=template_cfg.template_min_channel_amplitude,
+            sampling_frequency=recording.sampling_frequency,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        featurization_basis = None
 
     # filter out low-count/snr units
     if templates0 is None and (min_template_count or min_template_snr):
@@ -125,6 +144,7 @@ def estimate_template_library(
         computation_cfg=computation_cfg,
         tsvd=tsvd,
         whitener=whitener,
+        featurization_basis=featurization_basis,
     )
     gc.collect()
     torch.cuda.empty_cache()
@@ -271,16 +291,13 @@ def reorder_by_depth(sorting, template_data):
     rsd = template_data.raw_std_dev
     if rsd is not None:
         rsd = rsd[new_to_old]
-    template_data = TemplateData(
+    template_data = replace(
+        template_data,
         templates=template_data.templates[new_to_old],
         unit_ids=uids,
         spike_counts=template_data.spike_counts[new_to_old],
         spike_counts_by_channel=scbc,
         raw_std_dev=rsd,
-        registered_geom=template_data.registered_geom,
-        trough_offset_samples=template_data.trough_offset_samples,
-        whitener=template_data.whitener,
-        tsvd=template_data.tsvd,
         properties=properties,
     )
     return sorting, template_data
@@ -292,6 +309,40 @@ def ensure_save(template_data, template_npz_path):
         template_npz_path.parent.mkdir(exist_ok=True)
         template_data.to_npz(template_npz_path)
     return template_data
+
+
+def featurization_basis_from_templates(
+    templates0: TemplateData,
+    featurization_cfg: FeaturizationConfig,
+    waveform_cfg: WaveformConfig,
+    sampling_frequency: float,
+    rank: int,
+    min_channel_amplitude: float,
+    computation_cfg: ComputationConfig,
+    random_seed: int = 0,
+):
+    if featurization_cfg.input_tpca_waveform_cfg is None:
+        templates = templates0
+    else:
+        tslice = featurization_cfg.input_tpca_waveform_cfg.relative_slice(
+            waveform_cfg, sampling_frequency
+        )
+        trough = templates0.trough_offset_samples - tslice.start
+        templates = TemplateData(
+            templates=templates0.templates[:, tslice],
+            trough_offset_samples=trough,
+            unit_ids=templates0.unit_ids,
+            spike_counts=templates0.spike_counts,
+            spike_counts_by_channel=templates0.spike_counts_by_channel,
+        )
+    pca = pca_from_templates(
+        templates,
+        rank=rank,
+        min_channel_amplitude=min_channel_amplitude,
+        random_seed=random_seed,
+        computation_cfg=computation_cfg,
+    )
+    return pca.components_
 
 
 def _check_still_valid(sorting: DARTsortSorting):
@@ -425,16 +476,15 @@ def _handle_merge(
     else:
         raw_std_dev = None
 
-    template_data = TemplateData(
-        templates,
+    template_data = replace(
+        template_data,
+        templates=templates,
         unit_ids=np.arange(len(templates)),
         spike_counts=spike_counts,
         spike_counts_by_channel=spike_counts_by_channel,
         raw_std_dev=raw_std_dev,
         registered_geom=template_data.registered_geom,
         trough_offset_samples=template_data.trough_offset_samples,
-        whitener=template_data.whitener,
-        tsvd=template_data.tsvd,
     )
     return sorting, template_data
 

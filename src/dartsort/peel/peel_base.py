@@ -37,11 +37,19 @@ _lock = Lock()
 class BasePeeler(BModule):
     """Base class for peeling operations (subtraction, deconv, etc)
 
-    Subtraction, deconv, and other things like just grabbing waveforms
-    and featurizing a preexisting spike train (implemented with optional
-    additional peeling of preexisting templates in grab.py) share a lot
-    of logic for featurization and parallelization and data saving/loading.
-    This class handles all of that stuff so that it can be shared.
+    Subtraction, template matching, and other things like just grabbing waveforms
+    and featurizing a preexisting spike train (implemented with optional additional
+    peeling of preexisting templates in grab.py) share a lot of logic: reading 
+    chunks of data in parallel, extracting spike waveform snippets, denoising,
+    featurizing, .... This class implements the common logic.
+
+    Instances of peeler subclasses are usually instantiated with their .from_config()
+    alternate constructors and run using peel_util.run_peeler.
+
+    Results of peeling operations are DARTsortSorting objects. Peelers save outputs in
+    an HDF5 format with lots of datasets. Most of these datasets will have the same length
+    (.shape[0]), which is the number of spikes. Those datasets are loaded up and dealt
+    with via the DARTsortSorting.
     """
 
     peel_kind = ""
@@ -144,6 +152,7 @@ class BasePeeler(BModule):
         task_name=None,
         ignore_resuming=False,
         computation_cfg=None,
+        known_spike_count: int | None = None,
     ):
         """Run the full (already fitted) peeling and featurization pipeline
 
@@ -247,20 +256,18 @@ class BasePeeler(BModule):
                 # launch the jobs and wrap in a progress bar
                 results = pool.map(_peeler_process_job, jobs)
                 if show_progress:
-                    n_sec_chunk = (
-                        chunk_length_samples / self.recording.get_sampling_frequency()
-                    )
+                    s_chunk = chunk_length_samples / self.recording.sampling_frequency
                     dtag = computation_cfg.actual_device().type
                     results = tqdm(
                         results,
                         total=n_chunks_orig,
                         initial=n_chunks_orig - len(chunks_to_do),
                         smoothing=0,
-                        desc=f"{task_name}:{dtag} {n_sec_chunk:.1f}s/it [spk/it=%%%]",
+                        desc=f"{task_name}:{dtag} {s_chunk:.1f}s/it [spk/it=%%%]",
                         mininterval=0.25,
                     )
                 else:
-                    dtag = n_sec_chunk = None
+                    dtag = s_chunk = None
 
                 # construct h5 after forking to avoid pickling it
                 with self.initialize_files(
@@ -269,12 +276,8 @@ class BasePeeler(BModule):
                     overwrite=overwrite,
                     skip_features=skip_features,
                     residual_to_h5=residual_to_h5,
-                ) as (
-                    output_h5,
-                    h5_spike_datasets,
-                    residual_file,
-                    n_spikes,
-                ):
+                    known_spike_count=known_spike_count,
+                ) as (output_h5, h5_spike_datasets, residual_file, n_spikes):
                     batch_count = 0
                     try:
                         for result, chunk_start_samples in zip(results, chunks_to_do):
@@ -293,8 +296,8 @@ class BasePeeler(BModule):
                             if show_progress:
                                 desc = f"{task_name}:{dtag}"
                                 if not skip_features:
-                                    assert n_sec_chunk is not None
-                                    desc += f" [spk/{n_sec_chunk:g}s={n_spikes / batch_count:0.1f}]"
+                                    assert s_chunk is not None
+                                    desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
                                 results.set_description(desc, refresh=False)  # type: ignore
                             if not skip_features and (
                                 stop_after_n_waveforms
@@ -534,8 +537,10 @@ class BasePeeler(BModule):
 
             for ds in self.out_datasets():
                 h5ds = h5_spike_datasets[ds.name]
-                h5ds.resize(cur_n_spikes + n_new_spikes, axis=0)
-                h5ds[cur_n_spikes:] = chunk_result[ds.name]
+                i1 = cur_n_spikes + n_new_spikes
+                if h5ds.chunks is not None:
+                    h5ds.resize(i1, axis=0)
+                h5ds[cur_n_spikes:i1] = chunk_result[ds.name]
 
         return n_new_spikes
 
@@ -672,6 +677,7 @@ class BasePeeler(BModule):
             return chunk_starts_samples
         if chunk_length_samples is None:
             chunk_length_samples = self.chunk_length_samples
+        assert isinstance(chunk_length_samples, int)
 
         T_samples = self.recording.get_num_samples()
         if t_end is None:
@@ -783,6 +789,7 @@ class BasePeeler(BModule):
         libver="latest",
         residual_to_h5=False,
         skip_features=False,
+        known_spike_count: int | None = None,
     ):
         """Create, overwrite, or re-open output files"""
         if output_hdf5_filename is None:
@@ -808,6 +815,8 @@ class BasePeeler(BModule):
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
         last_chunk_start: int = output_h5["last_chunk_start"][()]  # type: ignore
+        if known_spike_count is not None:
+            assert known_spike_count >= n_spikes
 
         # write some fixed arrays that are useful to have around
         for name, value in self.fixed_output_data:
@@ -824,16 +833,21 @@ class BasePeeler(BModule):
                 if ds.name in output_h5:
                     dset = output_h5[ds.name]
                     assert isinstance(dset, h5py.Dataset)
-                    h5_spike_datasets[ds.name] = dset
-                else:
+                elif known_spike_count is None:
                     dset = output_h5.create_dataset(
                         ds.name,
                         dtype=ds.dtype,
                         shape=(n_spikes, *ds.shape_per_spike),
-                        maxshape=(None, *ds.shape_per_spike),
+                        maxshape=(known_spike_count, *ds.shape_per_spike),
                         chunks=(chunk_size, *ds.shape_per_spike),
                     )
-                    h5_spike_datasets[ds.name] = dset
+                else:
+                    dset = output_h5.create_dataset(
+                        ds.name,
+                        dtype=ds.dtype,
+                        shape=(known_spike_count, *ds.shape_per_spike),
+                    )
+                h5_spike_datasets[ds.name] = dset
 
         if residual_to_h5:
             if "residual" not in output_h5:

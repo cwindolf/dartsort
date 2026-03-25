@@ -153,6 +153,7 @@ class FeaturizationConfig:
         ms_before=0.75, ms_after=1.25
     )
     tpca_max_waveforms: int = 40_000
+    tpca_from_templates: bool = True
 
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
@@ -673,6 +674,7 @@ class RefinementConfig:
     kmeans_tries: int = 5
     kmeanspp_tries: int = 5
     full_proposal_every: int = 10
+    main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
     robust_strategy: Literal["none", "fixed"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
@@ -708,12 +710,13 @@ class RefinementConfig:
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
+    n_jobs_small: int = -1
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
 
     @classmethod
-    def from_n_jobs(cls, n_jobs):
-        return cls(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs)
+    def from_n_jobs(cls, n_jobs, n_jobs_small=-1):
+        return cls(n_jobs_cpu=n_jobs, n_jobs_gpu=n_jobs, n_jobs_small=n_jobs_small)
 
     def actual_device(self):
         if self.device is None:
@@ -723,7 +726,9 @@ class ComputationConfig:
             return torch.device("cpu")
         return torch.device(self.device)
 
-    def actual_n_jobs(self):
+    def actual_n_jobs(self, small: bool = False):
+        if small:
+            return self.n_jobs_small
         if self.actual_device().type == "cuda":
             return self.n_jobs_gpu
         return self.n_jobs_cpu

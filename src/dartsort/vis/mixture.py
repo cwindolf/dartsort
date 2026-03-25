@@ -214,7 +214,7 @@ class ISIHistogram(MixtureComponentPlot):
             -0.5 * self.bin_ms, self.max_ms + self.bin_ms + 1e-5, self.bin_ms
         )
         counts, _ = np.histogram(dt_ms, bin_edges)
-        axis.stairs(counts, bin_edges, color=glasbey1024[unit_id], fill=True)
+        axis.stairs(counts, bin_edges, color=glasbey1024[unit_id % len(glasbey1024)], fill=True)
         axis.set_xlabel(f"isi (ms, {dt_ms.size + 1} tot. sp.)")
         axis.set_ylabel("count")
 
@@ -318,7 +318,7 @@ class LikelihoodsView(MixtureComponentPlot):
         ax_time.set_xlabel("time (s)")
         ax_noise.set_xlabel("noise loglik")
         ax_hist.set_xlabel("count")
-        c = glasbey1024[unit_id]
+        c = glasbey1024[unit_id % len(glasbey1024)]
 
         ax_time.scatter(t, noise_ll, s=3, lw=0, color="darkgray")
         ax_time.scatter(t, my_ll, s=3, lw=0, color=c)
@@ -362,7 +362,7 @@ class NeighborMeans(MixtureComponentPlot):
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         chans, neighbors, means = self.compute(mix_data, unit_id)
-        colors = [glasbey1024[j] for j in neighbors]
+        colors = [glasbey1024[j % len(glasbey1024)] for j in neighbors]
         ax = panel.subplots()
         chans = chans[None].broadcast_to(len(means), *chans.shape)
         geomplot(
@@ -579,7 +579,7 @@ class MeanView(MixtureComponentPlot):
             channels=pchans[None],
             max_abs_amp=maa,
             geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
-            color=glasbey1024[unit_id],
+            color=glasbey1024[unit_id % len(glasbey1024)],
             ax=ax,
             show_zero=False,
             annotate_z=True,

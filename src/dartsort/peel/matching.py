@@ -177,6 +177,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
+
         trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
@@ -187,6 +188,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 matching_cfg.precomputed_templates_npz
             )
         assert trough_offset_samples == template_data.trough_offset_samples
+
+        nofeat = featurization_cfg.skip or featurization_cfg.denoise_only
+        do_tpca = featurization_cfg.save_input_tpca_projs and not nofeat
+        if do_tpca and featurization_cfg.tpca_from_templates:
+            from ..transform import TemporalPCAFeaturizer as TF
+
+            (tpca,) = [f for f in featurization_pipeline if isinstance(f, TF)]
+            tpca.initialize_from_templates(template_data)
 
         builder = MatchingTemplatesBuilder(
             recording=recording,

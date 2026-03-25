@@ -47,6 +47,7 @@ class TemplateData:
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
     whitener: np.ndarray | None = None
+    featurization_basis: np.ndarray | None = None
 
     # plugin registry for classes which actually estimate templates to hook into
     _registry: ClassVar = {}
@@ -142,6 +143,8 @@ class TemplateData:
             to_save["raw_std_dev"] = self.raw_std_dev
         if self.whitener is not None:
             to_save["whitener"] = self.whitener
+        if self.featurization_basis is not None:
+            to_save["featurization_basis"] = self.featurization_basis
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
         if self.properties is not None:
@@ -220,6 +223,7 @@ class TemplateData:
         whitener: SpatialWhitener | None = None,
         save_npz_name: str | None = "template_data.npz",
         tsvd=None,
+        featurization_basis=None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> "TemplateData":
@@ -262,6 +266,7 @@ class TemplateData:
             computation_cfg=computation_cfg,
             show_progress=show_progress,
         )
+        self = replace(self, featurization_basis=featurization_basis)
 
         gc.collect()
         torch.cuda.empty_cache()

@@ -90,7 +90,7 @@ def annotated_dendro(
         lines[j, :, 0] = ic
         lines[j, :, 1] = dc
         if dc[1] < threshold:
-            colors[j] = glasbey1024[n + j]
+            colors[j] = glasbey1024[(n + j) % len(glasbey1024)]
         else:
             colors[j] = above_threshold_color
 
@@ -251,8 +251,8 @@ def distance_matrix_dendro(
         for i, (tx, ty) in enumerate(
             zip(ax_im.xaxis.get_ticklabels(), ax_im.yaxis.get_ticklabels())
         ):
-            tx.set_color(label_colors[unit_ids[i]])
-            ty.set_color(label_colors[unit_ids[i]])
+            tx.set_color(label_colors[unit_ids[i] % len(label_colors)])
+            ty.set_color(label_colors[unit_ids[i] % len(label_colors)])
     else:
         ax_im.set_xticks([])
         ax_im.set_yticks([])

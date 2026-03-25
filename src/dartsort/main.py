@@ -488,6 +488,8 @@ def match(
             template_merge_cfg=matching_cfg.template_merge_cfg,
             computation_cfg=computation_cfg,
             detection_cfg=previous_detection_cfg,
+            fit_featurization_tsvd=featurization_cfg.tpca_from_templates,
+            featurization_cfg=featurization_cfg,
             tsvd=template_denoising_tsvd,
             whitener=whitener,
             template_npz_path=model_dir / template_npz_filename,

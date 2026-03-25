@@ -134,7 +134,7 @@ def tmm_demix(
         assert save_step_labels_format is not None
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
-    tmm.em(train_data)
+    tmm.em(train_data, min_iters=tmm.p.main_min_iters)
     if saving:
         stepname = f"tmm00em"
         save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
@@ -151,10 +151,20 @@ def tmm_demix(
         for inner_it, step_type in enumerate(refinement_cfg.mixture_steps):
             if step_type == "split":
                 run_split(tmm, train_data, val_data, prog_level)
-                tmm.em(train_data, show_progress=prog_level, allow_blanks=allow_blanks)
+                tmm.em(
+                    train_data,
+                    show_progress=prog_level,
+                    allow_blanks=allow_blanks,
+                    min_iters=tmm.p.main_min_iters,
+                )
             elif step_type == "merge":
                 run_merge(tmm, train_data, val_data, prog_level)
-                tmm.em(train_data, show_progress=prog_level, allow_blanks=allow_blanks)
+                tmm.em(
+                    train_data,
+                    show_progress=prog_level,
+                    allow_blanks=allow_blanks,
+                    min_iters=tmm.p.main_min_iters,
+                )
             elif step_type == "demolish":
                 assert val_data is not None
                 _not_last = outer_it + 1 < refinement_cfg.n_total_iters
@@ -166,7 +176,10 @@ def tmm_demix(
                 if _will_em:
                     allow_blanks = True
                     tmm.em(
-                        train_data, show_progress=prog_level, allow_blanks=allow_blanks
+                        train_data,
+                        show_progress=prog_level,
+                        allow_blanks=allow_blanks,
+                        min_iters=tmm.p.main_min_iters,
                     )
             else:
                 assert False
@@ -612,6 +625,7 @@ class TMMParams:
     min_channel_count: int
     split_min_count: int
     full_proposal_every: int
+    main_min_iters: int
     elbo_atol: float
     robust_strategy: RobustnessStrategy
     demolition_min_resp_ratio: float
@@ -640,6 +654,7 @@ class TMMParams:
             prior_pseudocount=refinement_cfg.prior_pseudocount,
             initial_basis_shrinkage=refinement_cfg.initial_basis_shrinkage,
             full_proposal_every=refinement_cfg.full_proposal_every,
+            main_min_iters=refinement_cfg.main_min_iters,
             cl_alpha=refinement_cfg.cl_alpha,
             cl_split_only=refinement_cfg.cl_split_only,
             latent_prior_std=refinement_cfg.latent_prior_std,
@@ -2105,12 +2120,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
         data: TruncatedSpikeData,
         show_progress: int = 1,
         allow_blanks: bool = False,
+        min_iters: int | None = None,
     ):
         assert self.lut_params is not None
         if show_progress:
             iters = trange(self.p.em_iters, desc="EM")
         else:
             iters = range(self.p.em_iters)
+        if min_iters is None:
+            min_iters = self.p.min_em_iters
         elbos = []
         for j in iters:
             if pnoid:
@@ -2131,7 +2149,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             lut_changed, lut = data.update(eres.candidates, self.unit_distance_matrix())
             del lut_changed  # doesn't matter if it did or not, my parameters changed
             self.update_lut(lut)
-            if j > self.p.min_em_iters and elbos[-1] - elbos[-2] < self.p.elbo_atol:
+            if j > min_iters and elbos[-1] - elbos[-2] < self.p.elbo_atol:
                 break
 
         if logger.isEnabledFor(DARTSORTDEBUG) and len(elbos) > 1:

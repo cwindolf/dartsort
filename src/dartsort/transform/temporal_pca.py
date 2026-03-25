@@ -1,4 +1,5 @@
 from typing import Self, cast
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -341,14 +342,35 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.initialize_spike_length_dependent_params()
         if hasattr(pca, "mean_"):
             self.b.mean.copy_(torch.from_numpy(pca.mean_))
-            self.center = not (self.b.mean == 0.0).all()
+            self.centered = not (self.b.mean == 0.0).all()
         else:
             self.b.mean.zero_()
-            self.center = False
+            self.centered = False
         self.b.components.copy_(torch.from_numpy(pca.components_[: self.rank]))
         self.b.whitener.copy_(
             torch.from_numpy(pca.explained_variance_[: self.rank])
         ).sqrt_()
+        self._needs_fit = False
+
+    def initialize_from_templates(self, td):
+        from ..templates.templib import pca_from_templates
+
+        assert not self.centered
+        assert not self.whiten
+        self.spike_length_samples = td.templates.shape[1]
+        self.initialize_spike_length_dependent_params()
+        basis = td.featurization_basis
+        if basis is None:
+            if self.temporal_slice is not None:
+                td = replace(td, templates=td.templates[:, self.temporal_slice])
+            basis = pca_from_templates(td, rank=self.rank).components_
+        if self.temporal_slice is None:
+            assert basis.shape[1] == self.spike_length_samples
+        else:
+            dt = self.temporal_slice.stop - self.temporal_slice.start
+            assert basis.shape[1] == dt
+        self.b.mean.zero_()
+        self.b.components.copy_(torch.asarray(basis[: self.rank]))
         self._needs_fit = False
 
 

@@ -3,8 +3,19 @@ from .internal_config import ComputationConfig, default_computation_cfg
 comp_cfg_holder = {}
 
 
-def set_global_computation_config(comp_cfg: ComputationConfig):
+def set_global_computation_config(
+    comp_cfg: ComputationConfig | None = None,
+    *,
+    n_jobs: int | None = None,
+    **comp_cfg_kwargs,
+):
     global comp_cfg_holder
+    if comp_cfg is None and n_jobs is not None:
+        comp_cfg = ComputationConfig.from_n_jobs(n_jobs=n_jobs)
+    elif comp_cfg is None:
+        comp_cfg = ComputationConfig(**comp_cfg_kwargs)
+    else:
+        assert False
     comp_cfg_holder["comp_cfg"] = comp_cfg
 
 

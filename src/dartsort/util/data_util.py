@@ -529,6 +529,16 @@ class DARTsortSorting:
             ephemeral_features=eph,
         )
 
+    def ensure_no_missing(self):
+        assert self.labels is not None
+        no_missing = np.all(self.labels >= 0)
+        if "mask_indices" in self._ephemeral_feature_names:
+            assert no_missing
+        if no_missing:
+            return self
+        else:
+            return self.drop_missing()
+
     def drop_missing(self) -> Self:
         """Remove spikes with -1 labels."""
         assert self.labels is not None

@@ -1,10 +1,16 @@
 from pathlib import Path
+from threading import local
 from typing import Literal, cast
 
 import h5py
 import torch
-from tqdm.auto import trange
+import numpy as np
+from tqdm.auto import tqdm
 
+from ..util.internal_config import ComputationConfig
+from ..util.job_util import ensure_computation_config
+from ..util.multiprocessing_util import pool_from_cfg
+from ..util.py_util import databag
 from .transform_base import BaseWaveformFeaturizer
 
 _my_name = "reduction_data"
@@ -117,43 +123,69 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         return {}
 
     def reduction_results(
-        self, hdf5_path: Path, labels: torch.Tensor, show_progress: bool = False
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        self,
+        hdf5_path: Path,
+        labels: torch.Tensor,
+        show_progress: bool = False,
+        computation_cfg: ComputationConfig | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """Gather mean or median results."""
         # if reduction was mean, done already
         if self.online:
             if self.with_raw_std_dev:
                 std = self.b.meansq.sub_(self.b.mean.square()).abs_().sqrt_()
+                std = std.numpy(force=True)
             else:
                 std = None
-            return self.b.count, self.b.mean, std
+            return self.b.count.numpy(force=True), self.b.mean.numpy(force=True), std
 
         # else, nanmedian in a loop
-        count = torch.zeros((self.n_units, self.output_channels), dtype=torch.int32)
-        wf_shape = (self.feature_dim, self.output_channels)
-        mean = torch.zeros((self.n_units, *wf_shape))
-        if self.with_raw_std_dev:
-            std = mean.clone()
-        else:
-            std = None
-        with h5py.File(hdf5_path, "r", locking=False) as h5:
-            dataset = cast(h5py.Dataset, h5[self.name[0]])
-            assert dataset.shape[1:] == wf_shape
+        computation_cfg = ensure_computation_config(computation_cfg)
+        dev = computation_cfg.actual_device()
+
+        n_jobs, Executor, context, *_ = pool_from_cfg(
+            computation_cfg, check_local=True, small=True
+        )
+        with Executor(
+            max_workers=n_jobs,
+            mp_context=context,
+            initializer=_reduction_init,
+            initargs=(hdf5_path, self.name[0], labels, dev, self.with_raw_std_dev),
+        ) as pool:
+            results = pool.map(_reduction_job, range(self.n_units))
             if show_progress:
-                it = trange(self.n_units, desc="Medians")
+                results = tqdm(
+                    results, total=self.n_units, desc=f"Medians:{dev.type}:{n_jobs}"
+                )
+
+            count = np.full(
+                (self.n_units, self.output_channels), dtype=np.int32, fill_value=-1
+            )
+            wf_shape = (self.feature_dim, self.output_channels)
+            mean = np.full(
+                (self.n_units, *wf_shape), dtype=np.float32, fill_value=np.nan
+            )
+            if self.with_raw_std_dev:
+                std = mean.copy()
             else:
-                it = range(self.n_units)
-            for j in it:
-                (inu,) = (labels == j).cpu().nonzero(as_tuple=True)
-                if not inu.numel():
+                std = None
+
+            for r in results:
+                if r is None:
                     continue
-                x = torch.asarray(dataset[inu.numpy()])
-                count[j] = x[:, 0].isfinite().sum(0)
-                mean[j] = torch.nanmedian(x, dim=0).values
+                count[r.j] = r.count
+                mean[r.j] = r.mean
                 if std is not None:
-                    xbar = x.nanmean(dim=0)
-                    xsqbar = x.square_().nanmean(dim=0)
-                    std[j] = xsqbar.sub_(xbar.square_()).abs_().sqrt_()
+                    assert r.std is not None
+                    std[r.j] = r.std
+
+        global _reduction_stuff
+        del _reduction_stuff.ctx
+        _reduction_stuff.ctx = None
+        assert (count >= 0).all()
+        assert count.max() > 0
+        assert np.isfinite(mean).all()
+
         return count, mean, std
 
     def _initialize(self, wf_shape: tuple[int, int]):
@@ -168,3 +200,66 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         else:
             self.register_buffer_or_none("meansq", None)
             self.register_buffer_or_none("batch_xsqbar", None)
+
+
+_reduction_stuff = local()
+_reduction_stuff.ctx = None
+
+
+@databag
+class _ReductionStuff:
+    h5: h5py.File
+    dataset: h5py.Dataset
+    labels: torch.Tensor
+    dev: torch.device
+    do_std: bool
+
+
+@databag
+class _ReductionResult:
+    j: int
+    count: np.ndarray
+    mean: np.ndarray
+    std: np.ndarray | None
+
+
+def _reduction_init(
+    hdf5_path: Path,
+    dataset_name: str,
+    labels: torch.Tensor,
+    dev: torch.device,
+    do_std: bool,
+):
+    global _reduction_stuff
+    h5 = h5py.File(hdf5_path, "r", locking=False, swmr=True, libver="latest")
+    _reduction_stuff.ctx = _ReductionStuff(
+        h5=h5,
+        dataset=cast(h5py.Dataset, h5[dataset_name]),
+        labels=torch.asarray(labels, dtype=torch.int32, copy=True, device=dev),
+        dev=dev,
+        do_std=do_std,
+    )
+
+
+def _reduction_job(j: int) -> _ReductionResult | None:
+    global _reduction_stuff
+    p = cast(_ReductionStuff, _reduction_stuff.ctx)
+    (inu,) = (p.labels == j).nonzero(as_tuple=True)
+    inu = inu.cpu()
+    if not inu.numel():
+        return None
+
+    x = torch.asarray(p.dataset[inu.numpy()], device=p.dev)
+    count = x[:, 0].isfinite().sum(0)
+    mean = torch.nanmedian(x, dim=0).values
+    if p.do_std:
+        xbar = x.nanmean(dim=0)
+        xsqbar = x.square_().nanmean(dim=0)
+        std = xsqbar.sub_(xbar.square_()).abs_().sqrt_()
+        std = std.numpy(force=True)
+    else:
+        std = None
+
+    return _ReductionResult(
+        j=j, count=count.numpy(force=True), mean=mean.numpy(force=True), std=std
+    )

@@ -5,7 +5,8 @@ import os
 from multiprocessing import get_context
 import queue
 
-from . import job_util
+from .job_util import ensure_computation_config
+from .internal_config import ComputationConfig
 
 have_cloudpickle = False
 cloudpickle = None
@@ -129,16 +130,19 @@ def rank_init(queue):
     rank_init.rank = queue.get()  # type: ignore
 
 
-def pool_from_cfg(computation_config=None, with_rank_queue=False, check_local=False):
-    if computation_config is None:
-        computation_config = job_util.get_global_computation_config()
-
+def pool_from_cfg(
+    computation_cfg: ComputationConfig | None = None,
+    with_rank_queue=False,
+    check_local=False,
+    small: bool = False,
+):
+    computation_cfg = ensure_computation_config(computation_cfg)
     return get_pool(
-        computation_config.actual_n_jobs(),
-        cls=computation_config.executor,
+        computation_cfg.actual_n_jobs(small=small),
+        cls=computation_cfg.executor,
         with_rank_queue=with_rank_queue,
         check_local=check_local,
-        multi_gpu=computation_config.is_multi_gpu(),
+        multi_gpu=computation_cfg.is_multi_gpu(),
     )
 
 
@@ -161,7 +165,7 @@ def get_pool(
     do_parallel = n_jobs >= 1
     n_jobs = max(1, n_jobs)
 
-    if isinstance(cls, str):
+    if do_parallel and isinstance(cls, str):
         if cls == "threading_unless_multigpu":
             if (n_jobs > 1 and multi_gpu) or os.name == "nt":
                 cls = "ProcessPoolExecutor"
@@ -177,6 +181,8 @@ def get_pool(
             cls = MockPoolExecutor
         else:
             assert False
+    elif isinstance(cls, str):
+        cls = MockPoolExecutor
 
     if cls == CloudpicklePoolExecutor and not have_cloudpickle:
         cls = ProcessPoolExecutor
