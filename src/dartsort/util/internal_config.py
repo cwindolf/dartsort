@@ -1053,9 +1053,12 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         )
     else:
         pre_refinement_cfg = None
-    motion_estimation_cfg = MotionEstimationConfig(
-        **{k.name: getattr(cfg, k.name) for k in fields(MotionEstimationConfig)}
-    )
+    motion_kw = {
+        k.name: getattr(cfg, k.name)
+        for k in fields(MotionEstimationConfig)
+        if hasattr(cfg, k.name)
+    }
+    motion_estimation_cfg = MotionEstimationConfig(**motion_kw)
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,

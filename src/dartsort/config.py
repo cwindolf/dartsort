@@ -162,7 +162,7 @@ class DARTsortUserConfig:
     window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
         default=None, arg_type=float_or_none
     )
-    max_dt_s: Annotated[float, Field(gt=0)] = 1000.0
+    max_dt_s: Annotated[float, Field(gt=0)] = 500.0
     max_disp_um: Annotated[float, Field(gt=0)] | None = argfield(
         default=None, arg_type=float_or_none
     )
