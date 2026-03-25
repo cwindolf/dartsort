@@ -203,8 +203,9 @@ class MotionInfo:
                 assert False
         assert depths_um is not None
         if not self.drifting:
-            probe_disp = np.zeros_like(depths_um)
-            n_pitches_shift = np.zeros(depths_um.shape, dtype=np.int32)
+            out_like = reg_depths_um if reg_depths_um is not None else depths_um
+            probe_disp = np.zeros_like(out_like)
+            n_pitches_shift = np.zeros(out_like.shape, dtype=np.int32)
             return probe_disp, n_pitches_shift
 
         if reg_depths_um is None:

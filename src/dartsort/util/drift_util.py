@@ -800,7 +800,7 @@ def get_shift_and_unit_pairs(
         reg_depths_um = np.concatenate((reg_depths_um_a, reg_depths_um_b))
 
     # figure out all shifts for all units at all times
-    unreg_depths_um = [motion.uncorrect_s(t_s) for t_s in chunk_time_centers_s]
+    unreg_depths_um = [motion.uncorrect_s(t_s, reg_depths_um) for t_s in chunk_time_centers_s]
     unreg_depths_um = np.stack(unreg_depths_um, axis=0)
     assert unreg_depths_um.shape == (len(chunk_time_centers_s), len(reg_depths_um))
     _, pitch_shifts = motion.pitch_shifts(
