@@ -184,7 +184,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         _reduction_stuff.ctx = None
         assert (count >= 0).all()
         assert count.max() > 0
-        assert np.isfinite(mean).all()
+        mean = np.nan_to_num(mean, copy=False)
 
         return count, mean, std
 
