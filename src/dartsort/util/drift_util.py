@@ -781,6 +781,7 @@ def get_shift_and_unit_pairs(
     template_data_b=None,
     motion=None,
 ):
+    assert template_data_a is not None
     if template_data_b is None:
         template_data_b = template_data_a
 
