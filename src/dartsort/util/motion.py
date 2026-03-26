@@ -7,6 +7,7 @@ from dredge.motion_util import MotionEstimate
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
+from torch import Tensor, is_tensor
 
 from .data_util import DARTsortSorting
 from .drift_util import get_pitch, registered_geometry
@@ -92,10 +93,10 @@ class MotionInfo:
     def from_motion_est(
         cls,
         *,
-        geom: np.ndarray,
+        geom: np.ndarray | Tensor,
         dredge_motion_est: MotionEstimate | None = None,
         si_motion: Motion | None = None,
-        rgeom: np.ndarray | None = None,
+        rgeom: np.ndarray | Tensor | None = None,
     ) -> Self:
         """Main constructor for MotionInfo objects
 
@@ -106,6 +107,11 @@ class MotionInfo:
         If neither dredge_motion_est nor si_motion is supplied, drifting is set
         to False and there is assumed to be no motion.
         """
+        if is_tensor(geom):
+            geom = geom.numpy(force=True)
+        if is_tensor(rgeom):
+            rgeom = rgeom.numpy(force=True)
+
         have_dredge = dredge_motion_est is not None
         have_si = si_motion is not None
         drifting = have_dredge or have_si
