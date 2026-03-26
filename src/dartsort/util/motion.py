@@ -232,7 +232,7 @@ class MotionInfo:
         if not self.drifting:
             return np.asarray(reg_depths_um, copy=True)
 
-        times_s = np.asarray(times_s)
+        times_s = np.broadcast_to(times_s, reg_depths_um.shape)
 
         if not self.is_nonrigid:
             return reg_depths_um + self.disp_at_s(times_s, depths_um=reg_depths_um)
@@ -285,7 +285,7 @@ class MotionInfo:
             assert times_s.shape == depths_um.shape
             probe_disp = -self.disp_at_s(times_s, depths_um)
         else:
-            assert depths_um.shape == reg_depths_um.shape
+            depths_um, reg_depths_um = np.broadcast_arrays(depths_um, reg_depths_um)
             probe_disp = reg_depths_um - depths_um
         assert np.isfinite(probe_disp).all()
 

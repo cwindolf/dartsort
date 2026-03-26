@@ -27,6 +27,8 @@ by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
 
+from typing import Sequence
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -773,8 +775,8 @@ def static_template_shift_index(n_templates):
 
 
 def get_shift_and_unit_pairs(
-    chunk_time_centers_s,
-    geom,
+    *,
+    chunk_time_centers_s: np.ndarray | Sequence[float] | None,
     template_data_a,
     template_data_b=None,
     motion=None,
@@ -785,11 +787,12 @@ def get_shift_and_unit_pairs(
     na = template_data_a.templates.shape[0]
     nb = template_data_b.templates.shape[0]
 
-    if motion is None:
+    if motion is None or not motion.drifting:
         shift_index_a = static_template_shift_index(na)
         shift_index_b = static_template_shift_index(nb)
         cooccurrence = np.ones((na, nb), dtype=bool)
         return shift_index_a, shift_index_b, cooccurrence
+    assert chunk_time_centers_s is not None
 
     reg_depths_um_a = template_data_a.registered_depths_um()
     reg_depths_um_b = template_data_b.registered_depths_um()
@@ -800,7 +803,9 @@ def get_shift_and_unit_pairs(
         reg_depths_um = np.concatenate((reg_depths_um_a, reg_depths_um_b))
 
     # figure out all shifts for all units at all times
-    unreg_depths_um = [motion.uncorrect_s(t_s, reg_depths_um) for t_s in chunk_time_centers_s]
+    unreg_depths_um = [
+        motion.uncorrect_s(t_s, reg_depths_um) for t_s in chunk_time_centers_s
+    ]
     unreg_depths_um = np.stack(unreg_depths_um, axis=0)
     assert unreg_depths_um.shape == (len(chunk_time_centers_s), len(reg_depths_um))
     _, pitch_shifts = motion.pitch_shifts(

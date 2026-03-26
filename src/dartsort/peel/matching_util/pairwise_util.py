@@ -3,7 +3,7 @@ from __future__ import annotations  # allow forward type references
 from collections import namedtuple
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Iterator, Optional, Union, Sequence
 
 import h5py
 import numpy as np
@@ -67,7 +67,6 @@ def compressed_convolve_to_h5(
         cooccurrence,
     ) = construct_shift_indices(
         chunk_time_centers_s,
-        geom,
         template_data,
         compressed_upsampled_temporal,
         template_data_b=template_data_b,
@@ -757,8 +756,7 @@ def correlate_pairs_lowrank(
 
 
 def construct_shift_indices(
-    chunk_time_centers_s,
-    geom,
+    chunk_time_centers_s: np.ndarray | Sequence[float] | None,
     template_data_a,
     compressed_upsampled_temporal,
     template_data_b=None,
@@ -769,9 +767,8 @@ def construct_shift_indices(
         template_shift_index_b,
         cooccurrence,
     ) = drift_util.get_shift_and_unit_pairs(
-        chunk_time_centers_s,
-        geom,
-        template_data_a,
+        chunk_time_centers_s=chunk_time_centers_s,
+        template_data_a=template_data_a,
         template_data_b=template_data_b,
         motion=motion,
     )

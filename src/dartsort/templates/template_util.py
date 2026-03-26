@@ -40,9 +40,9 @@ def weighted_average(unit_ids, templates, weights):
 
 def templates_at_time(
     *,
-    t_s,
-    registered_templates,
-    registered_template_depths_um=None,
+    t_s: float | np.ndarray,
+    registered_templates: np.ndarray | torch.Tensor,
+    registered_template_depths_um: np.ndarray | list[float] | None = None,
     motion: MotionInfo,
     return_pitch_shifts=False,
     return_padded=False,
@@ -55,6 +55,9 @@ def templates_at_time(
         return F.pad(registered_templates, (0, 1), value=fill_value)
     assert motion.drifting
     assert registered_template_depths_um is not None
+    registered_template_depths_um = np.asarray(
+        registered_template_depths_um, dtype=np.float32
+    )
 
     # for each unit, extract relevant channels at time t_s
     # how many pitches to shift each unit relative to registered pos at time t_s?
