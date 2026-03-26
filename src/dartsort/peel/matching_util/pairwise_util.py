@@ -66,9 +66,9 @@ def compressed_convolve_to_h5(
         upsampled_shifted_template_index,
         cooccurrence,
     ) = construct_shift_indices(
-        chunk_time_centers_s,
-        template_data,
-        compressed_upsampled_temporal,
+        chunk_time_centers_s=chunk_time_centers_s,
+        template_data_a=template_data,
+        compressed_upsampled_temporal=compressed_upsampled_temporal,
         template_data_b=template_data_b,
         motion=motion,
     )

@@ -413,10 +413,9 @@ def get_deconv_resid_decrease_iter(
         upsampled_shifted_template_index,
         cooccurrence,
     ) = construct_shift_indices(
-        None,
-        None,
-        template_data,
-        compressed_upsampled_temporal,
+        chunk_time_centers_s=None,
+        template_data_a=template_data,
+        compressed_upsampled_temporal=compressed_upsampled_temporal,
         motion=None,
     )
     if cooccurrence_mask is not None:
