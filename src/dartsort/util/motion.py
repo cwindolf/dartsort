@@ -20,6 +20,62 @@ from .py_util import databag, resolve_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
 
 
+def try_load_motion_info(
+    output_directory: Path | str | None, filename="motion.pkl"
+) -> "MotionInfo | None":
+    """Return the saved MotionInfo if there is any, else None."""
+    if output_directory is None:
+        return None
+    return MotionInfo.try_load(output_directory, filename)
+
+
+def get_motion_info(
+    *,
+    output_directory: Path | str | None = None,
+    filename: str = "motion.pkl",
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    si_motion: Motion | None = None,
+    dredge_motion_est: MotionEstimate | None = None,
+    motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
+    computation_cfg: ComputationConfig | None = None,
+    localizations_dataset_name="point_source_localizations",
+    amplitudes_dataset_name="denoised_ptp_amplitudes",
+    overwrite: bool = False,
+) -> "MotionInfo":
+    """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
+
+    Will save to disk so that future calls can re-load if output_directory is set.
+    If no motion has been computed yet, this will call out to DREDge to estimate the
+    motion based on the spike locations in the sorting object, using parameters
+    from motion_cfg.
+    """
+    if (motion := try_load_motion_info(output_directory, filename)) is not None:
+        return motion
+
+    have_si = si_motion is not None
+    have_dredge = dredge_motion_est is not None
+    assert not (have_si and have_dredge)
+    if not (have_si or have_dredge):
+        dredge_motion_est = dredge_estimate_motion(
+            recording=recording,
+            sorting=sorting,
+            motion_cfg=motion_cfg,
+            device=ensure_computation_config(computation_cfg).actual_device(),
+            localizations_dataset_name=localizations_dataset_name,
+            amplitudes_dataset_name=amplitudes_dataset_name,
+        )
+    motion = MotionInfo.from_motion_est(
+        geom=recording.get_channel_locations(),
+        dredge_motion_est=dredge_motion_est,
+        si_motion=si_motion,
+    )
+    if output_directory is not None:
+        motion.save(output_directory, filename, overwrite)
+
+    return motion
+
+
 @databag
 class MotionInfo:
     drifting: bool
@@ -40,7 +96,16 @@ class MotionInfo:
         dredge_motion_est: MotionEstimate | None = None,
         si_motion: Motion | None = None,
         rgeom: np.ndarray | None = None,
-    ):
+    ) -> Self:
+        """Main constructor for MotionInfo objects
+
+        Precomputes and saves motion-related data structures for use through all
+        of dartsort. Notably, the probe pitch, the min inter-channel distance,
+        and the "registered geometry". Also, k-d trees which are used everywhere.
+
+        If neither dredge_motion_est nor si_motion is supplied, drifting is set
+        to False and there is assumed to be no motion.
+        """
         have_dredge = dredge_motion_est is not None
         have_si = si_motion is not None
         drifting = have_dredge or have_si
@@ -264,55 +329,3 @@ class MotionInfo:
         else:
             assert not self.drifting
             return None
-
-
-def try_load_motion_info(
-    output_directory: Path | str | None, filename="motion.pkl"
-) -> MotionInfo | None:
-    if output_directory is None:
-        return None
-    return MotionInfo.try_load(output_directory, filename)
-
-
-def get_motion_info(
-    *,
-    output_directory: Path | str | None = None,
-    filename: str = "motion.pkl",
-    recording: BaseRecording,
-    sorting: DARTsortSorting,
-    si_motion: Motion | None = None,
-    dredge_motion_est: MotionEstimate | None = None,
-    motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
-    computation_cfg: ComputationConfig | None = None,
-    localizations_dataset_name="point_source_localizations",
-    amplitudes_dataset_name="denoised_ptp_amplitudes",
-    overwrite: bool = False,
-) -> MotionInfo:
-    """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
-
-    Will save to disk so that future calls can re-load if output_directory is set.
-    """
-    if (motion := try_load_motion_info(output_directory, filename)) is not None:
-        return motion
-
-    have_si = si_motion is not None
-    have_dredge = dredge_motion_est is not None
-    assert not (have_si and have_dredge)
-    if not (have_si or have_dredge):
-        dredge_motion_est = dredge_estimate_motion(
-            recording=recording,
-            sorting=sorting,
-            motion_cfg=motion_cfg,
-            device=ensure_computation_config(computation_cfg).actual_device(),
-            localizations_dataset_name=localizations_dataset_name,
-            amplitudes_dataset_name=amplitudes_dataset_name,
-        )
-    motion = MotionInfo.from_motion_est(
-        geom=recording.get_channel_locations(),
-        dredge_motion_est=dredge_motion_est,
-        si_motion=si_motion,
-    )
-    if output_directory is not None:
-        motion.save(output_directory, filename, overwrite)
-
-    return motion
