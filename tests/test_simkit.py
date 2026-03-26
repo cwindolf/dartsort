@@ -6,16 +6,16 @@ import pytest
 import torch
 
 from dartsort.evaluate import simkit, simlib
-from dartsort.util.internal_config import FeaturizationConfig
+from dartsort.util.internal_config import FeaturizationConfig, MotionEstimationConfig
+from dartsort.util.motion import get_motion_info
 from dartsort.util.noise_util import StationaryFactorizedNoise
-from dartsort.util.registration_util import estimate_motion
 
 f_dt = "float32"
 r_dt = "float16"
 
 
 def test_np1_geom_is_default():
-    assert np.array_equal(np1_dense_layout, simlib.generate_geom())
+    np.testing.assert_equal(np1_dense_layout, simlib.generate_geom())
 
 
 @pytest.mark.parametrize("globally_refractory", [False, True])
@@ -65,17 +65,17 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
     st = sim["sorting"]
     target[st.times_samples, st.labels] = st.labels.astype(r_dt) + 1.0
     traces = sim["recording"].get_traces()
-    assert np.allclose(target, traces, atol=1e-5)
+    np.testing.assert_allclose(target, traces, atol=1e-5)
     ii, jj = np.nonzero(np.abs(traces) > 0.1)
     lltt = np.c_[st.labels, st.times_samples]
     lltt = lltt[np.lexsort(lltt.T)]
-    assert np.array_equal(ii, st.times_samples)
-    assert np.array_equal(ii, lltt[:, 1])
-    assert np.array_equal(jj, lltt[:, 0])
+    np.testing.assert_equal(ii, st.times_samples)
+    np.testing.assert_equal(ii, lltt[:, 1])
+    np.testing.assert_equal(jj, lltt[:, 0])
     cctt = np.c_[st.channels, st.times_samples]
     cctt = cctt[np.lexsort(cctt.T)]
-    assert np.array_equal(ii, cctt[:, 1])
-    assert np.array_equal(jj, cctt[:, 0])
+    np.testing.assert_equal(ii, cctt[:, 1])
+    np.testing.assert_equal(jj, cctt[:, 0])
     if globally_refractory:
         assert np.diff(ii).min() >= ((fs / 1000) * refractory_ms)
     else:
@@ -83,11 +83,11 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
             inj = np.flatnonzero(jj == j)
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
             assert inj.size > (minfr * 0.5)
-    assert np.allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
-    assert sim["motion_est"] is None
+    np.testing.assert_allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
+    assert not sim["motion"].drifting
     u, c = np.unique(st.labels, return_counts=True)
-    assert np.array_equal(c, sim["unit_info_df"].gt_spike_count.values)
-    assert np.allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
+    np.testing.assert_equal(c, sim["unit_info_df"].gt_spike_count.values)
+    np.testing.assert_allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
 
 
 @pytest.mark.parametrize("globally_refractory", [False])
@@ -95,7 +95,7 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
 # @pytest.mark.parametrize("templates_kind", ["3exp", "library", "librarygrid"])
 @pytest.mark.parametrize("templates_kind", ["3exp"])
 # @pytest.mark.parametrize("noise_kind", ["zero", "white", "stationary_factorized_rbf"])
-@pytest.mark.parametrize("noise_kind", ["zero", "stationary_factorized_rbf"])
+@pytest.mark.parametrize("noise_kind", ["zero", "white", "stationary_factorized_rbf"])
 def test_reproducible_and_residual(
     tmp_path, globally_refractory, templates_kind, noise_kind
 ):
@@ -129,16 +129,16 @@ def test_reproducible_and_residual(
     sim0, sim1 = sims
     st0 = sim0["sorting"]
     st1 = sim1["sorting"]
-    assert np.array_equal(
+    np.testing.assert_equal(st0.times_samples, st1.times_samples)
+    np.testing.assert_equal(st0.channels, st1.channels)
+    np.testing.assert_equal(st0.labels, st1.labels)
+    np.testing.assert_equal(st0.times_seconds, st1.times_seconds)
+    np.testing.assert_equal(st0.localizations, st1.localizations)
+    np.testing.assert_equal(st0.ptp_amplitudes, st1.ptp_amplitudes)
+    np.testing.assert_equal(sim0["unit_info_df"].values, sim1["unit_info_df"].values)
+    np.testing.assert_equal(
         sim0["recording"].get_traces(), sim1["recording"].get_traces()
     )
-    assert np.array_equal(st0.times_samples, st1.times_samples)
-    assert np.array_equal(st0.channels, st1.channels)
-    assert np.array_equal(st0.labels, st1.labels)
-    assert np.array_equal(st0.times_seconds, st1.times_seconds)
-    assert np.array_equal(st0.localizations, st1.localizations)
-    assert np.array_equal(st0.ptp_amplitudes, st1.ptp_amplitudes)
-    assert np.array_equal(sim0["unit_info_df"].values, sim1["unit_info_df"].values)
 
     f = None
 
@@ -152,7 +152,7 @@ def test_reproducible_and_residual(
         tpca0, tpca1 = tpca_vals
         np.testing.assert_allclose(tpca0, tpca1, atol=0.01)
     else:
-        assert np.array_equal(*tpca_vals)
+        np.testing.assert_equal(*tpca_vals)
     del tpca_vals
 
     residuals = []
@@ -161,7 +161,7 @@ def test_reproducible_and_residual(
             f = cast(h5py.Dataset, h5["residual"])[:]
             np.nan_to_num(f, nan=-111111.0, copy=False)
             residuals.append(f)
-    assert np.array_equal(*residuals)
+    np.testing.assert_equal(*residuals)
     del residuals
 
     f = cast(np.ndarray, f)
@@ -173,16 +173,16 @@ def test_reproducible_and_residual(
         noise = StationaryFactorizedNoise.estimate(f)
         nc = f.shape[2]
         if noise_kind == "white":
-            assert np.allclose(noise.spatial_std, 1.0, atol=0.05)
-            assert np.allclose(noise.spatial_cov(), np.eye(nc), atol=0.075)
-            assert np.allclose(noise.kernel_fft, 1.0, atol=0.05)
+            np.testing.assert_allclose(noise.spatial_std, 1.0, atol=0.05)
+            np.testing.assert_allclose(noise.spatial_cov(), np.eye(nc), atol=0.075)
+            np.testing.assert_allclose(noise.kernel_fft, 1.0, atol=0.05)
         else:
             gs, gv = simlib.rbf_kernel_sqrt(st0.geom)
             gtk = np.load(simlib.default_temporal_kernel_npy)
             gc = gs * gv.T
             gc = gc @ gc.T
-            assert np.allclose(noise.spatial_std, gs[::-1], atol=0.05)
-            assert np.allclose(noise.spatial_cov(), gc, atol=0.075)
+            np.testing.assert_allclose(noise.spatial_std, gs[::-1], atol=0.05)
+            np.testing.assert_allclose(noise.spatial_cov(), gc, atol=0.075)
 
 
 @pytest.mark.parametrize("drift_speed", [0.0, -1.0, 5.0])
@@ -208,27 +208,27 @@ def test_motion(tmp_path, drift_speed, drift_type):
     assert sim is not None
     sim = cast(dict, sim)
     if not drift_speed:
-        assert sim["motion_est"] is None
+        assert not sim["motion"].drifting
         return
 
-    me0 = sim["motion_est"]
+    me0 = sim["motion"].dredge_motion_est
     d0 = me0.displacement.ravel()
     if drift_type == "line":
-        assert np.allclose(np.diff(d0), drift_speed)
+        np.testing.assert_allclose(np.diff(d0), drift_speed)
     elif drift_type == "triangle":
-        assert np.allclose(np.abs(np.diff(d0)), abs(drift_speed))
+        np.testing.assert_allclose(np.abs(np.diff(d0)), abs(drift_speed))
     else:
         assert False
-    me1 = estimate_motion(
-        sim["recording"],
-        sim["sorting"],
-        rigid=True,
+    me1 = get_motion_info(
+        recording=sim["recording"],
+        sorting=sim["sorting"],
+        motion_cfg=MotionEstimationConfig(rigid=True),
         amplitudes_dataset_name="ptp_amplitudes",
         localizations_dataset_name="localizations",
-    )
+    ).dredge_motion_est
     assert me1 is not None
     d1 = me1.displacement.ravel()
-    assert np.array_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore
+    np.testing.assert_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore
     assert np.isclose(
         np.mean(np.square(np.diff(d0)[1:-1] - np.diff(d1)[1:-1])), 0.0, atol=0.1
     )

@@ -1,10 +1,9 @@
-from typing import Literal, cast
 from threading import local
+from typing import Literal, cast
 
 import numba
 import numpy as np
 import torch
-from torch import Tensor
 import torch.nn.functional as F
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
@@ -13,13 +12,14 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import bernoulli
-from tqdm.auto import trange, tqdm
+from torch import Tensor
+from tqdm.auto import tqdm, trange
 
-from ..util.logging_util import get_logger
-from ..util.py_util import timer
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import get_pool
+from ..util.py_util import timer
 from .cluster_util import decrumb
 
 logger = get_logger(__name__)
@@ -951,14 +951,14 @@ def gmmdpc_hellinger(
     return labels
 
 
-# -- versions used in UHD project
+# -- versions used in UHD projectss
 
 
 def density_peaks_fancy(
     xyza,
     amps,
     sorting,
-    motion_est,
+    motion,
     geom,
     sigma_local=5.0,
     sigma_regional=None,
@@ -983,8 +983,8 @@ def density_peaks_fancy(
     use_y_triaging=False,
 ):
     z = xyza[:, 2]
-    if motion_est is not None:
-        z = motion_est.correct_s(sorting.times_seconds, z)
+    if motion is not None:
+        z = motion.correct_s(sorting.times_seconds, z)
     z_not_reg = xyza[:, 2]
     ampfeat = scales[2] * np.log(amp_log_c + amps[:])
     res = _density_peaks_clustering_uhd_implementation(

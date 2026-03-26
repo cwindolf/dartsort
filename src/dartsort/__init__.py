@@ -26,7 +26,6 @@ from .main import (
     check_recording,
     cluster,
     dartsort,
-    estimate_motion,
     grab,
     logger,
     match,
@@ -70,7 +69,7 @@ from .util.logging_util import (
 )
 from .util.noise_util import EmbeddedNoise
 from .util.py_util import databag, resolve_path
-from .util.registration_util import try_load_motion_est
+from .util.motion import MotionInfo, get_motion_info, try_load_motion_info
 from .util.waveform_util import make_channel_index
 
 __version__ = importlib.metadata.version("dartsort")

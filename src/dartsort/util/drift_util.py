@@ -27,6 +27,8 @@ by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
 
+from typing import Sequence
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,10 +43,12 @@ from .waveform_util import get_orders, get_pitch, make_channel_index
 
 
 def registered_geometry(
-    geom,
-    motion_est=None,
-    upward_drift=None,
-    downward_drift=None,
+    geom: np.ndarray,
+    upward_drift: float | None = None,
+    downward_drift: float | None = None,
+    displacement: np.ndarray | None = None,
+    pitch: float | None = None,
+    min_distance: float | None = None,
 ):
     """Pad probe to motion extent
 
@@ -97,7 +101,7 @@ def registered_geometry(
 
     But, the convention for motion estimation is the opposite: motion of
     the spikes relative to the probe. In other words, the displacement
-    in motion_est is such that
+    is such that
         registered z = original z - displacement
     So, if the probe moved up from t1->t2 (so that z(t2) < z(t1), since z
     is the spike's absolute position on the probe), this would register
@@ -105,18 +109,20 @@ def registered_geometry(
     negative displacement value estimated from spikes!
     """
     assert geom.ndim == 2
-    pitch = get_pitch(geom)
+    if pitch is None:
+        pitch = get_pitch(geom)
+    assert pitch is not None
 
     # figure out how much upward and downward motion there is
-    if motion_est is not None:
+    if displacement is not None:
         # these look flipped! why? see __doc__
-        downward_drift = max(0, motion_est.displacement.max())
-        upward_drift = max(0, -motion_est.displacement.min())
+        downward_drift = max(0.0, displacement.max())
+        upward_drift = max(0.0, -displacement.min())
     else:
         assert upward_drift is not None
         assert downward_drift is not None
-    assert upward_drift >= 0
-    assert downward_drift >= 0
+    assert upward_drift >= 0.0
+    assert downward_drift >= 0.0
 
     # pad with an integral number of pitches for simplicity
     pitches_pad_up = int(np.round(upward_drift / pitch))
@@ -125,7 +131,10 @@ def registered_geometry(
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
-    min_distance = np.sqrt(pdist(geom, metric="sqeuclidean").min()) / 2
+    if min_distance is None:
+        min_distance = np.sqrt(pdist(geom, metric="sqeuclidean").min())
+    assert min_distance is not None
+    min_distance = float(min_distance) / 2
 
     # find all registered site positions
     # the following naive algorithm is both quadratic now banished to a test
@@ -308,82 +317,6 @@ def registered_template(
         template = template[0, :]
 
     return template
-
-
-def get_spike_pitch_shifts(
-    depths_um=None,
-    geom=None,
-    registered_depths_um=None,
-    times_s=None,
-    sorting=None,
-    motion_est=None,
-    pitch=None,
-    mode="round",
-    localizations_dataset_name="point_source_localizations",
-):
-    """Figure out coarse pitch shifts based on spike positions
-
-    Determine the number of pitches the probe would need to shift in
-    order to coarsely align a waveform to its registered position.
-    """
-    if pitch is None:
-        pitch = get_pitch(geom)
-
-    if depths_um is None:
-        assert sorting is not None
-        depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
-
-    if registered_depths_um is None and motion_est is None:
-        return np.zeros(depths_um.shape, dtype=int)
-
-    if registered_depths_um is None:
-        assert motion_est is not None
-        if times_s is None:
-            assert sorting is not None
-            times_s = sorting.times_seconds
-        probe_displacement = -motion_est.disp_at_s(times_s, depths_um)
-    else:
-        probe_displacement = registered_depths_um - depths_um
-    assert np.isfinite(probe_displacement).all()
-
-    if mode == "floor":
-        n_pitches_shift = (probe_displacement / pitch).astype(int)
-    elif mode == "round":
-        n_pitches_shift = np.round(probe_displacement / pitch).astype(int)
-    else:
-        assert False
-
-    return n_pitches_shift
-
-
-def invert_motion_estimate(motion_est, t_s, registered_depths_um):
-    """ """
-    assert np.isscalar(t_s)
-
-    if (
-        hasattr(motion_est, "spatial_bin_centers_um")
-        and motion_est.spatial_bin_centers_um is not None
-    ):
-        # nonrigid motion
-        bin_centers = motion_est.spatial_bin_centers_um
-        t_s = np.full(bin_centers.shape, t_s)
-        bin_center_disps = motion_est.disp_at_s(t_s, depth_um=bin_centers)
-        # registered_bin_centers = motion_est.correct_s(t_s, depths_um=bin_centers)
-        registered_bin_centers = bin_centers - bin_center_disps
-        assert np.all(np.diff(registered_bin_centers) > 0), "Invertibility issue."
-        disps = np.interp(
-            registered_depths_um.clip(
-                registered_bin_centers.min(),
-                registered_bin_centers.max(),
-            ),
-            registered_bin_centers,
-            bin_center_disps,
-        )
-    else:
-        # rigid motion
-        disps = motion_est.disp_at_s(t_s)
-
-    return registered_depths_um + disps
 
 
 # -- waveform channel neighborhood shifting
@@ -842,11 +775,11 @@ def static_template_shift_index(n_templates):
 
 
 def get_shift_and_unit_pairs(
-    chunk_time_centers_s,
-    geom,
+    *,
+    chunk_time_centers_s: np.ndarray | Sequence[float] | None,
     template_data_a,
     template_data_b=None,
-    motion_est=None,
+    motion=None,
 ):
     if template_data_b is None:
         template_data_b = template_data_a
@@ -854,11 +787,12 @@ def get_shift_and_unit_pairs(
     na = template_data_a.templates.shape[0]
     nb = template_data_b.templates.shape[0]
 
-    if motion_est is None:
+    if motion is None or not motion.drifting:
         shift_index_a = static_template_shift_index(na)
         shift_index_b = static_template_shift_index(nb)
         cooccurrence = np.ones((na, nb), dtype=bool)
         return shift_index_a, shift_index_b, cooccurrence
+    assert chunk_time_centers_s is not None
 
     reg_depths_um_a = template_data_a.registered_depths_um()
     reg_depths_um_b = template_data_b.registered_depths_um()
@@ -869,19 +803,13 @@ def get_shift_and_unit_pairs(
         reg_depths_um = np.concatenate((reg_depths_um_a, reg_depths_um_b))
 
     # figure out all shifts for all units at all times
-    unreg_depths_um = np.stack(
-        [
-            invert_motion_estimate(motion_est, t_s, reg_depths_um)
-            for t_s in chunk_time_centers_s
-        ],
-        axis=0,
-    )
+    unreg_depths_um = [
+        motion.uncorrect_s(t_s, reg_depths_um) for t_s in chunk_time_centers_s
+    ]
+    unreg_depths_um = np.stack(unreg_depths_um, axis=0)
     assert unreg_depths_um.shape == (len(chunk_time_centers_s), len(reg_depths_um))
-    diff = reg_depths_um - unreg_depths_um
-    pitch_shifts = get_spike_pitch_shifts(
-        depths_um=reg_depths_um,
-        pitch=get_pitch(geom),
-        registered_depths_um=unreg_depths_um,
+    _, pitch_shifts = motion.pitch_shifts(
+        depths_um=reg_depths_um, reg_depths_um=unreg_depths_um
     )
     if same:
         shifts_a = shifts_b = pitch_shifts
@@ -921,55 +849,11 @@ def get_shift_and_unit_pairs(
     return template_shift_index_a, template_shift_index_b, cooccurrence
 
 
-def get_shift_info(
-    sorting, motion_est, geom, motion_depth_mode="channel", channels_mode="round"
-):
-    """
-    shifts = reg_depths - depths
-    reg_depths = depths + shifts
-    i.e., target_pos = source_pos + shifts
-          target_pos - shifts = source_pos
-    where by source pos i mean the true moving positions.
-    """
-    times_s = sorting.times_seconds
-    channels = sorting.channels
-    if motion_depth_mode == "localization":
-        depths = sorting.point_source_localizations[:, 2]
-    elif motion_depth_mode == "channel":
-        depths = geom[:, 1][channels]
-    else:
-        assert False
-
-    rdepths = depths
-    if motion_est is not None:
-        rdepths = motion_est.correct_s(times_s, depths)
-
-    # shift = -displacement and rz = z - displacement
-    shifts = rdepths - depths
-
-    if motion_est is None:
-        n_pitches_shift = np.zeros(len(depths), dtype=np.int64)
-    else:
-        n_pitches_shift = get_spike_pitch_shifts(
-            depths,
-            geom=geom,
-            motion_est=motion_est,
-            times_s=times_s,
-            registered_depths_um=rdepths,
-            mode=channels_mode,
-        )
-
-    # pitch = drift_util.get_pitch(geom)
-    # remaining_shift = shifts - pitch * n_pitches_shift
-
-    return channels, shifts, n_pitches_shift
-
-
 def get_stable_channels(
-    geom,
+    *,
+    motion,
     channels,
     channel_index,
-    registered_geom,
     n_pitches_shift,
     core_radius=None,
     workers=-1,
@@ -979,7 +863,7 @@ def get_stable_channels(
     if core_radius == "extract":
         core_channel_index = channel_index
     elif core_radius is not None:
-        core_channel_index = make_channel_index(geom, core_radius)
+        core_channel_index = make_channel_index(motion.geom, core_radius)
 
     # extract the main unique chans computation
     c = torch.asarray(channels, dtype=torch.int32)
@@ -992,19 +876,17 @@ def get_stable_channels(
     uniq_inv = uniq_inv.numpy(force=True)
 
     # precompute these, shared across next two calls
-    pitch = get_pitch(geom)
-    registered_kdtree = KDTree(registered_geom)
-    match_distance = pdist(geom).min() / 1.5
+    match_distance = motion.min_dist / 1.5
 
     extract_channels, extract_neighborhoods, extract_neighborhood_ids = (
         static_channel_neighborhoods(
-            geom,
+            motion.geom,
             channels,
             channel_index,
-            pitch=pitch,
+            pitch=motion.pitch,
             n_pitches_shift=n_pitches_shift,
-            registered_geom=registered_geom,
-            target_kdtree=registered_kdtree,
+            registered_geom=motion.rgeom,
+            target_kdtree=motion.rgeom_kdt,
             match_distance=match_distance,
             uniq_channels_and_shifts=uniq_channels_and_shifts,
             uniq_inv=uniq_inv,
@@ -1019,13 +901,13 @@ def get_stable_channels(
     elif core_radius is not None:
         core_channels, core_neighborhoods, core_neighborhood_ids = (
             static_channel_neighborhoods(
-                geom,
+                motion.geom,
                 channels,
                 core_channel_index,
-                pitch=pitch,
+                pitch=motion.pitch,
                 n_pitches_shift=n_pitches_shift,
-                registered_geom=registered_geom,
-                target_kdtree=registered_kdtree,
+                registered_geom=motion.rgeom,
+                target_kdtree=motion.rgeom_kdt,
                 match_distance=match_distance,
                 uniq_channels_and_shifts=uniq_channels_and_shifts,
                 uniq_inv=uniq_inv,

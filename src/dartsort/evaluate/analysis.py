@@ -13,36 +13,34 @@ from dataclasses import dataclass
 import numpy as np
 import spikeinterface.core as sc
 import torch
-from dredge.motion_util import MotionEstimate
 from sklearn.decomposition import PCA
 
 from ..clustering import merge
-from ..util.internal_config import (
-    TemplateConfig,
-    TemplateMergeConfig,
-    ComputationConfig,
-    ClusteringFeaturesConfig,
-    default_clustering_features_cfg,
-    raw_template_cfg,
-)
 from ..templates import TemplateData
+from ..util import job_util, logging_util
 from ..util.data_util import (
     DARTsortSorting,
     get_tpca,
-    try_get_model_dir,
     sorting_isis,
+    try_get_model_dir,
 )
 from ..util.drift_util import (
-    get_spike_pitch_shifts,
-    get_waveforms_on_static_channels,
     get_stable_channels,
+    get_waveforms_on_static_channels,
+)
+from ..util.internal_config import (
+    ClusteringFeaturesConfig,
+    ComputationConfig,
+    TemplateConfig,
+    TemplateMergeConfig,
+    default_clustering_features_cfg,
+    raw_template_cfg,
 )
 from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
+from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from ..util.spikeio import read_waveforms_channel_index
 from ..util.waveform_util import make_channel_index
-from ..util import job_util, logging_util
-
 
 logger = logging_util.get_logger(__name__)
 
@@ -55,7 +53,7 @@ class DARTsortAnalysis:
     recording: sc.BaseRecording
     template_data: TemplateData | None
     coarse_template_data: TemplateData | None
-    motion_est: MotionEstimate | None
+    motion: MotionInfo
     merge_distances: np.ndarray | None
     geom: np.ndarray
     registered_geom: np.ndarray
@@ -85,7 +83,7 @@ class DARTsortAnalysis:
         cls,
         recording: sc.BaseRecording,
         sorting: DARTsortSorting,
-        motion_est=None,
+        motion: MotionInfo | None = None,
         name: str | None = None,
         template_data: TemplateData | None = None,
         template_cfg: TemplateConfig | None = raw_template_cfg,
@@ -104,6 +102,10 @@ class DARTsortAnalysis:
         """
         computation_cfg = job_util.ensure_computation_config(computation_cfg)
         has_hdf5 = sorting.parent_h5_path is not None
+
+        if motion is None:
+            # no-drift motion
+            motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
         if has_hdf5 and vis_radius and (tpca := get_tpca(sorting)) is not None:
             sklearn_tpca = tpca.to_sklearn()  # type: ignore
@@ -128,7 +130,7 @@ class DARTsortAnalysis:
                 sorting=sorting,
                 template_cfg=template_cfg,
                 overwrite=False,
-                motion_est=motion_est,
+                motion=motion,
                 computation_cfg=computation_cfg,
             )
 
@@ -159,36 +161,19 @@ class DARTsortAnalysis:
         tpca_features_dset = clustering_features_cfg.pca_dataset_name
         times_seconds = getattr(sorting, "times_seconds", None)
         assert times_seconds is not None
-        if motion_est is None and xyza is not None:
-            reg_z = xyza[:, 2]
-        elif xyza is not None:
-            assert motion_est is not None
-            reg_z = motion_est.correct_s(times_seconds, xyza[:, 2])
-        else:
-            reg_z = None
         if xyza is not None:
             x = xyza[:, 0]
             z = xyza[:, 2]
+            reg_z = motion.correct_s(times_seconds, z)
         else:
-            x = z = None
-
-        geom = recording.get_channel_locations()
-        if motion_est is None:
-            rgeom = geom
-            if template_data is not None:
-                trg = template_data.registered_geom
-                assert (trg is None) or np.array_equal(rgeom, trg)
-        else:
-            assert template_data is not None
-            rgeom = template_data.registered_geom
-        assert rgeom is not None
+            x = z = reg_z = None
 
         device = computation_cfg.actual_device()
         if vis_radius and channel_index is not None:
             # interping to geom with shifts on fly rather than rgeom.
             erp = StableFeaturesInterpolator(
-                source_geom=pad_geom(geom, device=device),
-                target_geom=pad_geom(geom, device=device),
+                source_geom=pad_geom(motion.geom, device=device),
+                target_geom=pad_geom(motion.geom, device=device),
                 channel_index=torch.asarray(channel_index, device=device),
                 params=clustering_features_cfg.interp_params,
             )
@@ -204,19 +189,22 @@ class DARTsortAnalysis:
             recording=recording,
             template_data=template_data,
             coarse_template_data=coarse_template_data,
-            motion_est=motion_est,
+            motion=motion,
             merge_distances=merge_distances,
-            geom=geom,
-            registered_geom=rgeom,
+            geom=motion.geom,
+            registered_geom=motion.rgeom,
             extract_channel_index=channel_index,
             vis_channel_index=make_channel_index(
-                geom=rgeom, radius=vis_radius, p=vis_neighborhood_p, to_torch=False
+                geom=motion.rgeom,
+                radius=vis_radius,
+                p=vis_neighborhood_p,
+                to_torch=False,
             ),
             xyza=xyza,
             x=x,
             z=z,
             registered_z=reg_z,
-            shifting=motion_est is not None,
+            shifting=motion.drifting,
             times_seconds=times_seconds,
             amplitudes=amplitudes,
             amplitude_vectors=amplitude_vecs,
@@ -343,9 +331,7 @@ class DARTsortAnalysis:
         )
         device = self.erp.b.source_geom.device
         channels = torch.asarray(self.sorting.channels[which], device=device)
-        if self.motion_est is None:
-            shifts = torch.zeros(channels.shape, device=device)
-        else:
+        if self.motion.drifting:
             assert self.z is not None
             assert self.registered_z is not None
             # target will be geom - shift
@@ -353,6 +339,8 @@ class DARTsortAnalysis:
             # so, should take shift=disp=z-reg_z
             shifts = self.z[which] - self.registered_z[which]
             shifts = torch.asarray(shifts, device=device).float()
+        else:
+            shifts = torch.zeros(channels.shape, device=device)
         features = self.erp.interp(
             features=torch.asarray(features, device=device),
             source_main_channels=channels,
@@ -470,21 +458,17 @@ class DARTsortAnalysis:
         assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
 
         which = self.in_unit(unit_id)
-        if self.motion_est is not None and hasattr(self.sorting, "channel_index"):
+        if self.motion.drifting and hasattr(self.sorting, "channel_index"):
             assert self.z is not None
             assert self.registered_z is not None
             times_seconds = getattr(self.sorting, "times_seconds", None)
             assert times_seconds is not None
-            n_pitches_shift = get_spike_pitch_shifts(
-                self.z[which],
-                geom=self.geom,
-                registered_depths_um=self.registered_z[which],
-                times_s=times_seconds[which],
-                motion_est=self.motion_est,
+            _, n_pitches_shift = self.motion.pitch_shifts(
+                depths_um=self.z[which],
+                reg_depths_um=self.registered_z[which],
             )
             covered_chans = get_stable_channels(
-                geom=self.geom,
-                registered_geom=self.registered_geom,
+                motion=self.motion,
                 channels=self.sorting.channels[which],
                 channel_index=self.sorting.channel_index,  # type: ignore
                 n_pitches_shift=n_pitches_shift,
@@ -519,12 +503,9 @@ class DARTsortAnalysis:
             assert self.registered_z is not None
             times_seconds = getattr(self.sorting, "times_seconds", None)
             assert times_seconds is not None
-            n_pitches_shift = get_spike_pitch_shifts(
-                self.z[which],
-                geom=self.geom,
-                registered_depths_um=self.registered_z[which],
-                times_s=times_seconds[which],
-                motion_est=self.motion_est,
+            _, n_pitches_shift = self.motion.pitch_shifts(
+                depths_um=self.z[which],
+                reg_depths_um=self.registered_z[which],
             )
         else:
             n_pitches_shift = None

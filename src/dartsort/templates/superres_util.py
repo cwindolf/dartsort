@@ -2,16 +2,16 @@ from dataclasses import replace
 from logging import getLogger
 
 import numpy as np
-from dartsort.util import drift_util
 
+from ..util.motion import MotionInfo
 
 logger = getLogger(__name__)
 
 
 def superres_sorting(
+    *,
     sorting,
-    geom,
-    motion_est=None,
+    motion: MotionInfo,
     strategy="motion_estimate",
     localizations_dataset_name="point_source_localizations",
     superres_bin_size_um=10.0,
@@ -57,7 +57,6 @@ def superres_sorting(
             For instance, for motion_estimate binning, we store the centers
             of the bins (which are modulo pitch).
     """
-    pitch = drift_util.get_pitch(geom)
     full_labels = sorting.labels.copy()
 
     # load spike depths
@@ -69,8 +68,8 @@ def superres_sorting(
     if probe_margin_um is not None:
         valid = spike_depths_um == np.clip(
             spike_depths_um,
-            geom[:, 1].min() - probe_margin_um,
-            geom[:, 1].max() + probe_margin_um,
+            motion.geom[:, 1].min() - probe_margin_um,
+            motion.geom[:, 1].max() + probe_margin_um,
         )
         full_labels[~valid] = -1
 
@@ -85,13 +84,13 @@ def superres_sorting(
     if strategy in ("none", None):
         superres_to_original = np.arange(labels.max() + 1)
         superres_sorting = sorting
+        superres_labels = sorting.labels
     elif strategy == "motion_estimate":
         superres_labels, superres_to_original, bin_centers = motion_estimate_strategy(
             labels,
             spike_times_s,
             spike_depths_um,
-            pitch,
-            motion_est,
+            motion=motion,
             superres_bin_size_um=superres_bin_size_um,
         )
         properties["motion_estimate_bin_centers"] = bin_centers
@@ -100,8 +99,7 @@ def superres_sorting(
             labels,
             spike_times_s,
             spike_depths_um,
-            pitch,
-            motion_est,
+            motion=motion,
             superres_bin_size_um=superres_bin_size_um,
         )
     else:
@@ -109,7 +107,9 @@ def superres_sorting(
 
     # handle too-small units
     superres_labels, superres_to_original = remove_small_superres_units(
-        superres_labels, superres_to_original, min_spikes_per_bin=min_spikes_per_bin  # type: ignore
+        superres_labels,
+        superres_to_original,
+        min_spikes_per_bin=min_spikes_per_bin,  # type: ignore
     )
 
     # back to un-triaged label space
@@ -126,30 +126,29 @@ def motion_estimate_strategy(
     original_labels,
     spike_times_s,
     spike_depths_um,
-    pitch,
-    motion_est,
+    motion: MotionInfo,
     superres_bin_size_um=10.0,
     bin_round_atol=0.1,
 ):
     """ """
     # reg_pos = pos - disp, pos = reg_pos + disp
     # so, disp is the motion of spikes relative to fixed probe
-    if motion_est is None:
+    if motion is None:
         displacements = np.zeros_like(spike_depths_um)
     else:
-        displacements = motion_est.disp_at_s(spike_times_s, spike_depths_um)
+        displacements = motion.disp_at_s(spike_times_s, spike_depths_um)
 
-    n_bins = pitch // superres_bin_size_um
-    remainder = pitch - n_bins * superres_bin_size_um
+    n_bins = motion.pitch // superres_bin_size_um
+    remainder = motion.pitch - n_bins * superres_bin_size_um
     if not np.isclose(remainder, 0.0):
         n_bins = n_bins + (remainder > bin_round_atol)
         logger.info(
             f"Superres bin size didn't divide the pitch. Rounding it down from "
-            f"{superres_bin_size_um} to {pitch / n_bins}, for {n_bins} bins."
+            f"{superres_bin_size_um} to {motion.pitch / n_bins}, for {n_bins} bins."
         )
-        superres_bin_size_um = pitch / n_bins
+        superres_bin_size_um = motion.pitch / n_bins
 
-    mod_positions = displacements % pitch
+    mod_positions = displacements % motion.pitch
     bin_centers = np.arange(n_bins) * superres_bin_size_um + superres_bin_size_um / 2
     bin_ids = mod_positions // superres_bin_size_um
     bin_ids = bin_ids.astype(original_labels.dtype)
@@ -165,14 +164,13 @@ def drift_pitch_loc_bin_strategy(
     original_labels,
     spike_times_s,
     spike_depths_um,
-    pitch,
-    motion_est,
+    motion: MotionInfo,
     superres_bin_size_um=10.0,
 ):
-    n_pitches_shift = drift_util.get_spike_pitch_shifts(
-        spike_depths_um, pitch=pitch, times_s=spike_times_s, motion_est=motion_est
+    _, n_pitches_shift = motion.pitch_shifts(
+        times_s=spike_times_s, depths_um=spike_depths_um
     )
-    coarse_reg_depths = spike_depths_um + n_pitches_shift * pitch
+    coarse_reg_depths = spike_depths_um + n_pitches_shift * motion.pitch
 
     bin_ids = coarse_reg_depths // superres_bin_size_um
     bin_ids = bin_ids.astype(int)

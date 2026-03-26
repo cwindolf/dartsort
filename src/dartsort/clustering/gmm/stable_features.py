@@ -10,11 +10,13 @@ from ...util import drift_util, interpolation_util, spiketorch
 from ...util.data_util import DARTsortSorting, get_tpca
 from ...util.internal_config import (
     InterpolationParams,
+    RefinementConfig,
     default_extrapolation_params,
     default_interpolation_params,
 )
 from ...util.interpolation_util import SpikeNeighborhoods
 from ...util.job_util import get_global_computation_config
+from ...util.motion import MotionInfo
 from ...util.torch_util import BModule
 
 # -- main class
@@ -219,9 +221,9 @@ class StableSpikeDataset(torch.nn.Module):
     @classmethod
     def from_config(
         cls,
-        sorting,
-        refinement_cfg,
-        motion_est=None,
+        sorting: DARTsortSorting,
+        refinement_cfg: RefinementConfig,
+        motion: MotionInfo,
         computation_cfg=None,
         _core_feature_splits=("train", "kept"),
     ):
@@ -229,9 +231,9 @@ class StableSpikeDataset(torch.nn.Module):
             computation_cfg = get_global_computation_config()
         return cls.from_sorting(
             sorting,
-            motion_est=motion_est,
+            motion=motion,
             core_radius=refinement_cfg.core_radius,
-            max_n_spikes=refinement_cfg.max_n_spikes,
+            max_n_spikes=refinement_cfg.sampling_cfg.max_waveforms_fit,
             interp_params=refinement_cfg.interp_params.normalize(),
             split_proportions=(
                 1.0 - refinement_cfg.val_proportion,
@@ -244,15 +246,15 @@ class StableSpikeDataset(torch.nn.Module):
     @classmethod
     def from_sorting(
         cls,
-        sorting,
-        motion_est=None,
+        sorting: DARTsortSorting,
+        motion: MotionInfo,
         core_radius: float | Literal["extract"] | None = 35.0,
         max_n_spikes: float | int = np.inf,
         kept_indices: np.ndarray | None = None,
         discard_triaged: bool = False,
         interp_params: InterpolationParams = default_interpolation_params,
         features_dataset_name="collisioncleaned_tpca_features",
-        motion_depth_mode="channel",
+        motion_depth_mode: Literal["channel", "localization"] = "channel",
         split_names=("train", "val"),
         split_proportions=(0.75, 0.25),
         show_progress=True,
@@ -272,26 +274,17 @@ class StableSpikeDataset(torch.nn.Module):
             geom = h5["geom"][:]  # type: ignore
             extract_channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
             assert np.all(np.diff(extract_channel_index) >= 0)
-            if motion_est is None:
-                registered_geom = geom
-            else:
-                registered_geom = drift_util.registered_geometry(
-                    geom, motion_est=motion_est
-                )
-            prgeom = interpolation_util.pad_geom(registered_geom)
-
-            res = drift_util.get_shift_info(
-                sorting, motion_est, geom, motion_depth_mode
+            prgeom = interpolation_util.pad_geom(motion.rgeom)
+            shifts, n_pitches_shift = motion.pitch_shifts(
+                sorting=sorting, motion_depth_mode=motion_depth_mode
             )
-            channels, shifts, n_pitches_shift = res
 
             # determine channel occupancy of core/extract stable features
             res = drift_util.get_stable_channels(
-                geom,
-                channels,
-                extract_channel_index,
-                registered_geom,
-                n_pitches_shift,
+                motion=motion,
+                channels=sorting.channels,
+                channel_index=extract_channel_index,
+                n_pitches_shift=n_pitches_shift,
                 core_radius=core_radius,
                 workers=workers,
                 device=device,
@@ -317,6 +310,7 @@ class StableSpikeDataset(torch.nn.Module):
             if kept_indices is not None:
                 pass
             elif discard_triaged:
+                assert sorting.labels is not None
                 kept_indices = np.flatnonzero(sorting.labels >= 0)
             elif len(sorting) <= max_n_spikes:
                 kept_indices = np.arange(len(sorting))
@@ -364,7 +358,7 @@ class StableSpikeDataset(torch.nn.Module):
                 extract_channel_index,
                 sorting.channels[train_mask],
                 shifts[train_mask],
-                registered_geom,
+                motion.rgeom,
                 extract_channels[train_mask],
                 trim_to_rank=feature_rank,
                 params=interp_params,
@@ -382,7 +376,7 @@ class StableSpikeDataset(torch.nn.Module):
                     extract_channel_index,
                     sorting.channels,
                     shifts,
-                    registered_geom,
+                    motion.rgeom,
                     core_channels,
                     trim_to_rank=feature_rank,
                     params=interp_params,

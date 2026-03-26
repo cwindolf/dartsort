@@ -29,6 +29,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..util.motion import MotionInfo
 from ..util.torch_util import BModule
 from ..util.waveform_util import make_channel_index
 
@@ -1041,7 +1042,7 @@ class EmbeddedNoise(BModule):
         hdf5_path,
         mean_kind="zero",
         cov_kind="factorizednoise",
-        motion_est=None,
+        motion: MotionInfo | None = None,
         interp_params: InterpolationParams = default_template_interpolation_params,
         device=None,
         rank: int | None = None,
@@ -1053,20 +1054,18 @@ class EmbeddedNoise(BModule):
         from dartsort.util.drift_util import registered_geometry
 
         logger.dartsortdebug(
-            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {motion_est is None=} {glasso_alpha=}"
+            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=}"
         )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:]
-        if rgeom is None:
-            rgeom = geom
-            if motion_est is not None:
-                rgeom = registered_geometry(geom, motion_est=motion_est)
+        if motion is None:
+            motion = MotionInfo.from_motion_est(geom=geom)
         snippets = interpolate_residual_snippets(
-            motion_est=motion_est,
+            motion=motion,
             hdf5_path=hdf5_path,
             geom=geom,
-            registered_geom=rgeom,
+            registered_geom=motion.rgeom,
             interp_params=interp_params,
             device=device,
             rank=rank,
@@ -1137,7 +1136,7 @@ class EmbeddedNoise(BModule):
 
 def interpolate_residual_snippets(
     *,
-    motion_est,
+    motion: MotionInfo,
     hdf5_path: str | Path,
     geom,
     registered_geom,
@@ -1192,21 +1191,18 @@ def interpolate_residual_snippets(
         tpca = None
 
     erp = interpolation_util.ToFullProbeInterpolator(
-        geom=torch.asarray(geom, dtype=snippets.dtype),
-        rgeom=torch.asarray(registered_geom, dtype=snippets.dtype),
-        motion_est=motion_est,
-        params=interp_params,
+        motion=motion, params=interp_params, device=device
     )
     erp = erp.to(device=device)
 
     inds = []
-    if motion_est is not None:
-        if motion_est.time_bin_centers_s.size <= 1:
+    if motion is not None:
+        if motion.time_bins_s.size <= 1:
             dbin = 3 * np.ptp(times_s_np)
         else:
-            dbin = np.diff(motion_est.time_bin_centers_s).mean()
+            dbin = np.diff(motion.time_bins_s).mean()
         i0 = i1 = 0
-        for tbc in motion_est.time_bin_centers_s:
+        for tbc in motion.time_bins_s:
             left = tbc - 0.5 * dbin
             i0 = i0 + np.searchsorted(times_s_np[i0:], left)
             i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
@@ -1382,7 +1378,7 @@ def fp_control_threshold_from_h5(
 def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
-    motion_est=None,
+    motion: MotionInfo,
     interp_params: InterpolationParams = default_template_interpolation_params,
     device: torch.device | None = None,
     rgeom=None,
@@ -1398,12 +1394,13 @@ def residual_covariance(
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:].astype(np.float32)
         if rgeom is None:
-            rgeom = geom
-            if motion_est is not None:
-                rgeom = registered_geometry(geom, motion_est=motion_est)
+            if motion is None:
+                rgeom = geom
+            else:
+                rgeom = motion.rgeom
             rgeom = rgeom.astype(np.float32)
         snippets = interpolate_residual_snippets(
-            motion_est=motion_est,
+            motion=motion,
             hdf5_path=sorting.parent_h5_path,
             geom=geom,
             registered_geom=rgeom,
@@ -1497,7 +1494,7 @@ class SpatialWhitener(BModule):
         cls,
         *,
         sorting: DARTsortSorting,
-        motion_est=None,
+        motion: MotionInfo,
         whiten_cfg: WhiteningConfig,
         computation_cfg: ComputationConfig | None = None,
     ) -> Self:
@@ -1508,7 +1505,7 @@ class SpatialWhitener(BModule):
         cov = residual_covariance(
             sorting=sorting,
             do_interpolation=whiten_cfg.strategy == "postwhiten",
-            motion_est=motion_est,
+            motion=motion,
             interp_params=whiten_cfg.interp_params,
             device=device,
         )

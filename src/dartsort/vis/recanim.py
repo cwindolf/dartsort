@@ -113,7 +113,7 @@ class RecordingAnimation:
         self.probe_ax = probe_ax
 
     def initialize_figure(self, figsize=(5, 5)):
-        figure = plt.Figure(figsize=figsize, constrained_layout=True)
+        figure = plt.figure(figsize=figsize, layout="constrained")
         axes = figure.subplot_mosaic("ab\nac", gridspec_kw=dict(width_ratios=[1, 3]))
         left_ax = axes["a"]
         right_axes = [axes["b"], axes["c"]]
@@ -136,10 +136,8 @@ class RecordingAnimation:
         left_ax.add_collection(soma_patches)
         sns.despine(ax=left_ax, trim=True)
         left_ax.set_xlim(
-            [
-                self.geom[:, 0].min() - 2 * self.contact_wh[0],
-                self.geom[:, 0].max() + 3 * self.contact_wh[0],
-            ]
+            self.geom[:, 0].min() - 2 * self.contact_wh[0],
+            self.geom[:, 0].max() + 3 * self.contact_wh[0],
         )
         left_ax.set_xticks([self.geom[:, 0].min(), self.geom[:, 0].max()])
         left_ax.set_xlabel("x (um)")
@@ -163,18 +161,17 @@ class RecordingAnimation:
         self.artists = [shank, contact_patches, soma_patches, *vlines]
 
     def draw_frame(self, frame_ix):
-        self.probe_ax.set_ylim(self.zlim(frame_ix))
+        self.probe_ax.set_ylim(self.zlim(frame_ix))  # type: ignore
         sns.despine(ax=self.probe_ax, trim=True)
         self.update_contacts(frame_ix)
         self.update_somas(frame_ix)
         imr = self.update_recording(frame_ix)
         ims = self.update_signal(frame_ix)
         for ax in (self.recording_ax, self.signal_ax):
+            assert ax is not None
             ax.set_xlim(
-                [
-                    frame_ix / self.recording.sampling_frequency,
-                    (frame_ix + self.show_frames) / self.recording.sampling_frequency,
-                ]
+                frame_ix / self.recording.sampling_frequency,
+                (frame_ix + self.show_frames) / self.recording.sampling_frequency,
             )
             dt = 0.004
             ft0 = frame_ix / self.recording.sampling_frequency
@@ -187,6 +184,7 @@ class RecordingAnimation:
         z0, z1 = self.zlim(frame_ix)
         z0 = self.geom[:, 1][self.geom[:, 1] > z0].min()
         z1 = self.geom[:, 1][self.geom[:, 1] < z1].max()
+        assert self.signal_ax is not None
         self.signal_ax.set_ylim([z0, z1])
 
         self._has_drawn = True

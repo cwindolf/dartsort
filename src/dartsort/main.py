@@ -1,12 +1,12 @@
 import gc
 import traceback
-from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
 import torch
-from spikeinterface.core import BaseRecording
+from dredge.motion_util import MotionEstimate
+from spikeinterface.core import BaseRecording, Motion
 
 from .clustering import SimpleMatrixFeatures, get_clusterer, get_clustering_features
 from .config import DARTsortUserConfig, DeveloperConfig
@@ -48,12 +48,12 @@ from .util.main_util import (
     ds_handle_link_from,
     ds_save_features,
     ds_save_intermediate_labels,
-    ds_save_motion_est,
+    ds_save_motion,
 )
+from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.py_util import dartcopytree, resolve_path
-from .util.registration_util import estimate_motion
 
 logger = get_logger(__name__)
 
@@ -64,7 +64,8 @@ def dartsort(
     cfg: (
         DARTsortUserConfig | str | Path | DeveloperConfig | DARTsortInternalConfig
     ) = default_dartsort_cfg,
-    motion_est=None,
+    si_motion: Motion | None = None,
+    dredge_motion_est: MotionEstimate | None = None,
     overwrite=False,
 ):
     """dartsort
@@ -80,9 +81,10 @@ def dartsort(
     cfg: DARTsortUserConfig | DARTsortInternalConfig | str | Path
         Your settings. Either create a DARTsortUserConfig directly in code, or
         you can pass a string or Path pointing to a .toml file here.
-    motion_est: optional dredge.MotionEstimate
+    si_motion: optional spikeinterface.core.Motion
         This is meant to allow users to pass their own external motion estimate.
-        To do: support spikeinterface Motion objects here.
+    dredge_motion_est: optional dredge.MotionEstimate
+        This is meant to allow users to pass their own external motion estimate.
     overwrite : bool, default=False
         Ignore and overwrite stored results, if any. Otherwise, dartsort will
         try to resume from the last step that ran, or if it had finished then
@@ -96,7 +98,7 @@ def dartsort(
         export back to spikeinterface. Which would be everyone? :)
         Alternatively, you could visualize your results using the functions
         in the `import dartsort.vis as dartvis` library.
-     - "motion_est": dredge.MotionEstimate
+     - "motion": MotionInfo
 
     TODO: add the key "motion" with a spikeinterface Motion object.
     """
@@ -132,7 +134,8 @@ def dartsort(
                     recording=recording,
                     output_dir=output_dir,
                     cfg=cfg,
-                    motion_est=motion_est,
+                    si_motion=si_motion,
+                    dredge_motion_est=dredge_motion_est,
                     work_dir=work_dir,
                     overwrite=overwrite,
                 )
@@ -163,7 +166,8 @@ def dartsort(
             recording=recording,
             output_dir=output_dir,
             cfg=cfg,
-            motion_est=motion_est,
+            si_motion=si_motion,
+            dredge_motion_est=dredge_motion_est,
             work_dir=None,
             overwrite=overwrite,
         )
@@ -181,8 +185,9 @@ def _dartsort_impl(
     recording: BaseRecording,
     output_dir: Path,
     cfg: DARTsortInternalConfig = default_dartsort_cfg,
-    motion_est=None,
-    work_dir=None,
+    si_motion: Motion | None = None,
+    dredge_motion_est: MotionEstimate | None = None,
+    work_dir: Path | None = None,
     overwrite=False,
 ):
     """Internal helper function which implements dartsort's main logic."""
@@ -193,10 +198,16 @@ def _dartsort_impl(
 
     # if there are previous results stored, resume where they leave off
     # TODO uhh. overwrite, right?
-    next_step, sorting, _motion_est = ds_fast_forward(store_dir, cfg)
-    if motion_est is None:
-        motion_est = _motion_est
-    ret["motion_est"] = motion_est
+    next_step, sorting, _motion = ds_fast_forward(store_dir, cfg)
+    if (si_motion is None) and (dredge_motion_est is None):
+        motion = _motion
+    else:
+        motion = MotionInfo.from_motion_est(
+            geom=recording.get_channel_locations(),
+            dredge_motion_est=dredge_motion_est,
+            si_motion=si_motion,
+        )
+    ret["motion"] = motion
 
     if next_step == 0:
         # first step: initial detection and motion estimation
@@ -205,7 +216,7 @@ def _dartsort_impl(
             recording=recording,
             cfg=cfg,
             overwrite=overwrite,
-            motion_est=motion_est,
+            motion=motion,
         )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
@@ -216,18 +227,18 @@ def _dartsort_impl(
             ret["sorting"] = sorting
             return ret
 
-        if motion_est is None:
+        if motion is None:
             logger.dartsortdebug("-- Estimate motion")
-            motion_est = estimate_motion(
+            motion = get_motion_info(
                 output_directory=store_dir,
                 recording=recording,
                 sorting=sorting,
+                motion_cfg=cfg.motion_estimation_cfg,
+                computation_cfg=cfg.computation_cfg,
                 overwrite=overwrite,
-                device=cfg.computation_cfg.actual_device(),
-                **asdict(cfg.motion_estimation_cfg),
             )
-        ret["motion_est"] = motion_est
-        ds_save_motion_est(motion_est, output_dir, work_dir, overwrite)
+        ret["motion"] = motion
+        ds_save_motion(motion, output_dir, work_dir, overwrite)
 
         if cfg.dredge_only:
             ret["sorting"] = sorting
@@ -242,7 +253,7 @@ def _dartsort_impl(
         sorting = cluster(
             recording,
             sorting,
-            motion_est=motion_est,
+            motion=motion,
             refinement_cfgs=r_cfgs,
             clustering_cfg=cfg.clustering_cfg,
             clustering_features_cfg=cfg.clustering_features_cfg,
@@ -262,7 +273,7 @@ def _dartsort_impl(
         next_step += 1
 
     assert sorting is not None
-    assert (motion_est is not None) == cfg.motion_estimation_cfg.do_motion_estimation
+    assert motion is not None
     assert next_step > 0  # matching starts at 1
 
     for step in range(next_step, cfg.matching_iterations + 1):
@@ -283,7 +294,7 @@ def _dartsort_impl(
             output_dir=store_dir,
             recording=recording,
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             template_cfg=cfg.template_cfg,
             waveform_cfg=cfg.waveform_cfg,
             featurization_cfg=cfg.featurization_cfg,
@@ -315,9 +326,9 @@ def _dartsort_impl(
         ]
 
         sorting = cluster(
-            recording,
-            sorting,
-            motion_est=motion_est,
+            recording=recording,
+            sorting=sorting,
+            motion=motion,
             refinement_cfgs=r_cfgs,
             clustering_cfg=step_clustering_cfg,
             clustering_features_cfg=step_features_cfg,
@@ -350,9 +361,9 @@ def _dartsort_impl(
 
 def initial_detection(
     output_dir: str | Path,
-    recording,
+    recording: BaseRecording,
     cfg: DARTsortInternalConfig,
-    motion_est=None,
+    motion: MotionInfo | None = None,
     overwrite=False,
     show_progress=True,
 ):
@@ -392,7 +403,7 @@ def initial_detection(
             featurization_cfg=cfg.featurization_cfg,
             matching_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
-            motion_est=motion_est,
+            motion=motion,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -445,7 +456,7 @@ def match(
     output_dir: str | Path,
     recording: BaseRecording,
     sorting: DARTsortSorting | None = None,
-    motion_est=None,
+    motion: MotionInfo | None = None,
     waveform_cfg=default_waveform_cfg,
     template_cfg=default_template_cfg,
     featurization_cfg=default_featurization_cfg,
@@ -475,7 +486,7 @@ def match(
         sorting, template_data = estimate_template_library(
             recording=recording,
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             min_template_ptp=matching_cfg.min_template_ptp,
             min_template_snr=matching_cfg.min_template_snr,
             min_template_count=matching_cfg.min_template_count,
@@ -495,6 +506,7 @@ def match(
             template_npz_path=model_dir / template_npz_filename,
         )
         if prev_step_name is not None:
+            assert sorting is not None
             ds_save_intermediate_labels(
                 step_name=f"{prev_step_name}_9_prematch",
                 step_sorting=sorting,
@@ -509,7 +521,7 @@ def match(
         sampling_cfg=sampling_cfg,
         featurization_cfg=featurization_cfg,
         template_data=template_data,
-        motion_est=motion_est,
+        motion=motion,
         parent_sorting_hdf5_path=getattr(sorting, "parent_h5_path", None),
     )
     sorting = run_peeler(
@@ -600,9 +612,9 @@ def threshold(
 
 
 def cluster(
-    recording,
-    sorting,
-    motion_est=None,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    motion: MotionInfo,
     clustering_cfg: ClusteringConfig | None = default_clustering_cfg,
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
@@ -620,7 +632,7 @@ def cluster(
         features = get_clustering_features(
             recording,
             sorting,
-            motion_est=motion_est,
+            motion=motion,
             clustering_features_cfg=clustering_features_cfg,
         )
     assert features is not None
@@ -634,7 +646,7 @@ def cluster(
         refine_labels_fmt=_save_refined_name_fmt,
     )
     result = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion_est=motion_est
+        recording=recording, sorting=sorting, features=features, motion=motion
     )
 
     del features, clusterer

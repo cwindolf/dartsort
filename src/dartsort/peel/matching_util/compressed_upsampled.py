@@ -5,8 +5,6 @@ from typing import Self
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording
 from torch import Tensor
 
@@ -20,7 +18,8 @@ from ...templates import (
 )
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.job_util import ensure_computation_config
-from ...util.logging_util import get_logger, DARTSORTVERBOSE
+from ...util.logging_util import DARTSORTVERBOSE, get_logger
+from ...util.motion import MotionInfo
 from ...util.spiketorch import add_at_, convolve_lowrank, grab_spikes_full
 from .matching_base import (
     ChunkTemplateData,
@@ -52,6 +51,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
 
     def __init__(
         self,
+        *,
         low_rank_templates: LowRankTemplates,
         pconv_db: PconvBase,
         compressed_upsampled_temporal: CompressedUpsampledTemplates,
@@ -61,7 +61,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         registered_geom: np.ndarray | None = None,
         registered_template_depths_um: np.ndarray | None = None,
         refractory_radius_frames: int = 10,
-        motion_est=None,
+        motion: MotionInfo,
         dtype=torch.float,
     ):
         super().__init__()
@@ -115,22 +115,11 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         self.obj_n_templates = len(self.b.obj_unit_ids)
 
         # -- geometry, as needed
-        self.drifting = motion_est is not None and np.any(motion_est.displacement)
-        if self.drifting:
-            assert geom is not None
-            assert registered_geom is not None
-            self.geom = geom
-            self.geom_kdtree = KDTree(geom)
-            self.rgeom = registered_geom
-            self.motion_est = motion_est
-            self.match_rad = pdist(geom).min() / 1.5
-            self.n_channels_full = len(self.rgeom)
-            self.n_channels = len(geom)
-        else:
-            self.geom_kdtree = self.geom = self.motion_est = self.rgeom = None
-            self.n_channels = self.b.spatial_sing.shape[2]
-            self.n_channels_full = self.n_channels
-            self.match_rad = None
+        self.drifting = motion.drifting
+        self.motion = motion
+        self.n_channels_full = len(motion.rgeom)
+        self.n_channels = len(motion.geom)
+        self.match_rad = motion.min_dist / 1.5
         self.check_shapes()
 
         # -- upsampled temporal bases
@@ -188,7 +177,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         template_data: TemplateData,
         matching_cfg: MatchingConfig,
         computation_cfg: ComputationConfig | None,
-        motion_est,
+        motion: MotionInfo,
         overwrite: bool,
         dtype: torch.dtype,
     ) -> Self:
@@ -238,16 +227,15 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             pconv_lrt = lrt
         assert pconv_td is not None
         assert pconv_lrt is not None
-        drifting = motion_est is not None and np.any(motion_est.displacement)
         pairwise_conv_db = CompressedPairwiseConv.from_template_data(
-            save_folder / "pconv.h5",
+            hdf5_filename=save_folder / "pconv.h5",
             template_data=pconv_td,
             low_rank_templates=pconv_lrt,
             template_data_b=template_data if coarse_objective else None,
             low_rank_templates_b=lrt if coarse_objective else None,
             compressed_upsampled_temporal=cupt,
             chunk_time_centers_s=chunk_centers_s,
-            motion_est=motion_est if drifting else None,
+            motion=motion,
             geom=geom,
             computation_cfg=computation_cfg,
             overwrite=overwrite,
@@ -261,7 +249,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             registered_geom=template_data.registered_geom,
             registered_template_depths_um=template_data.registered_depths_um(),
             pconv_db=pairwise_conv_db,
-            motion_est=motion_est,
+            motion=motion,
             dtype=dtype,
         )
 
@@ -275,15 +263,11 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
     ) -> "CompressedUpsampledChunkTemplateData":
         if self.drifting:
             shifts, padded_spatial_sing = templates_at_time(
-                t_s,
-                self.b.spatial_sing,
-                self.geom,
+                t_s=t_s,
+                registered_templates=self.b.spatial_sing,
                 registered_template_depths_um=self.registered_template_depths_um,
-                registered_geom=self.rgeom,
-                motion_est=self.motion_est,
+                motion=self.motion,
                 return_pitch_shifts=True,
-                geom_kdtree=self.geom_kdtree,
-                match_distance=self.match_rad,
                 return_padded=True,
                 fill_value=0.0,
             )
@@ -299,15 +283,11 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
 
         if self.drifting and self.coarse_objective:
             obj_shifts, obj_spatial_sing = templates_at_time(
-                t_s,
-                self.b.spatial_sing,
-                self.geom,
+                t_s=t_s,
+                registered_templates=self.b.spatial_sing,
                 registered_template_depths_um=self.registered_template_depths_um,
-                registered_geom=self.rgeom,
-                motion_est=self.motion_est,
+                motion=self.motion,
                 return_pitch_shifts=True,
-                geom_kdtree=self.geom_kdtree,
-                match_distance=self.match_rad,
                 return_padded=False,
             )
             obj_shifts = torch.asarray(shifts, device=self.device)

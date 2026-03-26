@@ -19,20 +19,16 @@ from ..templates import TemplateData
 from ..templates.superres_util import superres_sorting
 from ..util import spikeio
 from ..util.data_util import DARTsortSorting
-from ..util.drift_util import (
-    get_spike_pitch_shifts,
-    registered_geometry,
-    registered_template,
-)
+from ..util.drift_util import registered_template
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
-    TemplateSVDMethod,
     WaveformConfig,
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.noise_util import SpatialWhitener
 from ..util.spiketorch import fast_nanmedian, nanmean, ptp
@@ -54,7 +50,7 @@ class UnitExtractTemplateData(TemplateData):
         sorting: DARTsortSorting,
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        motion_est=None,
+        motion: MotionInfo,
         tsvd=None,
         whitener: SpatialWhitener | None = None,
         computation_cfg: ComputationConfig | None = None,
@@ -67,7 +63,7 @@ class UnitExtractTemplateData(TemplateData):
             sorting=sorting,
             recording=recording,
             tsvd=tsvd,
-            motion_est=motion_est,
+            motion=motion,
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
             template_cfg=template_cfg,
@@ -80,7 +76,7 @@ def get_templates_unitextract(
     sorting: DARTsortSorting,
     template_cfg: TemplateConfig,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
-    motion_est=None,
+    motion: MotionInfo | None = None,
     tsvd=None,
     computation_cfg: ComputationConfig | None = None,
     show_progress: bool = True,
@@ -99,21 +95,14 @@ def get_templates_unitextract(
 
     # load motion features if necessary
     geom = recording.get_channel_locations()
-    if template_cfg.registered_templates:
-        motion_kw = dict(
-            motion_est=motion_est,
-            geom=geom,
-            localizations_dataset_name=template_cfg.localizations_dataset_name,
-        )
-    else:
-        motion_kw = dict(geom=geom)
+    if motion is None:
+        motion = MotionInfo.from_motion_est(geom=geom)
 
     # handle superresolved templates
     if template_cfg.superres_templates:
         superres_data = superres_sorting(
             sorting=sorting,
-            geom=geom,
-            motion_est=motion_est,
+            motion=motion,
             strategy=template_cfg.superres_strategy,
             superres_bin_size_um=template_cfg.superres_bin_size_um,
             min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
@@ -136,16 +125,14 @@ def get_templates_unitextract(
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
-        **motion_kw,  # type: ignore
+        motion=motion,
+        localizations_dataset_name=template_cfg.localizations_dataset_name,
     )
     if template_cfg.superres_templates:
         assert group_ids is not None
         unit_ids = group_ids[results["unit_ids"]]  # type: ignore
     else:
         unit_ids = results["unit_ids"]
-    rgeom = results["registered_geom"]
-    if rgeom is None:
-        rgeom = geom
     if tsvd is None:
         tsvd = results["denoising_tsvd"]
     assert tsvd is None or isinstance(tsvd, (PCA, TruncatedSVD))
@@ -153,9 +140,9 @@ def get_templates_unitextract(
         templates=cast(np.ndarray, results["templates"]),
         unit_ids=cast(np.ndarray, unit_ids),
         spike_counts=results["spike_counts"],  # type: ignore
-        spike_counts_by_channel=results["spike_counts_by_channel"],
-        raw_std_dev=results["raw_std_devs"],
-        registered_geom=rgeom,
+        spike_counts_by_channel=cast(np.ndarray, results["spike_counts_by_channel"]),
+        raw_std_dev=cast(np.ndarray, results["raw_std_devs"]),
+        registered_geom=motion.rgeom,
         trough_offset_samples=trough_offset_samples,
         properties=properties,  # type: ignore
         tsvd=tsvd,
@@ -168,13 +155,11 @@ def get_templates_unitextract(
 
 def get_templates(
     *,
-    recording,
-    sorting,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
     waveform_cfg: WaveformConfig,
-    motion_est=None,
-    geom=None,
+    motion: MotionInfo,
     pitch_shifts=None,
-    registered_geom=None,
     denoising_tsvd=None,
     template_cfg: TemplateConfig,
     random_seed=0,
@@ -244,9 +229,7 @@ def get_templates(
     reducer = nanmean if template_cfg.reduction == "mean" else fast_nanmedian
 
     # use geometry and motion estimate to get pitch shifts and reg geom
-    if pitch_shifts is None and motion_est is not None:
-        assert geom is not None
-        registered_geom = registered_geometry(geom, motion_est=motion_est)
+    if pitch_shifts is None and motion.drifting:
         try:
             spike_depths_um = getattr(sorting, localizations_dataset_name)[:, 2]
         except AttributeError:
@@ -255,14 +238,9 @@ def get_templates(
                 f"{localizations_dataset_name=} when computing registered templates."
             )
         spike_times_s = getattr(sorting, times_s_dataset_name)
-        pitch_shifts = get_spike_pitch_shifts(
-            spike_depths_um, geom, times_s=spike_times_s, motion_est=motion_est
+        _, pitch_shifts = motion.pitch_shifts(
+            times_s=spike_times_s, depths_um=spike_depths_um
         )
-    if pitch_shifts is not None:
-        assert registered_geom is not None
-        geom_kw = dict(registered_geom=registered_geom)
-    else:
-        geom_kw = dict(registered_geom=geom)
 
     # fit tsvd
     need_denoiser = denoising_tsvd is None and low_rank_denoising
@@ -270,7 +248,7 @@ def get_templates(
         denoising_tsvd = fit_tsvd(
             recording=recording,
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             dtype=dtype,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
@@ -291,7 +269,8 @@ def get_templates(
     res = get_all_shifted_raw_and_low_rank_templates(
         recording,
         sorting,
-        registered_geom=registered_geom,
+        drifting=motion.drifting,
+        registered_geom=motion.rgeom,
         denoising_tsvd=denoising_tsvd,
         pitch_shifts=pitch_shifts,
         spikes_per_unit=template_cfg.spikes_per_unit,
@@ -299,6 +278,7 @@ def get_templates(
         n_jobs=n_jobs,
         units_per_job=template_cfg.units_per_job,
         random_seed=random_seed,
+        match_distance=motion.min_dist / 1.5,
         show_progress=show_progress,
         dtype=dtype,
         trough_offset_samples=trough_offset_samples,
@@ -329,7 +309,6 @@ def get_templates(
             snrs_by_channel=snrs_by_channel,
             spike_counts_by_channel=spike_counts_by_channel,
             denoising_tsvd=denoising_tsvd,
-            **geom_kw,
         )
 
     weights = denoising_weights(
@@ -356,7 +335,6 @@ def get_templates(
         spike_counts_by_channel=spike_counts_by_channel,
         denoising_tsvd=denoising_tsvd,
         weights=weights,
-        **geom_kw,
     )
 
 
@@ -366,11 +344,13 @@ def get_templates(
 def get_all_shifted_raw_and_low_rank_templates(
     recording,
     sorting,
+    drifting: bool,
     registered_geom=None,
     denoising_tsvd=None,
     pitch_shifts=None,
     with_raw_std_dev=False,
     spikes_per_unit=500,
+    match_distance=0.0,
     reducer=fast_nanmedian,
     n_jobs=0,
     units_per_job=8,
@@ -428,7 +408,9 @@ def get_all_shifted_raw_and_low_rank_templates(
             random_seed,
             recording,
             sorting,
+            drifting,
             registered_kdtree,
+            match_distance,
             denoising_tsvd,
             pitch_shifts,
             spikes_per_unit,
@@ -500,7 +482,9 @@ class TemplateProcessContext:
         rg,
         recording,
         sorting,
+        drifting,
         registered_kdtree,
+        match_distance,
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,
@@ -515,7 +499,7 @@ class TemplateProcessContext:
         dtype,
     ):
         self.n_channels = recording.get_num_channels()
-        self.registered = registered_kdtree is not None
+        self.registered = drifting
 
         self.rg = rg
         self.device = device
@@ -552,7 +536,7 @@ class TemplateProcessContext:
         self.n_template_channels = self.n_channels
         if self.registered:
             self.geom = recording.get_channel_locations()
-            self.match_distance = pdist(self.geom).min() / 2
+            self.match_distance = match_distance
             self.registered_geom = registered_kdtree.data
             self.registered_kdtree = registered_kdtree
             self.pitch_shifts = pitch_shifts
@@ -567,7 +551,9 @@ def _template_process_init(
     random_seed,
     recording,
     sorting,
+    drifting,
     registered_kdtree,
+    match_distance,
     denoising_tsvd,
     pitch_shifts,
     spikes_per_unit,
@@ -597,7 +583,9 @@ def _template_process_init(
         rg,
         recording,
         sorting,
+        drifting,
         registered_kdtree,
+        match_distance,
         denoising_tsvd,
         pitch_shifts,
         spikes_per_unit,

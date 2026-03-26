@@ -85,12 +85,12 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
-    motion_est = sim["motion_est"]
+    motion = sim["motion"]
 
     features = get_clustering_features(
         recording,
         sorting,
-        motion_est=motion_est,
+        motion=motion,
         clustering_features_cfg=ClusteringFeaturesConfig(**featkw),
     )
     clusterer = get_clusterer(
@@ -98,7 +98,7 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
         refinement_cfgs=None,
     )
     res = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion_est=motion_est
+        recording=recording, sorting=sorting, features=features, motion=motion
     )
     assert res is not None
     assert res.labels is not None
@@ -113,12 +113,12 @@ def test_refinement(simulations, sim_name, refkw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
-    motion_est = sim["motion_est"]
+    motion = sim["motion"]
 
     features = get_clustering_features(
         recording,
         sorting,
-        motion_est=motion_est,
+        motion=motion,
         clustering_features_cfg=None,
     )
     if refkw["refinement_strategy"]:
@@ -130,7 +130,7 @@ def test_refinement(simulations, sim_name, refkw):
         clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]
     )
     res = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion_est=motion_est
+        recording=recording, sorting=sorting, features=features, motion=motion
     )
     assert res is not None
     assert res.labels is not None
@@ -151,12 +151,12 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
-    motion_est = sim["motion_est"]
+    motion = sim["motion"]
 
     res_sorting = cluster(
         recording=recording,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         clustering_cfg=ClusteringConfig(**cluskw),
         refinement_cfgs=[RefinementConfig(**initrefkw), RefinementConfig(**refkw)],
     )

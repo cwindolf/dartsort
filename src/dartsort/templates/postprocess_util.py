@@ -24,6 +24,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
 from ..util.py_util import resolve_path
 from ..util.spiketorch import ptp
@@ -36,7 +37,7 @@ logger = get_logger(__name__)
 def estimate_template_library(
     recording: BaseRecording,
     sorting: DARTsortSorting,
-    motion_est=None,
+    motion: MotionInfo | None = None,
     min_template_snr: float = 0.0,
     min_template_ptp: float = 0.0,
     min_template_count: int = 0,
@@ -65,6 +66,9 @@ def estimate_template_library(
         raise ValueError("No labels in sorting input to template postprocessing.")
     computation_cfg = ensure_computation_config(computation_cfg)
 
+    if motion is None:
+        motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
+
     # realign sorting and estimate template snr
     sorting, templates0 = realign(
         recording=recording,
@@ -72,7 +76,7 @@ def estimate_template_library(
         realign_cfg=realign_cfg,
         waveform_cfg=waveform_cfg,
         computation_cfg=computation_cfg,
-        motion_est=motion_est,
+        motion=motion,
     )
 
     # use templates0 to fit tsvd if relevant
@@ -81,7 +85,7 @@ def estimate_template_library(
         tsvd = fit_tsvd(
             recording=recording,
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             template_cfg=template_cfg,
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
@@ -110,7 +114,7 @@ def estimate_template_library(
             sorting=sorting,
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
-            motion_est=motion_est,
+            motion=motion,
         )
     if min_template_count or min_template_snr or (max_cc_flag_rate < 1.0):
         assert templates0 is not None
@@ -138,7 +142,7 @@ def estimate_template_library(
     templates = TemplateData.from_config(
         recording=recording,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         waveform_cfg=waveform_cfg,
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,
@@ -154,7 +158,7 @@ def estimate_template_library(
         recording=recording,
         sorting=sorting,
         template_data=templates,
-        motion_est=motion_est,
+        motion=motion,
         merge_cfg=template_merge_cfg,
         computation_cfg=computation_cfg,
         waveform_cfg=waveform_cfg,
@@ -174,7 +178,7 @@ def realign_and_chuck_noisy_template_units(
     recording,
     sorting,
     template_data=None,
-    motion_est=None,
+    motion=None,
     min_n_spikes=50,
     min_template_snr=15.0,
     waveform_cfg=default_waveform_cfg,
@@ -200,7 +204,7 @@ def realign_and_chuck_noisy_template_units(
             recording=recording,
             sorting=sorting,
             template_cfg=template_cfg,
-            motion_est=motion_est,
+            motion=motion,
             tsvd=tsvd,
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
@@ -355,7 +359,7 @@ def _handle_merge(
     *,
     recording: BaseRecording,
     sorting: DARTsortSorting,
-    motion_est,
+    motion,
     template_data: TemplateData,
     merge_cfg: TemplateMergeConfig | None,
     computation_cfg: ComputationConfig,
@@ -401,7 +405,7 @@ def _handle_merge(
         recompute_sorting, recompute_template_data = estimate_template_library(
             recording=recording,
             sorting=recompute_sorting,
-            motion_est=motion_est,
+            motion=motion,
             min_template_snr=0.0,
             min_template_count=0,
             waveform_cfg=waveform_cfg,

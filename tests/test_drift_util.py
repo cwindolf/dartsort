@@ -6,6 +6,7 @@ from scipy.spatial.distance import pdist, cdist
 
 from dartsort.util import drift_util, waveform_util
 from dartsort.evaluate import simlib
+from dartsort import MotionInfo
 import dredge.motion_util as mu
 
 
@@ -131,7 +132,9 @@ def test_registered_geometry(example_geoms, geom_ix, drift_speed):
     registered_geom0 = unique_shifted_positions[np.lexsort(sortpos.T)]
     assert len(np.unique(registered_geom0, axis=0)) == len(registered_geom0)
 
-    registered_geom1 = drift_util.registered_geometry(geom, motion_est=motion_est)
+    registered_geom1 = drift_util.registered_geometry(
+        geom, displacement=motion_est.displacement
+    )
     assert len(np.unique(registered_geom1, axis=0)) == len(registered_geom1)
     assert np.array_equal(registered_geom0, registered_geom1)
 
@@ -158,26 +161,25 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     n_spikes = 2048
     rg = np.random.default_rng(0)
     ci = waveform_util.make_channel_index(geom, radius)
-    max_distance = pdist(geom).min() / 2
 
     # create fake motion estimate
     time_bin_centers = np.arange(T_seconds) + 0.5
     drift = drift_speed * (time_bin_centers - T_seconds / 2)
-    motion_est = mu.get_motion_estimate(drift, time_bin_centers_s=time_bin_centers)
+    motion = MotionInfo.from_motion_est(
+        geom=geom,
+        dredge_motion_est=mu.get_motion_estimate(
+            drift, time_bin_centers_s=time_bin_centers
+        ),
+    )
 
     # pick random main channels and times
     drifted_chans = np.arange(n_spikes) % nc
     times = rg.uniform(0, T_seconds, size=n_spikes)
     drifted_pos = geom[drifted_chans]
     drifted_depths = drifted_pos[:, 1]
-    shifts = motion_est.disp_at_s(times, drifted_depths)
-    reg_depths = motion_est.correct_s(times, drifted_depths)
+    shifts = motion.disp_at_s(times, drifted_depths)
+    reg_depths = motion.correct_s(times, drifted_depths)
     assert np.isclose(reg_depths, drifted_depths - shifts).all()
-    reg_pos = np.c_[drifted_pos[:, 0], reg_depths]
-
-    # registered geometry -- kdt since we'll do lots of nn queries
-    rgeom = drift_util.registered_geometry(geom, motion_est)
-    kdt = KDTree(rgeom)
 
     # original (drifted) and registered channel neighborhood positions
     drifted_neighbs = ci[drifted_chans]
@@ -188,18 +190,19 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     reg_chan_pos[:, :, 1] -= shifts[:, None]
 
     # get pitch shifts and check that they agree with the drifted channel position
-    n_pitches_shift = drift_util.get_spike_pitch_shifts(
-        drifted_depths, geom, reg_depths
+    _, n_pitches_shift = motion.pitch_shifts(
+        depths_um=drifted_depths, reg_depths_um=reg_depths
     )
-    pitch = drift_util.get_pitch(geom)
-    pitch_shifts = n_pitches_shift * pitch
+    pitch_shifts = n_pitches_shift * motion.pitch
     pitch_reg_depths = drifted_depths + pitch_shifts
-    assert ((np.abs(reg_depths - pitch_reg_depths) // pitch) == 0).all()
+    assert ((np.abs(reg_depths - pitch_reg_depths) // motion.pitch) == 0).all()
     pitch_reg_pos = np.c_[drifted_pos[:, 0], pitch_reg_depths]
-    d_pitch, i_pitch = kdt.query(
-        pitch_reg_pos, distance_upper_bound=max_distance, workers=-1  # type: ignore
+    d_pitch, i_pitch = motion.rgeom_kdt.query(
+        pitch_reg_pos,
+        distance_upper_bound=motion.min_dist,
+        workers=-1,  # type: ignore
     )
-    assert (i_pitch < kdt.n).all()
+    assert (i_pitch < motion.rgeom_kdt.n).all()
     i_pitch: npt.NDArray[np.intp] = i_pitch
 
     # pitch-registered channel positions
@@ -209,11 +212,11 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     # -- different ways of getting the registered neighborhoods
     # 1 compute target channels directly
     ii, jj = np.nonzero(drifted_neighbs < len(geom))
-    _, chans_1_ = kdt.query(
-        pitch_reg_chan_pos[ii, jj], distance_upper_bound=max_distance, workers=-1
+    _, chans_1_ = motion.rgeom_kdt.query(
+        pitch_reg_chan_pos[ii, jj], distance_upper_bound=motion.min_dist, workers=-1
     )
-    assert (chans_1_ < kdt.n).all()
-    chans_1 = np.full_like(drifted_neighbs, kdt.n)
+    assert (chans_1_ < motion.rgeom_kdt.n).all()
+    chans_1 = np.full_like(drifted_neighbs, motion.rgeom_kdt.n)
     chans_1[ii, jj] = chans_1_
     assert (chans_1 == i_pitch[:, None]).any(1).all()
 
@@ -222,8 +225,8 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
         geom,
         drifted_chans,
         ci,
-        registered_geom=rgeom,
-        target_kdtree=kdt,
+        registered_geom=motion.rgeom,
+        target_kdtree=motion.rgeom_kdt,
         n_pitches_shift=n_pitches_shift,
         workers=-1,
     )
@@ -241,8 +244,8 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
         geom,
         drifted_chans,
         ci,
-        registered_geom=rgeom,
-        target_kdtree=kdt,
+        registered_geom=motion.rgeom,
+        target_kdtree=motion.rgeom_kdt,
         n_pitches_shift=n_pitches_shift,
         uniq_channels_and_shifts=cs_uniq,
         uniq_inv=cs_inv,
@@ -287,7 +290,12 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
 
     # 4 from get_stable_channels
     static_chans_4, neighborhoods_4, neighborhood_ids_4, *_ = (
-        drift_util.get_stable_channels(geom, drifted_chans, ci, rgeom, n_pitches_shift)
+        drift_util.get_stable_channels(
+            motion=motion,
+            channels=drifted_chans,
+            channel_index=ci,
+            n_pitches_shift=n_pitches_shift,
+        )
     )
     assert _ == [None, None, None]
     assert np.array_equal(neighborhoods_2, neighborhoods_4)

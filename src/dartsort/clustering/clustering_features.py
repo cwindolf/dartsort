@@ -1,11 +1,14 @@
-from typing import cast, Self
+from typing import Self, cast
 
 import h5py
 import numpy as np
 import torch
+from spikeinterface.core import BaseRecording
 
-from ..util.internal_config import ClusteringFeaturesConfig
 from ..util import drift_util, interpolation_util
+from ..util.data_util import DARTsortSorting
+from ..util.internal_config import ClusteringFeaturesConfig
+from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
 from . import cluster_util
@@ -21,9 +24,9 @@ minimal_features_cfg = ClusteringFeaturesConfig(
 
 
 def get_clustering_features(
-    recording,
-    sorting,
-    motion_est=None,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    motion: MotionInfo,
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
     ) = default_clustering_features_cfg,
@@ -32,7 +35,7 @@ def get_clustering_features(
         clustering_features_cfg = minimal_features_cfg
     if clustering_features_cfg.features_type == "simple_matrix":
         return SimpleMatrixFeatures.from_config(
-            recording, sorting, motion_est, clustering_features_cfg
+            recording, sorting, motion, clustering_features_cfg
         )
     assert False
 
@@ -62,14 +65,20 @@ class SimpleMatrixFeatures:
         )
 
     @classmethod
-    def from_config(cls, recording, sorting, motion_est, clustering_features_cfg):
+    def from_config(
+        cls,
+        recording: BaseRecording,
+        sorting: DARTsortSorting,
+        motion: MotionInfo,
+        clustering_features_cfg: ClusteringFeaturesConfig,
+    ):
         assert clustering_features_cfg.features_type == "simple_matrix"
 
         xyza = getattr(sorting, clustering_features_cfg.localizations_dataset_name)
         x = xyza[:, 0]
-        z_reg = z = xyza[:, 2]
-        if motion_est is not None:
-            z_reg = motion_est.correct_s(sorting.times_seconds, z)
+        z = xyza[:, 2]
+        t_s = sorting.times_seconds  # type: ignore
+        z_reg = motion.correct_s(t_s, z)
 
         features = []
 
@@ -110,22 +119,13 @@ class SimpleMatrixFeatures:
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
         elif do_pcs and clustering_features_cfg.motion_aware:
-            geom = sorting.geom
-            if motion_est is None:
-                registered_geom = geom
-            else:
-                registered_geom = drift_util.registered_geometry(
-                    geom, motion_est=motion_est
-                )
-            res = drift_util.get_shift_info(sorting, motion_est, geom)
-            channels, shifts, n_pitches_shift = res
-            mainchan_ci = single_channel_index(len(geom))
+            shifts, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+            mainchan_ci = single_channel_index(len(motion.geom))
             schan, *_ = drift_util.get_stable_channels(
-                geom,
-                channels,
-                mainchan_ci,
-                registered_geom,
-                n_pitches_shift,
+                motion=motion,
+                channels=sorting.channels,
+                channel_index=mainchan_ci,
+                n_pitches_shift=n_pitches_shift,
                 workers=clustering_features_cfg.workers,
             )
             mask = np.ones((1,), dtype=bool)
@@ -134,11 +134,11 @@ class SimpleMatrixFeatures:
                 pcs = interpolation_util.interpolate_by_chunk(
                     mask=mask,
                     dataset=h5[clustering_features_cfg.pca_dataset_name],
-                    geom=geom,
+                    geom=motion.geom,
                     channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
                     channels=sorting.channels,
                     shifts=shifts,
-                    registered_geom=registered_geom,
+                    registered_geom=motion.rgeom,
                     target_channels=schan,
                     params=clustering_features_cfg.interp_params,
                 )

@@ -13,6 +13,7 @@ from .internal_config import (
     InterpolationParams,
     default_interpolation_params,
 )
+from .motion import MotionInfo
 from .torch_util import BModule
 from .waveform_util import make_channel_index
 
@@ -1352,19 +1353,16 @@ class ToFullProbeInterpolator(BModule):
     """
 
     def __init__(
-        self,
-        *,
-        geom: torch.Tensor,
-        rgeom: torch.Tensor,
-        motion_est,
-        params: InterpolationParams,
+        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
     ):
         super().__init__()
         self.erp_params = params.normalize()
+        geom = torch.asarray(motion.geom, dtype=torch.float, device=device)
+        rgeom = torch.asarray(motion.rgeom, dtype=torch.float, device=device)
         channel_index = make_channel_index(
             geom, radius=self.erp_params.neighborhood_radius, to_torch=True
         )
-        self.motion_est = motion_est
+        self.motion = motion
         channel_index = channel_index.to(device=geom.device)
         self.register_buffer_or_none(
             "data", full_probe_precompute(geom, channel_index, self.erp_params)
@@ -1381,9 +1379,9 @@ class ToFullProbeInterpolator(BModule):
         assert waveforms.shape[2] == self.b.geom.shape[0]
 
         # get the target geom, which is the rgeom shifted to match the drift
-        if self.motion_est is not None:
-            disp = self.motion_est.disp_at_s(
-                t_s=np.array([t_s]), depth_um=self.rg_depths, grid=True
+        if self.motion.drifting:
+            disp = self.motion.disp_at_s(
+                times_s=np.array([t_s]), depths_um=self.rg_depths, grid=True
             )
             assert disp.shape[1] == 1
             tgeom = self.b.rgeom.clone()
@@ -1416,20 +1414,17 @@ class FromFullProbeInterpolator(BModule):
     """Interpolate from the registered geom to appropriate drifting geom channels."""
 
     def __init__(
-        self,
-        *,
-        geom: torch.Tensor,
-        rgeom: torch.Tensor,
-        motion_est,
-        params: InterpolationParams,
+        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
     ):
         super().__init__()
+        geom = torch.asarray(motion.geom, dtype=torch.float, device=device)
+        rgeom = torch.asarray(motion.rgeom, dtype=torch.float, device=device)
 
         self.erp_params = params.normalize()
         rchannel_index = make_channel_index(
             rgeom, radius=self.erp_params.neighborhood_radius, to_torch=True
         )
-        self.motion_est = motion_est
+        self.motion = motion
         rchannel_index = rchannel_index.to(device=rgeom.device)
         self.register_buffer_or_none(
             "data", full_probe_precompute(rgeom, rchannel_index, self.erp_params)
@@ -1449,9 +1444,9 @@ class FromFullProbeInterpolator(BModule):
 
         # move geom to its position at time t_s
         shift = torch.zeros_like(self.b.geom)
-        if self.motion_est is not None:
-            disp = self.motion_est.disp_at_s(
-                t_s=np.array([t_s]), depth_um=self.g_depths, grid=True
+        if self.motion.drifting:
+            disp = self.motion.disp_at_s(
+                times_s=np.array([t_s]), depths_um=self.g_depths, grid=True
             )
             assert disp.shape[1] == 1
             shift[:, 1].copy_(torch.tensor(disp[:, 0]))

@@ -1,18 +1,18 @@
 import numpy as np
-from spikeinterface.core import BaseRecording
 from sklearn.decomposition import PCA, TruncatedSVD
+from spikeinterface.core import BaseRecording
 
+from ..util.data_util import DARTsortSorting, load_stored_tsvd
 from ..util.internal_config import (
-    TemplateSVDMethod,
-    WaveformConfig,
-    TemplateConfig,
     ComputationConfig,
+    TemplateConfig,
+    WaveformConfig,
     default_waveform_cfg,
     raw_template_cfg,
 )
-from ..util.data_util import DARTsortSorting, load_stored_tsvd
-from ..util.waveform_util import make_channel_index
+from ..util.motion import MotionInfo
 from ..util.spikeio import read_waveforms_channel_index
+from ..util.waveform_util import make_channel_index
 from .templates import TemplateData
 
 
@@ -20,7 +20,7 @@ def fit_tsvd(
     *,
     recording: BaseRecording,
     sorting: DARTsortSorting,
-    motion_est,
+    motion: MotionInfo,
     template_cfg: TemplateConfig,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
@@ -43,7 +43,7 @@ def fit_tsvd(
                 sorting=sorting,
                 waveform_cfg=waveform_cfg,
                 computation_cfg=computation_cfg,
-                motion_est=motion_est,
+                motion=motion,
             )
         else:
             td = svd_input_templates
@@ -183,12 +183,12 @@ def quick_mean_templates(
     waveform_cfg: WaveformConfig,
     computation_cfg: ComputationConfig | None,
     template_cfg: TemplateConfig = raw_template_cfg,
-    motion_est,
+    motion: MotionInfo,
 ):
     return TemplateData.from_config(
         recording=recording,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         waveform_cfg=waveform_cfg,
         template_cfg=template_cfg,
         computation_cfg=computation_cfg,

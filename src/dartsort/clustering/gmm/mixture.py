@@ -67,6 +67,7 @@ from ...util.interpolation_util import (
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
 from ...util.main_util import ds_save_intermediate_labels
+from ...util.motion import MotionInfo
 from ...util.noise_util import EmbeddedNoise
 from ...util.py_util import databag
 from ...util.spiketorch import (
@@ -95,7 +96,7 @@ prop_check_rtol = 1e-6
 def tmm_demix(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion: MotionInfo,
     refinement_cfg: RefinementConfig,
     fit_indices: np.ndarray | None = None,
     computation_cfg: ComputationConfig | None,
@@ -115,7 +116,7 @@ def tmm_demix(
 
     tmm, train_data, val_data, full_data, *_ = instantiate_and_bootstrap_tmm(
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         refinement_cfg=refinement_cfg,
         seed=seed,
         computation_cfg=computation_cfg,
@@ -3703,7 +3704,7 @@ class TMMStack(BaseMixtureModel):
 def get_truncated_datasets(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion: MotionInfo,
     refinement_cfg: RefinementConfig,
     device: torch.device,
     rg: int | np.random.Generator,
@@ -3718,7 +3719,7 @@ def get_truncated_datasets(
     assert refinement_cfg.core_radius == "extract"
     data = get_full_neighborhood_data(
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         rg=rg,
         refinement_cfg=refinement_cfg,
         fit_indices=fit_indices,
@@ -3745,7 +3746,7 @@ def get_truncated_datasets(
     if noise is None:
         noise = EmbeddedNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
-            motion_est=motion_est,
+            motion=motion,
             rank=refinement_cfg.feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
@@ -3858,7 +3859,7 @@ def get_truncated_datasets(
 def get_full_neighborhood_data(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion: MotionInfo,
     refinement_cfg: RefinementConfig,
     device: torch.device | None,
     rg: np.random.Generator | int,
@@ -3882,8 +3883,8 @@ def get_full_neighborhood_data(
     if stable_data is None:
         vp = refinement_cfg.val_proportion
         stable_data = StableSpikeDataset.from_sorting(
-            sorting,
-            motion_est=motion_est,
+            sorting=sorting,
+            motion=motion,
             _core_feature_splits=(),  # turn off feat cache
             core_radius="extract",
             feature_rank=refinement_cfg.feature_rank,
@@ -3932,7 +3933,7 @@ def get_full_neighborhood_data(
 def instantiate_and_bootstrap_tmm(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion: MotionInfo,
     refinement_cfg: RefinementConfig,
     seed: np.random.Generator | int = 0,
     fit_indices: np.ndarray | None = None,
@@ -3955,7 +3956,7 @@ def instantiate_and_bootstrap_tmm(
     neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs = (
         get_truncated_datasets(
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             refinement_cfg=refinement_cfg,
             fit_indices=fit_indices,
             device=device,

@@ -1,24 +1,24 @@
 import gc
-from typing import cast, Literal, Self
+from typing import Literal, Self, cast
 
 import numpy as np
 import sklearn.cluster
 import torch
 from spikeinterface.core import BaseRecording
 
-from ..util.data_util import chunk_time_ranges, fit_reweighting, DARTsortSorting
-from ..util.main_util import ds_save_intermediate_labels
+from ..util import job_util
+from ..util.data_util import DARTsortSorting, chunk_time_ranges, fit_reweighting
 from ..util.internal_config import (
     ClusteringConfig,
-    RefinementConfig,
-    FitSamplingConfig,
     ComputationConfig,
+    FitSamplingConfig,
+    RefinementConfig,
 )
-from .clustering_features import SimpleMatrixFeatures
-from ..util import job_util
+from ..util.main_util import ds_save_intermediate_labels
+from ..util.motion import MotionInfo
 from . import cluster_util, density, forward_backward, refine_util
+from .clustering_features import SimpleMatrixFeatures
 from .gmm import mixture
-
 
 clustering_strategies: dict[str, "type[Clusterer]"] = {}
 refinement_strategies: dict[str, "type[Refinement]"] = {}
@@ -161,12 +161,12 @@ class Clusterer:
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> DARTsortSorting:
         if features is None:
             pass
         else:
-            labels = self._cluster(features, sorting, recording, motion_est)
+            labels = self._cluster(features, sorting, recording, motion)
             sorting = sorting.ephemeral_replace(labels=labels)
         if self.labels_fmt and self.save_labels_dir is not None:
             assert "{" not in self.labels_fmt
@@ -181,10 +181,10 @@ class Clusterer:
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         """Unused method but shows API."""
-        del features, recording, motion_est
+        del features, recording, motion
         assert sorting.labels is not None
         return sorting.labels
 
@@ -198,15 +198,14 @@ class ChannelSnapClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         return cluster_util.closest_registered_channels(
             times_seconds=sorting.times_seconds,  # type: ignore
             x=features.x,
             z_abs=features.z,
             z_reg=features.z_reg,
-            geom=recording.get_channel_locations(),
-            motion_est=motion_est,
+            motion=motion,
         )
 
 
@@ -244,7 +243,7 @@ class GridSnapClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         return cluster_util.grid_snap(
             times_seconds=sorting.times_seconds,  # type: ignore
@@ -253,8 +252,7 @@ class GridSnapClusterer(Clusterer):
             z_reg=features.z_reg,
             grid_dx=self.grid_dx,
             grid_dz=self.grid_dz,
-            geom=recording.get_channel_locations(),
-            motion_est=motion_est,
+            motion=motion,
         )
 
 
@@ -329,7 +327,7 @@ class DensityPeaksClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         subsampling, ixs = self.handle_sampling(features)
         X = features.features
@@ -354,7 +352,7 @@ class DensityPeaksClusterer(Clusterer):
                 features.xyza,
                 features.amplitudes,
                 sorting,
-                motion_est,
+                motion,
                 recording.get_channel_locations(),
                 sigma_local=self.sigma_local,
                 sigma_regional=self.sigma_regional,
@@ -479,7 +477,7 @@ class GMMDensityPeaksClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         res = density.gmm_density_peaks(
             X=features.features,
@@ -551,7 +549,7 @@ class RecursiveHDBSCANClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         return cluster_util.recursive_hdbscan_clustering(
             features.features,
@@ -593,7 +591,7 @@ class ScikitLearnClusterer(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ) -> np.ndarray:
         skcls = getattr(sklearn.cluster, self.sklearn_class_name)
         clus = skcls(**self.sklearn_kwargs)
@@ -617,10 +615,10 @@ class Refinement(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
-        sorting = self.clusterer.cluster(features, sorting, recording, motion_est)
-        sorting = self.refine(features, sorting, recording, motion_est)
+        sorting = self.clusterer.cluster(features, sorting, recording, motion)
+        sorting = self.refine(features, sorting, recording, motion)
         return sorting
 
     def _refine(
@@ -628,9 +626,9 @@ class Refinement(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
-        del features, recording, motion_est
+        del features, recording, motion
         return sorting
 
     def refine(
@@ -638,9 +636,9 @@ class Refinement(Clusterer):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
-        sorting = self._refine(features, sorting, recording, motion_est)
+        sorting = self._refine(features, sorting, recording, motion)
         if self.labels_fmt and self.save_labels_dir is not None:
             labels_fmt = self.labels_fmt.format(stepname="")
             ds_save_intermediate_labels(
@@ -658,14 +656,14 @@ class TMMRefinement(Refinement):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
         assert features is not None
         subsampling, ixs = self.handle_sampling(features)
         ixs = cast(np.ndarray, ixs) if subsampling else None
         sorting = mixture.tmm_demix(
             sorting=sorting,
-            motion_est=motion_est,
+            motion=motion,
             refinement_cfg=self.refinement_cfg,
             computation_cfg=self.computation_cfg,
             fit_indices=ixs,
@@ -681,41 +679,18 @@ class TMMRefinement(Refinement):
 refinement_strategies["tmm"] = TMMRefinement
 
 
-class SplitMergeRefinement(Refinement):
-    def _refine(
-        self,
-        features: SimpleMatrixFeatures,
-        sorting: DARTsortSorting,
-        recording: BaseRecording,
-        motion_est=None,
-    ):
-        return refine_util.split_merge(
-            recording=recording,
-            sorting=sorting,
-            motion_est=motion_est,
-            split_cfg=self.refinement_cfg.split_cfg,
-            merge_cfg=self.refinement_cfg.merge_cfg,
-            merge_template_cfg=self.refinement_cfg.merge_template_cfg,
-            computation_cfg=self.computation_cfg,
-        )
-
-
-# code too old. todo.
-# refinement_strategies["splitmerge"] = SplitMergeRefinement
-
-
 class PCMergeRefinement(Refinement):
     def _refine(
         self,
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
         return refine_util.pc_merge(
-            sorting,
+            sorting=sorting,
             refinement_cfg=self.refinement_cfg,
-            motion_est=motion_est,
+            motion=motion,
             computation_cfg=self.computation_cfg,
         ).sorting
 
@@ -731,7 +706,7 @@ class ForwardBackwardEnsembler(Refinement):
         features: SimpleMatrixFeatures,
         sorting: DARTsortSorting,
         recording: BaseRecording,
-        motion_est=None,
+        motion: MotionInfo,
     ):
         chunk_length_samples = (
             recording.sampling_frequency * self.refinement_cfg.chunk_size_s
@@ -745,7 +720,7 @@ class ForwardBackwardEnsembler(Refinement):
             mask = np.flatnonzero(times_seconds == times_seconds.clip(lo, hi))
             s = sorting.mask(mask)
             f = features.mask(mask)
-            l = self.clusterer._cluster(f, s, recording, motion_est)
+            l = self.clusterer._cluster(f, s, recording, motion)
             labels = np.full_like(sorting.labels, -1)
             labels[mask] = l
             chunk_sortings.append(sorting.ephemeral_replace(labels=labels))
@@ -756,7 +731,7 @@ class ForwardBackwardEnsembler(Refinement):
             log_c=self.refinement_cfg.log_c,
             feature_scales=self.refinement_cfg.feature_scales,
             adaptive_feature_scales=self.refinement_cfg.adaptive_feature_scales,
-            motion_est=motion_est,
+            motion=motion,
         )
         sorting = sorting.ephemeral_replace(labels=labels)
         return sorting

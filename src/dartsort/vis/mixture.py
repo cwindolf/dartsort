@@ -5,11 +5,8 @@ from typing import Iterable, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
-from dredge.motion_util import MotionEstimate
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.sparse.csgraph import connected_components
 from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups
@@ -41,6 +38,7 @@ from ..util.interpolation_util import (
     pad_geom,
 )
 from ..util.job_util import ensure_computation_config
+from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
 from .analysis_plots import distance_matrix_dendro
@@ -58,7 +56,7 @@ class MixtureVisData:
     val_data: TruncatedSpikeData | None
     full_data: StreamingSpikeData
     sorting: DARTsortSorting
-    motion_est: MotionEstimate | None
+    motion: MotionInfo | None
     train_scores: Scores
     full_scores: Scores
     eval_scores: Scores
@@ -1103,7 +1101,7 @@ def default_mixture_plots():
 def fit_mixture_and_visualize_all_components(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
     save_folder: str | Path,
@@ -1132,7 +1130,7 @@ def fit_mixture_and_visualize_all_components(
         return
     mix_data = fit_mixture_for_vis(
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
@@ -1158,7 +1156,7 @@ def fit_mixture_and_visualize_all_components(
 def fit_mixture_for_vis(
     *,
     sorting: DARTsortSorting,
-    motion_est,
+    motion,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
     em: bool = True,
@@ -1169,7 +1167,7 @@ def fit_mixture_for_vis(
     # run model to convergence and soft assign train/full sets
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
@@ -1232,7 +1230,7 @@ def fit_mixture_for_vis(
         val_data=mix_data.val_data,
         full_data=mix_data.full_data,
         sorting=sorting,
-        motion_est=motion_est,
+        motion=motion,
         train_scores=train_scores,
         full_scores=full_scores,
         eval_scores=eval_scores,
@@ -1570,10 +1568,10 @@ def vis_obs_interpolation(
 
     t_s = mix_data.train_times[trix]
     z = mix_data.sorting.slice_feature_by_name("point_source_localizations", fix)[:, 2]
-    if mix_data.motion_est is None:
+    if mix_data.motion is None:
         disp = np.zeros_like(z)
     else:
-        disp = mix_data.motion_est.disp_at_s(t_s, z)
+        disp = mix_data.motion.disp_at_s(t_s, z)
 
     dev = mix_data.tmm.b.means.device
     sgeom = pad_geom(mix_data.sorting.geom, device=dev)  # type: ignore

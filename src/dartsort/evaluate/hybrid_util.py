@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Generator, cast
 
 import numpy as np
-import torch
 from probeinterface import Probe
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
+from spikeinterface.core import BaseRecording, BaseSorting
 from spikeinterface.generation.drift_tools import (
     DriftingTemplates,
     InjectDriftingTemplatesRecording,
@@ -18,9 +18,11 @@ from spikeinterface.generation.drift_tools import (
 from tqdm.auto import tqdm
 
 from ..config import DeveloperConfig
+from ..evaluate.analysis import DARTsortAnalysis
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, unshifted_raw_template_cfg
+from ..util.motion import MotionInfo
 from ..util.py_util import resolve_path
 from . import analysis, comparison, simkit
 
@@ -28,10 +30,10 @@ logger = getLogger(__name__)
 
 
 def get_drifty_hybrid_recording(
-    recording,
-    templates,
-    motion_estimate,
-    sorting=None,
+    recording: BaseRecording,
+    templates: DriftingTemplates,
+    motion: MotionInfo,
+    sorting: BaseSorting | None = None,
     displacement_sampling_frequency=5.0,
     seed=0,
     firing_rates=None,
@@ -54,6 +56,7 @@ def get_drifty_hybrid_recording(
 
     if peak_channels is None:
         (central_disp_index,) = np.flatnonzero(np.all(templates.displacements == 0, 1))
+        assert templates.templates_array_moved is not None
         central_templates = templates.templates_array_moved[central_disp_index]
         peak_channels = np.ptp(central_templates, 1).argmax(1)
 
@@ -83,7 +86,7 @@ def get_drifty_hybrid_recording(
         t_start, t_end, step=1.0 / displacement_sampling_frequency
     )
 
-    disp_y = motion_estimate.disp_at_s(motion_times_s, depths, grid=True)
+    disp_y = motion.disp_at_s(motion_times_s, depths, grid=True)
 
     disp = np.zeros((motion_times_s.shape[0], 2, num_units))
     disp[:, 1, :] = disp_y.T
@@ -242,14 +245,17 @@ def greedy_match(
 
 
 def greedy_match_counts(
-    gt_sorting,
-    tested_sorting,
+    gt_sorting: DARTsortSorting,
+    tested_sorting: DARTsortSorting,
     radius_um=35.0,
     radius_frames=12,
     show_progress=True,
 ):
     """A greedy confusion matrix computed using greedy_match()."""
     from scipy.optimize import linear_sum_assignment
+
+    assert gt_sorting.labels is not None
+    assert tested_sorting.labels is not None
 
     gt_t = gt_sorting.times_samples / radius_frames
     tested_t = tested_sorting.times_samples / radius_frames
@@ -299,7 +305,7 @@ def sorting_from_times_labels(
     times_samples,
     labels,
     recording=None,
-    motion_est=None,
+    motion=None,
     sampling_frequency=30000.0,
     determine_channels=True,
     template_cfg=unshifted_raw_template_cfg,
@@ -341,22 +347,17 @@ def sorting_from_times_labels(
     )
 
     channels = np.nan_to_num(np.ptp(td.coarsen().templates, 1)).argmax(1)[labels_flat]
-    if motion_est is not None:
-        from scipy.spatial import KDTree
-
-        rgeom = td.registered_geom
-        assert rgeom is not None
-        guess_pos = rgeom[channels]
+    if motion is not None:
+        guess_pos = motion.rgeom[channels]
         times_seconds = recording.sample_index_to_time(times_samples)
         # anti-correct these already stable positions so that they start movin
-        guess_pos[:, 1] += motion_est.disp_at_s(times_seconds, depth_um=guess_pos[:, 1])
+        guess_pos[:, 1] += motion.disp_at_s(times_seconds, depth_um=guess_pos[:, 1])
 
-        gkdt = KDTree(recording.get_channel_locations())
         # closest original channels to shifted positions
         # these positions can drift off the probe if the main channel does! so in that case
         # we can't really upper bound the distance query. i guess it would be, like, the
         # largest distance that a unit would ever extend, or something, but let's not worry.
-        d, channels = gkdt.query(guess_pos, workers=n_jobs)
+        d, channels = motion.geom_kdt.query(guess_pos, workers=n_jobs)
 
     assert isinstance(channels, np.ndarray)
     sorting = sorting.ephemeral_replace(channels=channels)
@@ -492,9 +493,9 @@ def load_dartsort_step_sortings(
 
 
 def load_dartsort_step_unit_info_dataframes(
-    sorting_dir,
-    gt_analysis,
-    recording,
+    sorting_dir: Path | str,
+    gt_analysis: DARTsortAnalysis,
+    recording: BaseRecording,
     sorting_name=None,
     detection_h5_names=("subtraction.h5", "threshold.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
@@ -514,7 +515,7 @@ def load_dartsort_step_unit_info_dataframes(
         step_analysis = analysis.DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=step_sorting,
-            motion_est=None,
+            motion=gt_analysis.motion,
             name=name,
             template_cfg=None,
             vis_radius=0,

@@ -20,6 +20,7 @@ from dartsort.templates import (
     templates,
 )
 from dartsort.util.data_util import DARTsortSorting
+from dartsort.util.motion import MotionInfo
 from dartsort.util.internal_config import (
     TemplateConfig,
     TemplateRealignmentConfig,
@@ -107,7 +108,7 @@ def test_refractory_templates(
     st, td = estimate_template_library(
         recording=sim["recording"],
         sorting=sim["sorting"],
-        motion_est=sim["motion_est"],
+        motion=sim["motion"],
         template_cfg=template_cfg,
         realign_cfg=realign_cfg,
     )
@@ -144,7 +145,7 @@ def test_refractory_templates_algorithm_agreement(
         tsvd = fit_tsvd(
             recording=sim["recording"],
             sorting=sim["sorting"],
-            motion_est=sim["motion_est"],
+            motion=sim["motion"],
             waveform_cfg=WaveformConfig(),
             template_cfg=spike_sklearn_tsvd_template_cfg,
         )
@@ -169,7 +170,7 @@ def test_refractory_templates_algorithm_agreement(
         _, td = estimate_template_library(
             recording=sim["recording"],
             sorting=sim["sorting"],
-            motion_est=sim["motion_est"],
+            motion=sim["motion"],
             template_cfg=template_cfg,
             tsvd=tsvd,
             realign_cfg=realign_cfg,
@@ -221,7 +222,7 @@ def test_drifting_refractory_templates(refractory_simulations):
         _, td = estimate_template_library(
             recording=sim["recording"],
             sorting=sim["sorting"],
-            motion_est=sim["motion_est"],
+            motion=sim["motion"],
             template_cfg=tcfg,
             realign_cfg=None,
         )
@@ -274,7 +275,7 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
                 algorithm=algorithm,
                 template_interp_params=erp,
             ),
-            motion_est=IdentityMotionEstimate(),
+            motion=MotionInfo.from_motion_est(geom=rec.get_channel_locations()),
             save_folder=tmp_path,
             overwrite=True,
         )
@@ -289,11 +290,11 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
 
 def test_static_templates(tmp_path):
     rec0 = np.zeros((11, 10))
-    # geom = np.c_[np.zeros(10), np.arange(10).astype(float)]
+    geom = np.c_[np.zeros(10), np.arange(10).astype(float)]
     rec0[0, 1] = 1
     rec0[3, 5] = 2
     rec0 = sc.NumpyRecording(rec0, 1)
-    # rec0.set_dummy_probe_from_locations(geom)
+    rec0.set_dummy_probe_from_locations(geom)
 
     sorting = DARTsortSorting(
         times_samples=np.array([0, 2]),
@@ -302,6 +303,7 @@ def test_static_templates(tmp_path):
         sampling_frequency=1,
     )
     waveform_cfg = WaveformConfig.from_samples(0, 3, 1)
+    motion = MotionInfo.from_motion_est(geom=geom)
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"))
@@ -311,6 +313,7 @@ def test_static_templates(tmp_path):
                 sorting=sorting,
                 waveform_cfg=waveform_cfg,
                 template_cfg=raw_template_cfg,
+                motion=motion,
             )
             temps = res["raw_templates"]
             assert isinstance(temps, np.ndarray)
@@ -338,8 +341,11 @@ def test_drifting_templates(tmp_path):
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         rec1 = rec0.save_to_folder(str(Path(tdir) / "rec"), n_jobs=1)
         for rec in [rec0, rec1]:
-            me = get_motion_estimate(
-                0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
+            motion = MotionInfo.from_motion_est(
+                geom=geom,
+                dredge_motion_est=get_motion_estimate(
+                    0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
+                ),
             )
 
             t_s = np.array([0.0, 2, 6, 8])
@@ -357,22 +363,18 @@ def test_drifting_templates(tmp_path):
             res = get_templates(
                 recording=rec,
                 sorting=sorting,
-                geom=geom,
-                motion_est=me,
+                motion=motion,
                 waveform_cfg=waveform_cfg,
                 show_progress=False,
                 template_cfg=raw_template_cfg,
             )
             reg_temps = res["templates"]
-            registered_geom = res["registered_geom"]
 
             temps0 = template_util.templates_at_time(
-                0,
-                reg_temps,
-                geom,
+                t_s=0.0,
+                registered_templates=reg_temps,
                 registered_template_depths_um=[0, 0],
-                registered_geom=registered_geom,
-                motion_est=me,
+                motion=motion,
             )
             assert isinstance(temps0, np.ndarray)
             assert temps0.shape == (2, 3, 7)
@@ -380,12 +382,10 @@ def test_drifting_templates(tmp_path):
             assert temps0[1, 0, 2] == 2
 
             temps6 = template_util.templates_at_time(
-                6,
-                reg_temps,
-                geom,
+                t_s=6.0,
+                registered_templates=reg_temps,
                 registered_template_depths_um=[0, 0],
-                registered_geom=registered_geom,
-                motion_est=me,
+                motion=motion,
             )
             assert isinstance(temps6, np.ndarray)
             assert temps6.shape == (2, 3, 7)
@@ -393,12 +393,10 @@ def test_drifting_templates(tmp_path):
             assert temps6[1, 0, 5] == 2
 
             temps8 = template_util.templates_at_time(
-                8,
-                reg_temps,
-                geom,
+                t_s=8.0,
+                registered_templates=reg_temps,
                 registered_template_depths_um=[0, 0],
-                registered_geom=registered_geom,
-                motion_est=me,
+                motion=motion,
             )
             assert isinstance(temps8, np.ndarray)
             assert temps8.shape == (2, 3, 7)
@@ -416,8 +414,11 @@ def test_main_object():
     rec = sc.NumpyRecording(rec, 1)
     rec.set_dummy_probe_from_locations(probe)
 
-    me = get_motion_estimate(
-        0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
+    motion = MotionInfo.from_motion_est(
+        geom=probe,
+        dredge_motion_est=get_motion_estimate(
+            0.5 * np.arange(11), time_bin_centers_s=np.arange(11).astype(float)
+        ),
     )
     sorting = DARTsortSorting(
         times_samples=np.array([0, 2, 6, 8]),
@@ -437,7 +438,7 @@ def test_main_object():
             superres_templates=False,
             denoising_rank=2,
         ),
-        motion_est=me,
+        motion=motion,
         waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
 
@@ -482,8 +483,12 @@ def test_pconv(tmp_path, unit_ids):
         max_upsample=1,
         kind="cubic",
     )
+    no_motion = MotionInfo.from_motion_est(geom=geom)
+    zero_motion = MotionInfo.from_motion_est(
+        geom=geom, dredge_motion_est=IdentityMotionEstimate()
+    )
 
-    for motion_est, chunk_centers in [(None, None), (IdentityMotionEstimate(), [1, 2])]:
+    for motion, chunk_centers in [(no_motion, None), (zero_motion, [1, 2])]:
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tdir:
@@ -493,7 +498,7 @@ def test_pconv(tmp_path, unit_ids):
                 template_data=tdata,
                 low_rank_templates=svd_compressed,
                 compressed_upsampled_temporal=ctempup,
-                motion_est=motion_est,
+                motion=motion,
                 chunk_time_centers_s=chunk_centers,
             )
             assert pconvdb_path == Path(tdir) / "test.h5"
@@ -541,8 +546,11 @@ def test_pconv(tmp_path, unit_ids):
         trough_offset_samples=0,
     )
     geom = np.c_[np.zeros(c), np.arange(1, c + 1).astype(float)]
-    motion_est = get_motion_estimate(
-        time_bin_centers_s=np.array([0.0, 1, 2]), displacement=[-1.0, 0, 1]
+    motion = MotionInfo.from_motion_est(
+        geom=geom,
+        dredge_motion_est=get_motion_estimate(
+            time_bin_centers_s=np.array([0.0, 1, 2]), displacement=[-1.0, 0, 1]
+        ),
     )
 
     with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
@@ -552,7 +560,7 @@ def test_pconv(tmp_path, unit_ids):
             template_data=tdata,
             low_rank_templates=svd_compressed,
             compressed_upsampled_temporal=ctempup,
-            motion_est=motion_est,
+            motion=motion,
             chunk_time_centers_s=np.array([0.0, 1, 2]),
         )
         pconvdb = pairwise.CompressedPairwiseConv.from_h5(pconvdb_path)

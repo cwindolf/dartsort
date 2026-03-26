@@ -8,10 +8,11 @@ import torch.nn.functional as F
 
 from ...templates.template_util import CompressedUpsampledTemplates, LowRankTemplates
 from ...templates.templates import TemplateData
-from ...util.py_util import resolve_path
 from ...util import job_util
-from .pairwise_util import compressed_convolve_to_h5
+from ...util.motion import MotionInfo
+from ...util.py_util import resolve_path
 from .matching_base import PconvBase
+from .pairwise_util import compressed_convolve_to_h5
 
 
 class CompressedPairwiseConv(PconvBase):
@@ -129,6 +130,7 @@ class CompressedPairwiseConv(PconvBase):
     @classmethod
     def from_template_data(
         cls,
+        *,
         hdf5_filename: str | Path,
         template_data: TemplateData,
         low_rank_templates: LowRankTemplates,
@@ -136,7 +138,7 @@ class CompressedPairwiseConv(PconvBase):
         template_data_b: Optional[TemplateData] = None,
         low_rank_templates_b: Optional[LowRankTemplates] = None,
         chunk_time_centers_s: Optional[np.ndarray] = None,
-        motion_est=None,
+        motion: MotionInfo,
         geom: Optional[np.ndarray] = None,
         conv_batch_size=1024,
         units_batch_size=8,
@@ -159,7 +161,7 @@ class CompressedPairwiseConv(PconvBase):
             template_data_b=template_data_b,
             low_rank_templates_b=low_rank_templates_b,
             chunk_time_centers_s=chunk_time_centers_s,
-            motion_est=motion_est,
+            motion=motion,
             geom=geom,
             conv_batch_size=conv_batch_size,
             units_batch_size=units_batch_size,
@@ -199,8 +201,12 @@ class CompressedPairwiseConv(PconvBase):
         if template_indices_a is None:
             template_indices_a = self.b.all_inds_a
         dev = self.b.all_inds_a.device
-        template_indices_a = torch.atleast_1d(torch.asarray(template_indices_a, device=dev))
-        template_indices_b = torch.atleast_1d(torch.asarray(template_indices_b, device=dev))
+        template_indices_a = torch.atleast_1d(
+            torch.asarray(template_indices_a, device=dev)
+        )
+        template_indices_b = torch.atleast_1d(
+            torch.asarray(template_indices_b, device=dev)
+        )
 
         # handle no shifting
         no_shifting = (shifts_a is None) or (shifts_b is None)
@@ -226,7 +232,9 @@ class CompressedPairwiseConv(PconvBase):
             assert self.b.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
-            b_ix = b_ix + (torch.atleast_1d(torch.asarray(upsampling_indices_b, device=dev)),)
+            b_ix = b_ix + (
+                torch.atleast_1d(torch.asarray(upsampling_indices_b, device=dev)),
+            )
 
         # get shifted template indices for A
         shifted_temp_ix_a = shifted_template_index[a_ix]

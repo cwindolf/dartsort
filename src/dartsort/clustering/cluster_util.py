@@ -14,6 +14,7 @@ from sklearn.neighbors import KNeighborsClassifier
 
 from ..util import data_util, drift_util, waveform_util
 from ..util.logging_util import get_logger
+from ..util.motion import MotionInfo
 from dredge.motion_util import IdentityMotionEstimate
 
 
@@ -201,15 +202,15 @@ def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
     return labels
 
 
-def reorder_by_depth(sorting, motion_est=None):
+def reorder_by_depth(sorting, motion=None):
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]
 
     units, kept_labels = np.unique(kept_labels, return_inverse=True)
 
     depths = sorting.point_source_localizations[kept, 2]
-    if motion_est is not None:
-        depths = motion_est.correct_s(sorting.times_seconds[kept], depths)
+    if motion is not None:
+        depths = motion.correct_s(sorting.times_seconds[kept], depths)
 
     centroids = np.zeros(units.size)
     for u in range(units.size):
@@ -224,43 +225,37 @@ def reorder_by_depth(sorting, motion_est=None):
 
 
 def closest_registered_channels(
-    times_seconds, x, z_abs, geom, z_reg=None, motion_est=None
+    *, times_seconds, x, z_abs, z_reg=None, motion: MotionInfo
 ) -> np.ndarray:
     """Assign spikes to the drift-extended channel closest to their registered position"""
-    if motion_est is None:
-        motion_est = IdentityMotionEstimate()
-    registered_geom = drift_util.registered_geometry(geom, motion_est)
     if z_reg is None:
-        z_reg = motion_est.correct_s(times_seconds, z_abs)
+        assert motion is not None
+        z_reg = motion.correct_s(times_seconds, z_abs)
     reg_pos = np.c_[x, z_reg]
 
-    registered_kdt = KDTree(registered_geom)
-    _, reg_channels = registered_kdt.query(reg_pos)
+    _, reg_channels = motion.rgeom_kdt.query(reg_pos)
     reg_channels = np.atleast_1d(reg_channels)
 
     return reg_channels
 
 
 def grid_snap(
+    *,
     times_seconds,
     x,
     z_abs,
-    geom,
     grid_dx=15.0,
     grid_dz=15.0,
     z_reg=None,
-    motion_est=None,
+    motion: MotionInfo,
 ) -> np.ndarray:
-    if motion_est is None:
-        motion_est = IdentityMotionEstimate()
     if z_reg is None:
-        z_reg = motion_est.correct_s(times_seconds, z_abs)
+        z_reg = motion.correct_s(times_seconds, z_abs)
     reg_pos = np.c_[x, z_reg]
 
     # make a grid inside the registered geom bounding box
-    registered_geom = drift_util.registered_geometry(geom, motion_est)
-    min_x, max_x = registered_geom[:, 0].min(), registered_geom[:, 0].max()
-    min_z, max_z = registered_geom[:, 1].min(), registered_geom[:, 1].max()
+    min_x, max_x = motion.rgeom[:, 0].min(), motion.rgeom[:, 0].max()
+    min_z, max_z = motion.rgeom[:, 1].min(), motion.rgeom[:, 1].max()
     grid_x = np.arange(min_x, max_x, grid_dx)
     grid_x += (min_x + max_x) / 2 - grid_x.mean()
     grid_z = np.arange(min_z, max_z, grid_dz)

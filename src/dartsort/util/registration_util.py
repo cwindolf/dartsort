@@ -1,121 +1,75 @@
-import pickle
-from pathlib import Path
-
 import numpy as np
 import torch
-from spikeinterface.core import Motion
+from dredge.dredge_ap import register as dredge_register
+from dredge.motion_util import MotionEstimate, speed_limit_filter
+from spikeinterface.core import BaseRecording, Motion
 
-try:
-    from dredge import dredge_ap
-
-    have_dredge = True
-except ImportError:
-    have_dredge = False
-    dredge_ap = None
-    pass
+from .data_util import DARTsortSorting
+from .internal_config import MotionEstimationConfig, default_motion_estimation_cfg
 
 
-def estimate_motion(
-    recording,
-    sorting,
-    output_directory=None,
-    filename="motion_est.pkl",
-    overwrite=False,
-    do_motion_estimation=True,
-    probe_boundary_padding_um=100.0,
-    spatial_bin_length_um: float = 1.0,
-    temporal_bin_length_s: float = 1.0,
-    window_step_um: float = 400.0,
-    window_scale_um: float = 450.0,
-    window_margin_um: float | None = None,
-    max_dt_s: float = 1000.0,
-    max_disp_um: float | None = None,
-    correlation_threshold: float = 0.1,
-    min_amplitude: float | None = None,
-    masked_correlation: bool = False,
-    weights_threshold: float = 0.2,
-    rigid: bool = False,
+def dredge_estimate_motion(
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     device: torch.device | None = None,
-):
-    if not do_motion_estimation:
+) -> MotionEstimate | None:
+    if not motion_cfg.do_motion_estimation:
         return None
-
-    if output_directory is not None and not overwrite:
-        motion_est = try_load_motion_est(output_directory, filename)
-        if motion_est is not None:
-            return motion_est
-
-    if not have_dredge:
-        raise ValueError("Please install DREDge to use motion estimation.")
 
     x = getattr(sorting, localizations_dataset_name)[:, 0]
     z = getattr(sorting, localizations_dataset_name)[:, 2]
     a = getattr(sorting, amplitudes_dataset_name)
     geom = recording.get_channel_locations()
-    xmin = geom[:, 0].min() - probe_boundary_padding_um
-    xmax = geom[:, 0].max() + probe_boundary_padding_um
-    zmin = geom[:, 1].min() - probe_boundary_padding_um
-    zmax = geom[:, 1].max() + probe_boundary_padding_um
+    xmin = geom[:, 0].min() - motion_cfg.probe_boundary_padding_um
+    xmax = geom[:, 0].max() + motion_cfg.probe_boundary_padding_um
+    zmin = geom[:, 1].min() - motion_cfg.probe_boundary_padding_um
+    zmax = geom[:, 1].max() + motion_cfg.probe_boundary_padding_um
     valid = x == x.clip(xmin, xmax)
     valid &= z == z.clip(zmin, zmax)
-    if min_amplitude:
-        valid &= a >= min_amplitude
+    if motion_cfg.min_amplitude:
+        valid &= a >= motion_cfg.min_amplitude
     valid = np.flatnonzero(valid)
 
     # features for registration
     z = z[valid]
-    t_s = sorting.times_seconds[valid]
+    t_s = getattr(sorting, "times_seconds")
+    t_s = t_s[valid]
     a = a[valid]
 
     # run registration
-    assert have_dredge
-    assert dredge_ap is not None
-    motion_est, info = dredge_ap.register(
+    dredge_motion_est, _ = dredge_register(
         amps=a,
         depths_um=z,
         times_s=t_s,
-        rigid=rigid,
-        bin_um=spatial_bin_length_um,
-        bin_s=temporal_bin_length_s,
-        win_step_um=window_step_um,  # type: ignore
-        weights_threshold_low=weights_threshold,
-        weights_threshold_high=weights_threshold,
-        win_scale_um=window_scale_um,  # type: ignore
-        win_margin_um=window_margin_um,
-        count_masked_correlation=masked_correlation,
-        max_disp_um=max_disp_um,
-        max_dt_s=max_dt_s,  # type: ignore
-        mincorr=correlation_threshold,
+        rigid=motion_cfg.rigid,
+        bin_um=motion_cfg.spatial_bin_length_um,
+        bin_s=motion_cfg.temporal_bin_length_s,
+        win_step_um=motion_cfg.window_step_um,  # type: ignore
+        weights_threshold_low=motion_cfg.weight_threshold,
+        weights_threshold_high=motion_cfg.weight_threshold,
+        win_scale_um=motion_cfg.window_scale_um,  # type: ignore
+        win_margin_um=motion_cfg.window_margin_um,
+        max_disp_um=motion_cfg.max_disp_um,
+        max_dt_s=motion_cfg.max_dt_s,  # type: ignore
+        mincorr=motion_cfg.correlation_threshold,
         device=device,
     )
+    dredge_motion_est = speed_limit_filter(
+        dredge_motion_est,
+        band_width=motion_cfg.median_neighborhood_bins,
+        band_limit=motion_cfg.max_dist_from_median_um,
+        speed_limit_um_per_s=motion_cfg.speed_limit_um_per_s,
+    )
 
-    if output_directory is not None:
-        save_motion_est(motion_est, output_directory, filename)
-
-    return motion_est
-
-
-def try_load_motion_est(output_directory: Path, filename="motion_est.pkl"):
-    filename = output_directory / filename
-    if filename.exists():
-        with open(filename, "rb") as jar:
-            return pickle.load(jar)
-    return None
+    return dredge_motion_est
 
 
-def save_motion_est(motion_est, output_directory: Path, filename="motion_est.pkl", overwrite: bool = False):
-    filename = output_directory / filename
-    if filename.exists() and not overwrite:
-        return
-    with open(filename, "wb") as jar:
-        pickle.dump(motion_est, jar)
-
-
-def dredge_to_si(motion_est) -> Motion:
-    disp = motion_est.displacement
-    t = motion_est.time_bin_centers_s
+def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:
+    disp = dredge_motion_est.displacement
+    t = dredge_motion_est.time_bin_centers_s
     if disp.ndim == 1:
         # rigid case
         return Motion(
