@@ -488,6 +488,7 @@ def match(
             sorting=sorting,
             motion=motion,
             min_template_ptp=matching_cfg.min_template_ptp,
+            always_keep_ptp=matching_cfg.always_keep_ptp,
             min_template_snr=matching_cfg.min_template_snr,
             min_template_count=matching_cfg.min_template_count,
             max_cc_flag_rate=matching_cfg.max_cc_flag_rate,

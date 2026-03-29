@@ -266,6 +266,7 @@ class SharedBasisTemplates:
     # n, rank, chans
     spatial_singular: np.ndarray
     spike_counts_by_channel: np.ndarray | None
+    r2: np.ndarray | None
 
 
 def shared_basis_compress_templates(
@@ -274,7 +275,8 @@ def shared_basis_compress_templates(
     rank=5,
     computation_cfg=None,
     precomputed_basis: np.ndarray | None = None,
-):
+    with_r2: bool = False,
+) -> SharedBasisTemplates:
     computation_cfg = ensure_computation_config(computation_cfg)
     dev = computation_cfg.actual_device()
     if hasattr(template_data, "templates"):
@@ -307,22 +309,26 @@ def shared_basis_compress_templates(
     assert np.isfinite(temporal_comps).all()
     assert np.isfinite(spatial_sing).all()
 
-    if logger.isEnabledFor(DARTSORTVERBOSE):
+    if with_r2 or logger.isEnabledFor(DARTSORTVERBOSE):
         recon = torch.asarray(np.einsum("rt,nrc->ntc", temporal_comps, spatial_sing))
         templates = torch.asarray(templates)
         err = recon.sub_(templates).square_().sum(dim=(1, 2)).cpu()
         ss = templates.square().sum(dim=(1, 2)).cpu()
         r2 = 1.0 - err / ss
+        r2 = r2.numpy(force=True)
         logger.dartsortverbose(
             "Shared basis reconstructed templates with min, mean, max R^2s: "
             f"{r2.min().item():0.3f}, {r2.mean().item():0.3f}, {r2.max().item():0.3f}."
         )
+    else:
+        r2 = None
 
     return SharedBasisTemplates(
         unit_ids=unit_ids,
         temporal_components=temporal_comps,
         spatial_singular=spatial_sing,
         spike_counts_by_channel=counts,
+        r2=r2,
     )
 
 

@@ -40,6 +40,7 @@ def estimate_template_library(
     motion: MotionInfo | None = None,
     min_template_snr: float = 0.0,
     min_template_ptp: float = 0.0,
+    always_keep_ptp: float = 0.0,
     min_template_count: int = 0,
     max_cc_flag_rate: float = 1.0,
     cc_flag_entropy_cutoff: float = 0.0,
@@ -120,8 +121,10 @@ def estimate_template_library(
         assert templates0 is not None
         count_mask = templates0.spike_counts >= min_template_count
         snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
-        amp_mask = ptp(templates0.templates).max(1) >= min_template_ptp
+        amp = ptp(templates0.templates).max(1)
+        amp_mask = amp >= min_template_ptp
         mask = count_mask & snr_mask & amp_mask
+        mask |= amp >= always_keep_ptp
         flag_mask = cc_flag_criterion(
             sorting,
             detection_cfg,
