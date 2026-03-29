@@ -64,6 +64,7 @@ def dartsort(
     cfg: (
         DARTsortUserConfig | str | Path | DeveloperConfig | DARTsortInternalConfig
     ) = default_dartsort_cfg,
+    motion: MotionInfo | None = None,
     si_motion: Motion | None = None,
     dredge_motion_est: MotionEstimate | None = None,
     overwrite=False,
@@ -134,6 +135,7 @@ def dartsort(
                     recording=recording,
                     output_dir=output_dir,
                     cfg=cfg,
+                    motion=motion,
                     si_motion=si_motion,
                     dredge_motion_est=dredge_motion_est,
                     work_dir=work_dir,
@@ -166,6 +168,7 @@ def dartsort(
             recording=recording,
             output_dir=output_dir,
             cfg=cfg,
+            motion=motion,
             si_motion=si_motion,
             dredge_motion_est=dredge_motion_est,
             work_dir=None,
@@ -185,6 +188,7 @@ def _dartsort_impl(
     recording: BaseRecording,
     output_dir: Path,
     cfg: DARTsortInternalConfig = default_dartsort_cfg,
+    motion: MotionInfo | None = None,
     si_motion: Motion | None = None,
     dredge_motion_est: MotionEstimate | None = None,
     work_dir: Path | None = None,
@@ -199,7 +203,9 @@ def _dartsort_impl(
     # if there are previous results stored, resume where they leave off
     # TODO uhh. overwrite, right?
     next_step, sorting, _motion = ds_fast_forward(store_dir, cfg)
-    if (si_motion is None) and (dredge_motion_est is None):
+    if motion is not None:
+        pass
+    elif (si_motion is None) and (dredge_motion_est is None):
         motion = _motion
     else:
         motion = MotionInfo.from_motion_est(
