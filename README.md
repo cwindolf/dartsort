@@ -1,6 +1,7 @@
-[![badge](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
+[![ci](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
 [![coveralls](https://coveralls.io/repos/github/cwindolf/dartsort/badge.svg?branch=main)](https://coveralls.io/github/cwindolf/dartsort)
 [![Zenodo DOI](https://zenodo.org/badge/421108722.svg)](https://doi.org/10.5281/zenodo.16943074)
+[![pypi: dartsort](https://img.shields.io/pypi/v/dartsort?label=pypi:%20dartsort)](https://pypi.org/p/dartsort)
 
 # dartsort
 
@@ -13,39 +14,25 @@ A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/20
 
 ## Suggested install steps
 
-If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`.
+If you already have a Python environment set up, you can install `dartsort` with
 
-To install DARTsort, first clone this GitHub repository.
+```bash
+# get all dependencies (includes visualization and GPU packages); remove [gpu] if you don't have one
+$ pip install dartsort[full,gpu]
+```
 
-After cloning the repository, create and activate the `mamba`/`conda` environment from the configuration file provided as follows:
+If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`. You can build a conda environment called `dartsort` with
 
 ```bash
 $ mamba env create -f environment.yml
 $ mamba activate dartsort
 ```
 
-Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
-We also need to install `linear_operator` from the `gpytorch` channel.
-For example, on a Linux workstation or cluster with NVIDIA GPUs available, one might use (dropping in `mamba` for `conda` commands):
+after cloning this repository. Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
+
+Finish with the `pip` command above. Or, to work on the code, use:
 
 ```bash
-# Example -- see https://pytorch.org/get-started/locally/ to find your platform's command.
-(dartsort) $ mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 linear_operator -c pytorch -c nvidia -c gpytorch
-```
-
-Finally, install the remaining `pip` dependencies and `dartsort` itself:
-
-```bash
-(dartsort) $ pip install -r requirements-full.txt
-(dartsort) $ pip install -e .
-```
-
-To enable DARTsort's default motion correction algorithm [DREDge](https://www.biorxiv.org/content/10.1101/2023.10.24.563768), clone [its GitHub repository](https://github.com/evarol/dredge), and then `cd dredge/` and install the DREDge package with `pip install -e .`.
-
-Soon we will have a package on PyPI so that these last steps will be just a `pip install dartsort`.
-
-To make sure everything is working:
-
-```bash
-$ (dartsort) pytest tests/*
+(dartsort) $ pip install -e ./[full]
+(dartsort) $ pytest tests/*
 ```
