@@ -296,6 +296,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         pca: PCA | TruncatedSVD,
         temporal_slice=None,
         trim_rank_to: int | None = None,
+        **constructor_kwargs,
     ) -> Self:
         if isinstance(pca, PCA):
             whiten = pca.whiten  # type: ignore
@@ -307,7 +308,11 @@ class BaseTemporalPCA(BaseWaveformModule):
         if trim_rank_to:
             rank = min(rank, trim_rank_to)
         self = cls(
-            channel_index, rank=rank, whiten=whiten, temporal_slice=temporal_slice
+            channel_index,
+            rank=rank,
+            whiten=whiten,
+            temporal_slice=temporal_slice,
+            **constructor_kwargs,
         )
         self.initialize_from_sklearn(pca)
         return self
@@ -390,7 +395,31 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
-    def forward(self, waveforms, *, time_shifts=None, **unused):
+    def __init__(self, trough: int = 42, alignment_iterations: int = 0, align_pad: int = 0, trough_factor: float = 2.0, **super_kwargs):
+        super().__init__(**super_kwargs)
+        self.alignment_iterations = alignment_iterations
+        self.align_pad = align_pad
+        self.trough = trough
+        self.trough_factor = trough_factor
+
+    def forward(self, waveforms, *, channels, time_shifts=None, **unused):
+        if not self.alignment_iterations:
+            waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
+            return self.force_embed(waveforms)
+
+        assert time_shifts is None
+
+        # align on main channel
+        w = waveforms.take_along_dim(indices=channels[:, None], dim=2)
+        for _ in range(self.alignment_iterations):
+            x = self._temporal_slice(w, time_shifts=time_shifts)
+            r = self.force_project(x)[:, :, 0]
+            r = torch.where(r > 0, r, -self.trough_factor * r)
+            pk = r.argmax(dim=1)
+            time_shifts = pk - self.trough
+            time_shifts.masked_fill_(time_shifts.abs() > self.align_pad, 0)
+
+        # shifted embeds
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         return self.force_embed(waveforms)
 

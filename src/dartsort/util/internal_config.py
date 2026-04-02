@@ -79,6 +79,12 @@ class WaveformConfig:
             return slice(None)
         return slice(start_offset, other_len - end_offset)
 
+    def pad(self, padding_ms: float) -> Self:
+        return self.__class__(
+            ms_before=self.ms_before + padding_ms,
+            ms_after=self.ms_after + padding_ms,
+        )
+
 
 @cfg_dataclass
 class FeaturizationConfig:
@@ -395,6 +401,9 @@ class TemplateConfig:
     denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
     template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
+    svd_alignment_iterations: int = 0
+    svd_alignment_ms: float = 0.0
+    trough_factor: float = 3.0
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -414,10 +423,6 @@ class TemplateConfig:
             return "unitextract"
         else:
             return self.algorithm
-
-    def __post_init__(self):
-        if self.denoising_method in ("t", "loot") and self.reduction == "median":
-            raise ValueError("Median reduction not supported for 't' templates.")
 
 
 raw_template_cfg = TemplateConfig(

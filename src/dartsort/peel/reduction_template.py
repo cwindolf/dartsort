@@ -184,14 +184,36 @@ class TemplateReduction(GrabAndFeaturize):
         geom = torch.asarray(motion.geom)
         channel_index = full_channel_index(len(geom), to_torch=True)
 
+        # internal realignment
+        trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+        do_align = (
+            template_cfg.use_svd
+            and template_cfg.svd_alignment_iterations
+            and template_cfg.svd_alignment_ms
+        )
+        if do_align:
+            padded_waveform_cfg = waveform_cfg.pad(template_cfg.svd_alignment_ms)
+            tslice = waveform_cfg.relative_slice(
+                padded_waveform_cfg, sampling_frequency=recording.sampling_frequency
+            )
+        else:
+            padded_waveform_cfg = waveform_cfg
+            tslice = None
+
         # handle tsvd fit preferences
         if template_cfg.use_svd and tsvd is not None:
             if isinstance(tsvd, FullProbeTemporalPCAEmbedder):
-                pass
+                if do_align:
+                    raise ValueError(f"Haven't handled svd alignment in this case.")
             else:
                 assert tsvd.components_.shape[0] == template_cfg.denoising_rank
                 tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
-                    channel_index=channel_index, pca=tsvd
+                    channel_index=channel_index,
+                    pca=tsvd,
+                    alignment_iterations=template_cfg.svd_alignment_iterations,
+                    temporal_slice=tslice,
+                    trough_factor=template_cfg.trough_factor,
+                    trough=trough,
                 )
         elif template_cfg.use_svd and template_cfg.svd_method != "peeler":
             tsvd = fit_tsvd(
@@ -203,7 +225,12 @@ class TemplateReduction(GrabAndFeaturize):
             )
             assert tsvd.components_.shape[0] == template_cfg.denoising_rank
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
-                channel_index=channel_index, pca=tsvd
+                channel_index=channel_index,
+                pca=tsvd,
+                alignment_iterations=template_cfg.svd_alignment_iterations,
+                temporal_slice=tslice,
+                trough_factor=template_cfg.trough_factor,
+                trough=trough,
             )
         elif template_cfg.use_svd:
             tsvd = FullProbeTemporalPCAEmbedder(
@@ -212,6 +239,10 @@ class TemplateReduction(GrabAndFeaturize):
                 geom=geom,
                 fit_radius=template_cfg.denoising_fit_radius,
                 max_waveforms=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
+                alignment_iterations=template_cfg.svd_alignment_iterations,
+                temporal_slice=tslice,
+                trough_factor=template_cfg.trough_factor,
+                trough=trough,
             )
         else:
             tsvd = None
@@ -304,10 +335,10 @@ class TemplateReduction(GrabAndFeaturize):
             fixed_properties=fixed_properties,
             chunk_length_samples=template_cfg.grab_chunk_length_samples,
             fit_sampling_cfg=template_cfg.denoising_fit_sampling_cfg,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(
+            trough_offset_samples=padded_waveform_cfg.trough_offset_samples(
                 recording.sampling_frequency
             ),
-            spike_length_samples=waveform_cfg.spike_length_samples(
+            spike_length_samples=padded_waveform_cfg.spike_length_samples(
                 recording.sampling_frequency
             ),
         )
