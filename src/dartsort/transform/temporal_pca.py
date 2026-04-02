@@ -308,7 +308,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         if trim_rank_to:
             rank = min(rank, trim_rank_to)
         self = cls(
-            channel_index,
+            channel_index=channel_index,
             rank=rank,
             whiten=whiten,
             temporal_slice=temporal_slice,
