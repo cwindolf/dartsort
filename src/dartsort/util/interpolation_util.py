@@ -202,6 +202,7 @@ def interp_precompute(
         rq_alpha=params.rq_alpha,
         normalized=params.method.endswith("normalized"),
         smoothing_lambda=params.smoothing_lambda,
+        polyharmonic_order=params.polyharmonic_order,
     )
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
@@ -328,6 +329,7 @@ def kernel_interpolate(
             rq_alpha=params.rq_alpha,
             kriging_poly_degree=params.kriging_poly_degree,
             smoothing_lambda=params.smoothing_lambda,
+            polyharmonic_order=params.polyharmonic_order,
             precomputed_data=precomputed_data,
             neighborhoods=neighborhoods,
             solver_map=solver_map,
@@ -349,6 +351,7 @@ def kernel_interpolate(
         rq_alpha=params.rq_alpha,
         kriging_poly_degree=params.kriging_poly_degree,
         smoothing_lambda=params.smoothing_lambda,
+        polyharmonic_order=params.polyharmonic_order,
         precomputed_data=precomputed_data,
         solver_map=solver_map,
         neighborhoods=neighborhoods,
@@ -378,6 +381,7 @@ def _kernel_interpolate(
     rq_alpha: float,
     kriging_poly_degree: int,
     smoothing_lambda: float,
+    polyharmonic_order: int | float,
     precomputed_data,
     neighborhoods,
     solver_map=None,
@@ -428,6 +432,7 @@ def _kernel_interpolate(
         rq_alpha=rq_alpha,
         normalized=method.endswith("normalized"),
         smoothing_lambda=smoothing_lambda,
+        polyharmonic_order=polyharmonic_order,
     )
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
@@ -464,6 +469,7 @@ def get_kernel(
     rq_alpha=1.0,
     normalized=False,
     smoothing_lambda=0.0,
+    polyharmonic_order=2,
 ):
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
@@ -492,6 +498,13 @@ def get_kernel(
     elif kernel_name == "thinplate":
         kernel = thin_plate_greens(
             source_pos=source_pos, target_pos=target_pos, sigma=sigma
+        )
+    elif kernel_name == "polyharmonic":
+        kernel = polyharmonic_rbf(
+            source_pos=source_pos,
+            target_pos=target_pos,
+            sigma=sigma,
+            order=polyharmonic_order,
         )
     else:
         assert False
@@ -696,6 +709,7 @@ def bake_interpolation_1d(
         sigma=params.sigma,
         rq_alpha=params.rq_alpha,
         smoothing_lambda=params.smoothing_lambda,
+        polyharmonic_order=params.polyharmonic_order,
     )
     nsrc = xx.shape[0]
     assert k.shape == (1, nsrc, xx_.shape[0])
@@ -779,7 +793,19 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     r = rsq.sqrt()
     is_small = r < 1
     small = r.mul(r.pow(r).log_())
-    big = rsq.mul_(r.log_())
+    big = rsq.mul_(r.log())
+    kernel = torch.where(is_small, small, big)
+    return kernel
+
+
+def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float=2.0):
+    rsq = get_rsq(source_pos, target_pos, sigma)
+    r = rsq.sqrt_()
+    if isinstance(order, int) and (order % 2):
+        return r.pow_(order)
+    is_small = r < 1
+    small = r.pow(order - 1).mul(r.pow(r).log_())
+    big = r.pow(order).mul_(r.log())
     kernel = torch.where(is_small, small, big)
     return kernel
 

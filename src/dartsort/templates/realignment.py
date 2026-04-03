@@ -85,6 +85,14 @@ def realign(
         spike_length_samples=spike_length_samples,
         recording_length_samples=recording.get_num_samples(),
     )
+
+    mcs = templates.main_channels()
+    sgn = np.take_along_axis(
+        templates.templates[:, templates.trough_offset_samples], mcs[:, None], axis=1
+    )
+    sgn = np.sign(sgn).reshape(mcs.shape)
+    aligned_sorting.add_ephemeral_feature("alignment_channels", mcs[sorting.labels])
+    aligned_sorting.add_ephemeral_feature("alignment_signs", sgn[sorting.labels])
     return aligned_sorting, templates
 
 

@@ -236,6 +236,7 @@ class DeveloperConfig(DARTsortUserConfig):
     whiten_estimator: WhiteningEstimator = "localzca"
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
+    svd_alignment_iterations: int = 0
 
     # interpolation for features
     interp_method: InterpMethod = "kriging"
@@ -246,6 +247,7 @@ class DeveloperConfig(DARTsortUserConfig):
     interp_sigma: float = 10.0
     rq_alpha: float = 0.5
     smoothing_lambda: float = 0.0
+    polyharmonic_order: int = 2
 
     # initial clustering
     initial_euclidean_complete_only: bool = False
@@ -284,6 +286,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_em_iters: int = 250
     channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 0.05
+    gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
     gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
     gmm_n_candidates: int = 3

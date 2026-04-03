@@ -177,7 +177,16 @@ InterpMethod = Literal[
     "clampna",
 ]
 InterpKernel = Literal[
-    "zero", "nearest", "idw", "rbf", "multiquadric", "rq", "thinplate", "nan", "clampna"
+    "zero",
+    "nearest",
+    "idw",
+    "rbf",
+    "multiquadric",
+    "rq",
+    "thinplate",
+    "nan",
+    "clampna",
+    "polyharmonic",
 ]
 _kmethods = {"zero", "nearest", "nan", "clampna"}
 
@@ -193,6 +202,7 @@ class InterpolationParams:
     rq_alpha: float = 0.5
     smoothing_lambda: float = 0.0
     neighborhood_radius: float = 200.0
+    polyharmonic_order: int | float = 2
 
     @property
     def actual_extrap_method(self):
@@ -236,6 +246,7 @@ class InterpolationParams:
             rq_alpha=self.rq_alpha,
             smoothing_lambda=self.smoothing_lambda,
             neighborhood_radius=self.neighborhood_radius,
+            polyharmonic_order=self.polyharmonic_order,
         )
 
 
@@ -403,7 +414,6 @@ class TemplateConfig:
     svd_method: TemplateSVDMethod = "raw_template"
     svd_alignment_iterations: int = 0
     svd_alignment_ms: float = 0.0
-    trough_factor: float = 3.0
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -955,6 +965,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         svd_method=cfg.template_svd_method,
         whitening=whiten_cfg,
         template_interp_params=temp_interp_params,
+        svd_alignment_iterations=cfg.svd_alignment_iterations,
+        svd_alignment_ms=cfg.alignment_ms / 2,
     )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
@@ -976,16 +988,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             fit_sampling=cfg.fit_sampling,
         ),
     )
-    clustering_features_cfg = ClusteringFeaturesConfig(
-        use_amplitude=cfg.initial_amp_feat,
-        use_signed_amplitude=cfg.initial_signed_amp_feat,
-        n_main_channel_pcs=cfg.initial_pc_feats,
-        pc_transform=cfg.initial_pc_transform,
-        pc_scale=cfg.initial_pc_scale,
-        pc_pre_transform_scale=cfg.initial_pc_pre_scale,
-        motion_aware=cfg.motion_aware_clustering,
-        workers=cfg.clustering_workers,
-    )
 
     if cfg.gmm_metric == "cosine":
         dist_thresh = cfg.gmm_cosine_threshold
@@ -1006,7 +1008,19 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         sigma=cfg.interp_sigma,
         rq_alpha=cfg.rq_alpha,
         smoothing_lambda=cfg.smoothing_lambda,
+        polyharmonic_order=cfg.polyharmonic_order,
     ).normalize()
+    clustering_features_cfg = ClusteringFeaturesConfig(
+        use_amplitude=cfg.initial_amp_feat,
+        use_signed_amplitude=cfg.initial_signed_amp_feat,
+        n_main_channel_pcs=cfg.initial_pc_feats,
+        pc_transform=cfg.initial_pc_transform,
+        pc_scale=cfg.initial_pc_scale,
+        pc_pre_transform_scale=cfg.initial_pc_pre_scale,
+        motion_aware=cfg.motion_aware_clustering,
+        workers=cfg.clustering_workers,
+        interp_params=interp_params,
+    )
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
@@ -1033,6 +1047,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,
+        cl_split_only=cfg.gmm_cl_split_only,
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,

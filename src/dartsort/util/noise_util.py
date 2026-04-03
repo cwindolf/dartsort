@@ -1172,7 +1172,10 @@ def interpolate_residual_snippets(
             tpca = cast(BaseTemporalPCA, data_util.get_tpca(hdf5_path))
         elif not isinstance(tpca, BaseTemporalPCA):
             tpca = BaseTemporalPCA.from_sklearn(
-                channel_index=channel_index, pca=tpca, trim_rank_to=rank
+                channel_index=channel_index,
+                pca=tpca,
+                trim_rank_to=rank,
+                spike_length_samples=snippets.shape[1],
             )
 
         assert tpca is not None

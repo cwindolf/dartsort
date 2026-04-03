@@ -2961,7 +2961,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_labels = labels_from_scores_(train_scores)
         eval_labels = labels_from_scores_(eval_scores)
 
-        logger.dartsortverbose("Merge groups: %s.", groups)
         if show_progress:
             groups = tqdm(groups, desc="Merge", smoothing=0.0)
 
@@ -2978,6 +2977,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # no-merge cases
             if group_res is None:
                 continue
+            if group_res.improvement <= 0:
+                continue
+            if group_res.grouping.n_groups == group.numel():
+                continue
             if logger.isEnabledFor(DARTSORTVERBOSE):
                 logger.dartsortverbose(
                     "Group %s best partition %s had improvement %s.",
@@ -2985,10 +2988,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
                     group_res.grouping.group_ids.tolist(),
                     group_res.improvement,
                 )
-            if group_res.improvement <= 0:
-                continue
-            if group_res.grouping.n_groups == group.numel():
-                continue
             any_merged = True
 
             group_ids = group_res.grouping.group_ids.cpu()

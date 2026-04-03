@@ -292,6 +292,7 @@ class WaveformPlot(UnitPlot):
         self,
         count=100,
         color="k",
+        color_by="z",
         alpha=0.1,
         show_template=True,
         template_color="orange",
@@ -308,6 +309,7 @@ class WaveformPlot(UnitPlot):
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
         self.title = title
+        self.color_by = color_by
 
     def get_waveforms(
         self, sorting_analysis: DARTsortAnalysis, unit_id: int
@@ -329,6 +331,19 @@ class WaveformPlot(UnitPlot):
             spike_length_samples = sorting_analysis.spike_length_samples - tslice.start
         if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
+        
+        if not self.color_by or waves is None:
+            ckw = dict(color=self.color)
+        elif self.color_by == 'z':
+            assert sorting_analysis.z is not None
+            cc = sorting_analysis.z[waves.which]
+            cc = (cc - cc.min()) / np.ptp(cc)
+            ckw = dict(colors=plt.cm.berlin(cc))
+        else:
+            assert False
+        
+        
+
 
         max_abs_amp = None
         show_template = self.show_template
@@ -358,6 +373,7 @@ class WaveformPlot(UnitPlot):
                 )
             ls = geomplot(
                 waves.waveforms,
+                channels=waves.channels,
                 max_channels=np.full(len(waves.waveforms), waves.main_channel),
                 channel_index=waves.channel_index,
                 geom=waves.geom,
@@ -366,11 +382,11 @@ class WaveformPlot(UnitPlot):
                 subar=True,
                 msbar=False,
                 zlim="tight",
-                color=self.color,
                 alpha=self.alpha,
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
+                **ckw,
             )
             handles["waveforms"] = ls
 
@@ -558,6 +574,8 @@ class NeighborCCGPlot(UnitPlot):
         )
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        if not neighbor_ids.size:
+            return
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
         my_st = sorting_analysis.sorting.times_samples[

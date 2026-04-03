@@ -285,9 +285,11 @@ class MotionInfo:
             assert times_s.shape == depths_um.shape
             probe_disp = -self.disp_at_s(times_s, depths_um)
         else:
+            # rz = z - disp => rz - z = -disp.
             depths_um, reg_depths_um = np.broadcast_arrays(depths_um, reg_depths_um)
             probe_disp = reg_depths_um - depths_um
         assert np.isfinite(probe_disp).all()
+        probe_disp = probe_disp.astype(np.float32)
 
         if shift_mode == "floor":
             n_pitches_shift = (probe_disp / self.pitch).astype(int)

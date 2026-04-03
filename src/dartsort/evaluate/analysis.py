@@ -64,6 +64,8 @@ class DARTsortAnalysis:
     z: np.ndarray | None
     registered_z: np.ndarray | None
     shifting: bool
+    probe_disp: np.ndarray | None
+    stable_vis_channels: np.ndarray | None
     times_seconds: np.ndarray | None
     amplitudes: np.ndarray | None
     unit_ids: np.ndarray
@@ -170,15 +172,30 @@ class DARTsortAnalysis:
 
         device = computation_cfg.actual_device()
         if vis_radius and channel_index is not None:
-            # interping to geom with shifts on fly rather than rgeom.
             erp = StableFeaturesInterpolator(
                 source_geom=pad_geom(motion.geom, device=device),
-                target_geom=pad_geom(motion.geom, device=device),
+                target_geom=pad_geom(motion.rgeom, device=device),
                 channel_index=torch.asarray(channel_index, device=device),
                 params=clustering_features_cfg.interp_params,
             )
         else:
             erp = None
+
+        vis_channel_index = make_channel_index(
+            geom=motion.rgeom,
+            radius=vis_radius,
+            p=vis_neighborhood_p,
+            to_torch=False,
+        )
+        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+        schan_res = get_stable_channels(
+            motion=motion,
+            channels=sorting.channels,
+            channel_index=channel_index,
+            core_radius=vis_radius,
+            n_pitches_shift=n_pitches_shift,
+        )
+        stable_vis_channels = schan_res[3]
 
         unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)  # type: ignore
         spike_counts = spike_counts[unit_ids >= 0]
@@ -194,12 +211,9 @@ class DARTsortAnalysis:
             geom=motion.geom,
             registered_geom=motion.rgeom,
             extract_channel_index=channel_index,
-            vis_channel_index=make_channel_index(
-                geom=motion.rgeom,
-                radius=vis_radius,
-                p=vis_neighborhood_p,
-                to_torch=False,
-            ),
+            vis_channel_index=vis_channel_index,
+            probe_disp=probe_disp,
+            stable_vis_channels=stable_vis_channels,
             xyza=xyza,
             x=x,
             z=z,
@@ -322,32 +336,27 @@ class DARTsortAnalysis:
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=None,
+            channels=None,
         )
 
     def tpca_features(self, which: np.ndarray):
         assert self.erp is not None
+        assert self.stable_vis_channels is not None
+        assert self.probe_disp is not None
         features = self.sorting.slice_feature_by_name(
             self.tpca_features_dset, mask=which
         )
         device = self.erp.b.source_geom.device
         channels = torch.asarray(self.sorting.channels[which], device=device)
-        if self.motion.drifting:
-            assert self.z is not None
-            assert self.registered_z is not None
-            # target will be geom - shift
-            # want to move from original position to reg pos = z - disp
-            # so, should take shift=disp=z-reg_z
-            shifts = self.z[which] - self.registered_z[which]
-            shifts = torch.asarray(shifts, device=device).float()
-        else:
-            shifts = torch.zeros(channels.shape, device=device)
+        shifts = torch.asarray(self.probe_disp[which], device=device)
+        targ_chans = torch.asarray(self.stable_vis_channels[which], device=device)
         features = self.erp.interp(
             features=torch.asarray(features, device=device),
             source_main_channels=channels,
-            target_channels=self.erp.b.channel_index[channels],
+            target_channels=targ_chans,
             source_shifts=shifts,
         )
-        return features.numpy(force=True)
+        return features.numpy(force=True), targ_chans.numpy(force=True)
 
     def unit_tpca_waveforms(
         self,
@@ -376,7 +385,7 @@ class DARTsortAnalysis:
         if not which.size:
             return None
 
-        tpca_embeds = self.tpca_features(which=which)
+        tpca_embeds, channels = self.tpca_features(which=which)
         n, rank, c = tpca_embeds.shape
         tpca_embeds = tpca_embeds.transpose(0, 2, 1).reshape(n * c, rank)
         waveforms = np.full(
@@ -389,16 +398,14 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        waveforms, main_channel = self.unit_select_channels(
-            unit_id=unit_id, which=which, waveforms=waveforms
-        )
         return WaveformsBag(
             which=which,
             waveforms=waveforms,
-            main_channel=main_channel,
+            main_channel=self.unit_max_channel(unit_id),
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=self.tpca_temporal_slice,
+            channels=channels,
         )
 
     def unit_pca_features(
@@ -419,10 +426,16 @@ class DARTsortAnalysis:
             return None, None
 
         waveforms = tpca_waves.waveforms
+        if self.motion.drifting:
+            assert tpca_waves.channels is not None
+            uchans, cinv = np.unique(tpca_waves.channels, return_inverse=True)
+            w = np.full_like(waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan)
+            np.put_along_axis(w, cinv[:, None], waveforms, axis=2)
+            waveforms = w
 
-        # remove chans with no signal at all
+        # remove chans with too little signal
         not_entirely_nan_channels = np.flatnonzero(
-            np.isfinite(waveforms[:, 0]).any(axis=0)
+            np.isfinite(waveforms[:, 0]).mean(axis=0) > 0.05
         )
         if (
             not_entirely_nan_channels.size
@@ -574,3 +587,4 @@ class WaveformsBag:
     main_channel: int
     geom: np.ndarray
     channel_index: np.ndarray
+    channels: np.ndarray | None

@@ -68,23 +68,6 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.shape = (rank, channel_index.shape[1])
         self.nt = None
 
-    def initialize_spike_length_dependent_params(self):
-        nt = self.spike_length_samples
-        assert nt is not None
-        if self.nt is not None:
-            assert nt == self.nt
-            return
-        if self.temporal_slice is None:
-            self._temporal_ix = None
-        else:
-            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
-            nt = self.b._temporal_ix.numel()
-        self.nt = nt
-        self.register_buffer("mean", torch.zeros(nt))
-        self.register_buffer("components", torch.zeros(self.rank, nt))
-        self.register_buffer("whitener", torch.zeros(self.rank))
-        self.to(self.b.channel_index.device)
-
     def fit(
         self,
         recording,
@@ -293,6 +276,7 @@ class BaseTemporalPCA(BaseWaveformModule):
     def from_sklearn(
         cls,
         channel_index,
+        spike_length_samples: int,
         pca: PCA | TruncatedSVD,
         temporal_slice=None,
         trim_rank_to: int | None = None,
@@ -314,7 +298,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             temporal_slice=temporal_slice,
             **constructor_kwargs,
         )
-        self.initialize_from_sklearn(pca)
+        self.initialize_from_sklearn(pca, spike_length_samples=spike_length_samples)
         return self
 
     @classmethod
@@ -336,14 +320,25 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.b.whitener.copy_(other.whitener)
         return self
 
-    def initialize_from_sklearn(self, pca):
+    def initialize_spike_length_dependent_params(self):
+        nt = self.spike_length_samples
+        assert nt is not None
+        if self.nt is not None:
+            assert nt == self.nt
+            return
         if self.temporal_slice is None:
-            self.spike_length_samples = pca.components_.shape[1]
+            self._temporal_ix = None
         else:
-            # not really -- this is a hack.
-            self.spike_length_samples = (
-                self.temporal_slice.stop - self.temporal_slice.start
-            )
+            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
+            nt = self.b._temporal_ix.numel()
+        self.nt = nt
+        self.register_buffer("mean", torch.zeros(nt))
+        self.register_buffer("components", torch.zeros(self.rank, nt))
+        self.register_buffer("whitener", torch.zeros(self.rank))
+        self.to(self.b.channel_index.device)
+
+    def initialize_from_sklearn(self, pca, spike_length_samples: int):
+        self.spike_length_samples = spike_length_samples
         self.initialize_spike_length_dependent_params()
         if hasattr(pca, "mean_"):
             self.b.mean.copy_(torch.from_numpy(pca.mean_))
@@ -395,14 +390,19 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
-    def __init__(self, trough: int = 42, alignment_iterations: int = 0, align_pad: int = 0, trough_factor: float = 2.0, **super_kwargs):
+    def __init__(
+        self,
+        trough: int = 42,
+        alignment_iterations: int = 0,
+        align_pad: int = 0,
+        **super_kwargs,
+    ):
         super().__init__(**super_kwargs)
         self.alignment_iterations = alignment_iterations
         self.align_pad = align_pad
         self.trough = trough
-        self.trough_factor = trough_factor
 
-    def forward(self, waveforms, *, channels, time_shifts=None, **unused):
+    def forward(self, waveforms, *, alignment_channels, alignment_signs, time_shifts=None, **unused):
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
             return self.force_embed(waveforms)
@@ -410,13 +410,14 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         assert time_shifts is None
 
         # align on main channel
-        w = waveforms.take_along_dim(indices=channels[:, None], dim=2)
+        w = waveforms.take_along_dim(indices=alignment_channels[:, None, None], dim=2)
+        time_shifts = torch.zeros_like(alignment_channels)
         for _ in range(self.alignment_iterations):
             x = self._temporal_slice(w, time_shifts=time_shifts)
             r = self.force_project(x)[:, :, 0]
-            r = torch.where(r > 0, r, -self.trough_factor * r)
+            r *= alignment_signs[:, None]
             pk = r.argmax(dim=1)
-            time_shifts = pk - self.trough
+            time_shifts += pk - self.trough
             time_shifts.masked_fill_(time_shifts.abs() > self.align_pad, 0)
 
         # shifted embeds
