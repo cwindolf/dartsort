@@ -57,6 +57,7 @@ from ...util.internal_config import (
     ComputationConfig,
     DARTsortInternalConfig,
     RefinementConfig,
+    ComponentDistanceMetric,
 )
 from ...util.interpolation_util import (
     NeighborhoodFiller,
@@ -76,6 +77,7 @@ from ...util.spiketorch import (
     entropy,
     mean_elbo_dim1,
     normeuc_distance,
+    scaled_normeuc_distance,
     sign,
     spawn_torch_rg,
 )
@@ -209,7 +211,6 @@ def tmm_demix(
 # -- shared objects holding precomputed neighborhood-related data
 
 
-ComponentDistanceMetric = Literal["cosine", "normeuc"]
 RobustnessStrategy = Literal["none", "fixed"]
 
 
@@ -633,6 +634,9 @@ class TMMParams:
     demolish_during_selection: bool
     kmeans_tries: int
     kmeanspp_tries: int
+    whiten_split: bool
+    scale_dist_args: tuple[float, float, float]
+    whiten_dist: bool
 
     @classmethod
     def from_refinement_cfg(cls, refinement_cfg: RefinementConfig):
@@ -662,6 +666,9 @@ class TMMParams:
             robust_strategy=refinement_cfg.robust_strategy,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
+            whiten_split=refinement_cfg.whiten_split,
+            scale_dist_args=refinement_cfg.scale_dist_args,
+            whiten_dist=refinement_cfg.whiten_dist,
         )
 
 
@@ -1095,24 +1102,29 @@ class BatchedSpikeData:
             n_units = int(self.candidates.amax()) + 1
             assert n_units > 0
         self._update_sizes_from_n_units(n_units)
+
         if expand_lut:
             assert self.un_adj_lut is not None
             assert un_adj_lut is None
             expand_from_lut = self.un_adj_lut
         else:
             expand_from_lut = None
+
         new_lut = un_adj_lut is not None
         if new_lut:
             assert un_adj_lut.lut.shape[0] == n_units
+
         if self.candidates is None:
             assert un_adj_lut is not None
             labels = None
         else:
             labels = self.candidates[:, 0]
+
         count_needs_to_match_my_labels = labels is not None and not new_lut
         if pnoid and count_needs_to_match_my_labels:
             assert labels is not None
             assert labels.amax() < n_units
+
         self.un_adj_lut, self.un_adj, self.explore_adj = candidate_adjacencies(
             labels=labels,
             neighb_supset=self.neighb_supset,
@@ -1847,18 +1859,37 @@ class BaseMixtureModel(BModule):
             debug=debug,
         )
 
-    def unit_distance_matrix(self) -> Tensor:
+    def unit_distance_matrix(
+        self, distance_kind: ComponentDistanceMetric | None = None
+    ) -> Tensor:
         """Pairwise distance matrix
 
         These should return something with zero on the diagonal. Some centroids
         can have 0 norm, and they should have inf distance to other units.
         """
-        if self.p.distance_kind == "cosine":
-            return cosine_distance(self.centroids)
-        elif self.p.distance_kind == "normeuc":
-            return normeuc_distance(self.centroids)
+        if distance_kind is None:
+            distance_kind = self.p.distance_kind
+
+        from ...util.py_util import timer
+
+        if self.p.whiten_dist:
+            x = self.noise.whiten_full(self.centroids)
+        else:
+            x = self.centroids
+
+        if distance_kind == "cosine":
+            d = cosine_distance(x)
+        elif distance_kind == "normeuc":
+            d = normeuc_distance(x)
+        elif distance_kind == "scaled_normeuc":
+            d = scaled_normeuc_distance(x, *self.p.scale_dist_args)
         else:
             assert False
+
+        if pnoid:
+            assert not d.isnan().any()
+
+        return d
 
 
 class TruncatedMixtureModel(BaseMixtureModel):
@@ -2605,6 +2636,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             bail_at=int(single),
             weights=split_data.duties,
             debug=debug,
+            whiten=self.p.whiten_split,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -3045,7 +3077,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         flat_map = self.cleanup(result_map)
         distances = self.unit_distance_matrix()
         if pnoid:
-            assert distances.isfinite().all()
+            assert not distances.isnan().any()
         lut = train_data.remap(remapping=flat_map, distances=distances)
         assert lut is not None
         self.update_lut(lut)
@@ -5479,7 +5511,11 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
 
 
 def candidate_search_sets(
-    distances: Tensor, un_adj_lut: NeighborhoodLUT, un_adj: Tensor, n_search: int
+    distances: Tensor,
+    un_adj_lut: NeighborhoodLUT,
+    un_adj: Tensor,
+    n_search: int,
+    eps: float = 1e-8,
 ):
     n_lut = un_adj_lut.unit_ids.shape[0]
 
@@ -5490,11 +5526,14 @@ def candidate_search_sets(
     inf = s.new_full((1, 1), torch.inf).broadcast_to((n_lut, 1))
     s.scatter_(dim=1, index=un_adj_lut.unit_ids[:, None], src=inf)
 
+    # avoid nans if there are exact 0 distances
+    s.clamp_(min=eps)
+
     # flip scale so larger is better
     s.reciprocal_()
 
     # multiply by neighborhood-unit adjacency to set non olap to 0
-    s.mul_(un_adj.T[un_adj_lut.neighb_ids, : distances.shape[0]])
+    s *= un_adj.T[un_adj_lut.neighb_ids, : distances.shape[0]]
 
     # take topk, and fill invalids (s=0) with -1
     tops, topunits = torch.topk(s, k=n_search, dim=1)
@@ -5511,6 +5550,7 @@ def max_units_per_neighb(lut: NeighborhoodLUT):
 
 
 def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
+    """Returns n_neighbs x max possible proposed units array, basically transposing the LUT's nonzeros."""
     n_neighbs = lut.lut.shape[1]
     n_lut = lut.unit_ids.shape[0]
     proposals = torch.full((n_neighbs, max_proposed), -1)

@@ -77,7 +77,7 @@ class SpikeCountHistogram(OverviewPlot):
         assert sorting_analysis.coarse_template_data is not None
         axis = panel.subplots()
         axis.hist(
-            sorting_analysis.coarse_template_data.spike_counts,
+            np.unique(sorting_analysis.sorting.labels, return_counts=True)[1],
             bins=self.n_bins,
             log=self.log,
             histtype="stepfilled",

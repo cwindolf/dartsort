@@ -51,6 +51,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fpctrl_spike_counts=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         save_collidedness=False,
+        whiten_features=True,
         parent_sorting_hdf5_path: str | Path | None = None,
         dtype=torch.float,
     ):
@@ -82,6 +83,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self.matching_templates_builder = matching_templates_builder
         self.thresholdsq: float | None = None  # set in precompute
         self.save_collidedness = save_collidedness
+        self.whiten_features = whiten_features
 
         # fp control threshold stuff (TODO: remove?)
         self.fpctrl_spike_counts = fpctrl_spike_counts
@@ -233,6 +235,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fit_sampling_cfg=sampling_cfg,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             save_collidedness=save_collidedness,
+            whiten_features=matching_cfg.whiten_features,
             fpctrl_spike_counts=template_data.coarsen().spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
@@ -252,7 +255,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         assert self.matching_templates is not None
         # get chunk center time and template info at that time
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
-        segment = self.recording._recording_segments[0]
+        segment = self.recording.segments[0]
         chunk_center_seconds = float(segment.sample_index_to_time(chunk_center_samples))
         chunk_template_data = self.matching_templates.data_at_time(
             t_s=chunk_center_seconds,
@@ -298,17 +301,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         """Core peeling routine for subtraction"""
         if max_iter is None:
             max_iter = self.p.max_iter
-        # initialize residual, it needs to be padded to support our channel
-        # indexing convention (used later to extract small channel
-        # neighborhoods). this copies the input.
-        if chunk_template_data.prewhiten:
-            residual_padded = traces.new_empty((traces.shape[0], traces.shape[1] + 1))
-            chunk_template_data.whiten_traces(
-                traces=traces, out=residual_padded[:, :-1]
-            )
-            residual_padded[:, -1] = torch.nan
-        else:
-            residual_padded = F.pad(traces, (0, 1), value=torch.nan)
+
+        # note, this is chans major (transpose of traces)
+        traces_wh = chunk_template_data.whiten_traces(traces)
+
+        # initialize residual
+        residual = traces_wh.T if self.whiten_features else traces
+        residual_padded = F.pad(residual, (0, 1), value=torch.nan)
         residual = residual_padded[:, :-1]
 
         # name objective variables so that we can update them in-place later
@@ -319,10 +318,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         padded_conv = traces.new_zeros(
             chunk_template_data.obj_n_templates, padded_obj_len
         )
-        if self.is_scaling:
-            padded_scalings = padded_conv.clone()
-        else:
-            padded_scalings = None
+        padded_scalings = padded_conv.clone() if self.is_scaling else None
         padded_objective = traces.new_zeros(
             chunk_template_data.obj_n_templates + 1, padded_obj_len
         )
@@ -333,7 +329,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # initialize convolution
         chunk_template_data.convolve(
-            residual.T, padding=self.obj_pad_len, out=padded_conv
+            traces_wh, padding=self.obj_pad_len, out=padded_conv
         )
 
         # main loop
@@ -345,7 +341,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
             # we always need to update the residual in the final iteration
             # in "cd iterations", we may not need to update the residual.
-            update_residual = not coarse_only
+            update_residual = chunk_template_data.needs_residual and not coarse_only
 
             if not initializing_cd and refrac_mask is not None:
                 refrac_mask = torch.zeros_like(refrac_mask)
@@ -360,7 +356,6 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                     and len(previous_peaks)
                 ):
                     assert prev_update_residual is not None
-
                     prev_peaks = previous_peaks.pop()
                     if prev_update_residual:
                         chunk_template_data.unsubtract(residual_padded, prev_peaks)
@@ -416,9 +411,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             prev_refrac_mask = refrac_mask
             prev_update_residual = update_residual
 
-        # peaks are then the final current_peaks
         assert current_peaks is not None
         peaks = MatchingPeaks.concatenate(current_peaks)
+
+        # compute the residual now if not done above
+        if not chunk_template_data.needs_residual:
+            chunk_template_data.subtract(residual_padded, peaks)
+
         if not peaks.n_spikes:
             res = PeelingBatchResult(n_spikes=0)
             if return_residual:

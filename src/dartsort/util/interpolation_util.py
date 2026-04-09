@@ -469,7 +469,7 @@ def get_kernel(
     rq_alpha=1.0,
     normalized=False,
     smoothing_lambda=0.0,
-    polyharmonic_order=2,
+    polyharmonic_order: int | float = 2,
 ):
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
@@ -798,7 +798,7 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     return kernel
 
 
-def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float=2.0):
+def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float = 2.0):
     rsq = get_rsq(source_pos, target_pos, sigma)
     r = rsq.sqrt_()
     if isinstance(order, int) and (order % 2):

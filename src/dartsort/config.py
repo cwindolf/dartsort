@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Sequence
 
 from pydantic import Field
 
@@ -11,6 +11,7 @@ from .util.internal_config import (
     TemplateSVDMethod,
     WhiteningEstimator,
     WhiteningStrategy,
+    PreprocessingStrategy,
     default_pretrained_path,
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
@@ -25,6 +26,7 @@ class DARTsortUserConfig:
         False, doc="Whether to stop after initial localization and motion tracking."
     )
     matching_iterations: int = 1
+    preprocessing: PreprocessingStrategy = "none"
 
     # -- computer options
     n_jobs_cpu: int = argfield(
@@ -186,8 +188,12 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: tuple[MixtureStep, ...] = ("split", "demolish")
-    later_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
+    initial_steps: Sequence[MixtureStep] = argfield(
+        default=("split", "demolish"), arg_type=tuple
+    )
+    later_steps: Sequence[MixtureStep] = argfield(
+        default=("split", "merge", "demolish"), arg_type=tuple
+    )
     detection_type: str = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
@@ -205,7 +211,7 @@ class DeveloperConfig(DARTsortUserConfig):
         default=default_pretrained_path, arg_type=str_or_none
     )
     do_tpca_denoise: bool = True
-    first_denoiser_thinning: float = 0.5
+    first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
@@ -234,6 +240,7 @@ class DeveloperConfig(DARTsortUserConfig):
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "none"
     whiten_estimator: WhiteningEstimator = "localzca"
+    whiten_features: bool = True
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
     svd_alignment_iterations: int = 0
@@ -288,7 +295,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cl_alpha: float = 0.05
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
-    gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
+    gmm_metric: Literal["cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
     gmm_n_candidates: int = 3
     gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5

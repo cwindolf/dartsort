@@ -422,7 +422,7 @@ class BasePeeler(BModule):
             chunk_end_samples = chunk_start_samples + self.chunk_length_samples
         chunk_end_samples = min(self.recording.get_num_samples(), chunk_end_samples)
         chunk, left_margin, right_margin = get_chunk_with_margin(
-            self.recording._recording_segments[0],
+            self.recording.segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
             channel_indices=None,
@@ -469,7 +469,7 @@ class BasePeeler(BModule):
                     peel_result["residual"] = peel_result["residual"].cpu()  # type: ignore
 
         # add times in seconds
-        segment = self.recording._recording_segments[0]
+        segment = self.recording.segments[0]
         chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
             chunk_start_samples
         )

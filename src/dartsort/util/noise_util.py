@@ -527,8 +527,8 @@ class EmbeddedNoise(BModule):
     def whitener(self, channels=slice(None)):
         cov = self.marginal_covariance(channels=channels)
         chol = cov.cholesky().to_dense()
-        chans_eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
-        whitener = torch.linalg.solve_triangular(chol, chans_eye, upper=False)
+        eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
+        whitener = torch.linalg.solve_triangular(chol, eye, upper=False)
         return whitener.reshape(cov.shape)
 
     def whiten(self, data, channels=slice(None)):
@@ -544,6 +544,13 @@ class EmbeddedNoise(BModule):
         # res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
+
+    def whiten_full(self, data):
+        # self._full_whitener = None
+        if self._full_whitener is None:
+            self._full_whitener = self.whitener()
+        data = data.reshape(len(data), -1)
+        return data @ self._full_whitener
 
     def full_dense_cov(self, device=None):
         if self._full_cov is None:
@@ -1521,6 +1528,11 @@ class SpatialWhitener(BModule):
         )
         whitener = torch.asarray(whitener).to(cov)
         return cls(whitener=whitener)
+
+    def whiten_traces_spatial_major(
+        self, x: Tensor, out: Tensor | None = None
+    ) -> Tensor:
+        return torch.mm(self.b.whitener, x.T, out=out)
 
     def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
         *shp, c = x.shape

@@ -322,6 +322,8 @@ class BaseTemporalPCA(BaseWaveformModule):
 
     def initialize_spike_length_dependent_params(self):
         nt = self.spike_length_samples
+        if self.temporal_slice is not None and self.temporal_slice != slice(None):
+            nt = self.temporal_slice.stop - self.temporal_slice.start
         assert nt is not None
         if self.nt is not None:
             assert nt == self.nt
@@ -329,7 +331,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         if self.temporal_slice is None:
             self._temporal_ix = None
         else:
-            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
+            _temporal_ix = torch.arange(self.spike_length_samples)[self.temporal_slice]
+            self.register_buffer("_temporal_ix", _temporal_ix)
             nt = self.b._temporal_ix.numel()
         self.nt = nt
         self.register_buffer("mean", torch.zeros(nt))
@@ -402,7 +405,15 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         self.align_pad = align_pad
         self.trough = trough
 
-    def forward(self, waveforms, *, alignment_channels, alignment_signs, time_shifts=None, **unused):
+    def forward(
+        self,
+        waveforms,
+        *,
+        alignment_channels,
+        alignment_signs,
+        time_shifts=None,
+        **unused,
+    ):
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
             return self.force_embed(waveforms)

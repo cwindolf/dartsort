@@ -153,7 +153,7 @@ class WhiteNoiseRecordingSegment(BaseRecordingSegment):
 class UnwhitenPreprocessor(BasePreprocessor):
     def __init__(self, noise, recording):
         super().__init__(recording)
-        for parent_segment in recording._recording_segments:
+        for parent_segment in recording.segments:
             self.add_recording_segment(
                 UnwhitenPreprocessorSegment(parent_segment, noise)
             )

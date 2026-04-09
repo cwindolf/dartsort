@@ -170,6 +170,14 @@ class DARTsortAnalysis:
         else:
             x = z = reg_z = None
 
+        vis_channel_index = make_channel_index(
+            geom=motion.rgeom,
+            radius=vis_radius,
+            p=vis_neighborhood_p,
+            to_torch=False,
+        )
+        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+
         device = computation_cfg.actual_device()
         if vis_radius and channel_index is not None:
             erp = StableFeaturesInterpolator(
@@ -178,24 +186,25 @@ class DARTsortAnalysis:
                 channel_index=torch.asarray(channel_index, device=device),
                 params=clustering_features_cfg.interp_params,
             )
+            schan_res = get_stable_channels(
+                motion=motion,
+                channels=sorting.channels,
+                channel_index=channel_index,
+                core_radius=vis_radius,
+                n_pitches_shift=n_pitches_shift,
+            )
+            stable_vis_channels = schan_res[3]
         else:
             erp = None
+            stable_vis_channels = None
 
-        vis_channel_index = make_channel_index(
-            geom=motion.rgeom,
-            radius=vis_radius,
-            p=vis_neighborhood_p,
-            to_torch=False,
-        )
-        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
-        schan_res = get_stable_channels(
-            motion=motion,
-            channels=sorting.channels,
-            channel_index=channel_index,
-            core_radius=vis_radius,
-            n_pitches_shift=n_pitches_shift,
-        )
-        stable_vis_channels = schan_res[3]
+        if channel_index is None:
+            channel_index = make_channel_index(
+                geom=motion.geom,
+                radius=vis_radius,
+                p=vis_neighborhood_p,
+                to_torch=False,
+            )
 
         unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)  # type: ignore
         spike_counts = spike_counts[unit_ids >= 0]
@@ -354,7 +363,7 @@ class DARTsortAnalysis:
             features=torch.asarray(features, device=device),
             source_main_channels=channels,
             target_channels=targ_chans,
-            source_shifts=shifts,
+            source_shifts=shifts.float(),
         )
         return features.numpy(force=True), targ_chans.numpy(force=True)
 
@@ -429,7 +438,9 @@ class DARTsortAnalysis:
         if self.motion.drifting:
             assert tpca_waves.channels is not None
             uchans, cinv = np.unique(tpca_waves.channels, return_inverse=True)
-            w = np.full_like(waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan)
+            w = np.full_like(
+                waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan
+            )
             np.put_along_axis(w, cinv[:, None], waveforms, axis=2)
             waveforms = w
 

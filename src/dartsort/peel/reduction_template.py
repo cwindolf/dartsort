@@ -260,7 +260,7 @@ class TemplateReduction(GrabAndFeaturize):
         if whitener is None:
             assert template_cfg.whitening.strategy == "none"
         else:
-            assert template_cfg.whitening.strategy in ("prewhiten", "postwhiten")
+            assert template_cfg.whitening.strategy in ("prewhiten", "prewhiten_postapply", "postwhiten")
         if template_cfg.whitening.strategy == "prewhiten":
             assert whitener is not None
             transformers.append(

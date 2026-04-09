@@ -406,6 +406,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
     upsampling: bool
     up_factor: int
     needs_fine_pass: bool
+    needs_residual: bool = True
     coarse_objective: bool = False
     prewhiten: bool = False
 
@@ -496,13 +497,14 @@ class DebugChunkTemplateData(ChunkTemplateData):
         mask[row_ix, time_ix] = value
 
     def fine_match(
-        self, *, peaks: MatchingPeaks, residual: Tensor, conv: Tensor, padding: int = 0
+        self, *, peaks: MatchingPeaks, residual: Tensor | None, conv: Tensor, padding: int = 0
     ) -> MatchingPeaks:
         nt = self.templates_up.shape[2]
         if not peaks.n_spikes:
             return peaks
 
         assert peaks.times is not None
+        assert residual is not None
         times = peaks.times.clone()
         template_inds = peaks.template_inds
         assert times is not None

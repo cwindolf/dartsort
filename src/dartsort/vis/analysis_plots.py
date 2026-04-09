@@ -235,7 +235,7 @@ def distance_matrix_dendro(
             ax_im.text(
                 so + sc * i,
                 so + sc * j,
-                f"{val:.2f}",
+                f"{val:.2f}".lstrip("0"),
                 ha="center",
                 va="center",
                 clip_on=True,

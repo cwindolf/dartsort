@@ -778,7 +778,8 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
     return squareform(pdist)
 
 
-def normeuc_distance(means):
+@torch.jit.script
+def normeuc_distance(means: Tensor):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)
     norms_sqrt = means.square().sum(dim=1).sqrt_().sqrt_()
@@ -789,6 +790,66 @@ def normeuc_distance(means):
     dist[blank] = torch.inf
     dist[:, blank] = torch.inf
     dist.diagonal().zero_()
+    return dist
+
+
+@torch.jit.script
+def scaled_normeuc_distance(
+    means: Tensor,
+    scale_std: float = 0.01,
+    scale_min: float = 2.0 / 3.0,
+    scale_max: float = 4.0 / 3.0,
+    batch_size: int = 8192,
+):
+    means = means.reshape(means.shape[0], -1)
+    K = means.shape[0]
+
+    # euc dist foil identity helpful for scaled dist
+    norm = torch.linalg.norm(means, dim=1)
+    normsq = norm.square()
+
+    # dot upper tri
+    dots = means.new_full((K, K), torch.nan)
+    ix = torch.triu_indices(K, K)
+    ii = ix[0]
+    jj = ix[1]
+    nix = ii.shape[0]
+    for i0 in range(0, nix, batch_size):
+        i1 = min(nix, i0 + batch_size)
+        bii = ii[i0:i1]
+        bjj = jj[i0:i1]
+        dots[bii, bjj] = means[bii, None, :].bmm(means[bjj, :, None])[:, 0, 0]
+    del means
+
+    # fill in dot lower tri
+    dots[jj, ii] = dots[ii, jj]
+
+    # optimal penalized scaling
+    # columns are targets ("recording"), rows are the "templates"
+    inv_lambda = scale_std**-2
+    b = dots + inv_lambda
+    a = normsq[:, None] + inv_lambda
+    sc = b.div_(a).clamp_(scale_min, scale_max)
+    sc.masked_fill_(dots < 0, 0.0)
+    del a, b
+
+    # divide by geom mean of norms in each cell
+    col_norm = norm
+    col_normsq = normsq
+    row_norm = sc * norm[:, None]
+    dist = row_norm.square() + col_normsq[None, :]
+    dist -= dots.mul_(sc).mul_(2.0)
+    dist.relu_().sqrt_()
+    dist /= row_norm.sqrt_()
+    dist /= col_norm[None, :].sqrt_()
+
+    # handle blanks / orthogonal units. nb dots have been sc'd.
+    dist.masked_fill_(dots == 0.0, torch.inf)
+    dist.diagonal().zero_()
+
+    # symmetrize with minimum
+    dist = torch.minimum(dist, dist.T)
+
     return dist
 
 

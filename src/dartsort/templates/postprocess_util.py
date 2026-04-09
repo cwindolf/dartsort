@@ -539,10 +539,9 @@ def flag_possible_cc_error_spikes(
     kdt_subtract = KDTree(np.c_[times, xy_subtract])
 
     # get all possible neighbors
-    with timer("a"):
-        sdm = kdt_subtract.sparse_distance_matrix(
-            kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
-        )
+    sdm = kdt_subtract.sparse_distance_matrix(
+        kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
+    )
     # this is more an adjacency matrix. 0s will be discarded later.
     v = np.ones(sdm["i"].shape, dtype=np.float32)
     coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
@@ -551,10 +550,9 @@ def flag_possible_cc_error_spikes(
     if subtraction_cfg.spatial_dedup_radius_um:
         xy_dedup = xy / subtraction_cfg.spatial_dedup_radius_um
         kdt_dedup = KDTree(np.c_[times, xy_dedup])
-        with timer("b"):
-            sdm_dedup = kdt_dedup.sparse_distance_matrix(
-                kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
-            )
+        sdm_dedup = kdt_dedup.sparse_distance_matrix(
+            kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
+        )
         del kdt_dedup, xy_dedup
         v = np.ones(sdm_dedup["i"].shape, dtype=np.float32)
         coo_dedup = coo_array(

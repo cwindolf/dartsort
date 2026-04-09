@@ -331,19 +331,19 @@ class WaveformPlot(UnitPlot):
             spike_length_samples = sorting_analysis.spike_length_samples - tslice.start
         if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
-        
+
         if not self.color_by or waves is None:
             ckw = dict(color=self.color)
-        elif self.color_by == 'z':
+        elif self.color_by == "z":
             assert sorting_analysis.z is not None
             cc = sorting_analysis.z[waves.which]
-            cc = (cc - cc.min()) / np.ptp(cc)
-            ckw = dict(colors=plt.cm.berlin(cc))
+            if cc.std() > 1e-12:
+                cc = (cc - cc.min()) / np.ptp(cc)
+            else:
+                cc = np.full_like(cc, 0.5)
+            ckw = dict(colors=plt.get_cmap("berlin")(cc))
         else:
             assert False
-        
-        
-
 
         max_abs_amp = None
         show_template = self.show_template
@@ -386,24 +386,20 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
-                **ckw,
+                **ckw,  # type: ignore
             )
             handles["waveforms"] = ls
 
         if show_template:
             assert templates is not None
-            if waves is None:
-                showchans = sorting_analysis.vis_channel_index[
-                    sorting_analysis.unit_max_channel(unit_id)
-                ]
-                geom = sorting_analysis.registered_geom
-            else:
-                showchans = waves.channel_index[waves.main_channel]
-                geom = waves.geom
-            showchans = showchans[showchans < len(geom)]
+            mc = sorting_analysis.unit_max_channel(unit_id)
+            channels = sorting_analysis.vis_channel_index[mc]
+            channels = channels[channels < len(sorting_analysis.vis_channel_index)]
+            cc = np.broadcast_to(channels, (len(templates), *channels.shape))
             ls = geomplot(
-                templates[:, :, showchans],
-                geom=geom[showchans],
+                templates[:, :, channels],
+                geom=sorting_analysis.registered_geom,
+                channels=cc,
                 ax=axis,
                 show_zero=False,
                 zlim="tight",

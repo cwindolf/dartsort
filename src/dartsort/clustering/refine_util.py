@@ -139,7 +139,7 @@ def pc_merge(
         dists = spiketorch.maxz_distance(
             means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
-    elif refinement_cfg.pc_merge_metric == "normeuc":
+    elif refinement_cfg.pc_merge_metric.endswith("normeuc"):
         dists = spiketorch.weighted_normeuc_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )

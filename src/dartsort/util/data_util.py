@@ -1,18 +1,28 @@
+import warnings
 from collections import namedtuple
 from copy import copy
 from pathlib import Path
-from typing import Generator, Sequence, cast, Self, Literal
-import warnings
+from typing import TYPE_CHECKING, Generator, Literal, Self, Sequence, cast
 
 import h5py
 import numpy as np
 import torch
-from spikeinterface.core import NumpySorting, get_random_data_chunks
+from spikeinterface.core import (
+    BaseRecording,
+    BaseSorting,
+    NumpySorting,
+    get_random_data_chunks,
+)
 from tqdm.auto import tqdm
 
 from ..detect import detect_and_deduplicate
-from ..util.logging_util import get_logger
-from ..util.py_util import resolve_path
+from .internal_config import WaveformConfig, default_waveform_cfg
+from .logging_util import get_logger
+
+if TYPE_CHECKING:
+    from .motion import MotionInfo
+from .job_util import ensure_computation_config
+from .py_util import resolve_path
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -140,7 +150,7 @@ class DARTsortSorting:
         If there is a weight_key feature, this will produce
         a TsGroup with Tsd entries. Else, regular Ts.
         """
-        from pynapple.core.ts_group import TsGroup, Ts, Tsd
+        from pynapple.core.ts_group import Ts, Tsd, TsGroup
 
         assert self.labels is not None
 
@@ -663,8 +673,14 @@ class DARTsortSorting:
             return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
-def load_h5(f: str | Path) -> DARTsortSorting:
-    return DARTsortSorting.from_peeling_hdf5(h5_path=f)
+def load_h5(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+    f = resolve_path(f, strict=True)
+    st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
+    if labels_stem:
+        labels_npy = f.parent / f"{labels_stem}.npy"
+        if labels_npy.exists():
+            st = st.ephemeral_replace(labels=np.load(labels_npy))
+    return st
 
 
 def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
@@ -772,6 +788,84 @@ def load_stored_tsvd(
         tsvd.components_.shape,
     )
     return tsvd
+
+
+def sorting_from_spike_train(
+    times_samples: np.ndarray,
+    labels: np.ndarray,
+    sampling_frequency: float = 30_000.0,
+    recording: BaseRecording | None = None,
+    motion: "MotionInfo | None" = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    infer_channels: bool = True,
+    computation_cfg=None,
+    workers=4,
+):
+    if recording is not None:
+        sampling_frequency = recording.sampling_frequency
+        times_s = recording.sample_index_to_time(times_samples)
+    else:
+        times_s = times_samples / sampling_frequency
+    st = DARTsortSorting(
+        times_samples=times_samples,
+        labels=labels,
+        channels=np.zeros_like(labels),
+        sampling_frequency=sampling_frequency,
+        ephemeral_features=dict(times_seconds=times_s),
+    )
+    if not infer_channels:
+        return st, None
+    assert recording is not None
+
+    from ..templates.templib import quick_mean_templates
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+    if motion is None:
+        from .motion import MotionInfo
+
+        motion = MotionInfo.static(recording.get_channel_locations())
+
+    qmt = quick_mean_templates(
+        recording=recording,
+        sorting=st,
+        motion=motion,
+        waveform_cfg=waveform_cfg,
+        computation_cfg=computation_cfg,
+    )
+    channels = qmt.main_channels()[labels]
+    amplitudes = np.ptp(qmt.templates, axis=1).max(1)[labels]
+    x, z = motion.rgeom[channels].T
+    if motion is not None and motion.drifting:
+        # displaced channels
+        z = motion.uncorrect_s(times_s, z)
+        _, channels = motion.geom_kdt.query(np.c_[x, z], workers=workers)
+    pos = np.c_[x, 0 * x, z, 0 * z]
+    st = st.ephemeral_replace(
+        channels=channels, amplitudes=amplitudes, point_source_localizations=pos
+    )
+    return st, qmt
+
+
+def sorting_from_spikeinterface(
+    si_sorting: BaseSorting,
+    recording: BaseRecording | None = None,
+    motion: "MotionInfo | None" = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    infer_channels: bool = True,
+    computation_cfg=None,
+    workers=4,
+):
+    sv = si_sorting.to_spike_vector()
+    return sorting_from_spike_train(
+        times_samples=sv["sample_index"],  # type: ignore
+        labels=sv["unit_index"],  # type: ignore
+        recording=recording,
+        motion=motion,
+        waveform_cfg=waveform_cfg,
+        infer_channels=infer_channels,
+        computation_cfg=computation_cfg,
+        workers=workers,
+    )
 
 
 def get_labels(h5_path) -> np.ndarray:
@@ -1165,7 +1259,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
+    start_time_s, end_time_s = recording.segments[0].sample_index_to_time(
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)

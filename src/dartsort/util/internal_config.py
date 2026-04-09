@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import field, fields
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Self, Sequence
 
 import numpy as np
 import torch
@@ -21,6 +21,8 @@ default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
 default_pretrained_path = str(default_pretrained_path)
 
+
+PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
 
 @cfg_dataclass
 class WaveformConfig:
@@ -323,7 +325,7 @@ class SubtractionConfig:
 
     # initial denoiser fitting parameters
     first_denoiser_max_waveforms_fit: int = 250_000
-    first_denoiser_thinning: float = 0.5
+    first_denoiser_thinning: float = 0.0
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
     first_denoiser_spatial_dedup_radius: float = 100.0
@@ -357,7 +359,7 @@ class ThresholdingConfig:
     trough_priority: float | None = 2.0
 
 
-WhiteningStrategy = Literal["none", "prewhiten", "postwhiten"]
+WhiteningStrategy = Literal["none", "prewhiten", "prewhiten_postapply", "postwhiten"]
 WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 
 
@@ -508,6 +510,7 @@ class MatchingConfig:
     drift_interp_params: InterpolationParams = default_template_interpolation_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whitening: WhiteningConfig = WhiteningConfig()
+    whiten_features: bool = True
     margin_factor: int = 2
     max_fp_per_input_spike: float = 2.5
 
@@ -648,6 +651,7 @@ class ClusteringConfig:
 
 
 MixtureStep = Literal["split", "merge", "demolish"]
+ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 
 
 @cfg_dataclass
@@ -682,22 +686,22 @@ class RefinementConfig:
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
-    distance_metric: Literal["cosine", "normeuc"] = "normeuc"
+    distance_metric: ComponentDistanceMetric = "scaled_normeuc"
     n_candidates: int = 3
     merge_group_size: int = 5
     n_search: int | None = None
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512
-    split_friend_distance: float = 0.5
-    split_distance_threshold: float = 1.0
-    merge_distance_threshold: float = 1.0
+    split_friend_distance: float = 0.8
+    split_distance_threshold: float = 1.5
+    merge_distance_threshold: float = 1.5
     criterion_em_iters: int = 3
     hold_out_criterion: bool = True
     n_em_iters: int = 250
     em_converged_atol: float = 5e-3
     n_total_iters: int = 1
-    mixture_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
+    mixture_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
     kmeans_tries: int = 5
@@ -712,13 +716,9 @@ class RefinementConfig:
     demolition_min_resp_ratio: float = 1.1
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
-
-    # TODO... reintroduce this if wanted. or remove
-    # TODO the way to make it a real plugin would be to have a sidecar cfg thing here that took
-    # the actual method's params and was weakly typed... so gmm params would move to their own config
-    split_cfg: SplitConfig | None = None
-    merge_cfg: TemplateMergeConfig | None = None
-    merge_template_cfg: TemplateConfig | None = None
+    whiten_split: bool = True
+    scale_dist_args: tuple[float, float, float] = (0.01, 2.0 / 3.0, 4.0 / 3.0)
+    whiten_dist: bool = True
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -815,6 +815,7 @@ class DARTsortInternalConfig:
     detect_only: bool = False
     dredge_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
+    preprocessing: PreprocessingStrategy = "none"
     final_refinement: bool = True
     matching_iterations: int = 1
     recluster_after_first_matching: bool = True
@@ -995,7 +996,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dist_thresh = cfg.gmm_kl_threshold
     elif cfg.gmm_metric == "euclidean":
         dist_thresh = cfg.gmm_euclidean_threshold
-    elif cfg.gmm_metric == "normeuc":
+    elif cfg.gmm_metric.endswith("normeuc"):
         dist_thresh = cfg.gmm_normeuc_threshold
     else:
         assert False
@@ -1021,6 +1022,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         workers=cfg.clustering_workers,
         interp_params=interp_params,
     )
+    sb = 1.0 + cfg.amplitude_scaling_boundary
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
@@ -1054,6 +1056,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         robust_df=cfg.robust_df,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,
+        scale_dist_args=(cfg.amplitude_scaling_stddev, 1.0 / sb, sb / 1.0),
     )
     if cfg.initial_rank is None:
         irank = refinement_cfg.signal_rank
@@ -1098,6 +1101,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         min_template_snr=cfg.min_template_snr,
         min_template_count=cfg.min_template_count,
         whitening=whiten_cfg,
+        whiten_features=cfg.whiten_features,
         template_realignment_cfg=TemplateRealignmentConfig(
             trough_factor=cfg.trough_factor,
             realign_strategy=cfg.realign_strategy,
@@ -1135,6 +1139,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_features_cfg=clustering_features_cfg,
         motion_estimation_cfg=motion_estimation_cfg,
         computation_cfg=computation_cfg,
+        preprocessing=cfg.preprocessing,
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,

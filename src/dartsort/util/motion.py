@@ -1,6 +1,6 @@
 import pickle
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 import numpy as np
 from dredge.motion_util import MotionEstimate
@@ -9,7 +9,8 @@ from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
 from torch import Tensor, is_tensor
 
-from .data_util import DARTsortSorting
+if TYPE_CHECKING:
+    from .data_util import DARTsortSorting
 from .drift_util import get_pitch, registered_geometry
 from .internal_config import (
     ComputationConfig,
@@ -35,7 +36,7 @@ def get_motion_info(
     output_directory: Path | str | None = None,
     filename: str = "motion.pkl",
     recording: BaseRecording,
-    sorting: DARTsortSorting,
+    sorting: "DARTsortSorting",
     si_motion: Motion | None = None,
     dredge_motion_est: MotionEstimate | None = None,
     motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
@@ -158,6 +159,10 @@ class MotionInfo:
             pitch=pitch,
         )
 
+    @classmethod
+    def static(cls, geom: np.ndarray):
+        return cls.from_motion_est(geom=geom, dredge_motion_est=None, si_motion=None)
+
     @property
     def is_nonrigid(self) -> bool:
         if not self.drifting:
@@ -207,15 +212,16 @@ class MotionInfo:
         self, times_s: np.ndarray, depths_um: np.ndarray, grid: bool = False
     ) -> np.ndarray:
         if self.dredge_motion_est is not None:
-            return self.dredge_motion_est.disp_at_s(
+            d = self.dredge_motion_est.disp_at_s(
                 t_s=times_s, depth_um=depths_um, grid=grid
             )
         elif self.si_motion is not None:
-            return self.si_motion.get_displacement_at_time_and_depth(
+            d = self.si_motion.get_displacement_at_time_and_depth(
                 times_s=times_s, locations_um=depths_um, grid=grid
             )
         else:
             assert False
+        return d.astype(depths_um.dtype)
 
     def correct_s(self, times_s: np.ndarray, depths_um: np.ndarray) -> np.ndarray:
         if not self.drifting:
@@ -227,7 +233,8 @@ class MotionInfo:
         self, times_s: float | np.ndarray, reg_depths_um: np.ndarray
     ) -> np.ndarray:
         """Attempt to invert the motion estimate to un-register reg_depths_um."""
-        assert np.isscalar(times_s)
+        if self.is_nonrigid:
+            assert np.isscalar(times_s)
 
         if not self.drifting:
             return np.asarray(reg_depths_um, copy=True)
@@ -244,12 +251,13 @@ class MotionInfo:
         assert np.all(np.diff(reg_zc) > 0), "Motion invertibility issue."
         reg_depths_um_clipped = reg_depths_um.clip(reg_zc.min(), reg_zc.max())
         disps = np.interp(reg_depths_um_clipped, reg_zc, zc)
+        disps = disps.astype(reg_depths_um.dtype)
         return reg_depths_um + disps
 
     def pitch_shifts(
         self,
         *,
-        sorting: DARTsortSorting | None = None,
+        sorting: "DARTsortSorting | None" = None,
         times_s: np.ndarray | None = None,
         depths_um: np.ndarray | None = None,
         reg_depths_um: np.ndarray | None = None,
@@ -263,7 +271,6 @@ class MotionInfo:
         order to coarsely align a waveform to its registered position.
         """
         if depths_um is None:
-            assert depths_um is None
             assert sorting is not None
             times_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
             if motion_depth_mode == "localization":
@@ -289,7 +296,7 @@ class MotionInfo:
             depths_um, reg_depths_um = np.broadcast_arrays(depths_um, reg_depths_um)
             probe_disp = reg_depths_um - depths_um
         assert np.isfinite(probe_disp).all()
-        probe_disp = probe_disp.astype(np.float32)
+        probe_disp = probe_disp.astype(depths_um.dtype)
 
         if shift_mode == "floor":
             n_pitches_shift = (probe_disp / self.pitch).astype(int)

@@ -53,6 +53,7 @@ from .util.main_util import (
 from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
+from .util.preprocess_util import preprocess
 from .util.py_util import dartcopytree, resolve_path
 
 logger = get_logger(__name__)
@@ -113,6 +114,9 @@ def dartsort(
     # in benchmarking, it can be useful to resume from initial detection
     # and/or clustering results stored in elsewhere to avoid rerunning
     ds_handle_link_from(cfg, output_dir)
+
+    # preprocess
+    recording = preprocess(recording, cfg.preprocessing)
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
@@ -212,6 +216,17 @@ def _dartsort_impl(
             geom=recording.get_channel_locations(),
             dredge_motion_est=dredge_motion_est,
             si_motion=si_motion,
+        )
+    if motion is None and next_step > 0:
+        assert sorting is not None
+        logger.dartsortdebug("-- Estimate motion")
+        motion = get_motion_info(
+            output_directory=store_dir,
+            recording=recording,
+            sorting=sorting,
+            motion_cfg=cfg.motion_estimation_cfg,
+            computation_cfg=cfg.computation_cfg,
+            overwrite=overwrite,
         )
     ret["motion"] = motion
 

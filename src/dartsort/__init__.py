@@ -58,6 +58,7 @@ from .util.data_util import (
     load_h5,
     load_stored_tsvd,
 )
+from .util.preprocess_util import preprocess
 from .util.drift_util import registered_geometry
 from .util.internal_config import *
 from .util.job_util import ensure_computation_config, set_global_computation_config

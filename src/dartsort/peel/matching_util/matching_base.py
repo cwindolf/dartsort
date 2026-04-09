@@ -139,6 +139,7 @@ class ChunkTemplateData:
     upsampling: bool
     scaling: bool
     needs_fine_pass: bool
+    needs_residual: bool
     up_factor: int
     prewhiten: bool
     inv_lambda: Tensor
@@ -176,7 +177,7 @@ class ChunkTemplateData:
         self,
         *,
         peaks: "MatchingPeaks",
-        residual: Tensor,
+        residual: Tensor | None,
         conv: Tensor,
         padding: int = 0,
     ) -> "MatchingPeaks":

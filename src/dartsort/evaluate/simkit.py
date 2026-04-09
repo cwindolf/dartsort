@@ -239,18 +239,16 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         self._serializability["json"] = False
         self._serializability["pickle"] = False
 
-        assert len(recording._recording_segments) == 1
+        assert len(recording.segments) == 1
         self.add_recording_segment(
             InjectSpikesPreprocessorSegment(
-                recording._recording_segments[0],
+                recording.segments[0],
                 n_channels=self.get_num_channels(),
                 geom=recording.get_channel_locations(),
                 **simulation_kwargs,
             )
         )
-        self.segment = cast(
-            InjectSpikesPreprocessorSegment, self._recording_segments[0]
-        )
+        self.segment = cast(InjectSpikesPreprocessorSegment, self.segments[0])
 
     def basic_sorting(self) -> DARTsortSorting:
         return self.segment.basic_sorting()
