@@ -195,15 +195,7 @@ def interp_precompute(
     design_inds = design_inds.to(source_pos.device)
     design_zeros = source_pos.new_zeros((design_vars, design_vars))
 
-    source_kernels = get_kernel(
-        source_pos,
-        kernel_name=params.kernel.removesuffix("normalized"),
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        normalized=params.method.endswith("normalized"),
-        smoothing_lambda=params.smoothing_lambda,
-        polyharmonic_order=params.polyharmonic_order,
-    )
+    source_kernels = get_kernel(source_pos=source_pos, params=params)
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
         kernel = source_kernels[j][present][:, present]
@@ -323,13 +315,7 @@ def kernel_interpolate(
             features=features,
             source_pos=source_pos,
             target_pos=target_pos,
-            method=params.actual_extrap_method,
-            kernel_name=params.actual_extrap_kernel,
-            sigma=params.sigma,
-            rq_alpha=params.rq_alpha,
-            kriging_poly_degree=params.kriging_poly_degree,
-            smoothing_lambda=params.smoothing_lambda,
-            polyharmonic_order=params.polyharmonic_order,
+            params=params,
             precomputed_data=precomputed_data,
             neighborhoods=neighborhoods,
             solver_map=solver_map,
@@ -345,13 +331,7 @@ def kernel_interpolate(
         features=features,
         source_pos=source_pos,
         target_pos=target_pos,
-        method=params.method,
-        kernel_name=params.kernel,
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        kriging_poly_degree=params.kriging_poly_degree,
-        smoothing_lambda=params.smoothing_lambda,
-        polyharmonic_order=params.polyharmonic_order,
+        params=params,
         precomputed_data=precomputed_data,
         solver_map=solver_map,
         neighborhoods=neighborhoods,
@@ -375,13 +355,7 @@ def _kernel_interpolate(
     features: torch.Tensor,
     source_pos: torch.Tensor,
     target_pos: torch.Tensor,
-    method: InterpMethod,
-    kernel_name: InterpKernel,
-    sigma: float,
-    rq_alpha: float,
-    kriging_poly_degree: int,
-    smoothing_lambda: float,
-    polyharmonic_order: int | float,
+    params: InterpolationParams,
     precomputed_data,
     neighborhoods,
     solver_map=None,
@@ -395,18 +369,18 @@ def _kernel_interpolate(
     else:
         assert source_pos.ndim == target_pos.ndim == 3
     out_shape = (*features.shape[:2], target_pos.shape[1])
-    is_nearest = method == "nearest" or kernel_name == "nearest"
-    is_clampna = method == "clampna" or kernel_name == "clampna"
+    is_nearest = params.method == "nearest" or params.kernel == "nearest"
+    is_clampna = params.method == "clampna" or params.kernel == "clampna"
     do_nearest = is_nearest or is_clampna
     d = None
     if out is not None:
         assert out.shape == out_shape
-    if method == "nan" or kernel_name == "nan":
+    if params.method == "nan" or params.kernel == "nan":
         if out is None:
             return features.new_full(out_shape, torch.nan)
         else:
             return out.fill_(torch.nan)
-    elif method == "zero" or kernel_name == "zero":
+    elif params.method == "zero" or params.kernel == "zero":
         if out is None:
             return features.new_zeros(out_shape)
         else:
@@ -419,24 +393,15 @@ def _kernel_interpolate(
         if is_nearest:
             return out
         elif is_clampna:
-            out.masked_fill_(dmin > (2 * sigma) ** 2, torch.nan)
+            out.masked_fill_(dmin > (2 * params.sigma) ** 2, torch.nan)
             return out
         else:
             assert False
 
-    kernel = get_kernel(
-        source_pos=source_pos,
-        target_pos=target_pos,
-        kernel_name=kernel_name.removesuffix("normalized"),
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        normalized=method.endswith("normalized"),
-        smoothing_lambda=smoothing_lambda,
-        polyharmonic_order=polyharmonic_order,
-    )
+    kernel = get_kernel(source_pos=source_pos, target_pos=target_pos, params=params)
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
-    if method == "kriging":
+    if params.method == "kriging":
         assert precomputed_data is not None
         precomputed_data = precomputed_data.to(features)
         features = kriging_solve(
@@ -446,8 +411,8 @@ def _kernel_interpolate(
             solvers=precomputed_data,
             solver_map=solver_map,
             neighborhoods=neighborhoods,
-            sigma=sigma,
-            poly_degree=kriging_poly_degree,
+            sigma=params.sigma,
+            poly_degree=params.kriging_poly_degree,
         )
     else:
         features = torch.bmm(features, kernel, out=out)
@@ -462,17 +427,15 @@ def _kernel_interpolate(
 
 
 def get_kernel(
+    *,
     source_pos,
     target_pos=None,
-    kernel_name="rbf",
-    sigma=20.0,
-    rq_alpha=1.0,
-    normalized=False,
-    smoothing_lambda=0.0,
-    polyharmonic_order: int | float = 2,
+    params: InterpolationParams,
 ):
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
+    kernel_name = params.kernel.removesuffix("normalized")
+    normalized = params.method.endswith("normalized")
 
     if kernel_name == "zero":
         tc = source_pos.shape[1] if target_pos is None else target_pos.shape[1]
@@ -482,29 +445,34 @@ def get_kernel(
     elif kernel_name == "idw":
         kernel = idw_kernel(source_pos, target_pos)
     elif kernel_name == "rbf":
-        kernel = log_rbf(source_pos=source_pos, target_pos=target_pos, sigma=sigma)
+        kernel = log_rbf(
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
+        )
         if normalized:
             kernel = F.softmax(kernel, dim=1)
         else:
             kernel = kernel.exp_()
     elif kernel_name == "multiquadric":
         kernel = multiquadric_kernel(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
         )
     elif kernel_name == "rq":
         kernel = rq_kernel(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma, alpha=rq_alpha
+            source_pos=source_pos,
+            target_pos=target_pos,
+            sigma=params.sigma,
+            alpha=params.rq_alpha,
         )
     elif kernel_name == "thinplate":
         kernel = thin_plate_greens(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
         )
     elif kernel_name == "polyharmonic":
         kernel = polyharmonic_rbf(
             source_pos=source_pos,
             target_pos=target_pos,
-            sigma=sigma,
-            order=polyharmonic_order,
+            sigma=params.sigma,
+            order=params.polyharmonic_order,
         )
     else:
         assert False
@@ -513,8 +481,8 @@ def get_kernel(
     if normalized and kernel_name not in ("rbf", "nearest"):
         kernel = kernel.div_(kernel.sum(dim=1, keepdim=True))
 
-    if smoothing_lambda:
-        kernel.diagonal(dim1=-2, dim2=-1).add_(smoothing_lambda)
+    if params.smoothing_lambda:
+        kernel.diagonal(dim1=-2, dim2=-1).add_(params.smoothing_lambda)
 
     return kernel
 
@@ -702,14 +670,7 @@ def bake_interpolation_1d(
     params = params.normalize()
 
     k = get_kernel(
-        source_pos=xx[None, :, None],
-        target_pos=xx_[None, :, None],
-        kernel_name=params.kernel,
-        normalized=params.method.endswith("normalized"),
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        smoothing_lambda=params.smoothing_lambda,
-        polyharmonic_order=params.polyharmonic_order,
+        source_pos=xx[None, :, None], target_pos=xx_[None, :, None], params=params
     )
     nsrc = xx.shape[0]
     assert k.shape == (1, nsrc, xx_.shape[0])
