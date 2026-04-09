@@ -121,11 +121,6 @@ def test_refinement(simulations, sim_name, refkw):
         motion=motion,
         clustering_features_cfg=None,
     )
-    if refkw["refinement_strategy"]:
-        refkw["split_cfg"] = SplitConfig()
-        refkw["merge_cfg"] = TemplateMergeConfig()
-        refkw["merge_template_cfg"] = TemplateConfig(denoising_method="none")
-
     clusterer = get_clusterer(
         clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]
     )

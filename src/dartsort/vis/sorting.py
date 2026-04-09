@@ -75,9 +75,11 @@ class SpikeCountHistogram(OverviewPlot):
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis):
         assert sorting_analysis.coarse_template_data is not None
+        assert sorting_analysis.sorting.labels is not None
         axis = panel.subplots()
+        counts = np.unique(sorting_analysis.sorting.labels, return_counts=True)[1],
         axis.hist(
-            np.unique(sorting_analysis.sorting.labels, return_counts=True)[1],
+            counts,
             bins=self.n_bins,
             log=self.log,
             histtype="stepfilled",

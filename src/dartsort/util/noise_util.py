@@ -1212,10 +1212,18 @@ def interpolate_residual_snippets(
         else:
             dbin = np.diff(motion.time_bins_s).mean()
         i0 = i1 = 0
-        for tbc in motion.time_bins_s:
-            left = tbc - 0.5 * dbin
+        for j, tbc in enumerate(motion.time_bins_s):
+            # math done this way to avoid float issues; asserts check it.
+            if j:
+                left = 0.5 * (motion.time_bins_s[j - 1] + tbc)
+            else:
+                left = tbc - dbin
+            if j < motion.time_bins_s.shape[0] - 1:
+                right = 0.5 * (motion.time_bins_s[j + 1] + tbc)
+            else:
+                right = tbc + dbin
             i0 = i0 + np.searchsorted(times_s_np[i0:], left)
-            i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
+            i1 = i0 + np.searchsorted(times_s_np[i0:], right)
             if len(inds):
                 assert i0 == inds[-1][1]
             for i00 in range(i0, i1, batch_size):

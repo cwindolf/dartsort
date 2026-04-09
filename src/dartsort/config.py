@@ -143,7 +143,7 @@ class DARTsortUserConfig:
 
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
-    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
+    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 1.0 / 3.0
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
@@ -306,6 +306,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
+    gmm_scaled_normeuc_threshold: float = 1.5
     robust_strategy: Literal["none", "fixed"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0

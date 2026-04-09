@@ -536,6 +536,9 @@ def convolve_lowrank(
     """Depthwise convolution of traces with templates"""
     n_templates, spike_length_samples, rank = temporal_components.shape
     out_len = traces.shape[1] + 2 * padding - spike_length_samples + 1
+    print(f"{out.shape=}")
+    print(f"{n_templates=}")
+    print(f"{out_len=}")
     if out is None:
         out = torch.empty(
             (n_templates, out_len), dtype=traces.dtype, device=traces.device

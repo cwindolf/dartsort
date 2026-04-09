@@ -333,10 +333,6 @@ class TemplateReduction(GrabAndFeaturize):
         if template_cfg.weighted:
             weights = get_top_assignment_weights(sorting)
             fixed_properties["template_weights"] = weights
-        if (c := getattr(sorting, "alignment_channels", None)) is not None:
-            fixed_properties["alignment_channels"] = c
-        else:
-            fixed_properties["alignment_channels"] = sorting.channels
         if (c := getattr(sorting, "alignment_signs", None)) is not None:
             fixed_properties["alignment_signs"] = c
         else:

@@ -406,13 +406,7 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         self.trough = trough
 
     def forward(
-        self,
-        waveforms,
-        *,
-        alignment_channels,
-        alignment_signs,
-        time_shifts=None,
-        **unused,
+        self, waveforms, *, channels, alignment_signs, time_shifts=None, **unused
     ):
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
@@ -421,8 +415,8 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         assert time_shifts is None
 
         # align on main channel
-        w = waveforms.take_along_dim(indices=alignment_channels[:, None, None], dim=2)
-        time_shifts = torch.zeros_like(alignment_channels)
+        w = waveforms.take_along_dim(indices=channels[:, None, None], dim=2)
+        time_shifts = torch.zeros_like(channels)
         for _ in range(self.alignment_iterations):
             x = self._temporal_slice(w, time_shifts=time_shifts)
             r = self.force_project(x)[:, :, 0]

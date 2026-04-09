@@ -24,6 +24,7 @@ default_pretrained_path = str(default_pretrained_path)
 
 PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
 
+
 @cfg_dataclass
 class WaveformConfig:
     """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
@@ -415,7 +416,7 @@ class TemplateConfig:
     template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
     svd_alignment_iterations: int = 0
-    svd_alignment_ms: float = 0.0
+    svd_alignment_ms: float = 0.75
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -475,7 +476,7 @@ class TemplateMergeConfig:
     min_spatial_cosine: float = 0.75
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.01**2
-    amplitude_scaling_boundary: float = 0.333
+    amplitude_scaling_boundary: float = 1.0 / 3.0
     svd_compression_rank: int = 20
     max_shift_ms: float = 1.6666
 
@@ -496,7 +497,7 @@ class MatchingConfig:
     template_min_channel_amplitude: float = 1.0
     refractory_radius_frames: int = 0
     amplitude_scaling_variance: float = 0.01**2
-    amplitude_scaling_boundary: float = 0.333
+    amplitude_scaling_boundary: float = 1.0 / 3.0
     max_iter: int = 100
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
@@ -717,7 +718,7 @@ class RefinementConfig:
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
     whiten_split: bool = True
-    scale_dist_args: tuple[float, float, float] = (0.01, 2.0 / 3.0, 4.0 / 3.0)
+    scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
 
     # forward_backward parameters
@@ -996,8 +997,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         dist_thresh = cfg.gmm_kl_threshold
     elif cfg.gmm_metric == "euclidean":
         dist_thresh = cfg.gmm_euclidean_threshold
-    elif cfg.gmm_metric.endswith("normeuc"):
+    elif cfg.gmm_metric == "normeuc":
         dist_thresh = cfg.gmm_normeuc_threshold
+    elif cfg.gmm_metric == "scaled_normeuc":
+        dist_thresh = cfg.gmm_scaled_normeuc_threshold
     else:
         assert False
     interp_params = InterpolationParams(
