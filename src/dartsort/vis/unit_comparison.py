@@ -345,6 +345,9 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 waveforms.append(w[kind])
             colors.append(np.broadcast_to([color], waveforms[-1].shape[:1]))
 
+        if not len(waveforms):
+            return
+
         if self.order == "tprandom" and not self.average and len(waveforms) > 1:
             wlast = np.concatenate(waveforms[1:])
             clast = np.concatenate(colors[1:])
