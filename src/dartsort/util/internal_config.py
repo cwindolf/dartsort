@@ -198,6 +198,7 @@ _kmethods = {"zero", "nearest", "nan", "clampna"}
 class InterpolationParams:
     method: InterpMethod = "kriging"
     kernel: InterpKernel = "thinplate"
+    temporal: bool = False
     extrap_method: InterpMethod | None = None
     extrap_kernel: InterpKernel | None = None
     kriging_poly_degree: int = 1
@@ -206,6 +207,7 @@ class InterpolationParams:
     smoothing_lambda: float = 0.0
     neighborhood_radius: float = 200.0
     polyharmonic_order: int | float = 2
+    time_scale: float = 0.5
 
     @property
     def actual_extrap_method(self):
@@ -242,6 +244,7 @@ class InterpolationParams:
         return self.__class__(
             method=method,
             kernel=kernel,  # type: ignore
+            temporal=self.temporal,
             extrap_method=extrap_method,
             extrap_kernel=extrap_kernel,  # type: ignore
             kriging_poly_degree=self.kriging_poly_degree,
@@ -250,6 +253,7 @@ class InterpolationParams:
             smoothing_lambda=self.smoothing_lambda,
             neighborhood_radius=self.neighborhood_radius,
             polyharmonic_order=self.polyharmonic_order,
+            time_scale=self.time_scale,
         )
 
 

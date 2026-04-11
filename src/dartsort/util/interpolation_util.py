@@ -7,12 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .data_util import yield_masked_chunks
-from .internal_config import (
-    InterpKernel,
-    InterpMethod,
-    InterpolationParams,
-    default_interpolation_params,
-)
+from .internal_config import InterpolationParams, default_interpolation_params
 from .motion import MotionInfo
 from .torch_util import BModule
 from .waveform_util import make_channel_index
@@ -126,6 +121,7 @@ def interpolate_by_chunk(
         channel_index=channel_index,
         params=params,
         shift_dim=shift_dim,
+        nt=None,  # TODO
     )
     for sli, chunk_features in yield_masked_chunks(
         mask, dataset, show_progress=show_progress, desc_prefix="Interpolating"
@@ -146,11 +142,13 @@ def interpolate_by_chunk(
 
 
 def interp_precompute(
+    *,
     source_geom=None,
     channel_index=None,
     source_pos=None,
     params: InterpolationParams = default_interpolation_params,
     source_geom_is_padded=True,
+    nt: int | None,
 ):
     params = params.normalize()
     if params.method in ("nearest", "kernel", "normalized", "zero", "nan"):
@@ -176,7 +174,7 @@ def interp_precompute(
 
     ns = len(source_pos)
     neighb_size = source_pos.shape[1]
-    dim = source_pos.shape[2]
+    dim = source_pos.shape[2] + params.temporal
     if params.kriging_poly_degree < 0:
         design_vars = 0
     elif params.kriging_poly_degree == 0:
@@ -188,20 +186,40 @@ def interp_precompute(
     else:
         assert False
 
-    solvers = source_pos.new_zeros(
-        (ns, neighb_size + design_vars, neighb_size + design_vars)
-    )
-    design_inds = torch.arange(neighb_size, neighb_size + design_vars)
+    nt = nt if params.temporal else 1
+    assert nt is not None
+
+    dsolv = nt * neighb_size + design_vars
+    solvers = source_pos.new_zeros((ns, dsolv, dsolv))
+    design_inds = torch.arange(neighb_size, dsolv)
     design_inds = design_inds.to(source_pos.device)
     design_zeros = source_pos.new_zeros((design_vars, design_vars))
+    source_kernels = get_kernel(source_pos=source_pos, params=params, nt=nt)
+    if params.temporal:
+        assert nt is not None
+        source_pos, _ = attach_time_coord(
+            source_pos=source_pos, target_pos=None, params=params, nt=nt
+        )
 
-    source_kernels = get_kernel(source_pos=source_pos, params=params)
     for j in range(ns):
+        print(j)
         (present,) = valid[j].nonzero(as_tuple=True)
-        kernel = source_kernels[j][present][:, present]
+        npres = present.shape[0]
+        dsolvj = npres + design_vars
+        if params.temporal:
+            kernel = source_kernels[j][:, present][:, :, :, present]
+            assert kernel.shape == (nt, npres, nt, npres)
+            kernel = kernel.view(nt * npres, nt * npres)
+        else:
+            kernel = source_kernels[j][present][:, present]
 
         if design_vars:
-            pos = source_pos[j][present] / params.sigma
+            if params.temporal:
+                pos = source_pos[j].view(nt, neighb_size, dim)
+                pos = pos[:, present] / params.sigma
+                pos = pos.view(nt * npres, dim)
+            else:
+                pos = source_pos[j][present] / params.sigma
             const = pos.new_ones((pos.shape[0], 1))
             ix = torch.concatenate((present, design_inds), dim=0)
             if params.kriging_poly_degree == 0:
@@ -225,6 +243,15 @@ def interp_precompute(
                 assert False
             assert design.shape[1] == design_vars
 
+            # if params.temporal:
+            #     design = design[None, :, None, :]
+            #     design = design.broadcast_to(nt, npres, nt, design_vars)
+            #     design_t = design.permute(0, 3, 2, 1)
+            #     top = torch.cat([kernel, design], dim=3)
+            #     bot = torch.cat([design_t, design_zeros], dim=3)
+            #     to_solve = torch.cat([top, bot], dim=1)
+            #     to_solve = to_solve.view(nt * dsolvj, nt * dsolvj)
+            # else:
             top = torch.cat([kernel, design], dim=1)
             bot = torch.cat([design.T, design_zeros], dim=1)
             to_solve = torch.cat([top, bot], dim=0)
@@ -234,13 +261,20 @@ def interp_precompute(
 
         # double+pinv is helpful here. numerics can get weird with large domains.
         solver = torch.linalg.pinv(to_solve.double(), hermitian=True)
-        solvers[j, ix[:, None], ix[None, :]] = solver.to(solvers.dtype)
+        solver = solver.to(solvers.dtype)  # .view(nt, dsolvj, nt, dsolvj)
+        solvers[j, ix[:, None], ix[None, :]] = solver  # .permute(1, 3, 0, 2)
+
+    solvers = solvers.view(ns, dsolv, dsolv)
 
     return solvers
 
 
 def full_probe_precompute(
-    source_geom: torch.Tensor, channel_index: torch.Tensor, params: InterpolationParams
+    *,
+    source_geom: torch.Tensor,
+    channel_index: torch.Tensor,
+    params: InterpolationParams,
+    nt: int | None,
 ):
     """When kriging on the full probe, numerical problems arise due to solving huge systems
 
@@ -259,6 +293,7 @@ def full_probe_precompute(
         channel_index=channel_index,
         params=params,
         source_geom_is_padded=True,
+        nt=nt,
     )
 
 
@@ -303,6 +338,7 @@ def kernel_interpolate(
     features = torch.asarray(features)
     source_pos = torch.asarray(source_pos)
     target_pos = torch.asarray(target_pos)
+    nt = features.shape[1]  # TODO
 
     params = params.normalize()
     extrap_diff = params.extrap_diff()
@@ -325,7 +361,9 @@ def kernel_interpolate(
 
     if precomputed_data is None:
         # if at all possible, don't hit this branch. it's just here for vis.
-        precomputed_data = interp_precompute(source_pos=source_pos, params=params)
+        precomputed_data = interp_precompute(
+            source_pos=source_pos, params=params, nt=nt
+        )
 
     features = _kernel_interpolate(
         features=features,
@@ -368,13 +406,17 @@ def _kernel_interpolate(
         target_pos = target_pos[None]
     else:
         assert source_pos.ndim == target_pos.ndim == 3
-    out_shape = (*features.shape[:2], target_pos.shape[1])
+
+    n, f, cin = features.shape
+    cout = target_pos.shape[1]
+    out_shape = n, f, cout
+    if out is not None:
+        assert out.shape == out_shape
+
     is_nearest = params.method == "nearest" or params.kernel == "nearest"
     is_clampna = params.method == "clampna" or params.kernel == "clampna"
     do_nearest = is_nearest or is_clampna
-    d = None
-    if out is not None:
-        assert out.shape == out_shape
+
     if params.method == "nan" or params.kernel == "nan":
         if out is None:
             return features.new_full(out_shape, torch.nan)
@@ -398,7 +440,9 @@ def _kernel_interpolate(
         else:
             assert False
 
-    kernel = get_kernel(source_pos=source_pos, target_pos=target_pos, params=params)
+    kernel = get_kernel(
+        source_pos=source_pos, target_pos=target_pos, params=params, nt=f
+    )
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
     if params.method == "kriging":
@@ -411,9 +455,13 @@ def _kernel_interpolate(
             solvers=precomputed_data,
             solver_map=solver_map,
             neighborhoods=neighborhoods,
-            sigma=params.sigma,
-            poly_degree=params.kriging_poly_degree,
+            params=params,
         )
+    elif params.temporal:
+        features = features.view(n, 1, f * cin)
+        out = None if out is None else out.view(n, 1, f * cout)
+        features = torch.bmm(features, kernel, out=out)
+        features = features.view(n, f, cout)
     else:
         features = torch.bmm(features, kernel, out=out)
 
@@ -426,21 +474,58 @@ def _kernel_interpolate(
     return features
 
 
+def attach_time_coord(
+    *, source_pos, target_pos=None, params: InterpolationParams, nt: int
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    dt = params.time_scale * params.sigma
+    t1 = dt * nt / 2
+    tt = torch.arange(-t1, t1, dt, dtype=source_pos.dtype, device=source_pos.device)
+    assert tt.shape == (nt,)
+    n, cin, dim = source_pos.shape
+
+    # manual broadcast
+    stt = tt[None, :, None, None].broadcast_to(n, nt, cin, 1)
+    spos = source_pos[:, None, :, :].broadcast_to(*stt.shape[:3], dim)
+    # time-major!
+    source_pos = torch.cat((stt, spos), dim=3)
+    source_pos = source_pos.view(n, nt * cin, dim + 1)
+
+    if target_pos is not None:
+        n_, cout = target_pos.shape[:2]
+        assert n == n_
+        ttt = tt[None, :, None, None].broadcast_to(n, nt, cout, 1)
+        tpos = target_pos[:, None, :, :].broadcast_to(*ttt.shape[:3], dim)
+        target_pos = torch.cat((ttt, tpos), dim=3)
+        target_pos = target_pos.view(n, nt * cout, dim + 1)
+
+    return source_pos, target_pos
+
+
 def get_kernel(
-    *,
-    source_pos,
-    target_pos=None,
-    params: InterpolationParams,
+    *, source_pos, target_pos=None, params: InterpolationParams, nt: int | None
 ):
     assert source_pos.ndim == 3
-    assert source_pos.shape[2] in (1, 2, 3)
+    n, cin, dim = source_pos.shape
+    assert dim in (1, 2, 3)
     kernel_name = params.kernel.removesuffix("normalized")
     normalized = params.method.endswith("normalized")
+    if target_pos is None:
+        cout = cin
+    else:
+        n_, cout = target_pos.shape[:2]
+        assert n == n_
+
+    if params.temporal:
+        assert nt is not None
+        source_pos, target_pos = attach_time_coord(
+            source_pos=source_pos, target_pos=target_pos, params=params, nt=nt
+        )
 
     if kernel_name == "zero":
-        tc = source_pos.shape[1] if target_pos is None else target_pos.shape[1]
-        return source_pos.new_zeros(*source_pos.shape[:2], tc)
+        assert not params.temporal
+        return source_pos.new_zeros(n, cin, cout)
     elif kernel_name == "nearest":
+        assert not params.temporal
         kernel = nearest_kernel(source_pos, target_pos)
     elif kernel_name == "idw":
         kernel = idw_kernel(source_pos, target_pos)
@@ -484,27 +569,49 @@ def get_kernel(
     if params.smoothing_lambda:
         kernel.diagonal(dim1=-2, dim2=-1).add_(params.smoothing_lambda)
 
+    if params.temporal:
+        assert nt is not None
+        kernel = kernel.view(n, nt, cin, nt, cout)
+
     return kernel
 
 
 def kriging_solve(
+    *,
     target_pos: torch.Tensor,
     kernels: torch.Tensor,
     features: torch.Tensor,
     solvers: torch.Tensor,
     neighborhoods: torch.Tensor | None,
     solver_map: torch.Tensor | None = None,
-    sigma=1.0,
-    poly_degree=-1,
+    params: InterpolationParams,
 ) -> torch.Tensor:
-    if neighborhoods is None:
-        assert solvers.ndim == 3
+    if neighborhoods is None and params.temporal:
+        assert kernels.ndim == 5
+        n = solvers.shape[0]
+        assert n == kernels.shape[0] == features.shape[0]
         kernels, y, _ = kriging_poly_expand(
-            target_pos, features, kernels, poly_degree, sigma
+            target_pos=target_pos, features=features, kernels=kernels, params=params
         )
         assert y is not None
-        return y.bmm(solvers).bmm(kernels)
+        print(f"{kernels.shape=}")
+        print(f"{solvers.shape=}")
+        print(f"{features.shape=}")
+        print(f"{y.shape=}")
+        k = solvers.bmm(kernels)
+        y = y.view(n, 1, k.shape[1])
+        y = y.bmm(k)
+        print(f"{features.shape=} {y.shape=} {kernels.shape=}")
+        return y.view(n, features.shape[1], -1)
+    elif neighborhoods is None:
+        assert solvers.ndim == 3
+        kernels, y, _ = kriging_poly_expand(
+            target_pos=target_pos, features=features, kernels=kernels, params=params
+        )
+        assert y is not None
+        return y.bmm(solvers.bmm(kernels))
     else:
+        assert not params.temporal
         return kriging_neighborhood_solve(
             solvers=solvers,
             features=features,
@@ -512,20 +619,19 @@ def kriging_solve(
             target_pos=target_pos,
             solver_map=solver_map,
             neighborhoods=neighborhoods,
-            poly_degree=poly_degree,
-            sigma=sigma,
+            params=params,
         )
 
 
 def kriging_neighborhood_solve(
+    *,
     solvers: torch.Tensor,
     features: torch.Tensor,
     kernels: torch.Tensor,
     target_pos: torch.Tensor,
     solver_map: torch.Tensor | None,
     neighborhoods: torch.Tensor,
-    poly_degree: int,
-    sigma: float,
+    params: InterpolationParams,
 ) -> torch.Tensor:
     """This is like the "neighborhoods" option to numpy's RBFInterpolator
 
@@ -563,8 +669,7 @@ def kriging_neighborhood_solve(
         target_pos=target_pos[:, None],
         features=None,
         kernels=neighb_kernels[:, :, None],
-        poly_degree=poly_degree,
-        sigma=sigma,
+        params=params,
     )
     assert neighb_kernels.shape == (n_neighborhoods, nc_neighb + extra_dim, 1), 5
     neighb_solved = solvers.bmm(neighb_kernels)
@@ -601,11 +706,11 @@ def _kneighb_loop(
 
 
 def kriging_poly_expand(
+    *,
     target_pos: torch.Tensor,
     features: torch.Tensor | None,
     kernels: torch.Tensor,
-    poly_degree: int,
-    sigma: float,
+    params: InterpolationParams,
 ) -> tuple[torch.Tensor, torch.Tensor | None, int]:
     """Add polynomial basis terms to features and kernels
 
@@ -619,44 +724,60 @@ def kriging_poly_expand(
     """
     n, n_targ, dim = target_pos.shape
     assert kernels.shape[0] == n
-    assert kernels.shape[2] == n_targ
+    assert kernels.shape[-1] == n_targ
     if features is not None:
         assert n == features.shape[0]
-    if poly_degree == -1:
+
+    if params.temporal:
+        nt = kernels.shape[1]
+        target_pos, _ = attach_time_coord(
+            source_pos=target_pos, target_pos=None, params=params, nt=nt
+        )
+        dim = dim + 1
+    else:
+        nt = 1
+
+    if params.kriging_poly_degree == -1:
         extra_dim = 0
-    elif poly_degree == 0:
+        design = ()
+    elif params.kriging_poly_degree == 0:
         extra_dim = 1
-        const = kernels.new_ones((n, 1, n_targ))
-        kernels = torch.concatenate([kernels, const], dim=1)
-    elif poly_degree == 1:
+        design = (kernels.new_ones((n, 1, nt * n_targ)),)
+    elif params.kriging_poly_degree == 1:
         extra_dim = 1 + dim
-        const = kernels.new_ones((n, 1, n_targ))
-        xy = (target_pos / sigma).nan_to_num_().mT
-        kernels = torch.concatenate([kernels, xy, const], dim=1)
-    elif poly_degree == 2:
+        const = kernels.new_ones((n, 1, nt * n_targ))
+        xy = (target_pos / params.sigma).nan_to_num_().mT
+        design = (xy, const)
+    elif params.kriging_poly_degree == 2:
         extra_dim = 1 + dim + (dim * (dim + 1)) // 2
-        const = kernels.new_ones((n, 1, n_targ))
-        xy = (target_pos / sigma).nan_to_num_().mT
-        if dim == 1:
-            xysq = (xy.square(),)
-        elif dim == 2:
-            xysq = (xy.square(), xy[:, 0:1] * xy[:, 1:2])
-        elif dim == 3:
-            xysq = (
-                xy.square(),
-                xy[:, 0:1] * xy[:, 1:2],
-                xy[:, 0:1] * xy[:, 2:3],
-                xy[:, 1:2] * xy[:, 2:3],
-            )
-        else:
-            assert False
-        kernels = torch.concatenate([kernels, xy, *xysq, const], dim=1)
+        const = kernels.new_ones((n, 1, nt * n_targ))
+        xy = (target_pos / params.sigma).nan_to_num_().mT
+        xysq = (xy.square(),)
+        if dim >= 2:
+            xysq = xysq + (xy[:, 0:1] * xy[:, 1:2],)
+        if dim >= 3:
+            xysq = xysq + (xy[:, 0:1] * xy[:, 2:3], xy[:, 1:2] * xy[:, 2:3])
+        assert dim <= 3
+        design = (xy, *xysq, const)
     else:
         assert False
 
-    if extra_dim and features is not None:
-        rank = features.shape[1]
-        zero = features.new_zeros((n, rank, extra_dim))
+    if params.temporal and extra_dim:
+        assert kernels.ndim == 5
+        nt = kernels.shape[1]
+        kernels = kernels.reshape(n, nt * kernels.shape[2], -1)
+    assert kernels.ndim == 3
+    print(f"{kernels.shape=}")
+    print(f"{[d.shape for d in design]=}")
+    kernels = torch.concatenate([kernels, *design], dim=1)
+    print(f"{kernels.shape=}")
+
+    if params.temporal and extra_dim and features is not None:
+        features = features.view(n, 1, -1)
+        zero = features.new_zeros((n, 1, extra_dim))
+        y = torch.concatenate([features, zero], dim=2)
+    elif extra_dim and features is not None:
+        zero = features.new_zeros((n, features.shape[1], extra_dim))
         y = torch.concatenate([features, zero], dim=2)
     else:
         y = features
@@ -668,9 +789,13 @@ def bake_interpolation_1d(
     xx: torch.Tensor, xx_: torch.Tensor, params: InterpolationParams
 ) -> tuple[torch.Tensor, int]:
     params = params.normalize()
+    assert not params.temporal
 
     k = get_kernel(
-        source_pos=xx[None, :, None], target_pos=xx_[None, :, None], params=params
+        source_pos=xx[None, :, None],
+        target_pos=xx_[None, :, None],
+        params=params,
+        nt=None,
     )
     nsrc = xx.shape[0]
     assert k.shape == (1, nsrc, xx_.shape[0])
@@ -684,7 +809,7 @@ def bake_interpolation_1d(
     elif need_design:
         assert False
 
-    pdata = interp_precompute(source_pos=xx[None, :, None], params=params)
+    pdata = interp_precompute(source_pos=xx[None, :, None], params=params, nt=None)
     if pdata is not None:
         assert pdata.shape == (1, k.shape[0], k.shape[0])
         k = pdata[0] @ k
@@ -692,7 +817,9 @@ def bake_interpolation_1d(
     return k, zpad
 
 
-def pad_geom(geom, dtype=torch.float, device=None):
+def pad_geom(
+    geom: np.ndarray | torch.Tensor, dtype=torch.float, device=None
+) -> torch.Tensor:
     geom = torch.as_tensor(geom, dtype=dtype, device=device)
     geom = F.pad(geom, (0, 0, 0, 1), value=torch.nan)
     return geom
@@ -1138,6 +1265,7 @@ class StableFeaturesInterpolator(BModule):
         params: InterpolationParams,
         shift_dim: int = 1,
         dtype=torch.float,
+        nt: int | None,
     ):
         super().__init__()
         self.erp_params = params.normalize()
@@ -1152,6 +1280,7 @@ class StableFeaturesInterpolator(BModule):
             source_geom=self.b.source_geom,
             channel_index=channel_index,
             params=self.erp_params,
+            nt=nt,
         )
         self.has_neighb_data = neighb_data is not None
         self.register_buffer_or_none("neighb_data", neighb_data)
@@ -1249,10 +1378,12 @@ class NeighborhoodFiller(BModule):
 class NeighborhoodInterpolator(NeighborhoodFiller):
     def __init__(
         self,
+        *,
         prgeom: torch.Tensor,
         neighborhoods: SpikeNeighborhoods,
         params: InterpolationParams = default_interpolation_params,
         batch_size: int = 1024,
+        nt: int | None,
     ):
         super().__init__()
         assert len(prgeom) == neighborhoods.n_channels + 1
@@ -1265,6 +1396,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
             channel_index=neighborhoods.neighborhoods,
             source_geom_is_padded=True,
             params=self.erp_params,
+            nt=nt,
         )
         self.register_buffer_or_none("neighb_data", neighb_data)
         self.register_buffer("neighb_pos", self.b.prgeom[neighborhoods.b.neighborhoods])
@@ -1273,7 +1405,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
         self,
         waveforms: torch.Tensor,
         neighborhood_ids: torch.Tensor,
-        target_channels: torch.Tensor | slice,
+        target_channels: torch.Tensor | slice | None,
     ):
         if target_channels is None:
             targ_pos = self.b.prgeom
@@ -1340,7 +1472,12 @@ class ToFullProbeInterpolator(BModule):
     """
 
     def __init__(
-        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
+        self,
+        *,
+        motion: MotionInfo,
+        params: InterpolationParams,
+        device: torch.device,
+        nt: int | None,
     ):
         super().__init__()
         self.erp_params = params.normalize()
@@ -1351,9 +1488,10 @@ class ToFullProbeInterpolator(BModule):
         )
         self.motion = motion
         channel_index = channel_index.to(device=geom.device)
-        self.register_buffer_or_none(
-            "data", full_probe_precompute(geom, channel_index, self.erp_params)
+        data = full_probe_precompute(
+            source_geom=geom, channel_index=channel_index, params=self.erp_params, nt=nt
         )
+        self.register_buffer_or_none("data", data)
         if self.b.data is None:
             channel_index = None
         self.register_buffer_or_none("channel_index", channel_index)
@@ -1401,7 +1539,12 @@ class FromFullProbeInterpolator(BModule):
     """Interpolate from the registered geom to appropriate drifting geom channels."""
 
     def __init__(
-        self, *, motion: MotionInfo, params: InterpolationParams, device: torch.device
+        self,
+        *,
+        motion: MotionInfo,
+        params: InterpolationParams,
+        device: torch.device,
+        nt: int | None,
     ):
         super().__init__()
         geom = torch.asarray(motion.geom, dtype=torch.float, device=device)
@@ -1413,9 +1556,13 @@ class FromFullProbeInterpolator(BModule):
         )
         self.motion = motion
         rchannel_index = rchannel_index.to(device=rgeom.device)
-        self.register_buffer_or_none(
-            "data", full_probe_precompute(rgeom, rchannel_index, self.erp_params)
+        data = full_probe_precompute(
+            source_geom=rgeom,
+            channel_index=rchannel_index,
+            params=self.erp_params,
+            nt=nt,
         )
+        self.register_buffer_or_none("data", data)
         if self.b.data is None:
             rchannel_index = None
         self.register_buffer_or_none("rchannel_index", rchannel_index)
