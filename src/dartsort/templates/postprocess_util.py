@@ -251,6 +251,7 @@ def realign_and_chuck_noisy_template_units(
         whitener=template_data.whitener,
         tsvd=template_data.tsvd,
         properties=properties,
+        sampling_frequency=template_data.sampling_frequency,
     )
     if template_save_folder is not None:
         if template_npz_filename is not None:
@@ -341,6 +342,7 @@ def featurization_basis_from_templates(
             unit_ids=templates0.unit_ids,
             spike_counts=templates0.spike_counts,
             spike_counts_by_channel=templates0.spike_counts_by_channel,
+            sampling_frequency=templates0.sampling_frequency,
         )
     pca = pca_from_templates(
         templates,
