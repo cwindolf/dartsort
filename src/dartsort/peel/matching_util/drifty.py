@@ -53,6 +53,7 @@ from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
 from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
+from ...util.spiketorch import shared_temporal_pconv, full_shared_pconv
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import (
     ChunkTemplateData,
@@ -637,52 +638,6 @@ def get_interp_upsampling_data(
         interpolator=kernel,
         zpad=zpad,
     )
-
-
-# -- computing pairwise convolutions
-
-
-def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> Tensor:
-    rank, t = temporal_comps.shape
-    assert t >= rank
-    rank_, up, t_ = up_temporal_comps.shape
-    assert t == t_
-    assert rank == rank_
-
-    # NIL = rank, 1, t
-    inp = temporal_comps[:, None, :]
-    # OIL = rank * up, 1, t. rank major, not up major.
-    fil = up_temporal_comps.reshape(rank * up, 1, t)
-    # NOL = rank, rank * up, 2 * t - 1
-    pconv = F.conv1d(input=inp, weight=fil, padding=t - 1)
-    assert pconv.shape == (rank, rank * up, 2 * t - 1)
-    pconv = pconv.view(rank, rank, up, 2 * t - 1)
-    pconv = torch.flip(pconv, dims=(3,))
-
-    return pconv
-
-
-@torch.jit.script
-def full_shared_pconv(
-    tconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
-) -> Tensor:
-    rank, rank_, up, conv_len = tconv.shape
-    n_units, rank__, chans = spatial_sing.shape
-    assert rank == rank_ == rank__
-    out = spatial_sing.new_empty((n_units, n_units, up, conv_len))
-    spatial_sing_flat = spatial_sing.view(n_units * rank, chans)
-    tconv_flat = tconv.view(rank * rank, up * conv_len)
-
-    for i0 in range(0, n_units, batch_size):
-        i1 = min(n_units, i0 + batch_size)
-        chunksz = (i1 - i0) * n_units
-        spatial_left = spatial_sing[i0:i1]
-        spatial_outer = spatial_left.view((i1 - i0) * rank, chans) @ spatial_sing_flat.T
-        spatial_outer = spatial_outer.view(i1 - i0, rank, n_units, rank)
-        spatial_outer = spatial_outer.permute(0, 2, 1, 3).reshape(chunksz, rank * rank)
-        torch.mm(spatial_outer, tconv_flat, out=out[i0:i1].view(chunksz, up * conv_len))
-
-    return out
 
 
 # -- convolution

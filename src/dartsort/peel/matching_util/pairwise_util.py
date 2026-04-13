@@ -181,7 +181,7 @@ def iterate_compressed_pairwise_convolutions(
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_decrease=False,
     ignore_empty_channels=False,
-    distance_kind="rms",
+    distance_kind="scaled_normeuc",
     conv_batch_size=128,
     units_batch_size=8,
     device=None,
@@ -340,7 +340,7 @@ def conv_to_resid(
     amplitude_scaling_variance=0.0,
     amplitude_scaling_boundary=0.5,
     ignore_empty_channels=True,
-    distance_kind="rms",
+    distance_kind="scaled_normeuc",
 ) -> DeconvResidResult:
     """Reduce pairwise convolutions to a scalar, the deconv objective.
 
@@ -411,7 +411,7 @@ def conv_to_resid(
             com_spatial_sing_b,
         ).numpy(force=True)
         template_a_norms_ret = np.abs(ta).max(axis=(1, 2))
-    elif distance_kind == "rms":
+    elif distance_kind == "scaled_normeuc":
         template_a_norms_ret = template_a_norms
     elif distance_kind == "deconv":
         template_a_norms_ret = np.ones_like(template_a_norms)
@@ -443,7 +443,7 @@ def conv_to_resid(
         else:
             scaling = 1.0
 
-        if distance_kind in ("rms", "deconv"):
+        if distance_kind in ("scaled_normeuc", "deconv"):
             if amplitude_scaling_variance:
                 norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda  # type: ignore
             else:
@@ -491,7 +491,7 @@ def compressed_convolve_pairs(
     amplitude_scaling_boundary=0.5,
     reduce_deconv_resid_decrease=False,
     ignore_empty_channels=False,
-    distance_kind="rms",
+    distance_kind="scaled_normeuc",
     max_shift="full",
     batch_size=128,
     device=None,
@@ -1253,7 +1253,7 @@ class ConvWorkerContext:
     match_distance: Optional[float] = None
     conv_ignore_threshold: float = 0.0
     coarse_approx_error_threshold: float = 0.0
-    distance_kind: str = "rms"
+    distance_kind: str = "scaled_normeuc"
     min_spatial_cosine: float = 0.0
     amplitude_scaling_variance: float = 0.0
     amplitude_scaling_boundary: float = 0.5
