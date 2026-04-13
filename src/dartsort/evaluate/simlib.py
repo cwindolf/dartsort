@@ -237,7 +237,7 @@ def generate_geom(
         num_contact_per_column=num_contact_per_column,
         xpitch=xpitch,
         ypitch=ypitch,
-        y_shift_per_column=y_shift_per_column,
+        y_shift_per_column=np.asarray(y_shift_per_column),
     )
     geom = p.contact_positions
     assert geom is not None

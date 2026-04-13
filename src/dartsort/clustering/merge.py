@@ -20,7 +20,6 @@ def merge_templates(
     sorting: DARTsortSorting,
     template_data: TemplateData,
     max_shift_samples=40,
-    superres_linkage=np.max,
     linkage="complete",
     distance_kind="rms",
     sym_function=np.minimum,
@@ -40,7 +39,7 @@ def merge_templates(
     """Template distance based merge
 
     Pass in a sorting, recording and template config to make templates,
-    and this will merge them (with superres). Or, if you have templates
+    and this will merge them. Or, if you have templates
     already, pass them into template_data and we can skip the template
     construction.
 
@@ -48,9 +47,6 @@ def merge_templates(
     ---------
     max_shift_samples
         Max offset during matching
-    superres_linkage
-        How to combine distances between two units' superres templates
-        By default, it's the max.
     amplitude_scaling_*
         Optionally allow scaling during matching
 
@@ -60,7 +56,6 @@ def merge_templates(
     """
     computation_cfg = job_util.ensure_computation_config(computation_cfg)
     dist_matrix_kwargs = dict(
-        superres_linkage=superres_linkage,
         sym_function=sym_function,
         max_shift_samples=max_shift_samples,
         temporal_upsampling_factor=temporal_upsampling_factor,
@@ -129,7 +124,6 @@ def get_merge_distances(
 
 def calculate_merge_distances(
     template_data,
-    superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=40,
     temporal_upsampling_factor=1,
@@ -181,26 +175,12 @@ def calculate_merge_distances(
         sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms  # type: ignore
         sup_shifts[tixa, tixb] = res.shifts  # type: ignore
 
-    # apply linkage to reduce across superres templates
-    units = np.unique(template_data.unit_ids)
-    if units.size < n_templates:
-        dists = np.full((units.size, units.size), np.inf)
-        shifts = np.zeros((units.size, units.size), dtype=int)
-        for ia, ua in enumerate(units):
-            in_ua = np.flatnonzero(template_data.unit_ids == ua)
-            for ib, ub in enumerate(units):
-                in_ub = np.flatnonzero(template_data.unit_ids == ub)
-                in_pair = (in_ua[:, None], in_ub[None, :])
-                dists[ia, ib] = superres_linkage(sup_dists[in_pair])
-                shifts[ia, ib] = np.median(sup_shifts[in_pair])
-        coarse_td = template_data.coarsen(with_locs=False)
-        template_snrs = np.ptp(coarse_td.templates, 1).max(1) / coarse_td.spike_counts
-    else:
-        dists = sup_dists
-        shifts = sup_shifts
-        template_snrs = (
-            np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
-        )
+    units = template_data.unit_ids
+    dists = sup_dists
+    shifts = sup_shifts
+    template_snrs = (
+        np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
+    )
 
     dists = sym_function(dists, dists.T)
     np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
@@ -215,7 +195,6 @@ def calculate_merge_distances(
 def cross_match_distance_matrix(
     template_data_a,
     template_data_b,
-    superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=40,
     temporal_upsampling_factor=1,
@@ -237,7 +216,6 @@ def cross_match_distance_matrix(
     )
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
-        superres_linkage=superres_linkage,
         sym_function=sym_function,
         max_shift_samples=max_shift_samples,
         temporal_upsampling_factor=temporal_upsampling_factor,

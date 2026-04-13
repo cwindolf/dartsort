@@ -68,12 +68,7 @@ class UnitTextInfo(UnitPlot):
             snr = ptp * np.sqrt(nspikes)
             msg += f"template snr: {snr:.1f}"
         else:
-            ptp = np.ptp(temps, 1).max(1).mean()
-            msg += f"mean superres maxptp: {ptp:0.1f}su\n"
-            in_unit = sorting_analysis.template_data.unit_mask(unit_id)
-            counts = sorting_analysis.template_data.spike_counts[in_unit]
-            snrs = np.ptp(temps, 1).max(1) * np.sqrt(counts)
-            msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
+            assert False
 
         axis.text(0, 0, msg, fontsize=6.5)
 

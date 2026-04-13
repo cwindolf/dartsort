@@ -430,9 +430,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            denoising_method="none",
-            superres_bin_min_spikes=0,
-            template_min_channel_amplitude=0.0,
+            denoising_method="none", template_min_channel_amplitude=0.0
         )
         rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
@@ -589,9 +587,7 @@ def test_static(tmp_path, up_factor, cd_iter):
     rec1 = rec0.save_to_folder(tmp_path / "rec")
     for rec in [rec0, rec1]:
         template_cfg = dartsort.TemplateConfig(
-            denoising_method="none",
-            superres_bin_min_spikes=0,
-            template_min_channel_amplitude=0.0,
+            denoising_method="none", template_min_channel_amplitude=0.0
         )
         rr, st = no_overlap_recording_sorting(templates)
         template_data = TemplateData.from_config(
@@ -784,9 +780,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
         do_nn_denoise=False, do_tpca_denoise=False, n_residual_snips=8
     )
     tempconf = dartsort.TemplateConfig(
-        denoising_method="none",
-        superres_templates=False,
-        registered_templates=False,
+        denoising_method="none", registered_templates=False
     )
     matchconf = dartsort.MatchingConfig(threshold=threshold)
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)

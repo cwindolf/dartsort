@@ -7,14 +7,14 @@ from .internal_config import PreprocessingStrategy
 preprocessing_strategies = {}
 
 
-def none(rec: BaseRecording):
+def none(rec: BaseRecording) -> BaseRecording:
     return rec
 
 
 preprocessing_strategies["none"] = none
 
 
-def ibllike(rec: BaseRecording):
+def ibllike(rec: BaseRecording) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
     if "inter_sample_shift" in rec._properties:
@@ -36,7 +36,7 @@ def ibllike(rec: BaseRecording):
 preprocessing_strategies["ibllike"] = ibllike
 
 
-def ibllikecmr(rec: BaseRecording):
+def ibllikecmr(rec: BaseRecording) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
     if "inter_sample_shift" in rec._properties:

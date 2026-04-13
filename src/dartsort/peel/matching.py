@@ -236,7 +236,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             save_collidedness=save_collidedness,
             whiten_features=matching_cfg.whiten_features,
-            fpctrl_spike_counts=template_data.coarsen().spike_counts
+            fpctrl_spike_counts=template_data.spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
         )

@@ -403,12 +403,6 @@ class TemplateConfig:
     min_count_at_shift: int = 25
     template_interp_params: InterpolationParams = default_template_interpolation_params
 
-    # superresolved templates
-    superres_templates: bool = False
-    superres_bin_size_um: float = 5.0
-    superres_bin_min_spikes: int = 50
-    superres_strategy: str = "motion_estimate"
-
     # low rank denoising?
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
@@ -1167,7 +1161,6 @@ default_dartsort_cfg = DARTsortInternalConfig()
 unshifted_raw_template_cfg = TemplateConfig(
     registered_templates=False,
     denoising_method="none",
-    superres_templates=False,
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
