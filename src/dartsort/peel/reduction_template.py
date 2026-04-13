@@ -144,6 +144,15 @@ class ReductionTemplateData(TemplateData):
             templates = weights * raw_mean + (1 - weights) * svd_mean
         else:
             assert False
+        
+        spike_counts = count.max(axis=1)
+        if motion.drifting:
+            msk = np.logical_or(
+                count >= template_cfg.min_count_at_shift,
+                count >= template_cfg.min_fraction_at_shift * spike_counts[:, None]
+            )
+            msk = msk[:, None, :].astype(templates.dtype)
+            templates *= msk
 
         if whitener is None:
             whitener_np = None
@@ -154,7 +163,7 @@ class ReductionTemplateData(TemplateData):
             unit_ids=unit_ids,
             templates=templates,
             raw_std_dev=raw_std,
-            spike_counts=count.max(axis=1),
+            spike_counts=spike_counts,
             spike_counts_by_channel=count,
             registered_geom=motion.rgeom,
             trough_offset_samples=trough,
