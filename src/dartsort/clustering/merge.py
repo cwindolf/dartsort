@@ -456,6 +456,8 @@ def combine_templates(template_data_a, template_data_b):
         spike_counts=spike_counts,
         registered_geom=rgeom,
         spike_counts_by_channel=spike_counts_by_channel,
+        trough_offset_samples=template_data_a.trough_offset_samples,
+        sampling_frequency=template_data_a.sampling_frequency,
     )
 
     cross_mask = np.logical_and(

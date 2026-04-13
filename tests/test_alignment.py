@@ -66,6 +66,7 @@ def align_templates():
         spike_counts=np.ones(2),
         trough_offset_samples=trough,
         registered_geom=np.zeros((1, 2)),
+        sampling_frequency=1.0,
     )
 
 
@@ -433,6 +434,7 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
         spike_counts=np.ones(4),
         trough_offset_samples=trough_offset,
         registered_geom=np.c_[np.zeros(2), np.arange(2.0)],
+        sampling_frequency=30_000.0,
     )
 
     # simulate with no noise -- that's not relevant.
