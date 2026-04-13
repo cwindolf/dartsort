@@ -144,12 +144,12 @@ class ReductionTemplateData(TemplateData):
             templates = weights * raw_mean + (1 - weights) * svd_mean
         else:
             assert False
-        
+
         spike_counts = count.max(axis=1)
         if motion.drifting:
             msk = np.logical_or(
                 count >= template_cfg.min_count_at_shift,
-                count >= template_cfg.min_fraction_at_shift * spike_counts[:, None]
+                count >= template_cfg.min_fraction_at_shift * spike_counts[:, None],
             )
             msk = msk[:, None, :].astype(templates.dtype)
             templates *= msk
@@ -169,6 +169,7 @@ class ReductionTemplateData(TemplateData):
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            sampling_frequency=recording.sampling_frequency,
         )
 
 
@@ -269,7 +270,11 @@ class TemplateReduction(GrabAndFeaturize):
         if whitener is None:
             assert template_cfg.whitening.strategy == "none"
         else:
-            assert template_cfg.whitening.strategy in ("prewhiten", "prewhiten_postapply", "postwhiten")
+            assert template_cfg.whitening.strategy in (
+                "prewhiten",
+                "prewhiten_postapply",
+                "postwhiten",
+            )
         if template_cfg.whitening.strategy == "prewhiten":
             assert whitener is not None
             transformers.append(

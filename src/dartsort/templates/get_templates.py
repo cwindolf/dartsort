@@ -124,6 +124,7 @@ def get_templates_unitextract(
         trough_offset_samples=trough_offset_samples,
         properties=properties,  # type: ignore
         tsvd=tsvd,
+        sampling_frequency=recording.sampling_frequency,
     )
     return obj
 
