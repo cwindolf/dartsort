@@ -688,9 +688,9 @@ class RefinementConfig:
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
     distance_metric: ComponentDistanceMetric = "scaled_normeuc"
-    n_candidates: int = 3
+    n_candidates: int = 5
     merge_group_size: int = 5
-    n_search: int | None = None
+    n_search: int | None = 3
     n_explore: int | None = None
     train_batch_size: int = 512
     eval_batch_size: int = 512

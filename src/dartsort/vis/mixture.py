@@ -7,9 +7,10 @@ import numpy as np
 import torch
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
+from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
-from ..clustering.cluster_util import maximal_leaf_groups
+from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.gmm.mixture import (
     NeighborhoodLUT,
     Scores,
@@ -66,6 +67,8 @@ class MixtureVisData:
     train_ixs: np.ndarray
     val_ixs: np.ndarray | None
     full_labels: np.ndarray
+    full_inunits: dict[int, np.ndarray]
+    eval_inunits: dict[int, np.ndarray]
     tpca: TemporalPCA
     inf_diag_unit_distance_matrix: torch.Tensor
     prgeom: np.ndarray
@@ -448,13 +451,15 @@ class NeighborDistances(MixtureComponentPlot):
 class NeighborQDAPlot(MixtureComponentPlot):
     kind = "neighbors"
 
-    def __init__(self, count=5, log=True, ncols=1):
+    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
         super().__init__()
         self.count = count
         self.log = log
         self.ncols = ncols
         self.width = 1.5 * ncols
         self.height = 1.5 * count
+        self.kind = kind
+        self.kde_bin = kde_bin
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         _, neighbors = mix_data.friends(unit_id, count=self.count)
@@ -469,21 +474,25 @@ class NeighborQDAPlot(MixtureComponentPlot):
         )
         for ax, nid, color in zip(axes.flat, neighbors, colors):
             ious = {}
+            covs = {}
             dlls = {}
             ls = []
-            for split, linestyle in zip(["full", "val"], "-:"):
+            for split, linestyle in zip(["full", "eval"], "-:"):
                 if split == "full":
-                    slab = mix_data.full_labels
                     ssco = mix_data.full_scores
-                elif split == "val":
-                    slab = mix_data.eval_labels
+                    in_unit_id = mix_data.full_inunits[unit_id]
+                    in_nid = mix_data.full_inunits[nid]
+                elif split == "eval":
                     ssco = mix_data.eval_scores
+                    in_nid = mix_data.eval_inunits[nid]
+                    in_unit_id = mix_data.eval_inunits[unit_id]
                 else:
                     assert False
 
-                slab = torch.as_tensor(slab)
-                in_pair = torch.isin(slab, slab.new_tensor([unit_id, nid]))
-                (in_pair,) = in_pair.nonzero(as_tuple=True)
+                na = in_unit_id.size
+                nb = in_nid.size
+
+                in_pair = np.concatenate([in_unit_id, in_nid])
                 cand = ssco.candidates[in_pair].numpy(force=True)
                 ll = ssco.log_liks[in_pair].numpy(force=True)
 
@@ -493,7 +502,9 @@ class NeighborQDAPlot(MixtureComponentPlot):
                 overlap = np.logical_and(nid_mask.any(1), my_mask.any(1))
                 count = overlap.sum()
                 iou = count / in_pair.shape[0]
-                ious[split] = f"{iou:.2f}".lstrip("0")
+                cov = min(overlap[:na].sum() / na, overlap[na:].sum() / nb)
+                ious[split] = "iou=" + f"{iou:.2f}".lstrip("0")
+                covs[split] = "cov=" + f"{cov:.2f}".lstrip("0")
                 if not count:
                     continue
 
@@ -506,21 +517,76 @@ class NeighborQDAPlot(MixtureComponentPlot):
                 dlls[split] = my_ll - their_ll
                 ls.append(linestyle)
 
-            ax.hist(
-                dlls.values(),
-                label=dlls.keys(),
-                bins=32,
-                color=[color] * len(ls),
-                histtype="step",
-                log=self.log,
-                density=True,
-                linestyle=ls,
-            )
             ax.axvline(0, color="k", lw=0.8)
             ax.grid()
 
-            title = f"{nid}: " + ", ".join(f"{k} iou {v}" for k, v in ious.items())
-            ax.set_title(title, fontsize="small")
+            iout = f"{nid}:" + " ".join(f"{k}:{v}" for k, v in ious.items())
+            covt = f"{nid}:" + " ".join(f"{k}:{v}" for k, v in covs.items())
+
+            if len(dlls) < 2:
+                ax.set_title(f"{iout}\n{covt}", fontsize="small")
+                continue
+            hstats = {}
+            kstats = {}
+            if self.kind == "hist":
+                ax.hist(
+                    dlls.values(),
+                    label=dlls.keys(),
+                    bins=32,
+                    color=[color] * len(ls),
+                    histtype="step",
+                    log=self.log,
+                    density=True,
+                    linestyle=ls,
+                )
+            elif self.kind == "kde":
+                made_one = False
+                messages = []
+                for (label, dll), linestyle in zip(dlls.items(), ls):
+                    bines, bincs = centered_bins(dll)
+                    if not bincs.size:
+                        continue
+                    hist, _ = np.histogram(dll, bins=bines)
+                    print(f"{hist.shape=}")
+                    hist = hist.astype(np.float64) / hist.sum()
+                    ax.stairs(
+                        hist, edges=bines, linestyle=linestyle, color="k", zorder=10
+                    )
+                    made_one = True
+                    hsa, hsb = bimod_stats(hist)
+                    hstats[label] = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
+                    try:
+                        kdest = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+                    except ValueError as e:
+                        messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
+                        continue
+                    kde = cast(np.ndarray, kdest.evaluate(bincs))
+                    print(f"{kde.shape=}")
+                    kde /= kde.sum()
+                    ksa, ksb = bimod_stats(kde)
+                    kstats[label] = f"a:{fstr(ksa)}, b:{fstr(ksb)}"
+                    if not np.isfinite(kde).all():
+                        messages.append(f"{label} nan, n={len(dll)}")
+                    else:
+                        ax.step(
+                            y=kde, x=bincs, linestyle=linestyle, color=color, zorder=11
+                        )
+                if messages:
+                    ax.text(
+                        0.9,
+                        0.1,
+                        "\n".join(messages),
+                        fontsize="small",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="bottom",
+                    )
+                if made_one and self.log:
+                    ax.semilogy()
+
+            hstatt = f"H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
+            kstatt = f"K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
+            ax.set_title(f"{iout}\n{covt}\n{hstatt}\n{kstatt}", fontsize="small")
 
         for ax in axes.flat[len(neighbors) :]:
             ax.axis("off")
@@ -546,6 +612,7 @@ class MergeView(MixtureComponentPlot):
         me = neighbors.new_full((1,), unit_id)
         neighbors = torch.cat([neighbors, me]).sort().values
         D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
+        D.nan_to_num_(posinf=1000.0)
 
         # find my complete linkage cluster within D
         D = D.fill_diagonal_(0.0).numpy(force=True)
@@ -1200,6 +1267,7 @@ def default_mixture_plots():
         ISIHistogram(),
         ChansHeatmap(),
         LikelihoodsView(),
+        NeighborQDAPlot(),
         NeighborMeans(),
         NeighborDistances(),
         MergeView(),
@@ -1351,6 +1419,8 @@ def fit_mixture_for_vis(
         train_labels=train_labels.numpy(force=True),
         eval_labels=eval_labels,
         full_labels=full_labels,
+        eval_inunits=sparsify_labels(eval_labels.numpy(force=True)),
+        full_inunits=sparsify_labels(full_labels),
         tpca=tpca,
         inf_diag_unit_distance_matrix=dists,
         prgeom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
@@ -1757,3 +1827,39 @@ def vis_obs_interpolation(
 
 def _bold(x):
     return f"$\\mathbf{{{x}}}$"
+
+
+def centered_bins(x, dx=1.0):
+    if x is None or not x.size:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
+    vm = np.abs(x).max()
+    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
+    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    assert bin_centers.size == bin_edges.size - 1
+    assert bin_centers.size % 2
+    assert vm < min(-bin_centers.min(), bin_centers.max())
+    return bin_edges, bin_centers
+
+
+def bimod_stats(h):
+    print(f"{h.shape=}")
+    assert h.ndim == 1
+    assert h.size % 2
+    cix = h.shape[0] // 2
+    h0 = h[cix]
+    da = h[:cix].max()
+    db = h[cix + 1 :].max()
+    dd = min(da, db)
+    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
+        a = 0.0
+    elif np.isclose(dd, 0.0):
+        a = np.inf
+    else:
+        a = h0 / dd
+    b = h0 / max(da, db)
+    return a, b
+
+
+def fstr(x):
+    return f"{x:0.2f}".lstrip("0")

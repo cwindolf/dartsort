@@ -62,6 +62,16 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
     return new_labels, new_ids
 
 
+def sparsify_labels(labels: np.ndarray) -> dict[int, np.ndarray]:
+    assert labels.ndim == 1
+    ids = np.unique(labels)
+    ids = ids[ids >= 0]
+    inj = {}
+    for j in ids:
+        inj[j] = np.flatnonzero(labels == j)
+    return inj
+
+
 def leafsets(Z, max_distance=np.inf):
     """For a linkage Z, get the leaves in each non-leaf cluster."""
     n = len(Z) + 1
