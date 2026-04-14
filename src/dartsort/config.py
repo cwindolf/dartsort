@@ -141,6 +141,21 @@ class DARTsortUserConfig:
         doc="Radius around main channel used when localizing spikes.",
     )
 
+    # -- subtraction neural net
+    nn_denoiser_class_name: Literal["SingleChannelWaveformDenoiser", "Decollider"] = (
+        argfield(
+            default="SingleChannelWaveformDenoiser",
+            doc="Which neural net to use in initial detection? Set to Decollider (and set the pretrained "
+            "path to None to train a  brand-new unsupervised denoiser.",
+        )
+    )
+    nn_denoiser_pretrained_path: str | None = argfield(
+        default=default_pretrained_path,
+        arg_type=str_or_none,
+        doc="Path to a pytorch saved model (.pt file as dumped by torch.save()). If this is None, the "
+        "model will be fit.",
+    )
+
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
     amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 1.0 / 3.0
@@ -206,10 +221,6 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000
-    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = argfield(
-        default=default_pretrained_path, arg_type=str_or_none
-    )
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0
