@@ -170,6 +170,7 @@ class ReductionTemplateData(TemplateData):
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
             sampling_frequency=recording.sampling_frequency,
+            whiten_strategy=template_cfg.whitening.strategy,
         )
 
 

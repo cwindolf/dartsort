@@ -471,6 +471,7 @@ def test_pconv(tmp_path, unit_ids):
         spike_counts=np.ones(5),
         registered_geom=geom,
         trough_offset_samples=0,
+        sampling_frequency=1.0,
     )
     svd_compressed = template_util.svd_compress_templates(temps, rank=1)
     ctempup = template_util.compressed_upsampled_templates(
@@ -540,6 +541,7 @@ def test_pconv(tmp_path, unit_ids):
         spike_counts=np.ones(5),
         registered_geom=reg_geom,
         trough_offset_samples=0,
+        sampling_frequency=1.0,
     )
     geom = np.c_[np.zeros(c), np.arange(1, c + 1).astype(float)]
     motion = MotionInfo.from_motion_est(

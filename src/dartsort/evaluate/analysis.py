@@ -141,6 +141,9 @@ class DARTsortAnalysis:
         if template_data is not None:
             coarse_template_data = template_data.coarsen()
             dres = template_distances(
+                sorting=sorting,
+                recording=recording,
+                motion=motion,
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
                 computation_cfg=computation_cfg,

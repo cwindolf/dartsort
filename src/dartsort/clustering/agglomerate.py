@@ -14,8 +14,10 @@ from ..util.internal_config import (
     RefinementConfig,
     TemplateMergeConfig,
     WaveformConfig,
+    default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from ..util.spiketorch import (
@@ -23,6 +25,8 @@ from ..util.spiketorch import (
     scaled_normeuc_from_dots,
     shared_temporal_pconv,
 )
+
+logger = get_logger(__name__)
 
 
 @databag
@@ -51,20 +55,12 @@ def agglomerate(
         assert refinement_cfg is not None
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
-    if template_data is None:
-        assert sorting is not None
-        assert recording is not None
-        template_data = TemplateData.from_config(
-            recording=recording,
-            sorting=sorting,
-            template_cfg=template_merge_cfg.to_template_config(),
-            motion=motion,
-            waveform_cfg=waveform_cfg,
-        )
-    assert template_data is not None
-
     tdist_res = template_distances(
+        sorting=sorting,
+        recording=recording,
+        motion=motion,
         template_data=template_data,
+        waveform_cfg=waveform_cfg,
         template_merge_cfg=template_merge_cfg,
         computation_cfg=computation_cfg,
     )
@@ -91,16 +87,51 @@ class TemplateDistanceResult:
 
 def template_distances(
     *,
-    template_data: TemplateData,
+    template_data: TemplateData | None,
     template_merge_cfg: TemplateMergeConfig,
+    sorting: DARTsortSorting | None = None,
+    recording: BaseRecording | None = None,
+    motion: MotionInfo | None = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
 ) -> TemplateDistanceResult:
+    computation_cfg = ensure_computation_config(computation_cfg)
+    device = computation_cfg.actual_device()
+
+    if template_merge_cfg.whitening.strategy == "prewhiten_postapply":
+        raise ValueError(
+            "prewhiten_postapply does not make sense for template distance."
+        )
+
+    need_whitening = template_merge_cfg.whitening.strategy != "none"
+    if template_data is None:
+        need_templates = True
+    elif need_whitening and template_data.whitener is None:
+        logger.dartsortdebug(
+            "Need to recompute templates for distances since they were not whitened."
+        )
+        need_templates = True
+    else:
+        need_templates = False
+
+    if need_templates:
+        assert sorting is not None
+        assert recording is not None
+        assert motion is not None
+        template_data = TemplateData.from_config(
+            recording=recording,
+            sorting=sorting,
+            template_cfg=template_merge_cfg.to_template_config(),
+            motion=motion,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+        )
+    assert template_data is not None
+
     if template_data.tsvd is not None:
         basis = template_data.tsvd.components_
     else:
         basis = None
-    computation_cfg = ensure_computation_config(computation_cfg)
-    device = computation_cfg.actual_device()
 
     sbt = shared_basis_compress_templates(
         template_data,
@@ -111,6 +142,12 @@ def template_distances(
     )
     tcomp = torch.asarray(sbt.temporal_components, device=device)
     spatial_sing = torch.asarray(sbt.spatial_singular, device=device)
+
+    need_whiten_mul = template_merge_cfg.whitening.strategy == "postwhiten"
+    if need_whiten_mul:
+        ww = torch.asarray(template_data.whitener).to(spatial_sing)
+        k, r, c = spatial_sing.shape
+        spatial_sing = (spatial_sing.view(k * r, c) @ ww.T).view(k, r, c)
 
     tconv = shared_temporal_pconv(
         temporal_comps=tcomp,
