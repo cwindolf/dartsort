@@ -822,6 +822,7 @@ class DARTsortInternalConfig:
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    agglomerate_cfg: RefinementConfig | None = None
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
@@ -1147,6 +1148,34 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         executor=cfg.executor,
     )
 
+    # final aggregation
+    if cfg.agg_kind == "none":
+        agg_cfg = None
+    elif cfg.agg_kind == "template_distance":
+        agg_tmcfg = TemplateMergeConfig(
+            linkage=cfg.agg_template_linkage,
+            merge_distance_threshold=cfg.agg_no_qda_template_distance,
+            waveform_cfg=waveform_cfg,
+            whitening=whiten_cfg,
+        )
+        agg_cfg = RefinementConfig(
+            refinement_strategy="agglomerate",
+            template_merge_cfg=agg_tmcfg,
+            qda_threshold=0.0,
+        )
+    elif cfg.agg_kind == "qda":
+        agg_tmcfg = TemplateMergeConfig(
+            linkage=cfg.agg_qda_linkage,
+            merge_distance_threshold=cfg.agg_qda_max_template_distance,
+            waveform_cfg=waveform_cfg,
+            whitening=whiten_cfg,
+        )
+        agg_cfg = RefinementConfig(
+            refinement_strategy="agglomerate", template_merge_cfg=agg_tmcfg
+        )
+    else:
+        assert False
+
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
@@ -1157,6 +1186,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
         post_refinement_cfg=pre_refinement_cfg,
+        agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
         clustering_features_cfg=clustering_features_cfg,

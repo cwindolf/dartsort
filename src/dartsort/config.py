@@ -326,6 +326,13 @@ class DeveloperConfig(DARTsortUserConfig):
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
 
+    # agglomeration
+    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
+    agg_qda_max_template_distance: float = 0.6
+    agg_no_qda_template_distance: float = 0.2
+    agg_qda_linkage: Literal["single", "complete"] = "single"
+    agg_template_linkage: Literal["single", "complete"] = "complete"
+
     # store extra intermediates
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
