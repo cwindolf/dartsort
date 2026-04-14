@@ -1,10 +1,13 @@
 """Agglomeration of clusters to fix up GMM oversplits."""
 
+from threading import local
 from typing import cast
 
+import numba
 import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
+from tqdm.auto import tqdm
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -20,13 +23,15 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
+from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import databag
 from ..util.spiketorch import (
     best_shared_pconv,
     scaled_normeuc_from_dots,
     shared_temporal_pconv,
 )
-from .cluster_util import recluster
+from .cluster_util import linkage_mask, recluster, sparsify_labels
+from .gmm.mixture import Scores
 
 logger = get_logger(__name__)
 
@@ -37,7 +42,6 @@ class Agglomeration:
     merge_mapping: np.ndarray
     distances: np.ndarray
     shifts: np.ndarray
-    bimodalities: np.ndarray | None
 
 
 def agglomerate(
@@ -50,6 +54,7 @@ def agglomerate(
     template_data: TemplateData | None = None,
     computation_cfg: ComputationConfig | None = None,
     waveform_cfg: WaveformConfig,
+    show_progress: bool = True,
 ) -> Agglomeration:
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -83,20 +88,57 @@ def agglomerate(
             merge_mapping=new_ids,
             distances=tdist.distances,
             shifts=tdist.shifts,
-            bimodalities=None,
         )
 
-    # get mask
+    # tdist tells us the possible merges
+    mask = linkage_mask(
+        tdist.distances,
+        linkage_method=template_merge_cfg.linkage,
+        threshold=template_merge_cfg.merge_distance_threshold,
+    )
+
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    # get bimodality in mask
-    # update mask, extract merge
-    # apply with shifts
-    assert False
+    ntlabels, ntscores = _get_non_train_scores(sorting)
 
+    # restrict mask by overlap criteria
+    qda_res = qda(
+        mask=mask,
+        labels=ntlabels,
+        scores=ntscores,
+        min_iou=refinement_cfg.qda_min_iou,
+        min_cov=refinement_cfg.qda_min_coverage,
+        show_progress=show_progress,
+        computation_cfg=computation_cfg,
+    )
 
-def apply_agglomeration(
-    sorting: DARTsortSorting, merge_mapping: np.ndarray, shifts: np.ndarray | None
-) -> DARTsortSorting: ...
+    qda_mask = np.all(
+        [
+            qda_res.coverage >= refinement_cfg.qda_min_coverage,
+            qda_res.iou >= refinement_cfg.qda_min_iou,
+            qda_res.score >= refinement_cfg.qda_threshold,
+            qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
+        ],
+        axis=0,
+    )
+    np.fill_diagonal(qda_mask, True)
+    assert np.all(qda_mask <= mask)
+    qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
+
+    agg_sorting, new_ids = recluster(
+        sorting=sorting,
+        unit_ids=tdist.template_data.unit_ids,
+        dists=qda_as_dist,
+        shifts=tdist.shifts,
+        unit_snrs=tdist.template_data.snrs_by_channel().max(1),
+        threshold=0.5,
+        link=template_merge_cfg.linkage,
+    )
+    return Agglomeration(
+        agglomerated_sorting=agg_sorting,
+        merge_mapping=new_ids,
+        distances=tdist.distances,
+        shifts=tdist.shifts,
+    )
 
 
 @databag
@@ -211,3 +253,167 @@ def template_distances(
         r2=cast(np.ndarray, sbt.r2),
         template_data=template_data,
     )
+
+
+def _get_non_train_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
+    is_train = getattr(sorting, "gmm_train", None)
+    cand = getattr(sorting, "gmm_candidates", None)
+    log_liks = getattr(sorting, "gmm_log_liks", None)
+    resp = getattr(sorting, "gmm_responsibilities", None)
+
+    assert is_train is not None
+    assert cand is not None
+    assert log_liks is not None
+    assert resp is not None
+
+    not_train = torch.asarray(np.flatnonzero(np.logical_not(is_train)))
+    cand = torch.asarray(cand[not_train])
+    log_liks = torch.asarray(log_liks[not_train])
+    resp = torch.asarray(resp[not_train])
+
+    scores = Scores(
+        candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
+    )
+    assert sorting.labels is not None
+    labels = sorting.labels[not_train]
+    return labels, scores
+
+
+@databag
+class QDAResult:
+    score: np.ndarray
+    min_ratio: np.ndarray
+    iou: np.ndarray
+    coverage: np.ndarray
+
+
+def qda(
+    *,
+    mask: np.ndarray,
+    labels: np.ndarray,
+    scores: Scores,
+    min_iou: float = 0.5,
+    min_cov: float = 0.3,
+    min_count: int = 20,
+    show_progress: bool,
+    computation_cfg: ComputationConfig,
+) -> QDAResult:
+    iou = np.zeros(mask.shape, dtype=np.float32)
+    ctx = QDACtx(
+        inus=sparsify_labels(labels),
+        cand=scores.candidates.numpy(force=True),
+        log_liks=scores.log_liks.numpy(force=True),
+        min_iou=min_iou,
+        min_cov=min_cov,
+        min_count=min_count,
+        iou=iou,
+        cov=iou.copy(),
+        score=iou.copy(),
+        min_ratio=iou.copy(),
+    )
+
+    n_jobs, Executor, context, *_ = pool_from_cfg(
+        computation_cfg, check_local=True, small=True
+    )
+    with Executor(
+        max_workers=n_jobs,
+        mp_context=context,
+        initializer=_qda_init,
+        initargs=(ctx,),
+    ) as pool:
+        ii, jj = np.triu_indices_from(mask, k=1)
+        kk = np.flatnonzero(mask[ii, jj])
+        ii = ii[kk]
+        jj = jj[kk]
+
+        results = pool.map(_qda_job, np.c_[ii, jj])
+        if show_progress:
+            results = tqdm(results, desc=f"QDA:{n_jobs}")
+
+        for _ in results:
+            pass
+
+    return QDAResult(
+        score=ctx.score, min_ratio=ctx.min_ratio, iou=ctx.iou, coverage=ctx.cov
+    )
+
+
+_qda_context = local()
+_qda_context.ctx = None
+
+
+@databag
+class QDACtx:
+    inus: dict[int, np.ndarray]
+    cand: np.ndarray
+    log_liks: np.ndarray
+    min_iou: float
+    min_cov: float
+    min_count: int
+    iou: np.ndarray
+    cov: np.ndarray
+    score: np.ndarray
+    min_ratio: np.ndarray
+
+
+def _qda_init(ctx):
+    global _qda_context
+    _qda_context.ctx = ctx
+
+
+def _qda_job(ij):
+    p = _qda_context.ctx
+    assert p is not None
+
+    i, j = ij
+
+    ini = p.inus[i]
+    inj = p.inus[j]
+    inij, overlap, imask, jmask, iou, cov = _ioucov(i, j, ini, inj, p.cand)
+    p.iou[i, j] = p.iou[j, i] = iou
+    p.cov[i, j] = p.cov[j, i] = cov
+    if iou < p.min_iou:
+        return
+    if cov < p.min_cov:
+        return
+    if ini.size + inj.size < p.min_count:
+        return
+    dll = _dll(inij, overlap, imask, jmask, p.log_liks)
+
+
+@numba.jit(nopython=True, nogil=True)
+def _ioucov(i: int, j: int, ini: np.ndarray, inj: np.ndarray, cand: np.ndarray):
+    inij = np.concatenate([ini, inj])
+    ni = ini.size
+    nj = inj.size
+    nij = inij.size
+
+    candij = cand[inij]
+    imask = candij == i
+    jmask = candij == j
+
+    icov = imask.any(axis=1)
+    jcov = jmask.any(axis=1)
+    overlap = np.logical_and(icov, jcov)
+
+    noi = overlap[:ni].sum()
+    noj = overlap[ni:].sum()
+    iou = (noi + noj) / nij
+    cov = min(noi / ni, noj / nj)
+    return inij, overlap, imask, jmask, iou, cov
+
+
+@numba.jit(nopython=True, nogil=True)
+def _dll(
+    inij,
+    overlap: np.ndarray,
+    imask: np.ndarray,
+    jmask: np.ndarray,
+    log_liks: np.ndarray,
+):
+    ll = log_liks[inij]
+    _, ixi = np.nonzero(imask[overlap])
+    lli = np.take_along_axis(ll[overlap], ixi[:, None], axis=1)[:, 0]
+    _, ixj = np.nonzero(jmask[overlap])
+    llj = np.take_along_axis(ll[overlap], ixj[:, None], axis=1)[:, 0]
+    return lli - llj

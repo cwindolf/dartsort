@@ -726,14 +726,14 @@ class RefinementConfig:
     whiten_dist: bool = True
 
     # template merge parameters
-    template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig()
+    template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(linkage="single")
 
     # other agglomeration parameters
+    qda_link: Literal["single", "complete"] = "single"
     qda_threshold: float = 0.2
-    dip_min_ratio: float = 0.1
-    min_coverage: float = 0.35
-    min_iou: float = 0.5
-    include_train: bool = False
+    qda_min_ratio: float = 0.1
+    qda_min_coverage: float = 0.35
+    qda_min_iou: float = 0.5
 
     # forward_backward parameters
     chunk_size_s: float = 300.0

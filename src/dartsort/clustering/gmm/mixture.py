@@ -202,6 +202,7 @@ def tmm_demix(
     # final assignments
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
     # downstream, we might care if a spike was used for training
+    assert sorting.labels is not None
     is_train = np.zeros(sorting.labels.shape, dtype=bool)
     is_train[train_ixs] = True
     sorting.add_ephemeral_feature("gmm_train", is_train)

@@ -52,39 +52,53 @@ def recluster(
     if unit_ids is not None:
         assert np.array_equal(unit_ids, np.arange(dists.shape[0]))
     assert new_labels is not None
-
-    # update times according to shifts
-    times_updated = sorting.times_samples.copy()
-
-    # find original labels in each cluster
-    clust_inverse = {i: [] for i in new_ids}
-    for orig_label, new_label in enumerate(new_ids):
-        clust_inverse[new_label].append(orig_label)
-    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
-    logger.dartsortdebug(f"Merged {n_merges} units by template distance.")
-
-    # align to best snr unit
-    if shifts is not None:
-        assert unit_snrs is not None
-        for new_label, orig_labels in clust_inverse.items():
-            # we don't need to realign clusters which didn't change
-            if len(orig_labels) <= 1:
-                continue
-
-            orig_snrs = unit_snrs[orig_labels]
-            best_orig = orig_labels[orig_snrs.argmax()]
-            for ogl in np.setdiff1d(orig_labels, [best_orig]):
-                in_orig_unit = np.flatnonzero(sorting.labels == ogl)
-                # this is like trough[best] - trough[ogl]
-                shift_og_best = shifts[best_orig, ogl]
-                # if >0, trough of og is behind trough of best.
-                # subtracting will move trough of og to the right.
-                times_updated[in_orig_unit] -= shift_og_best
-
-    new_sorting = sorting.ephemeral_replace(
-        times_samples=times_updated, labels=new_labels
+    new_sorting = apply_reclustering(
+        sorting=sorting, merge_mapping=new_ids, shifts=shifts, unit_snrs=unit_snrs
     )
     return new_sorting, new_ids
+
+
+def apply_reclustering(
+    sorting: DARTsortSorting,
+    merge_mapping: np.ndarray,
+    new_labels: np.ndarray | None = None,
+    shifts: np.ndarray | None = None,
+    unit_snrs: np.ndarray | None = None,
+) -> DARTsortSorting:
+    assert sorting.labels is not None
+
+    if new_labels is None:
+        new_labels = np.full_like(sorting.labels, -1)
+        kept = np.flatnonzero(sorting.labels >= 0)
+        new_labels[kept] = merge_mapping[sorting.labels[kept]]
+
+    if shifts is None:
+        return sorting.ephemeral_replace(labels=new_labels)
+    assert unit_snrs is not None
+
+    # find original labels in each cluster
+    clust_inverse = {i: [] for i in merge_mapping}
+    for orig_label, new_label in enumerate(merge_mapping):
+        clust_inverse[new_label].append(orig_label)
+
+    # align to best snr unit
+    times_updated = sorting.times_samples.copy()
+    for new_label, orig_labels in clust_inverse.items():
+        # we don't need to realign clusters which didn't change
+        if len(orig_labels) <= 1:
+            continue
+
+        orig_snrs = unit_snrs[orig_labels]
+        best_orig = orig_labels[orig_snrs.argmax()]
+        for ogl in np.setdiff1d(orig_labels, [best_orig]):
+            in_orig_unit = np.flatnonzero(sorting.labels == ogl)
+            # this is like trough[best] - trough[ogl]
+            shift_og_best = shifts[best_orig, ogl]
+            # if >0, trough of og is behind trough of best.
+            # subtracting will move trough of og to the right.
+            times_updated[in_orig_unit] -= shift_og_best
+
+    return sorting.ephemeral_replace(times_samples=times_updated, labels=new_labels)
 
 
 def hierarchical_cluster(
@@ -134,6 +148,20 @@ def hierarchical_cluster(
         new_labels[kept] = new_ids[labels[kept]]
 
     return new_labels, new_ids
+
+
+def linkage_mask(
+    distances: np.ndarray, linkage_method="complete", threshold=1.0
+) -> np.ndarray:
+    _, ids = hierarchical_cluster(
+        labels=None,
+        distances=distances,
+        linkage_method=linkage_method,
+        threshold=threshold,
+    )
+    mask = ids[:, None] == ids[None, :]
+    assert mask.any(1).all()
+    return mask
 
 
 def sparsify_labels(labels: np.ndarray) -> dict[int, np.ndarray]:
