@@ -116,7 +116,7 @@ def tmm_demix(
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
-    tmm, train_data, val_data, full_data, *_ = instantiate_and_bootstrap_tmm(
+    mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion=motion,
         refinement_cfg=refinement_cfg,
@@ -124,6 +124,7 @@ def tmm_demix(
         computation_cfg=computation_cfg,
         fit_indices=fit_indices,
     )
+    tmm, train_data, val_data, full_data, train_ixs, _ = mix_data
 
     saving = save_cfg is not None and save_cfg.save_intermediate_labels
     save_kw = dict(
@@ -200,9 +201,13 @@ def tmm_demix(
 
     # final assignments
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
+    # downstream, we might care if a spike was used for training
+    is_train = np.zeros(sorting.labels.shape, dtype=bool)
+    is_train[train_ixs] = True
+    sorting.add_ephemeral_feature("gmm_train", is_train)
     # log proportion can be useful for downstream analysis
     sorting.add_ephemeral_feature(
-        "unit_log_proportions", tmm.b.log_proportions.numpy(force=True)
+        "gmm_log_proportions", tmm.b.log_proportions.numpy(force=True)
     )
     del tmm, train_data, val_data, full_data
     return sorting
