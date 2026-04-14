@@ -137,7 +137,7 @@ class TemplateData:
             unit_ids=self.unit_ids,
             spike_counts=self.spike_counts,
             trough_offset_samples=self.trough_offset_samples,
-            self.sampling_frequency=self.self.sampling_frequency,
+            sampling_frequency=self.sampling_frequency,
         )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom

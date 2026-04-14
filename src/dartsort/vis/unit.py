@@ -220,8 +220,9 @@ class PCAScatter(UnitPlot):
 
 
 class TimeFeatScatter(UnitPlot):
-    kind = "widescatter"
+    kind = "medium"
     width = 2
+    height = 0.75
 
     def __init__(
         self,
@@ -488,7 +489,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
     title = "coarse template distance"
     kind = "neighbors"
     width = 3
-    height = 1.25
+    height = 2
 
     def __init__(
         self,
@@ -529,12 +530,32 @@ class CoarseTemplateDistancePlot(UnitPlot):
             cmap="RdGy",
             origin="lower",
             interpolation="none",
+            aspect="auto",
         )
         if self.show_values:
-            for (j, i), label in np.ndenumerate(neighbor_dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+            if sorting_analysis.merge_lags is not None:
+                lags = sorting_analysis.merge_lags[neighbor_ixs][:, neighbor_ixs]
+            else:
+                lags = None
+            for (i, j), d in np.ndenumerate(neighbor_dists):
+                txt = f"{d:.2f}".lstrip("0")
+                if lags is not None:
+                    txt += f":{lags[i, j].item():+d}"
+
+                axis.text(i, j, txt, ha="center", va="center")
         plt.colorbar(im, ax=axis, shrink=0.3)
-        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+        if sorting_analysis.merge_r2 is not None:
+            r2 = sorting_analysis.merge_r2[neighbor_ixs]
+            if np.isclose(r2.min(), 1.0):
+                xt = neighbor_ids
+            else:
+                xt = [
+                    f"{nid.item()}\n" + f"{rr:.2f}".lstrip("0")
+                    for nid, rr in zip(neighbor_ids, r2)
+                ]
+        else:
+            xt = neighbor_ids
+        axis.set_xticks(range(len(neighbor_ids)), xt)
         axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
         for i, (tx, ty) in enumerate(
             zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
@@ -545,14 +566,19 @@ class CoarseTemplateDistancePlot(UnitPlot):
 
 
 class NeighborCCGPlot(UnitPlot):
-    kind = "neighbors"
-    width = 3
-    height = 0.75
+    kind = "medium"
 
-    def __init__(self, n_neighbors=3, max_lag=50):
+    def __init__(self, n_neighbors=3, max_lag=50, with_merged_acg=False):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
+        self.with_merged_acg = with_merged_acg
+        if self.with_merged_acg:
+            self.height = 1.0
+            self.width = 3.0
+        else:
+            self.height = 1.75
+            self.width = 2
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
@@ -577,21 +603,41 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts)
-        )
+        if self.with_merged_acg:
+            axes = panel.subplots(
+                nrows=1 + self.with_merged_acg,
+                ncols=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+        else:
+            axes = panel.subplots(
+                ncols=1 + self.with_merged_acg,
+                nrows=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+            axes = axes.T
         for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
+
+            if not self.with_merged_acg:
+                continue
+
             merged_st = np.concatenate((my_st, neighb_sts[j]))
             merged_st.sort()
             alags, acg = correlogram(merged_st, max_lag=self.max_lag)
-
-            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
             bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
-        axes[0, 0].set_ylabel("ccg")
-        axes[1, 0].set_ylabel("merged acg")
-        axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        if self.with_merged_acg:
+            axes[0, 0].set_ylabel("ccg")
+            axes[1, 0].set_ylabel("merged acg")
+            axes[-1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        else:
+            axes[-1, -1].set_xlabel("ccg")
 
 
 class NeighborQDAPlot(UnitPlot):
@@ -666,41 +712,39 @@ class NeighborQDAPlot(UnitPlot):
 
 # -- main routines
 
-default_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    PCAScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    TPCAWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
 
-no_pca_unit_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
+def default_plots():
+    return (
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        PCAScatter(),
+        TimeZScatter(),
+        TimeRegZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        TPCAWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    )
 
 
-template_assignment_plots = (
-    UnitTextInfo(),
-    RawWaveformPlot(),
-)
+def no_pca_unit_plots():
+    return (
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        TimeZScatter(),
+        TimeRegZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    )
 
 
 def make_unit_summary(
@@ -708,13 +752,15 @@ def make_unit_summary(
     unit_id,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
-    plots=default_plots,
+    plots=None,
     max_height=4,
     figsize=(16, 8.5),
     figure=None,
     gizmo_name="sorting_analysis",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots()
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
@@ -738,7 +784,7 @@ def make_unit_summary(
 def make_all_summaries(
     sorting_analysis: DARTsortAnalysis,
     save_folder,
-    plots=default_plots,
+    plots=None,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
@@ -756,6 +802,8 @@ def make_all_summaries(
     taskname="summaries",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots()
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.sorting.unit_ids

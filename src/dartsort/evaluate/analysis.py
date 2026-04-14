@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering import merge
+from ..clustering.agglomerate import template_distances
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -55,6 +55,8 @@ class DARTsortAnalysis:
     coarse_template_data: TemplateData | None
     motion: MotionInfo
     merge_distances: np.ndarray | None
+    merge_lags: np.ndarray | None
+    merge_r2: np.ndarray | None
     geom: np.ndarray
     registered_geom: np.ndarray
     extract_channel_index: np.ndarray | None
@@ -138,17 +140,19 @@ class DARTsortAnalysis:
 
         if template_data is not None:
             coarse_template_data = template_data.coarsen()
-            merge_distances = merge.get_merge_distances(
+            dres = template_distances(
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
                 computation_cfg=computation_cfg,
-                sampling_frequency=recording.sampling_frequency,
-            )[1]
+            )
+            merge_distances = dres.distances
+            merge_lags = dres.shifts
+            merge_r2 = dres.r2
             trough_offset_samples = template_data.trough_offset_samples
             spike_length_samples = template_data.spike_length_samples
         else:
             trough_offset_samples = spike_length_samples = 0
-            coarse_template_data = merge_distances = None
+            coarse_template_data = merge_distances = merge_lags = merge_r2 = None
 
         channel_index = getattr(sorting, "channel_index", None)
         amplitudes = getattr(
@@ -217,6 +221,8 @@ class DARTsortAnalysis:
             coarse_template_data=coarse_template_data,
             motion=motion,
             merge_distances=merge_distances,
+            merge_lags=merge_lags,
+            merge_r2=merge_r2,
             geom=motion.geom,
             registered_geom=motion.rgeom,
             extract_channel_index=channel_index,

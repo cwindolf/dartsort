@@ -299,6 +299,7 @@ def shared_basis_compress_templates(
         assert temporal_comps.shape[0] <= rank
         rank = temporal_comps.shape[0]
     else:
+        rank = min(rank, precomputed_basis.shape[0])
         assert precomputed_basis.shape == (rank, t)
         temporal_comps = precomputed_basis
 

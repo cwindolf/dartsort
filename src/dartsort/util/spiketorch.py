@@ -250,6 +250,100 @@ def full_shared_pconv(
     return out
 
 
+@torch.jit.script
+def best_shared_pconv(
+    tconv: Tensor, spatial_sing: Tensor, batch_size: int = 1024
+) -> tuple[Tensor, Tensor]:
+    rank, rank_, conv_len = tconv.shape
+    n_units, rank__, chans = spatial_sing.shape
+    assert rank == rank_ == rank__
+    lag_offset = conv_len // 2
+
+    conv_out = spatial_sing.new_empty((n_units, n_units))
+    lag_out = torch.empty_like(conv_out, dtype=torch.int32)
+
+    itriu = torch.triu_indices(n_units, n_units, offset=1)
+    ii = itriu[0]
+    jj = itriu[1]
+    ntriu = ii.shape[0]
+
+    conv_flat = conv_out.new_empty((ntriu,))
+    lag_flat = lag_out.new_empty((ntriu,))
+
+    tconv_flat = tconv.view(rank * rank, conv_len)
+
+    for i0 in range(0, ntriu, batch_size):
+        i1 = min(ntriu, i0 + batch_size)
+        bn = i1 - i0
+        bii = ii[i0:i1]
+        bjj = jj[i0:i1]
+
+        sii = spatial_sing[bii]
+        sjj = spatial_sing[bjj]
+
+        # contract channels dim
+        spatial_outer = torch.bmm(sii, sjj.mT)
+
+        # contract rank with tconv
+        bconv = spatial_outer.view(bn, rank * rank) @ tconv_flat
+
+        # reduce. would use out but it's weird in script.
+        conv_flat[i0:i1], lag_flat[i0:i1] = bconv.max(dim=1)
+
+    # squareform
+    conv_out[ii, jj] = conv_flat
+    conv_out[jj, ii] = conv_flat
+    lag_flat -= lag_offset
+    lag_out[ii, jj] = lag_flat
+    lag_out[jj, ii] = -lag_flat
+
+    lag_out.diagonal().zero_()
+    normsq = torch.linalg.norm(spatial_sing.view(n_units, -1), dim=1).square_()
+    conv_out.diagonal().copy_(normsq)
+
+    return conv_out, lag_out
+
+
+def scaled_normeuc_from_dots(
+    dots: Tensor, scale_var: float = 0.01**2, scale_boundary: float = 1.0 / 3.0
+) -> Tensor:
+    inv_lambda = 1.0 / scale_var
+    scale_max = 1.0 + scale_boundary
+    scale_min = 1.0 / scale_max
+
+    normsq = dots.diagonal().contiguous()
+
+    # optimal penalized scaling
+    # columns are targets ("recording"), rows are the "templates"
+    if scale_var > 0:
+        b = dots + inv_lambda
+        a = normsq[:, None] + inv_lambda
+        sc = b.div_(a).clamp_(scale_min, scale_max)
+    else:
+        sc = torch.ones_like(dots)
+
+    # euclidean distance identity
+    col_norm = normsq.sqrt()
+    row_norm = sc * col_norm[:, None]
+    dist = row_norm.square() + normsq[None, :]
+    dist -= sc.mul_(dots).mul_(2.0)
+    del sc
+    dist.relu_().sqrt_()
+
+    # divide by geom mean of norms
+    dist /= row_norm.sqrt_()
+    dist /= col_norm[None, :].sqrt_()
+
+    # handle blanks
+    dist.masked_fill_(dots == 0.0, torch.inf)
+    dist.diagonal().zero_()
+
+    # symmetrize
+    dist = torch.minimum(dist, dist.T)
+
+    return dist
+
+
 def ravel_multi_index(multi_index, dims):
     """torch implementation of np.ravel_multi_index
 
@@ -864,36 +958,11 @@ def scaled_normeuc_distance(
         dots[bii, bjj] = means[bii, None, :].bmm(means[bjj, :, None])[:, 0, 0]
     del means
 
-    # fill in dot lower tri
+    # fill in dot lower tri, diagonal
     dots[jj, ii] = dots[ii, jj]
+    dots.diagonal().copy_(normsq)
 
-    # optimal penalized scaling
-    # columns are targets ("recording"), rows are the "templates"
-    inv_lambda = scale_std**-2
-    b = dots + inv_lambda
-    a = normsq[:, None] + inv_lambda
-    sc = b.div_(a).clamp_(scale_min, scale_max)
-    sc.masked_fill_(dots < 0, 0.0)
-    del a, b
-
-    # divide by geom mean of norms in each cell
-    col_norm = norm
-    col_normsq = normsq
-    row_norm = sc * norm[:, None]
-    dist = row_norm.square() + col_normsq[None, :]
-    dist -= dots.mul_(sc).mul_(2.0)
-    dist.relu_().sqrt_()
-    dist /= row_norm.sqrt_()
-    dist /= col_norm[None, :].sqrt_()
-
-    # handle blanks / orthogonal units. nb dots have been sc'd.
-    dist.masked_fill_(dots == 0.0, torch.inf)
-    dist.diagonal().zero_()
-
-    # symmetrize with minimum
-    dist = torch.minimum(dist, dist.T)
-
-    return dist
+    return scaled_normeuc_from_dots(dots)
 
 
 def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):

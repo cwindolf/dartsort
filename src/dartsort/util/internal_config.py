@@ -463,7 +463,7 @@ class TemplateRealignmentConfig:
 
 @cfg_dataclass
 class TemplateMergeConfig:
-    distance_kind: str = "rms"
+    distance_kind: Literal["scaled_normeuc", "deconv", "max"] = "scaled_normeuc"
     linkage: str = "complete"
     merge_distance_threshold: float = 0.25
     cross_merge_distance_threshold: float = 0.5
@@ -472,7 +472,17 @@ class TemplateMergeConfig:
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 1.0 / 3.0
     svd_compression_rank: int = 20
-    max_shift_ms: float = 1.6666
+    max_shift_ms: float = 1.5
+
+    waveform_cfg: WaveformConfig = WaveformConfig()
+    whitening: WhiteningConfig = WhiteningConfig(strategy="prewhiten")
+
+    def to_template_config(self):
+        return TemplateConfig(
+            denoising_method="svd",
+            denoising_rank=self.svd_compression_rank,
+            whitening=self.whitening,
+        )
 
 
 @cfg_dataclass
@@ -714,6 +724,9 @@ class RefinementConfig:
     whiten_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
+
+    # template merge parameters
+    template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig()
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
