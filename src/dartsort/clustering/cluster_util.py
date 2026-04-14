@@ -137,6 +137,15 @@ def hierarchical_cluster(
             f"fcluster failed with {threshold=} and smallest pdist {pdist.min()}."
         ) from e
 
+    n_new = np.unique(new_ids).shape[0]
+    n_old = new_ids.shape[0]
+    n_merged = n_old - n_new
+    merge_pct = 100 * n_merged / n_old
+    logger.info(
+        f"{linkage_method} link merged {n_merged} units "
+        f"({n_old} -> {n_new}, {merge_pct:.1f}% reduction)."
+    )
+
     # offset by 1
     new_ids -= 1
 

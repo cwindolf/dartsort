@@ -340,9 +340,19 @@ def _dartsort_impl(
         else:
             step_clustering_cfg = step_features_cfg = None
 
-        r_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.post_refinement_cfg]
         if is_final and cfg.agglomerate_cfg is not None:
-            r_cfgs.append(cfg.agglomerate_cfg)
+            r_cfgs = [
+                cfg.pre_refinement_cfg,
+                cfg.refinement_cfg,
+                cfg.agglomerate_cfg,
+                cfg.post_refinement_cfg,
+            ]
+        else:
+            r_cfgs = [
+                cfg.pre_refinement_cfg,
+                cfg.refinement_cfg,
+                cfg.post_refinement_cfg,
+            ]
 
         sorting = cluster(
             recording=recording,

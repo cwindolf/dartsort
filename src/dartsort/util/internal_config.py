@@ -473,10 +473,14 @@ class TemplateMergeConfig:
     svd_compression_rank: int = 10
     max_shift_ms: float = 1.5
 
+    template_cfg: TemplateConfig | None = None
     waveform_cfg: WaveformConfig = WaveformConfig()
     whitening: WhiteningConfig = WhiteningConfig(strategy="prewhiten")
 
-    def to_template_config(self, template_cfg: TemplateConfig):
+    def to_template_config(self, template_cfg: TemplateConfig | None = None):
+        if template_cfg is None:
+            assert self.template_cfg is not None
+            template_cfg = self.template_cfg
         return replace(
             template_cfg,
             denoising_method="svd",
@@ -1152,11 +1156,18 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     if cfg.agg_kind == "none":
         agg_cfg = None
     elif cfg.agg_kind == "template_distance":
+        agg_whiten_cfg = WhiteningConfig(
+            strategy=cfg.whiten_strategy.removesuffix("_postapply"),  # type: ignore
+            estimator=cfg.whiten_estimator,
+            radius=cfg.subtraction_radius_um,
+            interp_params=temp_interp_params,
+        )
         agg_tmcfg = TemplateMergeConfig(
             linkage=cfg.agg_template_linkage,
             merge_distance_threshold=cfg.agg_no_qda_template_distance,
             waveform_cfg=waveform_cfg,
-            whitening=whiten_cfg,
+            whitening=agg_whiten_cfg,
+            template_cfg=template_cfg,
         )
         agg_cfg = RefinementConfig(
             refinement_strategy="agglomerate",
@@ -1164,11 +1175,18 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             qda_threshold=0.0,
         )
     elif cfg.agg_kind == "qda":
+        agg_whiten_cfg = WhiteningConfig(
+            strategy=cfg.whiten_strategy.removesuffix("_postapply"),  # type: ignore
+            estimator=cfg.whiten_estimator,
+            radius=cfg.subtraction_radius_um,
+            interp_params=temp_interp_params,
+        )
         agg_tmcfg = TemplateMergeConfig(
             linkage=cfg.agg_qda_linkage,
             merge_distance_threshold=cfg.agg_qda_max_template_distance,
             waveform_cfg=waveform_cfg,
-            whitening=whiten_cfg,
+            whitening=agg_whiten_cfg,
+            template_cfg=template_cfg,
         )
         agg_cfg = RefinementConfig(
             refinement_strategy="agglomerate", template_merge_cfg=agg_tmcfg

@@ -3,6 +3,7 @@
 from threading import local
 from typing import cast
 
+from KDEpy import FFTKDE
 import numba
 import numpy as np
 import torch
@@ -97,14 +98,10 @@ def agglomerate(
         threshold=template_merge_cfg.merge_distance_threshold,
     )
 
-    # reconstruct scores from sorting attached data (exclude train_ix?)
-    ntlabels, ntscores = _get_non_train_scores(sorting)
-
     # restrict mask by overlap criteria
     qda_res = qda(
         mask=mask,
-        labels=ntlabels,
-        scores=ntscores,
+        sorting=sorting,
         min_iou=refinement_cfg.qda_min_iou,
         min_cov=refinement_cfg.qda_min_coverage,
         show_progress=show_progress,
@@ -189,7 +186,6 @@ def template_distances(
         assert sorting is not None
         assert recording is not None
         assert motion is not None
-        assert template_cfg is not None
         template_data = TemplateData.from_config(
             recording=recording,
             sorting=sorting,
@@ -289,20 +285,26 @@ class QDAResult:
 
 def qda(
     *,
-    mask: np.ndarray,
-    labels: np.ndarray,
-    scores: Scores,
+    mask: np.ndarray | None,
+    sorting: DARTsortSorting,
     min_iou: float = 0.5,
-    min_cov: float = 0.3,
+    min_cov: float = 0.35,
     min_count: int = 20,
+    dx: float = 1.0,
     show_progress: bool,
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
+    # reconstruct scores from sorting attached data (exclude train_ix?)
+    ntlabels, ntscores = _get_non_train_scores(sorting)
+
+    if mask is None:
+        mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)
+
     iou = np.zeros(mask.shape, dtype=np.float32)
     ctx = QDACtx(
-        inus=sparsify_labels(labels),
-        cand=scores.candidates.numpy(force=True),
-        log_liks=scores.log_liks.numpy(force=True),
+        inus=sparsify_labels(ntlabels),
+        cand=ntscores.candidates.numpy(force=True),
+        log_liks=ntscores.log_liks.numpy(force=True),
         min_iou=min_iou,
         min_cov=min_cov,
         min_count=min_count,
@@ -310,6 +312,7 @@ def qda(
         cov=iou.copy(),
         score=iou.copy(),
         min_ratio=iou.copy(),
+        dx=dx,
     )
 
     n_jobs, Executor, context, *_ = pool_from_cfg(
@@ -354,6 +357,7 @@ class QDACtx:
     cov: np.ndarray
     score: np.ndarray
     min_ratio: np.ndarray
+    dx: float
 
 
 def _qda_init(ctx):
@@ -369,21 +373,49 @@ def _qda_job(ij):
 
     ini = p.inus[i]
     inj = p.inus[j]
-    inij, overlap, imask, jmask, iou, cov = _ioucov(i, j, ini, inj, p.cand)
+    inij = np.concatenate((ini, inj), axis=0)
+    overlap, imask, jmask, iou, cov = _ioucov(i, j, ini, inj, inij, p.cand)
     p.iou[i, j] = p.iou[j, i] = iou
     p.cov[i, j] = p.cov[j, i] = cov
+
     if iou < p.min_iou:
         return
     if cov < p.min_cov:
         return
     if ini.size + inj.size < p.min_count:
         return
+
     dll = _dll(inij, overlap, imask, jmask, p.log_liks)
 
+    vmn, vmx = torch.aminmax(torch.asarray(dll))
+    vm = max(-vmn, vmx)
+    nbins = (vm + p.dx) // p.dx
+    binc = np.arange(-nbins * p.dx, (nbins + 1) * p.dx, p.dx)
+    bc = binc.shape[0] // 2
+    assert np.isclose(binc[bc], 0.0)
+    assert binc.shape[0] == 2 * bc + 1
 
-@numba.jit(nopython=True, nogil=True)
-def _ioucov(i: int, j: int, ini: np.ndarray, inj: np.ndarray, cand: np.ndarray):
-    inij = np.concatenate([ini, inj])
+    kde = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+    kde = cast(np.ndarray, kde.evaluate(binc))
+    score, min_ratio = bimod_stats(kde)
+    p.score[i, j] = p.score[j, i] = score
+    p.min_ratio[i, j] = p.min_ratio[j, i] = min_ratio
+
+
+@numba.jit("b1[:](b1[:,:])", nopython=True, nogil=True)
+def np_any_axis1(x):
+    out = x[:, 0]
+    for i in range(1, x.shape[1]):
+        out = np.logical_or(out, x[:, i])
+    return out
+
+
+@numba.jit(
+    "Tuple((b1[:],b1[:,:],b1[:,:],f8,f8))(i8,i8,i8[:],i8[:],i8[:],i4[:,:])",
+    nopython=True,
+    nogil=True,
+)
+def _ioucov(i, j, ini: np.ndarray, inj: np.ndarray, inij: np.ndarray, cand: np.ndarray):
     ni = ini.size
     nj = inj.size
     nij = inij.size
@@ -392,28 +424,47 @@ def _ioucov(i: int, j: int, ini: np.ndarray, inj: np.ndarray, cand: np.ndarray):
     imask = candij == i
     jmask = candij == j
 
-    icov = imask.any(axis=1)
-    jcov = jmask.any(axis=1)
+    icov = np_any_axis1(imask)
+    jcov = np_any_axis1(jmask)
     overlap = np.logical_and(icov, jcov)
 
     noi = overlap[:ni].sum()
     noj = overlap[ni:].sum()
-    iou = (noi + noj) / nij
+    iou = (noi + noj).item() / nij
     cov = min(noi / ni, noj / nj)
-    return inij, overlap, imask, jmask, iou, cov
+    return overlap, imask, jmask, iou, cov
 
 
-@numba.jit(nopython=True, nogil=True)
+@numba.jit("f4[:](i8[:],b1[:],b1[:,:],b1[:,:],f4[:,:])", nopython=True, nogil=True)
 def _dll(
-    inij,
+    inij: np.ndarray,
     overlap: np.ndarray,
     imask: np.ndarray,
     jmask: np.ndarray,
     log_liks: np.ndarray,
 ):
     ll = log_liks[inij]
-    _, ixi = np.nonzero(imask[overlap])
-    lli = np.take_along_axis(ll[overlap], ixi[:, None], axis=1)[:, 0]
-    _, ixj = np.nonzero(jmask[overlap])
-    llj = np.take_along_axis(ll[overlap], ixj[:, None], axis=1)[:, 0]
+    olap = np.flatnonzero(overlap)
+    _, ixi = np.nonzero(imask[olap])
+    lli = np.take_along_axis(ll[olap], ixi[:, None], axis=1)[:, 0]
+    _, ixj = np.nonzero(jmask[olap])
+    llj = np.take_along_axis(ll[olap], ixj[:, None], axis=1)[:, 0]
     return lli - llj
+
+
+def bimod_stats(h):
+    assert h.ndim == 1
+    assert h.size % 2
+    cix = h.shape[0] // 2
+    h0 = h[cix]
+    da = h[:cix].max()
+    db = h[cix + 1 :].max()
+    dd = min(da, db)
+    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
+        a = 0.0
+    elif np.isclose(dd, 0.0):
+        a = np.inf
+    else:
+        a = h0 / dd
+    b = h0 / max(da, db)
+    return a, b

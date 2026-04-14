@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering.agglomerate import template_distances
+from ..clustering.agglomerate import template_distances, qda, QDAResult
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -74,6 +74,7 @@ class DARTsortAnalysis:
     spike_counts: np.ndarray
     amplitude_vectors: np.ndarray | None
     erp: StableFeaturesInterpolator | None
+    qda: QDAResult | None
     sklearn_tpca: PCA | None
     tpca_temporal_slice: slice
     name: str | None = None
@@ -159,6 +160,25 @@ class DARTsortAnalysis:
             trough_offset_samples = spike_length_samples = 0
             coarse_template_data = merge_distances = merge_lags = merge_r2 = None
 
+        if template_data is not None and hasattr(sorting, "gmm_candidates"):
+            assert sorting.labels is not None
+            c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+            lk = np.flatnonzero(sorting.labels >= 0)
+            is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
+            if is_gmm:
+                logger.info("Analyze GMM.")
+                assert merge_distances is not None
+                qdares = qda(
+                    mask=None,
+                    sorting=sorting,
+                    computation_cfg=computation_cfg,
+                    show_progress=True,
+                )
+            else:
+                qdares = None
+        else:
+            qdares = None
+
         channel_index = getattr(sorting, "channel_index", None)
         amplitudes = getattr(
             sorting, clustering_features_cfg.amplitudes_dataset_name, None
@@ -243,6 +263,7 @@ class DARTsortAnalysis:
             amplitudes=amplitudes,
             amplitude_vectors=amplitude_vecs,
             erp=erp,
+            qda=qdares,
             sklearn_tpca=sklearn_tpca,
             tpca_temporal_slice=tpca_temporal_slice,
             name=name,

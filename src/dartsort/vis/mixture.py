@@ -547,7 +547,6 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     if not bincs.size:
                         continue
                     hist, _ = np.histogram(dll, bins=bines)
-                    print(f"{hist.shape=}")
                     hist = hist.astype(np.float64) / hist.sum()
                     ax.stairs(
                         hist, edges=bines, linestyle=linestyle, color="k", zorder=10
@@ -561,7 +560,6 @@ class NeighborQDAPlot(MixtureComponentPlot):
                         messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
                         continue
                     kde = cast(np.ndarray, kdest.evaluate(bincs))
-                    print(f"{kde.shape=}")
                     kde /= kde.sum()
                     ksa, ksb = bimod_stats(kde)
                     kstats[label] = f"a:{fstr(ksa)}, b:{fstr(ksb)}"
@@ -1843,7 +1841,6 @@ def centered_bins(x, dx=1.0):
 
 
 def bimod_stats(h):
-    print(f"{h.shape=}")
     assert h.ndim == 1
     assert h.size % 2
     cix = h.shape[0] // 2

@@ -565,6 +565,54 @@ class CoarseTemplateDistancePlot(UnitPlot):
         axis.set_title(self.title)
 
 
+class NeighborQDAMatrices(UnitPlot):
+    kind = "tall"
+    width = 2
+    height = 4
+
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id):
+        neighbor_ixs, neighbor_ids, _, _ = sorting_analysis.nearby_coarse_templates(
+            unit_id
+        )
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+        if not np.equal(neighbor_ids, unit_id).any():
+            panel.subplots().axis("off")
+            return
+        assert neighbor_ids[0] == unit_id
+
+        axes = panel.subplots(nrows=2)
+
+        qda = sorting_analysis.qda
+        assert qda is not None
+
+        for ax, (sc, ol), title in zip(
+            axes,
+            [(qda.score, qda.iou), (qda.min_ratio, qda.coverage)],
+            ["qda/iou", "ratio/coverage"],
+        ):
+            im = ax.imshow(
+                sc,
+                vmin=0,
+                cmap="RdGy",
+                origin="lower",
+                interpolation="none",
+                aspect="auto",
+            )
+            for (i, j), d in np.ndenumerate(sc):
+                ostr = f"{ol[i, j]:.2f}".lstrip("0")
+                txt = f"{d:.2f}".lstrip("0") + f" ({ostr})"
+                ax.text(i, j, txt, ha="center", va="center")
+            plt.colorbar(im, ax=ax, shrink=0.3)
+            ax.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+            ax.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+            for i, (tx, ty) in enumerate(
+                zip(ax.xaxis.get_ticklabels(), ax.yaxis.get_ticklabels())
+            ):
+                tx.set_color(colors[i])
+                ty.set_color(colors[i])
+            ax.set_title(title)
+
+
 class NeighborCCGPlot(UnitPlot):
     kind = "medium"
 
@@ -713,8 +761,8 @@ class NeighborQDAPlot(UnitPlot):
 # -- main routines
 
 
-def default_plots():
-    return (
+def default_plots(sorting_analysis=None):
+    p = [
         UnitTextInfo(),
         ACG(),
         ISIHistogram(),
@@ -728,10 +776,14 @@ def default_plots():
         NearbyCoarseTemplatesPlot(),
         CoarseTemplateDistancePlot(),
         NeighborCCGPlot(),
-    )
+    ]
+    if sorting_analysis is not None and sorting_analysis.qda is not None:
+        p.append(NeighborQDAMatrices())
+    return p
 
 
-def no_pca_unit_plots():
+def no_pca_unit_plots(sorting_analysis=None):
+    del sorting_analysis
     return (
         UnitTextInfo(),
         ACG(),
@@ -760,7 +812,7 @@ def make_unit_summary(
     **other_global_params,
 ):
     if plots is None:
-        plots = default_plots()
+        plots = default_plots(sorting_analysis)
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
@@ -803,7 +855,7 @@ def make_all_summaries(
     **other_global_params,
 ):
     if plots is None:
-        plots = default_plots()
+        plots = default_plots(sorting_analysis)
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.sorting.unit_ids

@@ -67,7 +67,7 @@ from ...util.interpolation_util import (
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
-from ...util.main_util import ds_save_intermediate_labels
+from ...util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ...util.motion import MotionInfo
 from ...util.noise_util import EmbeddedNoise
 from ...util.py_util import databag
@@ -139,8 +139,8 @@ def tmm_demix(
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
     tmm.em(train_data, min_iters=tmm.p.main_min_iters)
+    stepname = f"tmm00em"
     if saving:
-        stepname = f"tmm00em"
         save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
     logger.dartsortdebug(
@@ -187,17 +187,11 @@ def tmm_demix(
                     )
             else:
                 assert False
-            if saving:
-                stepname = f"tmm{outer_it}{inner_it}{step_type}"
+            stepname = f"tmm{outer_it}{inner_it}{step_type}"
+            is_final = outer_it == refinement_cfg.n_total_iters - 1
+            is_final = is_final and inner_it == len(refinement_cfg.mixture_steps) - 1
+            if saving and not is_final:
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
-
-    if saving:
-        save_tmm_labels(
-            tmm=tmm,
-            stepname=f"tmm{outer_it + 1}0finalkeepnoise",
-            remove_noise=False,
-            **save_kw,  # type: ignore
-        )
 
     # final assignments
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
@@ -208,9 +202,20 @@ def tmm_demix(
     sorting.add_ephemeral_feature("gmm_train", is_train)
     # log proportion can be useful for downstream analysis
     sorting.add_ephemeral_feature(
-        "gmm_log_proportions", tmm.b.log_proportions.numpy(force=True)
+        "unit_log_proportions", tmm.b.log_proportions.numpy(force=True)
     )
     del tmm, train_data, val_data, full_data
+
+    if saving:
+        # final sorting gets dumped entirely
+        assert save_step_labels_format is not None
+        ds_save_intermediate_sorting(
+            step_name=save_step_labels_format.format(stepname=stepname),
+            step_sorting=sorting,
+            output_dir=save_step_labels_dir,
+            cfg=save_cfg,
+        )
+
     return sorting
 
 
