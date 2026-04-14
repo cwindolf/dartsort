@@ -1,5 +1,4 @@
-import dataclasses
-from dataclasses import field, fields
+from dataclasses import asdict, field, fields, replace
 from pathlib import Path
 from typing import Literal, Self, Sequence
 
@@ -253,9 +252,9 @@ class InterpolationParams:
         )
 
 
-default_interpolation_params = InterpolationParams()
+tps_interp_params = InterpolationParams()
 clampna_interp_params = InterpolationParams(method="clampna")
-default_template_interpolation_params = InterpolationParams(extrap_method="clampna")
+tps_interp_clampna_extrap_params = InterpolationParams(extrap_method="clampna")
 default_extrapolation_params = InterpolationParams(
     method="kernel", kernel="rq", sigma=10.0
 )
@@ -368,7 +367,7 @@ WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 class WhiteningConfig:
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
-    interp_params: InterpolationParams = default_template_interpolation_params
+    interp_params: InterpolationParams = clampna_interp_params
     radius: float = 200.0
 
 
@@ -401,7 +400,7 @@ class TemplateConfig:
     registered_templates: bool = True
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: int = 25
-    template_interp_params: InterpolationParams = default_template_interpolation_params
+    template_interp_params: InterpolationParams = clampna_interp_params
 
     # low rank denoising?
     denoising_rank: int = 5
@@ -471,14 +470,15 @@ class TemplateMergeConfig:
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 1.0 / 3.0
-    svd_compression_rank: int = 20
+    svd_compression_rank: int = 10
     max_shift_ms: float = 1.5
 
     waveform_cfg: WaveformConfig = WaveformConfig()
     whitening: WhiteningConfig = WhiteningConfig(strategy="prewhiten")
 
-    def to_template_config(self):
-        return TemplateConfig(
+    def to_template_config(self, template_cfg: TemplateConfig):
+        return replace(
+            template_cfg,
             denoising_method="svd",
             denoising_rank=self.svd_compression_rank,
             whitening=self.whitening,
@@ -512,7 +512,7 @@ class MatchingConfig:
         "drifty"
     )
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
-    drift_interp_params: InterpolationParams = default_template_interpolation_params
+    drift_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
     whitening: WhiteningConfig = WhiteningConfig()
     whiten_features: bool = True
@@ -607,7 +607,7 @@ class ClusteringFeaturesConfig:
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
 
-    interp_params: InterpolationParams = default_interpolation_params
+    interp_params: InterpolationParams = tps_interp_params
 
 
 @cfg_dataclass
@@ -728,6 +728,13 @@ class RefinementConfig:
     # template merge parameters
     template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig()
 
+    # other agglomeration parameters
+    qda_threshold: float = 0.2
+    dip_min_ratio: float = 0.1
+    min_coverage: float = 0.35
+    min_iou: float = 0.5
+    include_train: bool = False
+
     # forward_backward parameters
     chunk_size_s: float = 300.0
     log_c: float = 5.0
@@ -739,8 +746,8 @@ class RefinementConfig:
     core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
-    interp_params: InterpolationParams = default_interpolation_params
-    noise_interp_params: InterpolationParams = default_template_interpolation_params
+    interp_params: InterpolationParams = tps_interp_params
+    noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
 
 @cfg_dataclass
@@ -880,7 +887,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
 
     # if we have a user cfg, dump into dev cfg, and work from there
     if isinstance(cfg, DARTsortUserConfig):
-        cfg = DeveloperConfig(**dataclasses.asdict(cfg))
+        cfg = DeveloperConfig(**asdict(cfg))
 
     waveform_cfg = WaveformConfig(ms_before=cfg.ms_before, ms_after=cfg.ms_after)
     tpca_waveform_cfg = WaveformConfig(
@@ -955,9 +962,15 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
     if cfg.template_interp_kind == "tps":
-        temp_interp_params = default_template_interpolation_params
+        temp_interp_params = tps_interp_clampna_extrap_params
     elif cfg.template_interp_kind == "clampna":
         temp_interp_params = clampna_interp_params
+    else:
+        assert False
+    if cfg.matching_interp_kind == "tps":
+        match_interp_params = tps_interp_clampna_extrap_params
+    elif cfg.matching_interp_kind == "clampna":
+        match_interp_params = clampna_interp_params
     else:
         assert False
     whiten_cfg = WhiteningConfig(
@@ -1072,7 +1085,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         irank = refinement_cfg.signal_rank
     else:
         irank = cfg.initial_rank
-    initial_refinement_cfg = dataclasses.replace(
+    initial_refinement_cfg = replace(
         refinement_cfg,
         mixture_steps=cfg.initial_steps,
         signal_rank=irank,
@@ -1124,7 +1137,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             ),
         ),
         template_svd_compression_rank=cfg.matching_svd_rank,
-        drift_interp_params=temp_interp_params,
+        drift_interp_params=match_interp_params,
         refractory_radius_frames=cfg.refractory_radius_frames,
     )
     computation_cfg = ComputationConfig(

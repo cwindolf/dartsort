@@ -41,12 +41,11 @@ from torch import Tensor
 
 from ...templates import TemplateData
 from ...templates.template_util import shared_basis_compress_templates
-from ...util.internal_config import ComputationConfig, MatchingConfig, WhiteningStrategy
+from ...util.internal_config import ComputationConfig, MatchingConfig, WhiteningStrategy, tps_interp_clampna_extrap_params
 from ...util.interpolation_util import (
     FromFullProbeInterpolator,
     InterpolationParams,
     bake_interpolation_1d,
-    default_interpolation_params,
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import get_logger
@@ -85,7 +84,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
         up_interp_params: InterpolationParams = default_upsampling_params,
-        drift_interp_params: InterpolationParams = default_interpolation_params,
+        drift_interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
         refractory_radius_frames: int = 0,
         device: torch.device,
     ):

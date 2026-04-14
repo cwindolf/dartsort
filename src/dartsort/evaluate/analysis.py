@@ -146,7 +146,9 @@ class DARTsortAnalysis:
                 motion=motion,
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
+                template_cfg=template_cfg,
                 computation_cfg=computation_cfg,
+                allow_whitening_fail=True,
             )
             merge_distances = dres.distances
             merge_lags = dres.shifts

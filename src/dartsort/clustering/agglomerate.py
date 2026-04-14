@@ -12,6 +12,7 @@ from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
     RefinementConfig,
+    TemplateConfig,
     TemplateMergeConfig,
     WaveformConfig,
     default_waveform_cfg,
@@ -25,6 +26,7 @@ from ..util.spiketorch import (
     scaled_normeuc_from_dots,
     shared_temporal_pconv,
 )
+from .cluster_util import recluster
 
 logger = get_logger(__name__)
 
@@ -55,7 +57,7 @@ def agglomerate(
         assert refinement_cfg is not None
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
-    tdist_res = template_distances(
+    tdist = template_distances(
         sorting=sorting,
         recording=recording,
         motion=motion,
@@ -65,12 +67,31 @@ def agglomerate(
         computation_cfg=computation_cfg,
     )
 
+    # if not doing any QDA, be done now.
+    if refinement_cfg is None or not refinement_cfg.qda_threshold:
+        agg_sorting, new_ids = recluster(
+            sorting=sorting,
+            unit_ids=tdist.template_data.unit_ids,
+            dists=tdist.distances,
+            shifts=tdist.shifts,
+            unit_snrs=tdist.template_data.snrs_by_channel().max(1),
+            threshold=template_merge_cfg.merge_distance_threshold,
+            link=template_merge_cfg.linkage,
+        )
+        return Agglomeration(
+            agglomerated_sorting=agg_sorting,
+            merge_mapping=new_ids,
+            distances=tdist.distances,
+            shifts=tdist.shifts,
+            bimodalities=None,
+        )
+
     # get mask
     # reconstruct scores from sorting attached data (exclude train_ix?)
     # get bimodality in mask
     # update mask, extract merge
     # apply with shifts
-    return NotImplemented
+    assert False
 
 
 def apply_agglomeration(
@@ -83,6 +104,7 @@ class TemplateDistanceResult:
     distances: np.ndarray
     shifts: np.ndarray
     r2: np.ndarray
+    template_data: TemplateData
 
 
 def template_distances(
@@ -92,8 +114,10 @@ def template_distances(
     sorting: DARTsortSorting | None = None,
     recording: BaseRecording | None = None,
     motion: MotionInfo | None = None,
+    template_cfg: TemplateConfig | None = None,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
+    allow_whitening_fail: bool = False,
 ) -> TemplateDistanceResult:
     computation_cfg = ensure_computation_config(computation_cfg)
     device = computation_cfg.actual_device()
@@ -111,6 +135,11 @@ def template_distances(
             "Need to recompute templates for distances since they were not whitened."
         )
         need_templates = True
+        if allow_whitening_fail:
+            # this path is useful for visualization, when we don't care too much.
+            if sorting is None or sorting.parent_h5_path is None:
+                logger.info("Can't whiten, sorting doesn't have the data.")
+                need_templates = False
     else:
         need_templates = False
 
@@ -118,10 +147,11 @@ def template_distances(
         assert sorting is not None
         assert recording is not None
         assert motion is not None
+        assert template_cfg is not None
         template_data = TemplateData.from_config(
             recording=recording,
             sorting=sorting,
-            template_cfg=template_merge_cfg.to_template_config(),
+            template_cfg=template_merge_cfg.to_template_config(template_cfg),
             motion=motion,
             waveform_cfg=waveform_cfg,
             computation_cfg=computation_cfg,
@@ -150,8 +180,7 @@ def template_distances(
         spatial_sing = (spatial_sing.view(k * r, c) @ ww.T).view(k, r, c)
 
     tconv = shared_temporal_pconv(
-        temporal_comps=tcomp,
-        up_temporal_comps=tcomp[:, None],
+        temporal_comps=tcomp, up_temporal_comps=tcomp[:, None]
     )
     tconv = tconv[:, :, 0, :]
 
@@ -180,4 +209,5 @@ def template_distances(
         distances=dist.numpy(force=True),
         shifts=best_lag.numpy(force=True),
         r2=cast(np.ndarray, sbt.r2),
+        template_data=template_data,
     )

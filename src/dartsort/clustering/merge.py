@@ -12,6 +12,7 @@ from ..util import job_util
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, TemplateMergeConfig
 from ..util.logging_util import get_logger
+from .cluster_util import recluster
 
 logger = get_logger(__name__)
 
@@ -79,12 +80,12 @@ def merge_templates(
 
     # now run hierarchical clustering
     merged_sorting, new_unit_ids = recluster(
-        sorting,
-        units,
-        dists,
-        shifts,
-        template_snrs,
-        merge_distance_threshold=merge_distance_threshold,
+        sorting=sorting,
+        unit_ids=units,
+        dists=dists,
+        shifts=shifts.T,
+        unit_snrs=template_snrs,
+        threshold=merge_distance_threshold,
         link=linkage,
     )
 
@@ -276,68 +277,6 @@ def cross_match_distance_matrix(
         a_kept,
         b_kept,
     )
-
-
-def recluster(
-    sorting,
-    units,
-    dists,
-    shifts,
-    template_snrs,
-    merge_distance_threshold=0.25,
-    link="complete",
-):
-    # upper triangle not including diagonal, aka condensed distance matrix in scipy
-    pdist = dists[np.triu_indices(dists.shape[0], k=1)]
-    # scipy hierarchical clustering only supports finite values, so let's just
-    # drop in a huge value here
-    finite = np.isfinite(pdist)
-    if not finite.any():
-        return sorting, np.arange(dists.shape[0])
-    assert units.shape[0] == dists.shape[0] == dists.shape[1]
-
-    pdist[~finite] = 1_000_000 + pdist[finite].max()
-    Z = linkage(pdist, method=link)
-    # extract flat clustering using our max dist threshold
-    new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
-    assert new_labels.min() == 1  # start at 1 for some reason
-    new_labels -= 1
-
-    # update labels
-    labels_updated = np.full_like(sorting.labels, -1)
-    kept = np.flatnonzero(np.isin(sorting.labels, units))
-    labels_updated[kept] = new_labels[sorting.labels[kept]]
-
-    # update times according to shifts
-    times_updated = sorting.times_samples.copy()
-
-    # find original labels in each cluster
-    clust_inverse = {i: [] for i in new_labels}
-    for orig_label, new_label in enumerate(new_labels):
-        clust_inverse[new_label].append(orig_label)
-    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
-    logger.dartsortdebug(f"Merged {n_merges} templates.")
-
-    # align to best snr unit
-    for new_label, orig_labels in clust_inverse.items():
-        # we don't need to realign clusters which didn't change
-        if len(orig_labels) <= 1:
-            continue
-
-        orig_snrs = template_snrs[orig_labels]
-        best_orig = orig_labels[orig_snrs.argmax()]
-        for ogl in np.setdiff1d(orig_labels, [best_orig]):
-            in_orig_unit = np.flatnonzero(sorting.labels == ogl)
-            # this is like trough[best] - trough[ogl]
-            shift_og_best = shifts[ogl, best_orig]
-            # if >0, trough of og is behind trough of best.
-            # subtracting will move trough of og to the right.
-            times_updated[in_orig_unit] -= shift_og_best
-
-    new_sorting = sorting.ephemeral_replace(
-        times_samples=times_updated, labels=labels_updated
-    )
-    return new_sorting, new_labels
 
 
 def get_deconv_resid_decrease_iter(

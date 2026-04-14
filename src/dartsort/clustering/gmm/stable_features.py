@@ -12,7 +12,7 @@ from ...util.internal_config import (
     InterpolationParams,
     RefinementConfig,
     default_extrapolation_params,
-    default_interpolation_params,
+    tps_interp_params,
 )
 from ...util.interpolation_util import SpikeNeighborhoods
 from ...util.job_util import get_global_computation_config
@@ -91,7 +91,7 @@ class StableSpikeDataset(torch.nn.Module):
         split_names: Sequence[str] | None = None,
         split_mask: torch.Tensor | None = None,
         core_radius: float | Literal["extract"] | None = 35.0,
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = tps_interp_params,
         extrap_params: InterpolationParams = default_extrapolation_params,
         extract_neighborhoods=None,
         extract_neighborhood_ids=None,
@@ -252,7 +252,7 @@ class StableSpikeDataset(torch.nn.Module):
         max_n_spikes: float | int = np.inf,
         kept_indices: np.ndarray | None = None,
         discard_triaged: bool = False,
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = tps_interp_params,
         features_dataset_name="collisioncleaned_tpca_features",
         motion_depth_mode: Literal["channel", "localization"] = "channel",
         split_names=("train", "val"),

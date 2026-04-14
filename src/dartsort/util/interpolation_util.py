@@ -11,7 +11,7 @@ from .internal_config import (
     InterpKernel,
     InterpMethod,
     InterpolationParams,
-    default_interpolation_params,
+    tps_interp_params,
 )
 from .motion import MotionInfo
 from .torch_util import BModule
@@ -33,7 +33,7 @@ def interpolate_by_chunk(
     registered_geom,
     target_channels,
     trim_to_rank: int | None = None,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     device=None,
     store_on_device=False,
     show_progress=True,
@@ -149,7 +149,7 @@ def interp_precompute(
     source_geom=None,
     channel_index=None,
     source_pos=None,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     source_geom_is_padded=True,
 ):
     params = params.normalize()
@@ -266,7 +266,7 @@ def kernel_interpolate(
     features,
     source_pos,
     target_pos,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     precomputed_data=None,
     neighborhoods=None,
     solver_map=None,
@@ -1251,7 +1251,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
         self,
         prgeom: torch.Tensor,
         neighborhoods: SpikeNeighborhoods,
-        params: InterpolationParams = default_interpolation_params,
+        params: InterpolationParams = tps_interp_params,
         batch_size: int = 1024,
     ):
         super().__init__()

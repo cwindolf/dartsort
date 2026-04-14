@@ -25,7 +25,7 @@ from ..util.internal_config import (
     ComputationConfig,
     InterpolationParams,
     WhiteningConfig,
-    default_template_interpolation_params,
+    tps_interp_clampna_extrap_params,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
@@ -1050,7 +1050,7 @@ class EmbeddedNoise(BModule):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion: MotionInfo | None = None,
-        interp_params: InterpolationParams = default_template_interpolation_params,
+        interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
         device=None,
         rank: int | None = None,
         shrinkage=0.0,
@@ -1149,7 +1149,7 @@ def interpolate_residual_snippets(
     registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    interp_params: InterpolationParams = default_template_interpolation_params,
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     do_tpca: bool,
     tpca: PCA | BaseTemporalPCA | None = None,
     device: torch.device | str | None = None,
@@ -1397,7 +1397,7 @@ def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
     motion: MotionInfo,
-    interp_params: InterpolationParams = default_template_interpolation_params,
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     device: torch.device | None = None,
     rgeom=None,
     residual_times_s_dataset_name="residual_times_seconds",

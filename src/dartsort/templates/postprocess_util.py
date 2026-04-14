@@ -1,7 +1,7 @@
 import gc
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -378,25 +378,45 @@ def _handle_merge(
 
     from ..clustering.merge import merge_templates
 
-    merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
-    merge_res = merge_templates(
-        sorting=sorting,
-        template_data=template_data,
-        max_shift_samples=merge_shift_samples,
-        linkage=merge_cfg.linkage,
-        merge_distance_threshold=merge_cfg.merge_distance_threshold,
-        temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
-        amplitude_scaling_variance=merge_cfg.amplitude_scaling_variance,
-        amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
-        svd_compression_rank=merge_cfg.svd_compression_rank,
-        min_spatial_cosine=merge_cfg.min_spatial_cosine,
-        computation_cfg=computation_cfg,
-        show_progress=True,
-    )
-    sorting = merge_res["sorting"]
-    new_unit_ids = merge_res["new_unit_ids"]
-    del merge_res
-    assert sorting.labels is not None
+    if template_cfg.denoising_method == "svd":
+        # use new shared basis stuff
+        from ..clustering.agglomerate import agglomerate
+
+        agg = agglomerate(
+            sorting=sorting,
+            recording=recording,
+            motion=motion,
+            template_data=template_data,
+            template_merge_cfg=merge_cfg,
+            computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
+            refinement_cfg=None,
+        )
+        new_unit_ids = agg.merge_mapping
+        sorting = agg.agglomerated_sorting
+        assert sorting.labels is not None
+        del agg
+    else:
+        # TODO: remove old impl?
+        merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
+        merge_res = merge_templates(
+            sorting=sorting,
+            template_data=template_data,
+            max_shift_samples=merge_shift_samples,
+            linkage=merge_cfg.linkage,
+            merge_distance_threshold=merge_cfg.merge_distance_threshold,
+            temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
+            amplitude_scaling_variance=merge_cfg.amplitude_scaling_variance,
+            amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
+            svd_compression_rank=merge_cfg.svd_compression_rank,
+            min_spatial_cosine=merge_cfg.min_spatial_cosine,
+            computation_cfg=computation_cfg,
+            show_progress=True,
+        )
+        sorting = cast(DARTsortSorting, merge_res["sorting"])
+        new_unit_ids = merge_res["new_unit_ids"]
+        del merge_res
+        assert sorting.labels is not None
 
     # determine which units were merged and recompute only those templates
     ul, ui, uc = np.unique(new_unit_ids, return_index=True, return_counts=True)

@@ -12,7 +12,8 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
 from sklearn.neighbors import KNeighborsClassifier
 
-from ..util import data_util, drift_util, waveform_util
+from ..util import data_util, waveform_util
+from ..util.data_util import DARTsortSorting
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from dredge.motion_util import IdentityMotionEstimate
@@ -21,7 +22,78 @@ from dredge.motion_util import IdentityMotionEstimate
 logger = get_logger(__name__)
 
 
-def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps=1e-5):
+def recluster(
+    *,
+    sorting: DARTsortSorting,
+    dists: np.ndarray,
+    unit_ids: np.ndarray | None = None,
+    shifts: np.ndarray | None = None,
+    unit_snrs: np.ndarray | None = None,
+    threshold=0.25,
+    link="complete",
+):
+    """Distance-based hierarchical clustering of units
+
+    Arguments
+    ---------
+    sorting: DARTsortSorting,
+    dists: np.ndarray
+    unit_ids: np.ndarray | None, default None
+    shifts: np.ndarray | None, default None
+        shifts[i, j] is how far ahead unit i is from unit j, so, it's
+        like trough[i] - trough[j]
+    unit_snrs: np.ndarray | None, default None,
+    threshold=0.25,
+    link="complete",
+    """
+    new_labels, new_ids = hierarchical_cluster(
+        sorting.labels, dists, linkage_method=link, threshold=threshold
+    )
+    if unit_ids is not None:
+        assert np.array_equal(unit_ids, np.arange(dists.shape[0]))
+    assert new_labels is not None
+
+    # update times according to shifts
+    times_updated = sorting.times_samples.copy()
+
+    # find original labels in each cluster
+    clust_inverse = {i: [] for i in new_ids}
+    for orig_label, new_label in enumerate(new_ids):
+        clust_inverse[new_label].append(orig_label)
+    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
+    logger.dartsortdebug(f"Merged {n_merges} units by template distance.")
+
+    # align to best snr unit
+    if shifts is not None:
+        assert unit_snrs is not None
+        for new_label, orig_labels in clust_inverse.items():
+            # we don't need to realign clusters which didn't change
+            if len(orig_labels) <= 1:
+                continue
+
+            orig_snrs = unit_snrs[orig_labels]
+            best_orig = orig_labels[orig_snrs.argmax()]
+            for ogl in np.setdiff1d(orig_labels, [best_orig]):
+                in_orig_unit = np.flatnonzero(sorting.labels == ogl)
+                # this is like trough[best] - trough[ogl]
+                shift_og_best = shifts[best_orig, ogl]
+                # if >0, trough of og is behind trough of best.
+                # subtracting will move trough of og to the right.
+                times_updated[in_orig_unit] -= shift_og_best
+
+    new_sorting = sorting.ephemeral_replace(
+        times_samples=times_updated, labels=new_labels
+    )
+    return new_sorting, new_ids
+
+
+def hierarchical_cluster(
+    labels: np.ndarray | None,
+    distances: np.ndarray,
+    linkage_method="complete",
+    threshold=1.0,
+    eps=1e-5,
+):
     """"""
     n = distances.shape[0]
     assert eps < threshold  # that would be confusing.
@@ -30,6 +102,7 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
     pdist = distances[np.triu_indices(n, k=1)]
     # tolearate some numerical zeros.
     pdist[np.logical_and(pdist > -eps, pdist < 0)] = 0.0
+
     if pdist.min() > threshold:
         if labels is None:
             return None, np.arange(n)
@@ -49,8 +122,9 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
         raise ValueError(
             f"fcluster failed with {threshold=} and smallest pdist {pdist.min()}."
         ) from e
-    # offset by 1, I think always, but I don't want to be wrong?
-    new_ids -= new_ids.min()
+
+    # offset by 1
+    new_ids -= 1
 
     if labels is None:
         new_labels = None

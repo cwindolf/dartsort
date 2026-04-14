@@ -223,13 +223,14 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
-    postprocessing_merge_threshold: float = 0.025
+    postprocessing_merge_threshold: float = 0.05
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "median"
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 20
-    template_interp_kind: Literal["tps", "clampna"] = "tps"
+    template_interp_kind: Literal["tps", "clampna"] = "clampna"
+    matching_interp_kind: Literal["tps", "clampna"] = "clampna"
     matching_svd_rank: int = 10
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
