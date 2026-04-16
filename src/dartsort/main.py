@@ -450,6 +450,8 @@ def subtract(
     sampling_cfg=default_peeling_fit_sampling_cfg,
     computation_cfg: ComputationConfig | None = None,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
     show_progress=True,
@@ -477,6 +479,8 @@ def subtract(
         residual_filename=residual_filename,
         show_progress=show_progress,
         fit_only=subtraction_cfg.fit_only,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
     )
     return detections
 

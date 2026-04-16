@@ -27,6 +27,8 @@ def run_peeler(
     residual_filename: str | Path | None = None,
     show_progress: bool = True,
     fit_only: Literal[True],
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     localization_dataset_name="point_source_localizations",
 ) -> None: ...
 
@@ -45,6 +47,8 @@ def run_peeler(
     residual_filename: str | Path | None = None,
     show_progress: bool = True,
     fit_only: Literal[False] = False,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     localization_dataset_name="point_source_localizations",
 ) -> DARTsortSorting: ...
 
@@ -63,6 +67,8 @@ def run_peeler(
     residual_filename: str | Path | None = None,
     show_progress: bool = True,
     fit_only: bool = False,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     localization_dataset_name="point_source_localizations",
 ) -> DARTsortSorting | None: ...
 
@@ -80,6 +86,8 @@ def run_peeler(
     residual_filename: str | Path | None = None,
     show_progress: bool = True,
     fit_only: bool = False,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -104,6 +112,8 @@ def run_peeler(
         chunk_starts_samples=chunk_starts_samples,
         do_localization=do_localization_later,
         localization_dataset_name=localization_dataset_name,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -129,7 +139,8 @@ def run_peeler(
         show_progress=show_progress,
         computation_cfg=computation_cfg,
         total_residual_snips=n_resid_now,
-        stop_after_n_waveforms=featurization_cfg.stop_after_n,
+        stop_after_n_waveforms=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         shuffle=featurization_cfg.shuffle,
     )
 
@@ -172,6 +183,8 @@ def peeler_is_done(
     overwrite=False,
     n_residual_snips=0,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     do_localization=True,
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
@@ -202,14 +215,17 @@ def peeler_is_done(
         )
         return done
 
-    last_chunk_start, n_residual_snips = peeler.check_resuming(
-        output_hdf5_filename,
-        overwrite=False,
-    )
     chunk_starts_samples = peeler.get_chunk_starts(
         chunk_starts_samples=chunk_starts_samples
     )
-    return last_chunk_start >= max(chunk_starts_samples)
+    done, *_ = peeler.check_resuming(
+        output_hdf5_filename,
+        chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_waveforms=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
+        overwrite=False,
+    )
+    return done
 
 
 def _ensure_torch_linalg(computation_cfg):

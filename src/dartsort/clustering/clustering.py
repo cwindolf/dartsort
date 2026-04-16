@@ -149,7 +149,7 @@ class Clusterer:
             fit_sampling=self.sampling_cfg.fit_sampling,
             fit_max_reweighting=self.sampling_cfg.fit_max_reweighting,
         )
-        rg = np.random.default_rng(self.sampling_cfg.fit_subsampling_random_state)
+        rg = np.random.default_rng(self.sampling_cfg.seed)
         ixs = rg.choice(
             features.n,
             size=self.sampling_cfg.n_waveforms_fit,

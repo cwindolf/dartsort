@@ -423,7 +423,7 @@ class SubtractionPeeler(BasePeeler):
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling_cfg.fit_sampling,
-                    random_state=self.fit_sampling_cfg.fit_subsampling_random_state,
+                    random_state=self.fit_subsampling_random_state,
                     n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
                     fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",

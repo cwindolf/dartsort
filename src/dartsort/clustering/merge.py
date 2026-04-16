@@ -1,7 +1,6 @@
 import warnings
 
 import numpy as np
-from scipy.cluster.hierarchy import fcluster, linkage
 
 from ..peel.matching_util.pairwise_util import (
     construct_shift_indices,

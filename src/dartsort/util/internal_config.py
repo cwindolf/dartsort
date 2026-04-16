@@ -118,7 +118,6 @@ class FeaturizationConfig:
 
     skip: bool = False
     extract_radius: float = 100.0
-    stop_after_n: int | None = None
     shuffle: bool = False
 
     # -- denoising configuration
@@ -275,7 +274,7 @@ default_fit_max_reweighting = 4.0
 class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
-    fit_subsampling_random_state: int = 0
+    seed: int = 0
     fit_sampling: FitSamplingMethod = "amp_reweighted"
     fit_max_reweighting: float = default_fit_max_reweighting
     n_seconds_fit: int = 100
@@ -850,7 +849,11 @@ class DARTsortInternalConfig:
     final_refinement: bool = True
     matching_iterations: int = 1
     recluster_after_first_matching: bool = True
-    intermediate_matching_subsampling: float = 1.0
+    # subsampling: intermediate peels will continue until both criteria satisfied
+    # need at least this many spikes
+    subsampling_spikes: int = 2_000_000
+    # need to cover at least this fraction of chunks
+    subsampling_fraction: float = 0.1
 
     # development / debugging flags
     work_in_tmpdir: bool = False

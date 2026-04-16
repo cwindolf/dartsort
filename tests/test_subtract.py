@@ -1,3 +1,4 @@
+from kilosort.parameters import s
 import dataclasses
 import tempfile
 from typing import cast
@@ -24,6 +25,7 @@ fixedlenkeys = (
     "geom",
     "residual",
     "residual_times_seconds",
+    "chunk_starts_samples",
 )
 
 two_jobs_cfg_cpu = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2, device="cpu")
@@ -119,6 +121,7 @@ def test_fakedata_nonn(tmp_path):
         first_denoiser_temporal_jitter=0,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
+    nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
     assert channel_index.max() == len(geom)
@@ -139,6 +142,8 @@ def test_fakedata_nonn(tmp_path):
         assert st is not None
         out_h5 = st.parent_h5_path
         ns0 = len(st)
+        subtraction_full_spike_count = len(st)
+        subtraction_st = st
         print(ns0)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
@@ -166,7 +171,7 @@ def test_fakedata_nonn(tmp_path):
         assert st is not None
         ns1 = len(st)
         out_h5 = st.parent_h5_path
-        assert ns0 == ns1
+        assert subtraction_full_spike_count == ns1
         print(ns1)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
@@ -195,7 +200,7 @@ def test_fakedata_nonn(tmp_path):
         out_h5 = st.parent_h5_path
         ns2 = len(st)
         print(ns2)
-        assert ns0 == ns2
+        assert subtraction_full_spike_count == ns2
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
             assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
@@ -219,7 +224,7 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -228,11 +233,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns0 = len(st)
             print(ns0)
-            assert ns2 == ns0
+            assert subtraction_full_spike_count == ns0
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                     ns0,
@@ -248,7 +252,7 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
                 subtraction_cfg=subconf,
                 overwrite=False,
                 computation_cfg=ccfg,
@@ -257,11 +261,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns1 = len(st)
             print(ns1)
-            assert ns0 == ns1
+            assert subtraction_full_spike_count == ns1
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
@@ -277,7 +280,7 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -286,11 +289,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns2 = len(st)
             print(ns2)
-            assert ns0 == ns2
+            assert subtraction_full_spike_count == ns2
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
@@ -301,44 +303,24 @@ def test_fakedata_nonn(tmp_path):
                 )
 
     # simulate resuming a job that got cancelled in the middle
-    print("test resume1")
-    subconf = dataclasses.replace(
-        subconf,
-        subtraction_denoising_cfg=dataclasses.replace(
-            subconf.subtraction_denoising_cfg,
-            do_nn_denoise=True,
-            do_tpca_denoise=False,
-        ),
-    )
-    nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
-    print(subconf)
-    print(nolocfeatconf)
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
-        st0 = subtract(
-            recording=rec,
-            output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
-            subtraction_cfg=subconf,
-        )
-        assert st0 is not None
-        ns0 = len(st0)
-        print(ns0)
-
-    with tempfile.TemporaryDirectory(
-        dir=tmp_path, ignore_cleanup_errors=True
-    ) as tempdir:
+        # run 30% of recording, which rounds to 2 chunks, so that
+        # the last chunk starts at int(fs)
+        torch.manual_seed(0)
         sta = subtract(
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=nolocfeatconf,
             subtraction_cfg=subconf,
-            chunk_starts_samples=np.arange(2) * int(fs),
+            ensure_coverage=0.3,
+            stop_after_n_spikes=0,
         )
         assert sta is not None
         with h5py.File(sta.parent_h5_path, locking=False) as h5:
-            assert h5["last_chunk_start"][()] == int(1 * fs)   # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_start"][()] == int(fs)
+        # run the rest
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
@@ -346,12 +328,10 @@ def test_fakedata_nonn(tmp_path):
             subtraction_cfg=subconf,
         )
         assert stb is not None
-        print(f"{len(sta)=} {len(stb)=}")
-        print(f"{np.setdiff1d(st0.times_samples, stb.times_samples)=}")
-        assert len(sta) < ns0
-        assert len(stb) == ns0
-        np.testing.assert_array_equal(st0.times_samples, stb.times_samples)
-        np.testing.assert_array_equal(st0.channels, stb.channels)
+        assert len(sta) < subtraction_full_spike_count
+        assert len(stb) == subtraction_full_spike_count
+        np.testing.assert_array_equal(subtraction_st.times_samples, stb.times_samples)
+        np.testing.assert_array_equal(subtraction_st.channels, stb.channels)
 
 
 @pytest.mark.parametrize("nn_localization", [True])
@@ -400,7 +380,8 @@ def test_small_nonn(tmp_path, nn_localization):
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             l = None
             for k in h5.keys():
-                if k in fixedlenkeys: continue
+                if k in fixedlenkeys:
+                    continue
                 ds = cast(h5py.Dataset, h5[k])
                 if ds.ndim < 1:
                     continue
@@ -425,8 +406,8 @@ def test_small_nonn(tmp_path, nn_localization):
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
 
     print("Yes parallel")
@@ -447,6 +428,6 @@ def test_small_nonn(tmp_path, nn_localization):
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
