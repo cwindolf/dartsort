@@ -648,7 +648,7 @@ def subtract_chunk(
         if it and growth_tolerance is not None:
             residual_det = residual_det.clamp(-gtol, gtol)
 
-        times_samples, channels = detect_and_deduplicate(  # type: ignore
+        times_samples, channels = detect_and_deduplicate(
             residual_det,
             detection_threshold,
             peak_channel_index=peak_channel_index,

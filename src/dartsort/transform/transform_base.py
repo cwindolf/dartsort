@@ -1,4 +1,5 @@
-from typing import Any, Iterable
+from pathlib import Path
+from typing import Any, Iterable, Self
 
 import torch
 
@@ -64,6 +65,17 @@ class BaseWaveformModule(BModule):
         return dict(
             spike_length_samples=self.spike_length_samples, needs_fit=self.needs_fit()
         )
+
+    @classmethod
+    def load_from_pt(
+        cls,
+        *,
+        pretrained_path: str | Path,
+        channel_index: torch.Tensor,
+        geom: torch.Tensor,
+        **kwargs: dict[str, Any],
+    ) -> Self:
+        raise NotImplementedError
 
     def set_extra_state(self, state):
         self.spike_length_samples = state["spike_length_samples"]

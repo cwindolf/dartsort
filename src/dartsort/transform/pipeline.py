@@ -68,16 +68,22 @@ class WaveformPipeline(torch.nn.Module):
 
         channel_index = torch.as_tensor(channel_index)
         geom = torch.as_tensor(geom)
-        probe_kw = dict(channel_index=channel_index, geom=geom)
 
         transformers = []
         for name, kwargs in class_names_and_kwargs:
             transformer_cls = transformers_by_class_name[name]
-            if kwargs.get("pretrained_path") is not None:
-                transformer = transformer_cls.load_from_pt(**probe_kw, **kwargs)
+            pretrained_path = kwargs.pop("pretrained_path", None)
+            if pretrained_path is not None:
+                transformer = transformer_cls.load_from_pt(
+                    pretrained_path=pretrained_path,
+                    channel_index=channel_index,
+                    geom=geom,
+                    **kwargs,
+                )
             else:
-                assert kwargs.pop("pretrained_path", None) is None
-                transformer = transformer_cls(**probe_kw, **kwargs)
+                transformer = transformer_cls(
+                    channel_index=channel_index, geom=geom, **kwargs
+                )
             transformers.append(transformer)
 
         return cls(transformers, kwargs_to_store=class_names_and_kwargs)
