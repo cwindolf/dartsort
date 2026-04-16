@@ -22,7 +22,7 @@ def merge_templates(
     template_data: TemplateData,
     max_shift_samples=40,
     linkage="complete",
-    distance_kind="rms",
+    distance_kind="scaled_normeuc",
     sym_function=np.minimum,
     merge_distance_threshold=0.25,
     temporal_upsampling_factor=1,

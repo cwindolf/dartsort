@@ -416,7 +416,7 @@ def conv_to_resid(
     elif distance_kind == "deconv":
         template_a_norms_ret = np.ones_like(template_a_norms)
     else:
-        assert False
+        assert False, distance_kind
 
     # now, compute reduction in norm of A after matching by B
     scalings = np.ones_like(template_a_norms)

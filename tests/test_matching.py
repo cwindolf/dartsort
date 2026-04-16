@@ -23,7 +23,7 @@ from dartsort.util.logging_util import get_logger
 from dartsort.util.waveform_util import upsample_multichan
 
 # need to keep this unused import to register debug template method
-from dartsort.util.testing_util import matching_debug_util  # type: ignore
+from dartsort.util.testing_util import matching_debug_util
 
 logger = get_logger(__name__)
 

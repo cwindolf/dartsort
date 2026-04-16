@@ -17,12 +17,11 @@ from tqdm.auto import trange
 
 HAVE_CUPY = False
 try:
-    import cupy as cp  # type: ignore
+    import cupy as cp
 
     HAVE_CUPY = True
 except ImportError:
-    cp = None
-    HAVE_CUPY = False
+    cp = None  # type: ignore
 
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
@@ -730,13 +729,13 @@ def nancov(
         if nan_free:
             nobs = weights.sum(0)
         else:
-            nobs = (mask.T * weights) @ mask  # type: ignore
+            nobs = (mask.T * weights) @ mask
     else:
         xtx = x.T @ x
         if nan_free:
             nobs = np.array(len(x), dtype=x.dtype)
         else:
-            nobs = mask.T @ mask  # type: ignore
+            nobs = mask.T @ mask
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
@@ -767,6 +766,7 @@ def cosine_distance(means, means_b=None, true_distance=True):
     if sym:
         means_b = means
     else:
+        assert means_b is not None
         means_b = means_b.reshape(means_b.shape[0], -1)
     dot = means @ means_b.T
     norm = means.square().sum(1).sqrt_()

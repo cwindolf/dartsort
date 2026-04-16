@@ -2,12 +2,11 @@ import torch
 from scipy.sparse import coo_array
 
 try:
-    import cupy as cp  # type: ignore
-    from cupyx.scipy.sparse import coo_matrix as cupy_coo_matrix  # type: ignore
-
+    import cupy as cp
+    from cupyx.scipy.sparse import coo_matrix as cupy_coo_matrix
 except ImportError:
-    cp = None
-    cupy_coo_matrix = lambda a, shape: NotImplemented
+    cp = None  # type: ignore
+    cupy_coo_matrix = lambda a, shape: NotImplemented  # type: ignore
 
 
 def coo_to_scipy(coo_tensor):
