@@ -5,7 +5,7 @@ import h5py
 try:
     from hdbscan import HDBSCAN
 except ImportError:
-    from sklearn.cluster import HDBSCAN  # type: ignore
+    from sklearn.cluster import HDBSCAN
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage

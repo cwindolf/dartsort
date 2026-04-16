@@ -496,7 +496,6 @@ def _plan_vis(
         c0 = sorting.gmm_candidates[:, 0]  # type: ignore
         lk = np.flatnonzero(sorting.labels >= 0)
         is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
-        print(f"{is_gmm=}")
         make_mixture_summaries = is_gmm
     elif make_mixture_summaries is None:
         make_mixture_summaries = False

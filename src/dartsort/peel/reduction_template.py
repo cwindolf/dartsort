@@ -179,7 +179,7 @@ class ReductionTemplateData(TemplateData):
 
 class TemplateReduction(GrabAndFeaturize):
     @classmethod
-    def from_config(  # type: ignore[override]
+    def from_config(  # type: ignore
         cls,
         recording: BaseRecording,
         *,

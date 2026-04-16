@@ -457,7 +457,7 @@ class BasePeeler(BModule):
         # a user who wants these must featurize with a waveform node
         # then they'll end up in `features`
         if "collisioncleaned_waveforms" in peel_result:
-            del peel_result["collisioncleaned_waveforms"]
+            del peel_result["collisioncleaned_waveforms"]  # type: ignore
 
         chunk_result = peel_result | features
         if to_cpu:
@@ -872,10 +872,12 @@ class BasePeeler(BModule):
         save_residual = residual_filename is not None
         residual_file = None
         if save_residual:
-            residual_mode = "wb"
+            assert residual_filename is not None
             if last_chunk_start >= 0:
                 residual_mode = "ab"
                 assert Path(residual_filename).exists()
+            else:
+                residual_mode = "wb"
             residual_file = open(residual_filename, mode=residual_mode)
 
         try:

@@ -1,4 +1,5 @@
-from typing import Annotated, Literal, Sequence
+from collections.abc import Sequence
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -7,11 +8,11 @@ from .util.internal_config import (
     InterpKernel,
     InterpMethod,
     MixtureStep,
+    PreprocessingStrategy,
     RealignStrategy,
     TemplateSVDMethod,
     WhiteningEstimator,
     WhiteningStrategy,
-    PreprocessingStrategy,
     default_pretrained_path,
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
@@ -209,7 +210,7 @@ class DeveloperConfig(DARTsortUserConfig):
     later_steps: Sequence[MixtureStep] = argfield(
         default=("split", "merge", "demolish"), arg_type=tuple
     )
-    detection_type: str = "subtract"
+    detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
     recluster_after_first_matching: bool = True
@@ -240,8 +241,8 @@ class DeveloperConfig(DARTsortUserConfig):
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 20
-    template_interp_kind: Literal["tps", "clampna"] = "clampna"
-    matching_interp_kind: Literal["tps", "clampna"] = "clampna"
+    template_interp_kind: Literal["tps", "clampna"] = "tps"
+    matching_interp_kind: Literal["tps", "clampna"] = "tps"
     matching_svd_rank: int = 10
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
@@ -308,8 +309,8 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
     gmm_metric: Literal["cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
-    gmm_n_candidates: int = 3
-    gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
+    gmm_n_candidates: int = 5
+    gmm_n_search: int | None = argfield(default=3, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
@@ -332,8 +333,9 @@ class DeveloperConfig(DARTsortUserConfig):
     agg_no_qda_template_distance: float = 0.2
     agg_qda_linkage: Literal["single", "complete"] = "single"
     agg_template_linkage: Literal["single", "complete"] = "complete"
+    agg_template_whiten_strategy: WhiteningStrategy = "postwhiten"
 
-    # store extra intermediates
+    # store extra intermediates@
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)

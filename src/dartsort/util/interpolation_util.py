@@ -20,7 +20,7 @@ from .waveform_util import make_channel_index
 if TYPE_CHECKING:
     from .noise_util import EmbeddedNoise
 else:
-    EmbeddedNoise = None  # type: ignore
+    EmbeddedNoise = None
 
 
 def interpolate_by_chunk(

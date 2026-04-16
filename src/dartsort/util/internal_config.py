@@ -1,6 +1,8 @@
+from collections.abc import Sequence
 from dataclasses import asdict, field, fields, replace
+from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Literal, Self, Sequence
+from typing import Literal, Self
 
 import numpy as np
 import torch
@@ -16,9 +18,9 @@ except ImportError:
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
-default_pretrained_path = files("dartsort.pretrained")
-default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
-default_pretrained_path = str(default_pretrained_path)
+_default_pretrained_path: Traversable = files("dartsort.pretrained")
+_default_pretrained_path = _default_pretrained_path.joinpath("single_chan_denoiser.pt")
+default_pretrained_path = str(_default_pretrained_path)
 
 
 PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
@@ -33,7 +35,10 @@ class WaveformConfig:
 
     @classmethod
     def from_samples(
-        cls, samples_before: int, samples_after: int, sampling_frequency=30_000.0
+        cls,
+        samples_before: int,
+        samples_after: int,
+        sampling_frequency: float = 30_000.0,
     ) -> Self:
         sampling_frequency = float(sampling_frequency)
         samples_per_ms = sampling_frequency / 1000
@@ -49,17 +54,17 @@ class WaveformConfig:
         return self
 
     @staticmethod
-    def ms_to_samples(ms, sampling_frequency=30_000.0):
+    def ms_to_samples(ms, sampling_frequency: float = 30_000.0):
         if ms > sampling_frequency:
             return int((ms / 1000.0) * sampling_frequency)
         else:
             return int(ms * (sampling_frequency / 1000.0))
 
-    def trough_offset_samples(self, sampling_frequency=30_000.0):
+    def trough_offset_samples(self, sampling_frequency: float = 30_000.0):
         sampling_frequency = np.round(sampling_frequency)
         return self.ms_to_samples(self.ms_before, sampling_frequency=sampling_frequency)
 
-    def spike_length_samples(self, sampling_frequency=30_000.0):
+    def spike_length_samples(self, sampling_frequency: float = 30_000.0):
         spike_len_ms = self.ms_before + self.ms_after
         sampling_frequency = np.round(sampling_frequency)
         length = self.ms_to_samples(spike_len_ms, sampling_frequency=sampling_frequency)
@@ -67,7 +72,9 @@ class WaveformConfig:
         length = 2 * (length // 2) + 1
         return length
 
-    def relative_slice(self, other: Self, sampling_frequency=30_000.0) -> slice:
+    def relative_slice(
+        self, other: Self, sampling_frequency: float = 30_000.0
+    ) -> slice:
         """My trough-aligned subset of samples in other, which contains me."""
         assert other.ms_before >= self.ms_before
         assert other.ms_after >= self.ms_after
@@ -367,7 +374,7 @@ WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 class WhiteningConfig:
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
-    interp_params: InterpolationParams = clampna_interp_params
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
 
 
@@ -400,7 +407,7 @@ class TemplateConfig:
     registered_templates: bool = True
     min_fraction_at_shift: float = 0.25
     min_count_at_shift: int = 25
-    template_interp_params: InterpolationParams = clampna_interp_params
+    template_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # low rank denoising?
     denoising_rank: int = 5
@@ -464,7 +471,7 @@ class TemplateRealignmentConfig:
 class TemplateMergeConfig:
     distance_kind: Literal["scaled_normeuc", "deconv", "max"] = "scaled_normeuc"
     linkage: str = "complete"
-    merge_distance_threshold: float = 0.25
+    merge_distance_threshold: float = 0.05
     cross_merge_distance_threshold: float = 0.5
     min_spatial_cosine: float = 0.75
     temporal_upsampling_factor: int = 4
@@ -473,9 +480,9 @@ class TemplateMergeConfig:
     svd_compression_rank: int = 10
     max_shift_ms: float = 1.5
 
-    template_cfg: TemplateConfig | None = None
+    template_cfg: TemplateConfig | None = TemplateConfig()
     waveform_cfg: WaveformConfig = WaveformConfig()
-    whitening: WhiteningConfig = WhiteningConfig(strategy="prewhiten")
+    whitening: WhiteningConfig = WhiteningConfig(strategy="postwhiten")
 
     def to_template_config(self, template_cfg: TemplateConfig | None = None):
         if template_cfg is None:
@@ -531,9 +538,7 @@ class MatchingConfig:
     max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
-    template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
-        merge_distance_threshold=0.025
-    )
+    template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig()
     template_realignment_cfg: TemplateRealignmentConfig = TemplateRealignmentConfig()
     precomputed_templates_npz: str | None = None
     delete_pconv: bool = True
@@ -807,6 +812,12 @@ default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
 default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish"))
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
+default_agglomerate_cfg = RefinementConfig(
+    refinement_strategy="agglomerate",
+    template_merge_cfg=TemplateMergeConfig(
+        merge_distance_threshold=0.6, linkage="single"
+    ),
+)
 
 
 @cfg_dataclass
@@ -826,7 +837,7 @@ class DARTsortInternalConfig:
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
-    agglomerate_cfg: RefinementConfig | None = None
+    agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
     computation_cfg: ComputationConfig = default_computation_cfg
@@ -1157,7 +1168,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         agg_cfg = None
     elif cfg.agg_kind == "template_distance":
         agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.whiten_strategy.removesuffix("_postapply"),  # type: ignore
+            strategy=cfg.agg_template_whiten_strategy,
             estimator=cfg.whiten_estimator,
             radius=cfg.subtraction_radius_um,
             interp_params=temp_interp_params,
@@ -1176,7 +1187,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
-            strategy=cfg.whiten_strategy.removesuffix("_postapply"),  # type: ignore
+            strategy=cfg.agg_template_whiten_strategy,
             estimator=cfg.whiten_estimator,
             radius=cfg.subtraction_radius_um,
             interp_params=temp_interp_params,

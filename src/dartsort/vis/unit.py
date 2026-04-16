@@ -583,26 +583,41 @@ class NeighborQDAMatrices(UnitPlot):
         axes = panel.subplots(nrows=2)
 
         qda = sorting_analysis.qda
+        assert np.array_equal(neighbor_ixs, neighbor_ids)
         assert qda is not None
 
+        score = qda.score[neighbor_ixs][:, neighbor_ixs]
+        iou = qda.iou[neighbor_ixs][:, neighbor_ixs]
+        min_ratio = qda.min_ratio[neighbor_ixs][:, neighbor_ixs]
+        coverage = qda.coverage[neighbor_ixs][:, neighbor_ixs]
+
         for ax, (sc, ol), title in zip(
-            axes,
-            [(qda.score, qda.iou), (qda.min_ratio, qda.coverage)],
-            ["qda/iou", "ratio/coverage"],
+            axes, [(score, iou), (min_ratio, coverage)], ["qda/iou", "ratio/coverage"]
         ):
             im = ax.imshow(
                 sc,
                 vmin=0,
-                cmap="RdGy",
+                cmap="plasma",
                 origin="lower",
                 interpolation="none",
                 aspect="auto",
             )
+            vm = sc.max()
             for (i, j), d in np.ndenumerate(sc):
                 ostr = f"{ol[i, j]:.2f}".lstrip("0")
-                txt = f"{d:.2f}".lstrip("0") + f" ({ostr})"
-                ax.text(i, j, txt, ha="center", va="center")
-            plt.colorbar(im, ax=ax, shrink=0.3)
+                if ostr == ".00":
+                    ostr = "0"
+                else:
+                    ostr = ostr.rstrip("0")
+                dstr = f"{d:.2f}".lstrip("0")
+                if dstr == ".00":
+                    dstr = "0"
+                else:
+                    dstr = dstr.rstrip("0")
+                txt = f"{dstr}\n({ostr})"
+                ax.text(
+                    i, j, txt, ha="center", va="center", c="k" if d > vm / 2 else "w"
+                )
             ax.set_xticks(range(len(neighbor_ids)), neighbor_ids)
             ax.set_yticks(range(len(neighbor_ids)), neighbor_ids)
             for i, (tx, ty) in enumerate(

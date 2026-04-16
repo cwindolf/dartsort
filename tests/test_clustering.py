@@ -14,9 +14,6 @@ from dartsort.util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
     RefinementConfig,
-    SplitConfig,
-    TemplateConfig,
-    TemplateMergeConfig,
     FitSamplingConfig,
 )
 from dartsort.util.logging_util import get_logger
@@ -47,13 +44,14 @@ feature_kwargs = [
 ]
 feature_kwargs = [global_feature_kwargs | kw for kw in feature_kwargs]
 
-clustering_kwargs = [dict(cluster_strategy=k) for k in clustering_strategies]
-clustering_kwargs += [
+clustering_kwargs = [dict(cluster_strategy=k) for k in clustering_strategies] + [
     dict(cluster_strategy="gmmdpc", hellinger_weak=0.99, mop=True),
     dict(cluster_strategy="gmmdpc", use_hellinger=False),
 ]
 clustering_kwargs = [clukw | ck for ck in clustering_kwargs]
-refinement_kwargs = [dict(refinement_strategy=k) for k in refinement_strategies]
+refinement_kwargs = [
+    dict(refinement_strategy=k) for k in refinement_strategies if k != "agglomerate"
+]
 refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0)] + refinement_kwargs
 refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
@@ -68,6 +66,9 @@ eval_initial_refinement_kwargs = [
 ]
 eval_refinement_kwargs = [
     dict(refinement_strategy="tmm", demolish_during_selection=False),
+]
+eval_post_refinement_kwargs = [
+    dict(refinement_strategy="agglomerate"),
 ]
 
 eval_clustering_kwargs = [clukw | ck for ck in eval_clustering_kwargs]
@@ -142,7 +143,8 @@ def _nice_unique(x):
 @pytest.mark.parametrize("cluskw", eval_clustering_kwargs)
 @pytest.mark.parametrize("initrefkw", eval_initial_refinement_kwargs)
 @pytest.mark.parametrize("refkw", eval_refinement_kwargs)
-def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
+@pytest.mark.parametrize("postrefkw", eval_post_refinement_kwargs)
+def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw, postrefkw):
     sim = simulations[sim_name]
     recording = sim["recording"]
     sorting = sim["sorting"]
@@ -153,7 +155,11 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw):
         sorting=sorting,
         motion=motion,
         clustering_cfg=ClusteringConfig(**cluskw),
-        refinement_cfgs=[RefinementConfig(**initrefkw), RefinementConfig(**refkw)],
+        refinement_cfgs=[
+            RefinementConfig(**initrefkw),
+            RefinementConfig(**refkw),
+            RefinementConfig(**postrefkw),
+        ],
     )
     assert res_sorting.labels is not None
 

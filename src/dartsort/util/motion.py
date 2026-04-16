@@ -136,6 +136,7 @@ class MotionInfo:
                 assert dredge_motion_est is not None
                 d = dredge_motion_est.displacement
             elif have_si:
+                assert si_motion is not None
                 d = np.asarray(si_motion.displacement)
             else:
                 assert False

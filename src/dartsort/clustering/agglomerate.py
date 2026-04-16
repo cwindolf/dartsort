@@ -395,7 +395,7 @@ def _qda_job(ij):
     assert np.isclose(binc[bc], 0.0)
     assert binc.shape[0] == 2 * bc + 1
 
-    kde = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+    kde = FFTKDE(bw="ISJ").fit(dll)
     kde = cast(np.ndarray, kde.evaluate(binc))
     score, min_ratio = bimod_stats(kde)
     p.score[i, j] = p.score[j, i] = score

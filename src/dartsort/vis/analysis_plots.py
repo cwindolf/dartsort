@@ -358,7 +358,7 @@ def isi_hist(
     axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
 
-def correlogram(times_a, times_b=None, max_lag=50):
+def correlogram(times_a, times_b: np.ndarray | None = None, max_lag=50):
     lags = np.arange(-max_lag, max_lag + 1)
     ccg = np.zeros(len(lags), dtype=int)
 
@@ -367,6 +367,7 @@ def correlogram(times_a, times_b=None, max_lag=50):
     if auto:
         times_b = times_a
     else:
+        assert times_b is not None
         times_b = np.sort(times_b)
 
     for i, lag in enumerate(lags):

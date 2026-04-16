@@ -3,7 +3,7 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import torch
@@ -971,7 +971,7 @@ def check_residual_decrease(
     else:
         assert False
 
-    keep = threshold < reduction
+    keep = cast(torch.Tensor, threshold < reduction)
     (keep,) = keep.nonzero(as_tuple=True)
     if save_residnorm_decrease:
         features = dict(residnorm_decreases=reduction)

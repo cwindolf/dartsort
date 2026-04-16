@@ -75,5 +75,6 @@ line-length = 88
 [tool.jupytext]
 "formats" = "ipynb,py:percent"
 
-[tool.pyright]
-"include" = ["src", "tests"]
+[tool.ty.rules]
+"unsupported-base" = "ignore"
+"invalid-key" = "ignore"

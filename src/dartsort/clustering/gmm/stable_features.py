@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Literal, Self, Sequence
+from typing import Literal, Sequence, cast
 
 import h5py
 import numpy as np
 import torch
+from torch import Tensor
 
 from ...transform.temporal_pca import TemporalPCAFeaturizer
 from ...util import drift_util, interpolation_util, spiketorch
@@ -80,16 +81,16 @@ class StableSpikeDataset(torch.nn.Module):
     def __init__(
         self,
         kept_indices: np.ndarray,
-        prgeom: torch.Tensor,
+        prgeom: Tensor,
         tpca: TemporalPCAFeaturizer,
-        extract_channels: torch.Tensor,
-        core_channels: torch.Tensor | None,
+        extract_channels: Tensor,
+        core_channels: Tensor | None,
         original_sorting: DARTsortSorting,
-        core_features: torch.Tensor | None,
-        train_extract_features: torch.Tensor,
+        core_features: Tensor | None,
+        train_extract_features: Tensor,
         features_on_device: bool = False,
         split_names: Sequence[str] | None = None,
-        split_mask: torch.Tensor | None = None,
+        split_mask: Tensor | None = None,
         core_radius: float | Literal["extract"] | None = 35.0,
         interp_params: InterpolationParams = tps_interp_params,
         extrap_params: InterpolationParams = default_extrapolation_params,
@@ -135,7 +136,7 @@ class StableSpikeDataset(torch.nn.Module):
         if self.has_splits:
             assert split_names is not None
             self.split_indices.update(
-                (k, (split_mask == j).nonzero().view(-1))
+                (k, cast(Tensor, split_mask == j).nonzero().view(-1))
                 for j, k in enumerate(split_names)
             )
 
@@ -271,8 +272,8 @@ class StableSpikeDataset(torch.nn.Module):
 
         # load information not stored directly on the sorting
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-            geom = h5["geom"][:]  # type: ignore
-            extract_channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
+            geom = h5["geom"][:]
+            extract_channel_index: np.ndarray = h5["channel_index"][:]
             assert np.all(np.diff(extract_channel_index) >= 0)
             prgeom = interpolation_util.pad_geom(motion.rgeom)
             shifts, n_pitches_shift = motion.pitch_shifts(
@@ -402,11 +403,11 @@ class StableSpikeDataset(torch.nn.Module):
         self = cls(
             kept_indices=kept_indices,
             prgeom=prgeom,
-            tpca=tpca,  # type: ignore
+            tpca=tpca,
             extract_channels=extract_channels,
             extract_neighborhoods=extract_neighborhoods,
             extract_neighborhood_ids=extract_neighborhood_ids,
-            core_channels=core_channels,  # type: ignore
+            core_channels=core_channels,
             core_neighborhoods=core_neighborhoods,
             core_neighborhood_ids=core_neighborhood_ids,
             original_sorting=sorting,
@@ -425,14 +426,14 @@ class StableSpikeDataset(torch.nn.Module):
 
     def spike_data(
         self,
-        indices: torch.Tensor,
-        split_indices: torch.Tensor | None = None,
+        indices: Tensor,
+        split_indices: Tensor | None = None,
         neighborhood: str = "extract",
         with_channels=True,
         with_reconstructions: bool = False,
         with_neighborhood_ids: bool = False,
         split: str | None = "train",
-        feature_buffer: torch.Tensor | None = None,
+        feature_buffer: Tensor | None = None,
     ) -> "SpikeFeatures":
         withbuf = feature_buffer is not None
         non_blocking = False
@@ -443,6 +444,7 @@ class StableSpikeDataset(torch.nn.Module):
             assert split_indices is not None
 
             if withbuf:
+                assert feature_buffer is not None
                 features = feature_buffer[: len(indices)]
                 non_blocking = features.is_pinned()
                 torch.index_select(
@@ -458,6 +460,7 @@ class StableSpikeDataset(torch.nn.Module):
                 ]
         elif neighborhood == "core":
             if withbuf:
+                assert feature_buffer is not None
                 features = feature_buffer[: len(indices)]
                 non_blocking = features.is_pinned()
                 torch.index_select(self.core_features, 0, indices, out=features)  # type: ignore
@@ -496,7 +499,7 @@ class StableSpikeDataset(torch.nn.Module):
 
     def neighborhoods(
         self, neighborhood="core", split="train"
-    ) -> tuple[torch.Tensor | slice, "SpikeNeighborhoods"]:
+    ) -> tuple[Tensor | slice, "SpikeNeighborhoods"]:
         split_ixs = self.split_indices[split]
 
         if neighborhood == "extract":
@@ -522,16 +525,16 @@ class SpikeFeatures:
     """
 
     # these are relative to the StableFeatures instance's subsampling (keepers)
-    indices: torch.Tensor
+    indices: Tensor
     # n, r, c
-    features: torch.Tensor
+    features: Tensor
     # n, c
-    channels: torch.Tensor | None = None
+    channels: Tensor | None = None
     # n, t, c
-    waveforms: torch.Tensor | None = None
+    waveforms: Tensor | None = None
     # n
-    neighborhood_ids: torch.Tensor | None = None
-    split_indices: torch.Tensor | None = None
+    neighborhood_ids: Tensor | None = None
+    split_indices: Tensor | None = None
 
     def __len__(self):
         return len(self.features)

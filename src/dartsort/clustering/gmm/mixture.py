@@ -293,7 +293,7 @@ class NeighborhoodCovariance:
         neighborhoods: SpikeNeighborhoods,
         neighb_overlap: float,
     ) -> Self:
-        dev = cast(torch.device, noise.device)
+        dev = noise.device
         neighborhoods = neighborhoods.to(device=dev)
         prgeom = prgeom.to(device=dev)
         nc_obs, obs_ix, miss_near_ix, miss_full_mask = _neighborhood_indices(
@@ -656,7 +656,7 @@ class TMMParams:
             split_max_distance=refinement_cfg.split_distance_threshold,
             split_friend_distance=refinement_cfg.split_friend_distance,
             merge_max_distance=refinement_cfg.merge_distance_threshold,
-            distance_kind=cast(ComponentDistanceMetric, refinement_cfg.distance_metric),
+            distance_kind=refinement_cfg.distance_metric,
             min_count=refinement_cfg.min_count,
             split_min_count=refinement_cfg.split_min_count,
             split_k=refinement_cfg.kmeansk,
@@ -1122,7 +1122,7 @@ class BatchedSpikeData:
             expand_from_lut = None
 
         new_lut = un_adj_lut is not None
-        if new_lut:
+        if un_adj_lut is not None:
             assert un_adj_lut.lut.shape[0] == n_units
 
         if self.candidates is None:
@@ -1488,6 +1488,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             neighb_overlap=neighb_overlap,
             search_adj=search_adj,
         )
+        assert self.candidates is not None
         self.candidates[:, 0] = labels
         return self
 
@@ -1500,6 +1501,7 @@ class TruncatedSpikeData(BatchedSpikeData):
     ) -> tuple[bool, NeighborhoodLUT]:
         self._update_sizes_from_n_units(distances.shape[0])
         # fill in top spots
+        assert self.candidates is not None
         if new_top_candidates is not None:
             self.candidates[:, : self.n_candidates] = new_top_candidates
             self.update_adjacency(distances.shape[0], expand_lut=expand_lut)
@@ -1569,12 +1571,14 @@ class TruncatedSpikeData(BatchedSpikeData):
         return True, lut
 
     def erase_candidates(self):
+        assert self.candidates is not None
         self.candidates.fill_(-1)
         self.batch_candidate_counts.zero_()
 
     def batch(
         self, spike_indices: Tensor | slice, batch_index: int | None = None
     ) -> SpikeDataBatch:
+        assert self.candidates is not None
         candidates = self.candidates[spike_indices]
         if self.duties is None:
             duties = None
@@ -1618,6 +1622,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         labels: Tensor | None,
         min_count: int = 0,
     ):
+        assert self.candidates is not None
         assert unit_ids is not None
         unit_ids = torch.as_tensor(unit_ids, device=self.candidates.device)
         if labels is None:
@@ -1653,6 +1658,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         ids_new = remapping.mapping.unique()
         ids_new = ids_new[ids_new >= 0]
         n_units_new = ids_new.shape[0]
+        assert self.candidates is not None
         assert n_units_new <= n_units_orig
 
         if distances is not None:
@@ -1700,6 +1706,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         distances: Tensor,
     ) -> NeighborhoodLUT:
         """Erase candidates for spikes in the split, replace labels, re-bootstrap."""
+        assert self.candidates is not None
         self.candidates[:, 0].masked_fill_(unit_mask, -1)
         (split_ix,) = split_mask.nonzero(as_tuple=True)
         self.candidates[split_ix, 0] = split_labels[split_ix]
@@ -2287,7 +2294,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if pnoid:
             assert soln.isfinite().all()
         if not skip_proportions:
-            assert lp.isfinite().all()  # type: ignore
+            assert lp.isfinite().all()
 
     def fixed_weight_em(
         self, data: DenseSpikeData, responsibilities: Tensor, debug: bool = False
@@ -3390,6 +3397,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         _early_stop: bool = False,
         _dry_run: bool = False,
     ):
+        assert train_data.candidates is not None
         cur_train_labels = train_data.candidates[:, 0]
         train_labels = torch.full_like(cur_train_labels, -1)
         train_candidate_mask = torch.zeros_like(train_labels, dtype=torch.bool)
@@ -3597,7 +3605,7 @@ class TMMView(BaseMixtureModel):
         return self.tmm.b.log_proportions[self.unit_ids].logsumexp(dim=0)
 
     @property
-    def noise_log_prop(self) -> Tensor:  # type: ignore
+    def noise_log_prop(self) -> Tensor:
         return self.tmm.b.noise_log_prop
 
     def score(
@@ -4172,6 +4180,7 @@ def initialize_parameters_by_unit(
     puff=1.0,
 ):
     if scores is None:
+        assert data.candidates is not None
         labels = data.candidates[:, 0]
     else:
         labels = labels_from_scores_(scores)
