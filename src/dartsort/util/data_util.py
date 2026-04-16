@@ -1,3 +1,4 @@
+from anndata.experimental.merge import _
 import warnings
 from collections import namedtuple
 from copy import copy
@@ -78,13 +79,13 @@ class DARTsortSorting:
             assert labels.dtype.kind == "i"
         self.labels = labels
 
-        self._loaded_persistent_features = []
+        self._persistent_features: dict[str, np.ndarray] = {}
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
 
-        self._ephemeral_feature_names = []
+        self._ephemeral_features: dict[str, np.ndarray] = {}
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
                 check_shape = not self._no_check_needed(k)
@@ -122,7 +123,8 @@ class DARTsortSorting:
             "channels": self.channels,
             "labels": self.labels,
         }
-        fnames = self._loaded_persistent_features + self._ephemeral_feature_names
+        _pnames = list(self._persistent_features.keys())
+        fnames = _pnames + list(self._ephemeral_features.keys())
         if include_1d_features:
             for k in fnames:
                 v = getattr(self, k)
@@ -189,8 +191,8 @@ class DARTsortSorting:
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
         other = copy(self)
-        other._ephemeral_feature_names = self._ephemeral_feature_names.copy()
-        other._loaded_persistent_features = self._loaded_persistent_features.copy()
+        other._ephemeral_features = self._ephemeral_features.copy()
+        other._persistent_features = self._persistent_features.copy()
         return other
 
     def ephemeral_replace(
@@ -214,8 +216,8 @@ class DARTsortSorting:
             return False
         if self.labels is None:
             return False
-        if "labels" in self._ephemeral_feature_names:
-            assert "labels" not in self._loaded_persistent_features
+        if "labels" in self._ephemeral_features:
+            assert "labels" not in self._persistent_features
             return False
         try:
             return np.array_equal(self.labels, self._load_dataset("labels"))
@@ -223,6 +225,15 @@ class DARTsortSorting:
             return False
 
     # interface for setting features
+
+    def __getattr__(self, name: str) -> np.ndarray:
+        if "_ephemeral_features" in self.__dict__:
+            if name in self._ephemeral_features:
+                return self._ephemeral_features[name]
+        if "_persistent_features" in self.__dict__:
+            if name in self._persistent_features:
+                return self._persistent_features[name]
+        raise AttributeError
 
     def add_ephemeral_feature(
         self,
@@ -240,7 +251,7 @@ class DARTsortSorting:
         if check_shape:
             self._check_shape(feature_name, feature)
 
-        already_ephemeral = feature_name in self._ephemeral_feature_names
+        already_ephemeral = feature_name in self._ephemeral_features
         already_attr = hasattr(self, feature_name)
         if already_ephemeral:
             assert already_attr
@@ -248,29 +259,19 @@ class DARTsortSorting:
             raise ValueError(
                 f"Can't add feature {feature_name}, since it already exists."
             )
-        if not already_ephemeral:
-            self._ephemeral_feature_names.append(feature_name)
         logger.dartsortverbose(
             "Attach ephemeral feature %s with shape %s.", feature_name, feature.shape
         )
-        setattr(self, feature_name, feature)
+        self._ephemeral_features[feature_name] = feature
 
     def remove_ephemeral_feature(self, feature_name: str):
-        assert feature_name in self._ephemeral_feature_names
-        assert hasattr(self, feature_name)
+        assert feature_name in self._ephemeral_features
         logger.dartsortverbose("Remove ephemeral feature %s.", feature_name)
-        self._ephemeral_feature_names = [
-            k for k in self._ephemeral_feature_names if k != feature_name
-        ]
-        delattr(self, feature_name)
+        del self._ephemeral_features[feature_name]
 
     def unload_persistent_feature(self, feature_name: str):
-        assert feature_name in self._loaded_persistent_features
-        assert hasattr(self, feature_name)
-        self._loaded_persistent_features = [
-            k for k in self._loaded_persistent_features if k != feature_name
-        ]
-        delattr(self, feature_name)
+        assert feature_name in self._persistent_features
+        del self._persistent_features[feature_name]
 
     def add_feature(
         self,
@@ -285,9 +286,9 @@ class DARTsortSorting:
             self._register_persistent_feature(feature_name, feature, check_shape)
 
     def remove_feature(self, feature_name: str):
-        if feature_name in self._loaded_persistent_features:
+        if feature_name in self._persistent_features:
             self.unload_persistent_feature(feature_name)
-        elif feature_name in self._ephemeral_feature_names:
+        elif feature_name in self._ephemeral_features:
             self.remove_ephemeral_feature(feature_name)
         else:
             raise ValueError(f"Sorting doesn't have {feature_name}.")
@@ -308,10 +309,10 @@ class DARTsortSorting:
             check_shape = not self._no_check_needed(feature_name)
         if check_shape:
             self._check_shape(feature_name, feature)
-        if feature_name in self._loaded_persistent_features:
+        if feature_name in self._persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
-        self._loaded_persistent_features.append(feature_name)
-        setattr(self, feature_name, feature)
+        self._persistent_features[feature_name] = feature
+
         try:
             with h5py.File(
                 self.parent_h5_path, "r+", libver="latest", locking=False
@@ -431,14 +432,17 @@ class DARTsortSorting:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
             try:
-                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # pyright: ignore[reportCallIssue]
+                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
                 h5p = h5p.relative_to(sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
-        for k in self._ephemeral_feature_names:
-            data[k] = getattr(self, k)
-        data["ephemeral_feature_names"] = np.array(self._ephemeral_feature_names)
-        data["loaded_persistent_features"] = np.array(self._loaded_persistent_features)
+        data.update(self._ephemeral_features)
+        data["ephemeral_feature_names"] = np.array(
+            list(self._ephemeral_features.keys())
+        )
+        data["loaded_persistent_features"] = np.array(
+            list(self._persistent_features.keys())
+        )
         np.savez(sorting_npz, **data, allow_pickle=False)
 
     @classmethod
@@ -511,7 +515,7 @@ class DARTsortSorting:
             labels = self.labels[mask]
 
         eph = {}
-        for k in self._ephemeral_feature_names:
+        for k in self._ephemeral_features:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
             if self._no_check_needed(k):
@@ -521,7 +525,7 @@ class DARTsortSorting:
         eph["mask_indices"] = mask
 
         per = {}
-        for k in self._loaded_persistent_features:
+        for k in self._persistent_features:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
             if self._no_check_needed(k):
@@ -542,7 +546,7 @@ class DARTsortSorting:
     def ensure_no_missing(self):
         assert self.labels is not None
         no_missing = np.all(self.labels >= 0)
-        if "mask_indices" in self._ephemeral_feature_names:
+        if "mask_indices" in self._ephemeral_features:
             assert no_missing
         if no_missing:
             return self
@@ -589,11 +593,11 @@ class DARTsortSorting:
         nu = self.n_units
         unit_str = f"{nu} unit" + "s" * (nu > 1)
         feat_str = " "
-        if self._loaded_persistent_features:
-            s = ", ".join(self._loaded_persistent_features)
+        if self._persistent_features:
+            s = ", ".join(self._persistent_features)
             feat_str += f"Loaded HDF5 features: {s}. "
-        if self._ephemeral_feature_names:
-            s = ", ".join(self._ephemeral_feature_names)
+        if self._ephemeral_features:
+            s = ", ".join(self._ephemeral_features)
             feat_str += f"Features: {s}. "
         h5_str = ""
         if self.parent_h5_path:
@@ -644,8 +648,8 @@ class DARTsortSorting:
             return getattr(self, dataset_name)[mask]
 
         # otherwise, we don't have it loaded
-        assert dataset_name not in self._ephemeral_feature_names
-        assert dataset_name not in self._loaded_persistent_features
+        assert dataset_name not in self._ephemeral_features
+        assert dataset_name not in self._persistent_features
 
         # but we can try to load it
         if self.parent_h5_path is None:
@@ -724,7 +728,7 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         base_dir = sorting.parent
         stem = sorting.stem
         # TODO how to type this better... don't understand.
-        geom = channel_index = None  # type: ignore
+        geom = channel_index = None
     else:
         assert isinstance(sorting, DARTsortSorting)
         if sorting.parent_h5_path is None:
@@ -734,14 +738,14 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         base_dir = h5_path.parent
         stem = h5_path.stem
 
-        geom = getattr(sorting, "geom", None)  # type: ignore
-        channel_index = getattr(sorting, "channel_index", None)  # type: ignore
+        geom = getattr(sorting, "geom", None)
+        channel_index = getattr(sorting, "channel_index", None)
 
     model_dir = base_dir / f"{stem}_models"
     if geom is None or channel_index is None:
         with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
-            geom: np.ndarray = h5["geom"][:]  # type: ignore
-            channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
+            geom: np.ndarray = h5["geom"][:]
+            channel_index: np.ndarray = h5["channel_index"][:]
     assert geom is not None
     assert channel_index is not None
 
@@ -870,12 +874,12 @@ def sorting_from_spikeinterface(
 
 def get_labels(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r") as h5:
-        return h5["labels"][:]  # type: ignore
+        return h5["labels"][:]
 
 
 def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]  # type: ignore
+        return h5["residual"][:]
 
 
 def sorting_isis(sorting: DARTsortSorting):
@@ -883,7 +887,7 @@ def sorting_isis(sorting: DARTsortSorting):
     isis_ms = np.zeros(len(sorting))
     for uid in sorting.unit_ids:
         inu = np.flatnonzero(sorting.labels == uid)
-        t_ms = sorting.times_seconds[inu] * 1000  # type: ignore
+        t_ms = sorting.times_seconds[inu] * 1000
         isi = np.diff(t_ms)
         isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
         isi = np.minimum(isi[1:], isi[:-1])
@@ -1406,13 +1410,14 @@ def subsample_waveforms(
         h5 = h5py.File(hdf5_filename)
     elif need_open:
         raise ValueError("Need h5 or hdf5_filename.")
+    assert h5 is not None
 
     try:
-        channels: np.ndarray = h5["channels"][:]  # type: ignore
+        channels: np.ndarray = h5["channels"][:]
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            wfshape = h5[waveforms_dataset_name].shape  # type: ignore
+            wfshape = h5[waveforms_dataset_name].shape
             emptywf = torch.zeros(wfshape)
             return emptywf, dict(channels=emptyi)
         weights = fit_reweighting(
@@ -1430,19 +1435,18 @@ def subsample_waveforms(
             if not replace:
                 choices.sort()
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}  # type: ignore
+                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
                     ichoices
                 ]
                 fixed_properties = {
-                    k: h5[k][uchoices][ichoices]  # type: ignore
-                    for k in fixed_property_keys
+                    k: h5[k][uchoices][ichoices] for k in fixed_property_keys
                 }
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]  # type: ignore
-            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}  # type: ignore
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
     finally:
         if need_open:
             h5.close()
@@ -1462,7 +1466,7 @@ def subsample_waveforms(
 
 
 def fit_reweighting(
-    voltages: np.ndarray | None = None,  # type: ignore
+    voltages: np.ndarray | torch.Tensor | None = None,
     h5=None,
     hdf5_path=None,
     log_voltages=True,
@@ -1479,7 +1483,7 @@ def fit_reweighting(
             voltages = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
-                voltages: np.ndarray = h5[voltages_dataset_name][:]  # type: ignore
+                voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             assert False
     assert isinstance(voltages, np.ndarray)
@@ -1487,14 +1491,18 @@ def fit_reweighting(
     from ..clustering.density import get_smoothed_density
 
     if torch.is_tensor(voltages):
-        voltages = voltages.numpy(force=True)
+        v = voltages.numpy(force=True)
+    else:
+        v = voltages
+    del voltages
+
     if log_voltages:
-        sign = np.sign(voltages)
-        voltages = sign * np.log(np.abs(voltages))
-    voltages = np.nan_to_num(voltages)
-    sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
+        sign = np.sign(v)
+        v = sign * np.log(np.abs(v))
+    v = np.nan_to_num(v)
+    sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
-    dens = get_smoothed_density(voltages[:, None], sigma=sigma)
+    dens = get_smoothed_density(v[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
