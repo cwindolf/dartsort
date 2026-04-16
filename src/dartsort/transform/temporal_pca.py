@@ -1,5 +1,5 @@
-from typing import Self, cast
 from dataclasses import replace
+from typing import Self, cast
 
 import numpy as np
 import torch
@@ -74,11 +74,11 @@ class BaseTemporalPCA(BaseWaveformModule):
         waveforms,
         *,
         channels,
-        weights=None,
-        time_shifts=None,
-        **unused,
+        **fixed_properties,
     ):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+        weights = fixed_properties.get("weights", None)
+        time_shifts = fixed_properties.get("time_shifts", None)
+        super().fit(recording, waveforms, channels=channels)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -261,7 +261,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
             n_components=rank,
-            random_state=self.random_state,  # type: ignore
+            random_state=self.random_state,
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)
@@ -283,7 +283,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         **constructor_kwargs,
     ) -> Self:
         if isinstance(pca, PCA):
-            whiten = pca.whiten  # type: ignore
+            whiten = pca.whiten
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
@@ -321,6 +321,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         return self
 
     def initialize_spike_length_dependent_params(self):
+        assert isinstance(self.spike_length_samples, int)
         nt = self.spike_length_samples
         if self.temporal_slice is not None and self.temporal_slice != slice(None):
             nt = self.temporal_slice.stop - self.temporal_slice.start
@@ -405,9 +406,9 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         self.align_pad = align_pad
         self.trough = trough
 
-    def forward(
-        self, waveforms, *, channels, alignment_signs, time_shifts=None, **unused
-    ):
+    def forward(self, waveforms, *, channels, **fixed_properties):
+        alignment_signs = fixed_properties["alignment_signs"]
+        time_shifts = fixed_properties.get("time_shifts")
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
             return self.force_embed(waveforms)

@@ -63,15 +63,10 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         self.with_raw_std_dev = with_raw_std_dev
         self._initialize((self.feature_dim, output_channels))
 
-    def transform(
-        self,
-        waveforms: torch.Tensor,
-        *,
-        labels: torch.Tensor,
-        **fixed_properties,
-    ):
+    def transform(self, waveforms: torch.Tensor, **fixed_properties: torch.Tensor):
         assert waveforms.shape[1] == self.feature_dim
         assert waveforms.shape[2] == self.output_channels
+        labels = fixed_properties["labels"]
 
         # if median, early out
         if not self.online:
