@@ -638,7 +638,7 @@ class DARTsortSorting:
         with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
             dset = h5[dataset_name]
             assert isinstance(dset, h5py.Dataset)
-            return dset[:]
+            return dset[()]
 
     def slice_feature_by_name(
         self, dataset_name: str, mask: np.ndarray | slice = slice(None)

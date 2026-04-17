@@ -285,7 +285,7 @@ default_clustering_fit_sampling_cfg = FitSamplingConfig(
     max_waveforms_fit=500_000, n_waveforms_fit=500_000
 )
 default_refinement_fit_sampling_cfg = FitSamplingConfig(
-    max_waveforms_fit=1500 * 1024, n_waveforms_fit=1500 * 1024
+    max_waveforms_fit=2000 * 1024, n_waveforms_fit=2000 * 1024
 )
 
 PeakSign = Literal["pos", "neg", "both"]
