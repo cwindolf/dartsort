@@ -12,9 +12,9 @@ from ..util.data_util import SpikeDataset
 from ..util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
+    PeakSign,
     ThresholdingConfig,
     WaveformConfig,
-    PeakSign,
     default_peeling_fit_sampling_cfg,
     default_thresholding_cfg,
 )
@@ -101,19 +101,21 @@ class ThresholdAndFeaturize(BasePeeler):
         thresholding_cfg: ThresholdingConfig,
         featurization_cfg: FeaturizationConfig,
         sampling_cfg: FitSamplingConfig,
+        featurization_pipeline: WaveformPipeline | None = None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
 
-        featurization_pipeline = WaveformPipeline.from_config(
-            geom=geom,
-            channel_index=channel_index,
-            featurization_cfg=featurization_cfg,
-            waveform_cfg=waveform_cfg,
-            sampling_frequency=recording.sampling_frequency,
-        )
+        if featurization_pipeline is None:
+            featurization_pipeline = WaveformPipeline.from_config(
+                geom=geom,
+                channel_index=channel_index,
+                featurization_cfg=featurization_cfg,
+                waveform_cfg=waveform_cfg,
+                sampling_frequency=recording.sampling_frequency,
+            )
 
         # waveform logic
         trough_offset_samples = waveform_cfg.trough_offset_samples(
@@ -249,7 +251,7 @@ def threshold_chunk(
     quiet=False,
 ) -> PeelingBatchResult:
     n_index = channel_index.shape[1]
-    times_rel, channels, energies = detect_and_deduplicate(  # type: ignore
+    times_rel, channels, energies = detect_and_deduplicate(
         traces,
         detection_threshold,
         peak_channel_index=peak_channel_index,

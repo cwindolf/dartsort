@@ -129,6 +129,11 @@ class DARTsortUserConfig:
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
     )
+    motion_voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
+        default=4.0,
+        doc="If subsampling, a quick thresholding will be run at this voltage "
+        "threshold to grab spikes for motion estimation purposes."
+    )
 
     # -- featurization length, radius, rank parameters
     temporal_pca_rank: Annotated[int, Field(gt=0)] = argfield(

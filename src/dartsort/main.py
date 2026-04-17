@@ -17,16 +17,20 @@ from .peel import (
     ThresholdAndFeaturize,
 )
 from .templates import TemplateData, estimate_template_library
+from .transform import WaveformPipeline
 from .util.data_util import DARTsortSorting, check_recording
 from .util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
     ComputationConfig,
     DARTsortInternalConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
     MatchingConfig,
     RefinementConfig,
     SubtractionConfig,
     ThresholdingConfig,
+    WaveformConfig,
     default_clustering_cfg,
     default_clustering_features_cfg,
     default_dartsort_cfg,
@@ -49,6 +53,7 @@ from .util.main_util import (
     ds_save_features,
     ds_save_intermediate_labels,
     ds_save_motion,
+    motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
@@ -224,8 +229,11 @@ def _dartsort_impl(
             output_directory=store_dir,
             recording=recording,
             sorting=sorting,
+            detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
             motion_cfg=cfg.motion_estimation_cfg,
             computation_cfg=cfg.computation_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
+            waveform_cfg=cfg.waveform_cfg,
             overwrite=overwrite,
         )
     ret["motion"] = motion
@@ -254,8 +262,11 @@ def _dartsort_impl(
                 output_directory=store_dir,
                 recording=recording,
                 sorting=sorting,
+                detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
                 motion_cfg=cfg.motion_estimation_cfg,
                 computation_cfg=cfg.computation_cfg,
+                sampling_cfg=cfg.peeler_sampling_cfg,
+                waveform_cfg=cfg.waveform_cfg,
                 overwrite=overwrite,
             )
         ret["motion"] = motion
@@ -306,7 +317,7 @@ def _dartsort_impl(
             previous_detection_cfg = cfg.initial_detection_cfg
         else:
             previous_detection_cfg = cfg.matching_cfg
-        
+
         if is_final:
             _nspk = None
             _pres = 1.0
@@ -456,10 +467,10 @@ def initial_detection(
 def subtract(
     output_dir: str | Path,
     recording: BaseRecording,
-    waveform_cfg=default_waveform_cfg,
-    featurization_cfg=default_featurization_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     subtraction_cfg=default_subtraction_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     computation_cfg: ComputationConfig | None = None,
     chunk_starts_samples=None,
     stop_after_n_spikes: int | None = None,
@@ -502,11 +513,11 @@ def match(
     recording: BaseRecording,
     sorting: DARTsortSorting | None = None,
     motion: MotionInfo | None = None,
-    waveform_cfg=default_waveform_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg=default_template_cfg,
-    featurization_cfg=default_featurization_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     matching_cfg=default_matching_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     previous_detection_cfg: Any | None = None,
     prev_step_name: str | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
@@ -593,9 +604,9 @@ def grab(
     output_dir: str | Path,
     recording: BaseRecording,
     sorting: DARTsortSorting,
-    waveform_cfg=default_waveform_cfg,
-    featurization_cfg=default_featurization_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     show_progress=True,
@@ -628,10 +639,11 @@ def grab(
 def threshold(
     output_dir: str | Path,
     recording: BaseRecording,
-    waveform_cfg=default_waveform_cfg,
-    thresholding_cfg=default_thresholding_cfg,
-    featurization_cfg=default_featurization_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    thresholding_cfg: ThresholdingConfig = default_thresholding_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
+    featurization_pipeline: WaveformPipeline | None = None,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
@@ -647,6 +659,7 @@ def threshold(
         waveform_cfg=waveform_cfg,
         thresholding_cfg=thresholding_cfg,
         featurization_cfg=featurization_cfg,
+        featurization_pipeline=featurization_pipeline,
         sampling_cfg=sampling_cfg,
     )
     sorting = run_peeler(

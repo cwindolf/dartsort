@@ -123,7 +123,7 @@ class FeaturizationConfig:
     # -- denoising configuration
     do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
-    do_enforce_decrease: bool = True
+    do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
 
@@ -162,7 +162,7 @@ class FeaturizationConfig:
     tpca_fit_radius: float = 75.0
     tpca_rank: int = 8
     tpca_centered: bool = False
-    learn_cleaned_tpca_basis: bool = True
+    learn_cleaned_tpca_basis: bool = False
     input_tpca_waveform_cfg: WaveformConfig | None = WaveformConfig(
         ms_before=0.75, ms_after=1.25
     )
@@ -347,7 +347,7 @@ class ThresholdingConfig:
     chunk_length_samples: int = 30_000
 
     # thresholding
-    detection_threshold: float = 5.0
+    detection_threshold: float = 4.0
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius_um: float = 150.0
@@ -577,6 +577,11 @@ class MotionEstimationConfig:
         doc="Motion bins farther than this from the local median will be replaced by interpolation.",
     )
     median_neighborhood_bins: int = 51
+
+    # if spikes are needed, a thresholding detection is run
+    tpca_rank: int = 8
+    localization_radius_um: float = 100.0
+    threshold_cfg: ThresholdingConfig = ThresholdingConfig()
 
 
 @cfg_dataclass
@@ -1124,7 +1129,17 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         for k in fields(MotionEstimationConfig)
         if hasattr(cfg, k.name)
     }
-    motion_estimation_cfg = MotionEstimationConfig(**motion_kw)
+    motion_threshold_cfg = ThresholdingConfig(
+        detection_threshold=cfg.motion_voltage_threshold,
+        chunk_length_samples=cfg.chunk_length_samples,
+        peak_sign=cfg.peak_sign,
+    )
+    motion_estimation_cfg = MotionEstimationConfig(
+        **motion_kw,
+        tpca_rank=cfg.temporal_pca_rank,
+        localization_radius_um=cfg.localization_radius_um,
+        threshold_cfg=motion_threshold_cfg,
+    )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
         amplitude_scaling_variance=cfg.amplitude_scaling_stddev**2,

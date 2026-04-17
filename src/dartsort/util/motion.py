@@ -1,3 +1,4 @@
+from dataclasses import replace
 import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, cast
@@ -7,7 +8,7 @@ from dredge.motion_util import MotionEstimate
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
-from torch import Tensor, is_tensor
+from torch import Tensor, is_tensor, asarray
 
 if TYPE_CHECKING:
     from .data_util import DARTsortSorting
@@ -15,7 +16,12 @@ from .drift_util import get_pitch, registered_geometry
 from .internal_config import (
     ComputationConfig,
     MotionEstimationConfig,
+    WaveformConfig,
+    FitSamplingConfig,
+    FeaturizationConfig,
     default_motion_estimation_cfg,
+    default_waveform_cfg,
+    default_peeling_fit_sampling_cfg,
 )
 from .job_util import ensure_computation_config
 from .py_util import databag, resolve_path
@@ -36,14 +42,18 @@ def get_motion_info(
     output_directory: Path | str | None = None,
     filename: str = "motion.pkl",
     recording: BaseRecording,
-    sorting: "DARTsortSorting",
+    sorting: "DARTsortSorting | None",
+    detect_new_peaks: bool = False,
     si_motion: Motion | None = None,
     dredge_motion_est: MotionEstimate | None = None,
     motion_cfg: MotionEstimationConfig = default_motion_estimation_cfg,
+    waveform_cfg: WaveformConfig | None = None,
+    sampling_cfg: FitSamplingConfig | None = None,
     computation_cfg: ComputationConfig | None = None,
     localizations_dataset_name="point_source_localizations",
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
+    show_progress: bool = True,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
 
@@ -55,13 +65,33 @@ def get_motion_info(
     if (motion := try_load_motion_info(output_directory, filename)) is not None:
         return motion
 
+    if detect_new_peaks:
+        assert output_directory is not None
+        assert sorting is not None
+        assert sampling_cfg is not None
+        assert waveform_cfg is not None
+        motion_sorting = threshold_for_motion(
+            output_directory=output_directory,
+            recording=recording,
+            previous_sorting=sorting,
+            motion_cfg=motion_cfg,
+            computation_cfg=computation_cfg,
+            sampling_cfg=sampling_cfg,
+            waveform_cfg=waveform_cfg,
+            overwrite=overwrite,
+            show_progress=show_progress,
+        )
+    else:
+        motion_sorting = sorting
+    assert motion_sorting is not None
+
     have_si = si_motion is not None
     have_dredge = dredge_motion_est is not None
     assert not (have_si and have_dredge)
     if not (have_si or have_dredge):
         dredge_motion_est = dredge_estimate_motion(
             recording=recording,
-            sorting=sorting,
+            sorting=motion_sorting,
             motion_cfg=motion_cfg,
             device=ensure_computation_config(computation_cfg).actual_device(),
             localizations_dataset_name=localizations_dataset_name,
@@ -345,3 +375,81 @@ class MotionInfo:
         else:
             assert not self.drifting
             return None
+
+
+def threshold_for_motion(
+    *,
+    output_directory: Path | str,
+    hdf5_filename="motionthreshold.h5",
+    model_subdir="motionthreshold_models",
+    recording: BaseRecording,
+    previous_sorting: "DARTsortSorting | None",
+    motion_cfg: MotionEstimationConfig,
+    computation_cfg: ComputationConfig | None = None,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    overwrite: bool = False,
+    show_progress: bool = False,
+):
+    """Thresholding detection and localization to get spikes for motion estimation."""
+    from ..main import threshold
+    from ..transform import WaveformPipeline
+    from .data_util import try_get_denoising_pipeline
+    from .waveform_util import make_channel_index
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+
+    # load previous denoisers if possible, stack on features
+    # else fall back to a more default-like feat cfg
+    rad = motion_cfg.localization_radius_um
+    featurization_cfg = FeaturizationConfig(
+        save_input_tpca_projs=False,
+        save_collidedness=False,
+        learn_cleaned_tpca_basis=False,
+        n_residual_snips=0,
+        extract_radius=rad,
+        localization_radius=rad,
+        tpca_rank=motion_cfg.tpca_rank,
+    )
+    if previous_sorting is not None:
+        denoising_pipeline, geom, channel_index = try_get_denoising_pipeline(
+            previous_sorting
+        )
+    else:
+        denoising_pipeline = None
+        geom = asarray(recording.get_channel_locations())
+        channel_index = make_channel_index(
+            geom, featurization_cfg.extract_radius, to_torch=True
+        )
+
+    if denoising_pipeline is not None:
+        featurization_cfg = replace(
+            featurization_cfg, do_nn_denoise=False, do_tpca_denoise=False
+        )
+    pipeline = WaveformPipeline.from_config(
+        featurization_cfg=featurization_cfg,
+        waveform_cfg=waveform_cfg,
+        geom=geom,
+        channel_index=channel_index,
+        sampling_frequency=recording.sampling_frequency,
+    )
+    if denoising_pipeline is not None:
+        pipeline = WaveformPipeline(
+            transformers=denoising_pipeline.transformers + pipeline.transformers
+        )
+
+    return threshold(
+        output_dir=output_directory,
+        recording=recording,
+        waveform_cfg=waveform_cfg,
+        thresholding_cfg=motion_cfg.threshold_cfg,
+        featurization_cfg=featurization_cfg,
+        featurization_pipeline=pipeline,
+        sampling_cfg=sampling_cfg,
+        chunk_starts_samples=None,
+        overwrite=overwrite,
+        show_progress=show_progress,
+        hdf5_filename=hdf5_filename,
+        model_subdir=model_subdir,
+        computation_cfg=computation_cfg,
+    )

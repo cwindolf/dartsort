@@ -256,7 +256,7 @@ def featurization_config_to_class_names_and_kwargs(
     # logic for picking an efficient combo of tpcas and nn denoisers
     class_names_and_kwargs.extend(_add_tpca_and_nn(featurization_cfg, waveform_cfg))
 
-    if fc.do_enforce_decrease:
+    if fc.do_enforce_decrease is True:
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if fc.save_output_waveforms:
         class_names_and_kwargs.append(
@@ -349,6 +349,32 @@ def _add_localization_and_ampvec(fc):
     do_feats = not fc.denoise_only
     more = []
 
+    do_ptp_amp = do_feats and fc.save_amplitudes
+    do_peak_vec = do_feats and (
+        fc.do_localization
+        and fc.localization_amplitude_type == "peak"
+        and not fc.nn_localization
+    )
+    do_ptp_vec = do_feats and fc.save_amplitudes
+    do_logptt = do_feats and fc.save_amplitudes
+    do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
+    if do_any_amp or (do_feats and fc.save_all_amplitudes):
+        more.append(
+            (
+                "AmplitudeFeatures",
+                {
+                    "name_prefix": fc.output_waveforms_name,
+                    "ptp_max_amplitude": do_ptp_amp or fc.save_all_amplitudes,
+                    "peak_amplitude_vectors": do_peak_vec or fc.save_all_amplitudes,
+                    "ptp_amplitude_vectors": do_ptp_vec or fc.save_all_amplitudes,
+                    "log_peak_to_trough": do_logptt or fc.save_all_amplitudes,
+                },
+            )
+        )
+
+    if fc.do_enforce_decrease == "loc_only" and fc.do_localization:
+        more.append(("EnforceDecrease", {}))
+
     if do_feats and fc.do_localization and fc.nn_localization:
         more.append(
             (
@@ -370,29 +396,6 @@ def _add_localization_and_ampvec(fc):
                     "localization_model": "com",
                     "radius": fc.localization_radius,
                     "name": "com_localizations",
-                },
-            )
-        )
-
-    do_ptp_amp = do_feats and fc.save_amplitudes
-    do_peak_vec = do_feats and (
-        fc.do_localization
-        and fc.localization_amplitude_type == "peak"
-        and not fc.nn_localization
-    )
-    do_ptp_vec = do_feats and fc.save_amplitudes
-    do_logptt = do_feats and fc.save_amplitudes
-    do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
-    if do_any_amp or (do_feats and fc.save_all_amplitudes):
-        more.append(
-            (
-                "AmplitudeFeatures",
-                {
-                    "name_prefix": fc.output_waveforms_name,
-                    "ptp_max_amplitude": do_ptp_amp or fc.save_all_amplitudes,
-                    "peak_amplitude_vectors": do_peak_vec or fc.save_all_amplitudes,
-                    "ptp_amplitude_vectors": do_ptp_vec or fc.save_all_amplitudes,
-                    "log_peak_to_trough": do_logptt or fc.save_all_amplitudes,
                 },
             )
         )

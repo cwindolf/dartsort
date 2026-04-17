@@ -129,6 +129,31 @@ def ds_save_motion(
     motion.save(output_directory=output_dir, overwrite=overwrite)
 
 
+def motion_needs_peaks(
+    cfg: DARTsortInternalConfig, recording: BaseRecording, sorting: DARTsortSorting
+):
+    if cfg.subsampling_presence == 1.0:
+        return False
+    if cfg.subsampling_spikes is None:
+        return False
+
+    # assert sorting's chunk starts, sorted, match full recording's
+    # so, this means sorting could have been shuffled but was not run with
+    # run_subsampled_peeling()
+    # this function not designed for that kind of sorting
+    targ_chunk_starts = np.arange(
+        0, recording.get_num_samples(), cfg.initial_detection_cfg.chunk_length_samples
+    )
+    my_chunk_starts = sorting._load_dataset("chunk_starts_samples")
+    assert np.array_equal(targ_chunk_starts, np.sort(my_chunk_starts))
+
+    # check if sorting quit early
+    last_chunk_start = sorting._load_dataset("last_chunk_start").item()
+    complete = my_chunk_starts[-1] == last_chunk_start
+
+    return not complete
+
+
 def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if cfg.link_from is None:
         return

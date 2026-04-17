@@ -1,16 +1,15 @@
 from pathlib import Path
-from typing import overload, Literal
 
 import h5py
 import numpy as np
 import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
-from .data_util import DARTsortSorting
-from . import job_util
-from .py_util import resolve_path
 from ..peel.peel_base import BasePeeler
-from .internal_config import FeaturizationConfig, ComputationConfig
+from . import job_util
+from .data_util import DARTsortSorting
+from .internal_config import ComputationConfig, FeaturizationConfig
+from .py_util import resolve_path
 
 
 def run_peeler(
@@ -71,6 +70,8 @@ def run_peeler(
     n_resid_now = featurization_cfg.n_residual_snips * int(
         not featurization_cfg.residual_later
     )
+    is_subsampling = stop_after_n_spikes is not None
+    is_subsampling = is_subsampling and ensure_coverage != 1.0
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -81,7 +82,7 @@ def run_peeler(
         total_residual_snips=n_resid_now,
         stop_after_n_waveforms=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
-        shuffle=featurization_cfg.shuffle,
+        shuffle=featurization_cfg.shuffle or is_subsampling,
     )
 
     if featurization_cfg.residual_later:
