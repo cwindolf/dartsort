@@ -1,4 +1,3 @@
-from kilosort.parameters import s
 import dataclasses
 import tempfile
 from typing import cast
