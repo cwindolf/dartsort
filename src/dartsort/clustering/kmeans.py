@@ -440,7 +440,7 @@ def kmeans(
     drop_prop = X.new_full((), drop_prop)
     if weights is not None:
         weights = weights.to(device=X.device)
-    with torch.jit.optimized_execution(True):  # type: ignore
+    with torch.jit.optimized_execution(True):
         for j in range(n_kmeans_tries):
             aa, ee, cc, dists = kmeans_inner(
                 X,
