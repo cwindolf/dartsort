@@ -851,9 +851,9 @@ class DARTsortInternalConfig:
     recluster_after_first_matching: bool = True
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
-    subsampling_spikes: int = 2_000_000
+    subsampling_spikes: int | None = 2_048_000
     # need to cover at least this fraction of chunks
-    subsampling_fraction: float = 0.1
+    subsampling_presence: float = 0.1
 
     # development / debugging flags
     work_in_tmpdir: bool = False
@@ -1240,6 +1240,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
+        subsampling_spikes=cfg.subsampling_spikes,
+        subsampling_presence=cfg.subsampling_presence,
     )
 
 
