@@ -13,66 +13,6 @@ from ..peel.peel_base import BasePeeler
 from .internal_config import FeaturizationConfig, ComputationConfig
 
 
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[True],
-    stop_after_n_spikes: int | None = None,
-    ensure_coverage: float | None = None,
-    localization_dataset_name="point_source_localizations",
-) -> None: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[False] = False,
-    stop_after_n_spikes: int | None = None,
-    ensure_coverage: float | None = None,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: bool = False,
-    stop_after_n_spikes: int | None = None,
-    ensure_coverage: float | None = None,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting | None: ...
-
-
 def run_peeler(
     peeler: BasePeeler,
     *,
