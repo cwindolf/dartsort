@@ -1314,8 +1314,13 @@ class StreamingSpikeData(BatchedSpikeData):
         self.proposals = proposals.to(self.device)
 
     def _update_sizes_from_n_units(self, n_units: int):
-        if self.max_n_total is None:
+        if self.max_n_total is None or self.max_n_explore is None:
             self.max_n_total = n_units
+        else:
+            self.max_n_total = min(
+                self.max_n_candidates * (self.max_n_search + 1) + self.max_n_explore,
+                n_units,
+            )
         assert self.max_n_total <= n_units
         n_candidates = min(self.max_n_candidates, self.max_n_total)
         n_explore = self.max_n_total - n_candidates
