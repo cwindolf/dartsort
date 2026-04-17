@@ -1135,10 +1135,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         peak_sign=cfg.peak_sign,
     )
     motion_estimation_cfg = MotionEstimationConfig(
-        **motion_kw,
-        tpca_rank=cfg.temporal_pca_rank,
-        localization_radius_um=cfg.localization_radius_um,
-        threshold_cfg=motion_threshold_cfg,
+        **motion_kw, tpca_rank=cfg.temporal_pca_rank, threshold_cfg=motion_threshold_cfg
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
