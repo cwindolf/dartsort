@@ -169,11 +169,11 @@ class UnwhitenPreprocessorSegment(BasePreprocessorSegment):
         end_frame = self.get_num_samples() if end_frame is None else end_frame
         traces, lm, rm = get_chunk_with_margin(
             self.parent_recording_segment,
-            start_frame,
-            end_frame,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            last_dimension_indices=None,
             margin=self.noise.margin,
             add_reflect_padding=True,
-            channel_indices=None,
         )
         assert lm == rm == self.noise.margin
         dtype = traces.dtype

@@ -451,7 +451,7 @@ class BasePeeler(BModule):
             self.recording.segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
-            channel_indices=None,
+            last_dimension_indices=None,
             margin=self.chunk_margin_samples,
         )
         chunk = torch.tensor(

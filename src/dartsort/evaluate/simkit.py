@@ -827,11 +827,11 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
     ):
         traces, lm, rm = get_chunk_with_margin(
             self.parent_recording_segment,
-            start_frame,
-            end_frame,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            last_dimension_indices=None,
             margin=self.margin,
             add_zeros=True,
-            channel_indices=None,
         )
         assert lm == rm == self.margin
         assert traces.shape[1] == self.n_channels
