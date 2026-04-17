@@ -469,18 +469,10 @@ def kmeans(
     )
 
 
-def subylogneglog_(x, z):
-    return x.sub_(z.log_().neg_().log_())
-
-
-subylogneglog_ = torch.func.vmap(subylogneglog_, chunk_size=1)
-
-
 @torch.jit.script
 def _one_gumbel_nolog(p: Tensor, gen: torch.Generator, buf: Tensor):
     z = buf.uniform_(generator=gen).log_()
     return torch.divide(p, z, out=z).argmin(dim=0)
-    # return p.log_().sub_(z.log_().neg_().log_()).argmax()
 
 
 @torch.jit.script

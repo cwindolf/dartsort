@@ -734,12 +734,20 @@ class BasePeeler(BModule):
     def sample_chunks(
         self, chunk_starts_samples: np.ndarray, n_chunks: int, ordered: bool = False
     ) -> np.ndarray:
-        rg = np.random.default_rng(self.random_seed)
-        chunk_starts_samples = rg.choice(
-            chunk_starts_samples, size=n_chunks, replace=False
-        )
+        if self.fit_sampling_cfg.chunk_sampling == "random":
+            rg = np.random.default_rng(self.random_seed)
+            chunk_starts_samples = rg.choice(
+                chunk_starts_samples, size=n_chunks, replace=False
+            )
+        elif self.fit_sampling_cfg.chunk_sampling == "kmeanspp":
+            _ix = _kmeansppix(len(chunk_starts_samples), n_chunks, self.random_seed)
+            chunk_starts_samples = chunk_starts_samples[_ix]
+        else:
+            assert False
+
         if ordered:
             chunk_starts_samples.sort()
+
         return chunk_starts_samples
 
     def run_subsampled_peeling(
@@ -1077,3 +1085,31 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             skip_features=_peeler_process_context.ctx.skip_features,
             to_cpu=_peeler_process_context.ctx.to_cpu,
         )
+
+
+def _kmeansppix(n: int, k: int | None = None, seed=0):
+    rg = np.random.default_rng(seed)
+    k = k if k is not None else n
+    assert 0 < k <= n
+
+    xx = np.arange(float(n))
+    xx -= np.mean(xx)
+    xx /= np.std(xx)
+
+    inds = np.full((k,), n + 1, dtype=np.int64)
+    inds[0] = rg.integers(n)
+
+    dist = xx - xx[inds[0]]
+    dist *= dist
+
+    scratch = np.empty_like(dist)
+
+    for j in range(1, k):
+        p = np.divide(dist, dist.sum(), out=scratch)
+        inds[j] = rg.choice(n, p=p)
+        dj = np.subtract(xx, xx[inds[j]], out=scratch)
+        dj *= dj
+        np.minimum(dist, dj, out=dist)
+
+    assert np.unique(inds).shape == (k,)
+    return inds
