@@ -306,9 +306,13 @@ def _dartsort_impl(
             previous_detection_cfg = cfg.initial_detection_cfg
         else:
             previous_detection_cfg = cfg.matching_cfg
-
-        # TODO
-        # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+        
+        if is_final:
+            _nspk = None
+            _pres = 1.0
+        else:
+            _nspk = cfg.subsampling_spikes
+            _pres = cfg.subsampling_presence
 
         logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(
@@ -322,6 +326,8 @@ def _dartsort_impl(
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite,
             computation_cfg=cfg.computation_cfg,
+            stop_after_n_spikes=_nspk,
+            ensure_coverage=_pres,
             hdf5_filename=f"matching{step}.h5",
             model_subdir=f"matching{step}_models",
             previous_detection_cfg=previous_detection_cfg,
@@ -406,6 +412,8 @@ def initial_detection(
             subtraction_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
         )
@@ -418,6 +426,8 @@ def initial_detection(
             thresholding_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -433,6 +443,8 @@ def initial_detection(
             matching_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             motion=motion,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -499,6 +511,8 @@ def match(
     prev_step_name: str | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
     show_progress=True,
@@ -565,6 +579,8 @@ def match(
         model_subdir=model_subdir,
         featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=overwrite,
         residual_filename=residual_filename,
         show_progress=show_progress,
@@ -617,6 +633,8 @@ def threshold(
     featurization_cfg=default_featurization_cfg,
     sampling_cfg=default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     show_progress=True,
     hdf5_filename="threshold.h5",
@@ -638,6 +656,8 @@ def threshold(
         model_subdir=model_subdir,
         featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=overwrite,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
