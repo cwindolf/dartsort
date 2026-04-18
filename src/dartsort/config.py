@@ -33,6 +33,7 @@ class DARTsortUserConfig:
     )
     preprocessing: PreprocessingStrategy = argfield(
         default="none",
+        arg_type=str,
         doc="If other than 'none', dartsort will apply a standard preprocessing "
         "to the recording. Leave as 'none' if you'd prefer to control preprocessing. "
         "If so, be aware that dartsort expects its input to be standardized on "
