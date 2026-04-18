@@ -101,19 +101,19 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         batch_w = batch_w[:, None] * nz
 
         # Welford weights
-        self.count += batch_w
-        batch_w /= self.count
+        self.b.count += batch_w
+        batch_w /= self.b.count
         batch_w.nan_to_num_()
 
         # handle means
         labels_ix = labels[:, None, None].broadcast_to(wx.shape)
         batch_xbar.scatter_add_(dim=0, index=labels_ix, src=wx)
-        self.mean += batch_xbar.sub_(self.b.mean).mul_(batch_w[:, None])
+        self.b.mean += batch_xbar.sub_(self.b.mean).mul_(batch_w[:, None])
         if self.with_raw_std_dev:
             wxx = x.mul_(wx)
             assert batch_xsqbar is not None
             batch_xsqbar.scatter_add_(dim=0, index=labels_ix, src=wxx)
-            self.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
+            self.b.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
 
         return {}
 
