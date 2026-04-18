@@ -189,7 +189,7 @@ class BasePeeler(BModule):
         # this is -1 if we haven't started yet
         if ignore_resuming:
             done = False
-            last_chunk_index = -1
+            next_chunk_index = 0
             resids_so_far = 0
         elif output_hdf5_filename is not None:
             done, last_chunk_index, resids_so_far = self.check_resuming(
@@ -199,15 +199,16 @@ class BasePeeler(BModule):
                 ensure_coverage=ensure_coverage,
                 overwrite=overwrite,
             )
+            next_chunk_index = last_chunk_index + 1
             logger.dartsortdebug(
                 f"[{self.__class__.__name__}:{task_name}] Resuming at chunk "
-                f"{last_chunk_index}/{n_chunks_orig}."
+                f"{next_chunk_index}/{n_chunks_orig}."
             )
         else:
             assert False
         if done:
             return
-        chunks_to_do = chunk_starts_samples[last_chunk_index + 1 :]
+        chunks_to_do = chunk_starts_samples[next_chunk_index:]
 
         if total_residual_snips is not None:
             assert residual_snips_per_chunk is None
@@ -324,10 +325,8 @@ class BasePeeler(BModule):
                             # prevent stop if we're asked to cover but didn't
                             if ensure_coverage is not None:
                                 chunks_done = batch_count + last_chunk_index + 1
-                                chunk_coverage = chunks_done / n_chunks_orig
-                                can_stop = (
-                                    can_stop and chunk_coverage >= ensure_coverage
-                                )
+                                covered = chunks_done / n_chunks_orig >= ensure_coverage
+                                can_stop = can_stop and covered
                             if can_stop:
                                 pool.shutdown(cancel_futures=True)
                     except CancelledError:
