@@ -742,7 +742,11 @@ def cluster(
         stable_features = None
 
     result = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, stable_features=stable_features, motion=motion
+        recording=recording,
+        sorting=sorting,
+        features=features,
+        stable_features=stable_features,
+        motion=motion,
     )
 
     del features, clusterer

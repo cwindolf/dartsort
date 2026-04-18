@@ -705,6 +705,7 @@ class TMMRefinement(Refinement):
             motion=motion,
             refinement_cfg=self.refinement_cfg,
             computation_cfg=self.computation_cfg,
+            stable_features=stable_features,
             fit_indices=ixs,
             save_step_labels_format=self.labels_fmt,
             save_step_labels_dir=self.save_labels_dir,

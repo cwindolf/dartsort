@@ -840,12 +840,10 @@ class SpikeNeighborhoods(BModule):
     def __init__(
         self,
         n_channels: int,
-        neighborhood_ids,
-        neighborhoods,
-        features=None,
-        neighborhood_members=None,
+        neighborhood_ids: torch.Tensor,
+        neighborhoods: torch.Tensor,
         device=None,
-        name=None,
+        name="full",
     ):
         """SpikeNeighborhoods
 
@@ -864,9 +862,13 @@ class SpikeNeighborhoods(BModule):
         super().__init__()
         self.name = name
         self.n_channels = n_channels
-        self.register_buffer("neighborhood_ids", neighborhood_ids.long())
-        self.register_buffer("chans_arange", torch.arange(n_channels, dtype=torch.long))
-        self.register_buffer("neighborhoods", neighborhoods.long())
+        neighborhood_ids = torch.asarray(
+            neighborhood_ids, dtype=torch.long, device=device
+        )
+        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long, device=device)
+        self.register_buffer("neighborhood_ids", neighborhood_ids)
+        self.register_buffer("chans_arange", torch.arange(n_channels))
+        self.register_buffer("neighborhoods", neighborhoods)
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as an indicator matrix
@@ -889,46 +891,6 @@ class SpikeNeighborhoods(BModule):
         self.register_buffer("channel_counts", indicators.sum(0))
         self.register_buffer("_masks", torch.concatenate(masks, dim=0))
         self._mask_slices = mask_slices
-
-        if neighborhood_members is None:
-            # cache lookups
-            neighborhood_members = []
-            for j in range(len(neighborhoods)):
-                (in_nhood,) = torch.nonzero(neighborhood_ids == j, as_tuple=True)
-                in_nhood = in_nhood.long()
-                neighborhood_members.append(in_nhood.cpu())
-        assert len(neighborhood_members) == self.n_neighborhoods
-
-        # it's a pain to store dicts with register_buffer, so store offsets
-        _neighborhood_members = torch.empty(
-            sum(v.numel() for v in neighborhood_members), dtype=torch.long
-        )
-        self.neighborhood_members_slices = []
-        neighborhood_member_offset = 0
-        neighborhood_popcounts = []
-        for j in range(len(neighborhoods)):
-            nhoodmemsz = neighborhood_members[j].numel()
-            nhoodmemsl = slice(
-                neighborhood_member_offset, neighborhood_member_offset + nhoodmemsz
-            )
-            _neighborhood_members[nhoodmemsl] = neighborhood_members[j]
-            self.neighborhood_members_slices.append(nhoodmemsl)
-            neighborhood_member_offset += nhoodmemsz
-            neighborhood_popcounts.append(nhoodmemsz)
-        # self.register_buffer("_neighborhood_members", _neighborhood_members)
-        # seems that indices want to live on cpu.
-        self._neighborhood_members = _neighborhood_members.cpu()
-        self.register_buffer("popcounts", torch.tensor(neighborhood_popcounts))
-
-        if features is not None:
-            _features_valid = []
-            for j in range(len(neighborhoods)):
-                f = features[self.neighborhood_members(j)]
-                f = f[..., self.valid_mask(j).to(f.device)]
-                if device is not None and device.type == "cuda":
-                    f = f.pin_memory()
-                _features_valid.append(f)
-            self._features_valid = _features_valid
         self.to(device=device)
 
     @classmethod
@@ -939,20 +901,15 @@ class SpikeNeighborhoods(BModule):
         neighborhood_ids=None,
         neighborhoods=None,
         device=None,
-        deduplicate=False,
-        features=None,
-        name=None,
+        name="full",
     ):
         if neighborhood_ids is not None:
             assert neighborhoods is not None
-            return cls.from_known_ids(
+            return cls(
                 n_channels=n_channels,
                 neighborhood_ids=neighborhood_ids,
                 neighborhoods=neighborhoods,
                 device=device,
-                deduplicate=deduplicate,
-                features=features,
-                name=name,
             )
         if device is not None:
             channels = channels.to(device)
@@ -965,43 +922,7 @@ class SpikeNeighborhoods(BModule):
             n_channels=n_channels,
             neighborhoods=neighborhoods,
             neighborhood_ids=neighborhood_ids,
-            features=features,
             device=channels.device,
-            name=name,
-        )
-
-    @classmethod
-    def from_known_ids(
-        cls,
-        *,
-        n_channels: int,
-        neighborhood_ids,
-        neighborhoods,
-        device=None,
-        deduplicate=False,
-        features=None,
-        name=None,
-    ):
-        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long)
-        neighborhood_ids = torch.asarray(neighborhood_ids, dtype=torch.long)
-        if device is not None:
-            neighborhoods = neighborhoods.to(device)
-            neighborhood_ids = neighborhood_ids.to(device)
-        if deduplicate:
-            neighborhoods, old2new = torch.unique(
-                neighborhoods, dim=0, return_inverse=True
-            )
-            neighborhood_ids = old2new[neighborhood_ids]
-            kept_ids, neighborhood_ids = torch.unique(
-                neighborhood_ids, return_inverse=True
-            )
-            neighborhoods = neighborhoods[kept_ids]
-        return cls(
-            n_channels=n_channels,
-            neighborhoods=neighborhoods,
-            neighborhood_ids=neighborhood_ids,
-            features=features,
-            device=device,
             name=name,
         )
 
@@ -1014,12 +935,6 @@ class SpikeNeighborhoods(BModule):
             name=self.name,
         )
 
-    def has_feature_cache(self):
-        return hasattr(self, "_features_valid")
-
-    def valid_mask(self, id):
-        return self._masks[self._mask_slices[id]]  # type: ignore
-
     def neighborhood_channels(self, id):
         nhc = self.b.neighborhoods[id]
         return nhc[nhc < self.n_channels]
@@ -1028,90 +943,7 @@ class SpikeNeighborhoods(BModule):
         return self.b.chans_arange[self.b.indicators[:, id] == 0]
 
     def neighborhood_members(self, id):
-        return self._neighborhood_members[self.neighborhood_members_slices[id]]
-
-    def neighborhood_features(
-        self, id, batch_start=None, batch_size=None, batch_buffer=None
-    ):
-        f = self._features_valid[id]
-        if batch_start is not None:
-            f = f[batch_start : batch_start + batch_size]
-        if batch_buffer is not None:
-            batch_buffer[: len(f)] = f
-            return batch_buffer[: len(f)]
-        else:
-            return f
-
-    def subset_neighborhoods(self, channels, min_coverage=1.0, batch_size=None):
-        """Return info on neighborhoods which cover the channel set well enough
-
-        Define coverage for a neighborhood and a channel group as the intersection
-        size divided by the neighborhood's size.
-
-        Returns
-        -------
-        neighborhood_info : list of tuples
-            Each entry is, in order,
-             - neighborhood id
-             - neighborhood channels array
-             - neighborhood member indices
-             - optional batch start
-            representing a batch of spikes living on that neighborhood.
-        n_spikes : int
-            The total number of spikes in the neighborhood.
-        """
-        inds = self.b.indicators[channels]
-        coverage = inds.sum(0) / self.b.channel_counts
-        (covered_ids,) = torch.nonzero(coverage >= min_coverage, as_tuple=True)
-        n_spikes = self.b.popcounts[covered_ids].sum()
-
-        neighborhood_info = []
-        for j in covered_ids:
-            jneighb = self.b.neighborhoods[j]
-            jmems = self.neighborhood_members(j)
-            if batch_size is None or len(jmems) < batch_size:
-                neighborhood_info.append((j, jneighb, jmems, None))
-            else:
-                for bs in range(0, len(jmems), batch_size):
-                    mem_batch = jmems[bs : bs + batch_size]
-                    neighborhood_info.append((j, jneighb, mem_batch, bs))
-
-        return covered_ids, neighborhood_info, n_spikes
-
-    def spike_neighborhoods(
-        self, channels, neighborhood_ids=None, spike_indices=None, min_coverage=1.0
-    ):
-        """Like subset_neighborhoods, but for an already chosen collection of spikes
-
-        This is used when subsetting log likelihood calculations.
-        In this case, the returned neighborhood_member_indices keys are relative:
-        spike_indices[neighborhood_member_indices] are the actual indices.
-        """
-        if neighborhood_ids is None:
-            assert spike_indices is not None
-            neighborhood_ids = self.b.neighborhood_ids[spike_indices]
-        assert neighborhood_ids is not None
-
-        covered_ids = torch.unique(neighborhood_ids)
-        if min_coverage:
-            covered_ids = covered_ids.to(self.indicators.device)
-            inds = self.b.indicators[channels][:, covered_ids]
-            coverage = inds.sum(0) / self.b.channel_counts[covered_ids]
-            covered = coverage >= min_coverage
-            covered_ids = covered_ids[covered].cpu()
-            neighborhood_ids = neighborhood_ids.cpu()
-
-        neighborhood_info = [
-            (
-                j,
-                self.b.neighborhoods[j],
-                *(neighborhood_ids == j).nonzero(as_tuple=True),
-                None,
-            )
-            for j in covered_ids
-        ]
-        n_spikes = self.b.popcounts[covered_ids].sum()
-        return neighborhood_info, n_spikes
+        return (self.b.neighborhood_ids == id).nonzero().view(-1)
 
     def adjacency(self, overlap=0.5):
         overlaps = self.b.indicators.T @ self.b.indicators

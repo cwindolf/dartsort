@@ -86,8 +86,6 @@ def pc_merge(
     debug: bool = False,
 ) -> PCMergeResult:
     assert refinement_cfg.refinement_strategy == "pcmerge"
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
     if not refinement_cfg.pc_merge_threshold:
         return PCMergeResult(sorting=sorting)
 

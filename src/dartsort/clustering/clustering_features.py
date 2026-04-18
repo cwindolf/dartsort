@@ -58,7 +58,7 @@ class SimpleMatrixFeatures:
         motion: MotionInfo,
         clustering_features_cfg: ClusteringFeaturesConfig,
         computation_cfg: ComputationConfig | None,
-    ):
+    ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         xyza = getattr(sorting, clustering_features_cfg.localizations_dataset_name)
         x = xyza[:, 0]
@@ -183,7 +183,7 @@ class StableWaveformFeatures:
         motion: MotionInfo,
         clustering_features_cfg: ClusteringFeaturesConfig,
         computation_cfg: ComputationConfig | None,
-    ):
+    ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         shifts, n_pitches_shift = motion.pitch_shifts(
             sorting=sorting, motion_depth_mode=clustering_features_cfg.motion_depth_mode
@@ -198,6 +198,12 @@ class StableWaveformFeatures:
             device=computation_cfg.actual_device(),
         )
         channels, neighborhoods, neighborhood_ids = res[:3]
+        channels = torch.asarray(channels)
+        spike_neighborhoods = SpikeNeighborhoods(
+            n_channels=motion.rgeom.shape[0],
+            neighborhood_ids=neighborhood_ids,
+            neighborhoods=neighborhoods,
+        )
 
         with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
             features = interpolate_by_chunk(
@@ -217,7 +223,7 @@ class StableWaveformFeatures:
         return cls(
             channels=channels,
             features=torch.asarray(features),
-            neighborhoods=neighborhoods,
+            neighborhoods=spike_neighborhoods,
         )
 
 
