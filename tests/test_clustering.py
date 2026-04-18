@@ -5,8 +5,8 @@ from sklearn.metrics import rand_score
 from dartsort.clustering import (
     clustering_strategies,
     get_clusterer,
-    get_clustering_features,
     refinement_strategies,
+    SimpleMatrixFeatures,
 )
 from dartsort.templates.postprocess_util import reorder_by_depth
 from dartsort.main import cluster
@@ -88,11 +88,11 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
     sorting = sim["sorting"]
     motion = sim["motion"]
 
-    features = get_clustering_features(
-        recording,
-        sorting,
+    features = SimpleMatrixFeatures.from_config(
+        sorting=sorting,
         motion=motion,
         clustering_features_cfg=ClusteringFeaturesConfig(**featkw),
+        computation_cfg=None,
     )
     clusterer = get_clusterer(
         clustering_cfg=ClusteringConfig(**cluskw),
@@ -116,11 +116,11 @@ def test_refinement(simulations, sim_name, refkw):
     sorting = sim["sorting"]
     motion = sim["motion"]
 
-    features = get_clustering_features(
-        recording,
-        sorting,
+    features = SimpleMatrixFeatures.from_config(
+        sorting=sorting,
         motion=motion,
-        clustering_features_cfg=None,
+        clustering_features_cfg=ClusteringFeaturesConfig(),
+        computation_cfg=None,
     )
     clusterer = get_clusterer(
         clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]

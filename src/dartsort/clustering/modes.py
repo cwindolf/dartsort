@@ -5,7 +5,7 @@ from scipy.stats import norm
 from . import density
 
 try:
-    from isosplit import up_down_isotonic_regression, jisotonic5  # type: ignore[reportMissingImports]
+    from isosplit import up_down_isotonic_regression, jisotonic5  # type: ignore
 except ImportError:
     up_down_isotonic_regression = lambda *a, **k: None
     jisotonic5 = None
@@ -187,7 +187,7 @@ def smoothed_dipscore_at(
 
             dens_err = (np.abs(dens - densities) * spacings).sum()
             if score_kind == "ks":
-                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()  # type: ignore
+                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()
             elif score_kind == "tv":
                 my_score = 0.5 * dens_err
             else:

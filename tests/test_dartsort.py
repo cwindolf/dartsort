@@ -121,7 +121,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
 
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
-        detection_type=type.removesuffix("_cumulant"),
+        detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
         **cfg_add,

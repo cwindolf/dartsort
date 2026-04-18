@@ -534,7 +534,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
 
             if isinstance(self.p.threshold, float):
-                tb = np.sqrt(self.p.threshold**2 - scale_const)
+                tb = np.sqrt(max(0.0, self.p.threshold**2 - scale_const))
                 _msg = f"In norm units, that's from {self.p.threshold:0.2f}->{tb:0.2f}"
             else:
                 _msg = ""

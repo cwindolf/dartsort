@@ -58,12 +58,14 @@ from ...util.internal_config import (
     DARTsortInternalConfig,
     RefinementConfig,
     ComponentDistanceMetric,
+    ClusteringFeaturesConfig,
 )
 from ...util.interpolation_util import (
     NeighborhoodFiller,
     NeighborhoodImputer,
     NeighborhoodInterpolator,
     SpikeNeighborhoods,
+    pad_geom,
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
@@ -83,8 +85,8 @@ from ...util.spiketorch import (
 )
 from ...util.torch_util import BModule
 from ..cluster_util import linkage, maximal_leaf_groups
+from ..clustering_features import StableWaveformFeatures
 from ..kmeans import kmeans
-from .stable_features import StableSpikeDataset
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -100,6 +102,8 @@ def tmm_demix(
     sorting: DARTsortSorting,
     motion: MotionInfo,
     refinement_cfg: RefinementConfig,
+    stable_features: StableWaveformFeatures | None = None,
+    clustering_features_cfg: ClusteringFeaturesConfig | None = None,
     fit_indices: np.ndarray | None = None,
     computation_cfg: ComputationConfig | None,
     save_step_labels_format: str | None = None,
@@ -119,6 +123,8 @@ def tmm_demix(
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion=motion,
+        stable_features=stable_features,
+        clustering_features_cfg=clustering_features_cfg,
         refinement_cfg=refinement_cfg,
         seed=seed,
         computation_cfg=computation_cfg,
@@ -3760,29 +3766,30 @@ def get_truncated_datasets(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    clustering_features_cfg: ClusteringFeaturesConfig | None,
     refinement_cfg: RefinementConfig,
     device: torch.device,
     rg: int | np.random.Generator,
     fit_indices: np.ndarray | None = None,
     noise: EmbeddedNoise | None = None,
-    stable_data: StableSpikeDataset | None = None,
+    stable_features: StableWaveformFeatures | None = None,
 ):
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
 
     # we assume that the core neighborhoods are exactly the same as extract ones
-    assert refinement_cfg.core_radius == "extract"
     data = get_full_neighborhood_data(
         sorting=sorting,
         motion=motion,
         rg=rg,
+        clustering_features_cfg=clustering_features_cfg,
         refinement_cfg=refinement_cfg,
         fit_indices=fit_indices,
-        stable_data=stable_data,
+        stable_features=stable_features,
         device=device,
     )
-    full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
-    del stable_data
+    feature_rank, full_features, full_neighbs, train_ixs, train_neighbs, val_ixs, val_neighbs, prgeom = data  # fmt: skip
+    del stable_features
 
     if refinement_cfg.robust_strategy == "fixed":
         duties = getattr(sorting, refinement_cfg.robust_fixed_std_dataset)
@@ -3802,7 +3809,7 @@ def get_truncated_datasets(
         noise = EmbeddedNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
             motion=motion,
-            rank=refinement_cfg.feature_rank,
+            rank=feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
             glasso_alpha=refinement_cfg.glasso_alpha,
@@ -3812,7 +3819,7 @@ def get_truncated_datasets(
         )
     assert isinstance(noise, EmbeddedNoise)
     noise.to(device=device)
-    assert noise.rank == refinement_cfg.feature_rank
+    assert noise.rank == feature_rank
     neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
         prgeom=prgeom,
         noise=noise,
@@ -3898,10 +3905,11 @@ def get_truncated_datasets(
     )
 
     if refinement_cfg.impute_kind == "interp":
+        assert clustering_features_cfg is not None
         erp = NeighborhoodInterpolator(
             prgeom=prgeom,
             neighborhoods=full_neighbs,
-            params=refinement_cfg.interp_params,
+            params=clustering_features_cfg.interp_params,
         )
     elif refinement_cfg.impute_kind == "impute":
         erp = NeighborhoodImputer(noise=noise, neighborhoods=full_neighbs)
@@ -3915,12 +3923,15 @@ def get_full_neighborhood_data(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    clustering_features_cfg: ClusteringFeaturesConfig | None,
     refinement_cfg: RefinementConfig,
     device: torch.device | None,
     rg: np.random.Generator | int,
     fit_indices: np.ndarray | None = None,
-    stable_data: StableSpikeDataset | None = None,
+    stable_features: StableWaveformFeatures | None = None,
+    computation_cfg: ComputationConfig | None = None,
 ) -> tuple[
+    int,
     Tensor,
     SpikeNeighborhoods,
     Tensor | slice,
@@ -3932,37 +3943,43 @@ def get_full_neighborhood_data(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # TODO clean up stable data constructor, just keep what's needed
-    # don't store full core features...? just extract feats by split?
-    # or, just get rid of the stable dataset and grab only what's needed.
-    if stable_data is None:
-        vp = refinement_cfg.val_proportion
-        stable_data = StableSpikeDataset.from_sorting(
+    rg = np.random.default_rng(rg)
+
+    # indices that train/val splits will live inside (full split is not restricted)
+    n_fit = refinement_cfg.sampling_cfg.n_waveforms_fit
+    if fit_indices is None and len(sorting) > n_fit:
+        fit_indices = rg.choice(len(sorting), size=n_fit, replace=False)
+        fit_indices.sort()
+    elif fit_indices is None:
+        fit_indices = np.arange(len(sorting))
+    assert fit_indices is not None
+    n_fit = fit_indices.shape[0]
+
+    # data splits: -1 full, 0 train, 2 val
+    split_mask = np.full(len(sorting), -1, dtype=np.int8)
+    split_mask[fit_indices] = 0
+    n_val = int(np.ceil(refinement_cfg.val_proportion * n_fit))
+    split_mask[fit_indices[np.sort(rg.choice(n_fit, size=n_val, replace=False))]] = 1
+    train_indices = torch.asarray(np.flatnonzero(split_mask == 0))
+    val_indices = torch.asarray(np.flatnonzero(split_mask == 1))
+
+    if stable_features is None:
+        assert clustering_features_cfg is not None
+        stable_features = StableWaveformFeatures.from_config(
             sorting=sorting,
             motion=motion,
-            _core_feature_splits=(),  # turn off feat cache
-            core_radius="extract",
-            feature_rank=refinement_cfg.feature_rank,
-            kept_indices=fit_indices,
-            max_n_spikes=refinement_cfg.sampling_cfg.n_waveforms_fit,
-            split_proportions=(1.0 - vp, vp),
-            interp_params=refinement_cfg.interp_params.normalize(),
-            random_seed=rg,
-            device=device,
+            clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
         )
 
-    full_neighborhoods = stable_data._core_neighborhoods["key_full"]
-    train_indices = stable_data.split_indices["train"]
-    val_indices = stable_data.split_indices.get("val")
-    assert isinstance(full_neighborhoods, SpikeNeighborhoods)
-    assert stable_data.core_features is not None
-    xfull = stable_data.core_features
-    prgeom = stable_data.prgeom.to(device=device)
-    assert isinstance(prgeom, Tensor)
-    del stable_data  # TODO: just compute above stuff directly.
+    xfull = stable_features.features
+    full_neighborhoods = stable_features.neighborhoods
+    prgeom = pad_geom(motion.rgeom, device=device)
 
     assert xfull.shape[2] == full_neighborhoods.b.neighborhoods.shape[1]
-    assert xfull.shape[1] == refinement_cfg.feature_rank
+    frank = xfull.shape[1]
+    if clustering_features_cfg is not None:
+        assert frank == clustering_features_cfg.feature_rank
     assert xfull.shape[0] == full_neighborhoods.b.neighborhood_ids.shape[0]
     xfull = xfull.view(len(xfull), -1)
     xfull = xfull.nan_to_num_()
@@ -3975,6 +3992,7 @@ def get_full_neighborhood_data(
         val_neighborhoods = full_neighborhoods.slice(val_indices)
 
     return (
+        frank,
         xfull,
         full_neighborhoods,
         train_indices,
@@ -3989,6 +4007,8 @@ def instantiate_and_bootstrap_tmm(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    clustering_features_cfg: ClusteringFeaturesConfig | None,
+    stable_features: StableWaveformFeatures | None,
     refinement_cfg: RefinementConfig,
     seed: np.random.Generator | int = 0,
     fit_indices: np.ndarray | None = None,
@@ -4012,6 +4032,8 @@ def instantiate_and_bootstrap_tmm(
         get_truncated_datasets(
             sorting=sorting,
             motion=motion,
+            stable_features=stable_features,
+            clustering_features_cfg=clustering_features_cfg,
             refinement_cfg=refinement_cfg,
             fit_indices=fit_indices,
             device=device,

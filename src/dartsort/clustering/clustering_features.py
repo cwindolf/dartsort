@@ -3,11 +3,14 @@ from typing import Self, cast
 import h5py
 import numpy as np
 import torch
+from torch import Tensor
 from spikeinterface.core import BaseRecording
 
-from ..util import drift_util, interpolation_util
+from ..util.drift_util import get_stable_channels
+from ..util.interpolation_util import interpolate_by_chunk, SpikeNeighborhoods
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import ClusteringFeaturesConfig
+from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
+from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
@@ -21,23 +24,6 @@ minimal_features_cfg = ClusteringFeaturesConfig(
     use_x=False,
     use_z=False,
 )
-
-
-def get_clustering_features(
-    recording: BaseRecording,
-    sorting: DARTsortSorting,
-    motion: MotionInfo,
-    clustering_features_cfg: (
-        ClusteringFeaturesConfig | None
-    ) = default_clustering_features_cfg,
-) -> "SimpleMatrixFeatures":
-    if clustering_features_cfg is None:
-        clustering_features_cfg = minimal_features_cfg
-    if clustering_features_cfg.features_type == "simple_matrix":
-        return SimpleMatrixFeatures.from_config(
-            recording, sorting, motion, clustering_features_cfg
-        )
-    assert False
 
 
 @databag
@@ -67,17 +53,17 @@ class SimpleMatrixFeatures:
     @classmethod
     def from_config(
         cls,
-        recording: BaseRecording,
+        *,
         sorting: DARTsortSorting,
         motion: MotionInfo,
         clustering_features_cfg: ClusteringFeaturesConfig,
+        computation_cfg: ComputationConfig | None,
     ):
-        assert clustering_features_cfg.features_type == "simple_matrix"
-
+        computation_cfg = ensure_computation_config(computation_cfg)
         xyza = getattr(sorting, clustering_features_cfg.localizations_dataset_name)
         x = xyza[:, 0]
         z = xyza[:, 2]
-        t_s = sorting.times_seconds  # type: ignore
+        t_s = sorting.times_seconds
         z_reg = motion.correct_s(t_s, z)
 
         features = []
@@ -119,19 +105,22 @@ class SimpleMatrixFeatures:
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
         elif do_pcs and clustering_features_cfg.motion_aware:
-            shifts, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+            shifts, n_pitches_shift = motion.pitch_shifts(
+                sorting=sorting,
+                motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+            )
             mainchan_ci = single_channel_index(len(motion.geom))
-            schan, *_ = drift_util.get_stable_channels(
+            schan, *_ = get_stable_channels(
                 motion=motion,
                 channels=sorting.channels,
                 channel_index=mainchan_ci,
                 n_pitches_shift=n_pitches_shift,
-                workers=clustering_features_cfg.workers,
+                workers=computation_cfg.n_jobs_small,
             )
             mask = np.ones((1,), dtype=bool)
             mask = np.broadcast_to(mask, len(schan))
             with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                pcs = interpolation_util.interpolate_by_chunk(
+                pcs = interpolate_by_chunk(
                     mask=mask,
                     dataset=h5[clustering_features_cfg.pca_dataset_name],
                     geom=motion.geom,
@@ -176,6 +165,63 @@ class SimpleMatrixFeatures:
             amplitudes=amp,
             signed_amplitudes=samp,
         )
+
+
+@databag
+class StableWaveformFeatures:
+    # n, nc_extract
+    channels: Tensor
+    # n, rank, nc_extract
+    features: Tensor
+    neighborhoods: SpikeNeighborhoods
+
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        sorting: DARTsortSorting,
+        motion: MotionInfo,
+        clustering_features_cfg: ClusteringFeaturesConfig,
+        computation_cfg: ComputationConfig | None,
+    ):
+        computation_cfg = ensure_computation_config(computation_cfg)
+        shifts, n_pitches_shift = motion.pitch_shifts(
+            sorting=sorting, motion_depth_mode=clustering_features_cfg.motion_depth_mode
+        )
+        res = get_stable_channels(
+            motion=motion,
+            channels=sorting.channels,
+            channel_index=sorting.channel_index,
+            n_pitches_shift=n_pitches_shift,
+            core_radius=None,
+            workers=computation_cfg.n_jobs_small,
+            device=computation_cfg.actual_device(),
+        )
+        channels, neighborhoods, neighborhood_ids = res[:3]
+
+        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+            features = interpolate_by_chunk(
+                mask=np.ones(len(sorting), dtype=np.bool_),
+                dataset=h5[clustering_features_cfg.pca_dataset_name],
+                geom=motion.geom,
+                channel_index=sorting.channel_index,
+                channels=sorting.channels,
+                shifts=shifts,
+                registered_geom=motion.rgeom,
+                target_channels=channels,
+                trim_to_rank=clustering_features_cfg.feature_rank,
+                params=clustering_features_cfg.interp_params.normalize(),
+                device=computation_cfg.actual_device(),
+            )
+
+        return cls(
+            channels=channels,
+            features=torch.asarray(features),
+            neighborhoods=neighborhoods,
+        )
+
+
+# -- helpers
 
 
 def signed_log1p(x, pre_scale=1.0):

@@ -29,8 +29,10 @@ from ..util import spiketorch
 from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
 from ..util.internal_config import (
     ComputationConfig,
+    ClusteringFeaturesConfig,
     InterpolationParams,
     RefinementConfig,
+    default_clustering_features_cfg,
     default_refinement_cfg,
 )
 from ..util.interpolation_util import (
@@ -76,7 +78,7 @@ class MixtureVisData:
 
     @property
     def times_seconds(self):
-        return self.sorting.times_seconds  # type: ignore
+        return self.sorting.times_seconds
 
     def to_sorting(self) -> DARTsortSorting:
         return self.sorting.ephemeral_replace(labels=self.full_labels)
@@ -182,8 +184,8 @@ class MixtureVisData:
 
 
 class MixtureComponentPlot(BasePlot):
-    width = 1
-    height = 1
+    width = 1.0
+    height = 1.0
     kind = "mixture"
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
@@ -555,7 +557,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     hsa, hsb = bimod_stats(hist)
                     hstats[label] = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
                     try:
-                        kdest = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+                        kdest = FFTKDE(bw="ISJ").fit(dll)
                     except ValueError as e:
                         messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
                         continue
@@ -732,7 +734,7 @@ class MeanView(MixtureComponentPlot):
 
         ax = panel.subplots()
         ax.axis("off")
-        lines, pchans = geomplot(  # type: ignore
+        lines, pchans = geomplot(
             waveforms=waveforms,
             channels=wchans,
             color="k",
@@ -886,8 +888,8 @@ class CovarianceView(MixtureComponentPlot):
             imb = row_top[1].imshow(cov_emp - cov, **res_kw)
             ax_bottom.plot(ev[: self.neigs], color=c, label=name)
         if not self.cov_vert:
-            plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
-            plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
+            plt.colorbar(ima, ax=row_top[0], shrink=0.3)
+            plt.colorbar(imb, ax=row_top[1], shrink=0.3)
 
         if self.cov_vert:
             axes_top[0, 0].set_title("cov", fontsize="small")
@@ -1334,6 +1336,7 @@ def fit_mixture_for_vis(
     *,
     sorting: DARTsortSorting,
     motion,
+    clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
     em: bool = True,
@@ -1345,6 +1348,8 @@ def fit_mixture_for_vis(
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion=motion,
+        clustering_features_cfg=clustering_features_cfg,
+        stable_features=None,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
@@ -1481,7 +1486,7 @@ def make_mixture_summaries(
 
     save_folder.mkdir(exist_ok=True, parents=True)
     global_params = dict(**other_global_params)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
 
     initargs = (
         mix_data,
@@ -1754,9 +1759,9 @@ def vis_obs_interpolation(
         disp = mix_data.motion.disp_at_s(t_s, z)
 
     dev = mix_data.tmm.b.means.device
-    sgeom = pad_geom(mix_data.sorting.geom, device=dev)  # type: ignore
+    sgeom = pad_geom(mix_data.sorting.geom, device=dev)
     tgeom = torch.asarray(mix_data.prgeom).to(sgeom)
-    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)  # type: ignore
+    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)
     erps = {}
     for k, ip in (erp_params or {}).items():
         erps[k] = StableFeaturesInterpolator(

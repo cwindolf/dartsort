@@ -8,7 +8,7 @@ import torch
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording, Motion
 
-from .clustering import SimpleMatrixFeatures, get_clusterer, get_clustering_features
+from .clustering import SimpleMatrixFeatures, StableWaveformFeatures, get_clusterer
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
     GrabAndFeaturize,
@@ -713,11 +713,12 @@ def cluster(
     _save_dir=None,
 ):
     if features is None:
-        features = get_clustering_features(
-            recording,
-            sorting,
+        assert clustering_features_cfg is not None
+        features = SimpleMatrixFeatures.from_config(
+            sorting=sorting,
             motion=motion,
             clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
         )
     assert features is not None
     clusterer = get_clusterer(
@@ -729,8 +730,19 @@ def cluster(
         initial_name=_save_initial_name,
         refine_labels_fmt=_save_refined_name_fmt,
     )
+    if clusterer.needs_stable_features():
+        assert clustering_features_cfg is not None
+        stable_features = StableWaveformFeatures.from_config(
+            sorting=sorting,
+            motion=motion,
+            clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        stable_features = None
+
     result = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion=motion
+        recording=recording, sorting=sorting, features=features, stable_features=stable_features, motion=motion
     )
 
     del features, clusterer

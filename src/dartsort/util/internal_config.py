@@ -596,8 +596,6 @@ class SplitConfig:
 
 @cfg_dataclass
 class ClusteringFeaturesConfig:
-    features_type: Literal["simple_matrix", "stable_waveforms"] = "simple_matrix"
-
     # simple matrix feature controls
     use_x: bool = True
     use_z: bool = True
@@ -613,7 +611,9 @@ class ClusteringFeaturesConfig:
     pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
     adaptive_feature_scales: bool = False
-    workers: int = 5
+
+    # stable feature controls
+    feature_rank: int = 8
 
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     voltages_dataset_name: str = "collisioncleaned_voltages"
@@ -621,7 +621,9 @@ class ClusteringFeaturesConfig:
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
 
+    # interpolation, drift handling
     interp_params: InterpolationParams = tps_interp_params
+    motion_depth_mode: Literal["channel", "localization"] = "channel"
 
 
 @cfg_dataclass
@@ -698,7 +700,6 @@ class RefinementConfig:
     split_min_count: int = 8
     channels_count_min: int = 1
     signal_rank: int = 3
-    feature_rank: int = 8
     initialize_at_rank_0: bool = False
     cl_alpha: float = 0.05
     cl_split_only: bool = True
@@ -757,10 +758,8 @@ class RefinementConfig:
 
     # stable waveform feature controls
     cov_radius: float = 500.0
-    core_radius: float | Literal["extract"] = "extract"
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
-    interp_params: InterpolationParams = tps_interp_params
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
 
@@ -1023,7 +1022,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         outlier_radius=5 * cfg.density_bandwidth,
         radius_search=5 * cfg.density_bandwidth,
         min_cluster_size=cfg.min_cluster_size,
-        workers=cfg.clustering_workers,
         use_hellinger=cfg.use_hellinger,
         component_overlap=cfg.component_overlap,
         hellinger_strong=cfg.hellinger_strong,
@@ -1067,15 +1065,14 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         pc_scale=cfg.initial_pc_scale,
         pc_pre_transform_scale=cfg.initial_pc_pre_scale,
         motion_aware=cfg.motion_aware_clustering,
-        workers=cfg.clustering_workers,
         interp_params=interp_params,
+        feature_rank=cfg.temporal_pca_rank,
     )
     sb = 1.0 + cfg.amplitude_scaling_boundary
     refinement_cfg = RefinementConfig(
         refinement_strategy=cfg.refinement_strategy,
         min_count=cfg.min_cluster_size,
         signal_rank=cfg.signal_rank,
-        feature_rank=cfg.temporal_pca_rank,
         initialize_at_rank_0=cfg.initialize_at_rank_0,
         n_total_iters=cfg.n_later_refinement_iters,
         n_em_iters=cfg.n_em_iters,
@@ -1093,7 +1090,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         prior_pseudocount=cfg.prior_pseudocount,
         initial_basis_shrinkage=cfg.initial_basis_shrinkage,
         cov_kind=cfg.cov_kind,
-        interp_params=interp_params,
         mixture_steps=cfg.later_steps,
         kmeansk=cfg.kmeansk,
         cl_alpha=cfg.gmm_cl_alpha,

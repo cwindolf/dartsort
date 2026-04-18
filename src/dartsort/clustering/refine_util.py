@@ -9,7 +9,7 @@ from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from .cluster_util import hierarchical_cluster, reorder_by_depth
-from .gmm.stable_features import StableSpikeDataset
+from .clustering_features import StableWaveformFeatures
 
 logger = get_logger(__name__)
 
@@ -32,7 +32,7 @@ def get_noise_log_priors(noise, sorting, refinement_cfg):
             raise ValueError(f"{templates_npz} is not there?")
 
         with h5py.File(h5_name, "r", locking=False) as h5:
-            matching_labels = h5["labels"][:]  # type: ignore
+            matching_labels = h5["labels"][:]
 
         template_data = TemplateData.from_npz(templates_npz)
         tpca = data_util.get_tpca(sorting)
@@ -79,6 +79,7 @@ class PCMergeResult:
 def pc_merge(
     *,
     sorting: data_util.DARTsortSorting,
+    stable_features: StableWaveformFeatures,
     refinement_cfg: RefinementConfig,
     motion: MotionInfo,
     computation_cfg: ComputationConfig | None = None,
@@ -104,25 +105,13 @@ def pc_merge(
     assert subset_sorting.labels is not None
 
     # make stable features, no need for core features though.
-    data = StableSpikeDataset.from_sorting(
-        subset_sorting,
-        motion=motion,
-        core_radius=None,
-        discard_triaged=True,
-        interp_params=refinement_cfg.interp_params.normalize(),
-        split_proportions=None,
-        split_names=("train",),
-        device=computation_cfg.actual_device(),
-    )
-
-    # average by unit
-    kept = data.kept_indices
-    n = len(kept)
-    x = data._train_extract_features.view(n, -1, data.n_channels_extract)
+    kept = np.flatnonzero(subset_sorting.labels >= 0)
+    x = stable_features.features[kept]
     x = x[:, : refinement_cfg.pc_merge_rank]
     xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
+    n_reg_chans = motion.rgeom.shape[0]
     means, counts = spiketorch.average_by_label(
-        x, xlabels, data._train_extract_channels, data.n_channels
+        x, xlabels, stable_features.channels, n_reg_chans
     )
 
     # compute distances
@@ -131,7 +120,7 @@ def pc_merge(
     elif refinement_cfg.pc_merge_metric == "maxz":
         x = x.square_()
         meansq, _ = spiketorch.average_by_label(
-            x, xlabels, data._train_extract_channels, data.n_channels
+            x, xlabels, stable_features.channels, n_reg_chans
         )
         stddev = meansq.sub_(means.square()).sqrt_()
         stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
