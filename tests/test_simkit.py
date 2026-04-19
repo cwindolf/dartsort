@@ -83,11 +83,15 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
             inj = np.flatnonzero(jj == j)
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
             assert inj.size > (minfr * 0.5)
-    np.testing.assert_allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
+    np.testing.assert_allclose(
+        sim["templates"].templates, simple_template_library, atol=1e-5
+    )
     assert not sim["motion"].drifting
     u, c = np.unique(st.labels, return_counts=True)
     np.testing.assert_equal(c, sim["unit_info_df"].gt_spike_count.values)
-    np.testing.assert_allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
+    np.testing.assert_allclose(
+        st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5
+    )
 
 
 @pytest.mark.parametrize("globally_refractory", [False])
@@ -228,7 +232,7 @@ def test_motion(tmp_path, drift_speed, drift_type):
     ).dredge_motion_est
     assert me1 is not None
     d1 = me1.displacement.ravel()
-    np.testing.assert_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore
+    np.testing.assert_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)
     assert np.isclose(
         np.mean(np.square(np.diff(d0)[1:-1] - np.diff(d1)[1:-1])), 0.0, atol=0.1
     )

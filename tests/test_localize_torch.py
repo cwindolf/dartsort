@@ -1,8 +1,9 @@
 import numpy as np
 import torch
+from test_util import dense_layout
+
 from dartsort.localize import localize_torch
 from dartsort.util.waveform_util import make_channel_index
-from test_util import dense_layout
 
 
 def test_localize_torch():
@@ -78,17 +79,17 @@ def test_localize_torch():
     res = localize_torch.localize_amplitude_vectors(pred_ampvecs, g, chans, ci)
     # it's not that good I guess :|
     tol = 3
-    assert (res["x"] - xs).abs().max() < tol  # type: ignore
-    assert (res["z_rel"] - z_rels).abs().max() < tol  # type: ignore
-    assert (res["z_abs"] - z_abss).abs().max() < tol  # type: ignore
-    assert (res["alpha"] - alphas).abs().max() < tol  # type: ignore
-    assert (res["y"] - ys).abs().max() < tol  # type: ignore
+    assert (res["x"] - xs).abs().max() < tol
+    assert (res["z_rel"] - z_rels).abs().max() < tol
+    assert (res["z_abs"] - z_abss).abs().max() < tol
+    assert (res["alpha"] - alphas).abs().max() < tol
+    assert (res["y"] - ys).abs().max() < tol
 
     rescom = localize_torch.localize_amplitude_vectors(
         pred_ampvecs, g, chans, ci, model="com"
     )
     # well, com is way worse :)
     tol = 90
-    assert (rescom["x"] - xs).abs().max() < tol  # type: ignore
-    assert (rescom["z_rel"] - z_rels).abs().max() < tol  # type: ignore
-    assert (rescom["z_abs"] - z_abss).abs().max() < tol  # type: ignore
+    assert (rescom["x"] - xs).abs().max() < tol
+    assert (rescom["z_rel"] - z_rels).abs().max() < tol
+    assert (rescom["z_abs"] - z_abss).abs().max() < tol

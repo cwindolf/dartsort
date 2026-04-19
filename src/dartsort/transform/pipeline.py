@@ -1,14 +1,16 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
+from typing import Sequence
+
 import torch
 
-from .transform_base import BaseWaveformModule, BaseWaveformFeaturizer
 from ..util.data_util import SpikeDataset
-from ..util.internal_config import WaveformConfig, FeaturizationConfig
+from ..util.internal_config import FeaturizationConfig, WaveformConfig
+from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
 
 class WaveformPipeline(torch.nn.Module):
-    def __init__(self, transformers: list[BaseWaveformModule], kwargs_to_store=None):
+    def __init__(self, transformers: Sequence[BaseWaveformModule], kwargs_to_store=None):
         super().__init__()
         check_unique_feature_names(transformers)
         self.transformers: list[BaseWaveformModule] = torch.nn.ModuleList(transformers)  # type: ignore

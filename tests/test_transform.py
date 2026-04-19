@@ -1,14 +1,14 @@
+import pickle
 import tempfile
 from pathlib import Path
-import pickle
 
 import numpy as np
-import torch
 import spikeinterface.core as sc
+import torch
+from test_util import dense_layout
 
 from dartsort.transform import WaveformPipeline, transformers_by_class_name
 from dartsort.util.waveform_util import make_channel_index
-from test_util import dense_layout
 
 
 def _check_state_equal(d1, d2):
@@ -84,7 +84,7 @@ def test_all_transformers():
     # set channels to nan as they would be in a real context
     for i in range(n_spikes):
         rel_chans = channel_index[channels[i]] + 0
-        rel_chans[rel_chans < len(geom)] -= channel_index[channels[i]][0]  # type: ignore
+        rel_chans[rel_chans < len(geom)] -= channel_index[channels[i]][0]
         waveforms[i, :, rel_chans == len(geom)] = np.nan
     assert np.isnan(waveforms).any()
     assert not np.isnan(waveforms).all(axis=(1, 2)).any()

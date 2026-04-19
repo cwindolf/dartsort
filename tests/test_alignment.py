@@ -108,7 +108,7 @@ def align_sim(tmp_path_factory, align_templates):
 
 def test_denoiser_alignment(align_sim, align_templates):
     t0 = align_templates.templates[0, :, 0]
-    ci = dartsort.util.waveform_util.full_channel_index(1, to_torch=True)
+    ci = dartsort.waveform_util.full_channel_index(1, to_torch=True)
     rec = align_sim["recording"]
     gt_st = align_sim["sorting"]
     noise_wfs = gt_st._load_dataset("noise_waveforms")
@@ -179,14 +179,14 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert not np.array_equal(st0.times_samples, gt_st.times_samples)
 
     # st1 is perfect
-    assert np.array_equal(st0.times_samples, st1.times_samples - st1.time_shifts)  # type: ignore
+    assert np.array_equal(st0.times_samples, st1.times_samples - st1.time_shifts)  
     assert np.array_equal(st1.times_samples, gt_st.times_samples)
 
     # -- the template computation handles time_shifts correctly
     # to do this, we need to cluster the detections. we can just cheat and use the sign.
     # unit 0 had positive sign, hence the <
     sts = [
-        st.ephemeral_replace(labels=(st.voltages < 0).astype(int))  # type: ignore
+        st.ephemeral_replace(labels=(st.voltages < 0).astype(int))  
         for st in sts
     ]
     assert len(sts) == 2
@@ -229,7 +229,7 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert wf0.shape == wf1.shape == (gt_st.n_spikes, t0.shape[0], 1)
     true_wfs = align_templates.templates[gt_st.labels, 1:-1]
     assert np.all(np.abs(true_wfs[:, :, 0]).argmax(1) == trough - 1)
-    time_ixs = np.arange(1, t0.shape[0] - 1) + st1.time_shifts[:, None]  # type: ignore
+    time_ixs = np.arange(1, t0.shape[0] - 1) + st1.time_shifts[:, None]  
     time_ixs = time_ixs[:, :, None]
     wf1_sliced = np.take_along_axis(wf1, indices=time_ixs, axis=1)
     np.testing.assert_allclose(wf1_sliced, true_wfs, atol=snr / 2)
@@ -460,7 +460,7 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
         geom=gt_td.registered_geom,
         common_reference=False,
     )
-    sim_recording, template_simulator = res  # type: ignore
+    sim_recording, template_simulator = res  
     sim_recording: dartsort.simkit.InjectSpikesPreprocessor
     gt_st: dartsort.DARTsortSorting = sim_recording.basic_sorting()
 
