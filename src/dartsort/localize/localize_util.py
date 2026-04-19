@@ -73,7 +73,7 @@ def localize_hdf5(
         return
 
     try:
-        n_jobs, Executor, context, queue = get_pool(  # type: ignore
+        n_jobs, Executor, context, queue = get_pool(
             n_jobs,
             with_rank_queue=True,
             rank_queue_empty=True,
@@ -115,7 +115,7 @@ def localize_hdf5(
                 if not h5.swmr_mode:
                     h5.swmr_mode = True
                 for rank in range(n_jobs):
-                    queue.put(rank)  # type: ignore
+                    queue.put(rank)
 
                 batches = range(next_batch_start, n_spikes, spikes_per_batch)
                 results = pool.map(_h5_localize_job, batches)
@@ -256,10 +256,10 @@ def _h5_localize_job(start_ix):
             logbarrier=p.logbarrier,
         )
     xyza_batch = np.c_[
-        locs["x"].numpy(force=True),  # type: ignore
-        locs["y"].numpy(force=True),  # type: ignore
-        locs["z_abs"].numpy(force=True),  # type: ignore
-        locs["alpha"].numpy(force=True),  # type: ignore
+        locs["x"].numpy(force=True),
+        locs["y"].numpy(force=True),
+        locs["z_abs"].numpy(force=True),
+        locs["alpha"].numpy(force=True),
     ]
     return start_ix, end_ix, xyza_batch
 
