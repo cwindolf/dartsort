@@ -669,7 +669,7 @@ class BasePeeler(BModule):
                     device=device,
                 )
                 if not len(waveforms):
-                    raise ValueError(f"Found no spikes when trying to fit featurizers.")
+                    raise ValueError("Found no spikes when trying to fit featurizers.")
 
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(

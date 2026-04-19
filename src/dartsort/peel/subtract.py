@@ -138,6 +138,8 @@ class SubtractionPeeler(BasePeeler):
             datasets.append(SpikeDataset("time_shifts", (), "int16"))
         if self.save_residnorm_decrease:
             datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
 
         # we may be featurizing during subtraction, register the features
         datasets.extend(self.subtraction_denoising_pipeline.spike_datasets())

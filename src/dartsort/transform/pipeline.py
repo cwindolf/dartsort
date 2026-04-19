@@ -138,24 +138,20 @@ class WaveformPipeline(torch.nn.Module):
             # allow scalars or spike-len vectors
             assert v.shape == () or v.shape[0] == waveforms.shape[0]
 
-        features = {}
+        features = fixed_properties.copy()
 
         if not waveforms.shape[0]:
             return waveforms, features
 
         for transformer in self.transformers:
             if transformer.is_featurizer and transformer.is_denoiser:
-                waveforms, new_features = transformer(
-                    waveforms, **fixed_properties, **features
-                )
+                waveforms, new_features = transformer(waveforms, **features)
                 features.update(new_features)
             elif transformer.is_featurizer:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
-                features.update(
-                    transformer.transform(waveforms, **fixed_properties, **features)
-                )
+                features.update(transformer.transform(waveforms, **features))
             elif transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties, **features)
+                waveforms = transformer(waveforms, **features)
 
         return waveforms, features
 
@@ -169,7 +165,7 @@ class WaveformPipeline(torch.nn.Module):
         if not self.needs_fit():
             return
 
-        features = {}
+        features = fixed_properties.copy()
 
         for transformer in self.transformers:
             if transformer.needs_fit():
@@ -177,7 +173,6 @@ class WaveformPipeline(torch.nn.Module):
                 transformer.fit(
                     recording=recording,
                     waveforms=waveforms,
-                    **fixed_properties,
                     **features,
                 )
             transformer.eval()
@@ -188,17 +183,13 @@ class WaveformPipeline(torch.nn.Module):
                 break
 
             if transformer.is_featurizer and transformer.is_denoiser:
-                waveforms, new_features = transformer(
-                    waveforms, **fixed_properties, **features
-                )
+                waveforms, new_features = transformer(waveforms, **features)
                 features.update(new_features)
             elif transformer.is_featurizer:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
-                features.update(
-                    transformer.transform(waveforms, **fixed_properties, **features)
-                )
+                features.update(transformer.transform(waveforms, **features))
             elif transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties, **features)
+                waveforms = transformer(waveforms, **features)
 
         assert not waveforms.requires_grad
 

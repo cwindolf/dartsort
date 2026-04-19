@@ -148,6 +148,8 @@ class ThresholdAndFeaturize(BasePeeler):
             datasets.append(
                 SpikeDataset(name="orig_channels", shape_per_spike=(), dtype=float)
             )
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
         datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype=float))
         return datasets
 

@@ -62,7 +62,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         else:
             raise ValueError(f"Need either a MatchingTemplates or a builder.")
 
-        fixed_prop_keys = ("channels",)
+        fixed_prop_keys = ("channels", "labels")
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
 
@@ -143,6 +143,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 SpikeDataset(name="scores", shape_per_spike=(), dtype=np.float32),
             ]
         )
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
         if self.is_scaling:
             datasets.append(
                 SpikeDataset(name="scalings", shape_per_spike=(), dtype=np.float32),
