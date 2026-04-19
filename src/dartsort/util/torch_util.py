@@ -64,8 +64,18 @@ class BufGetter:
     __slots__ = "buffers", "cpu_buffers"
 
     def __init__(self, buffers, cpu_buffers):
-        self.buffers = buffers
-        self.cpu_buffers = cpu_buffers
+        super().__setattr__("buffers", buffers)
+        super().__setattr__("cpu_buffers", cpu_buffers)
+
+    def __setattr__(self, key, value):
+        # don't set my properties directly, but += etc are allowed and will
+        # modify the property in-place, so that ids are equal
+        if key in self.cpu_buffers:
+            assert value is self.cpu_buffers[key]
+        elif key in self.buffers:
+            assert value is self.buffers[key]
+        else:
+            raise AttributeError
 
     def __getattr__(self, key) -> Tensor:
         if key in self.cpu_buffers:
