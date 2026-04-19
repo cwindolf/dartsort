@@ -8,21 +8,19 @@ Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
 
-from dataclasses import replace
 from pathlib import Path
-
-from tqdm.auto import tqdm
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.legend_handler import HandlerTuple
+from tqdm.auto import tqdm
 
-from ..util.internal_config import raw_template_cfg
-from ..util.job_util import get_global_computation_config
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
-from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
+from ..util.job_util import get_global_computation_config
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, get_pool
 from . import layout
-from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
+from .analysis_plots import bar, correlogram, isi_hist, plot_correlogram
 from .colors import glasbey1024
 from .waveforms import geomplot, geomplot_templates
 
@@ -55,7 +53,7 @@ class UnitTextInfo(UnitPlot):
         if h5_path:
             msg += f"feature source: {h5_path.name}\n"
 
-        nspikes = (sorting_analysis.sorting.labels == unit_id).sum()
+        nspikes = cast(np.ndarray, sorting_analysis.sorting.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
 
         assert sorting_analysis.template_data is not None
@@ -382,7 +380,7 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
-                **ckw,  # type: ignore
+                **ckw,
             )
             handles["waveforms"] = ls
 
@@ -738,8 +736,8 @@ class NeighborQDAPlot(UnitPlot):
             in_pair = np.flatnonzero(
                 np.isin(sorting_analysis.sorting.labels, [unit_id, nid])
             )
-            cand = sorting_analysis.sorting.candidates[in_pair]  # type: ignore
-            ll = sorting_analysis.sorting.log_liks[in_pair]  # type: ignore
+            cand = sorting_analysis.sorting.candidates[in_pair]
+            ll = sorting_analysis.sorting.log_liks[in_pair]
 
             my_mask = cand == unit_id
             nid_mask = cand == nid
@@ -842,7 +840,7 @@ def make_unit_summary(
         figsize=figsize,
         figure=figure,
         unit_id=unit_id,
-        **{gizmo_name: sorting_analysis},  # type: ignore
+        **{gizmo_name: sorting_analysis},
     )
 
     return figure
@@ -909,10 +907,10 @@ def make_all_summaries(
     )
     if n_jobs is None:
         n_jobs = get_global_computation_config().n_jobs_cpu
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     if n_jobs:
-        initargs = (cloudpickle.dumps(initargs),)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
-    with Executor(  # type: ignore
+        initargs = (cloudpickle.dumps(initargs),)  # type: ignore
+    with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
@@ -926,7 +924,7 @@ def make_all_summaries(
                 smoothing=0,
                 total=len(unit_ids),
             )
-        for res in results:
+        for _ in results:
             pass
 
 
@@ -1005,7 +1003,7 @@ _summary_job_context = None
 def _summary_init(*args):
     global _summary_job_context
     if len(args) == 1:
-        args = cloudpickle.loads(args[0])
+        args = cloudpickle.loads(args[0])  # type: ignore
     _summary_job_context = SummaryJobContext(*args)
 
 

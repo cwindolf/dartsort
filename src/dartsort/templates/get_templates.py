@@ -117,12 +117,12 @@ def get_templates_unitextract(
     obj = TemplateData(
         templates=cast(np.ndarray, results["templates"]),
         unit_ids=cast(np.ndarray, unit_ids),
-        spike_counts=results["spike_counts"],  # type: ignore
+        spike_counts=results["spike_counts"],
         spike_counts_by_channel=cast(np.ndarray, results["spike_counts_by_channel"]),
         raw_std_dev=cast(np.ndarray, results["raw_std_devs"]),
         registered_geom=motion.rgeom,
         trough_offset_samples=trough_offset_samples,
-        properties=properties,  # type: ignore
+        properties=properties,
         tsvd=tsvd,
         sampling_frequency=recording.sampling_frequency,
     )
@@ -342,7 +342,7 @@ def get_all_shifted_raw_and_low_rank_templates(
     dtype=np.float32,
     device=None,
 ):
-    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)  # type: ignore
+    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
     unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)
     spike_counts = spike_counts[unit_ids >= 0]
     unit_ids = unit_ids[unit_ids >= 0]
@@ -427,19 +427,19 @@ def get_all_shifted_raw_and_low_rank_templates(
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
             if with_raw_std_dev:
-                raw_square_templates[ix_chunk] = raw_square_temps_chunk  # type: ignore
+                raw_square_templates[ix_chunk] = raw_square_temps_chunk
             if not raw:
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk  # type: ignore
             snrs_by_channel[ix_chunk] = snrs_chunk
             spike_counts_by_channel[ix_chunk] = chancounts_chunk
             if show_progress:
-                pbar.update(len(units_chunk))  # type: ignore
+                pbar.update(len(units_chunk))
         if show_progress:
-            pbar.close()  # type: ignore
+            pbar.close()
 
     raw_std_dev = None
     if with_raw_std_dev:
-        raw_std_dev = raw_square_templates  # type: ignore
+        raw_std_dev = raw_square_templates
         raw_std_dev -= raw_templates**2
         np.abs(raw_std_dev, out=raw_std_dev)
         raw_std_dev **= 0.5

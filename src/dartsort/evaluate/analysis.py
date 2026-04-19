@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering.agglomerate import template_distances, qda, QDAResult
+from ..clustering.agglomerate import QDAResult, qda, template_distances
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -113,7 +113,7 @@ class DARTsortAnalysis:
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
         if has_hdf5 and vis_radius and (tpca := get_tpca(sorting)) is not None:
-            sklearn_tpca = tpca.to_sklearn()  # type: ignore
+            sklearn_tpca = tpca.to_sklearn()
             tpca_temporal_slice = sklearn_tpca.temporal_slice
         else:
             sklearn_tpca = None
@@ -162,7 +162,7 @@ class DARTsortAnalysis:
 
         if template_data is not None and hasattr(sorting, "gmm_candidates"):
             assert sorting.labels is not None
-            c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+            c0 = sorting.gmm_candidates[:, 0]
             lk = np.flatnonzero(sorting.labels >= 0)
             is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
             if is_gmm:
@@ -526,7 +526,7 @@ class DARTsortAnalysis:
             covered_chans = get_stable_channels(
                 motion=self.motion,
                 channels=self.sorting.channels[which],
-                channel_index=self.sorting.channel_index,  # type: ignore
+                channel_index=self.sorting.channel_index,
                 n_pitches_shift=n_pitches_shift,
             )[0]
         else:
@@ -616,7 +616,7 @@ class DARTsortAnalysis:
             inu = self.in_unit(uid)
             if not inu.size > 1:
                 continue
-            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
+            t_ms = self.sorting.times_seconds[inu] * 1000
             isi = np.diff(t_ms)
             viol_rates[j] = (np.abs(isi) < dt_ms).mean()
         return viol_rates

@@ -66,7 +66,7 @@ class Localization(BaseWaveformFeaturizer):
                     radius=self.radius,
                     n_channels_subset=self.n_channels_subset,
                     logbarrier=self.logbarrier,
-                    dtype=cast(torch.dtype, self.dtype),
+                    dtype=self.dtype,
                     model=self.localization_model,
                 )
                 localizations[sl, 0] = loc_result["x"]

@@ -72,10 +72,10 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
     width = 3
     height = 2
 
-    def __init__(self, trim_kind="auto", ordered=True, cmap=plt.cm.magma):
+    def __init__(self, trim_kind="auto", ordered=True, cmap="magma"):
         self.trim_kind = trim_kind
         self.ordered = ordered
-        self.cmap = cmap
+        self.cmap = plt.get_cmap(cmap)
 
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
@@ -223,14 +223,16 @@ class TemplateDistanceMatrix(ComparisonPlot):
     width = 3
     height = 1
 
-    def __init__(self, cmap=plt.cm.magma):
-        self.cmap = cmap
+    def __init__(self, cmap="magma"):
+        self.cmap = plt.get_cmap(cmap)
 
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
         col_order = np.array(agreement.columns)
-        col_order_ix = np.searchsorted(comparison.tested_analysis.sorting.unit_ids, col_order)
+        col_order_ix = np.searchsorted(
+            comparison.tested_analysis.sorting.unit_ids, col_order
+        )
         dist = comparison.template_distances[row_order, :][:, col_order_ix]
 
         ax = panel.subplots()

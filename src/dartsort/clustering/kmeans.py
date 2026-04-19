@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-from torch import Tensor
 import torch.nn.functional as F
+from torch import Tensor
 from tqdm.auto import trange
 
 try:
@@ -133,7 +133,7 @@ def kmeanspp(
                 assignments.masked_fill_(closer, j)
             torch.minimum(dists, newdists, out=dists)
         else:
-            j += 1  # type: ignore
+            j += 1
 
     centroid_ixs = centroid_ixs[:j]
     if not skip_assignment:
@@ -205,7 +205,7 @@ def truncated_kmeans(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
             f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
         )
-    del nearest_distsq, _d  # type: ignore
+    del nearest_distsq, _d
 
     # initialize parameters
     n_components = len(centroid_ixs)

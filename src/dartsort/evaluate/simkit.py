@@ -333,7 +333,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         else:
             assert not hdf5_path.exists()
 
-        n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")  # type: ignore
+        n_jobs, Executor, context = get_pool(n_jobs, cls="ThreadPoolExecutor")
         with Executor(max_workers=n_jobs, mp_context=context) as pool:
             nt = self.get_num_frames()
             bs = int(self.sampling_frequency * chunk_len_s)
@@ -487,7 +487,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         with warnings.catch_warnings(record=True) as ws:
             recording = self.save_to_folder(
                 folder=recording_dir,
-                overwrite=overwrite,  # type: ignore
+                overwrite=overwrite,
                 n_jobs=n_jobs or 1,
                 pool_engine="thread",
                 chunk_duration=chunk_len_s,
@@ -702,7 +702,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         if self.drift_type == "triangle":
             t_seconds = self.sample_index_to_time(t_samples)
             phase = t_seconds * (2 * np.pi / self.drift_period)
-            wave = sawtooth(phase, width=0.5)  # type: ignore
+            wave = sawtooth(phase, width=0.5)
             # -1 to 1 and back to -1, so divide by 4 to have 2*ptp=drift_speed*drift_period.
             return wave * (self.drift_speed * self.drift_period / 4.0)
 

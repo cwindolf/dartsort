@@ -554,7 +554,7 @@ def flag_possible_cc_error_spikes(
     times = sorting.times_samples
     channels = sorting.channels
     amps = getattr(sorting, amplitudes_dataset_name)
-    xy = sorting.geom[channels]  # type: ignore
+    xy = sorting.geom[channels]
     n = len(times)
 
     # rescale units so that the max allowed temporal and spatial dists are 10

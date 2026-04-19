@@ -1,16 +1,16 @@
-from typing import Any
 import warnings
 from logging import getLogger
+from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 from matplotlib.colors import FuncNorm
 from matplotlib.lines import Line2D
 from matplotlib.scale import FuncScale
-import numpy as np
-import seaborn as sns
 
 try:
-    from matplotlib_venn import venn2  # type: ignore
+    from matplotlib_venn import venn2
 except ImportError:
 
     def venn2(*args, **kwargs) -> Any:
@@ -22,7 +22,6 @@ from .colors import glasbey1024
 from .layout import BasePlot
 from .unit import make_all_summaries, make_unit_summary
 from .waveforms import geomplot
-
 
 logger = getLogger(__name__)
 
@@ -86,7 +85,7 @@ class UnitComparisonPlot(BasePlot):
             tested_unit_id = comparison.get_match(unit_id)
             a = comparison.agreement_scores[tested_unit_id]
             asorted = a.sort_values(ascending=False)
-            ids = asorted.index[:n].values if n else []
+            ids = asorted.index[:n].values if n else np.array([])
             ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
@@ -104,7 +103,7 @@ class UnitComparisonPlot(BasePlot):
         elif method == "greedy" and which == "gt":
             tested_unit_id = comparison.get_match(unit_id)
             g = comparison.greedy_iou[:, tested_unit_id]
-            ids = np.argsort(g)[::-1][: n - 1] if n else []
+            ids = np.argsort(g)[::-1][: n - 1] if n else np.array([])
             ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
@@ -402,7 +401,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 linestyle=(1, (1, 1)),
             )
             tk = f"{comparison.tested_analysis.name}#{tested_unit_id}"
-            handles[tk] = testedline  # type: ignore
+            handles[tk] = testedline
         if self.average:
             gt_template = comparison.gt_analysis.coarse_template_data.unit_templates(
                 unit_id
@@ -420,7 +419,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 color="k",
                 linestyle=(0, (1, 1)),
             )
-            handles["GT"] = gtline  # type: ignore
+            handles["GT"] = gtline
 
         ax.legend(
             handles=handles.values(),
@@ -678,7 +677,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         conf = np.nan_to_num(conf)
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
-        conf = np.abs(np.clip(conf, min=0.0))  # type: ignore[reportCallIssue]
+        conf = np.abs(np.clip(conf, 0.0, None))
 
         ax = panel.subplots()
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0, vmax=max(conf.max(), 0.01))
@@ -803,7 +802,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ax.set_ylabel(f"{va.name} CCG v. {cat}", color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
-        ax.set_xlabel("lag (samples)")  # type: ignore
+        ax.set_xlabel("lag (samples)")
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)

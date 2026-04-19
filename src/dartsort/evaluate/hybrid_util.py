@@ -163,7 +163,7 @@ def closest_clustering(
     gt_pos /= rescale
     peel_pos /= rescale
     peelix2gtix = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
-    labels = peelix2gtix.copy()  # type: ignore
+    labels = peelix2gtix.copy()
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
     return peel_st.ephemeral_replace(labels=labels, gt_match_ix=peelix2gtix)
@@ -219,7 +219,7 @@ def greedy_match(
         d, i = test_kdtree.query(
             gt_coords[gt_ix],
             k=1,
-            distance_upper_bound=min(thresh, max_val),  # type: ignore
+            distance_upper_bound=min(thresh, max_val),
             workers=workers,
             p=p,
         )
