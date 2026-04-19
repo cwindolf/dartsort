@@ -9,7 +9,6 @@ from tqdm.auto import trange
 
 from ._multichan_denoiser_kit import (
     BaseMultichannelDenoiser,
-    RefreshableDataset,
     RefreshableDataLoader,
     AsyncBatchDataset,
 )

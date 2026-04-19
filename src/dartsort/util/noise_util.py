@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Self, cast
+from typing import Self, cast, TYPE_CHECKING
 
 import h5py
 import linear_operator
@@ -18,7 +18,8 @@ from sklearn.decomposition import PCA
 from torch import Tensor
 from tqdm.auto import tqdm, trange
 
-from ..transform.temporal_pca import BaseTemporalPCA
+if TYPE_CHECKING:
+    from ..transform.temporal_pca import BaseTemporalPCA
 from ..util import more_operators, spiketorch
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
@@ -733,7 +734,7 @@ class EmbeddedNoise(BModule):
         if channels_left is None:
             channels_left = channels
         nc = channels.numel()
-        ncl = channels_left.numel()
+        ncl = int(channels_left.numel())
 
         if have_left:
             if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
@@ -743,8 +744,11 @@ class EmbeddedNoise(BModule):
                 #         f"for cov_kind={self.cov_kind} when the block overlaps "
                 #         "with the diagonal."
                 #     )
-                sz = self.rank * ncl, self.rank * nc
-                return operators.ZeroLinearOperator(*sz, dtype=self.b.global_std.dtype)
+                return operators.ZeroLinearOperator(
+                    self.rank * ncl,  # type: ignore
+                    self.rank * nc,  # type: ignore
+                    dtype=self.b.global_std.dtype,
+                )
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
@@ -1151,14 +1155,15 @@ def interpolate_residual_snippets(
     residual_dataset_name="residual",
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     do_tpca: bool,
-    tpca: PCA | BaseTemporalPCA | None = None,
+    tpca: "PCA | BaseTemporalPCA | None" = None,
     device: torch.device | str | None = None,
     rank: int | None = None,
     batch_size=64,
     show_progress=True,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from dartsort.util import data_util, drift_util, interpolation_util
+    from . import data_util, interpolation_util
+    from ..transform import BaseTemporalPCA
 
     assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
 
@@ -1529,7 +1534,7 @@ class SpatialWhitener(BModule):
         )
         geom = getattr(sorting, "geom", None)
         assert geom is not None
-        neighbs = make_channel_index(geom, radius=whiten_cfg.radius)
+        neighbs = make_channel_index(geom, radius=whiten_cfg.radius, to_torch=False)
         cov_np = cov.numpy(force=True).astype(np.float64)
         whitener = whitening_estimators[whiten_cfg.estimator](
             cov_np, channel_index=neighbs
