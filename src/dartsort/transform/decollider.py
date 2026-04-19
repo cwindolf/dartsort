@@ -35,6 +35,8 @@ class Decollider(BaseMultichannelDenoiser):
         self,
         channel_index,
         geom,
+        waveform_cfg,
+        sampling_frequency=30_000.0,
         hidden_dims=(1024, 1024),
         norm_kind="none",
         name=None,
@@ -86,6 +88,8 @@ class Decollider(BaseMultichannelDenoiser):
         super().__init__(
             geom=geom,
             channel_index=channel_index,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
             name=name,
             name_prefix=name_prefix,
             hidden_dims=hidden_dims,
@@ -159,9 +163,11 @@ class Decollider(BaseMultichannelDenoiser):
             self.den_net = self.inf_net
         self.to(self.device)
 
-    def fit(self, recording, waveforms, *, channels, **spike_data):
+    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
         weights = spike_data.get("weights")
-        super().fit(recording, waveforms, channels=channels)
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
         train_data, val_data = self._construct_datasets_from_waveforms(
             waveforms, channels, recording, weights
         )
