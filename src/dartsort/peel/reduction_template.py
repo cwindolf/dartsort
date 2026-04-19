@@ -339,6 +339,8 @@ class TemplateReduction(GrabAndFeaturize):
 
         # assemble pipeline
         fp = WaveformPipeline(transformers=transformers)
+        fp.attach_motion(motion)
+        fp.precompute()
         logger.dartsortverbose("Template pipeline: %s", fp)
 
         # grab weights and labels for fixed_properties

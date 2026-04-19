@@ -149,6 +149,9 @@ class BaseWaveformModule(BModule):
     def needs_precompute(self) -> bool:
         return False
 
+    def attach_motion(self, motion):
+        pass
+
     def precompute(self):
         pass
 

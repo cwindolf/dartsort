@@ -182,6 +182,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
+        featurization_pipeline.attach_motion(motion)
 
         trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency

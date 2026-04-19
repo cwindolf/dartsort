@@ -171,6 +171,10 @@ class WaveformPipeline(torch.nn.Module):
     def needs_fit(self):
         return any(t.needs_fit() for t in self.transformers)
 
+    def attach_motion(self, motion):
+        for t in self.transformers:
+            t.attach_motion(motion)
+
     def forward(self, waveforms, **fixed_properties):
         """
         fixed_properties usually contains max_channels, and may contain other relevant
@@ -245,10 +249,12 @@ class WaveformPipeline(torch.nn.Module):
                 features["waveforms"] = transformer(**features)
 
         assert not features["waveforms"].requires_grad
+        assert not self.needs_fit()
 
     def precompute(self):
         for transformer in self.transformers:
             transformer.precompute()
+        assert not self.needs_precompute()
 
     def __iter__(self):
         return iter(self.transformers)
