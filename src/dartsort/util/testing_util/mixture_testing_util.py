@@ -222,7 +222,7 @@ def simulate_moppca(
     noise_log_priors = noise_log_priors[labels]
 
     return dict(
-        geom=prgeom,
+        prgeom=prgeom,
         data=data,
         init_sorting=init_sorting,
         neighborhoods=neighbs,
