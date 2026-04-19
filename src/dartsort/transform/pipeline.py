@@ -10,7 +10,9 @@ from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
 
 class WaveformPipeline(torch.nn.Module):
-    def __init__(self, transformers: Sequence[BaseWaveformModule], kwargs_to_store=None):
+    def __init__(
+        self, transformers: Sequence[BaseWaveformModule], kwargs_to_store=None
+    ):
         super().__init__()
         check_unique_feature_names(transformers)
         self.transformers: list[BaseWaveformModule] = torch.nn.ModuleList(transformers)  # type: ignore
@@ -143,13 +145,17 @@ class WaveformPipeline(torch.nn.Module):
 
         for transformer in self.transformers:
             if transformer.is_featurizer and transformer.is_denoiser:
-                waveforms, new_features = transformer(waveforms, **fixed_properties)
+                waveforms, new_features = transformer(
+                    waveforms, **fixed_properties, **features
+                )
                 features.update(new_features)
             elif transformer.is_featurizer:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
-                features.update(transformer.transform(waveforms, **fixed_properties))
+                features.update(
+                    transformer.transform(waveforms, **fixed_properties, **features)
+                )
             elif transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties)
+                waveforms = transformer(waveforms, **fixed_properties, **features)
 
         return waveforms, features
 
@@ -163,11 +169,16 @@ class WaveformPipeline(torch.nn.Module):
         if not self.needs_fit():
             return
 
+        features = {}
+
         for transformer in self.transformers:
             if transformer.needs_fit():
                 transformer.train()
                 transformer.fit(
-                    recording=recording, waveforms=waveforms, **fixed_properties
+                    recording=recording,
+                    waveforms=waveforms,
+                    **fixed_properties,
+                    **features,
                 )
             transformer.eval()
             transformer.requires_grad_(False)
@@ -176,11 +187,19 @@ class WaveformPipeline(torch.nn.Module):
             if not self.needs_fit():
                 break
 
-            if transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties)
-                if transformer.is_featurizer:
-                    # result is tuple wfs, feats
-                    waveforms = waveforms[0]
+            if transformer.is_featurizer and transformer.is_denoiser:
+                waveforms, new_features = transformer(
+                    waveforms, **fixed_properties, **features
+                )
+                features.update(new_features)
+            elif transformer.is_featurizer:
+                assert isinstance(transformer, BaseWaveformFeaturizer)
+                features.update(
+                    transformer.transform(waveforms, **fixed_properties, **features)
+                )
+            elif transformer.is_denoiser:
+                waveforms = transformer(waveforms, **fixed_properties, **features)
+
         assert not waveforms.requires_grad
 
     def precompute(self):

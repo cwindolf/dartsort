@@ -63,10 +63,10 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         self.with_raw_std_dev = with_raw_std_dev
         self._initialize((self.feature_dim, output_channels))
 
-    def transform(self, waveforms: torch.Tensor, **fixed_properties: torch.Tensor):
+    def transform(self, waveforms: torch.Tensor, **spike_data: torch.Tensor):
         assert waveforms.shape[1] == self.feature_dim
         assert waveforms.shape[2] == self.output_channels
-        labels = fixed_properties["labels"]
+        labels = spike_data["labels"]
 
         # if median, early out
         if not self.online:
@@ -84,8 +84,8 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             batch_xsqbar = None
 
         # sum weight per unit
-        if "weights" in fixed_properties:
-            weights = fixed_properties["weights"]
+        if "weights" in spike_data:
+            weights = spike_data["weights"]
         else:
             weights = self.b.count.new_ones((1,)).broadcast_to(labels.shape)
         batch_w = self.b.count.new_zeros(self.n_units)

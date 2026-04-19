@@ -57,8 +57,15 @@ class BaseWaveformModule(BModule):
                 self.__class__._pre_load_state
             )
 
-    def fit(self, recording: BaseRecording, waveforms: torch.Tensor, *, channels: torch.Tensor, **fixed_properties: torch.Tensor) -> Any:
-        del recording, fixed_properties
+    def fit(
+        self,
+        recording: BaseRecording,
+        waveforms: torch.Tensor,
+        *,
+        channels: torch.Tensor,
+        **spike_data: torch.Tensor,
+    ) -> Any:
+        del recording, spike_data
         self.spike_length_samples = waveforms.shape[1]
         self.initialize_spike_length_dependent_params()
 
@@ -128,8 +135,8 @@ class BaseWaveformModule(BModule):
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
 
-    def forward(self, waveforms, *, channels: torch.Tensor,  **fixed_properties):
-        del waveforms, fixed_properties
+    def forward(self, waveforms, *, channels: torch.Tensor, **spike_data):
+        del waveforms, spike_data
         raise NotImplementedError
 
 
@@ -141,8 +148,14 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
     # output dtye
     dtype: torch.dtype | list[torch.dtype] = torch.float
 
-    def transform(self, waveforms: torch.Tensor, *, channels: torch.Tensor, **fixed_properties: torch.Tensor):
-        del waveforms, fixed_properties
+    def transform(
+        self,
+        waveforms: torch.Tensor,
+        *,
+        channels: torch.Tensor,
+        **spike_data: torch.Tensor,
+    ):
+        del waveforms, spike_data
         # returns dict {key=feat name, value=feature}
         raise NotImplementedError
 
@@ -203,16 +216,16 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
             return False
         return self.pipeline.needs_fit()
 
-    def fit(self, recording, waveforms, **fixed_properties):
+    def fit(self, recording, waveforms, **spike_data):
         if self.pipeline is None:
             return
-        self.pipeline.fit(recording, waveforms, **fixed_properties)
+        self.pipeline.fit(recording, waveforms, **spike_data)
 
-    def forward(self, waveforms, **fixed_properties):
+    def forward(self, waveforms, **spike_data):
         if self.pipeline is None:
             return waveforms, {}
         pipeline_waveforms, pipeline_features = self.pipeline(
-            waveforms, **fixed_properties
+            waveforms, **spike_data
         )
         del pipeline_waveforms  # passthrough!
         return waveforms, pipeline_features
@@ -226,19 +239,19 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
                     datasets.extend(t.spike_datasets)
         return datasets
 
-    def transform(self, waveforms, **fixed_properties):
+    def transform(self, waveforms, **spike_data):
         if self.pipeline is None:
             return {}
         pipeline_waveforms, pipeline_features = self.pipeline(
-            waveforms, **fixed_properties
+            waveforms, **spike_data
         )
         del pipeline_waveforms
         return pipeline_features
 
 
 class IdentityWaveformDenoiser(BaseWaveformDenoiser):
-    def forward(self, waveforms, **unused):
-        del unused
+    def forward(self, waveforms, **spike_data):
+        del spike_data
         return waveforms
 
 
@@ -263,6 +276,6 @@ class Waveform(BaseWaveformFeaturizer):
         self.shape = (spike_length_samples, channel_index.shape[1])
         self.dtype = dtype
 
-    def transform(self, waveforms, **unused):
-        del unused
+    def transform(self, waveforms, **spike_data):
+        del spike_data
         return {self.name: waveforms.clone()}

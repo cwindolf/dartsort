@@ -159,8 +159,9 @@ class Decollider(BaseMultichannelDenoiser):
             self.den_net = self.inf_net
         self.to(self.device)
 
-    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+    def fit(self, recording, waveforms, *, channels, **spike_data):
+        weights = spike_data.get("weights")
+        super().fit(recording, waveforms, channels=channels)
         train_data, val_data = self._construct_datasets_from_waveforms(
             waveforms, channels, recording, weights
         )

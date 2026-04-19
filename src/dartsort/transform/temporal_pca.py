@@ -74,10 +74,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         waveforms,
         *,
         channels,
-        **fixed_properties,
+        **spike_data,
     ):
-        weights = fixed_properties.get("weights", None)
-        time_shifts = fixed_properties.get("time_shifts", None)
+        weights = spike_data.get("weights", None)
+        time_shifts = spike_data.get("time_shifts", None)
         super().fit(recording, waveforms, channels=channels)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
@@ -406,9 +406,9 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         self.align_pad = align_pad
         self.trough = trough
 
-    def forward(self, waveforms, *, channels, **fixed_properties):
-        alignment_signs = fixed_properties["alignment_signs"]
-        time_shifts = fixed_properties.get("time_shifts")
+    def forward(self, waveforms, *, channels, **spike_data):
+        alignment_signs = spike_data["alignment_signs"]
+        time_shifts = spike_data.get("time_shifts")
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
             return self.force_embed(waveforms)
