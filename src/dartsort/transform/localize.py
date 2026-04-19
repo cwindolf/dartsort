@@ -19,6 +19,8 @@ class Localization(BaseWaveformFeaturizer):
         self,
         channel_index,
         geom,
+        waveform_cfg=None,
+        sampling_frequency=None,
         radius=None,
         n_channels_subset=None,
         logbarrier=True,

@@ -16,8 +16,6 @@ from ..util import data_util, waveform_util
 from ..util.data_util import DARTsortSorting
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from dredge.motion_util import IdentityMotionEstimate
-
 
 logger = get_logger(__name__)
 
@@ -460,7 +458,7 @@ def get_main_channel_pcs(
     mask[which] = True
     channels = sorting.channels[which]
 
-    features = getattr(sorting, "collisioncleaned_tpca_features", None)
+    features = getattr(sorting, dataset_name, None)
     channel_index = getattr(sorting, "channel_index", None)
     if features is not None and channel_index is not None:
         features = features[which][:, :rank]

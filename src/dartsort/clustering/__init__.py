@@ -1,2 +1,2 @@
 from .clustering_features import SimpleMatrixFeatures, StableWaveformFeatures
-from .clustering import get_clusterer, clustering_strategies, refinement_strategies
+from .clustering import get_clusterer, clustering_strategies, refinement_strategies, TMMRefinement

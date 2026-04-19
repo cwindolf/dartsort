@@ -6,6 +6,11 @@ import torch
 
 from ..util.data_util import SpikeDataset
 from ..util.torch_util import BModule
+from ..util.internal_config import (
+    WaveformConfig,
+    ComputationConfig,
+    default_waveform_cfg,
+)
 
 
 class BaseWaveformModule(BModule):
@@ -13,7 +18,15 @@ class BaseWaveformModule(BModule):
     is_featurizer = False
     default_name = ""
 
-    def __init__(self, channel_index=None, geom=None, name=None, name_prefix=None):
+    def __init__(
+        self,
+        channel_index=None,
+        geom=None,
+        name=None,
+        name_prefix=None,
+        waveform_cfg: WaveformConfig | None = default_waveform_cfg,
+        sampling_frequency: float = 30_000.0,
+    ):
         super().__init__()
         if name is None:
             name = self.default_name
@@ -29,7 +42,17 @@ class BaseWaveformModule(BModule):
             geom = torch.asarray(geom, dtype=torch.float, copy=True)
             self.register_buffer("geom", geom)
 
-        self.spike_length_samples = None
+        self.waveform_cfg = waveform_cfg
+        if waveform_cfg is None:
+            self.spike_length_samples = None
+            self.trough_offset_samples = None
+        else:
+            self.trough_offset_samples = waveform_cfg.trough_offset_samples(
+                sampling_frequency
+            )
+            self.spike_length_samples = waveform_cfg.spike_length_samples(
+                sampling_frequency
+            )
         try:
             self._hook = self.register_load_state_dict_pre_hook(
                 self.__class__._pre_load_state
@@ -62,6 +85,7 @@ class BaseWaveformModule(BModule):
         recording: BaseRecording,
         waveforms: torch.Tensor,
         *,
+        computation_cfg: ComputationConfig,
         channels: torch.Tensor,
         **spike_data: torch.Tensor,
     ) -> Any:
@@ -224,9 +248,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def forward(self, waveforms, **spike_data):
         if self.pipeline is None:
             return waveforms, {}
-        pipeline_waveforms, pipeline_features = self.pipeline(
-            waveforms, **spike_data
-        )
+        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, **spike_data)
         del pipeline_waveforms  # passthrough!
         return waveforms, pipeline_features
 
@@ -242,9 +264,7 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def transform(self, waveforms, **spike_data):
         if self.pipeline is None:
             return {}
-        pipeline_waveforms, pipeline_features = self.pipeline(
-            waveforms, **spike_data
-        )
+        pipeline_waveforms, pipeline_features = self.pipeline(waveforms, **spike_data)
         del pipeline_waveforms
         return pipeline_features
 
@@ -262,18 +282,22 @@ class Waveform(BaseWaveformFeaturizer):
         self,
         channel_index,
         geom=None,
-        spike_length_samples=121,
         dtype=torch.float,
         name=None,
         name_prefix=None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        sampling_frequency=30_000.0,
     ):
         super().__init__(
             geom=geom,
             channel_index=channel_index,
             name=name,
             name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
-        self.shape = (spike_length_samples, channel_index.shape[1])
+        assert self.spike_length_samples is not None
+        self.shape = (self.spike_length_samples, channel_index.shape[1])
         self.dtype = dtype
 
     def transform(self, waveforms, **spike_data):

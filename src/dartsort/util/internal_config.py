@@ -137,7 +137,7 @@ class FeaturizationConfig:
     save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
-    save_collidedness: bool = True
+    save_collidedness: bool = False
     save_amplitudes: bool = True
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
@@ -803,7 +803,7 @@ class ComputationConfig:
 
 # default configs, used as defaults for kwargs in main.py etc
 default_waveform_cfg = WaveformConfig()
-default_featurization_cfg = FeaturizationConfig(learn_cleaned_tpca_basis=True)
+default_featurization_cfg = FeaturizationConfig()
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
 default_template_cfg = TemplateConfig()
@@ -917,6 +917,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     tpca_waveform_cfg = WaveformConfig(
         ms_before=cfg.feature_ms_before, ms_after=cfg.feature_ms_after
     )
+    save_collidedness = cfg.robust_strategy == "fixed"
     featurization_cfg = FeaturizationConfig(
         tpca_rank=cfg.temporal_pca_rank,
         extract_radius=cfg.featurization_radius_um,
@@ -925,7 +926,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         tpca_fit_radius=cfg.fit_radius_um,
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
-        learn_cleaned_tpca_basis=True,
+        save_collidedness=save_collidedness,
     )
     peeler_fit_sampling_cfg = FitSamplingConfig(
         n_waveforms_fit=cfg.n_waveforms_fit,

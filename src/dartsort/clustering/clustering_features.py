@@ -4,12 +4,11 @@ import h5py
 import numpy as np
 import torch
 from torch import Tensor
-from spikeinterface.core import BaseRecording
 
-from ..util.drift_util import get_stable_channels
-from ..util.interpolation_util import interpolate_by_chunk, SpikeNeighborhoods
 from ..util.data_util import DARTsortSorting
+from ..util.drift_util import get_stable_channels
 from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
+from ..util.interpolation_util import SpikeNeighborhoods, interpolate_by_chunk
 from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
@@ -119,12 +118,13 @@ class SimpleMatrixFeatures:
             )
             mask = np.ones((1,), dtype=bool)
             mask = np.broadcast_to(mask, len(schan))
-            with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+            if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
+                pcs = getattr(sorting, clustering_features_cfg.pca_dataset_name)
                 pcs = interpolate_by_chunk(
                     mask=mask,
-                    dataset=h5[clustering_features_cfg.pca_dataset_name],
+                    dataset=pcs,
                     geom=motion.geom,
-                    channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+                    channel_index=cast(h5py.Dataset, sorting.channel_index)[:],
                     channels=sorting.channels,
                     shifts=shifts,
                     registered_geom=motion.rgeom,
@@ -132,6 +132,21 @@ class SimpleMatrixFeatures:
                     params=clustering_features_cfg.interp_params,
                 )
                 pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
+            else:
+                assert sorting.parent_h5_path is not None
+                with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+                    pcs = interpolate_by_chunk(
+                        mask=mask,
+                        dataset=h5[clustering_features_cfg.pca_dataset_name],
+                        geom=motion.geom,
+                        channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+                        channels=sorting.channels,
+                        shifts=shifts,
+                        registered_geom=motion.rgeom,
+                        target_channels=schan,
+                        params=clustering_features_cfg.interp_params,
+                    )
+                    pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
 
         if do_pcs:
             assert pcs is not None
@@ -205,10 +220,11 @@ class StableWaveformFeatures:
             neighborhoods=neighborhoods,
         )
 
-        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
+            features = getattr(sorting, clustering_features_cfg.pca_dataset_name)
             features = interpolate_by_chunk(
                 mask=np.ones(len(sorting), dtype=np.bool_),
-                dataset=h5[clustering_features_cfg.pca_dataset_name],
+                dataset=features,
                 geom=motion.geom,
                 channel_index=sorting.channel_index,
                 channels=sorting.channels,
@@ -219,6 +235,22 @@ class StableWaveformFeatures:
                 params=clustering_features_cfg.interp_params.normalize(),
                 device=computation_cfg.actual_device(),
             )
+        else:
+            assert sorting.parent_h5_path is not None
+            with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+                features = interpolate_by_chunk(
+                    mask=np.ones(len(sorting), dtype=np.bool_),
+                    dataset=h5[clustering_features_cfg.pca_dataset_name],
+                    geom=motion.geom,
+                    channel_index=sorting.channel_index,
+                    channels=sorting.channels,
+                    shifts=shifts,
+                    registered_geom=motion.rgeom,
+                    target_channels=channels,
+                    trim_to_rank=clustering_features_cfg.feature_rank,
+                    params=clustering_features_cfg.interp_params.normalize(),
+                    device=computation_cfg.actual_device(),
+                )
 
         return cls(
             channels=channels,

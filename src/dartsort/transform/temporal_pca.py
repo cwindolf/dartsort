@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
+from ..util.internal_config import WaveformConfig, default_waveform_cfg
 from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -26,6 +27,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         self,
         channel_index,
         geom=None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        sampling_frequency: float = 30_000.0,
         rank=8,
         whiten=False,
         centered=False,
@@ -45,7 +48,12 @@ class BaseTemporalPCA(BaseWaveformModule):
                 raise ValueError("TemporalPCA with fit_radius!=None requires geom.")
 
         super().__init__(
-            channel_index=channel_index, geom=geom, name=name, name_prefix=name_prefix
+            channel_index=channel_index,
+            geom=geom,
+            name=name,
+            name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
 
         # behavior
@@ -73,12 +81,15 @@ class BaseTemporalPCA(BaseWaveformModule):
         recording,
         waveforms,
         *,
+        computation_cfg,
         channels,
         **spike_data,
     ):
         weights = spike_data.get("weights", None)
         time_shifts = spike_data.get("time_shifts", None)
-        super().fit(recording, waveforms, channels=channels)
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights

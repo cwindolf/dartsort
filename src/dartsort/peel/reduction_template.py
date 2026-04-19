@@ -20,7 +20,6 @@ from ..util.data_util import (
     get_top_assignment_weights,
     subsample_by_count_and_valid_time,
 )
-from ..util.drift_util import registered_geometry
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
@@ -220,7 +219,7 @@ class TemplateReduction(GrabAndFeaturize):
         if template_cfg.use_svd and tsvd is not None:
             if isinstance(tsvd, FullProbeTemporalPCAEmbedder):
                 if do_align:
-                    raise ValueError(f"Haven't handled svd alignment in this case.")
+                    raise ValueError("Haven't handled svd alignment in this case.")
             else:
                 assert tsvd.components_.shape[0] == template_cfg.denoising_rank
                 tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
@@ -363,10 +362,7 @@ class TemplateReduction(GrabAndFeaturize):
             fixed_properties=fixed_properties,
             chunk_length_samples=template_cfg.grab_chunk_length_samples,
             fit_sampling_cfg=template_cfg.denoising_fit_sampling_cfg,
-            trough_offset_samples=padded_waveform_cfg.trough_offset_samples(
-                recording.sampling_frequency
-            ),
-            spike_length_samples=pad_spike_len,
+            waveform_cfg=padded_waveform_cfg,
         )
 
     def temporal_svd(self) -> PCA | None:

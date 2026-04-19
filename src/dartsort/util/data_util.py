@@ -1308,7 +1308,7 @@ def yield_chunks(
 
     The dataset can either not be chunked or chunked only on the first axis.
     """
-    if dataset.chunks is None:
+    if not hasattr(dataset, "chunks") or dataset.chunks is None:
         chunks = (
             slice(s, min(s + fallback_chunk_length, len(dataset)))
             for s in range(0, len(dataset), fallback_chunk_length)

@@ -25,6 +25,7 @@ from ..util.data_util import (
     resolve_path,
 )
 from ..util.logging_util import get_logger
+from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import ptp
@@ -85,6 +86,7 @@ def generate_simulation(
     recording_dtype="float16",
     features_dtype="float32",
     featurization_cfg=default_sim_featurization_cfg,
+    computation_cfg=None,
     save_injected_waveforms=False,
     save_noise_waveforms=False,
     save_collision_waveforms=False,
@@ -95,10 +97,10 @@ def generate_simulation(
     random_seed=0,
     noise_in_memory=False,
     overwrite=False,
-    n_jobs=1,
     no_save=False,
     just_noise=False,
 ):
+    computation_cfg = ensure_computation_config(computation_cfg)
     if folder is not None and not (overwrite or just_noise or no_save):
         try:
             return load_simulation(folder)
@@ -124,7 +126,7 @@ def generate_simulation(
             noise_fft_t=noise_fft_t,
             white_noise_scale=white_noise_scale,
             sampling_frequency=sampling_frequency,
-            n_jobs=n_jobs,
+            n_jobs=computation_cfg.actual_n_jobs(),
             in_memory=noise_in_memory,
             overwrite=overwrite,
         )
@@ -198,8 +200,9 @@ def generate_simulation(
     sim_recording.save_simulation(
         folder,
         overwrite=overwrite,
-        n_jobs=n_jobs,
+        n_jobs=computation_cfg.actual_n_jobs(),
         featurization_cfg=featurization_cfg,
+        computation_cfg=computation_cfg,
         chunk_len_s=chunk_len_s,
         save_injected_waveforms=save_injected_waveforms,
         save_noise_waveforms=save_noise_waveforms,
@@ -471,6 +474,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         overwrite=False,
         n_jobs=1,
         featurization_cfg=default_sim_featurization_cfg,
+        computation_cfg=None,
         save_injected_waveforms=False,
         save_noise_waveforms=False,
         save_collision_waveforms=False,
@@ -516,7 +520,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         if featurization_cfg is not None and not featurization_cfg.skip:
             # this is only for the TPCA feature.
             torch.manual_seed(self.segment.random_seed)
-            add_features(sorting_h5, recording, featurization_cfg)
+            add_features(sorting_h5, recording, featurization_cfg, computation_cfg)
 
         self.gt_unit_information().to_csv(unit_info_csv)
         self.motion().save(folder)
@@ -740,7 +744,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         i0 = np.searchsorted(self.times_samples, search_start)
         i1 = np.searchsorted(self.times_samples, search_end)
         t = self.times_samples[i0:i1]
-        l = self.labels[i0:i1]
+        ll = self.labels[i0:i1]
         s = self.scalings[i0:i1]
         u = self.jitter_ix[i0:i1]
 
@@ -749,17 +753,17 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         tix = t_rel[:, None] + self.snippet_time_ix
         tc = (start_frame + end_frame) / 2
         pos, temps, offsets = self.templates(t_samples=tc, up=True, padded=extract)
-        temps = temps[l, u]
+        temps = temps[ll, u]
         temps *= s[:, None, None]
         temps_unpad = temps[..., :-1] if extract else temps
-        offsets = offsets[l, u]
+        offsets = offsets[ll, u]
 
         spikes = dict(
             i0=i0,
             i1=i1,
             times_samples=t + offsets,
             time_shifts=offsets.astype(np.int16),
-            labels=l,
+            labels=ll,
             scalings=s,
             jitter_ix=u,
             tix=tix,
@@ -769,7 +773,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         if not extract:
             return spikes
 
-        spikes["localizations"] = pos[l]
+        spikes["localizations"] = pos[ll]
         spikes["displacements"] = np.full(
             i1 - i0, self.drift(tc), dtype=self.features_dtype
         )

@@ -24,7 +24,12 @@ from ..util.data_util import (
     extract_random_snips,
     subsample_waveforms,
 )
-from ..util.internal_config import FitSamplingConfig, default_peeling_fit_sampling_cfg
+from ..util.internal_config import (
+    FitSamplingConfig,
+    default_peeling_fit_sampling_cfg,
+    WaveformConfig,
+    default_waveform_cfg,
+)
 from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
@@ -62,8 +67,7 @@ class BasePeeler(BModule):
         chunk_length_samples: int = 30_000,
         chunk_margin_samples: int = 0,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        trough_offset_samples=42,
-        spike_length_samples=121,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         fixed_property_keys=("channels",),
         dtype=torch.float,
     ):
@@ -73,8 +77,13 @@ class BasePeeler(BModule):
         self.recording = recording
         self.chunk_length_samples: int = chunk_length_samples
         self.chunk_margin_samples: int = chunk_margin_samples
-        self.trough_offset_samples: int = trough_offset_samples
-        self.spike_length_samples: int = spike_length_samples
+        self.waveform_cfg = waveform_cfg
+        self.trough_offset_samples: int = waveform_cfg.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        self.spike_length_samples: int = waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         self.fit_sampling_cfg = fit_sampling_cfg
         self.random_seed = fit_sampling_cfg.seed
         self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
@@ -634,14 +643,10 @@ class BasePeeler(BModule):
             self.channel_index,
             [
                 ("Voltage", {"name": "peeled_voltages_fit"}),
-                (
-                    "Waveform",
-                    {
-                        "name": "peeled_waveforms_fit",
-                        "spike_length_samples": self.spike_length_samples,
-                    },
-                ),
+                ("Waveform", {"name": "peeled_waveforms_fit"}),
             ],
+            waveform_cfg=self.waveform_cfg,
+            sampling_frequency=self.recording.sampling_frequency,
         )
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
@@ -675,6 +680,7 @@ class BasePeeler(BModule):
                 featurization_pipeline.fit(
                     recording=self.recording,
                     waveforms=waveforms,
+                    computation_cfg=computation_cfg,
                     **fixed_properties,
                 )
                 assert getrefcount(waveforms) <= 2

@@ -53,6 +53,8 @@ transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}
 
 # serialization
 if hasattr(torch.serialization, "add_safe_globals"):
+    from ..util.internal_config import WaveformConfig
+
     others = [
         set,
         slice,
@@ -60,5 +62,6 @@ if hasattr(torch.serialization, "add_safe_globals"):
         torch.nn.Sequential,
         WaveformPipeline,
         SingleChannelDenoiser,
+        WaveformConfig,
     ]
     torch.serialization.add_safe_globals(all_transformers + others)  # type: ignore

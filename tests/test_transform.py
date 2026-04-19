@@ -9,6 +9,7 @@ from test_util import dense_layout
 
 from dartsort.transform import WaveformPipeline, transformers_by_class_name
 from dartsort.util.waveform_util import make_channel_index
+from dartsort.util.internal_config import default_waveform_cfg
 
 
 def _check_state_equal(d1, d2):
@@ -117,6 +118,8 @@ def test_all_transformers():
             for j, name in enumerate(transformers_by_class_name)
             if name not in skip_me
         ],
+        waveform_cfg=default_waveform_cfg,
+        sampling_frequency=30_000.0,
     )
     if torch.cuda.is_available():
         pipeline = pipeline.to(torch.device("cuda"))

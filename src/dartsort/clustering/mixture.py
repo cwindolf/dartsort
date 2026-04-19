@@ -110,7 +110,8 @@ def tmm_demix(
     save_step_labels_dir: Path | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
     seed: int | np.random.Generator = 0,
-) -> DARTsortSorting:
+    skip_final_assign_and_return_mix_data: bool = False,
+):
     """GMM-based spike clustering using truncated expectation maximization
 
     Infers #units using a cross-validation criterion evaluated over proposed
@@ -129,6 +130,7 @@ def tmm_demix(
         seed=seed,
         computation_cfg=computation_cfg,
         fit_indices=fit_indices,
+        skip_full=skip_final_assign_and_return_mix_data,
     )
     tmm, train_data, val_data, full_data, train_ixs, _ = mix_data
 
@@ -145,7 +147,7 @@ def tmm_demix(
 
     # start with one round of em. below flow is like split-em-merge-em-repeat.
     tmm.em(train_data, min_iters=tmm.p.main_min_iters)
-    stepname = f"tmm00em"
+    stepname = "tmm00em"
     if saving:
         save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
@@ -199,7 +201,11 @@ def tmm_demix(
             if saving and not is_final:
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 
+    if skip_final_assign_and_return_mix_data:
+        return mix_data
+
     # final assignments
+    assert full_data is not None
     sorting = relabel_and_add_scores(sorting, tmm, full_data)
     # downstream, we might care if a spike was used for training
     assert sorting.labels is not None
@@ -235,7 +241,7 @@ class MixtureModelAndDatasets(NamedTuple):
     tmm: "TruncatedMixtureModel"
     train_data: "TruncatedSpikeData"
     val_data: "TruncatedSpikeData | None"
-    full_data: "StreamingSpikeData"
+    full_data: "StreamingSpikeData | None"
     train_ixs: Tensor | slice
     val_ixs: Tensor | None
 
@@ -1898,8 +1904,6 @@ class BaseMixtureModel(BModule):
         """
         if distance_kind is None:
             distance_kind = self.p.distance_kind
-
-        from ..util.py_util import timer
 
         if self.p.whiten_dist:
             x = self.noise.whiten_full(self.centroids)
@@ -3773,6 +3777,7 @@ def get_truncated_datasets(
     fit_indices: np.ndarray | None = None,
     noise: EmbeddedNoise | None = None,
     stable_features: StableWaveformFeatures | None = None,
+    skip_full: bool = False,
 ):
     assert sorting.labels is not None
     labels = torch.tensor(sorting.labels, device=device)
@@ -3889,20 +3894,23 @@ def get_truncated_datasets(
 
     assert torch.equal(full_neighbs.b.neighborhoods, train_neighbs.b.neighborhoods)
     assert full_neighbs.neighborhood_ids.shape == (full_features.shape[0],)
-    full_data = StreamingSpikeData(
-        n_candidates=n_candidates,
-        max_n_candidates=max_candidates,
-        x=full_features,
-        neighborhoods=full_neighbs,
-        device=device,
-        batch_size=refinement_cfg.eval_batch_size,
-        duties=duties,
-        neighb_cov=neighb_cov,
-    )
-    assert torch.equal(
-        full_data.neighborhoods.b.neighborhoods,
-        train_data.neighborhoods.b.neighborhoods,
-    )
+    if skip_full:
+        full_data = None
+    else:
+        full_data = StreamingSpikeData(
+            n_candidates=n_candidates,
+            max_n_candidates=max_candidates,
+            x=full_features,
+            neighborhoods=full_neighbs,
+            device=device,
+            batch_size=refinement_cfg.eval_batch_size,
+            duties=duties,
+            neighb_cov=neighb_cov,
+        )
+        assert torch.equal(
+            full_data.neighborhoods.b.neighborhoods,
+            train_data.neighborhoods.b.neighborhoods,
+        )
 
     if refinement_cfg.impute_kind == "interp":
         assert clustering_features_cfg is not None
@@ -4013,6 +4021,7 @@ def instantiate_and_bootstrap_tmm(
     seed: np.random.Generator | int = 0,
     fit_indices: np.ndarray | None = None,
     computation_cfg: ComputationConfig | None = None,
+    skip_full: bool = False,
 ) -> MixtureModelAndDatasets:
     global pnoid
     pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -4038,6 +4047,7 @@ def instantiate_and_bootstrap_tmm(
             fit_indices=fit_indices,
             device=device,
             rg=rg,
+            skip_full=skip_full,
         )
     )
 
@@ -4478,7 +4488,7 @@ def brute_merge(
     )
     assert len(subset_to_id) == len(id_to_subset)
     if debug:
-        logger.dartsortdebug(f"brute_merge: %s partitions.", len(partitions))
+        logger.dartsortdebug("brute_merge: %s partitions.", len(partitions))
     n_subsets = len(subset_to_id)
     if not n_subsets:
         return None
@@ -5549,8 +5559,8 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
     if len(luts) == 1:
         return luts[0]
     adj = luts[0].lut < luts[0].unit_ids.shape[0]
-    for l in luts[1:]:
-        adj.logical_or_(l.lut < l.unit_ids.shape[0])
+    for ll in luts[1:]:
+        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
