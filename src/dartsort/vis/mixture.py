@@ -584,8 +584,8 @@ class NeighborQDAPlot(MixtureComponentPlot):
                 if made_one and self.log:
                     ax.semilogy()
 
-            hstatt = f"H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
-            kstatt = f"K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
+            hstatt = "H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
+            kstatt = "K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
             ax.set_title(f"{iout}\n{covt}\n{hstatt}\n{kstatt}", fontsize="small")
 
         for ax in axes.flat[len(neighbors) :]:
@@ -997,11 +997,11 @@ class SplitView(MixtureComponentPlot):
         if have_kmeans:
             assert debug_info.split_data is not None
             chans_by_km = {}
-            for l in kmeans_labels.unique():
-                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == l]
+            for ll in kmeans_labels.unique():
+                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == ll]
                 chans_l = mix_data.tmm.neighb_cov.obs_ix[neighbs_l]
                 chans_l = chans_l[chans_l < mix_data.tmm.neighb_cov.n_channels]
-                chans_by_km[l.item()] = chans_l.numpy(force=True)
+                chans_by_km[ll.item()] = chans_l.numpy(force=True)
         else:
             chans_by_km = None
 
@@ -1062,7 +1062,7 @@ class SplitView(MixtureComponentPlot):
                 f"{_bold('imp')}: {debug_info.merge_res.improvement:.3f}\n"
             )
         else:
-            txt += f"no allowed partitions\n"
+            txt += "no allowed partitions\n"
         if debug_info.split_model is not None:
             sprops = debug_info.split_model.b.log_proportions.cpu()
             sprops = (
@@ -1353,6 +1353,7 @@ def fit_mixture_for_vis(
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
+    assert mix_data.full_data is not None
     if em or split or merge or both:
         mix_data.tmm.em(mix_data.train_data)
     for _ in range(max(int(split), int(both))):
@@ -1660,8 +1661,8 @@ def vis_split_interpolation(
     vis_ix = []
     rg = np.random.default_rng(seed)
     ulabels = kmeans_labels.unique()
-    for l in ulabels:
-        (in_l,) = (kmeans_labels == l).nonzero(as_tuple=True)
+    for ll in ulabels:
+        (in_l,) = (kmeans_labels == ll).nonzero(as_tuple=True)
         in_l = in_l.numpy(force=True)
         if in_l.size > n_per_group:
             in_l = rg.choice(in_l, size=n_per_group, replace=False)

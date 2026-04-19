@@ -1,5 +1,3 @@
-import torch
-
 from ..util.internal_config import InterpolationParams
 from ..util.interpolation_util import ToFullProbeInterpolator
 from ..util.logging_util import get_logger

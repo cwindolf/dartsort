@@ -32,9 +32,11 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
             pred = self.to_orig_channels(pred, channels)
         return pred
 
-    def fit(self, recording, waveforms, *, channels, **spike_data):
+    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
         gt_waveforms = spike_data["gt_waveforms"]
-        super().fit(recording, waveforms, channels=channels)
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
         train_loader, val_loader = self._waveforms_to_loaders(
             waveforms, gt_waveforms, channels
         )

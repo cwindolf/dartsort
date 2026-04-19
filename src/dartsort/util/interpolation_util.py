@@ -7,12 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .data_util import yield_masked_chunks
-from .internal_config import (
-    InterpKernel,
-    InterpMethod,
-    InterpolationParams,
-    tps_interp_params,
-)
+from .internal_config import InterpolationParams, tps_interp_params
 from .motion import MotionInfo
 from .torch_util import BModule
 from .waveform_util import make_channel_index
@@ -1278,7 +1273,6 @@ class FromFullProbeInterpolator(BModule):
         solver_map = dist.argmin(1)
 
         # interpolate from static geom to shifted geom
-        n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
             source_pos=self.b.rgeom,
