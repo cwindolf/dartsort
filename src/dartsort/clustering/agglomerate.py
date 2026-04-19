@@ -3,10 +3,10 @@
 from threading import local
 from typing import cast
 
-from KDEpy import FFTKDE
 import numba
 import numpy as np
 import torch
+from KDEpy import FFTKDE
 from spikeinterface.core import BaseRecording
 from tqdm.auto import tqdm
 
@@ -32,7 +32,7 @@ from ..util.spiketorch import (
     shared_temporal_pconv,
 )
 from .cluster_util import linkage_mask, recluster, sparsify_labels
-from .gmm.mixture import Scores
+from .mixture import Scores
 
 logger = get_logger(__name__)
 

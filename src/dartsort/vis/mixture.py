@@ -11,7 +11,7 @@ from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
-from ..clustering.gmm.mixture import (
+from ..clustering.mixture import (
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,

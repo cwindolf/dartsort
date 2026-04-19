@@ -18,9 +18,8 @@ from ..util.internal_config import (
 )
 from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
-from . import cluster_util, density, forward_backward, refine_util, agglomerate
+from . import agglomerate, cluster_util, density, forward_backward, mixture, refine_util
 from .clustering_features import SimpleMatrixFeatures, StableWaveformFeatures
-from .gmm import mixture
 
 clustering_strategies: dict[str, "type[Clusterer]"] = {}
 refinement_strategies: dict[str, "type[Refinement]"] = {}

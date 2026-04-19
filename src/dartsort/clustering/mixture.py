@@ -52,28 +52,28 @@ from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
 from tqdm.auto import tqdm, trange
 
-from ...util.data_util import DARTsortSorting, subset_sorting_by_spike_count
-from ...util.internal_config import (
+from ..util.data_util import DARTsortSorting, subset_sorting_by_spike_count
+from ..util.internal_config import (
     ComputationConfig,
     DARTsortInternalConfig,
     RefinementConfig,
     ComponentDistanceMetric,
     ClusteringFeaturesConfig,
 )
-from ...util.interpolation_util import (
+from ..util.interpolation_util import (
     NeighborhoodFiller,
     NeighborhoodImputer,
     NeighborhoodInterpolator,
     SpikeNeighborhoods,
     pad_geom,
 )
-from ...util.job_util import ensure_computation_config
-from ...util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
-from ...util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
-from ...util.motion import MotionInfo
-from ...util.noise_util import EmbeddedNoise
-from ...util.py_util import databag
-from ...util.spiketorch import (
+from ..util.job_util import ensure_computation_config
+from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
+from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
+from ..util.motion import MotionInfo
+from ..util.noise_util import EmbeddedNoise
+from ..util.py_util import databag
+from ..util.spiketorch import (
     cosine_distance,
     ecl,
     entropy,
@@ -83,10 +83,10 @@ from ...util.spiketorch import (
     sign,
     spawn_torch_rg,
 )
-from ...util.torch_util import BModule
-from ..cluster_util import linkage, maximal_leaf_groups
-from ..clustering_features import StableWaveformFeatures
-from ..kmeans import kmeans
+from ..util.torch_util import BModule
+from .cluster_util import linkage, maximal_leaf_groups
+from .clustering_features import StableWaveformFeatures
+from .kmeans import kmeans
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -1899,7 +1899,7 @@ class BaseMixtureModel(BModule):
         if distance_kind is None:
             distance_kind = self.p.distance_kind
 
-        from ...util.py_util import timer
+        from ..util.py_util import timer
 
         if self.p.whiten_dist:
             x = self.noise.whiten_full(self.centroids)

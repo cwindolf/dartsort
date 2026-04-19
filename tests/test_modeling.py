@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 
-from dartsort.clustering.gmm import mixture
+from dartsort.clustering import mixture
 from dartsort.util.internal_config import RefinementConfig, ClusteringFeaturesConfig
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
