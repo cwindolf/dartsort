@@ -29,7 +29,7 @@ class DARTsortUserConfig:
     matching_iterations: int = argfield(
         default=1,
         doc="By default, 1 template matching step is carried out using templates "
-        "estimated from the initial detection round."
+        "estimated from the initial detection round.",
     )
     preprocessing: PreprocessingStrategy = argfield(
         default="none",
@@ -39,7 +39,7 @@ class DARTsortUserConfig:
         "If so, be aware that dartsort expects its input to be standardized on "
         "each channel in addition to the usual highpass filtering, but that "
         "whitening is handled internally. See util/preprocess_util.py if you're "
-        "curious about the details of the methods."
+        "curious about the details of the methods.",
     )
     subsampling_spikes: int | None = argfield(
         default=2_048_000,
@@ -54,7 +54,7 @@ class DARTsortUserConfig:
         doc="Early detection steps which have already found `subsampling_spikes` "
         "spikes are only allowed to end early if they additionally cover this "
         "fraction of the recording, to make sure there's good coverage of "
-        "conditions for template estimation."
+        "conditions for template estimation.",
     )
 
     # -- computer options
@@ -65,8 +65,7 @@ class DARTsortUserConfig:
         "#cpu - (val+1) so that -1 is all cores, -2 is all less 1, etc.",
     )
     n_jobs_gpu: int = argfield(
-        default=0,
-        doc="Number of parallel workers to use when running on GPU."
+        default=0, doc="Number of parallel workers to use when running on GPU."
     )
     n_jobs_small: int = argfield(
         default=-2,
@@ -133,7 +132,7 @@ class DARTsortUserConfig:
     motion_voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
         default=4.0,
         doc="If subsampling, a quick thresholding will be run at this voltage "
-        "threshold to grab spikes for motion estimation purposes."
+        "threshold to grab spikes for motion estimation purposes.",
     )
 
     # -- featurization length, radius, rank parameters
@@ -252,6 +251,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
     fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
+    n_residual_snips: int = 2 * 4096
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000

@@ -195,7 +195,7 @@ default_fit_max_reweighting = 4.0
 class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
-    n_residual_snips: int = 4 * 4096
+    n_residual_snips: int = 2 * 4096
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
     fit_sampling: FitSamplingMethod = "amp_reweighted"
@@ -925,10 +925,15 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         save_collidedness=save_collidedness,
     )
+    if cfg.dredge_only:
+        n_residual_snips = 0
+    else:
+        n_residual_snips = cfg.n_residual_snips
     peeler_fit_sampling_cfg = FitSamplingConfig(
         n_waveforms_fit=cfg.n_waveforms_fit,
         max_waveforms_fit=cfg.max_waveforms_fit,
         fit_sampling=cfg.fit_sampling,
+        n_residual_snips=n_residual_snips,
     )
     if cfg.detection_type == "subtract":
         subtraction_denoising_cfg = FeaturizationConfig(
