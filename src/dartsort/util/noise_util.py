@@ -1062,11 +1062,6 @@ class EmbeddedNoise(BModule):
         zero_radius: float | None = None,
         rgeom=None,
     ):
-        from dartsort.util.drift_util import registered_geometry
-
-        logger.dartsortdebug(
-            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=}"
-        )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:]
@@ -1081,6 +1076,11 @@ class EmbeddedNoise(BModule):
             device=device,
             rank=rank,
             do_tpca=True,
+        )
+        assert snippets.shape[0] > 1
+        logger.dartsortdebug(
+            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=} "
+            f"from {snippets.shape=}."
         )
         if rank is not None:
             assert snippets.shape[1] == rank

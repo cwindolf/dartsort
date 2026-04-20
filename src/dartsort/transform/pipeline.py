@@ -188,7 +188,6 @@ class WaveformPipeline(torch.nn.Module):
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
-            # allow scalars or spike-len vectors
             assert v.shape == () or v.shape[0] == waveforms.shape[0]
 
         features = fixed_properties.copy()
@@ -217,10 +216,13 @@ class WaveformPipeline(torch.nn.Module):
         **fixed_properties,
     ):
         waveforms = torch.asarray(waveforms)
+        h5_path = fixed_properties.pop("hdf5_filename", None)
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
+        fixed_properties["hdf5_filename"] = h5_path
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
-            assert v.shape[0] == waveforms.shape[0]
+            if torch.is_tensor(v):
+                assert v.shape[0] == waveforms.shape[0]
 
         if not self.needs_fit():
             return

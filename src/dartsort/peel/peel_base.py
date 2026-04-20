@@ -227,7 +227,10 @@ class BasePeeler(BModule):
             )
 
         if residual_snips_per_chunk is None:
-            residual_snips_per_chunk = repeat(None)
+            if residual_to_h5:
+                residual_snips_per_chunk = repeat(1)
+            else:
+                residual_snips_per_chunk = repeat(None)
         elif isinstance(residual_snips_per_chunk, int):
             residual_to_h5 = bool(residual_snips_per_chunk)
             residual_snips_per_chunk = repeat(residual_snips_per_chunk)
