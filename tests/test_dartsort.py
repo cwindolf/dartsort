@@ -126,7 +126,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         save_intermediates=True,
         **cfg_add,
     )
-    with warnings.catch_warnings() as ws:
+    with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="Can't extract this many non-overlapping snips."
         )

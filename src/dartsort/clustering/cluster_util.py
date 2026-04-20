@@ -112,6 +112,11 @@ def hierarchical_cluster(
     if n <= 1:
         return labels, np.arange(n)
     pdist = distances[np.triu_indices(n, k=1)]
+    assert not np.isnan(pdist).any()
+    assert not np.isneginf(pdist).any()
+    finite = np.isfinite(pdist)
+    if not finite.any():
+        return labels, np.arange(n)
     # tolearate some numerical zeros.
     pdist[np.logical_and(pdist > -eps, pdist < 0)] = 0.0
 
@@ -122,7 +127,6 @@ def hierarchical_cluster(
             ids = np.unique(labels)
             return labels, ids[ids >= 0]
 
-    finite = np.isfinite(pdist)
     if not finite.all():
         inf = max(0, pdist[finite].max()) + threshold + 1.0
         pdist[np.logical_not(finite)] = inf

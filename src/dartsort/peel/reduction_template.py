@@ -286,7 +286,6 @@ class TemplateReduction(GrabAndFeaturize):
             interp = WaveformInterpolator(
                 geom=geom,
                 channel_index=channel_index,
-                motion=motion,
                 params=template_cfg.template_interp_params,
             )
         else:

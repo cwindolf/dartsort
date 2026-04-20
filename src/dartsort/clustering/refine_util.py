@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from ..transform.temporal_pca import BaseTemporalPCA
-from ..util import data_util, job_util, spiketorch
+from ..util import data_util, spiketorch
 from ..util.internal_config import ComputationConfig, RefinementConfig
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
@@ -109,7 +109,7 @@ def pc_merge(
     xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
     n_reg_chans = motion.rgeom.shape[0]
     means, counts = spiketorch.average_by_label(
-        x, xlabels, stable_features.channels, n_reg_chans
+        x, xlabels, stable_features.channels[kept], n_reg_chans
     )
 
     # compute distances
