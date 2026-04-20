@@ -8,7 +8,6 @@ import pytest
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
-from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
 
 import dartsort
@@ -32,7 +31,6 @@ nofeatcfg = dartsort.FeaturizationConfig(
     do_tpca_denoise=False,
     do_enforce_decrease=False,
     denoise_only=True,
-    n_residual_snips=0,
 )
 
 spike_length_samples = 121
@@ -405,7 +403,7 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
 
     # spike train
     # fmt: off
-    start = 50
+    # start = 50
     # tclu = []
     # for i in range(up_factor):
     #     tclu.extend((start + 200 * i, 0, 0, i))
@@ -414,9 +412,9 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
     trough_shifts = []
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l, u, c in zip(times, labels, upsampling_indices, channels):
+    for t, ll, u, c in zip(times, labels, upsampling_indices, channels):
         temp = cupts.compressed_upsampled_templates[
-            cupts.compressed_upsampling_map[l, u]
+            cupts.compressed_upsampling_map[ll, u]
         ]
         trough_shifts.append(np.abs(temp[:, c]).argmax() - trough_offset_samples)
         rec0[
@@ -576,10 +574,10 @@ def test_static(tmp_path, up_factor, cd_iter):
     # fmt: on
     times, channels, labels = np.array(tcl).reshape(-1, 3).T
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l in zip(times, labels):
+    for t, ll in zip(times, labels):
         rec0[
             t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
-        ] += templates[l]
+        ] += templates[ll]
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
@@ -767,8 +765,8 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
     # inject the spikes into a noise background
     rec0 = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, l in zip(times, labels):
-        rec0[t : t + 121] += templates[l]
+    for t, ll in zip(times, labels):
+        rec0[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec0) > 80) >= 50
     assert np.sum(np.abs(rec0) > 40) >= 100
 
@@ -776,9 +774,8 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
     rec0 = si.NumpyRecording(rec0, fs)
     rec0.set_dummy_probe_from_locations(geom)
 
-    featconf = dartsort.FeaturizationConfig(
-        do_nn_denoise=False, do_tpca_denoise=False, n_residual_snips=8
-    )
+    featconf = dartsort.FeaturizationConfig(do_nn_denoise=False, do_tpca_denoise=False)
+    sampconf = dartsort.FitSamplingConfig(n_residual_snips=8)
     tempconf = dartsort.TemplateConfig(
         denoising_method="none", registered_templates=False
     )
@@ -795,6 +792,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             motion=no_motion,
             template_cfg=tempconf,
             featurization_cfg=featconf,
+            sampling_cfg=sampconf,
             matching_cfg=matchconf,
         )
         assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]

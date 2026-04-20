@@ -406,7 +406,6 @@ def threshold_for_motion(
         save_input_tpca_projs=False,
         save_collidedness=False,
         learn_cleaned_tpca_basis=False,
-        n_residual_snips=0,
         extract_radius=rad,
         localization_radius=rad,
         tpca_rank=motion_cfg.tpca_rank,

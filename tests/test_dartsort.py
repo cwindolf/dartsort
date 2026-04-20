@@ -20,7 +20,8 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
             ),
             residnorm_decrease_threshold=16.0,
         ),
-        featurization_cfg=dartsort.FeaturizationConfig(n_residual_snips=512),
+        peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
+        featurization_cfg=dartsort.FeaturizationConfig(),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=do_motion_estimation, rigid=True
         ),
@@ -79,9 +80,8 @@ def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
             use_amplitude=False, n_main_channel_pcs=1
         ),
         refinement_cfg=dartsort.RefinementConfig(),
-        featurization_cfg=dartsort.FeaturizationConfig(
-            n_residual_snips=512, nn_localization=False
-        ),
+        peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
+        featurization_cfg=dartsort.FeaturizationConfig(nn_localization=False),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=False
         ),
@@ -102,9 +102,7 @@ def test_cli_help():
     assert not res.returncode, res.stderr.decode()
 
 
-@pytest.mark.parametrize(
-    "type", ["subtract", "threshold", "match", "drifty_match"]
-)
+@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "drifty_match"])
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")

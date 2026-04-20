@@ -24,8 +24,8 @@ from ..util.data_util import (
     extract_random_snips,
     resolve_path,
 )
-from ..util.logging_util import get_logger
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import ptp
@@ -91,6 +91,7 @@ def generate_simulation(
     save_noise_waveforms=False,
     save_collision_waveforms=False,
     save_collidedness=False,
+    n_residual_snips=4096,
     # control
     max_drift_per_chunk=0.5,
     max_chunk_len_s=1.0,
@@ -208,6 +209,7 @@ def generate_simulation(
         save_noise_waveforms=save_noise_waveforms,
         save_collision_waveforms=save_collision_waveforms,
         save_collidedness=save_collidedness,
+        n_residual_snips=n_residual_snips,
     )
     return load_simulation(folder)
 
@@ -474,6 +476,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         overwrite=False,
         n_jobs=1,
         featurization_cfg=default_sim_featurization_cfg,
+        n_residual_snips=4096,
         computation_cfg=None,
         save_injected_waveforms=False,
         save_noise_waveforms=False,
@@ -503,9 +506,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if msg.startswith("auto_cast_uint"):
                     continue
                 raise w.category(w.message)
-        n_residual_snips = (
-            0 if featurization_cfg is None else featurization_cfg.n_residual_snips
-        )
+        n_residual_snips = 0 if featurization_cfg is None else n_residual_snips
         self.save_features_to_hdf5(
             sorting_h5,
             n_jobs=n_jobs,

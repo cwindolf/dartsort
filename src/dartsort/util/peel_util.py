@@ -27,7 +27,6 @@ def run_peeler(
     fit_only: bool = False,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
-    shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -68,9 +67,10 @@ def run_peeler(
         return
 
     # run main
-    n_resid_now = featurization_cfg.n_residual_snips * int(
-        not featurization_cfg.residual_later
-    )
+    is_subsampling = stop_after_n_spikes is not None
+    is_subsampling = is_subsampling and ensure_coverage != 1.0
+    n_resid_snips = peeler.fit_sampling_cfg.n_residual_snips
+    n_resid_now = 0 if is_subsampling else n_resid_snips
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -81,10 +81,9 @@ def run_peeler(
         total_residual_snips=n_resid_now,
         stop_after_n_waveforms=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
-        shuffle=featurization_cfg.shuffle or shuffle,
+        shuffle=is_subsampling,
     )
-
-    if featurization_cfg.residual_later:
+    if n_resid_snips and is_subsampling:
         peeler.run_subsampled_peeling(
             output_hdf5_filename,
             chunk_length_samples=peeler.spike_length_samples,
@@ -92,7 +91,7 @@ def run_peeler(
             skip_features=True,
             ignore_resuming=True,
             computation_cfg=computation_cfg,
-            n_chunks=featurization_cfg.n_residual_snips,
+            n_chunks=n_resid_snips,
             task_name="Residual snips",
             overwrite=False,
             ordered=True,

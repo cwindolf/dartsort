@@ -118,7 +118,6 @@ class FeaturizationConfig:
 
     skip: bool = False
     extract_radius: float = 100.0
-    shuffle: bool = False
 
     # -- denoising configuration
     do_nn_denoise: bool = False
@@ -126,10 +125,6 @@ class FeaturizationConfig:
     do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
-
-    # -- residual snips
-    n_residual_snips: int = 4 * 4096
-    residual_later: bool = False
 
     # -- featurization configuration
     save_input_voltages: bool = True
@@ -275,6 +270,7 @@ default_fit_max_reweighting = 4.0
 class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
+    n_residual_snips: int = 4 * 4096
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
     fit_sampling: FitSamplingMethod = "amp_reweighted"
@@ -1258,7 +1254,6 @@ unshifted_raw_template_cfg = TemplateConfig(
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
     do_enforce_decrease=False,
-    n_residual_snips=0,
     save_input_tpca_projs=False,
     save_amplitudes=False,
     do_localization=False,
@@ -1266,4 +1261,4 @@ waveforms_only_featurization_cfg = FeaturizationConfig(
     save_input_voltages=True,
     save_input_waveforms=True,
 )
-skip_featurization_cfg = FeaturizationConfig(skip=True, n_residual_snips=0)
+skip_featurization_cfg = FeaturizationConfig(skip=True)

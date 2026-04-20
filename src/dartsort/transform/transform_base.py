@@ -183,8 +183,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
         channels: torch.Tensor,
         **spike_data: torch.Tensor,
     ):
-        del waveforms, spike_data
-        # returns dict {key=feat name, value=feature}
+        del waveforms, spike_data, channels
+        # returns dict {feat name: feature, ...}
         raise NotImplementedError
 
     @property

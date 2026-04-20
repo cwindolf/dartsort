@@ -9,6 +9,7 @@ import spikeinterface.core as sc
 import torch
 from dartsort.util.internal_config import (
     FeaturizationConfig,
+    FitSamplingConfig,
     SubtractionConfig,
     ComputationConfig,
 )
@@ -96,12 +97,11 @@ def test_fakedata_nonn(tmp_path):
         labels.append(np.full((spikes_per_unit,), i))
     times = np.concatenate(sts)
     labels = np.concatenate(labels)
-    gt_times = np.sort(times) + 42
 
     # inject the spikes into a noise background
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, l in zip(times, labels):
-        rec[t : t + 121] += templates[l]
+    for t, ll in zip(times, labels):
+        rec[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec) > 80) >= 100
     assert np.sum(np.abs(rec) > 40) >= 50
 
@@ -119,7 +119,8 @@ def test_fakedata_nonn(tmp_path):
         first_denoiser_spatial_jitter=0,
         first_denoiser_temporal_jitter=0,
     )
-    featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
+    featconf = FeaturizationConfig(do_nn_denoise=False)
+    sampconf = FitSamplingConfig(n_residual_snips=8)
     nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
@@ -136,6 +137,7 @@ def test_fakedata_nonn(tmp_path):
             output_dir=tempdir,
             featurization_cfg=featconf,
             subtraction_cfg=subconf,
+            sampling_cfg=sampconf,
             overwrite=True,
         )
         assert st is not None
@@ -164,6 +166,7 @@ def test_fakedata_nonn(tmp_path):
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=featconf,
+            sampling_cfg=sampconf,
             subtraction_cfg=subconf,
             overwrite=False,
         )
@@ -184,6 +187,9 @@ def test_fakedata_nonn(tmp_path):
                 featconf.tpca_rank,
                 channel_index.shape[1],
             )
+            assert h5["residual"].shape[0] == 8
+            assert h5["residual"].shape[1] == 121
+            assert h5["residual"].shape[2] == geom.shape[0]
 
         # test overwrite
         print("overwrite")
@@ -360,9 +366,7 @@ def test_small_nonn(tmp_path, nn_localization):
             do_nn_denoise=False, denoise_only=True
         ),
     )
-    featconf = FeaturizationConfig(
-        do_nn_denoise=False, n_residual_snips=8, nn_localization=nn_localization
-    )
+    featconf = FeaturizationConfig(do_nn_denoise=False, nn_localization=nn_localization)
 
     print("No parallel")
     with tempfile.TemporaryDirectory(
@@ -377,16 +381,16 @@ def test_small_nonn(tmp_path, nn_localization):
         )
         assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
-            l = None
+            ll = None
             for k in h5.keys():
                 if k in fixedlenkeys:
                     continue
                 ds = cast(h5py.Dataset, h5[k])
                 if ds.ndim < 1:
                     continue
-                if l is None:
-                    l = ds.shape[0]
-                assert l == ds.shape[0], f"{k} {l}, {ds}"
+                if ll is None:
+                    ll = ds.shape[0]
+                assert ll == ds.shape[0], f"{k} {ll}, {ds}"
 
     print("CPU parallel")
     with tempfile.TemporaryDirectory(
