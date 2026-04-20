@@ -403,7 +403,7 @@ def _add_tpca_and_nn(fc, wc, fs):
             )
         )
 
-    if combine or not do_feats:
+    if combine:
         # that was it, all in one as discussed above.
         return more
 

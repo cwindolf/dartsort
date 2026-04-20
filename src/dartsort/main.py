@@ -346,7 +346,6 @@ def _dartsort_impl(
             model_subdir=f"matching{step}_models",
             previous_detection_cfg=previous_detection_cfg,
             prev_step_name=f"refined{step - 1}",
-            skip_resid_snips=is_final and is_subsampling,
             save_cfg=cfg,
         )
         logger.info(f"Matching step {step}: {sorting}")

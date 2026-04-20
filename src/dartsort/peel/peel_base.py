@@ -777,29 +777,28 @@ class BasePeeler(BModule):
         self,
         hdf5_filename,
         chunk_length_samples=None,
+        n_chunks: int | None = None,
         residual_to_h5=False,
         skip_features=False,
         ignore_resuming=False,
-        n_chunks=None,
-        t_start=None,
-        t_end=None,
+        skip_last=False,
         computation_cfg=None,
         task_name=None,
         overwrite=True,
         ordered=False,
-        skip_last=False,
         show_progress=True,
     ):
-        # run peeling on these chunks to the temp folder
-        chunk_starts = self.get_chunk_starts(
-            subsampled=True,
-            chunk_length_samples=chunk_length_samples,
-            t_start=t_start,
-            t_end=t_end,
-            n_chunks=n_chunks,
-            ordered=ordered,
-            skip_last=skip_last,
-        )
+        if n_chunks is not None:
+            chunk_starts = self.get_chunk_starts(
+                chunk_length_samples=chunk_length_samples,
+                subsampled=True,
+                n_chunks=n_chunks,
+                ordered=ordered,
+                skip_last=skip_last,
+            )
+        else:
+            assert not ordered
+            chunk_starts = None
         return self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
@@ -812,6 +811,7 @@ class BasePeeler(BModule):
             overwrite=overwrite,
             task_name=task_name,
             show_progress=show_progress,
+            shuffle=chunk_starts is None,
         )
 
     def save_models(self, save_folder):
