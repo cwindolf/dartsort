@@ -346,6 +346,7 @@ def _dartsort_impl(
             model_subdir=f"matching{step}_models",
             previous_detection_cfg=previous_detection_cfg,
             prev_step_name=f"refined{step - 1}",
+            skip_resid_snips=is_final and is_subsampling,
             save_cfg=cfg,
         )
         logger.info(f"Matching step {step}: {sorting}")
@@ -529,6 +530,7 @@ def match(
     ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
+    skip_resid_snips=False,
     show_progress=True,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
@@ -597,6 +599,7 @@ def match(
         ensure_coverage=ensure_coverage,
         overwrite=overwrite,
         residual_filename=residual_filename,
+        skip_resid_snips=skip_resid_snips,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )

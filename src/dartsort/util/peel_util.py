@@ -23,6 +23,7 @@ def run_peeler(
     chunk_starts_samples: np.ndarray | None = None,
     overwrite: bool = False,
     residual_filename: str | Path | None = None,
+    skip_resid_snips: bool = False,
     show_progress: bool = True,
     fit_only: bool = False,
     stop_after_n_spikes: int | None = None,
@@ -69,7 +70,7 @@ def run_peeler(
     # run main
     is_subsampling = stop_after_n_spikes is not None
     is_subsampling = is_subsampling and ensure_coverage != 1.0
-    n_resid_snips = peeler.fit_sampling_cfg.n_residual_snips
+    n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
     n_resid_now = 0 if is_subsampling else n_resid_snips
     peeler.peel(
         output_hdf5_filename,
