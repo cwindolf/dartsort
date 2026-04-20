@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
     is_multi = True
+    needs_residual = True
 
     def __init__(
         self,
@@ -100,6 +101,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
                 self.loc_ds: spike_data[self.loc_ds],
             },
             sampling_frequency=recording.sampling_frequency,
+            parent_h5_path=spike_data["hdf5_filename"],
         )
 
         # build clusterer

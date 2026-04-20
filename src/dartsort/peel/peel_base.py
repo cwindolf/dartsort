@@ -658,6 +658,20 @@ class BasePeeler(BModule):
                     computation_cfg=computation_cfg,
                     task_name="Load examples for feature fitting",
                 )
+                if featurization_pipeline.needs_residual():
+                    self.run_subsampled_peeling(
+                        temp_hdf5_filename,
+                        chunk_length_samples=self.spike_length_samples,
+                        residual_to_h5=True,
+                        skip_features=True,
+                        ignore_resuming=True,
+                        computation_cfg=computation_cfg,
+                        n_chunks=self.fit_sampling_cfg.n_residual_snips,
+                        task_name="Residual snips",
+                        overwrite=False,
+                        ordered=True,
+                        skip_last=True,
+                    )
 
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
@@ -673,6 +687,7 @@ class BasePeeler(BModule):
                     fixed_property_keys=self.fixed_property_keys,
                     device=device,
                 )
+                fixed_properties["hdf5_filename"] = temp_hdf5_filename  # type: ignore
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 

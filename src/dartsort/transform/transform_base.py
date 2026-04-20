@@ -17,6 +17,7 @@ class BaseWaveformModule(BModule):
     is_denoiser = False
     is_featurizer = False
     default_name = ""
+    needs_residual = False
 
     def __init__(
         self,

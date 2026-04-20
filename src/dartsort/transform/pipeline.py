@@ -175,6 +175,9 @@ class WaveformPipeline(torch.nn.Module):
         for t in self.transformers:
             t.attach_motion(motion)
 
+    def needs_residual(self):
+        return any(t.needs_residual for t in self.transformers)
+
     def forward(self, waveforms, **fixed_properties):
         """
         fixed_properties usually contains max_channels, and may contain other relevant
