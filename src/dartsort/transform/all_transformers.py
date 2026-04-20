@@ -1,4 +1,4 @@
-import torch
+import torch.serialization
 
 from .amortized_localization import AmortizedLocalization
 from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude, Voltage
@@ -8,6 +8,7 @@ from .fixed_prop import FixedProperty
 from .interp import WaveformInterpolator
 from .localize import Localization, PointSourceLocalization
 from .matching_denoiser import DebugMatchingPursuitDenoiser
+from .mixture_classifier import TruncatedMixtureModelTransformer
 from .pipeline import WaveformPipeline
 from .single_channel_denoiser import (
     SingleChannelDenoiser,
@@ -21,32 +22,33 @@ from .temporal_pca import (
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
 )
-from .transform_base import Passthrough, Waveform, BaseWaveformModule
+from .transform_base import BaseWaveformModule, Passthrough, Waveform
 from .whiten import WaveformWhitener
 
 all_transformers: list[type[BaseWaveformModule]] = [
-    Waveform,
+    AmortizedLocalization,
     AmplitudeVector,
-    MaxAmplitude,
+    AmplitudeFeatures,
+    BaseTemporalPCA,
+    DebugMatchingPursuitDenoiser,
+    Decollider,
     EnforceDecrease,
     FixedProperty,
+    FullProbeTemporalPCAEmbedder,
+    Localization,
+    MaxAmplitude,
+    Passthrough,
+    PointSourceLocalization,
     SingleChannelWaveformDenoiser,
-    BaseTemporalPCA,
+    SupervisedDenoiser,
+    TemporalPCA,
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
-    TemporalPCA,
-    Localization,
-    PointSourceLocalization,
-    AmortizedLocalization,
-    AmplitudeFeatures,
+    TruncatedMixtureModelTransformer,
     Voltage,
-    Decollider,
-    SupervisedDenoiser,
-    Passthrough,
-    DebugMatchingPursuitDenoiser,
     WaveformInterpolator,
-    FullProbeTemporalPCAEmbedder,
     WaveformWhitener,
+    Waveform,
 ]
 
 transformers_by_class_name = {cls.__name__: cls for cls in all_transformers}

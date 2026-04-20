@@ -126,6 +126,7 @@ def test_all_transformers():
         "TemplateWaveformReducer",
         "FullProbeTemporalPCAEmbedder",
         "WaveformWhitener",
+        "TruncatedMixtureModelTransformer",
     }
     class_names_and_kwargs = [
         (name, {"name_prefix": j, **smoke_test_kwargs.get(name, {})})

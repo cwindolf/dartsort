@@ -1,6 +1,6 @@
 """Fit and apply the GMM of clustering/mixture.py as a transform node."""
 
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 import torch
 import numpy as np
@@ -14,6 +14,10 @@ from ..util.internal_config import (
 )
 from ..util.motion import MotionInfo
 from .transform_base import BaseWaveformFeaturizer
+
+if TYPE_CHECKING:
+    from ..clustering.mixture import MixtureModelAndDatasets, TruncatedMixtureModel
+    from ..util.interpolation_util import StableFeaturesInterpolator
 
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
@@ -78,10 +82,10 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         labels = spike_data.get("labels")
         if labels is None:
             assert self.clustering_cfg is not None
-        self.pca_ds = self.clustering_features_cfg.pca_dataset_name
         amp_ds = self.clustering_features_cfg.amplitudes_dataset_name
-        self.loc_ds = self.clustering_features_cfg.localizations_dataset_name
         volt_ds = self.clustering_features_cfg.voltages_dataset_name
+        self.pca_ds = self.clustering_features_cfg.pca_dataset_name
+        self.loc_ds = self.clustering_features_cfg.localizations_dataset_name
         sorting = DARTsortSorting(
             times_samples=spike_data["times_samples"],
             channels=channels,
@@ -122,15 +126,15 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             computation_cfg=computation_cfg,
         )
 
-        mix_data = clus.get_tmm(
+        mix_data: "MixtureModelAndDatasets" = clus.get_tmm(
             features=simple_features,
             stable_features=stable_features,
             sorting=sorting,
             motion=self.motion,
         )
 
-        self.erp = stable_features.erp
-        self.tmm = mix_data.tmm
+        self.erp: StableFeaturesInterpolator = stable_features.erp
+        self.tmm: "TruncatedMixtureModel" = mix_data.tmm
         self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.obs_ix.clone())
         self.workers = computation_cfg.actual_n_jobs(small=True)
         neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
@@ -182,12 +186,12 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             candidates=candidates,
             neighborhood_ids=neighborhood_ids,
             n_candidates=self.n_candidates,
-            candidate_count=cand_count.item(),
+            candidate_count=int(cand_count.item()),
             duties=None,
         )
 
         return {
-            "gmm_candidates": scores.candidates,
+            "gmm_candidates": scores.candidates.to(dtype=torch.int16),
             "gmm_log_liks": scores.log_liks,
             "gmm_responsibilities": scores.responsibilities,
         }
