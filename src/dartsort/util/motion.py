@@ -402,6 +402,7 @@ def threshold_for_motion(
     # load previous denoisers if possible, stack on features
     # else fall back to a more default-like feat cfg
     rad = motion_cfg.localization_radius_um
+    sampling_cfg = replace(sampling_cfg, n_residual_snips=0)
     featurization_cfg = FeaturizationConfig(
         save_input_tpca_projs=False,
         save_collidedness=False,
