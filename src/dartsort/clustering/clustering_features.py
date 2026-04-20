@@ -8,7 +8,7 @@ from torch import Tensor
 from ..util.data_util import DARTsortSorting
 from ..util.drift_util import get_stable_channels
 from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
-from ..util.interpolation_util import SpikeNeighborhoods, interpolate_by_chunk
+from ..util.interpolation_util import SpikeNeighborhoods, StableFeaturesInterpolator, interpolate_by_chunk
 from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
@@ -120,7 +120,7 @@ class SimpleMatrixFeatures:
             mask = np.broadcast_to(mask, len(schan))
             if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
                 pcs = getattr(sorting, clustering_features_cfg.pca_dataset_name)
-                pcs = interpolate_by_chunk(
+                erp, pcs = interpolate_by_chunk(
                     mask=mask,
                     dataset=pcs,
                     geom=motion.geom,
@@ -135,7 +135,7 @@ class SimpleMatrixFeatures:
             else:
                 assert sorting.parent_h5_path is not None
                 with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                    pcs = interpolate_by_chunk(
+                    erp, pcs = interpolate_by_chunk(
                         mask=mask,
                         dataset=h5[clustering_features_cfg.pca_dataset_name],
                         geom=motion.geom,
@@ -189,6 +189,7 @@ class StableWaveformFeatures:
     # n, rank, nc_extract
     features: Tensor
     neighborhoods: SpikeNeighborhoods
+    erp: StableFeaturesInterpolator
 
     @classmethod
     def from_config(
@@ -222,7 +223,7 @@ class StableWaveformFeatures:
 
         if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
             features = getattr(sorting, clustering_features_cfg.pca_dataset_name)
-            features = interpolate_by_chunk(
+            erp, features = interpolate_by_chunk(
                 mask=np.ones(len(sorting), dtype=np.bool_),
                 dataset=features,
                 geom=motion.geom,
@@ -238,7 +239,7 @@ class StableWaveformFeatures:
         else:
             assert sorting.parent_h5_path is not None
             with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                features = interpolate_by_chunk(
+                erp, features = interpolate_by_chunk(
                     mask=np.ones(len(sorting), dtype=np.bool_),
                     dataset=h5[clustering_features_cfg.pca_dataset_name],
                     geom=motion.geom,
@@ -256,6 +257,7 @@ class StableWaveformFeatures:
             channels=channels,
             features=torch.asarray(features),
             neighborhoods=spike_neighborhoods,
+            erp=erp,
         )
 
 

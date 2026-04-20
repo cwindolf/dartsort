@@ -361,6 +361,13 @@ class NeighborhoodLUT:
             return False
         return torch.equal(self.lut, other.lut)
 
+    def full_proposal_candidates(self, pad_shape_to: int | None = None) -> Tensor:
+        n_proposed = max_units_per_neighb(self)
+        if pad_shape_to is not None:
+            n_proposed = max(n_proposed, pad_shape_to)
+        proposals = full_proposal_by_neighb(self, n_proposed)
+        return proposals
+
 
 def lut_blank_units(lut: NeighborhoodLUT) -> Tensor:
     return (lut.lut == lut.unit_ids.shape[0]).all(1).nonzero(as_tuple=True)[0]
@@ -840,7 +847,7 @@ class SpikeDataBatch:
     # x, CmoCooinvx are not needed for soft_assign/score, so they can be None.
     """
 
-    batch: Tensor | slice
+    batch: Tensor | slice | None
     neighborhood_ids: Tensor
     xt: Tensor | None
     candidates: Tensor
@@ -1766,10 +1773,9 @@ class FullProposalDataView(BatchedSpikeData):
     def from_truncated_spike_data(
         cls, data: TruncatedSpikeData, un_adj_lut: NeighborhoodLUT
     ) -> Self:
-        n_proposed = max_units_per_neighb(un_adj_lut)
-        n_proposed = max(data.n_candidates, n_proposed)
+        proposals = un_adj_lut.full_proposal_candidates(pad_shape_to=data.n_candidates)
+        n_proposed = proposals.shape[1]
         n_explore = n_proposed - data.n_candidates
-        proposals = full_proposal_by_neighb(un_adj_lut, n_proposed)
         self = cls(n_explore=n_explore, data=data, proposals=proposals)
         return self
 
@@ -2435,6 +2441,33 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
             scores.append(batch_scores)
         return concatenate_scores(scores)
+
+    def score_features(
+        self,
+        features: Tensor,
+        candidates: Tensor,
+        neighborhood_ids: Tensor,
+        n_candidates: int,
+        candidate_count: int | None,
+        duties: Tensor | None,
+    ) -> Scores:
+        wx, noise_logliks = _whiten_and_noise_score_batch(
+            x=features, neighb_ids=neighborhood_ids, neighb_cov=self.neighb_cov
+        )
+        batch = SpikeDataBatch(
+            batch=None,
+            neighborhood_ids=neighborhood_ids,
+            xt=None,
+            candidates=candidates,
+            whitenedx=wx,
+            noise_logliks=noise_logliks,
+            duties=duties,
+            CmoCooinvx=None,
+            candidate_count=candidate_count,
+        )
+        return self.score_batch(
+            batch=batch, n_candidates=n_candidates, allow_blanks=True
+        )
 
     def score_batch(
         self,
