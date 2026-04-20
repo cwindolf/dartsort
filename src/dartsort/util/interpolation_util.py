@@ -137,7 +137,7 @@ def interpolate_by_chunk(
             allow_destroy=True,
         ).to(out)
 
-    return out
+    return erp, out
 
 
 def interp_precompute(
@@ -997,6 +997,8 @@ class StableFeaturesInterpolator(BModule):
         # allows per-channel shifts with 2d input
         if source_shifts.ndim == 1:
             source_shifts = source_shifts.unsqueeze(1)
+
+        # handle x/z disp (wow, lol)
         if self.shift_dim == 0:
             source_shifts = torch.stack(
                 [source_shifts, torch.zeros_like(source_shifts)], dim=-1

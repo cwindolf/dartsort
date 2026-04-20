@@ -120,7 +120,6 @@ class MetricColumn(VersusPlot):
         if self.box and self.box_x_cuts:
             bins = [0] + self.box_x_cuts + [int(np.ceil(df[x].max().item()))]
             df = df.copy(deep=False)
-            edge_strs = [f"{int(b)}" for b in bins]
             bin_strs = np.array([f"{a}-{b}" for a, b in zip(bins, bins[1:])])
             binix = np.searchsorted(bins, df[x].values, side="right") - 1
             assert binix.min() >= 0

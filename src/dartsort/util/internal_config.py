@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from dataclasses import asdict, field, fields, replace
+from dataclasses import asdict, fields, replace
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Literal, Self
@@ -586,15 +586,6 @@ class MotionEstimationConfig:
 
 
 @cfg_dataclass
-class SplitConfig:
-    split_strategy: str = "FeatureSplit"
-    recursive_split: bool = True
-    split_strategy_kwargs: dict | None = field(
-        default_factory=lambda: dict(max_spikes=20_000)
-    )
-
-
-@cfg_dataclass
 class ClusteringFeaturesConfig:
     # simple matrix feature controls
     use_x: bool = True
@@ -615,15 +606,16 @@ class ClusteringFeaturesConfig:
     # stable feature controls
     feature_rank: int = 8
 
+    # interpolation, drift handling
+    interp_params: InterpolationParams = tps_interp_params
+    motion_depth_mode: Literal["channel", "localization"] = "channel"
+
+    # attribute name registry
     amplitudes_dataset_name: str = "denoised_ptp_amplitudes"
     voltages_dataset_name: str = "collisioncleaned_voltages"
     amplitude_vectors_dataset_name: str = "denoised_ptp_amplitude_vectors"
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
-
-    # interpolation, drift handling
-    interp_params: InterpolationParams = tps_interp_params
-    motion_depth_mode: Literal["channel", "localization"] = "channel"
 
 
 @cfg_dataclass

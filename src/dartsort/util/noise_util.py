@@ -1178,6 +1178,12 @@ def interpolate_residual_snippets(
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
 
+    # allow out of order residual sampling
+    order = np.argsort(times_s_np)
+    if not np.array_equal(order, np.arange(len(order))):
+        times_s_np = times_s_np[order]
+        snippets = snippets[order]
+
     # tpca project
     if do_tpca:
         if tpca is None:

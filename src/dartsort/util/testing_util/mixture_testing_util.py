@@ -5,7 +5,6 @@ from typing import Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import adjusted_rand_score
 
 
 def simulate_moppca(
@@ -111,7 +110,7 @@ def simulate_moppca(
         freq = rg.uniform(0.2, 1.0, size=(K, rank, 1, M))
         amp = rg.uniform(1.0, 2.0, size=(K, rank, 1, M))
         domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
-        W = amp * np.exp(-(np.sin(phase + freq * domain[:, None])**2))
+        W = amp * np.exp(-(np.sin(phase + freq * domain[:, None]) ** 2))
     elif t_w == "zero":
         W = np.zeros((K, rank, nc, M))
     else:
@@ -203,7 +202,6 @@ def simulate_moppca(
         rank=rank,
     )
     _tpca = _tpca.to(device)
-    splits = rg.binomial(1, p=0.3, size=N)
 
     prgeom = 15.0 * torch.arange(nc, dtype=torch.float)
     prgeom = torch.stack((torch.zeros(nc), prgeom), dim=1)
@@ -213,6 +211,7 @@ def simulate_moppca(
         channels=channels,
         features=x,
         neighborhoods=neighbs,
+        erp=None,  # type: ignore
     )
 
     x = x.to(device)
@@ -239,7 +238,6 @@ def simulate_moppca(
         noise_log_priors=noise_log_priors,
         n_channels=nc,
     )
-
 
 
 def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
@@ -278,4 +276,3 @@ def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
 
     muerr = mu - umu
     return muerr, werr
-
