@@ -170,6 +170,7 @@ class BaseWaveformDenoiser(BaseWaveformModule):
 class BaseWaveformFeaturizer(BaseWaveformModule):
     is_featurizer = True
     is_multi = False
+    saving = True
     # output shape per waveform
     shape: tuple | list[tuple] = ()
     # output dtye
@@ -188,6 +189,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
 
     @property
     def spike_datasets(self) -> Iterable[SpikeDataset]:
+        if not self.saving:
+            return ()
         if self.is_multi:
             assert isinstance(self.dtype, (list, tuple))
             datasets = [

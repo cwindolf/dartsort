@@ -331,7 +331,7 @@ def featurization_config_to_class_names_and_kwargs(
             ("Waveform", {"name_prefix": fc.output_waveforms_name})
         )
 
-    if fc.save_output_tpca_projs:
+    if fc.save_output_tpca_projs or fc.compute_input_tpca_projs_regardless:
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
@@ -340,6 +340,7 @@ def featurization_config_to_class_names_and_kwargs(
                     "name_prefix": fc.output_waveforms_name,
                     "centered": fc.tpca_centered,
                     "fit_radius": fc.tpca_fit_radius,
+                    "save_feature": fc.save_output_tpca_projs,
                 },
             )
         )
@@ -358,14 +359,17 @@ def _add_tpca_and_nn(fc, wc, fs):
     # we can combine the tpca featurization and denoising into one step
     # it's not exactly equivalent, since the denoiser would have run on the full
     # time length, but it's close enough
+    need_input_tpca_projs = (
+        fc.compute_input_tpca_projs_regardless or fc.save_input_tpca_projs
+    )
     combine = (
         do_feats
-        and fc.save_input_tpca_projs
+        and need_input_tpca_projs
         and not (
             fc.do_nn_denoise or fc.save_output_waveforms or fc.save_output_tpca_projs
         )
     )
-    if combine or (do_feats and fc.save_input_tpca_projs):
+    if combine or (do_feats and need_input_tpca_projs):
         tslice = fc.input_tpca_waveform_cfg.relative_slice(wc, fs)
         more.append(
             (
@@ -377,6 +381,7 @@ def _add_tpca_and_nn(fc, wc, fs):
                     "temporal_slice": tslice,
                     "max_waveforms": fc.tpca_max_waveforms,
                     "fit_radius": fc.tpca_fit_radius,
+                    "save_feature": fc.save_input_tpca_projs,
                 },
             )
         )

@@ -30,6 +30,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         sampling_frequency: float = 30_000.0,
         rank=8,
+        save_feature: bool = True,
         whiten=False,
         centered=False,
         fit_radius=None,
@@ -57,6 +58,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         )
 
         # behavior
+        self.saving = save_feature 
         self.rank = rank
         self.centered = centered
         self.whiten = whiten

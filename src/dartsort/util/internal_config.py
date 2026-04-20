@@ -135,6 +135,8 @@ class FeaturizationConfig:
     save_input_voltages: bool = True
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
+    compute_input_tpca_projs_regardless: bool = False
+    save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
     save_collidedness: bool = False
@@ -151,7 +153,6 @@ class FeaturizationConfig:
     localization_noise_floor: bool = False
 
     # -- further info about denoising
-    # in the future we may add multi-channel or other nns
     nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
     nn_denoiser_pretrained_path: str | None = default_pretrained_path
     nn_denoiser_train_epochs: int = 100
