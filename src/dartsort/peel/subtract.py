@@ -134,7 +134,7 @@ class SubtractionPeeler(BasePeeler):
         datasets = super().out_datasets()
 
         if self.save_iteration:
-            datasets.append(SpikeDataset("iteration", (), "int32"))
+            datasets.append(SpikeDataset("iteration", (), "int16"))
         if self.p.realign_to_denoiser:
             datasets.append(SpikeDataset("time_shifts", (), "int16"))
         if self.save_residnorm_decrease:

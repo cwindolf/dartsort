@@ -2,7 +2,7 @@ import gc
 import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 from dredge.motion_util import MotionEstimate
@@ -54,6 +54,7 @@ from .util.main_util import (
     ds_save_intermediate_labels,
     ds_save_motion,
     motion_needs_peaks,
+    _matching_step_cfgs,
 )
 from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
@@ -321,12 +322,11 @@ def _dartsort_impl(
         else:
             previous_detection_cfg = cfg.matching_cfg
 
-        if is_final:
-            _nspk = None
-            _pres = 1.0
-        else:
-            _nspk = cfg.subsampling_spikes
-            _pres = cfg.subsampling_presence
+        _nspk = None if is_final else cfg.subsampling_spikes
+        _pres = 1.0 if is_final else cfg.subsampling_presence
+        step_clus_cfg, step_ref_cfgs, step_feat_cfg = _matching_step_cfgs(
+            is_final, is_subsampling, cfg
+        )
 
         logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(
@@ -336,7 +336,7 @@ def _dartsort_impl(
             motion=motion,
             template_cfg=cfg.template_cfg,
             waveform_cfg=cfg.waveform_cfg,
-            featurization_cfg=cfg.featurization_cfg,
+            featurization_cfg=step_feat_cfg,
             matching_cfg=cfg.matching_cfg,
             overwrite=overwrite,
             computation_cfg=cfg.computation_cfg,
@@ -355,38 +355,19 @@ def _dartsort_impl(
         if is_final and not cfg.final_refinement:
             break
 
-        if cfg.recluster_after_first_matching:
-            step_clustering_cfg = cfg.clustering_cfg
-            step_features_cfg = cfg.clustering_features_cfg
-        else:
-            step_clustering_cfg = step_features_cfg = None
-
-        if is_final and cfg.agglomerate_cfg is not None:
-            r_cfgs = [
-                cfg.pre_refinement_cfg,
-                cfg.refinement_cfg,
-                cfg.agglomerate_cfg,
-                cfg.post_refinement_cfg,
-            ]
-        else:
-            r_cfgs = [
-                cfg.pre_refinement_cfg,
-                cfg.refinement_cfg,
-                cfg.post_refinement_cfg,
-            ]
-
-        sorting = cluster(
-            recording=recording,
-            sorting=sorting,
-            motion=motion,
-            refinement_cfgs=r_cfgs,
-            clustering_cfg=step_clustering_cfg,
-            clustering_features_cfg=step_features_cfg,
-            _save_cfg=cfg,
-            _save_dir=output_dir,
-            _save_initial_name=f"recluster{step}",
-            _save_refined_name_fmt=f"refined{step}{{stepname}}",
-        )
+        if step_clus_cfg or step_ref_cfgs is not None and len(step_ref_cfgs):
+            sorting = cluster(
+                recording=recording,
+                sorting=sorting,
+                motion=motion,
+                refinement_cfgs=step_ref_cfgs,
+                clustering_cfg=step_clus_cfg,
+                clustering_features_cfg=cfg.clustering_features_cfg,
+                _save_cfg=cfg,
+                _save_dir=output_dir,
+                _save_initial_name=f"recluster{step}",
+                _save_refined_name_fmt=f"refined{step}{{stepname}}",
+            )
         ds_save_intermediate_labels(
             step_name=f"refined{step}",
             step_sorting=sorting,
@@ -692,7 +673,7 @@ def cluster(
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
     ) = default_clustering_features_cfg,
-    refinement_cfgs: list[RefinementConfig | None] | None = None,
+    refinement_cfgs: Sequence[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
     features: SimpleMatrixFeatures | None = None,
     *,

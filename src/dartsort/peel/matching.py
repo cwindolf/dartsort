@@ -138,8 +138,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         datasets = super().out_datasets()
         datasets.extend(
             [
-                SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
+                SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int32),
+                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int32),
                 SpikeDataset(name="scores", shape_per_spike=(), dtype=np.float32),
             ]
         )
@@ -151,7 +151,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             )
         if self.is_upsampling:
             datasets.append(
-                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int64)
+                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int8)
             )
             datasets.append(
                 SpikeDataset(name="time_shifts", shape_per_spike=(), dtype=np.int8),

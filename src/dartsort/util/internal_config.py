@@ -165,6 +165,13 @@ class FeaturizationConfig:
     tpca_max_waveforms: int = 40_000
     tpca_from_templates: bool = True
 
+    # mixture model
+    use_gmm_classifier: bool = False
+    pre_gmm_clustering_cfg: "ClusteringConfig | None" = None
+    pre_gmm_refinement_cfgs: "Sequence[RefinementConfig | None] | None" = None
+    gmm_refinement_cfg: "RefinementConfig | None" = None
+    gmm_clustering_features_cfg: "ClusteringFeaturesConfig | None" = None
+
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
     output_waveforms_name: str = "denoised"

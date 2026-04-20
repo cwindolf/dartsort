@@ -1,5 +1,5 @@
 import gc
-from typing import Literal, Self, cast
+from typing import Literal, Self, Sequence, cast
 
 import numpy as np
 import sklearn.cluster
@@ -27,7 +27,7 @@ refinement_strategies: dict[str, "type[Refinement]"] = {}
 
 def get_clusterer(
     clustering_cfg: ClusteringConfig | None = None,
-    refinement_cfgs: list[RefinementConfig | None] | None = None,
+    refinement_cfgs: Sequence[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     save_cfg=None,

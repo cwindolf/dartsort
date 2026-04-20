@@ -34,7 +34,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         motion: MotionInfo,
         clustering_cfg: ClusteringConfig | None,
         clustering_features_cfg: ClusteringFeaturesConfig,
-        pre_gmm_refinement_cfgs: Sequence[RefinementConfig] | None,
+        pre_gmm_refinement_cfgs: Sequence[RefinementConfig | None] | None,
         gmm_refinement_cfg: RefinementConfig,
         waveform_cfg: WaveformConfig,
         sampling_frequency: float = 30_000.0,
@@ -46,7 +46,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.gmm_refinement_cfg = gmm_refinement_cfg
 
         assert name is None
-        name = ("gmm_candidates", "gmm_log_liks", "gmm_responsibilities")
+        name = ("labels", "gmm_candidates", "gmm_log_liks", "gmm_responsibilities")
         super().__init__(
             channel_index=channel_index,
             geom=geom,
@@ -60,8 +60,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.motion_depth_mode = clustering_features_cfg.motion_depth_mode
         assert gmm_refinement_cfg.robust_strategy == "none"  # not implemented atm
         self.n_candidates = ncand
-        self.shape = [(ncand,), (ncand + 1,), (ncand + 1,)]
-        self.dtype = [torch.int16, torch.float32, torch.float32]
+        self.shape = [(), (ncand,), (ncand + 1,), (ncand + 1,)]
+        self.dtype = [torch.int32, torch.int32, torch.float32, torch.float32]
         self.motion: MotionInfo | None = None
         self.channel_index_np = self.b.channel_index.numpy(force=True)
         self.workers = 1
@@ -193,7 +193,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         )
 
         return {
-            "gmm_candidates": scores.candidates.to(dtype=torch.int16),
+            "labels": scores.candidates[:, 0].to(dtype=torch.int32),
+            "gmm_candidates": scores.candidates.to(dtype=torch.int32),
             "gmm_log_liks": scores.log_liks,
             "gmm_responsibilities": scores.responsibilities,
         }

@@ -251,27 +251,24 @@ def template_distances(
     )
 
 
-def _get_non_train_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
-    is_train = getattr(sorting, "gmm_train", None)
+def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
     cand = getattr(sorting, "gmm_candidates", None)
     log_liks = getattr(sorting, "gmm_log_liks", None)
     resp = getattr(sorting, "gmm_responsibilities", None)
 
-    assert is_train is not None
     assert cand is not None
     assert log_liks is not None
     assert resp is not None
 
-    not_train = torch.asarray(np.flatnonzero(np.logical_not(is_train)))
-    cand = torch.asarray(cand[not_train])
-    log_liks = torch.asarray(log_liks[not_train])
-    resp = torch.asarray(resp[not_train])
+    cand = torch.asarray(cand)
+    log_liks = torch.asarray(log_liks)
+    resp = torch.asarray(resp)
 
     scores = Scores(
         candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
     )
     assert sorting.labels is not None
-    labels = sorting.labels[not_train]
+    labels = sorting.labels
     return labels, scores
 
 
@@ -295,16 +292,16 @@ def qda(
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    ntlabels, ntscores = _get_non_train_scores(sorting)
+    glabels, gscores = _get_scores(sorting)
 
     if mask is None:
         mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)
 
     iou = np.zeros(mask.shape, dtype=np.float32)
     ctx = QDACtx(
-        inus=sparsify_labels(ntlabels),
-        cand=ntscores.candidates.numpy(force=True),
-        log_liks=ntscores.log_liks.numpy(force=True),
+        inus=sparsify_labels(glabels),
+        cand=gscores.candidates.numpy(force=True),
+        log_liks=gscores.log_liks.numpy(force=True),
         min_iou=min_iou,
         min_cov=min_cov,
         min_count=min_count,

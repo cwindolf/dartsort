@@ -336,7 +336,7 @@ def featurization_config_to_class_names_and_kwargs(
             ("Waveform", {"name_prefix": fc.output_waveforms_name})
         )
 
-    if fc.save_output_tpca_projs or fc.compute_input_tpca_projs_regardless:
+    if fc.save_output_tpca_projs:
         class_names_and_kwargs.append(
             (
                 "TemporalPCAFeaturizer",
@@ -345,13 +345,25 @@ def featurization_config_to_class_names_and_kwargs(
                     "name_prefix": fc.output_waveforms_name,
                     "centered": fc.tpca_centered,
                     "fit_radius": fc.tpca_fit_radius,
-                    "save_feature": fc.save_output_tpca_projs,
                 },
             )
         )
 
     # logic for grabbing localizations and amplitude vectors
     class_names_and_kwargs.extend(_add_localization_and_ampvec(featurization_cfg))
+
+    if fc.use_gmm_classifier:
+        class_names_and_kwargs.append(
+            (
+                "TruncatedMixtureModelTransformer",
+                {
+                    "clustering_cfg": fc.pre_gmm_clustering_cfg,
+                    "clustering_features_cfg": fc.gmm_clustering_features_cfg,
+                    "pre_gmm_refinement_cfgs": fc.pre_gmm_refinement_cfgs,
+                    "gmm_refinement_cfg": fc.gmm_refinement_cfg,
+                },
+            )
+        )
 
     return class_names_and_kwargs
 
@@ -391,7 +403,7 @@ def _add_tpca_and_nn(fc, wc, fs):
             )
         )
 
-    if combine:
+    if combine or not do_feats:
         # that was it, all in one as discussed above.
         return more
 
