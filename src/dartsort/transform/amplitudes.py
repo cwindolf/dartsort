@@ -208,5 +208,6 @@ class Voltage(BaseWaveformFeaturizer):
     def transform(self, waveforms, *, channels, **unused):
         waveforms_at_time = waveforms[:, self.trough_offset_samples]
         rel_inds = self.b.main_channel_relative_inds[channels]
+        waveforms_at_time = waveforms_at_time.to(device=rel_inds.device)
         v = waveforms_at_time.take_along_dim(rel_inds[:, None], dim=1)[:, 0]
         return {self.name: v}

@@ -24,6 +24,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         self,
         channel_index,
         geom=None,
+        waveform_cfg=None,
+        sampling_frequency=None,
         denoiser=None,
         batch_size=1024,
         in_place=False,

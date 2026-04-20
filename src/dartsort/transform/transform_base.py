@@ -215,7 +215,14 @@ class BaseWaveformAutoencoder(BaseWaveformDenoiser, BaseWaveformFeaturizer):
 
 class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
     def __init__(
-        self, pipeline=None, geom=None, channel_index=None, name=None, name_prefix=None
+        self,
+        pipeline=None,
+        geom=None,
+        channel_index=None,
+        name=None,
+        name_prefix=None,
+        waveform_cfg=None,
+        sampling_frequency=30_000.0,
     ):
         del geom, channel_index
         t = []

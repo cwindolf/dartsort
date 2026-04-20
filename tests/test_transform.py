@@ -10,20 +10,32 @@ from test_util import dense_layout
 from dartsort.transform import WaveformPipeline, transformers_by_class_name
 from dartsort.util.waveform_util import make_channel_index
 from dartsort.util.internal_config import default_waveform_cfg
+from dartsort.util.job_util import get_global_computation_config
 
 
-def _check_state_equal(d1, d2):
+def _check_state_equal(d1, d2, class_names_and_kwargs):
     for k1, v1 in d1.items():
         assert k1 in d2
         if isinstance(v1, dict):
-            _check_state_equal(v1, d2[k1])
+            try:
+                _check_state_equal(v1, d2[k1], class_names_and_kwargs)
+            except ValueError as e:
+                if k1.startswith("transformers."):
+                    tfix = int(k1.split(".")[1])
+                    raise ValueError(
+                        f"while recursing {k1=} ({class_names_and_kwargs[tfix]=})"
+                    ) from e
+                else:
+                    raise ValueError(f"while recursing {k1=}") from e
         elif torch.is_tensor(v1):
-            assert torch.equal(v1, d2[k1])
+            if not torch.equal(v1, d2[k1]):
+                raise ValueError(f"{k1}: {v1.shape=} tensor != {d2[k1].shape=} tensor")
         else:
-            assert v1 == d2[k1]
+            if v1 != d2[k1]:
+                raise ValueError(f"{k1}: {v1=} != {d2[k1]=}")
 
 
-def _check_saveload(geom, channel_index, pipeline):
+def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
     # check saving and loading before fit
     with tempfile.TemporaryDirectory() as tdir:
         pt = Path(tdir) / "pt.pt"
@@ -55,19 +67,25 @@ def _check_saveload(geom, channel_index, pipeline):
         orig_state_dict = pipeline.state_dict()
         torch.save(pipeline, pt)
         pipeline2 = torch.load(pt)
-        _check_state_equal(orig_state_dict, pipeline2.state_dict())
+        _check_state_equal(
+            orig_state_dict, pipeline2.state_dict(), class_names_and_kwargs
+        )
         assert pipeline2.needs_fit() == nf
 
         # now with state dict
         torch.save(pipeline.state_dict(), pt)
         pipeline.load_state_dict(torch.load(pt))
         assert pipeline.needs_fit() == nf
-        _check_state_equal(orig_state_dict, pipeline.state_dict())
+        _check_state_equal(
+            orig_state_dict, pipeline.state_dict(), class_names_and_kwargs
+        )
 
         # now tith from_state_dict_pt
         pipeline2 = WaveformPipeline.from_state_dict_pt(geom, channel_index, pt)
         assert pipeline2.needs_fit() == nf
-        _check_state_equal(orig_state_dict, pipeline2.state_dict())
+        _check_state_equal(
+            orig_state_dict, pipeline2.state_dict(), class_names_and_kwargs
+        )
 
 
 def test_all_transformers():
@@ -109,15 +127,16 @@ def test_all_transformers():
         "FullProbeTemporalPCAEmbedder",
         "WaveformWhitener",
     }
+    class_names_and_kwargs = [
+        (name, {"name_prefix": j, **smoke_test_kwargs.get(name, {})})
+        for j, name in enumerate(transformers_by_class_name)
+        if name not in skip_me
+    ]
 
     pipeline = WaveformPipeline.from_class_names_and_kwargs(
         geom,
         channel_index,
-        [
-            (name, {"name_prefix": j, **smoke_test_kwargs.get(name, {})})
-            for j, name in enumerate(transformers_by_class_name)
-            if name not in skip_me
-        ],
+        class_names_and_kwargs,
         waveform_cfg=default_waveform_cfg,
         sampling_frequency=30_000.0,
     )
@@ -127,15 +146,19 @@ def test_all_transformers():
     # Stay on CPU here, for fit.
     waveforms = torch.from_numpy(waveforms)
     channels = torch.from_numpy(channels)
-    print(f"{waveforms.requires_grad=}")
     print("-- Precompute")
     pipeline.precompute()
     print("-- Pre-fit check")
-    _check_saveload(geom, channel_index, pipeline.cpu())
+    _check_saveload(geom, channel_index, pipeline.cpu(), class_names_and_kwargs)
     if torch.cuda.is_available():
         pipeline = pipeline.to(torch.device("cuda"))
     print("-- Fit")
-    pipeline.fit(recording=noise_rec, waveforms=waveforms, channels=channels)
+    pipeline.fit(
+        recording=noise_rec,
+        waveforms=waveforms,
+        channels=channels,
+        computation_cfg=get_global_computation_config(),
+    )
     assert not pipeline.needs_fit()
     print("-- Forward")
     # now to device
@@ -163,7 +186,7 @@ def test_all_transformers():
         else:
             assert v.isfinite().all()
     print("-- Final check")
-    _check_saveload(geom, channel_index, pipeline.cpu())
+    _check_saveload(geom, channel_index, pipeline.cpu(), class_names_and_kwargs)
 
 
 if __name__ == "__main__":
