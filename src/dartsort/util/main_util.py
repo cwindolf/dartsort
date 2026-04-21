@@ -11,6 +11,7 @@ from ..util.internal_config import (
     DARTsortInternalConfig,
     ClusteringConfig,
     FeaturizationConfig,
+    FitSamplingConfig,
     RefinementConfig,
 )
 from ..util.logging_util import get_logger
@@ -339,11 +340,12 @@ def _matching_step_cfgs(
     ClusteringConfig | None,
     Sequence[RefinementConfig | None],
     FeaturizationConfig,
+    FitSamplingConfig,
 ]:
     clus_cfg = cfg.clustering_cfg if cfg.recluster_after_first_matching else None
 
     gmm_as_classifier = (
-        is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "gmm"
+        is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
     if not cfg.final_refinement:
         ref_cfgs = []
@@ -357,13 +359,16 @@ def _matching_step_cfgs(
             cfg.featurization_cfg,
             save_input_tpca_projs=False,
             compute_input_tpca_projs_regardless=True,
+            use_gmm_classifier=True,
             pre_gmm_clustering_cfg=clus_cfg,
             gmm_clustering_features_cfg=cfg.clustering_features_cfg,
             pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
             gmm_refinement_cfg=cfg.refinement_cfg,
         )
+        samp_cfg = cfg.refinement_cfg.sampling_cfg
         clus_cfg = None
     else:
         feat_cfg = cfg.featurization_cfg
+        samp_cfg = cfg.peeler_sampling_cfg
 
-    return clus_cfg, ref_cfgs, feat_cfg
+    return clus_cfg, ref_cfgs, feat_cfg, samp_cfg

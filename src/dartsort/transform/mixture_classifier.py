@@ -31,7 +31,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         geom=None,
         name=None,
         name_prefix=None,
-        motion: MotionInfo,
+        motion: MotionInfo | None = None,
         clustering_cfg: ClusteringConfig | None,
         clustering_features_cfg: ClusteringFeaturesConfig,
         pre_gmm_refinement_cfgs: Sequence[RefinementConfig | None] | None,
@@ -65,6 +65,9 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.motion: MotionInfo | None = None
         self.channel_index_np = self.b.channel_index.numpy(force=True)
         self.workers = 1
+
+    def needs_fit(self):
+        return not hasattr(self, "tmm")
 
     def attach_motion(self, motion: MotionInfo):
         self.motion = motion

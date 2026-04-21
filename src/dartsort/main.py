@@ -324,9 +324,11 @@ def _dartsort_impl(
 
         _nspk = None if is_final else cfg.subsampling_spikes
         _pres = 1.0 if is_final else cfg.subsampling_presence
-        step_clus_cfg, step_ref_cfgs, step_feat_cfg = _matching_step_cfgs(
+        step_clus_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = _matching_step_cfgs(
             is_final, is_subsampling, cfg
         )
+        print(f"{samp_cfg=}")
+        print(f"{step_feat_cfg.use_gmm_classifier=}")
 
         logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(
@@ -334,6 +336,7 @@ def _dartsort_impl(
             recording=recording,
             sorting=sorting,
             motion=motion,
+            sampling_cfg=samp_cfg,
             template_cfg=cfg.template_cfg,
             waveform_cfg=cfg.waveform_cfg,
             featurization_cfg=step_feat_cfg,
