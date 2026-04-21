@@ -6,7 +6,7 @@ import sklearn.cluster
 import torch
 from spikeinterface.core import BaseRecording
 
-from ..util import job_util
+from ..util.job_util import ensure_computation_config
 from ..util.data_util import DARTsortSorting, chunk_time_ranges, fit_reweighting
 from ..util.internal_config import (
     ClusteringConfig,
@@ -108,8 +108,7 @@ class Clusterer:
         self.computation_cfg = computation_cfg
         self.sampling_cfg = sampling_cfg
         self.waveform_cfg = waveform_cfg
-        if computation_cfg is None:
-            self.computation_cfg = job_util.get_global_computation_config()
+        self.computation_cfg = ensure_computation_config(computation_cfg)
         self.save_cfg = save_cfg
         self.save_labels_dir = save_labels_dir
         self.labels_fmt = labels_fmt
@@ -317,6 +316,7 @@ class DensityPeaksClusterer(Clusterer):
         labels_fmt=None,
     ) -> Self:
         assert clustering_cfg is not None
+        computation_cfg = ensure_computation_config(computation_cfg)
         uhdversion = clustering_cfg.cluster_strategy == "density_peaks_uhdversion"
         return cls(
             knn_k=clustering_cfg.knn_k,
@@ -329,7 +329,7 @@ class DensityPeaksClusterer(Clusterer):
             random_seed=clustering_cfg.random_seed,
             outlier_radius=clustering_cfg.outlier_radius,
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
-            workers=clustering_cfg.workers,
+            workers=computation_cfg.actual_n_jobs(small=True),
             uhdversion=uhdversion,
             computation_cfg=computation_cfg,
             waveform_cfg=waveform_cfg,
@@ -467,11 +467,12 @@ class GMMDensityPeaksClusterer(Clusterer):
         labels_fmt=None,
     ) -> Self:
         assert clustering_cfg is not None
+        computation_cfg = ensure_computation_config(computation_cfg)
         return cls(
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             outlier_radius=clustering_cfg.outlier_radius,
             remove_clusters_smaller_than=clustering_cfg.min_cluster_size,
-            workers=clustering_cfg.workers,
+            workers=computation_cfg.actual_n_jobs(small=True),
             n_initializations=clustering_cfg.kmeanspp_initializations,
             n_iter=clustering_cfg.kmeans_iter,
             max_components_per_channel=clustering_cfg.components_per_channel,

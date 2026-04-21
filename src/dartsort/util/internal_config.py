@@ -251,7 +251,6 @@ class ClusteringConfig:
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
     # global parameters
-    workers: int = 5
     random_seed: int = 0
     min_cluster_size: int = 25
 
