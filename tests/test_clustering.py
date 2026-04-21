@@ -5,8 +5,9 @@ from sklearn.metrics import rand_score
 from dartsort.clustering import (
     clustering_strategies,
     get_clusterer,
-    get_clustering_features,
     refinement_strategies,
+    SimpleMatrixFeatures,
+    StableWaveformFeatures,
 )
 from dartsort.templates.postprocess_util import reorder_by_depth
 from dartsort.main import cluster
@@ -88,18 +89,22 @@ def test_clustering(simulations, sim_name, featkw, cluskw):
     sorting = sim["sorting"]
     motion = sim["motion"]
 
-    features = get_clustering_features(
-        recording,
-        sorting,
+    features = SimpleMatrixFeatures.from_config(
+        sorting=sorting,
         motion=motion,
         clustering_features_cfg=ClusteringFeaturesConfig(**featkw),
+        computation_cfg=None,
     )
     clusterer = get_clusterer(
         clustering_cfg=ClusteringConfig(**cluskw),
         refinement_cfgs=None,
     )
     res = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion=motion
+        recording=recording,
+        sorting=sorting,
+        features=features,
+        stable_features=None,
+        motion=motion,
     )
     assert res is not None
     assert res.labels is not None
@@ -116,17 +121,30 @@ def test_refinement(simulations, sim_name, refkw):
     sorting = sim["sorting"]
     motion = sim["motion"]
 
-    features = get_clustering_features(
-        recording,
-        sorting,
+    features = SimpleMatrixFeatures.from_config(
+        sorting=sorting,
         motion=motion,
-        clustering_features_cfg=None,
+        clustering_features_cfg=ClusteringFeaturesConfig(),
+        computation_cfg=None,
     )
     clusterer = get_clusterer(
         clustering_cfg=None, refinement_cfgs=[RefinementConfig(**refkw)]
     )
+    if clusterer.needs_stable_features():
+        stable_features = StableWaveformFeatures.from_config(
+            sorting=sorting,
+            motion=motion,
+            clustering_features_cfg=ClusteringFeaturesConfig(),
+            computation_cfg=None,
+        )
+    else:
+        stable_features = None
     res = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion=motion
+        recording=recording,
+        sorting=sorting,
+        features=features,
+        stable_features=stable_features,
+        motion=motion,
     )
     assert res is not None
     assert res.labels is not None

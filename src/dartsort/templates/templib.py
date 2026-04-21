@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
@@ -13,7 +15,9 @@ from ..util.internal_config import (
 from ..util.motion import MotionInfo
 from ..util.spikeio import read_waveforms_channel_index
 from ..util.waveform_util import make_channel_index
-from .templates import TemplateData
+
+if TYPE_CHECKING:
+    from .templates import TemplateData
 
 
 def fit_tsvd(
@@ -24,7 +28,7 @@ def fit_tsvd(
     template_cfg: TemplateConfig,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     computation_cfg: ComputationConfig | None = None,
-    svd_input_templates: TemplateData | None = None,
+    svd_input_templates: "TemplateData | None" = None,
     dtype=np.float32,
     random_seed=0,
     n_iter=15,
@@ -114,7 +118,7 @@ def fit_tsvd(
 
 
 def pca_from_templates(
-    td: TemplateData,
+    td: "TemplateData",
     rank: int,
     min_channel_amplitude: float = 1.0,
     random_seed: int = 0,
@@ -185,6 +189,8 @@ def quick_mean_templates(
     template_cfg: TemplateConfig = raw_template_cfg,
     motion: MotionInfo,
 ):
+    from .templates import TemplateData
+
     return TemplateData.from_config(
         recording=recording,
         sorting=sorting,

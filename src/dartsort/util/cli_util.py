@@ -119,10 +119,15 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
         if default is MISSING:
             default = None
 
-        kw = dict(default=default, help=doc, dest=field.name)
         try:
             if type_ == bool:
-                parser.add_argument(name, action=FieldBooleanOptionalAction, **kw)  # type: ignore
+                parser.add_argument(
+                    name,
+                    action=FieldBooleanOptionalAction,
+                    default=default,
+                    help=doc,
+                    dest=field.name,
+                )
             else:
                 parser.add_argument(
                     name,
@@ -131,7 +136,9 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
                     required=required,
                     choices=choices,
                     metavar=metavar,
-                    **kw,  # type: ignore
+                    default=default,
+                    help=doc,
+                    dest=field.name,
                 )
         except Exception as e:
             ee = ValueError(f"Exception raised while adding {field=} to CLI")

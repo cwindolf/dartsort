@@ -16,8 +16,6 @@ from ..util import data_util, waveform_util
 from ..util.data_util import DARTsortSorting
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from dredge.motion_util import IdentityMotionEstimate
-
 
 logger = get_logger(__name__)
 
@@ -114,6 +112,11 @@ def hierarchical_cluster(
     if n <= 1:
         return labels, np.arange(n)
     pdist = distances[np.triu_indices(n, k=1)]
+    assert not np.isnan(pdist).any()
+    assert not np.isneginf(pdist).any()
+    finite = np.isfinite(pdist)
+    if not finite.any():
+        return labels, np.arange(n)
     # tolearate some numerical zeros.
     pdist[np.logical_and(pdist > -eps, pdist < 0)] = 0.0
 
@@ -124,7 +127,6 @@ def hierarchical_cluster(
             ids = np.unique(labels)
             return labels, ids[ids >= 0]
 
-    finite = np.isfinite(pdist)
     if not finite.all():
         inf = max(0, pdist[finite].max()) + threshold + 1.0
         pdist[np.logical_not(finite)] = inf
@@ -460,7 +462,7 @@ def get_main_channel_pcs(
     mask[which] = True
     channels = sorting.channels[which]
 
-    features = getattr(sorting, "collisioncleaned_tpca_features", None)
+    features = getattr(sorting, dataset_name, None)
     channel_index = getattr(sorting, "channel_index", None)
     if features is not None and channel_index is not None:
         features = features[which][:, :rank]

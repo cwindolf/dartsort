@@ -1,13 +1,12 @@
+import dredge.motion_util as mu
 import numpy as np
 import numpy.typing as npt
 import pytest
-from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist, cdist
+from scipy.spatial.distance import cdist, pdist
 
-from dartsort.util import drift_util, waveform_util
-from dartsort.evaluate import simlib
 from dartsort import MotionInfo
-import dredge.motion_util as mu
+from dartsort.evaluate import simlib
+from dartsort.util import drift_util, waveform_util
 
 
 def test_shifted_waveforms():
@@ -200,7 +199,7 @@ def test_stable_channels(example_geoms, geom_ix, drift_speed, radius):
     d_pitch, i_pitch = motion.rgeom_kdt.query(
         pitch_reg_pos,
         distance_upper_bound=motion.min_dist,
-        workers=-1,  # type: ignore
+        workers=-1,
     )
     assert (i_pitch < motion.rgeom_kdt.n).all()
     i_pitch: npt.NDArray[np.intp] = i_pitch

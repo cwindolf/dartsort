@@ -1,12 +1,18 @@
 import shutil
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import DARTsortInternalConfig
+from ..util.internal_config import (
+    DARTsortInternalConfig,
+    ClusteringConfig,
+    FeaturizationConfig,
+    RefinementConfig,
+)
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo, try_load_motion_info
 from ..util.py_util import dartcopy2, dartcopytree, resolve_path
@@ -127,6 +133,31 @@ def ds_save_motion(
     if work_dir is None:
         return
     motion.save(output_directory=output_dir, overwrite=overwrite)
+
+
+def motion_needs_peaks(
+    cfg: DARTsortInternalConfig, recording: BaseRecording, sorting: DARTsortSorting
+):
+    if cfg.subsampling_presence == 1.0:
+        return False
+    if cfg.subsampling_spikes is None:
+        return False
+
+    # assert sorting's chunk starts, sorted, match full recording's
+    # so, this means sorting could have been shuffled but was not run with
+    # run_subsampled_peeling()
+    # this function not designed for that kind of sorting
+    targ_chunk_starts = np.arange(
+        0, recording.get_num_samples(), cfg.initial_detection_cfg.chunk_length_samples
+    )
+    my_chunk_starts = sorting._load_dataset("chunk_starts_samples")
+    assert np.array_equal(targ_chunk_starts, np.sort(my_chunk_starts))
+
+    # check if sorting quit early
+    last_chunk_start = sorting._load_dataset("last_chunk_start").item()
+    complete = my_chunk_starts[-1] == last_chunk_start
+
+    return not complete
 
 
 def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
@@ -300,3 +331,39 @@ def ds_fast_forward(
         prev_sorting = prev_sorting.ephemeral_replace(labels=prev_labels)
 
     return cur_step, prev_sorting, motion
+
+
+def _matching_step_cfgs(
+    is_final: bool, is_subsampling: bool, cfg: DARTsortInternalConfig
+) -> tuple[
+    ClusteringConfig | None,
+    Sequence[RefinementConfig | None],
+    FeaturizationConfig,
+]:
+    clus_cfg = cfg.clustering_cfg if cfg.recluster_after_first_matching else None
+
+    gmm_as_classifier = (
+        is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "gmm"
+    )
+    if not cfg.final_refinement:
+        ref_cfgs = []
+    elif gmm_as_classifier:
+        ref_cfgs = [cfg.agglomerate_cfg]
+    else:
+        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
+
+    if cfg.final_refinement and gmm_as_classifier:
+        feat_cfg = replace(
+            cfg.featurization_cfg,
+            save_input_tpca_projs=False,
+            compute_input_tpca_projs_regardless=True,
+            pre_gmm_clustering_cfg=clus_cfg,
+            gmm_clustering_features_cfg=cfg.clustering_features_cfg,
+            pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
+            gmm_refinement_cfg=cfg.refinement_cfg,
+        )
+        clus_cfg = None
+    else:
+        feat_cfg = cfg.featurization_cfg
+
+    return clus_cfg, ref_cfgs, feat_cfg

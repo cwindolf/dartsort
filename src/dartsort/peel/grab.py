@@ -1,4 +1,4 @@
-from typing import Literal, Mapping
+from typing import Mapping
 
 import numpy as np
 import torch
@@ -12,6 +12,7 @@ from ..util.internal_config import (
     FitSamplingConfig,
     WaveformConfig,
     default_peeling_fit_sampling_cfg,
+    default_waveform_cfg,
 )
 from ..util.waveform_util import make_channel_index
 from .peel_base import (
@@ -35,14 +36,19 @@ class GrabAndFeaturize(BasePeeler):
         *,
         times_samples,
         fixed_properties: Mapping[str, np.ndarray | torch.Tensor] | None = None,
-        trough_offset_samples=42,
-        spike_length_samples=121,
         chunk_length_samples=30_000,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         dtype=torch.float,
     ):
         fixed_properties = fixed_properties or {}
         fixed_property_keys = tuple(fixed_properties.keys())
+        trough_offset_samples = waveform_cfg.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        spike_length_samples = waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -51,8 +57,7 @@ class GrabAndFeaturize(BasePeeler):
             chunk_margin_samples=max(
                 trough_offset_samples, spike_length_samples - trough_offset_samples
             ),
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
+            waveform_cfg=waveform_cfg,
             fit_sampling_cfg=fit_sampling_cfg,
             fixed_property_keys=fixed_property_keys,
             dtype=dtype,
@@ -124,12 +129,6 @@ class GrabAndFeaturize(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-        trough_offset_samples = waveform_cfg.trough_offset_samples(
-            recording.sampling_frequency
-        )
-        spike_length_samples = waveform_cfg.spike_length_samples(
-            recording.sampling_frequency
-        )
         fixed_property_keys = fixed_property_keys or []
         fixed_property_keys = list(fixed_property_keys)
         if "channels" not in fixed_property_keys:
@@ -141,8 +140,7 @@ class GrabAndFeaturize(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             times_samples=sorting.times_samples,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
+            waveform_cfg=waveform_cfg,
             chunk_length_samples=chunk_length_samples,
             fixed_properties=fixed_properties,
             dtype=torch.float,

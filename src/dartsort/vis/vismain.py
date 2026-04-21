@@ -493,7 +493,7 @@ def _plan_vis(
 
     if make_mixture_summaries is None and hasattr(sorting, "gmm_candidates"):
         assert sorting.labels is not None
-        c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+        c0 = sorting.gmm_candidates[:, 0] 
         lk = np.flatnonzero(sorting.labels >= 0)
         is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
         make_mixture_summaries = is_gmm

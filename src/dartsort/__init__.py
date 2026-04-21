@@ -2,11 +2,12 @@ import importlib.metadata
 
 from . import detect, util
 from .clustering import (
+    SimpleMatrixFeatures,
+    StableWaveformFeatures,
     cluster_util,
     clustering_strategies,
     density,
     get_clusterer,
-    get_clustering_features,
     kmeans,
     merge,
     refinement_strategies,

@@ -100,6 +100,7 @@ class DARTsortGroundTruthComparison:
         """Make sure that all GT and tested units are present."""
         if self._agreement_scores is not None:
             return self._agreement_scores
+        assert self.comparison.agreement_scores is not None
         a = self.comparison.agreement_scores.copy()
         gtids = np.arange(self.gt_analysis.sorting.unit_ids.max() + 1)
         tids = np.arange(self.tested_analysis.sorting.unit_ids.max() + 1)
@@ -205,9 +206,7 @@ class DARTsortGroundTruthComparison:
                 if udt.size:
                     match_dt_rms[j] = np.sqrt(np.square(udt).mean())
             except ValueError as e:
-                warnings.warn(
-                    f"ValueError in misalignment. SI matching bug. {e=}"  # type: ignore
-                )
+                warnings.warn(f"ValueError in misalignment. SI matching bug. {e=}")
         return match_dt_rms
 
     def matched_misalignment(self, gt_unit_id):
@@ -402,7 +401,7 @@ class DARTsortGroundTruthComparison:
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         tp_waves = self.gt_analysis.unit_raw_waveforms(
-            which=ind_groups["matched_gt_indices"],  # type: ignore
+            which=ind_groups["matched_gt_indices"],
             **waveform_kw,  # type: ignore
         )
         if tp_waves is None:
@@ -419,7 +418,7 @@ class DARTsortGroundTruthComparison:
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         fn_waves = self.gt_analysis.unit_raw_waveforms(
-            which=ind_groups["only_gt_indices"],  # type: ignore
+            which=ind_groups["only_gt_indices"],
             **waveform_kw,  # type: ignore
         )
         if fn_waves is None:
@@ -432,7 +431,7 @@ class DARTsortGroundTruthComparison:
         # load FP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         fp_waves = self.tested_analysis.unit_raw_waveforms(
-            which=ind_groups["only_tested_indices"],  # type: ignore
+            which=ind_groups["only_tested_indices"],
             **waveform_kw,  # type: ignore
         )
         if fp_waves is None:
@@ -446,7 +445,7 @@ class DARTsortGroundTruthComparison:
             w["unsorted_tp"] = w["unsorted_fn"] = None
         else:
             utp_waves = self.gt_analysis.unit_raw_waveforms(
-                which=ind_groups["unsorted_tp_indices"],  # type: ignore
+                which=ind_groups["unsorted_tp_indices"],
                 **waveform_kw,  # type: ignore
             )
             if utp_waves is None:
@@ -456,7 +455,7 @@ class DARTsortGroundTruthComparison:
                 w["which_unsorted_tp"] = utp_waves.which
                 w["unsorted_tp"] = utp_waves.waveforms
             ufn_waves = self.gt_analysis.unit_raw_waveforms(
-                which=ind_groups["unsorted_fn_indices"],  # type: ignore
+                which=ind_groups["unsorted_fn_indices"],
                 **waveform_kw,  # type: ignore
             )
             if ufn_waves is None:

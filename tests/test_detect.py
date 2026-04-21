@@ -1,10 +1,11 @@
 import numpy as np
 import pytest
 import torch
+from test_util import dense_layout
+
 from dartsort.detect.detect import detect_and_deduplicate
 from dartsort.detect.detect_filters import convexity_filter
 from dartsort.util.waveform_util import make_channel_index
-from test_util import dense_layout
 
 
 @pytest.mark.parametrize("dedup_exact", [False, True])
@@ -39,7 +40,7 @@ def test_detect_and_deduplicate(dedup_exact):
     desired_times = np.concatenate([desired_times, desired_times + 10000])
     desired_times.sort()
 
-    times, chans = detect_and_deduplicate(  # type: ignore
+    times, chans = detect_and_deduplicate(
         torch.tensor(x),
         threshold=threshold,
         peak_sign="both",
@@ -53,7 +54,7 @@ def test_detect_and_deduplicate(dedup_exact):
     assert times.shape == chans.shape
     assert len(times.shape) == 1
 
-    times2, chans2 = detect_and_deduplicate(  # type: ignore
+    times2, chans2 = detect_and_deduplicate(
         torch.tensor(x),
         threshold=threshold,
         peak_sign="pos",
@@ -65,7 +66,7 @@ def test_detect_and_deduplicate(dedup_exact):
     assert np.array_equal(times.numpy(), times2.numpy())
     assert np.array_equal(chans.numpy(), chans2.numpy())
 
-    times, chans = detect_and_deduplicate(  # type: ignore
+    times, chans = detect_and_deduplicate(
         torch.tensor(x),
         threshold=threshold,
         peak_sign="neg",

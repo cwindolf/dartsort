@@ -24,7 +24,12 @@ from ..util.data_util import (
     extract_random_snips,
     subsample_waveforms,
 )
-from ..util.internal_config import FitSamplingConfig, default_peeling_fit_sampling_cfg
+from ..util.internal_config import (
+    FitSamplingConfig,
+    default_peeling_fit_sampling_cfg,
+    WaveformConfig,
+    default_waveform_cfg,
+)
 from ..util.logging_util import get_logger
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
@@ -39,7 +44,7 @@ class BasePeeler(BModule):
 
     Subtraction, template matching, and other things like just grabbing waveforms
     and featurizing a preexisting spike train (implemented with optional additional
-    peeling of preexisting templates in grab.py) share a lot of logic: reading 
+    peeling of preexisting templates in grab.py) share a lot of logic: reading
     chunks of data in parallel, extracting spike waveform snippets, denoising,
     featurizing, .... This class implements the common logic.
 
@@ -62,8 +67,7 @@ class BasePeeler(BModule):
         chunk_length_samples: int = 30_000,
         chunk_margin_samples: int = 0,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-        trough_offset_samples=42,
-        spike_length_samples=121,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         fixed_property_keys=("channels",),
         dtype=torch.float,
     ):
@@ -73,11 +77,17 @@ class BasePeeler(BModule):
         self.recording = recording
         self.chunk_length_samples: int = chunk_length_samples
         self.chunk_margin_samples: int = chunk_margin_samples
-        self.trough_offset_samples: int = trough_offset_samples
-        self.spike_length_samples: int = spike_length_samples
+        self.waveform_cfg = waveform_cfg
+        self.trough_offset_samples: int = waveform_cfg.trough_offset_samples(
+            recording.sampling_frequency
+        )
+        self.spike_length_samples: int = waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         self.fit_sampling_cfg = fit_sampling_cfg
+        self.random_seed = fit_sampling_cfg.seed
         self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
-            fit_sampling_cfg.fit_subsampling_random_state
+            fit_sampling_cfg.seed
         )
         self.dtype: torch.dtype = dtype
         self.np_dtype = torch.empty((), dtype=dtype).numpy().dtype
@@ -142,7 +152,8 @@ class BasePeeler(BModule):
         chunk_length_samples=None,
         total_residual_snips=None,
         residual_snips_per_chunk=None,
-        stop_after_n_waveforms=None,
+        stop_after_n_waveforms: int | None = None,
+        ensure_coverage: float | None = None,
         shuffle=False,
         overwrite=False,
         residual_filename=None,
@@ -172,32 +183,41 @@ class BasePeeler(BModule):
         if task_name is None:
             task_name = self.peel_kind
 
+        # figure out which chunks to process, and exit early if already done
+        chunk_starts_samples = self.get_chunk_starts(
+            chunk_starts_samples=chunk_starts_samples
+        )
+        chunk_starts_samples = np.asarray(chunk_starts_samples, dtype=np.int64)
+        if shuffle:
+            chunk_starts_samples = self.sample_chunks(
+                chunk_starts_samples=chunk_starts_samples,
+                n_chunks=chunk_starts_samples.shape[0],
+            )
+        n_chunks_orig = len(chunk_starts_samples)
+
         # this is -1 if we haven't started yet
         if ignore_resuming:
-            last_chunk_start = -1
+            done = False
+            next_chunk_index = 0
             resids_so_far = 0
         elif output_hdf5_filename is not None:
-            last_chunk_start, resids_so_far = self.check_resuming(
-                output_hdf5_filename, overwrite=overwrite
+            done, last_chunk_index, resids_so_far = self.check_resuming(
+                output_hdf5_filename,
+                chunk_starts_samples=chunk_starts_samples,
+                stop_after_n_waveforms=stop_after_n_waveforms,
+                ensure_coverage=ensure_coverage,
+                overwrite=overwrite,
             )
+            next_chunk_index = last_chunk_index + 1
             logger.dartsortdebug(
-                f"[{self.__class__.__name__}:{task_name}] Resuming at {last_chunk_start=}."
+                f"[{self.__class__.__name__}:{task_name}] Resuming at chunk "
+                f"{next_chunk_index}/{n_chunks_orig}."
             )
         else:
             assert False
-
-        # figure out which chunks to process, and exit early if already done
-        chunk_starts_samples = self.get_chunk_starts(
-            chunk_starts_samples=chunk_starts_samples,
-        )
-        chunk_starts_samples = np.asarray(chunk_starts_samples, dtype=int)
-        if shuffle:
-            assert overwrite or last_chunk_start < 0
-            self.fit_subsampling_random_state.shuffle(chunk_starts_samples)
-        n_chunks_orig = len(chunk_starts_samples)
-        chunks_to_do = [
-            start for start in chunk_starts_samples if start > last_chunk_start
-        ]
+        if done:
+            return
+        chunks_to_do = chunk_starts_samples[next_chunk_index:]
 
         if total_residual_snips is not None:
             assert residual_snips_per_chunk is None
@@ -207,7 +227,10 @@ class BasePeeler(BModule):
             )
 
         if residual_snips_per_chunk is None:
-            residual_snips_per_chunk = repeat(None)
+            if residual_to_h5:
+                residual_snips_per_chunk = repeat(1)
+            else:
+                residual_snips_per_chunk = repeat(None)
         elif isinstance(residual_snips_per_chunk, int):
             residual_to_h5 = bool(residual_snips_per_chunk)
             residual_snips_per_chunk = repeat(residual_snips_per_chunk)
@@ -217,7 +240,7 @@ class BasePeeler(BModule):
 
         jobs = list(zip(chunks_to_do, residual_snips_per_chunk))
 
-        if not chunks_to_do:
+        if not chunks_to_do.size:
             return output_hdf5_filename
         save_residual = residual_filename is not None
         compute_residual = save_residual or residual_to_h5
@@ -232,7 +255,7 @@ class BasePeeler(BModule):
         # wrap in try/finally to ensure file handles get closed if there
         # is some unforseen error
         try:
-            n_jobs, Executor, context, rank_queue, is_local = pool_from_cfg(  # type: ignore
+            n_jobs, Executor, context, rank_queue, is_local = pool_from_cfg(
                 computation_cfg, with_rank_queue=True, check_local=True
             )
             with Executor(
@@ -272,11 +295,13 @@ class BasePeeler(BModule):
                 # construct h5 after forking to avoid pickling it
                 with self.initialize_files(
                     output_hdf5_filename,
+                    chunk_starts_samples=chunk_starts_samples,
                     residual_filename=residual_filename,
                     overwrite=overwrite,
                     skip_features=skip_features,
                     residual_to_h5=residual_to_h5,
                     known_spike_count=known_spike_count,
+                    ignore_resuming=ignore_resuming,
                 ) as (output_h5, h5_spike_datasets, residual_file, n_spikes):
                     batch_count = 0
                     try:
@@ -298,15 +323,27 @@ class BasePeeler(BModule):
                                 if not skip_features:
                                     assert s_chunk is not None
                                     desc += f" [spk/{s_chunk:g}s={n_spikes / batch_count:0.1f}]"
-                                results.set_description(desc, refresh=False)  # type: ignore
-                            if not skip_features and (
-                                stop_after_n_waveforms
-                                and n_spikes >= stop_after_n_waveforms
-                            ):
+                                results.set_description(desc, refresh=False)
+
+                            # early stopping criteria
+                            # no early stopping if we're skipping features (used for residual)
+                            can_stop = not skip_features
+                            # only allow stop if we have enough waveforms
+                            if stop_after_n_waveforms is not None:
+                                enough_spikes = n_spikes >= stop_after_n_waveforms
+                                can_stop = can_stop and enough_spikes
+                            else:
+                                can_stop = False
+                            # prevent stop if we're asked to cover but didn't
+                            if ensure_coverage is not None:
+                                chunks_done = batch_count + last_chunk_index + 1
+                                covered = chunks_done / n_chunks_orig >= ensure_coverage
+                                can_stop = can_stop and covered
+                            if can_stop:
                                 pool.shutdown(cancel_futures=True)
                     except CancelledError:
                         if show_progress:
-                            results.write(  # type: ignore
+                            results.write(
                                 f"Got {n_spikes} spikes, enough to stop early."
                             )
         finally:
@@ -425,7 +462,7 @@ class BasePeeler(BModule):
             self.recording.segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
-            channel_indices=None,
+            last_dimension_indices=None,
             margin=self.chunk_margin_samples,
         )
         chunk = torch.tensor(
@@ -466,7 +503,7 @@ class BasePeeler(BModule):
             }
             if "residual" in peel_result:
                 if torch.is_tensor(peel_result["residual"]):
-                    peel_result["residual"] = peel_result["residual"].cpu()  # type: ignore
+                    peel_result["residual"] = peel_result["residual"].cpu()
 
         # add times in seconds
         segment = self.recording.segments[0]
@@ -509,6 +546,7 @@ class BasePeeler(BModule):
         # not that something else couldn't happen...
         with delay_keyboard_interrupt:
             if not ignore_resuming:
+                output_h5["last_chunk_index"][()] = output_h5["last_chunk_index"][()] + 1
                 output_h5["last_chunk_start"][()] = chunk_start_samples
 
             if residual_file is not None:
@@ -609,14 +647,10 @@ class BasePeeler(BModule):
             self.channel_index,
             [
                 ("Voltage", {"name": "peeled_voltages_fit"}),
-                (
-                    "Waveform",
-                    {
-                        "name": "peeled_waveforms_fit",
-                        "spike_length_samples": self.spike_length_samples,
-                    },
-                ),
+                ("Waveform", {"name": "peeled_waveforms_fit"}),
             ],
+            waveform_cfg=self.waveform_cfg,
+            sampling_frequency=self.recording.sampling_frequency,
         )
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
@@ -628,6 +662,20 @@ class BasePeeler(BModule):
                     computation_cfg=computation_cfg,
                     task_name="Load examples for feature fitting",
                 )
+                if featurization_pipeline.needs_residual():
+                    self.run_subsampled_peeling(
+                        temp_hdf5_filename,
+                        chunk_length_samples=self.spike_length_samples,
+                        residual_to_h5=True,
+                        skip_features=True,
+                        ignore_resuming=True,
+                        computation_cfg=computation_cfg,
+                        n_chunks=self.fit_sampling_cfg.n_residual_snips,
+                        task_name="Residual snips",
+                        overwrite=False,
+                        ordered=True,
+                        skip_last=True,
+                    )
 
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
@@ -643,13 +691,15 @@ class BasePeeler(BModule):
                     fixed_property_keys=self.fixed_property_keys,
                     device=device,
                 )
+                fixed_properties["hdf5_filename"] = temp_hdf5_filename  # type: ignore
                 if not len(waveforms):
-                    raise ValueError(f"Found no spikes when trying to fit featurizers.")
+                    raise ValueError("Found no spikes when trying to fit featurizers.")
 
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
                     recording=self.recording,
                     waveforms=waveforms,
+                    computation_cfg=computation_cfg,
                     **fixed_properties,
                 )
                 assert getrefcount(waveforms) <= 2
@@ -698,42 +748,58 @@ class BasePeeler(BModule):
         n_chunks = min(len(chunk_starts_samples), n_chunks)
 
         # make a random subset of chunks to use for fitting
-        rg = np.random.default_rng(self.fit_subsampling_random_state)
-        self.fit_subsampling_random_state = rg
-        chunk_starts_samples = rg.choice(
-            chunk_starts_samples, size=n_chunks, replace=False
+        chunk_starts_samples = self.sample_chunks(
+            chunk_starts_samples=chunk_starts_samples,
+            n_chunks=n_chunks,
+            ordered=ordered,
         )
+        return chunk_starts_samples
+
+    def sample_chunks(
+        self, chunk_starts_samples: np.ndarray, n_chunks: int, ordered: bool = False
+    ) -> np.ndarray:
+        if self.fit_sampling_cfg.chunk_sampling == "random":
+            rg = np.random.default_rng(self.random_seed)
+            chunk_starts_samples = rg.choice(
+                chunk_starts_samples, size=n_chunks, replace=False
+            )
+        elif self.fit_sampling_cfg.chunk_sampling == "kmeanspp":
+            _ix = _kmeansppix(len(chunk_starts_samples), n_chunks, self.random_seed)
+            chunk_starts_samples = chunk_starts_samples[_ix]
+        else:
+            assert False
+
         if ordered:
             chunk_starts_samples.sort()
+
         return chunk_starts_samples
 
     def run_subsampled_peeling(
         self,
         hdf5_filename,
         chunk_length_samples=None,
+        n_chunks: int | None = None,
         residual_to_h5=False,
         skip_features=False,
         ignore_resuming=False,
-        n_chunks=None,
-        t_start=None,
-        t_end=None,
+        skip_last=False,
         computation_cfg=None,
         task_name=None,
         overwrite=True,
         ordered=False,
-        skip_last=False,
         show_progress=True,
     ):
-        # run peeling on these chunks to the temp folder
-        chunk_starts = self.get_chunk_starts(
-            subsampled=True,
-            chunk_length_samples=chunk_length_samples,
-            t_start=t_start,
-            t_end=t_end,
-            n_chunks=n_chunks,
-            ordered=ordered,
-            skip_last=skip_last,
-        )
+        if n_chunks is not None:
+            chunk_starts = self.get_chunk_starts(
+                chunk_length_samples=chunk_length_samples,
+                subsampled=True,
+                n_chunks=n_chunks,
+                ordered=ordered,
+                skip_last=skip_last,
+            )
+        else:
+            assert not ordered
+            chunk_starts = None
         return self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
@@ -746,6 +812,7 @@ class BasePeeler(BModule):
             overwrite=overwrite,
             task_name=task_name,
             show_progress=show_progress,
+            shuffle=chunk_starts is None,
         )
 
     def save_models(self, save_folder):
@@ -766,23 +833,54 @@ class BasePeeler(BModule):
             state_dict = torch.load(feats_pt)
             self.featurization_pipeline.load_state_dict(state_dict)
 
-    def check_resuming(self, output_hdf5_filename, overwrite=False) -> tuple[int, int]:
+    def check_resuming(
+        self,
+        output_hdf5_filename,
+        chunk_starts_samples: np.ndarray,
+        stop_after_n_waveforms: int | None = None,
+        ensure_coverage: float | None = None,
+        overwrite=False,
+    ) -> tuple[bool, int, int]:
         output_hdf5_filename = Path(output_hdf5_filename)
         exists = output_hdf5_filename.exists()
-        last_chunk_start = -1
+        last_chunk_index = -1
+        n_spikes = 0
         residual_snips_so_far = 0
         if exists and not overwrite:
             with h5py.File(output_hdf5_filename, "r", locking=False) as h5:
-                last_chunk_start: int = h5["last_chunk_start"][()]  # type: ignore
+                last_chunk_start: int = h5["last_chunk_start"][()]
+                h5_starts = h5["chunk_starts_samples"][:]
+                if not np.array_equal(chunk_starts_samples, h5_starts):
+                    raise ValueError(
+                        "Trying to resume a peeling job, but the chunk starts "
+                        "on disk differ. Maybe shuffle flag changed?"
+                    )
+                n_spikes = len(h5["times_samples"])
+                if last_chunk_start >= 0:
+                    is_last = np.flatnonzero(chunk_starts_samples == last_chunk_start)
+                    assert is_last.shape == (1,)
+                    last_chunk_index = is_last[0]
+                assert last_chunk_index == h5["last_chunk_index"][()]
+
                 residual_snips_so_far = 0
                 if "residual" in h5:
-                    residual_snips_so_far = len(h5["residual"])  # type: ignore
-        return last_chunk_start, residual_snips_so_far
+                    residual_snips_so_far = len(h5["residual"])
+
+        # am I done?
+        done = all_done = last_chunk_index == len(chunk_starts_samples) - 1
+        if stop_after_n_waveforms is not None:
+            done = n_spikes >= stop_after_n_waveforms
+        if ensure_coverage:
+            coverage = (last_chunk_index + 1) / len(chunk_starts_samples)
+            done = done and coverage >= ensure_coverage
+        done = all_done or done
+        return done, last_chunk_index, residual_snips_so_far
 
     @contextmanager
     def initialize_files(
         self,
         output_hdf5_filename,
+        chunk_starts_samples: np.ndarray,
         residual_filename=None,
         overwrite=False,
         chunk_size=1024,
@@ -790,6 +888,7 @@ class BasePeeler(BModule):
         residual_to_h5=False,
         skip_features=False,
         known_spike_count: int | None = None,
+        ignore_resuming: bool = False,
     ):
         """Create, overwrite, or re-open output files"""
         if output_hdf5_filename is None:
@@ -803,18 +902,30 @@ class BasePeeler(BModule):
         exists = output_hdf5_filename.exists()
         n_spikes = 0
         if exists and overwrite:
+            # overwriting, destroy destroy
             output_hdf5_filename.unlink()
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
-        elif exists:
-            # exists and not overwrite
+            output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
+            output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
+        elif exists and ignore_resuming:
+            # ignore the previous chunk structure, don't touch it, ignore ignore.
             output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
-            n_spikes = len(output_h5["times_samples"])  # type: ignore
+            n_spikes = len(output_h5["times_samples"])
+        elif exists:
+            # exists and possibly resuming
+            output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
+            n_spikes = len(output_h5["times_samples"])
+            # check chunks match, or else what are we even doin!
+            _stored_chunks = output_h5["chunk_starts_samples"][:]
+            assert np.array_equal(chunk_starts_samples, _stored_chunks)
         else:
-            # didn't exist, so overwrite does not matter
+            # create create
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
-        last_chunk_start: int = output_h5["last_chunk_start"][()]  # type: ignore
+            output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
+            output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
+
         if known_spike_count is not None:
             assert known_spike_count >= n_spikes
 
@@ -872,8 +983,12 @@ class BasePeeler(BModule):
         save_residual = residual_filename is not None
         residual_file = None
         if save_residual:
+            assert not ignore_resuming
             assert residual_filename is not None
+            last_chunk_start: int = output_h5["last_chunk_start"][()]
+            last_chunk_index: int = output_h5["last_chunk_index"][()]
             if last_chunk_start >= 0:
+                assert last_chunk_index >= 0
                 residual_mode = "ab"
                 assert Path(residual_filename).exists()
             else:
@@ -881,12 +996,7 @@ class BasePeeler(BModule):
             residual_file = open(residual_filename, mode=residual_mode)
 
         try:
-            yield (
-                output_h5,
-                h5_spike_datasets,
-                residual_file,
-                n_spikes,
-            )
+            yield output_h5, h5_spike_datasets, residual_file, n_spikes
         finally:
             self.to("cpu")
             output_h5.close()
@@ -1008,3 +1118,31 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
             skip_features=_peeler_process_context.ctx.skip_features,
             to_cpu=_peeler_process_context.ctx.to_cpu,
         )
+
+
+def _kmeansppix(n: int, k: int | None = None, seed=0):
+    rg = np.random.default_rng(seed)
+    k = k if k is not None else n
+    assert 0 < k <= n
+
+    xx = np.arange(float(n))
+    xx -= np.mean(xx)
+    xx /= np.std(xx)
+
+    inds = np.full((k,), n + 1, dtype=np.int64)
+    inds[0] = rg.integers(n)
+
+    dist = xx - xx[inds[0]]
+    dist *= dist
+
+    scratch = np.empty_like(dist)
+
+    for j in range(1, k):
+        p = np.divide(dist, dist.sum(), out=scratch)
+        inds[j] = rg.choice(n, p=p)
+        dj = np.subtract(xx, xx[inds[j]], out=scratch)
+        dj *= dj
+        np.minimum(dist, dj, out=dist)
+
+    assert np.unique(inds).shape == (k,)
+    return inds

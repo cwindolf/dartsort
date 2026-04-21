@@ -29,6 +29,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self,
         channel_index,
         geom,
+        *,
+        waveform_cfg,
+        sampling_frequency=30_000.0,
         radius=100.0,
         amplitude_kind="peak",
         localization_model="pointsource",
@@ -58,7 +61,12 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         assert amplitude_kind in ("peak", "ptp")
         assert reference in ("main_channel", "com")
         super().__init__(
-            geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
 
         self.amplitude_kind = amplitude_kind
@@ -108,9 +116,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def needs_fit(self):
         return self._needs_fit
 
-    def fit(self, recording, waveforms, *, channels, **fixed_properties):
+    def fit(
+        self, recording, waveforms, *, computation_cfg, channels, **fixed_properties
+    ):
         weights = fixed_properties.get("weights", None)
-        super().fit(recording, waveforms, channels=channels)  # just for spike len stuff
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )  # just for spike len stuff
         with torch.enable_grad():
             self._fit(waveforms, channels, weights=weights)
         self.eval()
@@ -445,6 +457,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             else:
                 assert False
 
+        waveforms = waveforms.to(device=self.relative_index.device)
         waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
         if self.amplitudes_only:
             obs_amps = waveforms[:, 0]

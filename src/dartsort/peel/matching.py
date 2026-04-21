@@ -21,6 +21,7 @@ from ..util.internal_config import (
     WaveformConfig,
     default_matching_cfg,
     default_peeling_fit_sampling_cfg,
+    default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
@@ -47,7 +48,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         matching_templates: MatchingTemplates | None = None,
         matching_templates_builder: MatchingTemplatesBuilder | None = None,
         p: MatchingConfig = default_matching_cfg,
-        trough_offset_samples=42,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         fpctrl_spike_counts=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         save_collidedness=False,
@@ -60,9 +61,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         elif matching_templates_builder is not None:
             spike_length_samples = matching_templates_builder.spike_length_samples
         else:
-            raise ValueError(f"Need either a MatchingTemplates or a builder.")
+            raise ValueError("Need either a MatchingTemplates or a builder.")
 
-        fixed_prop_keys = ("channels",)
+        fixed_prop_keys = ("channels", "labels")
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
 
@@ -72,9 +73,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=p.chunk_length_samples,
             chunk_margin_samples=p.margin_factor * spike_length_samples + 1,
+            waveform_cfg=waveform_cfg,
             fit_sampling_cfg=fit_sampling_cfg,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
             fixed_property_keys=fixed_prop_keys,
             dtype=dtype,
         )
@@ -138,18 +138,20 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         datasets = super().out_datasets()
         datasets.extend(
             [
-                SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int64),
-                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int64),
+                SpikeDataset(name="template_inds", shape_per_spike=(), dtype=np.int32),
+                SpikeDataset(name="labels", shape_per_spike=(), dtype=np.int32),
                 SpikeDataset(name="scores", shape_per_spike=(), dtype=np.float32),
             ]
         )
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
         if self.is_scaling:
             datasets.append(
                 SpikeDataset(name="scalings", shape_per_spike=(), dtype=np.float32),
             )
         if self.is_upsampling:
             datasets.append(
-                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int64)
+                SpikeDataset(name="up_inds", shape_per_spike=(), dtype=np.int8)
             )
             datasets.append(
                 SpikeDataset(name="time_shifts", shape_per_spike=(), dtype=np.int8),
@@ -180,11 +182,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
+        featurization_pipeline.attach_motion(motion)
 
         trough_offset_samples = waveform_cfg.trough_offset_samples(
             recording.sampling_frequency
         )
-
         if template_data is None:
             assert matching_cfg.precomputed_templates_npz is not None
             template_data = TemplateData.from_npz(
@@ -231,7 +233,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             p=matching_cfg,
-            trough_offset_samples=trough_offset_samples,
+            waveform_cfg=waveform_cfg,
             fit_sampling_cfg=sampling_cfg,
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             save_collidedness=save_collidedness,
@@ -534,7 +536,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
 
             if isinstance(self.p.threshold, float):
-                tb = np.sqrt(self.p.threshold**2 - scale_const)
+                tb = np.sqrt(max(0.0, self.p.threshold**2 - scale_const))
                 _msg = f"In norm units, that's from {self.p.threshold:0.2f}->{tb:0.2f}"
             else:
                 _msg = ""

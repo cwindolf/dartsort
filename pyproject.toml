@@ -36,10 +36,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-vis = ["matplotlib", "seaborn"]
-dev = ["pytest", "pytest-cov"]
+vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 gpu = ["cupy"]
 full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykernel", "black"]
+test = [
+  "pytest",
+  "pytest-cov",
+  "spikeinterface @ git+https://github.com/SpikeInterface/spikeinterface.git",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"

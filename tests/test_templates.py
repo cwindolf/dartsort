@@ -486,6 +486,7 @@ def test_pconv(tmp_path, unit_ids):
     )
 
     for motion, chunk_centers in [(no_motion, None), (zero_motion, [1, 2])]:
+        chunk_centers = np.array(chunk_centers) if chunk_centers else None
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tdir:

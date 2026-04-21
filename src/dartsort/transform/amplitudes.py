@@ -1,6 +1,7 @@
 import torch
 from dartsort.util.spiketorch import ptp
 
+from ..util.internal_config import WaveformConfig, default_waveform_cfg
 from .transform_base import BaseWaveformFeaturizer
 
 
@@ -11,6 +12,8 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         self,
         channel_index,
         geom=None,
+        waveform_cfg=None,
+        sampling_frequency=None,
         dtype=torch.float,
         name_prefix="",
         ptp_max_amplitude=True,
@@ -114,6 +117,8 @@ class AmplitudeVector(BaseWaveformFeaturizer):
         self,
         channel_index,
         geom=None,
+        waveform_cfg=None,
+        sampling_frequency=None,
         kind="peak",
         dtype=torch.float,
         name=None,
@@ -144,6 +149,8 @@ class MaxAmplitude(BaseWaveformFeaturizer):
         self,
         channel_index=None,
         geom=None,
+        waveform_cfg=None,
+        sampling_frequency=None,
         kind="ptp",
         dtype=torch.float,
         name=None,
@@ -176,17 +183,22 @@ class Voltage(BaseWaveformFeaturizer):
         dtype=torch.float,
         name=None,
         name_prefix="",
-        trough_offset_samples: int = 42,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        sampling_frequency: float = 30_000.0,
     ):
         if name is None:
             name = self.default_name
             if name_prefix:
                 name = f"{name_prefix}_{name}"
         super().__init__(
-            name=name, name_prefix=name_prefix, channel_index=channel_index
+            name=name,
+            name_prefix=name_prefix,
+            channel_index=channel_index,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
+        assert self.trough_offset_samples is not None
         self.dtype = dtype
-        self.trough_offset_samples = trough_offset_samples
         chans_arange = torch.arange(len(self.b.channel_index)).to(self.b.channel_index)
         my_ix = self.b.channel_index == chans_arange[:, None]
         cix, rel_inds = my_ix.nonzero(as_tuple=True)
@@ -196,5 +208,6 @@ class Voltage(BaseWaveformFeaturizer):
     def transform(self, waveforms, *, channels, **unused):
         waveforms_at_time = waveforms[:, self.trough_offset_samples]
         rel_inds = self.b.main_channel_relative_inds[channels]
+        waveforms_at_time = waveforms_at_time.to(device=rel_inds.device)
         v = waveforms_at_time.take_along_dim(rel_inds[:, None], dim=1)[:, 0]
         return {self.name: v}

@@ -62,7 +62,7 @@ def test_check_recording():
 
     with pytest.warns(Warning) as warninfo:
         check_recording(rec)
-    warnings = {(w.category, w.message.args[0][:11]) for w in warninfo} # pyright: ignore[reportAttributeAccessIssue]
+    warnings = {(w.category, w.message.args[0][:11]) for w in warninfo}  # type: ignore
     expected = {
         (RuntimeWarning, "Detected 50"),
         (RuntimeWarning, "Recording v"),

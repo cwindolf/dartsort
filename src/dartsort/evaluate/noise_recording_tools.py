@@ -50,13 +50,15 @@ def get_background_recording(
 
     if noise_kind == "zero":
         return recording
-    
+
     if noise_kind == "white" and in_memory:
         return recording.save_to_memory(n_jobs=1)
     if noise_kind == "white":
         assert noise_recording_folder is not None
         return recording.save_to_folder(
-            noise_recording_folder, n_jobs=1, overwrite=overwrite  # type: ignore
+            folder=noise_recording_folder,
+            n_jobs=1,
+            overwrite=overwrite,
         )
 
     assert noise_kind == "stationary_factorized_rbf"
@@ -68,7 +70,7 @@ def get_background_recording(
     spatial_std, spatial_vt = rbf_kernel_sqrt(
         geom, bandwidth=noise_spatial_kernel_bandwidth
     )
-    noise_temporal_kernel = noise_temporal_kernel.astype(spatial_vt.dtype) + 0j
+    noise_temporal_kernel = noise_temporal_kernel.astype(spatial_vt.dtype) + 0j  # type: ignore
     noise = StationaryFactorizedNoise(
         spatial_std=spatial_std,
         vt_spatial=spatial_vt,
@@ -82,14 +84,15 @@ def get_background_recording(
     # white noise must be cached before convolving
     with tempfile.TemporaryDirectory() as tdir:
         recording = recording.save_to_folder(
-            Path(tdir) / "noiserecording", n_jobs=1  # type: ignore
+            folder=Path(tdir) / "noiserecording",
+            n_jobs=1,
         )
         recording = UnwhitenPreprocessor(noise, recording)
         recording = recording.save_to_folder(
-            noise_recording_folder,  # type: ignore
+            folder=noise_recording_folder,
             n_jobs=n_jobs or 1,
             pool_engine="thread",
-            overwrite=overwrite,  # type: ignore
+            overwrite=overwrite,
         )
 
     return recording
@@ -169,11 +172,11 @@ class UnwhitenPreprocessorSegment(BasePreprocessorSegment):
         end_frame = self.get_num_samples() if end_frame is None else end_frame
         traces, lm, rm = get_chunk_with_margin(
             self.parent_recording_segment,
-            start_frame,
-            end_frame,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            last_dimension_indices=None,
             margin=self.noise.margin,
             add_reflect_padding=True,
-            channel_indices=None,
         )
         assert lm == rm == self.noise.margin
         dtype = traces.dtype

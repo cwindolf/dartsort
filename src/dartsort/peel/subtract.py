@@ -1,6 +1,5 @@
 import gc
 import tempfile
-import warnings
 from collections import namedtuple
 from pathlib import Path
 from typing import Literal, cast
@@ -19,10 +18,11 @@ from ..util.internal_config import (
     FitSamplingConfig,
     PeakSign,
     SubtractionConfig,
-    WaveformConfig,
     ThresholdingConfig,
+    WaveformConfig,
     default_peeling_fit_sampling_cfg,
     default_subtraction_cfg,
+    default_waveform_cfg,
 )
 from ..util.spiketorch import grab_spikes, ptp, subtract_spikes_
 from ..util.waveform_util import (
@@ -45,8 +45,7 @@ class SubtractionPeeler(BasePeeler):
         subtraction_denoising_pipeline: WaveformPipeline,
         featurization_pipeline: WaveformPipeline | None,
         p: SubtractionConfig = default_subtraction_cfg,
-        trough_offset_samples=42,
-        spike_length_samples=121,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         save_iteration=False,
         save_residnorm_decrease=False,
@@ -59,6 +58,9 @@ class SubtractionPeeler(BasePeeler):
             fixed_property_keys = ("channels",)
         if save_collidedness:
             fixed_property_keys = fixed_property_keys + ("collidedness",)
+        spike_length_samples = waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         super().__init__(
             recording=recording,
             channel_index=channel_index,
@@ -66,8 +68,7 @@ class SubtractionPeeler(BasePeeler):
             chunk_length_samples=p.chunk_length_samples,
             chunk_margin_samples=self.next_margin(2 * spike_length_samples),
             fit_sampling_cfg=fit_sampling_cfg,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
+            waveform_cfg=waveform_cfg,
             fixed_property_keys=fixed_property_keys,
             dtype=dtype,
         )
@@ -133,11 +134,13 @@ class SubtractionPeeler(BasePeeler):
         datasets = super().out_datasets()
 
         if self.save_iteration:
-            datasets.append(SpikeDataset("iteration", (), "int32"))
+            datasets.append(SpikeDataset("iteration", (), "int16"))
         if self.p.realign_to_denoiser:
             datasets.append(SpikeDataset("time_shifts", (), "int16"))
         if self.save_residnorm_decrease:
             datasets.append(SpikeDataset("residnorm_decreases", (), "float32"))
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
 
         # we may be featurizing during subtraction, register the features
         datasets.extend(self.subtraction_denoising_pipeline.spike_datasets())
@@ -196,21 +199,6 @@ class SubtractionPeeler(BasePeeler):
             waveform_cfg=waveform_cfg,
             sampling_frequency=recording.sampling_frequency,
         )
-
-        # waveform logic
-        trough_offset_samples = waveform_cfg.trough_offset_samples(
-            recording.sampling_frequency
-        )
-        spike_length_samples = waveform_cfg.spike_length_samples(
-            recording.sampling_frequency
-        )
-
-        if trough_offset_samples != 42 or spike_length_samples != 121:
-            # temporary warning just so I can see if this happens
-            warnings.warn(
-                f"waveform_cfg {trough_offset_samples=} {spike_length_samples=} "
-                f"since {recording.sampling_frequency=}"
-            )
         save_collidedness = (
             featurization_cfg.save_collidedness and not featurization_cfg.skip
         )
@@ -221,8 +209,7 @@ class SubtractionPeeler(BasePeeler):
             subtraction_denoising_pipeline=subtraction_denoising_pipeline,
             featurization_pipeline=featurization_pipeline,
             p=subtraction_cfg,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
+            waveform_cfg=waveform_cfg,
             fit_sampling_cfg=sampling_cfg,
             save_iteration=subtraction_cfg.save_iteration,
             save_residnorm_decrease=subtraction_cfg.save_residnorm_decrease,
@@ -369,10 +356,14 @@ class SubtractionPeeler(BasePeeler):
         init_voltage_feature = Voltage(
             channel_index=self.sub_channel_index,
             name="subtract_fit_voltages",
+            waveform_cfg=self.waveform_cfg,
+            sampling_frequency=self.recording.sampling_frequency,
         )
         init_waveform_feature = Waveform(
             channel_index=self.sub_channel_index,
             name="subtract_fit_waveforms",
+            waveform_cfg=self.waveform_cfg,
+            sampling_frequency=self.recording.sampling_frequency,
         )
         ifeats = [init_voltage_feature, init_waveform_feature]
         if which == "denoisers":
@@ -395,7 +386,11 @@ class SubtractionPeeler(BasePeeler):
         # if fitting the very first denoiser...
         if which == "denoisers" and not already_fitted:
             assert fit_feats is not None
-            fit_pipeline = WaveformPipeline(fit_feats)
+            fit_pipeline = WaveformPipeline(
+                fit_feats,
+                waveform_cfg=self.waveform_cfg,
+                sampling_frequency=self.recording.sampling_frequency,
+            )
             self._threshold_to_fit(
                 tmp_dir, fit_pipeline, computation_cfg=computation_cfg
             )
@@ -423,7 +418,7 @@ class SubtractionPeeler(BasePeeler):
                 waveforms, fixed_properties = subsample_waveforms(
                     temp_hdf5_filename,
                     fit_sampling=self.fit_sampling_cfg.fit_sampling,
-                    random_state=self.fit_sampling_cfg.fit_subsampling_random_state,
+                    random_state=self.fit_subsampling_random_state,
                     n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
                     fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="subtract_fit_voltages",
@@ -432,10 +427,17 @@ class SubtractionPeeler(BasePeeler):
                 )
                 # these are on CPU for now.
                 assert fit_feats is not None
-                fit_denoise = WaveformPipeline(fit_feats)
+                fit_denoise = WaveformPipeline(
+                    fit_feats,
+                    waveform_cfg=self.waveform_cfg,
+                    sampling_frequency=self.recording.sampling_frequency,
+                )
                 fit_denoise = fit_denoise.to(device)
                 fit_denoise.fit(
-                    recording=self.recording, waveforms=waveforms, **fixed_properties
+                    recording=self.recording,
+                    waveforms=waveforms,
+                    computation_cfg=computation_cfg,
+                    **fixed_properties,
                 )
                 fit_denoise = fit_denoise.to("cpu")
                 self.subtraction_denoising_pipeline = orig_denoise
@@ -448,7 +450,12 @@ class SubtractionPeeler(BasePeeler):
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
         geom = self.recording.get_channel_locations()
-        waveform_pipeline = WaveformPipeline([Waveform(self.sub_channel_index)])
+        waveform_node = Waveform(
+            self.sub_channel_index,
+            waveform_cfg=self.waveform_cfg,
+            sampling_frequency=self.recording.sampling_frequency,
+        )
+        waveform_pipeline = WaveformPipeline([waveform_node])
 
         if self.p.first_denoiser_spatial_dedup_radius:
             dn_dedup_ci = make_channel_index(
@@ -475,20 +482,19 @@ class SubtractionPeeler(BasePeeler):
                 convexity_radius=self.p.convexity_radius,
                 spatial_jitter_radius=self.p.first_denoiser_spatial_jitter,
             ),
-            trough_offset_samples=self.trough_offset_samples,
-            spike_length_samples=self.spike_length_samples,
+            waveform_cfg=self.waveform_cfg,
             peak_channel_index=self.peak_channel_index,
             dedup_channel_index=dn_dedup_ci,
         )
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
-            temp_hdf5_filename = Path(temp_dir) / f"subtraction_denoiser0_fit.h5"
+            temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser0_fit.h5"
             try:
                 trainer.peel(
                     temp_hdf5_filename,
                     shuffle=True,
                     stop_after_n_waveforms=self.p.first_denoiser_max_waveforms_fit,
-                    task_name=f"Load examples for initial denoiser fitting",
+                    task_name="Load examples for initial denoiser fitting",
                     computation_cfg=computation_cfg,
                 )
 
@@ -508,7 +514,10 @@ class SubtractionPeeler(BasePeeler):
                 # fit the thing
                 fit_pipeline = fit_pipeline.to(device)
                 fit_pipeline.fit(
-                    recording=self.recording, waveforms=waveforms, **fixed_properties
+                    recording=self.recording,
+                    waveforms=waveforms,
+                    computation_cfg=computation_cfg,
+                    **fixed_properties,
                 )
                 fit_pipeline.to("cpu")
             finally:

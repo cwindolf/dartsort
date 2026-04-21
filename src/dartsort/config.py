@@ -26,23 +26,50 @@ class DARTsortUserConfig:
     dredge_only: bool = argfield(
         False, doc="Whether to stop after initial localization and motion tracking."
     )
-    matching_iterations: int = 1
-    preprocessing: PreprocessingStrategy = "none"
+    matching_iterations: int = argfield(
+        default=1,
+        doc="By default, 1 template matching step is carried out using templates "
+        "estimated from the initial detection round.",
+    )
+    preprocessing: PreprocessingStrategy = argfield(
+        default="none",
+        arg_type=str,
+        doc="If other than 'none', dartsort will apply a standard preprocessing "
+        "to the recording. Leave as 'none' if you'd prefer to control preprocessing. "
+        "If so, be aware that dartsort expects its input to be standardized on "
+        "each channel in addition to the usual highpass filtering, but that "
+        "whitening is handled internally. See util/preprocess_util.py if you're "
+        "curious about the details of the methods.",
+    )
+    subsampling_spikes: int | None = argfield(
+        default=2_048_000,
+        arg_type=int_or_none,
+        doc="Detection steps before the final matching round will run until at least "
+        "this many spikes are found or the whole recording is covered, to make sure "
+        "that there is enough data for clustering. See also subsampling_fraction. "
+        "Set to None to disable subsampling.",
+    )
+    subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = argfield(
+        default=0.1,
+        doc="Early detection steps which have already found `subsampling_spikes` "
+        "spikes are only allowed to end early if they additionally cover this "
+        "fraction of the recording, to make sure there's good coverage of "
+        "conditions for template estimation.",
+    )
 
     # -- computer options
     n_jobs_cpu: int = argfield(
         default=0,
         doc="Number of parallel workers to use when running on CPU. "
-        "0 means everything runs on the main thread.",
+        "0 means everything runs on the main thread; negative means "
+        "#cpu - (val+1) so that -1 is all cores, -2 is all less 1, etc.",
     )
     n_jobs_gpu: int = argfield(
-        default=0,
-        doc="Number of parallel workers to use when running on GPU. "
-        "0 means everything runs on the main thread.",
+        default=0, doc="Number of parallel workers to use when running on GPU."
     )
     n_jobs_small: int = argfield(
-        default=8,
-        doc="Max workers to use for small jobs (will not exceed #cores).",
+        default=-2,
+        doc="Max workers to use for small jobs.",
     )
     device: str | None = argfield(
         default=None,
@@ -101,6 +128,11 @@ class DARTsortUserConfig:
         doc="Initial detection's neural net matching threshold. Same as "
         "matching_threshold, except that a neural net is trying to guess "
         "the true waveforms here, rather than using cluster templates.",
+    )
+    motion_voltage_threshold: Annotated[float, Field(gt=0)] = argfield(
+        default=4.0,
+        doc="If subsampling, a quick thresholding will be run at this voltage "
+        "threshold to grab spikes for motion estimation purposes.",
     )
 
     # -- featurization length, radius, rank parameters
@@ -219,6 +251,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
     fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
+    n_residual_snips: int = 2 * 4096
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000
@@ -279,7 +312,6 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
-    clustering_workers: int = 5
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 500_000
     pre_refinement_merge: bool = True
     pre_refinement_merge_metric: str = "normeuc"
@@ -296,7 +328,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_rank: int | None = argfield(default=None, arg_type=int_or_none)
     initialize_at_rank_0: bool = False
     signal_rank: Annotated[int, Field(ge=0)] = 3
-    gmm_max_spikes: Annotated[int, Field(gt=0)] = 1500 * 1024
+    gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
     kmeansk: int = 4
     min_cluster_size: int = 25
 

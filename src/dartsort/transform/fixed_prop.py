@@ -1,5 +1,4 @@
 import torch
-from dartsort.util.spiketorch import ptp
 
 from .transform_base import BaseWaveformFeaturizer
 
@@ -24,5 +23,5 @@ class FixedProperty(BaseWaveformFeaturizer):
         self.shape = ()
         self.dtype = dtype
 
-    def transform(self, waveforms, **rest):
-        return {self.name: rest[self.name]}
+    def transform(self, waveforms, **spike_data):
+        return {self.name: spike_data[self.name]}

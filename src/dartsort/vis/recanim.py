@@ -13,7 +13,6 @@ from ..localize.localize_util import localize_waveforms
 glasbey1024a = np.c_[glasbey1024, np.ones(len(glasbey1024))]
 _t = np.array([1.0, 1, 1, 0])
 _LW = 1
-_MAX_SC = 512
 
 
 class RecordingAnimation:
@@ -188,6 +187,7 @@ class RecordingAnimation:
         self.signal_ax.set_ylim([z0, z1])
 
         self._has_drawn = True
+        assert self.vlines is not None
         for vl in self.vlines:
             vl.set_xdata(
                 2

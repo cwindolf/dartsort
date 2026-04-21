@@ -1,18 +1,39 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
+from typing import Sequence
+
 import torch
 
-from .transform_base import BaseWaveformModule, BaseWaveformFeaturizer
 from ..util.data_util import SpikeDataset
-from ..util.internal_config import WaveformConfig, FeaturizationConfig
+from ..util.internal_config import (
+    FeaturizationConfig,
+    WaveformConfig,
+    ComputationConfig,
+)
+from ..util.waveform_util import assert_all_finite_in_probe
+from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
 
 class WaveformPipeline(torch.nn.Module):
-    def __init__(self, transformers: list[BaseWaveformModule], kwargs_to_store=None):
+    def __init__(
+        self,
+        transformers: Sequence[BaseWaveformModule],
+        channel_index: torch.Tensor | None = None,
+        kwargs_to_store=None,
+        waveform_cfg=None,
+        sampling_frequency=30_000.0,
+    ):
         super().__init__()
         check_unique_feature_names(transformers)
         self.transformers: list[BaseWaveformModule] = torch.nn.ModuleList(transformers)  # type: ignore
         self.kwargs_to_store = kwargs_to_store
+        self.sampling_frequency = sampling_frequency
+        self.waveform_cfg = waveform_cfg
+        if channel_index is not None:
+            self.register_buffer("channel_index", channel_index.clone())
+        else:
+            self.channel_index = None
+        self.safe = False
 
     def __len__(self):
         return len(self.transformers)
@@ -22,9 +43,14 @@ class WaveformPipeline(torch.nn.Module):
         return bool(len(self.transformers))
 
     def get_extra_state(self):
-        if self.kwargs_to_store is None:
-            return {}
-        return dict(class_names_and_kwargs=self.kwargs_to_store)
+        extra_state = {}
+        if self.kwargs_to_store is not None:
+            extra_state["class_names_and_kwargs"] = self.kwargs_to_store
+        if self.waveform_cfg is not None:
+            extra_state["waveform_cfg"] = self.waveform_cfg
+        if self.sampling_frequency is not None:
+            extra_state["sampling_frequency"] = self.sampling_frequency
+        return extra_state
 
     def set_extra_state(self, state):
         # needed so that load_state_dict doesn't complain if there's
@@ -44,6 +70,8 @@ class WaveformPipeline(torch.nn.Module):
         state_dict = torch.load(state_dict_pt)
         extra_state = state_dict.get("_extra_state", {})
         class_names_and_kwargs = extra_state.get("class_names_and_kwargs")
+        waveform_cfg = extra_state.get("waveform_cfg")
+        sampling_frequency = extra_state.get("sampling_frequency")
         if class_names_and_kwargs is None:
             raise ValueError(
                 "Can't load a featurization pipeline from state dict if it "
@@ -53,7 +81,11 @@ class WaveformPipeline(torch.nn.Module):
                 "directly. (You may want to just use torch.save() and load()!)"
             )
         self = cls.from_class_names_and_kwargs(
-            geom, channel_index, class_names_and_kwargs
+            geom,
+            channel_index,
+            class_names_and_kwargs,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
         self.precompute()
         # strict=False is needed here, because some transformers don't have
@@ -63,7 +95,14 @@ class WaveformPipeline(torch.nn.Module):
         return self
 
     @classmethod
-    def from_class_names_and_kwargs(cls, geom, channel_index, class_names_and_kwargs):
+    def from_class_names_and_kwargs(
+        cls,
+        geom,
+        channel_index,
+        class_names_and_kwargs,
+        waveform_cfg: WaveformConfig | None,
+        sampling_frequency: float = 30_000.0,
+    ):
         from .all_transformers import transformers_by_class_name
 
         channel_index = torch.as_tensor(channel_index)
@@ -82,21 +121,32 @@ class WaveformPipeline(torch.nn.Module):
                 )
             else:
                 transformer = transformer_cls(
-                    channel_index=channel_index, geom=geom, **kwargs
+                    channel_index=channel_index,
+                    geom=geom,
+                    waveform_cfg=waveform_cfg,
+                    sampling_frequency=sampling_frequency,
+                    **kwargs,
                 )
             transformers.append(transformer)
 
-        return cls(transformers, kwargs_to_store=class_names_and_kwargs)
+        return cls(
+            transformers,
+            channel_index=channel_index,
+            kwargs_to_store=class_names_and_kwargs,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
+        )
 
     @classmethod
     def from_config(
         cls,
-        featurization_cfg,
-        waveform_cfg,
+        *,
+        featurization_cfg: FeaturizationConfig,
+        waveform_cfg: WaveformConfig,
         recording=None,
         geom=None,
         channel_index=None,
-        sampling_frequency: int | float = 30_000,
+        sampling_frequency: float,
     ):
         if geom is None:
             from dartsort.util.waveform_util import make_channel_index
@@ -111,15 +161,30 @@ class WaveformPipeline(torch.nn.Module):
             assert recording is None
             assert channel_index is not None
         args = featurization_config_to_class_names_and_kwargs(
-            featurization_cfg, waveform_cfg, sampling_frequency=sampling_frequency
+            featurization_cfg,
+            waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
-        return cls.from_class_names_and_kwargs(geom, channel_index, args)
+        return cls.from_class_names_and_kwargs(
+            geom,
+            channel_index,
+            args,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
+        )
 
     def needs_precompute(self):
         return any(t.needs_precompute() for t in self.transformers)
 
     def needs_fit(self):
         return any(t.needs_fit() for t in self.transformers)
+
+    def attach_motion(self, motion):
+        for t in self.transformers:
+            t.attach_motion(motion)
+
+    def needs_residual(self):
+        return any(t.needs_residual for t in self.transformers)
 
     def forward(self, waveforms, **fixed_properties):
         """
@@ -131,41 +196,68 @@ class WaveformPipeline(torch.nn.Module):
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
-            # allow scalars or spike-len vectors
             assert v.shape == () or v.shape[0] == waveforms.shape[0]
 
-        features = {}
+        features = fixed_properties.copy()
+        features["waveforms"] = waveforms
 
         if not waveforms.shape[0]:
             return waveforms, features
 
         for transformer in self.transformers:
             if transformer.is_featurizer and transformer.is_denoiser:
-                waveforms, new_features = transformer(waveforms, **fixed_properties)
-                features.update(new_features)
+                waveforms, new_features = transformer(**features)
+                features.update(waveforms=waveforms, **new_features)
             elif transformer.is_featurizer:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
-                features.update(transformer.transform(waveforms, **fixed_properties))
+                features.update(transformer.transform(**features))
             elif transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties)
+                features["waveforms"] = waveforms = transformer(**features)
+
+            if self.safe:
+                assert_all_finite_in_probe(
+                    waveforms,
+                    features["channels"],
+                    self.channel_index,
+                    str(transformer),
+                )
 
         return waveforms, features
 
-    def fit(self, recording, waveforms, **fixed_properties):
+    def fit(
+        self,
+        recording,
+        waveforms,
+        computation_cfg: ComputationConfig,
+        **fixed_properties,
+    ):
         waveforms = torch.asarray(waveforms)
+        h5_path = fixed_properties.pop("hdf5_filename", None)
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
+        fixed_properties["hdf5_filename"] = h5_path
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
-            assert v.shape[0] == waveforms.shape[0]
+            if torch.is_tensor(v):
+                assert v.shape[0] == waveforms.shape[0]
 
         if not self.needs_fit():
             return
 
-        for transformer in self.transformers:
+        features = fixed_properties.copy()
+        features["waveforms"] = waveforms
+        del waveforms
+
+        if self.safe:
+            assert torch.is_tensor(features["waveforms"])
+            assert_all_finite_in_probe(
+                features["waveforms"], features["channels"], self.channel_index, "Init"
+            )
+
+        for tix, transformer in enumerate(self.transformers):
             if transformer.needs_fit():
                 transformer.train()
                 transformer.fit(
-                    recording=recording, waveforms=waveforms, **fixed_properties
+                    recording=recording, computation_cfg=computation_cfg, **features
                 )
             transformer.eval()
             transformer.requires_grad_(False)
@@ -174,16 +266,33 @@ class WaveformPipeline(torch.nn.Module):
             if not self.needs_fit():
                 break
 
-            if transformer.is_denoiser:
-                waveforms = transformer(waveforms, **fixed_properties)
-                if transformer.is_featurizer:
-                    # result is tuple wfs, feats
-                    waveforms = waveforms[0]
-        assert not waveforms.requires_grad
+            if transformer.is_featurizer and transformer.is_denoiser:
+                waveforms, new_features = transformer(**features)
+                features.update(waveforms=waveforms, **new_features)
+            elif transformer.is_featurizer:
+                assert isinstance(transformer, BaseWaveformFeaturizer)
+                features.update(transformer.transform(**features))
+            elif transformer.is_denoiser:
+                features["waveforms"] = transformer(**features)
+
+            if self.safe:
+                assert torch.is_tensor(features["waveforms"])
+                this = str(type(transformer).__name__)
+                prev = ">".join(str(type(t).__name__) for t in self.transformers[:tix])
+                assert_all_finite_in_probe(
+                    features["waveforms"],
+                    features["channels"],
+                    self.channel_index,
+                    f"({tix}): {this} <- [{prev}]",
+                )
+
+        assert not features["waveforms"].requires_grad
+        assert not self.needs_fit()
 
     def precompute(self):
         for transformer in self.transformers:
             transformer.precompute()
+        assert not self.needs_precompute()
 
     def __iter__(self):
         return iter(self.transformers)
@@ -210,7 +319,7 @@ def check_unique_feature_names(transformers):
 def featurization_config_to_class_names_and_kwargs(
     featurization_cfg: FeaturizationConfig,
     waveform_cfg: WaveformConfig,
-    sampling_frequency: float = 30_000.0,
+    sampling_frequency: float,
 ):
     """Convert this config into a list of waveform transformer classes and arguments
 
@@ -224,20 +333,15 @@ def featurization_config_to_class_names_and_kwargs(
     class_names_and_kwargs = []
     do_feats = not fc.denoise_only
 
-    tos = waveform_cfg.trough_offset_samples(sampling_frequency)
-    sls = waveform_cfg.spike_length_samples(sampling_frequency)
-    tos_kw = dict(trough_offset_samples=tos)
-    sls_kw = dict(spike_length_samples=sls)
-
     if do_feats and fc.save_input_voltages:
         class_names_and_kwargs.append(
-            ("Voltage", {"name_prefix": fc.input_waveforms_name, **tos_kw})
+            ("Voltage", {"name_prefix": fc.input_waveforms_name})
         )
     if do_feats and fc.save_collidedness:
         class_names_and_kwargs.append(("FixedProperty", {"name": "collidedness"}))
     if fc.save_input_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fc.input_waveforms_name, **sls_kw})
+            ("Waveform", {"name_prefix": fc.input_waveforms_name})
         )
     if do_feats and fc.learn_cleaned_tpca_basis:
         class_names_and_kwargs.append(
@@ -254,13 +358,15 @@ def featurization_config_to_class_names_and_kwargs(
         )
 
     # logic for picking an efficient combo of tpcas and nn denoisers
-    class_names_and_kwargs.extend(_add_tpca_and_nn(featurization_cfg, waveform_cfg))
+    class_names_and_kwargs.extend(
+        _add_tpca_and_nn(featurization_cfg, waveform_cfg, sampling_frequency)
+    )
 
-    if fc.do_enforce_decrease:
+    if fc.do_enforce_decrease is True:
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if fc.save_output_waveforms:
         class_names_and_kwargs.append(
-            ("Waveform", {"name_prefix": fc.output_waveforms_name, **sls_kw})
+            ("Waveform", {"name_prefix": fc.output_waveforms_name})
         )
 
     if fc.save_output_tpca_projs:
@@ -279,10 +385,23 @@ def featurization_config_to_class_names_and_kwargs(
     # logic for grabbing localizations and amplitude vectors
     class_names_and_kwargs.extend(_add_localization_and_ampvec(featurization_cfg))
 
+    if fc.use_gmm_classifier:
+        class_names_and_kwargs.append(
+            (
+                "TruncatedMixtureModelTransformer",
+                {
+                    "clustering_cfg": fc.pre_gmm_clustering_cfg,
+                    "clustering_features_cfg": fc.gmm_clustering_features_cfg,
+                    "pre_gmm_refinement_cfgs": fc.pre_gmm_refinement_cfgs,
+                    "gmm_refinement_cfg": fc.gmm_refinement_cfg,
+                },
+            )
+        )
+
     return class_names_and_kwargs
 
 
-def _add_tpca_and_nn(fc, wc):
+def _add_tpca_and_nn(fc, wc, fs):
     do_feats = not fc.denoise_only
     more = []
 
@@ -290,15 +409,18 @@ def _add_tpca_and_nn(fc, wc):
     # we can combine the tpca featurization and denoising into one step
     # it's not exactly equivalent, since the denoiser would have run on the full
     # time length, but it's close enough
+    need_input_tpca_projs = (
+        fc.compute_input_tpca_projs_regardless or fc.save_input_tpca_projs
+    )
     combine = (
         do_feats
-        and fc.save_input_tpca_projs
+        and need_input_tpca_projs
         and not (
             fc.do_nn_denoise or fc.save_output_waveforms or fc.save_output_tpca_projs
         )
     )
-    if combine or (do_feats and fc.save_input_tpca_projs):
-        tslice = fc.input_tpca_waveform_cfg.relative_slice(wc)
+    if combine or (do_feats and need_input_tpca_projs):
+        tslice = fc.input_tpca_waveform_cfg.relative_slice(wc, fs)
         more.append(
             (
                 "TemporalPCA",
@@ -309,6 +431,7 @@ def _add_tpca_and_nn(fc, wc):
                     "temporal_slice": tslice,
                     "max_waveforms": fc.tpca_max_waveforms,
                     "fit_radius": fc.tpca_fit_radius,
+                    "save_feature": fc.save_input_tpca_projs,
                 },
             )
         )
@@ -349,6 +472,32 @@ def _add_localization_and_ampvec(fc):
     do_feats = not fc.denoise_only
     more = []
 
+    do_ptp_amp = do_feats and fc.save_amplitudes
+    do_peak_vec = do_feats and (
+        fc.do_localization
+        and fc.localization_amplitude_type == "peak"
+        and not fc.nn_localization
+    )
+    do_ptp_vec = do_feats and fc.save_amplitudes
+    do_logptt = do_feats and fc.save_amplitudes
+    do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
+    if do_any_amp or (do_feats and fc.save_all_amplitudes):
+        more.append(
+            (
+                "AmplitudeFeatures",
+                {
+                    "name_prefix": fc.output_waveforms_name,
+                    "ptp_max_amplitude": do_ptp_amp or fc.save_all_amplitudes,
+                    "peak_amplitude_vectors": do_peak_vec or fc.save_all_amplitudes,
+                    "ptp_amplitude_vectors": do_ptp_vec or fc.save_all_amplitudes,
+                    "log_peak_to_trough": do_logptt or fc.save_all_amplitudes,
+                },
+            )
+        )
+
+    if fc.do_enforce_decrease == "loc_only" and fc.do_localization:
+        more.append(("EnforceDecrease", {}))
+
     if do_feats and fc.do_localization and fc.nn_localization:
         more.append(
             (
@@ -370,29 +519,6 @@ def _add_localization_and_ampvec(fc):
                     "localization_model": "com",
                     "radius": fc.localization_radius,
                     "name": "com_localizations",
-                },
-            )
-        )
-
-    do_ptp_amp = do_feats and fc.save_amplitudes
-    do_peak_vec = do_feats and (
-        fc.do_localization
-        and fc.localization_amplitude_type == "peak"
-        and not fc.nn_localization
-    )
-    do_ptp_vec = do_feats and fc.save_amplitudes
-    do_logptt = do_feats and fc.save_amplitudes
-    do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
-    if do_any_amp or (do_feats and fc.save_all_amplitudes):
-        more.append(
-            (
-                "AmplitudeFeatures",
-                {
-                    "name_prefix": fc.output_waveforms_name,
-                    "ptp_max_amplitude": do_ptp_amp or fc.save_all_amplitudes,
-                    "peak_amplitude_vectors": do_peak_vec or fc.save_all_amplitudes,
-                    "ptp_amplitude_vectors": do_ptp_vec or fc.save_all_amplitudes,
-                    "log_peak_to_trough": do_logptt or fc.save_all_amplitudes,
                 },
             )
         )

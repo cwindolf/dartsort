@@ -638,7 +638,7 @@ class DARTsortSorting:
         with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
             dset = h5[dataset_name]
             assert isinstance(dset, h5py.Dataset)
-            return dset[:]
+            return dset[()]
 
     def slice_feature_by_name(
         self, dataset_name: str, mask: np.ndarray | slice = slice(None)
@@ -1308,7 +1308,7 @@ def yield_chunks(
 
     The dataset can either not be chunked or chunked only on the first axis.
     """
-    if dataset.chunks is None:
+    if not hasattr(dataset, "chunks") or dataset.chunks is None:
         chunks = (
             slice(s, min(s + fallback_chunk_length, len(dataset)))
             for s in range(0, len(dataset), fallback_chunk_length)
@@ -1426,7 +1426,8 @@ def subsample_waveforms(
             fit_max_reweighting=fit_max_reweighting,
             voltages_dataset_name=voltages_dataset_name,
         )
-        fixed_property_keys = [k for k in fixed_property_keys if k in h5]
+        for k in fixed_property_keys:
+            assert k in h5, k
         if n_wf > n_waveforms_fit and not subsample_by_weighting:
             choices = random_state.choice(
                 n_wf, p=weights, size=n_waveforms_fit, replace=replace

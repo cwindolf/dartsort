@@ -11,7 +11,7 @@ from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
-from ..clustering.gmm.mixture import (
+from ..clustering.mixture import (
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
@@ -29,8 +29,10 @@ from ..util import spiketorch
 from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
 from ..util.internal_config import (
     ComputationConfig,
+    ClusteringFeaturesConfig,
     InterpolationParams,
     RefinementConfig,
+    default_clustering_features_cfg,
     default_refinement_cfg,
 )
 from ..util.interpolation_util import (
@@ -76,7 +78,7 @@ class MixtureVisData:
 
     @property
     def times_seconds(self):
-        return self.sorting.times_seconds  # type: ignore
+        return self.sorting.times_seconds
 
     def to_sorting(self) -> DARTsortSorting:
         return self.sorting.ephemeral_replace(labels=self.full_labels)
@@ -182,8 +184,8 @@ class MixtureVisData:
 
 
 class MixtureComponentPlot(BasePlot):
-    width = 1
-    height = 1
+    width = 1.0
+    height = 1.0
     kind = "mixture"
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
@@ -555,7 +557,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     hsa, hsb = bimod_stats(hist)
                     hstats[label] = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
                     try:
-                        kdest = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+                        kdest = FFTKDE(bw="ISJ").fit(dll)
                     except ValueError as e:
                         messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
                         continue
@@ -582,8 +584,8 @@ class NeighborQDAPlot(MixtureComponentPlot):
                 if made_one and self.log:
                     ax.semilogy()
 
-            hstatt = f"H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
-            kstatt = f"K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
+            hstatt = "H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
+            kstatt = "K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
             ax.set_title(f"{iout}\n{covt}\n{hstatt}\n{kstatt}", fontsize="small")
 
         for ax in axes.flat[len(neighbors) :]:
@@ -732,7 +734,7 @@ class MeanView(MixtureComponentPlot):
 
         ax = panel.subplots()
         ax.axis("off")
-        lines, pchans = geomplot(  # type: ignore
+        lines, pchans = geomplot(
             waveforms=waveforms,
             channels=wchans,
             color="k",
@@ -886,8 +888,8 @@ class CovarianceView(MixtureComponentPlot):
             imb = row_top[1].imshow(cov_emp - cov, **res_kw)
             ax_bottom.plot(ev[: self.neigs], color=c, label=name)
         if not self.cov_vert:
-            plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
-            plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
+            plt.colorbar(ima, ax=row_top[0], shrink=0.3)
+            plt.colorbar(imb, ax=row_top[1], shrink=0.3)
 
         if self.cov_vert:
             axes_top[0, 0].set_title("cov", fontsize="small")
@@ -995,11 +997,11 @@ class SplitView(MixtureComponentPlot):
         if have_kmeans:
             assert debug_info.split_data is not None
             chans_by_km = {}
-            for l in kmeans_labels.unique():
-                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == l]
+            for ll in kmeans_labels.unique():
+                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == ll]
                 chans_l = mix_data.tmm.neighb_cov.obs_ix[neighbs_l]
                 chans_l = chans_l[chans_l < mix_data.tmm.neighb_cov.n_channels]
-                chans_by_km[l.item()] = chans_l.numpy(force=True)
+                chans_by_km[ll.item()] = chans_l.numpy(force=True)
         else:
             chans_by_km = None
 
@@ -1060,7 +1062,7 @@ class SplitView(MixtureComponentPlot):
                 f"{_bold('imp')}: {debug_info.merge_res.improvement:.3f}\n"
             )
         else:
-            txt += f"no allowed partitions\n"
+            txt += "no allowed partitions\n"
         if debug_info.split_model is not None:
             sprops = debug_info.split_model.b.log_proportions.cpu()
             sprops = (
@@ -1334,6 +1336,7 @@ def fit_mixture_for_vis(
     *,
     sorting: DARTsortSorting,
     motion,
+    clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
     em: bool = True,
@@ -1345,9 +1348,12 @@ def fit_mixture_for_vis(
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion=motion,
+        clustering_features_cfg=clustering_features_cfg,
+        stable_features=None,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
+    assert mix_data.full_data is not None
     if em or split or merge or both:
         mix_data.tmm.em(mix_data.train_data)
     for _ in range(max(int(split), int(both))):
@@ -1481,7 +1487,7 @@ def make_mixture_summaries(
 
     save_folder.mkdir(exist_ok=True, parents=True)
     global_params = dict(**other_global_params)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
 
     initargs = (
         mix_data,
@@ -1655,8 +1661,8 @@ def vis_split_interpolation(
     vis_ix = []
     rg = np.random.default_rng(seed)
     ulabels = kmeans_labels.unique()
-    for l in ulabels:
-        (in_l,) = (kmeans_labels == l).nonzero(as_tuple=True)
+    for ll in ulabels:
+        (in_l,) = (kmeans_labels == ll).nonzero(as_tuple=True)
         in_l = in_l.numpy(force=True)
         if in_l.size > n_per_group:
             in_l = rg.choice(in_l, size=n_per_group, replace=False)
@@ -1754,9 +1760,9 @@ def vis_obs_interpolation(
         disp = mix_data.motion.disp_at_s(t_s, z)
 
     dev = mix_data.tmm.b.means.device
-    sgeom = pad_geom(mix_data.sorting.geom, device=dev)  # type: ignore
+    sgeom = pad_geom(mix_data.sorting.geom, device=dev)
     tgeom = torch.asarray(mix_data.prgeom).to(sgeom)
-    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)  # type: ignore
+    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)
     erps = {}
     for k, ip in (erp_params or {}).items():
         erps[k] = StableFeaturesInterpolator(

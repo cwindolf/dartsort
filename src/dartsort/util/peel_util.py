@@ -1,19 +1,17 @@
 from pathlib import Path
-from typing import overload, Literal
 
 import h5py
 import numpy as np
 import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
-from .data_util import DARTsortSorting
-from . import job_util
-from .py_util import resolve_path
 from ..peel.peel_base import BasePeeler
-from .internal_config import FeaturizationConfig, ComputationConfig
+from . import job_util
+from .data_util import DARTsortSorting
+from .internal_config import ComputationConfig, FeaturizationConfig
+from .py_util import resolve_path
 
 
-@overload
 def run_peeler(
     peeler: BasePeeler,
     *,
@@ -25,61 +23,12 @@ def run_peeler(
     chunk_starts_samples: np.ndarray | None = None,
     overwrite: bool = False,
     residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[True],
-    localization_dataset_name="point_source_localizations",
-) -> None: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[False] = False,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
+    skip_resid_snips: bool = False,
     show_progress: bool = True,
     fit_only: bool = False,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting | None: ...
-
-
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: bool = False,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
+    shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -97,6 +46,9 @@ def run_peeler(
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
 
+    is_subsampling = stop_after_n_spikes is not None
+    is_subsampling = is_subsampling and ensure_coverage != 1.0
+
     if peeler_is_done(
         peeler,
         output_hdf5_filename,
@@ -104,6 +56,9 @@ def run_peeler(
         chunk_starts_samples=chunk_starts_samples,
         do_localization=do_localization_later,
         localization_dataset_name=localization_dataset_name,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
+        shuffle=is_subsampling or shuffle,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -118,9 +73,8 @@ def run_peeler(
         return
 
     # run main
-    n_resid_now = featurization_cfg.n_residual_snips * int(
-        not featurization_cfg.residual_later
-    )
+    n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
+    n_resid_now = 0 if is_subsampling else n_resid_snips
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -129,11 +83,11 @@ def run_peeler(
         show_progress=show_progress,
         computation_cfg=computation_cfg,
         total_residual_snips=n_resid_now,
-        stop_after_n_waveforms=featurization_cfg.stop_after_n,
-        shuffle=featurization_cfg.shuffle,
+        stop_after_n_waveforms=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
+        shuffle=is_subsampling or shuffle,
     )
-
-    if featurization_cfg.residual_later:
+    if n_resid_snips and is_subsampling:
         peeler.run_subsampled_peeling(
             output_hdf5_filename,
             chunk_length_samples=peeler.spike_length_samples,
@@ -141,7 +95,7 @@ def run_peeler(
             skip_features=True,
             ignore_resuming=True,
             computation_cfg=computation_cfg,
-            n_chunks=featurization_cfg.n_residual_snips,
+            n_chunks=n_resid_snips,
             task_name="Residual snips",
             overwrite=False,
             ordered=True,
@@ -172,9 +126,12 @@ def peeler_is_done(
     overwrite=False,
     n_residual_snips=0,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     do_localization=True,
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
+    shuffle=False,
 ):
     if overwrite:
         return False
@@ -202,14 +159,17 @@ def peeler_is_done(
         )
         return done
 
-    last_chunk_start, n_residual_snips = peeler.check_resuming(
+    chunk_starts_samples = peeler.get_chunk_starts(
+        chunk_starts_samples=chunk_starts_samples, subsampled=shuffle
+    )
+    done, *_ = peeler.check_resuming(
         output_hdf5_filename,
+        chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_waveforms=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=False,
     )
-    chunk_starts_samples = peeler.get_chunk_starts(
-        chunk_starts_samples=chunk_starts_samples
-    )
-    return last_chunk_start >= max(chunk_starts_samples)
+    return done
 
 
 def _ensure_torch_linalg(computation_cfg):

@@ -1348,6 +1348,7 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
     n = x.shape[0]
     assert x.ndim == 3
     assert labels.shape == (n,)
+    assert channels.shape[0] == n
     if weights is None:
         weights = x.new_ones(n)
     unique_labels = labels.unique()

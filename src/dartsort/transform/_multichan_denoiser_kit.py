@@ -9,7 +9,7 @@ import numpy as np
 
 from .transform_base import BaseWaveformDenoiser
 from ..util.waveform_util import regularize_channel_index
-from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg
+from ..util.spiketorch import get_relative_index, reindex
 from ..util.logging_util import get_logger
 from ..util import nn_util
 from ..util import spikeio
@@ -23,6 +23,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self,
         channel_index,
         geom,
+        waveform_cfg,
+        sampling_frequency=30_000.0,
         hidden_dims=(1024, 1024),
         norm_kind="none",
         name=None,
@@ -50,7 +52,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         step_callback=None,
     ):
         super().__init__(
-            geom=geom, channel_index=channel_index, name=name, name_prefix=name_prefix
+            geom=geom,
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
 
         self.norm_kind = norm_kind

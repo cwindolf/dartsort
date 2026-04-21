@@ -1,5 +1,4 @@
 import warnings
-from typing import Literal
 
 import numpy as np
 import torch
@@ -12,11 +11,12 @@ from ..util.data_util import SpikeDataset
 from ..util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
+    PeakSign,
     ThresholdingConfig,
     WaveformConfig,
-    PeakSign,
     default_peeling_fit_sampling_cfg,
     default_thresholding_cfg,
+    default_waveform_cfg,
 )
 from ..util.waveform_util import get_channel_index_rel_inds, make_channel_index
 from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
@@ -28,9 +28,8 @@ class ThresholdAndFeaturize(BasePeeler):
         recording: BaseRecording,
         channel_index: np.ndarray | torch.Tensor,
         featurization_pipeline: WaveformPipeline | None = None,
-        trough_offset_samples=42,
-        spike_length_samples=121,
         p: ThresholdingConfig = default_thresholding_cfg,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         peak_channel_index=None,
         dedup_channel_index=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
@@ -42,17 +41,19 @@ class ThresholdAndFeaturize(BasePeeler):
         fixed_prop_keys = ("channels",)
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
+        spike_length_samples = waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         super().__init__(
             recording=recording,
             channel_index=channel_index,
             featurization_pipeline=featurization_pipeline,
             chunk_length_samples=p.chunk_length_samples,
+            waveform_cfg=waveform_cfg,
             chunk_margin_samples=self.next_margin(spike_length_samples, factor=5),
             fit_sampling_cfg=fit_sampling_cfg,
             dtype=dtype,
-            trough_offset_samples=trough_offset_samples,
             fixed_property_keys=fixed_prop_keys,
-            spike_length_samples=spike_length_samples,
         )
         self.p = p
         self.peel_kind = f"Threshold {p.detection_threshold}"
@@ -101,27 +102,22 @@ class ThresholdAndFeaturize(BasePeeler):
         thresholding_cfg: ThresholdingConfig,
         featurization_cfg: FeaturizationConfig,
         sampling_cfg: FitSamplingConfig,
+        featurization_pipeline: WaveformPipeline | None = None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
         channel_index = make_channel_index(
             geom, featurization_cfg.extract_radius, to_torch=True
         )
 
-        featurization_pipeline = WaveformPipeline.from_config(
-            geom=geom,
-            channel_index=channel_index,
-            featurization_cfg=featurization_cfg,
-            waveform_cfg=waveform_cfg,
-            sampling_frequency=recording.sampling_frequency,
-        )
+        if featurization_pipeline is None:
+            featurization_pipeline = WaveformPipeline.from_config(
+                geom=geom,
+                channel_index=channel_index,
+                featurization_cfg=featurization_cfg,
+                waveform_cfg=waveform_cfg,
+                sampling_frequency=recording.sampling_frequency,
+            )
 
-        # waveform logic
-        trough_offset_samples = waveform_cfg.trough_offset_samples(
-            recording.sampling_frequency
-        )
-        spike_length_samples = waveform_cfg.spike_length_samples(
-            recording.sampling_frequency
-        )
         save_collidedness = (
             featurization_cfg.save_collidedness and not featurization_cfg.skip
         )
@@ -130,9 +126,8 @@ class ThresholdAndFeaturize(BasePeeler):
             recording,
             channel_index,
             featurization_pipeline=featurization_pipeline,
-            trough_offset_samples=trough_offset_samples,
-            spike_length_samples=spike_length_samples,
             p=thresholding_cfg,
+            waveform_cfg=waveform_cfg,
             fit_sampling_cfg=sampling_cfg,
             save_collidedness=save_collidedness,
         )
@@ -146,6 +141,8 @@ class ThresholdAndFeaturize(BasePeeler):
             datasets.append(
                 SpikeDataset(name="orig_channels", shape_per_spike=(), dtype=float)
             )
+        if self.save_collidedness:
+            datasets.append(SpikeDataset("collidedness", (), "float32"))
         datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype=float))
         return datasets
 
@@ -249,7 +246,7 @@ def threshold_chunk(
     quiet=False,
 ) -> PeelingBatchResult:
     n_index = channel_index.shape[1]
-    times_rel, channels, energies = detect_and_deduplicate(  # type: ignore
+    times_rel, channels, energies = detect_and_deduplicate(
         traces,
         detection_threshold,
         peak_channel_index=peak_channel_index,

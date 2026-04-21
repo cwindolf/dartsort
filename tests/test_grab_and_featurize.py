@@ -10,10 +10,9 @@ import numpy as np
 import spikeinterface.core as sc
 import torch
 from dartsort import transform
-from dartsort.localize.localize_util import localize_hdf5
 from dartsort.peel.grab import GrabAndFeaturize
 from dartsort.util.waveform_util import make_channel_index
-from dartsort.util.internal_config import ComputationConfig
+from dartsort.util.internal_config import ComputationConfig, WaveformConfig
 
 
 two_jobs_cfg = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2)
@@ -26,8 +25,11 @@ def test_grab_and_featurize():
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
     geom = rg.uniform(low=0, high=100, size=(n_channels, 2))
-    rec = sc.NumpyRecording(noise, 10_000)
+    fs = 10_000.0
+    rec = sc.NumpyRecording(noise, fs)
     rec.set_dummy_probe_from_locations(geom)
+    wf_cfg = WaveformConfig()
+    sls = wf_cfg.spike_length_samples(fs)
 
     # random spike times_samples
     n_spikes = 5203
@@ -36,11 +38,14 @@ def test_grab_and_featurize():
 
     # grab the wfs
     channel_index = make_channel_index(geom, 20)
-    pipeline = transform.WaveformPipeline([transform.Waveform(channel_index)])
+    pipeline = transform.WaveformPipeline(
+        [transform.Waveform(channel_index, waveform_cfg=wf_cfg, sampling_frequency=fs)]
+    )
     grab = GrabAndFeaturize(
         rec,
         torch.as_tensor(channel_index),
         pipeline,
+        waveform_cfg=wf_cfg,
         times_samples=torch.as_tensor(times_samples),
         fixed_properties=dict(channels=torch.as_tensor(channels)),
     )
@@ -53,7 +58,7 @@ def test_grab_and_featurize():
             assert cast(h5py.Dataset, h5["channels"]).shape == (n_spikes,)
             assert cast(h5py.Dataset, h5["waveforms"]).shape == (
                 n_spikes,
-                121,
+                sls,
                 channel_index.shape[1],
             )
             assert np.array_equal(cast(h5py.Dataset, h5["geom"])[()], geom)
@@ -69,7 +74,7 @@ def test_grab_and_featurize():
             assert cast(h5py.Dataset, h5["channels"]).shape == (n_spikes,)
             assert cast(h5py.Dataset, h5["waveforms"]).shape == (
                 n_spikes,
-                121,
+                sls,
                 channel_index.shape[1],
             )
             assert np.array_equal(cast(h5py.Dataset, h5["geom"])[()], geom)
@@ -82,13 +87,22 @@ def test_grab_and_featurize():
     channel_index = make_channel_index(geom, 20)
     pipeline = transform.WaveformPipeline(
         [
-            transform.Waveform(channel_index),
+            transform.Waveform(
+                channel_index, waveform_cfg=wf_cfg, sampling_frequency=fs
+            ),
             transform.TemporalPCADenoiser(
                 channel_index=torch.tensor(channel_index),
                 geom=torch.tensor(geom),
                 fit_radius=10,
+                waveform_cfg=wf_cfg,
+                sampling_frequency=fs,
             ),
-            transform.Waveform(channel_index, name="tpca_waveforms"),
+            transform.Waveform(
+                channel_index,
+                name="tpca_waveforms",
+                waveform_cfg=wf_cfg,
+                sampling_frequency=fs,
+            ),
         ]
     )
     grab = GrabAndFeaturize(
@@ -97,6 +111,7 @@ def test_grab_and_featurize():
         pipeline,
         times_samples=torch.as_tensor(times_samples),
         fixed_properties=dict(channels=torch.as_tensor(channels)),
+        waveform_cfg=wf_cfg,
     )
 
     with tempfile.TemporaryDirectory() as tempdir:
@@ -108,12 +123,12 @@ def test_grab_and_featurize():
             assert cast(h5py.Dataset, h5["channels"]).shape == (n_spikes,)
             assert cast(h5py.Dataset, h5["waveforms"]).shape == (
                 n_spikes,
-                121,
+                sls,
                 channel_index.shape[1],
             )
             assert cast(h5py.Dataset, h5["tpca_waveforms"]).shape == (
                 n_spikes,
-                121,
+                sls,
                 channel_index.shape[1],
             )
             assert np.array_equal(cast(h5py.Dataset, h5["geom"])[()], geom)
@@ -131,7 +146,7 @@ def test_grab_and_featurize():
             assert cast(h5py.Dataset, h5["channels"]).shape == (n_spikes,)
             assert cast(h5py.Dataset, h5["waveforms"]).shape == (
                 n_spikes,
-                121,
+                sls,
                 channel_index.shape[1],
             )
             assert np.array_equal(cast(h5py.Dataset, h5["geom"])[()], geom)
