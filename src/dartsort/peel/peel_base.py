@@ -774,6 +774,7 @@ class BasePeeler(BModule):
             chk_per_s = self.recording.sampling_frequency / chunk_length_samples
             n_chunks = int(np.ceil(self.fit_sampling_cfg.n_seconds_fit * chk_per_s))
         n_chunks = min(len(chunk_starts_samples), n_chunks)
+        assert isinstance(n_chunks, int)
 
         # make a random subset of chunks to use for fitting
         chunk_starts_samples = self.sample_chunks(

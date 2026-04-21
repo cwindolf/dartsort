@@ -446,6 +446,7 @@ def threshold_for_motion(
         featurization_cfg=featurization_cfg,
         featurization_pipeline=pipeline,
         sampling_cfg=sampling_cfg,
+        extract_channel_index=channel_index,
         chunk_starts_samples=None,
         overwrite=overwrite,
         show_progress=show_progress,

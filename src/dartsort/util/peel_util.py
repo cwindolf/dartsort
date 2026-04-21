@@ -166,7 +166,7 @@ def peeler_is_done(
         return done
 
     chunk_starts_samples = peeler.get_chunk_starts(
-        chunk_starts_samples=chunk_starts_samples, subsampled=shuffle
+        chunk_starts_samples=chunk_starts_samples, subsampled=shuffle, n_chunks=np.inf
     )
     done, *_ = peeler.check_resuming(
         output_hdf5_filename,

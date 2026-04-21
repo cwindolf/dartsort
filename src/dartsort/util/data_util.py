@@ -713,7 +713,7 @@ def try_get_denoising_pipeline(sorting: DARTsortSorting):
     from dartsort.transform import WaveformPipeline
 
     geom = torch.asarray(getattr(sorting, "geom"))
-    channel_index = torch.asarray(getattr(sorting, "subtract_channel_index"))
+    channel_index = torch.asarray(getattr(sorting, "sub_channel_index"))
     dn = WaveformPipeline.from_state_dict_pt(geom, channel_index, candidates[0])
     dn = dn.eval()
     return dn, geom, channel_index

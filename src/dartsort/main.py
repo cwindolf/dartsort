@@ -632,6 +632,7 @@ def threshold(
     featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     featurization_pipeline: WaveformPipeline | None = None,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+    extract_channel_index: torch.Tensor | None = None,
     chunk_starts_samples=None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
@@ -648,6 +649,7 @@ def threshold(
         thresholding_cfg=thresholding_cfg,
         featurization_cfg=featurization_cfg,
         featurization_pipeline=featurization_pipeline,
+        extract_channel_index=extract_channel_index,
         sampling_cfg=sampling_cfg,
     )
     sorting = run_peeler(

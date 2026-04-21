@@ -102,12 +102,16 @@ class ThresholdAndFeaturize(BasePeeler):
         thresholding_cfg: ThresholdingConfig,
         featurization_cfg: FeaturizationConfig,
         sampling_cfg: FitSamplingConfig,
+        extract_channel_index: torch.Tensor | None = None,
         featurization_pipeline: WaveformPipeline | None = None,
     ):
         geom = torch.tensor(recording.get_channel_locations())
-        channel_index = make_channel_index(
-            geom, featurization_cfg.extract_radius, to_torch=True
-        )
+        if extract_channel_index is None:
+            channel_index = make_channel_index(
+                geom, featurization_cfg.extract_radius, to_torch=True
+            )
+        else:
+            channel_index = extract_channel_index
 
         if featurization_pipeline is None:
             featurization_pipeline = WaveformPipeline.from_config(
