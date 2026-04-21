@@ -162,7 +162,7 @@ def get_pool(
     except AttributeError:
         n_cores = multiprocessing.cpu_count()
     if n_jobs < 0:
-        n_jobs = n_cores - (n_jobs + 1)
+        n_jobs = n_cores + (n_jobs + 1)
     do_parallel = n_jobs >= 1
     n_jobs = max(1, min(n_jobs, n_cores))
 
