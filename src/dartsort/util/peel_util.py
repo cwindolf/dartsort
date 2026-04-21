@@ -28,6 +28,7 @@ def run_peeler(
     fit_only: bool = False,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,
+    shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -45,6 +46,9 @@ def run_peeler(
     if computation_cfg is None:
         computation_cfg = job_util.get_global_computation_config()
 
+    is_subsampling = stop_after_n_spikes is not None
+    is_subsampling = is_subsampling and ensure_coverage != 1.0
+
     if peeler_is_done(
         peeler,
         output_hdf5_filename,
@@ -54,6 +58,7 @@ def run_peeler(
         localization_dataset_name=localization_dataset_name,
         stop_after_n_spikes=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
+        shuffle=is_subsampling or shuffle,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -68,8 +73,6 @@ def run_peeler(
         return
 
     # run main
-    is_subsampling = stop_after_n_spikes is not None
-    is_subsampling = is_subsampling and ensure_coverage != 1.0
     n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
     n_resid_now = 0 if is_subsampling else n_resid_snips
     peeler.peel(
@@ -82,7 +85,7 @@ def run_peeler(
         total_residual_snips=n_resid_now,
         stop_after_n_waveforms=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
-        shuffle=is_subsampling,
+        shuffle=is_subsampling or shuffle,
     )
     if n_resid_snips and is_subsampling:
         peeler.run_subsampled_peeling(
@@ -128,6 +131,7 @@ def peeler_is_done(
     do_localization=True,
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
+    shuffle=False,
 ):
     if overwrite:
         return False
@@ -156,7 +160,7 @@ def peeler_is_done(
         return done
 
     chunk_starts_samples = peeler.get_chunk_starts(
-        chunk_starts_samples=chunk_starts_samples
+        chunk_starts_samples=chunk_starts_samples, subsampled=shuffle
     )
     done, *_ = peeler.check_resuming(
         output_hdf5_filename,

@@ -1,22 +1,24 @@
 import dataclasses
 import tempfile
 from typing import cast
-import pytest
+from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 import spikeinterface.core as sc
 import torch
-from dartsort.util.internal_config import (
-    FeaturizationConfig,
-    FitSamplingConfig,
-    SubtractionConfig,
-    ComputationConfig,
-)
+from test_util import dense_layout
+
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.util import waveform_util
-from test_util import dense_layout
+from dartsort.util.internal_config import (
+    ComputationConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
+    SubtractionConfig,
+)
 
 fixedlenkeys = (
     "subtract_channel_index",
@@ -35,9 +37,8 @@ two_jobs_cfg_spawn = ComputationConfig(
 )
 
 
-def test_fakedata_nonn(tmp_path):
-    print("test_fakedata_nonn")
-    # generate fake neuropixels data with artificial templates
+@pytest.fixture
+def fakedata():
     T_s = 3.5
     fs = 30000
     n_channels = 25
@@ -81,22 +82,9 @@ def test_fakedata_nonn(tmp_path):
     templates[3] *= 50 / np.abs(templates[3]).max()
 
     # make fake spike trains
-    spikes_per_unit = 51
     refrac_t = 100
-    t_remaining = T_samples - spikes_per_unit * refrac_t - 2 * 121 - 1
-    mnp = np.ones(spikes_per_unit) / spikes_per_unit
-    assert t_remaining > spikes_per_unit
-    sts = []
-    labels = []
-    for i in range(len(templates)):
-        dt = refrac_t + rg.multinomial(t_remaining, mnp)
-        assert dt.shape == (spikes_per_unit,)
-        st = 121 + np.cumsum(dt)
-        assert st.max() < T_samples - 121
-        sts.append(st)
-        labels.append(np.full((spikes_per_unit,), i))
-    times = np.concatenate(sts)
-    labels = np.concatenate(labels)
+    times = np.arange(121, T_samples - 121, refrac_t)
+    labels = rg.integers(len(templates), size=times.shape)
 
     # inject the spikes into a noise background
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
@@ -108,6 +96,14 @@ def test_fakedata_nonn(tmp_path):
     # make into spikeinterface
     rec = sc.NumpyRecording(rec, fs)
     rec.set_dummy_probe_from_locations(geom)
+
+    return rec, geom, T_s, fs
+
+
+def test_fakedata_nonn(fakedata, tmp_path):
+    rec, geom, T_s, fs = fakedata
+    print("test_fakedata_nonn")
+    # generate fake neuropixels data with artificial templates
 
     subconf = SubtractionConfig(
         detection_threshold=20.0,
@@ -144,7 +140,6 @@ def test_fakedata_nonn(tmp_path):
         out_h5 = st.parent_h5_path
         ns0 = len(st)
         subtraction_full_spike_count = len(st)
-        subtraction_st = st
         print(ns0)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
@@ -198,6 +193,7 @@ def test_fakedata_nonn(tmp_path):
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=featconf,
+            sampling_cfg=FitSamplingConfig(n_residual_snips=0),
             subtraction_cfg=subconf,
             overwrite=True,
         )
@@ -220,7 +216,6 @@ def test_fakedata_nonn(tmp_path):
             )
 
     for ccfg in (two_jobs_cfg, two_jobs_cfg_spawn):
-        print(f"---- {ccfg=}")
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tempdir:
@@ -230,6 +225,7 @@ def test_fakedata_nonn(tmp_path):
                 recording=rec,
                 output_dir=tempdir,
                 featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -258,6 +254,7 @@ def test_fakedata_nonn(tmp_path):
                 recording=rec,
                 output_dir=tempdir,
                 featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=False,
                 computation_cfg=ccfg,
@@ -286,6 +283,7 @@ def test_fakedata_nonn(tmp_path):
                 recording=rec,
                 output_dir=tempdir,
                 featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -307,36 +305,84 @@ def test_fakedata_nonn(tmp_path):
                     channel_index.shape[1],
                 )
 
-    # simulate resuming a job that got cancelled in the middle
+
+def test_resume(fakedata, tmp_path):
+    rec, geom, T_s, fs = fakedata
+
+    subconf = SubtractionConfig(
+        detection_threshold=20.0,
+        peak_sign="both",
+        subtraction_denoising_cfg=FeaturizationConfig(
+            do_nn_denoise=False, denoise_only=True
+        ),
+        first_denoiser_thinning=0.0,
+        first_denoiser_spatial_jitter=0,
+        first_denoiser_temporal_jitter=0,
+    )
+    featconf = FeaturizationConfig(skip=True)
+    sampconf = FitSamplingConfig(n_residual_snips=0)
+    channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
+    assert channel_index.shape[0] == len(geom)
+    assert channel_index.max() == len(geom)
+    assert channel_index.min() == 0
+
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
         # run 30% of recording, which rounds to 2 chunks, so that
         # the last chunk starts at int(fs)
+        print(f"--- {rec=}")
+        torch.manual_seed(0)
+        st_orig = subtract(
+            recording=rec,
+            output_dir=tempdir,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            sampling_cfg=sampconf,
+        )
+        assert st_orig is not None
+        subtraction_full_spike_count = len(st_orig)
+
+        # remove output, but retain models so that same basis etc are used
+        (Path(tempdir) / "subtraction.h5").unlink()
+
+        # run 30% of recording, which rounds to 2 chunks, so that
+        # the last chunk starts at int(fs)
+        print(f"--- {rec=}")
         torch.manual_seed(0)
         sta = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
+            featurization_cfg=featconf,
             subtraction_cfg=subconf,
+            sampling_cfg=sampconf,
             ensure_coverage=0.3,
             stop_after_n_spikes=0,
         )
+        print("i stop", flush=True)
         assert sta is not None
         with h5py.File(sta.parent_h5_path, locking=False) as h5:
-            assert h5["last_chunk_start"][()] == int(fs)
+            assert h5["last_chunk_index"][()] == 1
+            assert h5["last_chunk_start"][()] >= 0
         # run the rest
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
+            sampling_cfg=sampconf,
+            featurization_cfg=featconf,
             subtraction_cfg=subconf,
+            shuffle=True,
         )
         assert stb is not None
+        with h5py.File(stb.parent_h5_path, locking=False) as h5:
+            assert h5["last_chunk_index"][()] == 3
+            assert h5["last_chunk_start"][()] >= 0
         assert len(sta) < subtraction_full_spike_count
         assert len(stb) == subtraction_full_spike_count
-        np.testing.assert_array_equal(subtraction_st.times_samples, stb.times_samples)
-        np.testing.assert_array_equal(subtraction_st.channels, stb.channels)
+        order = np.argsort(stb.times_samples, stable=True)
+        assert st_orig.times_samples.shape == stb.times_samples.shape
+        np.testing.assert_array_equal(st_orig.times_samples, stb.times_samples[order])
+        np.testing.assert_array_equal(st_orig.channels, stb.channels[order])
 
 
 @pytest.mark.parametrize("nn_localization", [True])

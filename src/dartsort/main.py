@@ -461,6 +461,7 @@ def subtract(
     ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
+    shuffle: bool = False,
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
@@ -488,6 +489,7 @@ def subtract(
         fit_only=subtraction_cfg.fit_only,
         stop_after_n_spikes=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
+        shuffle=shuffle,
     )
     return detections
 

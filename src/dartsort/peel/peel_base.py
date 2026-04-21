@@ -546,6 +546,7 @@ class BasePeeler(BModule):
         # not that something else couldn't happen...
         with delay_keyboard_interrupt:
             if not ignore_resuming:
+                output_h5["last_chunk_index"][()] = output_h5["last_chunk_index"][()] + 1
                 output_h5["last_chunk_start"][()] = chunk_start_samples
 
             if residual_file is not None:
@@ -849,12 +850,17 @@ class BasePeeler(BModule):
             with h5py.File(output_hdf5_filename, "r", locking=False) as h5:
                 last_chunk_start: int = h5["last_chunk_start"][()]
                 h5_starts = h5["chunk_starts_samples"][:]
-                assert np.array_equal(chunk_starts_samples, h5_starts)
+                if not np.array_equal(chunk_starts_samples, h5_starts):
+                    raise ValueError(
+                        "Trying to resume a peeling job, but the chunk starts "
+                        "on disk differ. Maybe shuffle flag changed?"
+                    )
                 n_spikes = len(h5["times_samples"])
                 if last_chunk_start >= 0:
                     is_last = np.flatnonzero(chunk_starts_samples == last_chunk_start)
                     assert is_last.shape == (1,)
                     last_chunk_index = is_last[0]
+                assert last_chunk_index == h5["last_chunk_index"][()]
 
                 residual_snips_so_far = 0
                 if "residual" in h5:
@@ -900,6 +906,7 @@ class BasePeeler(BModule):
             output_hdf5_filename.unlink()
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
+            output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
             output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
         elif exists and ignore_resuming:
             # ignore the previous chunk structure, don't touch it, ignore ignore.
@@ -916,6 +923,7 @@ class BasePeeler(BModule):
             # create create
             output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
+            output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
             output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
 
         if known_spike_count is not None:
@@ -978,7 +986,9 @@ class BasePeeler(BModule):
             assert not ignore_resuming
             assert residual_filename is not None
             last_chunk_start: int = output_h5["last_chunk_start"][()]
+            last_chunk_index: int = output_h5["last_chunk_index"][()]
             if last_chunk_start >= 0:
+                assert last_chunk_index >= 0
                 residual_mode = "ab"
                 assert Path(residual_filename).exists()
             else:
