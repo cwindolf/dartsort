@@ -21,10 +21,10 @@ from .temporal_pca import (
     TemporalPCADenoiser,
     TemporalPCAFeaturizer,
 )
-from .transform_base import Passthrough, Waveform
+from .transform_base import Passthrough, Waveform, BaseWaveformModule
 from .whiten import WaveformWhitener
 
-all_transformers = [
+all_transformers: list[type[BaseWaveformModule]] = [
     Waveform,
     AmplitudeVector,
     MaxAmplitude,
@@ -61,4 +61,4 @@ if hasattr(torch.serialization, "add_safe_globals"):
         WaveformPipeline,
         SingleChannelDenoiser,
     ]
-    torch.serialization.add_safe_globals(all_transformers + others)
+    torch.serialization.add_safe_globals(all_transformers + others)  # type: ignore

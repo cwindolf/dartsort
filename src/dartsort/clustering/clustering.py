@@ -13,10 +13,12 @@ from ..util.internal_config import (
     ComputationConfig,
     FitSamplingConfig,
     RefinementConfig,
+    WaveformConfig,
+    default_waveform_cfg,
 )
 from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
-from . import cluster_util, density, forward_backward, refine_util
+from . import cluster_util, density, forward_backward, refine_util, agglomerate
 from .clustering_features import SimpleMatrixFeatures
 from .gmm import mixture
 
@@ -28,6 +30,7 @@ def get_clusterer(
     clustering_cfg: ClusteringConfig | None = None,
     refinement_cfgs: list[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
     save_cfg=None,
     save_labels_dir=None,
     initial_name=None,
@@ -44,16 +47,8 @@ def get_clusterer(
         clus_strategy = "none"
 
     saving_labels = save_cfg is not None and save_cfg.save_intermediate_labels
-    if saving_labels:
-        shared_save_kw = dict(
-            save_labels_dir=save_labels_dir,
-            save_cfg=save_cfg,
-        )
-    else:
-        shared_save_kw = dict(
-            save_labels_dir=None,
-            save_cfg=None,
-        )
+    if not saving_labels:
+        save_labels_dir = save_cfg = None
 
     C = clustering_strategies[clus_strategy]
     init_fmt = initial_name if (saving_labels and clustering_cfg is not None) else None
@@ -61,7 +56,9 @@ def get_clusterer(
         clustering_cfg,
         labels_fmt=init_fmt,
         computation_cfg=computation_cfg,
-        **shared_save_kw,
+        waveform_cfg=waveform_cfg,
+        save_labels_dir=save_labels_dir,
+        save_cfg=save_cfg,
     )
 
     refinement_cfgs = refinement_cfgs or []
@@ -89,7 +86,9 @@ def get_clusterer(
             refinement_cfg=r_cfg,
             labels_fmt=r_fmt,
             computation_cfg=computation_cfg,
-            **shared_save_kw,
+            waveform_cfg=waveform_cfg,
+            save_labels_dir=save_labels_dir,
+            save_cfg=save_cfg,
         )
 
     return clusterer
@@ -100,12 +99,14 @@ class Clusterer:
         self,
         computation_cfg: ComputationConfig | None = None,
         sampling_cfg: FitSamplingConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
     ):
         self.computation_cfg = computation_cfg
         self.sampling_cfg = sampling_cfg
+        self.waveform_cfg = waveform_cfg
         if computation_cfg is None:
             self.computation_cfg = job_util.get_global_computation_config()
         self.save_cfg = save_cfg
@@ -117,6 +118,7 @@ class Clusterer:
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -127,6 +129,7 @@ class Clusterer:
             sampling_cfg = clustering_cfg.sampling_cfg
         return cls(
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -223,6 +226,7 @@ class GridSnapClusterer(Clusterer):
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -232,6 +236,7 @@ class GridSnapClusterer(Clusterer):
             grid_dx=clustering_cfg.grid_dx,
             grid_dz=clustering_cfg.grid_dz,
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -296,6 +301,7 @@ class DensityPeaksClusterer(Clusterer):
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -316,6 +322,7 @@ class DensityPeaksClusterer(Clusterer):
             workers=clustering_cfg.workers,
             uhdversion=uhdversion,
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -443,6 +450,7 @@ class GMMDensityPeaksClusterer(Clusterer):
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -466,6 +474,7 @@ class GMMDensityPeaksClusterer(Clusterer):
             max_samples=clustering_cfg.sampling_cfg.n_waveforms_fit,
             n_neighbors_search=clustering_cfg.n_neighbors_search,
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -527,6 +536,7 @@ class RecursiveHDBSCANClusterer(Clusterer):
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -538,6 +548,7 @@ class RecursiveHDBSCANClusterer(Clusterer):
             cluster_selection_epsilon=clustering_cfg.cluster_selection_epsilon,
             recursive=clustering_cfg.recursive,
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -571,6 +582,7 @@ class ScikitLearnClusterer(Clusterer):
         cls,
         clustering_cfg: ClusteringConfig | None,
         computation_cfg: ComputationConfig | None = None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
         save_cfg=None,
         save_labels_dir=None,
         labels_fmt=None,
@@ -580,6 +592,7 @@ class ScikitLearnClusterer(Clusterer):
             sklearn_class_name=clustering_cfg.sklearn_class_name,
             sklearn_kwargs=clustering_cfg.sklearn_kwargs,
             computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
             save_cfg=save_cfg,
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
@@ -696,6 +709,28 @@ class PCMergeRefinement(Refinement):
 
 
 refinement_strategies["pcmerge"] = PCMergeRefinement
+
+
+class AgglomerateRefinement(Refinement):
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures,
+        sorting: DARTsortSorting,
+        recording: BaseRecording,
+        motion: MotionInfo,
+    ):
+        return agglomerate.agglomerate(
+            recording=recording,
+            sorting=sorting,
+            template_merge_cfg=None,
+            refinement_cfg=self.refinement_cfg,
+            motion=motion,
+            computation_cfg=self.computation_cfg,
+            waveform_cfg=self.waveform_cfg,
+        ).agglomerated_sorting
+
+
+refinement_strategies["agglomerate"] = AgglomerateRefinement
 
 
 class ForwardBackwardEnsembler(Refinement):

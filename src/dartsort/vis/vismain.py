@@ -40,7 +40,7 @@ def visualize_sorting(
     make_unit_summaries=True,
     make_gt_overviews=True,
     make_unit_comparisons=True,
-    make_mixture_summaries=False,
+    make_mixture_summaries=None,
     make_versus=True,
     analysis=None,
     single_unit_ids=None,
@@ -211,7 +211,7 @@ def visualize_all_sorting_steps(
     make_unit_summaries=True,
     make_gt_overviews=True,
     make_unit_comparisons=True,
-    make_mixture_summaries=False,
+    make_mixture_summaries=None,
     make_versus=True,
     step_sortings=None,
     template_cfg=raw_template_cfg,
@@ -374,7 +374,7 @@ def _plan_vis(
     make_gt_overviews=False,
     make_unit_comparisons=False,
     make_versus=False,
-    make_mixture_summaries=False,
+    make_mixture_summaries=None,
     sorting_analysis=None,
     other_analyses=None,
     gt_analysis=None,
@@ -435,15 +435,6 @@ def _plan_vis(
     else:
         unit_summary_dir = None
 
-    if make_mixture_summaries and is_labeled:
-        mix_dir = output_directory / "mixture_summaries"
-        if overwrite:
-            need_mix = True
-        else:
-            need_mix = not mixture.all_summaries_done(check_ids, mix_dir)
-    else:
-        mix_dir = None
-
     can_gt = gt_analysis is not None and is_labeled
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
@@ -499,6 +490,24 @@ def _plan_vis(
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,
         )
+
+    if make_mixture_summaries is None and hasattr(sorting, "gmm_candidates"):
+        assert sorting.labels is not None
+        c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+        lk = np.flatnonzero(sorting.labels >= 0)
+        is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
+        make_mixture_summaries = is_gmm
+    elif make_mixture_summaries is None:
+        make_mixture_summaries = False
+
+    if make_mixture_summaries and is_labeled:
+        mix_dir = output_directory / "mixture_summaries"
+        if overwrite:
+            need_mix = True
+        else:
+            need_mix = not mixture.all_summaries_done(check_ids, mix_dir)
+    else:
+        mix_dir = None
 
     if need_comparison:
         assert sorting_analysis is not None

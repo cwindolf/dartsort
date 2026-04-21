@@ -20,7 +20,7 @@ class DebugMatchingPursuitDenoiser(BaseWaveformDenoiser):
     def initialize_spike_length_dependent_params(self):
         if not hasattr(self, "basis"):
             # this path is only hit by test_transform
-            zbuf = torch.zeros((1, self.spike_length_samples))  # type: ignore
+            zbuf = torch.zeros((1, self.spike_length_samples))
             self.register_buffer("basis", zbuf)
 
     def needs_fit(self) -> bool:

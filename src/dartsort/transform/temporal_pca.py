@@ -1,5 +1,5 @@
-from typing import Self, cast
 from dataclasses import replace
+from typing import Self, cast
 
 import numpy as np
 import torch
@@ -74,11 +74,11 @@ class BaseTemporalPCA(BaseWaveformModule):
         waveforms,
         *,
         channels,
-        weights=None,
-        time_shifts=None,
-        **unused,
+        **fixed_properties,
     ):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+        weights = fixed_properties.get("weights", None)
+        time_shifts = fixed_properties.get("time_shifts", None)
+        super().fit(recording, waveforms, channels=channels)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
@@ -261,7 +261,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
             n_components=rank,
-            random_state=self.random_state,  # type: ignore
+            random_state=self.random_state,
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)
@@ -283,7 +283,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         **constructor_kwargs,
     ) -> Self:
         if isinstance(pca, PCA):
-            whiten = pca.whiten  # type: ignore
+            whiten = pca.whiten
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
@@ -321,7 +321,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         return self
 
     def initialize_spike_length_dependent_params(self):
+        assert isinstance(self.spike_length_samples, int)
         nt = self.spike_length_samples
+        if self.temporal_slice is not None and self.temporal_slice != slice(None):
+            nt = self.temporal_slice.stop - self.temporal_slice.start
         assert nt is not None
         if self.nt is not None:
             assert nt == self.nt
@@ -329,7 +332,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         if self.temporal_slice is None:
             self._temporal_ix = None
         else:
-            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
+            _temporal_ix = torch.arange(self.spike_length_samples)[self.temporal_slice]
+            self.register_buffer("_temporal_ix", _temporal_ix)
             nt = self.b._temporal_ix.numel()
         self.nt = nt
         self.register_buffer("mean", torch.zeros(nt))
@@ -402,7 +406,9 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         self.align_pad = align_pad
         self.trough = trough
 
-    def forward(self, waveforms, *, alignment_channels, alignment_signs, time_shifts=None, **unused):
+    def forward(self, waveforms, *, channels, **fixed_properties):
+        alignment_signs = fixed_properties["alignment_signs"]
+        time_shifts = fixed_properties.get("time_shifts")
         if not self.alignment_iterations:
             waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
             return self.force_embed(waveforms)
@@ -410,8 +416,8 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
         assert time_shifts is None
 
         # align on main channel
-        w = waveforms.take_along_dim(indices=alignment_channels[:, None, None], dim=2)
-        time_shifts = torch.zeros_like(alignment_channels)
+        w = waveforms.take_along_dim(indices=channels[:, None, None], dim=2)
+        time_shifts = torch.zeros_like(channels)
         for _ in range(self.alignment_iterations):
             x = self._temporal_slice(w, time_shifts=time_shifts)
             r = self.force_project(x)[:, :, 0]

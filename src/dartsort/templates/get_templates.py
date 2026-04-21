@@ -10,13 +10,11 @@ from typing import ClassVar, cast
 import numpy as np
 import torch
 from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
 from tqdm.auto import tqdm
 
 from ..templates import TemplateData
-from ..templates.superres_util import superres_sorting
 from ..util import spikeio
 from ..util.data_util import DARTsortSorting
 from ..util.drift_util import registered_template
@@ -97,23 +95,7 @@ def get_templates_unitextract(
     geom = recording.get_channel_locations()
     if motion is None:
         motion = MotionInfo.from_motion_est(geom=geom)
-
-    # handle superresolved templates
-    if template_cfg.superres_templates:
-        superres_data = superres_sorting(
-            sorting=sorting,
-            motion=motion,
-            strategy=template_cfg.superres_strategy,
-            superres_bin_size_um=template_cfg.superres_bin_size_um,
-            min_spikes_per_bin=template_cfg.superres_bin_min_spikes,
-        )
-        group_ids = superres_data["group_ids"]
-        assert isinstance(superres_data["sorting"], DARTsortSorting)
-        sorting = superres_data["sorting"]
-        properties = superres_data["properties"]
-    else:
-        group_ids = None
-        properties = {}
+    properties = {}
 
     # main!
     results = get_templates(
@@ -128,11 +110,7 @@ def get_templates_unitextract(
         motion=motion,
         localizations_dataset_name=template_cfg.localizations_dataset_name,
     )
-    if template_cfg.superres_templates:
-        assert group_ids is not None
-        unit_ids = group_ids[results["unit_ids"]]  # type: ignore
-    else:
-        unit_ids = results["unit_ids"]
+    unit_ids = results["unit_ids"]
     if tsvd is None:
         tsvd = results["denoising_tsvd"]
     assert tsvd is None or isinstance(tsvd, (PCA, TruncatedSVD))
@@ -146,6 +124,7 @@ def get_templates_unitextract(
         trough_offset_samples=trough_offset_samples,
         properties=properties,  # type: ignore
         tsvd=tsvd,
+        sampling_frequency=recording.sampling_frequency,
     )
     return obj
 

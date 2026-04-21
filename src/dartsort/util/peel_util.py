@@ -186,7 +186,7 @@ def peeler_is_done(
         with h5py.File(output_hdf5_filename, "r") as h5:
             if "residual" not in h5:
                 return False
-            if len(h5["residual"]) < n_residual_snips:  # type: ignore
+            if len(h5["residual"]) < n_residual_snips:
                 return False
 
     if do_localization:

@@ -7,9 +7,10 @@ import numpy as np
 import torch
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
+from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
-from ..clustering.cluster_util import maximal_leaf_groups
+from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
 from ..clustering.gmm.mixture import (
     NeighborhoodLUT,
     Scores,
@@ -66,9 +67,12 @@ class MixtureVisData:
     train_ixs: np.ndarray
     val_ixs: np.ndarray | None
     full_labels: np.ndarray
+    full_inunits: dict[int, np.ndarray]
+    eval_inunits: dict[int, np.ndarray]
     tpca: TemporalPCA
     inf_diag_unit_distance_matrix: torch.Tensor
     prgeom: np.ndarray
+    distance_cache: dict
 
     @property
     def times_seconds(self):
@@ -120,6 +124,22 @@ class MixtureVisData:
             dists = np.ascontiguousarray(dists[::-1])
             neighbors = np.ascontiguousarray(neighbors[::-1])
         return dists, neighbors
+
+    def distances(
+        self, neighbors: np.ndarray, dist_kind=None
+    ) -> tuple[str, np.ndarray]:
+        if dist_kind is None:
+            dist_kind = self.tmm.p.distance_kind
+            d = self.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
+            d = d.numpy(force=True)
+            np.fill_diagonal(d, 0.0)
+        elif dist_kind in self.distance_cache:
+            d = self.distance_cache[dist_kind][neighbors][:, neighbors]
+        else:
+            _d = self.tmm.unit_distance_matrix(dist_kind)
+            self.distance_cache[dist_kind] = _d.numpy(force=True)
+            d = self.distance_cache[dist_kind][neighbors][:, neighbors]
+        return dist_kind, d
 
     def reconstruct_flat(self, features: torch.Tensor) -> np.ndarray:
         frank = self.tmm.neighb_cov.feat_rank
@@ -212,7 +232,9 @@ class ISIHistogram(MixtureComponentPlot):
             -0.5 * self.bin_ms, self.max_ms + self.bin_ms + 1e-5, self.bin_ms
         )
         counts, _ = np.histogram(dt_ms, bin_edges)
-        axis.stairs(counts, bin_edges, color=glasbey1024[unit_id % len(glasbey1024)], fill=True)
+        axis.stairs(
+            counts, bin_edges, color=glasbey1024[unit_id % len(glasbey1024)], fill=True
+        )
         axis.set_xlabel(f"isi (ms, {dt_ms.size + 1} tot. sp.)")
         axis.set_ylabel("count")
 
@@ -337,11 +359,14 @@ class LikelihoodsView(MixtureComponentPlot):
             handlelength=1.0,
         )
 
+        for ax in (ax_time, ax_noise, ax_hist):
+            ax.grid(which="both")
+
 
 class NeighborMeans(MixtureComponentPlot):
     kind = "block"
     width = 2
-    height = 2
+    height = 3
 
     def __init__(self, count=5, vis_radius=50.0):
         self.count = count
@@ -373,6 +398,7 @@ class NeighborMeans(MixtureComponentPlot):
             ax=ax,
             subar=True,
             annotate_z=True,
+            trough_offset=22,
         )
         panel.legend(
             handles=[Line2D([0, 1], [0, 0], color=c) for c in colors],
@@ -396,19 +422,18 @@ class NeighborDistances(MixtureComponentPlot):
     width = 2
     height = 2
 
-    def __init__(self, count=5, cmap="plasma"):
+    def __init__(self, count=5, cmap="plasma", dist_kind=None):
         self.count = count
         self.cmap = plt.get_cmap(cmap)
+        self.dist_kind = dist_kind
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        dists, neighbors = mix_data.friends(unit_id, count=self.count)
-        d = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors]
-        d = d.numpy(force=True)
-        np.fill_diagonal(d, 0.0)
-        return d, neighbors
+        _, neighbors = mix_data.friends(unit_id, count=self.count)
+        dk, d = mix_data.distances(neighbors, self.dist_kind)
+        return d, dk, neighbors
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
-        d, neighbors = self.compute(mix_data, unit_id)
+        d, dk, neighbors = self.compute(mix_data, unit_id)
         distance_matrix_dendro(
             panel,
             d,
@@ -418,8 +443,155 @@ class NeighborDistances(MixtureComponentPlot):
             vmax=mix_data.tmm.p.split_max_distance,
             image_cmap=self.cmap,
             show_values=True,
+            with_colorbar=False,
         )
-        panel.suptitle(f"{mix_data.tmm.p.distance_kind} dists", fontsize="small")
+        panel.suptitle(f"{dk} dists", fontsize="small")
+
+
+class NeighborQDAPlot(MixtureComponentPlot):
+    kind = "neighbors"
+
+    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
+        super().__init__()
+        self.count = count
+        self.log = log
+        self.ncols = ncols
+        self.width = 1.5 * ncols
+        self.height = 1.5 * count
+        self.kind = kind
+        self.kde_bin = kde_bin
+
+    def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
+        _, neighbors = mix_data.friends(unit_id, count=self.count)
+        neighbors = neighbors[neighbors != unit_id][::-1]
+        colors = np.array(glasbey1024)[neighbors % len(glasbey1024)]
+
+        axes = panel.subplots(
+            squeeze=False,
+            nrows=int(np.ceil(len(neighbors) / self.ncols)),
+            ncols=self.ncols,
+            gridspec_kw=dict(hspace=0.0, wspace=0.0),
+        )
+        for ax, nid, color in zip(axes.flat, neighbors, colors):
+            ious = {}
+            covs = {}
+            dlls = {}
+            ls = []
+            for split, linestyle in zip(["full", "eval"], "-:"):
+                if split == "full":
+                    ssco = mix_data.full_scores
+                    in_unit_id = mix_data.full_inunits[unit_id]
+                    in_nid = mix_data.full_inunits[nid]
+                elif split == "eval":
+                    ssco = mix_data.eval_scores
+                    in_nid = mix_data.eval_inunits[nid]
+                    in_unit_id = mix_data.eval_inunits[unit_id]
+                else:
+                    assert False
+
+                na = in_unit_id.size
+                nb = in_nid.size
+
+                in_pair = np.concatenate([in_unit_id, in_nid])
+                cand = ssco.candidates[in_pair].numpy(force=True)
+                ll = ssco.log_liks[in_pair].numpy(force=True)
+
+                my_mask = cand == unit_id
+                nid_mask = cand == nid
+
+                overlap = np.logical_and(nid_mask.any(1), my_mask.any(1))
+                count = overlap.sum()
+                iou = count / in_pair.shape[0]
+                cov = min(overlap[:na].sum() / na, overlap[na:].sum() / nb)
+                ious[split] = "iou=" + f"{iou:.2f}".lstrip("0")
+                covs[split] = "cov=" + f"{cov:.2f}".lstrip("0")
+                if not count:
+                    continue
+
+                _, my_ix = np.nonzero(my_mask[overlap])
+                my_ll = np.take_along_axis(ll[overlap], my_ix[:, None], axis=1)[:, 0]
+                _, their_ix = np.nonzero(nid_mask[overlap])
+                their_ll = np.take_along_axis(ll[overlap], their_ix[:, None], axis=1)[
+                    :, 0
+                ]
+                dlls[split] = my_ll - their_ll
+                ls.append(linestyle)
+
+            ax.axvline(0, color="k", lw=0.8)
+            ax.grid()
+
+            iout = f"{nid}:" + " ".join(f"{k}:{v}" for k, v in ious.items())
+            covt = f"{nid}:" + " ".join(f"{k}:{v}" for k, v in covs.items())
+
+            if len(dlls) < 2:
+                ax.set_title(f"{iout}\n{covt}", fontsize="small")
+                continue
+            hstats = {}
+            kstats = {}
+            if self.kind == "hist":
+                ax.hist(
+                    dlls.values(),
+                    label=dlls.keys(),
+                    bins=32,
+                    color=[color] * len(ls),
+                    histtype="step",
+                    log=self.log,
+                    density=True,
+                    linestyle=ls,
+                )
+            elif self.kind == "kde":
+                made_one = False
+                messages = []
+                for (label, dll), linestyle in zip(dlls.items(), ls):
+                    bines, bincs = centered_bins(dll)
+                    if not bincs.size:
+                        continue
+                    hist, _ = np.histogram(dll, bins=bines)
+                    hist = hist.astype(np.float64) / hist.sum()
+                    ax.stairs(
+                        hist, edges=bines, linestyle=linestyle, color="k", zorder=10
+                    )
+                    made_one = True
+                    hsa, hsb = bimod_stats(hist)
+                    hstats[label] = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
+                    try:
+                        kdest = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+                    except ValueError as e:
+                        messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
+                        continue
+                    kde = cast(np.ndarray, kdest.evaluate(bincs))
+                    kde /= kde.sum()
+                    ksa, ksb = bimod_stats(kde)
+                    kstats[label] = f"a:{fstr(ksa)}, b:{fstr(ksb)}"
+                    if not np.isfinite(kde).all():
+                        messages.append(f"{label} nan, n={len(dll)}")
+                    else:
+                        ax.step(
+                            y=kde, x=bincs, linestyle=linestyle, color=color, zorder=11
+                        )
+                if messages:
+                    ax.text(
+                        0.9,
+                        0.1,
+                        "\n".join(messages),
+                        fontsize="small",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="bottom",
+                    )
+                if made_one and self.log:
+                    ax.semilogy()
+
+            hstatt = f"H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
+            kstatt = f"K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
+            ax.set_title(f"{iout}\n{covt}\n{hstatt}\n{kstatt}", fontsize="small")
+
+        for ax in axes.flat[len(neighbors) :]:
+            ax.axis("off")
+        for ax in axes[:, 0]:
+            ax.set_ylabel("density")
+        for ax in axes[-1]:
+            ax.set_xlabel("my ll - their ll")
 
 
 class MergeView(MixtureComponentPlot):
@@ -438,6 +610,7 @@ class MergeView(MixtureComponentPlot):
         me = neighbors.new_full((1,), unit_id)
         neighbors = torch.cat([neighbors, me]).sort().values
         D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
+        D.nan_to_num_(posinf=1000.0)
 
         # find my complete linkage cluster within D
         D = D.fill_diagonal_(0.0).numpy(force=True)
@@ -570,6 +743,7 @@ class MeanView(MixtureComponentPlot):
             show_zero=self.show_zero,
             linewidth=0.5,
             return_chans=True,
+            trough_offset=22,
         )
         pchans = np.array(list(pchans))
         geomplot(
@@ -581,6 +755,7 @@ class MeanView(MixtureComponentPlot):
             ax=ax,
             show_zero=False,
             annotate_z=True,
+            show_trough=False,
         )
 
 
@@ -745,7 +920,7 @@ class CovarianceView(MixtureComponentPlot):
 class SplitView(MixtureComponentPlot):
     kind = "tall"
     width = 2.5
-    height = 5
+    height = 7.5
 
     def __init__(
         self,
@@ -771,6 +946,7 @@ class SplitView(MixtureComponentPlot):
             D = mix_data.inf_diag_unit_distance_matrix[friends][:, friends].clone()
             D.fill_diagonal_(0.0)
             pd = D.numpy()[np.triu_indices(D.shape[0], k=1)]
+            np.nan_to_num(pd, copy=False, posinf=1000.0)
             Z = linkage(pd, method="complete")
             fcl = fcluster(
                 Z, mix_data.tmm.p.split_friend_distance, criterion="distance"
@@ -850,6 +1026,7 @@ class SplitView(MixtureComponentPlot):
                 M=kmean[None].broadcast_to(debug_info.kmeans_x.shape),
             )
             assert loadings is not None
+            del components
             loadings = loadings.numpy(force=True)
         else:
             loadings = None
@@ -968,7 +1145,6 @@ class SplitView(MixtureComponentPlot):
         split_res=None,
         debug_info=None,
     ):
-        print(f"{debug_info=}")
         c = self.compute(mix_data, unit_id, split_res=split_res, debug_info=debug_info)
         (
             txt,
@@ -1045,7 +1221,7 @@ class SplitView(MixtureComponentPlot):
                 *loadings.T, edgecolors=colors, s=10, lw=0.5, facecolor="none", alpha=1
             )
             ax_pc.grid()
-        elif loadings is not None and tw is not None:
+        elif loadings is not None and tw is None:
             ax_pc.scatter(*loadings.T, c=colors, s=5, alpha=0.5)
             ax_pc.grid()
         else:
@@ -1066,6 +1242,7 @@ class SplitView(MixtureComponentPlot):
                 ax=ax_mean,
                 subar=True,
                 annotate_z=True,
+                trough_offset=22,
             )
         else:
             ax_mean.text(0, 0, "no subunit means", fontsize=5)
@@ -1088,12 +1265,12 @@ def default_mixture_plots():
         ISIHistogram(),
         ChansHeatmap(),
         LikelihoodsView(),
+        NeighborQDAPlot(),
         NeighborMeans(),
         NeighborDistances(),
         MergeView(),
         MeanView(),
         CovarianceView(),
-        MeanView(mini=True),
         SplitView(),
     )
 
@@ -1240,9 +1417,12 @@ def fit_mixture_for_vis(
         train_labels=train_labels.numpy(force=True),
         eval_labels=eval_labels,
         full_labels=full_labels,
+        eval_inunits=sparsify_labels(eval_labels.numpy(force=True)),
+        full_inunits=sparsify_labels(full_labels),
         tpca=tpca,
         inf_diag_unit_distance_matrix=dists,
         prgeom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+        distance_cache={},
     )
 
 
@@ -1251,7 +1431,7 @@ def make_mixture_component_summary(
     unit_id: int,
     plots=default_mixture_plots,
     max_height=9,
-    figsize=(17, 10),
+    figsize=(19, 10),
     card_hspace=0.01,
     figure=None,
     **other_global_params,
@@ -1278,7 +1458,7 @@ def make_mixture_summaries(
     save_folder: str | Path,
     plots=default_mixture_plots,
     max_height=9,
-    figsize=(17, 10),
+    figsize=(19, 10),
     card_hspace=0.01,
     dpi=200,
     image_ext="png",
@@ -1645,3 +1825,38 @@ def vis_obs_interpolation(
 
 def _bold(x):
     return f"$\\mathbf{{{x}}}$"
+
+
+def centered_bins(x, dx=1.0):
+    if x is None or not x.size:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
+    vm = np.abs(x).max()
+    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
+    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    assert bin_centers.size == bin_edges.size - 1
+    assert bin_centers.size % 2
+    assert vm < min(-bin_centers.min(), bin_centers.max())
+    return bin_edges, bin_centers
+
+
+def bimod_stats(h):
+    assert h.ndim == 1
+    assert h.size % 2
+    cix = h.shape[0] // 2
+    h0 = h[cix]
+    da = h[:cix].max()
+    db = h[cix + 1 :].max()
+    dd = min(da, db)
+    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
+        a = 0.0
+    elif np.isclose(dd, 0.0):
+        a = np.inf
+    else:
+        a = h0 / dd
+    b = h0 / max(da, db)
+    return a, b
+
+
+def fstr(x):
+    return f"{x:0.2f}".lstrip("0")

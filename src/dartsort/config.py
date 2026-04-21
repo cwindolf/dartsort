@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -7,6 +8,7 @@ from .util.internal_config import (
     InterpKernel,
     InterpMethod,
     MixtureStep,
+    PreprocessingStrategy,
     RealignStrategy,
     TemplateSVDMethod,
     WhiteningEstimator,
@@ -25,6 +27,7 @@ class DARTsortUserConfig:
         False, doc="Whether to stop after initial localization and motion tracking."
     )
     matching_iterations: int = 1
+    preprocessing: PreprocessingStrategy = "none"
 
     # -- computer options
     n_jobs_cpu: int = argfield(
@@ -139,9 +142,24 @@ class DARTsortUserConfig:
         doc="Radius around main channel used when localizing spikes.",
     )
 
+    # -- subtraction neural net
+    nn_denoiser_class_name: Literal["SingleChannelWaveformDenoiser", "Decollider"] = (
+        argfield(
+            default="SingleChannelWaveformDenoiser",
+            doc="Which neural net to use in initial detection? Set to Decollider (and set the pretrained "
+            "path to None to train a  brand-new unsupervised denoiser.",
+        )
+    )
+    nn_denoiser_pretrained_path: str | None = argfield(
+        default=default_pretrained_path,
+        arg_type=str_or_none,
+        doc="Path to a pytorch saved model (.pt file as dumped by torch.save()). If this is None, the "
+        "model will be fit.",
+    )
+
     # -- matching parameters
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
-    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 0.333
+    amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 1.0 / 3.0
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
@@ -186,9 +204,13 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: tuple[MixtureStep, ...] = ("split", "demolish")
-    later_steps: tuple[MixtureStep, ...] = ("split", "merge", "demolish")
-    detection_type: str = "subtract"
+    initial_steps: Sequence[MixtureStep] = argfield(
+        default=("split", "demolish"), arg_type=tuple
+    )
+    later_steps: Sequence[MixtureStep] = argfield(
+        default=("split", "merge", "demolish"), arg_type=tuple
+    )
+    detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
     recluster_after_first_matching: bool = True
@@ -200,12 +222,8 @@ class DeveloperConfig(DARTsortUserConfig):
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000
-    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = argfield(
-        default=default_pretrained_path, arg_type=str_or_none
-    )
     do_tpca_denoise: bool = True
-    first_denoiser_thinning: float = 0.5
+    first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
@@ -217,13 +235,14 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     matching_cd_iter: int = 0
     matching_coarse_cd: bool = True
-    postprocessing_merge_threshold: float = 0.025
+    postprocessing_merge_threshold: float = 0.05
     template_spikes_per_unit: int = 500
     template_reduction: Literal["mean", "median"] = "median"
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
     min_template_count: int = 20
     template_interp_kind: Literal["tps", "clampna"] = "tps"
+    matching_interp_kind: Literal["tps", "clampna"] = "tps"
     matching_svd_rank: int = 10
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
@@ -234,6 +253,7 @@ class DeveloperConfig(DARTsortUserConfig):
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "none"
     whiten_estimator: WhiteningEstimator = "localzca"
+    whiten_features: bool = True
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
     svd_alignment_iterations: int = 0
@@ -288,9 +308,9 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_cl_alpha: float = 0.05
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
-    gmm_metric: Literal["cosine", "normeuc"] = "normeuc"
-    gmm_n_candidates: int = 3
-    gmm_n_search: int | None = argfield(default=None, arg_type=int_or_none)
+    gmm_metric: Literal["cosine", "normeuc", "scaled_normeuc"] = "scaled_normeuc"
+    gmm_n_candidates: int = 5
+    gmm_n_search: int | None = argfield(default=3, arg_type=int_or_none)
     gmm_val_proportion: Annotated[float, Field(gt=0)] = 0.5
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
@@ -299,6 +319,7 @@ class DeveloperConfig(DARTsortUserConfig):
     gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
+    gmm_scaled_normeuc_threshold: float = 1.5
     robust_strategy: Literal["none", "fixed"] = "none"
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
@@ -306,7 +327,15 @@ class DeveloperConfig(DARTsortUserConfig):
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
 
-    # store extra intermediates
+    # agglomeration
+    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
+    agg_qda_max_template_distance: float = 0.6
+    agg_no_qda_template_distance: float = 0.2
+    agg_qda_linkage: Literal["single", "complete"] = "single"
+    agg_template_linkage: Literal["single", "complete"] = "complete"
+    agg_template_whiten_strategy: WhiteningStrategy = "postwhiten"
+
+    # store extra intermediates@
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)

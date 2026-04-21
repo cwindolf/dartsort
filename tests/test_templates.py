@@ -1,6 +1,7 @@
 import tempfile
 from itertools import product
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -271,7 +272,6 @@ def test_roundtrip(tmp_path, algorithm, denoising_method):
             sorting=st,
             template_cfg=dartsort.TemplateConfig(
                 denoising_method=denoising_method,
-                superres_bin_min_spikes=0,
                 algorithm=algorithm,
                 template_interp_params=erp,
             ),
@@ -368,7 +368,7 @@ def test_drifting_templates(tmp_path):
                 show_progress=False,
                 template_cfg=raw_template_cfg,
             )
-            reg_temps = res["templates"]
+            reg_temps = cast(np.ndarray, res["templates"])
 
             temps0 = template_util.templates_at_time(
                 t_s=0.0,
@@ -433,11 +433,7 @@ def test_main_object():
     tdata = templates.TemplateData.from_config(
         recording=rec,
         sorting=sorting,
-        template_cfg=dartsort.TemplateConfig(
-            denoising_method="none",
-            superres_templates=False,
-            denoising_rank=2,
-        ),
+        template_cfg=dartsort.TemplateConfig(denoising_method="none", denoising_rank=2),
         motion=motion,
         waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
@@ -449,7 +445,7 @@ def test_pconv(tmp_path, unit_ids):
     # design an experiment
 
     # 4 chans, no drift
-    # 3 units (superres): 0 (0,1), 1 (2,3), 3 (4)
+    # 3 units: 0 (0,1), 1 (2,3), 3 (4)
     # temps overlap like:
     # 0        chan=0   z=0
     #  12           1     1
@@ -475,6 +471,7 @@ def test_pconv(tmp_path, unit_ids):
         spike_counts=np.ones(5),
         registered_geom=geom,
         trough_offset_samples=0,
+        sampling_frequency=1.0,
     )
     svd_compressed = template_util.svd_compress_templates(temps, rank=1)
     ctempup = template_util.compressed_upsampled_templates(
@@ -544,6 +541,7 @@ def test_pconv(tmp_path, unit_ids):
         spike_counts=np.ones(5),
         registered_geom=reg_geom,
         trough_offset_samples=0,
+        sampling_frequency=1.0,
     )
     geom = np.c_[np.zeros(c), np.arange(1, c + 1).astype(float)]
     motion = MotionInfo.from_motion_est(

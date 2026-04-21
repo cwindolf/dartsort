@@ -108,8 +108,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def needs_fit(self):
         return self._needs_fit
 
-    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+    def fit(self, recording, waveforms, *, channels, **fixed_properties):
+        weights = fixed_properties.get("weights", None)
+        super().fit(recording, waveforms, channels=channels)  # just for spike len stuff
         with torch.enable_grad():
             self._fit(waveforms, channels, weights=weights)
         self.eval()
@@ -481,17 +482,16 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         return locs
 
-    def transform(self, waveforms, *, channels, show_progress=False, **unused):
+    def transform(self, waveforms, *, channels, **fixed_properties):
         n = len(waveforms)
         if self.nc == 1:
             return {self.name: waveforms.new_zeros((n, 3))}
         with torch.no_grad():
             if n > self.inference_batch_size:
                 locs = waveforms.new_empty((n, 3))
-                rg = trange if show_progress else range
                 my_device = self.b.padded_geom.device
                 device_in = locs.device
-                for bs in rg(0, n, self.inference_batch_size):
+                for bs in range(0, n, self.inference_batch_size):
                     be = bs + self.inference_batch_size
                     batch = waveforms[bs:be].to(my_device)
                     batch_chans = channels[bs:be].to(my_device)

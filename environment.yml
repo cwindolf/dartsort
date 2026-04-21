@@ -16,3 +16,4 @@ dependencies:
   - numba
   - pydantic
   - opt-einsum
+  - kdepy

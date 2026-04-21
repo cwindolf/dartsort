@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering import merge
+from ..clustering.agglomerate import template_distances, qda, QDAResult
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -55,6 +55,8 @@ class DARTsortAnalysis:
     coarse_template_data: TemplateData | None
     motion: MotionInfo
     merge_distances: np.ndarray | None
+    merge_lags: np.ndarray | None
+    merge_r2: np.ndarray | None
     geom: np.ndarray
     registered_geom: np.ndarray
     extract_channel_index: np.ndarray | None
@@ -72,6 +74,7 @@ class DARTsortAnalysis:
     spike_counts: np.ndarray
     amplitude_vectors: np.ndarray | None
     erp: StableFeaturesInterpolator | None
+    qda: QDAResult | None
     sklearn_tpca: PCA | None
     tpca_temporal_slice: slice
     name: str | None = None
@@ -138,17 +141,43 @@ class DARTsortAnalysis:
 
         if template_data is not None:
             coarse_template_data = template_data.coarsen()
-            merge_distances = merge.get_merge_distances(
+            dres = template_distances(
+                sorting=sorting,
+                recording=recording,
+                motion=motion,
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
+                template_cfg=template_cfg,
                 computation_cfg=computation_cfg,
-                sampling_frequency=recording.sampling_frequency,
-            )[1]
+                allow_whitening_fail=True,
+            )
+            merge_distances = dres.distances
+            merge_lags = dres.shifts
+            merge_r2 = dres.r2
             trough_offset_samples = template_data.trough_offset_samples
             spike_length_samples = template_data.spike_length_samples
         else:
             trough_offset_samples = spike_length_samples = 0
-            coarse_template_data = merge_distances = None
+            coarse_template_data = merge_distances = merge_lags = merge_r2 = None
+
+        if template_data is not None and hasattr(sorting, "gmm_candidates"):
+            assert sorting.labels is not None
+            c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+            lk = np.flatnonzero(sorting.labels >= 0)
+            is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
+            if is_gmm:
+                logger.info("Analyze GMM.")
+                assert merge_distances is not None
+                qdares = qda(
+                    mask=None,
+                    sorting=sorting,
+                    computation_cfg=computation_cfg,
+                    show_progress=True,
+                )
+            else:
+                qdares = None
+        else:
+            qdares = None
 
         channel_index = getattr(sorting, "channel_index", None)
         amplitudes = getattr(
@@ -170,6 +199,14 @@ class DARTsortAnalysis:
         else:
             x = z = reg_z = None
 
+        vis_channel_index = make_channel_index(
+            geom=motion.rgeom,
+            radius=vis_radius,
+            p=vis_neighborhood_p,
+            to_torch=False,
+        )
+        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+
         device = computation_cfg.actual_device()
         if vis_radius and channel_index is not None:
             erp = StableFeaturesInterpolator(
@@ -178,24 +215,25 @@ class DARTsortAnalysis:
                 channel_index=torch.asarray(channel_index, device=device),
                 params=clustering_features_cfg.interp_params,
             )
+            schan_res = get_stable_channels(
+                motion=motion,
+                channels=sorting.channels,
+                channel_index=channel_index,
+                core_radius=vis_radius,
+                n_pitches_shift=n_pitches_shift,
+            )
+            stable_vis_channels = schan_res[3]
         else:
             erp = None
+            stable_vis_channels = None
 
-        vis_channel_index = make_channel_index(
-            geom=motion.rgeom,
-            radius=vis_radius,
-            p=vis_neighborhood_p,
-            to_torch=False,
-        )
-        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
-        schan_res = get_stable_channels(
-            motion=motion,
-            channels=sorting.channels,
-            channel_index=channel_index,
-            core_radius=vis_radius,
-            n_pitches_shift=n_pitches_shift,
-        )
-        stable_vis_channels = schan_res[3]
+        if channel_index is None:
+            channel_index = make_channel_index(
+                geom=motion.geom,
+                radius=vis_radius,
+                p=vis_neighborhood_p,
+                to_torch=False,
+            )
 
         unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)  # type: ignore
         spike_counts = spike_counts[unit_ids >= 0]
@@ -208,6 +246,8 @@ class DARTsortAnalysis:
             coarse_template_data=coarse_template_data,
             motion=motion,
             merge_distances=merge_distances,
+            merge_lags=merge_lags,
+            merge_r2=merge_r2,
             geom=motion.geom,
             registered_geom=motion.rgeom,
             extract_channel_index=channel_index,
@@ -223,6 +263,7 @@ class DARTsortAnalysis:
             amplitudes=amplitudes,
             amplitude_vectors=amplitude_vecs,
             erp=erp,
+            qda=qdares,
             sklearn_tpca=sklearn_tpca,
             tpca_temporal_slice=tpca_temporal_slice,
             name=name,
@@ -354,7 +395,7 @@ class DARTsortAnalysis:
             features=torch.asarray(features, device=device),
             source_main_channels=channels,
             target_channels=targ_chans,
-            source_shifts=shifts,
+            source_shifts=shifts.float(),
         )
         return features.numpy(force=True), targ_chans.numpy(force=True)
 
@@ -429,7 +470,9 @@ class DARTsortAnalysis:
         if self.motion.drifting:
             assert tpca_waves.channels is not None
             uchans, cinv = np.unique(tpca_waves.channels, return_inverse=True)
-            w = np.full_like(waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan)
+            w = np.full_like(
+                waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan
+            )
             np.put_along_axis(w, cinv[:, None], waveforms, axis=2)
             waveforms = w
 

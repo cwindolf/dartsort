@@ -422,7 +422,7 @@ class BasePeeler(BModule):
             chunk_end_samples = chunk_start_samples + self.chunk_length_samples
         chunk_end_samples = min(self.recording.get_num_samples(), chunk_end_samples)
         chunk, left_margin, right_margin = get_chunk_with_margin(
-            self.recording._recording_segments[0],
+            self.recording.segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
             channel_indices=None,
@@ -457,7 +457,7 @@ class BasePeeler(BModule):
         # a user who wants these must featurize with a waveform node
         # then they'll end up in `features`
         if "collisioncleaned_waveforms" in peel_result:
-            del peel_result["collisioncleaned_waveforms"]
+            del peel_result["collisioncleaned_waveforms"]  # type: ignore
 
         chunk_result = peel_result | features
         if to_cpu:
@@ -469,7 +469,7 @@ class BasePeeler(BModule):
                     peel_result["residual"] = peel_result["residual"].cpu()  # type: ignore
 
         # add times in seconds
-        segment = self.recording._recording_segments[0]
+        segment = self.recording.segments[0]
         chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
             chunk_start_samples
         )
@@ -872,10 +872,12 @@ class BasePeeler(BModule):
         save_residual = residual_filename is not None
         residual_file = None
         if save_residual:
-            residual_mode = "wb"
+            assert residual_filename is not None
             if last_chunk_start >= 0:
                 residual_mode = "ab"
                 assert Path(residual_filename).exists()
+            else:
+                residual_mode = "wb"
             residual_file = open(residual_filename, mode=residual_mode)
 
         try:

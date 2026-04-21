@@ -8,7 +8,7 @@ from ..util.internal_config import ComputationConfig, RefinementConfig
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
-from .cluster_util import agglomerate, reorder_by_depth
+from .cluster_util import hierarchical_cluster, reorder_by_depth
 from .gmm.stable_features import StableSpikeDataset
 
 logger = get_logger(__name__)
@@ -139,7 +139,7 @@ def pc_merge(
         dists = spiketorch.maxz_distance(
             means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
-    elif refinement_cfg.pc_merge_metric == "normeuc":
+    elif refinement_cfg.pc_merge_metric.endswith("normeuc"):
         dists = spiketorch.weighted_normeuc_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
@@ -154,9 +154,9 @@ def pc_merge(
         raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
 
     # linkage
-    labels, ids = agglomerate(
-        sorting.labels,
-        dists,
+    labels, ids = hierarchical_cluster(
+        labels=sorting.labels,
+        distances=np.asarray(dists),
         linkage_method=refinement_cfg.pc_merge_linkage,
         threshold=refinement_cfg.pc_merge_threshold,
     )

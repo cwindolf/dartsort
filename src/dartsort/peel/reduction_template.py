@@ -145,6 +145,15 @@ class ReductionTemplateData(TemplateData):
         else:
             assert False
 
+        spike_counts = count.max(axis=1)
+        if motion.drifting:
+            msk = np.logical_or(
+                count >= template_cfg.min_count_at_shift,
+                count >= template_cfg.min_fraction_at_shift * spike_counts[:, None],
+            )
+            msk = msk[:, None, :].astype(templates.dtype)
+            templates *= msk
+
         if whitener is None:
             whitener_np = None
         else:
@@ -154,12 +163,14 @@ class ReductionTemplateData(TemplateData):
             unit_ids=unit_ids,
             templates=templates,
             raw_std_dev=raw_std,
-            spike_counts=count.max(axis=1),
+            spike_counts=spike_counts,
             spike_counts_by_channel=count,
             registered_geom=motion.rgeom,
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            sampling_frequency=recording.sampling_frequency,
+            whiten_strategy=template_cfg.whitening.strategy,
         )
 
 
@@ -168,7 +179,7 @@ class ReductionTemplateData(TemplateData):
 
 class TemplateReduction(GrabAndFeaturize):
     @classmethod
-    def from_config(  # type: ignore[override]
+    def from_config(  # type: ignore
         cls,
         recording: BaseRecording,
         *,
@@ -260,7 +271,11 @@ class TemplateReduction(GrabAndFeaturize):
         if whitener is None:
             assert template_cfg.whitening.strategy == "none"
         else:
-            assert template_cfg.whitening.strategy in ("prewhiten", "postwhiten")
+            assert template_cfg.whitening.strategy in (
+                "prewhiten",
+                "prewhiten_postapply",
+                "postwhiten",
+            )
         if template_cfg.whitening.strategy == "prewhiten":
             assert whitener is not None
             transformers.append(
@@ -333,10 +348,6 @@ class TemplateReduction(GrabAndFeaturize):
         if template_cfg.weighted:
             weights = get_top_assignment_weights(sorting)
             fixed_properties["template_weights"] = weights
-        if (c := getattr(sorting, "alignment_channels", None)) is not None:
-            fixed_properties["alignment_channels"] = c
-        else:
-            fixed_properties["alignment_channels"] = sorting.channels
         if (c := getattr(sorting, "alignment_signs", None)) is not None:
             fixed_properties["alignment_signs"] = c
         else:

@@ -1,5 +1,5 @@
 import gc
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -14,17 +14,19 @@ from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
     WaveformConfig,
+    WhiteningStrategy,
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
+from ..util.py_util import databag
 from .template_util import weighted_average
 
 logger = get_logger(__name__)
 
 
-@dataclass
+@databag
 class TemplateData:
     # (n_templates, spike_length_samples, n_registered_channels or n_channels)
     templates: np.ndarray
@@ -38,7 +40,8 @@ class TemplateData:
     raw_std_dev: np.ndarray | None = None
 
     registered_geom: np.ndarray | None = None
-    trough_offset_samples: int = 42
+    trough_offset_samples: int
+    sampling_frequency: float
 
     # stores (n_templates, *) arrays of template properties
     # possibilities:
@@ -48,6 +51,7 @@ class TemplateData:
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
     whitener: np.ndarray | None = None
+    whiten_strategy: WhiteningStrategy = "none"
     featurization_basis: np.ndarray | None = None
 
     # plugin registry for classes which actually estimate templates to hook into
@@ -113,6 +117,7 @@ class TemplateData:
     def from_npz(cls, npz_path):
         with np.load(npz_path, allow_pickle=True) as data:
             data = dict(**data)
+            data["whiten_strategy"] = str(data["whiten_strategy"])
             if "spike_length_samples" in data:
                 del data["spike_length_samples"]  # todo: remove
             if "parent_sorting_hdf5_path" in data:
@@ -135,6 +140,8 @@ class TemplateData:
             unit_ids=self.unit_ids,
             spike_counts=self.spike_counts,
             trough_offset_samples=self.trough_offset_samples,
+            sampling_frequency=self.sampling_frequency,
+            whiten_strategy=self.whiten_strategy,
         )
         if self.registered_geom is not None:
             to_save["registered_geom"] = self.registered_geom
@@ -179,6 +186,8 @@ class TemplateData:
             trough_offset_samples=self.trough_offset_samples,
             properties=properties,
             tsvd=self.tsvd,
+            sampling_frequency=self.sampling_frequency,
+            whiten_strategy=self.whiten_strategy,
         )
 
     def coarsen(self):

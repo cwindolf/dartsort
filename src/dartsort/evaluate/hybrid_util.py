@@ -482,14 +482,21 @@ def load_dartsort_step_sortings(
 
         # refinement steps
         stepstr = step_format.format(step=step)
-        for npy in sorted(sorting_dir.glob(f"{stepstr}*.npy")):
-            stem = npy.stem.removesuffix("_labels")
-            if stem == stepstr:
-                continue
-            yield (
-                name_formatter(stem),
-                st0.ephemeral_replace(labels=np.load(npy)),
-            )
+        npys = list(sorting_dir.glob(f"{stepstr}*.npy"))
+        npzs = list(sorting_dir.glob(f"{stepstr}*.npz"))
+        for npx in sorted(npys + npzs):
+            stem = npx.stem.removesuffix("_labels")
+            if npx.name.endswith(".npy"):
+                if stem == stepstr:
+                    continue
+                yield (
+                    name_formatter(stem),
+                    st0.ephemeral_replace(labels=np.load(npx)),
+                )
+            elif npx.name.endswith(".npz"):
+                yield (name_formatter(stem), DARTsortSorting.load(npx))
+            else:
+                assert False
 
 
 def load_dartsort_step_unit_info_dataframes(

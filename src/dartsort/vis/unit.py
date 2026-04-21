@@ -68,12 +68,7 @@ class UnitTextInfo(UnitPlot):
             snr = ptp * np.sqrt(nspikes)
             msg += f"template snr: {snr:.1f}"
         else:
-            ptp = np.ptp(temps, 1).max(1).mean()
-            msg += f"mean superres maxptp: {ptp:0.1f}su\n"
-            in_unit = sorting_analysis.template_data.unit_mask(unit_id)
-            counts = sorting_analysis.template_data.spike_counts[in_unit]
-            snrs = np.ptp(temps, 1).max(1) * np.sqrt(counts)
-            msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
+            assert False
 
         axis.text(0, 0, msg, fontsize=6.5)
 
@@ -225,8 +220,9 @@ class PCAScatter(UnitPlot):
 
 
 class TimeFeatScatter(UnitPlot):
-    kind = "widescatter"
+    kind = "medium"
     width = 2
+    height = 0.75
 
     def __init__(
         self,
@@ -331,19 +327,19 @@ class WaveformPlot(UnitPlot):
             spike_length_samples = sorting_analysis.spike_length_samples - tslice.start
         if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
-        
+
         if not self.color_by or waves is None:
             ckw = dict(color=self.color)
-        elif self.color_by == 'z':
+        elif self.color_by == "z":
             assert sorting_analysis.z is not None
             cc = sorting_analysis.z[waves.which]
-            cc = (cc - cc.min()) / np.ptp(cc)
-            ckw = dict(colors=plt.cm.berlin(cc))
+            if cc.std() > 1e-12:
+                cc = (cc - cc.min()) / np.ptp(cc)
+            else:
+                cc = np.full_like(cc, 0.5)
+            ckw = dict(colors=plt.get_cmap("berlin")(cc))
         else:
             assert False
-        
-        
-
 
         max_abs_amp = None
         show_template = self.show_template
@@ -386,24 +382,20 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
-                **ckw,
+                **ckw,  # type: ignore
             )
             handles["waveforms"] = ls
 
         if show_template:
             assert templates is not None
-            if waves is None:
-                showchans = sorting_analysis.vis_channel_index[
-                    sorting_analysis.unit_max_channel(unit_id)
-                ]
-                geom = sorting_analysis.registered_geom
-            else:
-                showchans = waves.channel_index[waves.main_channel]
-                geom = waves.geom
-            showchans = showchans[showchans < len(geom)]
+            mc = sorting_analysis.unit_max_channel(unit_id)
+            channels = sorting_analysis.vis_channel_index[mc]
+            channels = channels[channels < len(sorting_analysis.vis_channel_index)]
+            cc = np.broadcast_to(channels, (len(templates), *channels.shape))
             ls = geomplot(
-                templates[:, :, showchans],
-                geom=geom[showchans],
+                templates[:, :, channels],
+                geom=sorting_analysis.registered_geom,
+                channels=cc,
                 ax=axis,
                 show_zero=False,
                 zlim="tight",
@@ -497,7 +489,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
     title = "coarse template distance"
     kind = "neighbors"
     width = 3
-    height = 1.25
+    height = 2
 
     def __init__(
         self,
@@ -538,12 +530,32 @@ class CoarseTemplateDistancePlot(UnitPlot):
             cmap="RdGy",
             origin="lower",
             interpolation="none",
+            aspect="auto",
         )
         if self.show_values:
-            for (j, i), label in np.ndenumerate(neighbor_dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+            if sorting_analysis.merge_lags is not None:
+                lags = sorting_analysis.merge_lags[neighbor_ixs][:, neighbor_ixs]
+            else:
+                lags = None
+            for (i, j), d in np.ndenumerate(neighbor_dists):
+                txt = f"{d:.2f}".lstrip("0")
+                if lags is not None:
+                    txt += f":{lags[i, j].item():+d}"
+
+                axis.text(i, j, txt, ha="center", va="center")
         plt.colorbar(im, ax=axis, shrink=0.3)
-        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+        if sorting_analysis.merge_r2 is not None:
+            r2 = sorting_analysis.merge_r2[neighbor_ixs]
+            if np.isclose(r2.min(), 1.0):
+                xt = neighbor_ids
+            else:
+                xt = [
+                    f"{nid.item()}\n" + f"{rr:.2f}".lstrip("0")
+                    for nid, rr in zip(neighbor_ids, r2)
+                ]
+        else:
+            xt = neighbor_ids
+        axis.set_xticks(range(len(neighbor_ids)), xt)
         axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
         for i, (tx, ty) in enumerate(
             zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
@@ -553,15 +565,83 @@ class CoarseTemplateDistancePlot(UnitPlot):
         axis.set_title(self.title)
 
 
-class NeighborCCGPlot(UnitPlot):
-    kind = "neighbors"
-    width = 3
-    height = 0.75
+class NeighborQDAMatrices(UnitPlot):
+    kind = "tall"
+    width = 2
+    height = 4
 
-    def __init__(self, n_neighbors=3, max_lag=50):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id):
+        neighbor_ixs, neighbor_ids, _, _ = sorting_analysis.nearby_coarse_templates(
+            unit_id
+        )
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+        if not np.equal(neighbor_ids, unit_id).any():
+            panel.subplots().axis("off")
+            return
+        assert neighbor_ids[0] == unit_id
+
+        axes = panel.subplots(nrows=2)
+
+        qda = sorting_analysis.qda
+        assert np.array_equal(neighbor_ixs, neighbor_ids)
+        assert qda is not None
+
+        score = qda.score[neighbor_ixs][:, neighbor_ixs]
+        iou = qda.iou[neighbor_ixs][:, neighbor_ixs]
+        min_ratio = qda.min_ratio[neighbor_ixs][:, neighbor_ixs]
+        coverage = qda.coverage[neighbor_ixs][:, neighbor_ixs]
+
+        for ax, (sc, ol), title in zip(
+            axes, [(score, iou), (min_ratio, coverage)], ["qda/iou", "ratio/coverage"]
+        ):
+            im = ax.imshow(
+                sc,
+                vmin=0,
+                cmap="plasma",
+                origin="lower",
+                interpolation="none",
+                aspect="auto",
+            )
+            vm = sc.max()
+            for (i, j), d in np.ndenumerate(sc):
+                ostr = f"{ol[i, j]:.2f}".lstrip("0")
+                if ostr == ".00":
+                    ostr = "0"
+                else:
+                    ostr = ostr.rstrip("0")
+                dstr = f"{d:.2f}".lstrip("0")
+                if dstr == ".00":
+                    dstr = "0"
+                else:
+                    dstr = dstr.rstrip("0")
+                txt = f"{dstr}\n({ostr})"
+                ax.text(
+                    i, j, txt, ha="center", va="center", c="k" if d > vm / 2 else "w"
+                )
+            ax.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+            ax.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+            for i, (tx, ty) in enumerate(
+                zip(ax.xaxis.get_ticklabels(), ax.yaxis.get_ticklabels())
+            ):
+                tx.set_color(colors[i])
+                ty.set_color(colors[i])
+            ax.set_title(title)
+
+
+class NeighborCCGPlot(UnitPlot):
+    kind = "medium"
+
+    def __init__(self, n_neighbors=3, max_lag=50, with_merged_acg=False):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
+        self.with_merged_acg = with_merged_acg
+        if self.with_merged_acg:
+            self.height = 1.0
+            self.width = 3.0
+        else:
+            self.height = 1.75
+            self.width = 2
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
@@ -586,21 +666,41 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts)
-        )
+        if self.with_merged_acg:
+            axes = panel.subplots(
+                nrows=1 + self.with_merged_acg,
+                ncols=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+        else:
+            axes = panel.subplots(
+                ncols=1 + self.with_merged_acg,
+                nrows=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+            axes = axes.T
         for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
+
+            if not self.with_merged_acg:
+                continue
+
             merged_st = np.concatenate((my_st, neighb_sts[j]))
             merged_st.sort()
             alags, acg = correlogram(merged_st, max_lag=self.max_lag)
-
-            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
             bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
-        axes[0, 0].set_ylabel("ccg")
-        axes[1, 0].set_ylabel("merged acg")
-        axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        if self.with_merged_acg:
+            axes[0, 0].set_ylabel("ccg")
+            axes[1, 0].set_ylabel("merged acg")
+            axes[-1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        else:
+            axes[-1, -1].set_xlabel("ccg")
 
 
 class NeighborQDAPlot(UnitPlot):
@@ -675,41 +775,43 @@ class NeighborQDAPlot(UnitPlot):
 
 # -- main routines
 
-default_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    PCAScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    TPCAWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
 
-no_pca_unit_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
+def default_plots(sorting_analysis=None):
+    p = [
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        PCAScatter(),
+        TimeZScatter(),
+        TimeRegZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        TPCAWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    ]
+    if sorting_analysis is not None and sorting_analysis.qda is not None:
+        p.append(NeighborQDAMatrices())
+    return p
 
 
-template_assignment_plots = (
-    UnitTextInfo(),
-    RawWaveformPlot(),
-)
+def no_pca_unit_plots(sorting_analysis=None):
+    del sorting_analysis
+    return (
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        TimeZScatter(),
+        TimeRegZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    )
 
 
 def make_unit_summary(
@@ -717,13 +819,15 @@ def make_unit_summary(
     unit_id,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
-    plots=default_plots,
+    plots=None,
     max_height=4,
     figsize=(16, 8.5),
     figure=None,
     gizmo_name="sorting_analysis",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots(sorting_analysis)
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
@@ -747,7 +851,7 @@ def make_unit_summary(
 def make_all_summaries(
     sorting_analysis: DARTsortAnalysis,
     save_folder,
-    plots=default_plots,
+    plots=None,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
@@ -765,6 +869,8 @@ def make_all_summaries(
     taskname="summaries",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots(sorting_analysis)
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.sorting.unit_ids

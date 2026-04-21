@@ -17,12 +17,11 @@ from tqdm.auto import trange
 
 HAVE_CUPY = False
 try:
-    import cupy as cp  # type: ignore
+    import cupy as cp
 
     HAVE_CUPY = True
 except ImportError:
-    cp = None
-    HAVE_CUPY = False
+    cp = None  # type: ignore
 
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
@@ -205,6 +204,143 @@ def svd_lowrank_helper(
     explained_variance = S.square() / (x.shape[0] - 1)
     whitener = torch.sqrt(explained_variance)
     return loadings, components, explained_variance, whitener
+
+
+def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> Tensor:
+    rank, t = temporal_comps.shape
+    assert t >= rank
+    rank_, up, t_ = up_temporal_comps.shape
+    assert t == t_
+    assert rank == rank_
+
+    # NIL = rank, 1, t
+    inp = temporal_comps[:, None, :]
+    # OIL = rank * up, 1, t. rank major, not up major.
+    fil = up_temporal_comps.reshape(rank * up, 1, t)
+    # NOL = rank, rank * up, 2 * t - 1
+    pconv = F.conv1d(input=inp, weight=fil, padding=t - 1)
+    assert pconv.shape == (rank, rank * up, 2 * t - 1)
+    pconv = pconv.view(rank, rank, up, 2 * t - 1)
+    pconv = torch.flip(pconv, dims=(3,))
+
+    return pconv
+
+
+@torch.jit.script
+def full_shared_pconv(
+    tconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
+) -> Tensor:
+    rank, rank_, up, conv_len = tconv.shape
+    n_units, rank__, chans = spatial_sing.shape
+    assert rank == rank_ == rank__
+    out = spatial_sing.new_empty((n_units, n_units, up, conv_len))
+    spatial_sing_flat = spatial_sing.view(n_units * rank, chans)
+    tconv_flat = tconv.view(rank * rank, up * conv_len)
+
+    for i0 in range(0, n_units, batch_size):
+        i1 = min(n_units, i0 + batch_size)
+        chunksz = (i1 - i0) * n_units
+        spatial_left = spatial_sing[i0:i1]
+        spatial_outer = spatial_left.view((i1 - i0) * rank, chans) @ spatial_sing_flat.T
+        spatial_outer = spatial_outer.view(i1 - i0, rank, n_units, rank)
+        spatial_outer = spatial_outer.permute(0, 2, 1, 3).reshape(chunksz, rank * rank)
+        torch.mm(spatial_outer, tconv_flat, out=out[i0:i1].view(chunksz, up * conv_len))
+
+    return out
+
+
+@torch.jit.script
+def best_shared_pconv(
+    tconv: Tensor, spatial_sing: Tensor, batch_size: int = 1024
+) -> tuple[Tensor, Tensor]:
+    rank, rank_, conv_len = tconv.shape
+    n_units, rank__, chans = spatial_sing.shape
+    assert rank == rank_ == rank__
+    lag_offset = conv_len // 2
+
+    conv_out = spatial_sing.new_empty((n_units, n_units))
+    lag_out = torch.empty_like(conv_out, dtype=torch.int32)
+
+    itriu = torch.triu_indices(n_units, n_units, offset=1)
+    ii = itriu[0]
+    jj = itriu[1]
+    ntriu = ii.shape[0]
+
+    conv_flat = conv_out.new_empty((ntriu,))
+    lag_flat = lag_out.new_empty((ntriu,))
+
+    tconv_flat = tconv.view(rank * rank, conv_len)
+
+    for i0 in range(0, ntriu, batch_size):
+        i1 = min(ntriu, i0 + batch_size)
+        bn = i1 - i0
+        bii = ii[i0:i1]
+        bjj = jj[i0:i1]
+
+        sii = spatial_sing[bii]
+        sjj = spatial_sing[bjj]
+
+        # contract channels dim
+        spatial_outer = torch.bmm(sii, sjj.mT)
+
+        # contract rank with tconv
+        bconv = spatial_outer.view(bn, rank * rank) @ tconv_flat
+
+        # reduce. would use out but it's weird in script.
+        conv_flat[i0:i1], lag_flat[i0:i1] = bconv.max(dim=1)
+
+    # squareform
+    conv_out[ii, jj] = conv_flat
+    conv_out[jj, ii] = conv_flat
+    lag_flat -= lag_offset
+    lag_out[ii, jj] = lag_flat
+    lag_out[jj, ii] = -lag_flat
+
+    lag_out.diagonal().zero_()
+    normsq = torch.linalg.norm(spatial_sing.view(n_units, -1), dim=1).square_()
+    conv_out.diagonal().copy_(normsq)
+
+    return conv_out, lag_out
+
+
+def scaled_normeuc_from_dots(
+    dots: Tensor, scale_var: float = 0.01**2, scale_boundary: float = 1.0 / 3.0
+) -> Tensor:
+    inv_lambda = 1.0 / scale_var
+    scale_max = 1.0 + scale_boundary
+    scale_min = 1.0 / scale_max
+
+    normsq = dots.diagonal().contiguous()
+
+    # optimal penalized scaling
+    # columns are targets ("recording"), rows are the "templates"
+    if scale_var > 0:
+        b = dots + inv_lambda
+        a = normsq[:, None] + inv_lambda
+        sc = b.div_(a).clamp_(scale_min, scale_max)
+    else:
+        sc = torch.ones_like(dots)
+
+    # euclidean distance identity
+    col_norm = normsq.sqrt()
+    row_norm = sc * col_norm[:, None]
+    dist = row_norm.square() + normsq[None, :]
+    dist -= sc.mul_(dots).mul_(2.0)
+    del sc
+    dist.relu_().sqrt_()
+
+    # divide by geom mean of norms
+    dist /= row_norm.sqrt_()
+    dist /= col_norm[None, :].sqrt_()
+
+    # handle blanks
+    dist.masked_fill_(dots == 0.0, torch.inf)
+    dist.diagonal().zero_()
+
+    # symmetrize
+    dist = torch.minimum(dist, dist.T)
+
+    return dist
 
 
 def ravel_multi_index(multi_index, dims):
@@ -593,13 +729,13 @@ def nancov(
         if nan_free:
             nobs = weights.sum(0)
         else:
-            nobs = (mask.T * weights) @ mask  # type: ignore
+            nobs = (mask.T * weights) @ mask
     else:
         xtx = x.T @ x
         if nan_free:
             nobs = np.array(len(x), dtype=x.dtype)
         else:
-            nobs = mask.T @ mask  # type: ignore
+            nobs = mask.T @ mask
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
@@ -630,6 +766,7 @@ def cosine_distance(means, means_b=None, true_distance=True):
     if sym:
         means_b = means
     else:
+        assert means_b is not None
         means_b = means_b.reshape(means_b.shape[0], -1)
     dot = means @ means_b.T
     norm = means.square().sum(1).sqrt_()
@@ -778,7 +915,8 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
     return squareform(pdist)
 
 
-def normeuc_distance(means):
+@torch.jit.script
+def normeuc_distance(means: Tensor):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)
     norms_sqrt = means.square().sum(dim=1).sqrt_().sqrt_()
@@ -790,6 +928,41 @@ def normeuc_distance(means):
     dist[:, blank] = torch.inf
     dist.diagonal().zero_()
     return dist
+
+
+@torch.jit.script
+def scaled_normeuc_distance(
+    means: Tensor,
+    scale_std: float = 0.01,
+    scale_min: float = 2.0 / 3.0,
+    scale_max: float = 4.0 / 3.0,
+    batch_size: int = 8192,
+):
+    means = means.reshape(means.shape[0], -1)
+    K = means.shape[0]
+
+    # euc dist foil identity helpful for scaled dist
+    norm = torch.linalg.norm(means, dim=1)
+    normsq = norm.square()
+
+    # dot upper tri
+    dots = means.new_full((K, K), torch.nan)
+    ix = torch.triu_indices(K, K)
+    ii = ix[0]
+    jj = ix[1]
+    nix = ii.shape[0]
+    for i0 in range(0, nix, batch_size):
+        i1 = min(nix, i0 + batch_size)
+        bii = ii[i0:i1]
+        bjj = jj[i0:i1]
+        dots[bii, bjj] = means[bii, None, :].bmm(means[bjj, :, None])[:, 0, 0]
+    del means
+
+    # fill in dot lower tri, diagonal
+    dots[jj, ii] = dots[ii, jj]
+    dots.diagonal().copy_(normsq)
+
+    return scaled_normeuc_from_dots(dots)
 
 
 def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):

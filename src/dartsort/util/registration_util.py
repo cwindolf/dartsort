@@ -47,13 +47,13 @@ def dredge_estimate_motion(
         rigid=motion_cfg.rigid,
         bin_um=motion_cfg.spatial_bin_length_um,
         bin_s=motion_cfg.temporal_bin_length_s,
-        win_step_um=motion_cfg.window_step_um,  # type: ignore
+        win_step_um=motion_cfg.window_step_um,
         weights_threshold_low=motion_cfg.weight_threshold,
         weights_threshold_high=motion_cfg.weight_threshold,
-        win_scale_um=motion_cfg.window_scale_um,  # type: ignore
+        win_scale_um=motion_cfg.window_scale_um,
         win_margin_um=motion_cfg.window_margin_um,
         max_disp_um=motion_cfg.max_disp_um,
-        max_dt_s=motion_cfg.max_dt_s,  # type: ignore
+        max_dt_s=motion_cfg.max_dt_s,
         mincorr=motion_cfg.correlation_threshold,
         device=device,
     )

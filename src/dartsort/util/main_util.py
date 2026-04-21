@@ -14,6 +14,34 @@ from ..util.py_util import dartcopy2, dartcopytree, resolve_path
 logger = get_logger(__name__)
 
 
+def ds_save_intermediate_sorting(
+    step_name: str,
+    step_sorting: DARTsortSorting,
+    output_dir: Path | str | None,
+    cfg: DARTsortInternalConfig | None,
+    work_dir: str | Path | None = None,
+):
+    if cfg is not None and not cfg.save_intermediate_labels:
+        return
+    if output_dir is None:
+        return
+    output_dir = resolve_path(output_dir, strict=True)
+    if work_dir is None:
+        store_dir = output_dir
+    else:
+        store_dir = resolve_path(work_dir, strict=True)
+
+    step_npz = store_dir / f"{step_name}.npz"
+    logger.info(f"Saving {step_name} labels to {step_npz}")
+    logger.info(f"{step_name}: {step_sorting}.")
+    step_sorting.save(step_npz)
+
+    if work_dir is not None:
+        targ_npz = output_dir / step_npz.name
+        logger.info(f"Copy {step_npz} -> {targ_npz}.")
+        dartcopy2(cfg, step_npz, targ_npz)
+
+
 def ds_save_intermediate_labels(
     step_name: str,
     step_sorting: DARTsortSorting,

@@ -320,6 +320,9 @@ class RefreshableDataLoader(DataLoader):
     def refresh(self):
         pass
 
+    def cleanup(self):
+        pass
+
 
 class RefreshableDataset(Dataset):
     def refresh(self, indices):
@@ -327,7 +330,7 @@ class RefreshableDataset(Dataset):
 
 
 class AOTIndicesInOrderBatchSampler(RefreshableSampler):
-    def __init__(self, n_examples, batch_size=None):
+    def __init__(self, n_examples: int, batch_size: int):
         super().__init__()
         self.n_examples = n_examples
         self.indices = torch.arange(n_examples)
@@ -344,7 +347,7 @@ class AOTIndicesInOrderBatchSampler(RefreshableSampler):
 class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
     def __init__(
         self,
-        n_examples=None,
+        n_examples: int,
         weights=None,
         replacement=True,
         batch_size=None,
@@ -355,8 +358,6 @@ class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
 
         if weights is not None:
             weights = torch.as_tensor(weights, dtype=torch.double)
-        if n_examples is None:
-            n_examples = len(weights)
 
         self.n_examples = n_examples
         self.weights = weights
@@ -374,6 +375,7 @@ class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
         return (n + self.batch_size - 1) // self.batch_size
 
     def __iter__(self):
+        assert self.indices is not None
         if self.batch_size is None:
             yield from self.indices
         else:
@@ -416,11 +418,12 @@ class AOTIndicesWeightedRandomBatchSampler(RefreshableSampler):
 class AOTIndicesRefreshableDataLoader(RefreshableDataLoader):
     def __init__(
         self,
+        *,
         dataset,
         in_order=False,
         weights=None,
         replacement=True,
-        batch_size=None,
+        batch_size: int,
         generator=None,
         epoch_size=None,
     ):

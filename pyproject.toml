@@ -18,6 +18,7 @@ dependencies = [
   "dredge-ephys",
   "h5py",
   "jaxtyping",
+  "kdepy",
   "linear_operator",
   "numba",
   "numpy>=1.20;python_version<'3.13'",
@@ -74,5 +75,6 @@ line-length = 88
 [tool.jupytext]
 "formats" = "ipynb,py:percent"
 
-[tool.pyright]
-"include" = ["src", "tests"]
+[tool.ty.rules]
+"unsupported-base" = "ignore"
+"invalid-key" = "ignore"

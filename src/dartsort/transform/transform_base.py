@@ -1,5 +1,7 @@
-from typing import Any, Iterable
+from pathlib import Path
+from typing import Any, Iterable, Self
 
+from spikeinterface.core import BaseRecording
 import torch
 
 from ..util.data_util import SpikeDataset
@@ -55,7 +57,7 @@ class BaseWaveformModule(BModule):
                 self.__class__._pre_load_state
             )
 
-    def fit(self, recording, waveforms, **fixed_properties) -> Any:
+    def fit(self, recording: BaseRecording, waveforms: torch.Tensor, *, channels: torch.Tensor, **fixed_properties: torch.Tensor) -> Any:
         del recording, fixed_properties
         self.spike_length_samples = waveforms.shape[1]
         self.initialize_spike_length_dependent_params()
@@ -64,6 +66,17 @@ class BaseWaveformModule(BModule):
         return dict(
             spike_length_samples=self.spike_length_samples, needs_fit=self.needs_fit()
         )
+
+    @classmethod
+    def load_from_pt(
+        cls,
+        *,
+        pretrained_path: str | Path,
+        channel_index: torch.Tensor,
+        geom: torch.Tensor,
+        **kwargs: dict[str, Any],
+    ) -> Self:
+        raise NotImplementedError
 
     def set_extra_state(self, state):
         self.spike_length_samples = state["spike_length_samples"]
@@ -115,8 +128,8 @@ class BaseWaveformModule(BModule):
 class BaseWaveformDenoiser(BaseWaveformModule):
     is_denoiser = True
 
-    def forward(self, waveforms, **unused):
-        del waveforms, unused
+    def forward(self, waveforms, *, channels: torch.Tensor,  **fixed_properties):
+        del waveforms, fixed_properties
         raise NotImplementedError
 
 
@@ -128,8 +141,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
     # output dtye
     dtype: torch.dtype | list[torch.dtype] = torch.float
 
-    def transform(self, waveforms, **unused):
-        del waveforms, unused
+    def transform(self, waveforms: torch.Tensor, *, channels: torch.Tensor, **fixed_properties: torch.Tensor):
+        del waveforms, fixed_properties
         # returns dict {key=feat name, value=feature}
         raise NotImplementedError
 

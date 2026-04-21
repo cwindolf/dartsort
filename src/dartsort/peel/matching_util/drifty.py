@@ -41,18 +41,18 @@ from torch import Tensor
 
 from ...templates import TemplateData
 from ...templates.template_util import shared_basis_compress_templates
-from ...util.internal_config import ComputationConfig, MatchingConfig, WhiteningStrategy
+from ...util.internal_config import ComputationConfig, MatchingConfig, WhiteningStrategy, tps_interp_clampna_extrap_params
 from ...util.interpolation_util import (
     FromFullProbeInterpolator,
     InterpolationParams,
     bake_interpolation_1d,
-    default_interpolation_params,
 )
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
 from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
+from ...util.spiketorch import shared_temporal_pconv, full_shared_pconv
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import (
     ChunkTemplateData,
@@ -75,17 +75,16 @@ class DriftyMatchingTemplates(MatchingTemplates):
         temporal_comps: Tensor,
         spatial_sing: Tensor,
         motion: MotionInfo,
-        geom: Tensor,
         trough_offset_samples: int,
         unit_ids: Tensor | None = None,
-        rgeom: Tensor | None = None,
         whiten_strategy: WhiteningStrategy = "none",
         whitener: SpatialWhitener | None = None,
+        whiten_features: bool = True,
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
         interp_up_radius: int = 8,
         up_interp_params: InterpolationParams = default_upsampling_params,
-        drift_interp_params: InterpolationParams = default_interpolation_params,
+        drift_interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
         refractory_radius_frames: int = 0,
         device: torch.device,
     ):
@@ -101,6 +100,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.up_method = up_method
         self.interpolating = motion.drifting
         self.whiten_strategy = whiten_strategy
+        self.whiten_features = whiten_features
 
         # validation / shape documentation
         assert temporal_comps.ndim == 2
@@ -110,7 +110,6 @@ class DriftyMatchingTemplates(MatchingTemplates):
         assert trough_offset_samples <= self.spike_length_samples
 
         if self.interpolating:
-            assert rgeom is not None
             logger.dartsortdebug("Drifty matching will interpolate templates.")
             self.erp = FromFullProbeInterpolator(
                 motion=motion, params=drift_interp_params, device=device
@@ -133,7 +132,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         up_temporal_comps = upsample_singlechan_torch(
             temporal_comps, temporal_jitter=up_factor
         )
-        temporal_pconv = shared_temporal_pconv(temporal_comps, up_temporal_comps)
+        tconv = shared_temporal_pconv(temporal_comps, up_temporal_comps)
 
         assert temporal_comps.shape == (rank, self.spike_length_samples)
         self.register_buffer("temporal_comps", temporal_comps.contiguous())
@@ -147,7 +146,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             up_major_temporal_comps = None
         self.register_buffer_or_none("up_major_temporal_comps", up_major_temporal_comps)
         self.register_buffer("spatial_sing", spatial_sing)
-        self.register_buffer("temporal_pconv", temporal_pconv)
+        self.register_buffer("tconv", tconv)
         if unit_ids is None:
             unit_ids = torch.arange(self.n_units, device=device)
         self.register_buffer("unit_ids", unit_ids)
@@ -156,6 +155,14 @@ class DriftyMatchingTemplates(MatchingTemplates):
             assert whitener is not None
             self.whitener = whitener.to(spatial_sing.device)
             conv_spatial_sing = self.whitener.transpose_whiten(spatial_sing)
+        elif self.whiten_strategy == "prewhiten_postapply" and not self.interpolating:
+            assert whitener is not None
+            self.whitener = whitener.to(spatial_sing.device)
+            conv_spatial_sing = self.whitener.whiten(spatial_sing)
+        elif self.whiten_strategy == "prewhiten_postapply":
+            assert whitener is not None
+            self.whitener = whitener.to(spatial_sing.device)
+            conv_spatial_sing = None
         elif self.whiten_strategy == "prewhiten":
             assert whitener is not None
             self.whitener = whitener.to(spatial_sing.device)
@@ -167,10 +174,13 @@ class DriftyMatchingTemplates(MatchingTemplates):
         self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
 
         # full pconv can be precomputed when not interpolating
-        if self.whiten_strategy == "postwhiten" and not self.interpolating:
-            pconv = full_shared_pconv(self.b.temporal_pconv, self.b.norm_spatial_sing)
         if not self.interpolating:
-            pconv = full_shared_pconv(self.b.temporal_pconv, self.b.spatial_sing)
+            if self.whiten_strategy == "postwhiten":
+                pconv = full_shared_pconv(self.b.tconv, self.b.spatial_sing)
+            elif self.whiten_strategy == "prewhiten_postapply":
+                pconv = full_shared_pconv(self.b.tconv, self.b.conv_spatial_sing)
+            else:
+                pconv = full_shared_pconv(self.b.tconv, self.b.spatial_sing)
         else:
             pconv = None
         self.register_buffer_or_none("pconv", pconv)
@@ -205,13 +215,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         device = computation_cfg.actual_device()
 
         unit_ids = torch.asarray(template_data.unit_ids, device=device)
-        geom = torch.asarray(recording.get_channel_locations())
-        geom = geom.to(device=device, dtype=dtype)
-        rgeom = torch.asarray(template_data.registered_geom)
-        rgeom = rgeom.to(device=device, dtype=dtype)
-
         shared_basis_temps = shared_basis_compress_templates(
-            template_data,
+            template_data=template_data,
             min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
             rank=matching_cfg.template_svd_compression_rank,
             computation_cfg=computation_cfg,
@@ -219,21 +224,23 @@ class DriftyMatchingTemplates(MatchingTemplates):
         temporal_comps = torch.asarray(shared_basis_temps.temporal_components)
         spatial_sing = torch.asarray(shared_basis_temps.spatial_singular)
 
-        if matching_cfg.whitening.strategy == "none":
+        wh_none = matching_cfg.whitening.strategy == "none"
+        if wh_none:
             assert template_data.whitener is None
             whitener = None
         else:
             assert template_data.whitener is not None
             whitener = SpatialWhitener.from_numpy(template_data.whitener)
 
+        if not wh_none and not matching_cfg.whiten_features:
+            assert matching_cfg.whitening.strategy == "prewhiten_postapply"
+
         return cls(
             temporal_comps=temporal_comps.to(device=device, dtype=dtype),
             spatial_sing=spatial_sing.to(device=device, dtype=dtype),
             motion=motion,
-            geom=geom,
             trough_offset_samples=template_data.trough_offset_samples,
             unit_ids=unit_ids,
-            rgeom=rgeom,
             up_factor=matching_cfg.up_factor,
             up_method=matching_cfg.up_method,
             interp_up_radius=matching_cfg.upsampling_radius,
@@ -241,6 +248,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             refractory_radius_frames=matching_cfg.refractory_radius_frames,
             whitener=whitener,
             whiten_strategy=matching_cfg.whitening.strategy,
+            whiten_features=matching_cfg.whiten_features,
             device=device,
         )
 
@@ -252,24 +260,37 @@ class DriftyMatchingTemplates(MatchingTemplates):
     def spatial_at_time(self, t_s: float) -> tuple[Tensor, ...]:
         if self.whiten_strategy == "postwhiten":
             spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
+            normsq_spatial_sing = spatial_sing
             conv_spatial_sing = self.interp_at_time(t_s, self.b.conv_spatial_sing)
         elif self.whiten_strategy in ("none", "prewhiten"):
             spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
-            conv_spatial_sing = spatial_sing
+            conv_spatial_sing = normsq_spatial_sing = spatial_sing
+        elif self.whiten_strategy == "prewhiten_postapply":
+            assert self.whitener is not None
+            spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
+            if self.interpolating:
+                conv_spatial_sing = self.whitener.whiten(spatial_sing)
+            else:
+                conv_spatial_sing = self.b.conv_spatial_sing
+            if self.whiten_features:
+                spatial_sing = conv_spatial_sing
+            normsq_spatial_sing = conv_spatial_sing
         else:
             assert False
 
         # normsq for channel selection from original
-        normsq_by_chan = spatial_sing.square().sum(dim=1)
+        normsq_by_chan = normsq_spatial_sing.square().sum(dim=1)
         main_channels = normsq_by_chan.argmax(dim=1)
         normsq = normsq_by_chan.sum(dim=1)
 
-        # padded spatial sing is used for clean wfs only
-        padded_spatial_sing = F.pad(spatial_sing, (0, 1))
+        # normsq is always the pconv one
         if self.b.pconv is None:
-            pconv = full_shared_pconv(self.b.temporal_pconv, spatial_sing)
+            pconv = full_shared_pconv(self.b.tconv, normsq_spatial_sing)
         else:
             pconv = self.b.pconv
+
+        # padded spatial sing is used for clean wfs only
+        padded_spatial_sing = F.pad(spatial_sing, (0, 1))
 
         return conv_spatial_sing, normsq, main_channels, padded_spatial_sing, pconv
 
@@ -293,7 +314,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
             scaling=scaling,
             upsampling=self.upsampling,
             needs_fine_pass=self.upsampling,
-            prewhiten=self.whiten_strategy == "prewhiten",
+            needs_residual=self.upsampling and self.up_method == "direct",
+            prewhiten=self.whiten_strategy.startswith("prewhiten"),
             spatial_whitener=self.whitener,
             inv_lambda=torch.asarray(inv_lambda).to(normsq, non_blocking=True),
             scale_min=torch.asarray(scale_min).to(normsq, non_blocking=True),
@@ -324,6 +346,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     upsampling: bool
     scaling: bool
     needs_fine_pass: bool
+    needs_residual: bool
     prewhiten: bool
     inv_lambda: Tensor
     scale_min: Tensor
@@ -389,32 +412,29 @@ class DriftyChunkTemplateData(ChunkTemplateData):
             return
         assert peaks.times is not None
         assert peaks.template_inds is not None
-        if peaks.up_inds is not None:
-            tempc = self.up_major_temporal_comps[peaks.up_inds]
+
+        if peaks.up_inds is None:
+            tempc = self.temporal_comps[None]
         else:
-            tempc = self.temporal_comps
-            tempc = tempc[None].broadcast_to(peaks.n_spikes, *tempc.shape)
-        if peaks.scalings is None:
-            batch_templates = torch.bmm(
-                tempc.mT, self.padded_spatial_sing[peaks.template_inds]
-            )
-        else:
-            tempc = tempc * peaks.scalings[:, None, None]
-            batch_templates = torch.bmm(
-                tempc.mT, self.padded_spatial_sing[peaks.template_inds]
-            )
-        n, t, c = batch_templates.shape
-        time_ix = peaks.times[:, None] + self.time_ix[None, :]
-        assert traces.shape[1] in (c, c + 1)
-        assert time_ix.shape == (n, t)
-        batch_templates = batch_templates.view(n * t, c)
-        time_ix = time_ix.view(n * t)[:, None].broadcast_to(batch_templates.shape)
-        if sign == -1:
-            traces.scatter_add_(dim=0, src=batch_templates._neg_view(), index=time_ix)
-        elif sign == 1:
-            traces.scatter_add_(dim=0, src=batch_templates, index=time_ix)
-        else:
-            assert False
+            tempc = self.up_major_temporal_comps
+
+        assert sign in (-1, 1)
+        tempc = (
+            self.temporal_comps
+            if peaks.up_inds is None
+            else self.up_major_temporal_comps
+        )
+        _subtract_templates_loop(
+            traces=traces,
+            up_inds=peaks.up_inds,
+            scalings=peaks.scalings,
+            template_inds=peaks.template_inds,
+            tempc=tempc,
+            spatc=self.padded_spatial_sing,
+            times=peaks.times,
+            time_ix=self.time_ix,
+            neg=sign == -1,
+        )
 
     def subtract_conv(
         self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
@@ -470,7 +490,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
         self,
         *,
         peaks: "MatchingPeaks",
-        residual: Tensor,
+        residual: Tensor | None,
         conv: Tensor,
         padding: int = 0,
     ) -> "MatchingPeaks":
@@ -522,11 +542,11 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     def whiten_traces(self, traces: Tensor, out: Tensor | None = None):
         if self.prewhiten:
             assert self.spatial_whitener is not None
-            return self.spatial_whitener.whiten(traces, out=out)
+            return self.spatial_whitener.whiten_traces_spatial_major(traces, out=out)
         elif out is not None:
-            return out.copy_(traces)
+            return out.copy_(traces.T)
         else:
-            return traces
+            return traces.T.contiguous()
 
 
 # -- helpers
@@ -619,54 +639,6 @@ def get_interp_upsampling_data(
     )
 
 
-# -- computing pairwise convolutions
-
-
-def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> Tensor:
-    rank, t = temporal_comps.shape
-    assert t >= rank
-    rank_, up, t_ = up_temporal_comps.shape
-    assert t == t_
-    assert rank == rank_
-
-    # NIL = rank, 1, t
-    inp = temporal_comps[:, None, :]
-    # OIL = rank * up, 1, t. rank major, not up major.
-    fil = up_temporal_comps.reshape(rank * up, 1, t)
-    # NOL = rank, rank * up, 2 * t - 1
-    pconv = F.conv1d(input=inp, weight=fil, padding=t - 1)
-    assert pconv.shape == (rank, rank * up, 2 * t - 1)
-    pconv = pconv.view(rank, rank, up, 2 * t - 1)
-    pconv = torch.flip(pconv, dims=(3,))
-
-    return pconv
-
-
-@torch.jit.script
-def full_shared_pconv(
-    temporal_pconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
-) -> Tensor:
-    rank, rank_, up, conv_len = temporal_pconv.shape
-    n_units, rank__, chans = spatial_sing.shape
-    assert rank == rank_ == rank__
-    out = spatial_sing.new_empty((n_units, n_units, up, conv_len))
-    spatial_sing_flat = spatial_sing.view(n_units * rank, chans)
-    temporal_pconv_flat = temporal_pconv.view(rank * rank, up * conv_len)
-    for i0 in range(0, n_units, batch_size):
-        i1 = min(n_units, i0 + batch_size)
-        chunksz = (i1 - i0) * n_units
-        spatial_left = spatial_sing[i0:i1]
-        spatial_outer = spatial_left.view((i1 - i0) * rank, chans) @ spatial_sing_flat.T
-        spatial_outer = spatial_outer.view(i1 - i0, rank, n_units, rank)
-        spatial_outer = spatial_outer.permute(0, 2, 1, 3).reshape(chunksz, rank * rank)
-        torch.mm(
-            spatial_outer,
-            temporal_pconv_flat,
-            out=out[i0:i1].view(chunksz, up * conv_len),
-        )
-    return out
-
-
 # -- convolution
 
 
@@ -748,6 +720,61 @@ def _upsampling_fine_match(
         scalings = scalings.take_along_dim(dim=1, indices=up_best[:, None])[:, 0]
 
     return scalings, upsampling_ixs, up_best, objs
+
+
+# --
+
+
+@torch.jit.script
+def _subtract_templates_loop(
+    traces: Tensor,
+    up_inds: Tensor | None,
+    scalings: Tensor | None,
+    template_inds: Tensor,
+    tempc: Tensor,
+    spatc: Tensor,
+    times: Tensor,
+    time_ix: Tensor,
+    neg: bool,
+    batch_size: int = 256,
+):
+    n = times.shape[0]
+
+    # put time on dim -2, rank on -1
+    tempc = tempc.transpose(-2, -1)
+
+    # holder
+    t, r = tempc.shape[-2:]
+    c = spatc.shape[-1]
+    btemp = tempc.new_empty((min(n, batch_size), t, c))
+
+    # time inds
+    tt = times[:, None] + time_ix
+    tt = tt.view(n * t)
+
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        nb = i1 - i0
+        if nb < batch_size:
+            btemp = btemp[:nb]
+
+        if up_inds is None:
+            if scalings is not None:
+                btempc = tempc * scalings[i0:i1, None, None]
+            else:
+                btempc = tempc.broadcast_to(nb, t, r)
+        else:
+            btempc = tempc[up_inds[i0:i1]]
+            if scalings is not None:
+                btempc.mul_(scalings[i0:i1, None, None])
+
+        btemp = torch.bmm(btempc, spatc[template_inds[i0:i1]], out=btemp)
+        if neg:
+            btemp = btemp._neg_view()
+
+        btemp_flat = btemp.view(nb * t, c)
+        btt = tt[i0 * t : i1 * t, None].broadcast_to(btemp_flat.shape)
+        traces.scatter_add_(dim=0, src=btemp_flat, index=btt)
 
 
 # -- Keys' piecewise cubic interpolation impl (order 3 and 4)

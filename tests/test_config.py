@@ -10,7 +10,7 @@ def test_cfg_consistency():
     # can just do assert cfg0 == cfg1, but pytest gives a better
     # error message if you do...
     for field in dataclasses.fields(dartsort.DARTsortInternalConfig):
-        assert getattr(cfg0, field.name) == getattr(cfg1, field.name)
+        assert getattr(cfg0, field.name) == getattr(cfg1, field.name), field.name
 
 
 def test_waveform_config():

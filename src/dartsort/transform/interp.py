@@ -40,8 +40,8 @@ class WaveformInterpolator(BaseWaveformDenoiser):
             motion=motion, params=params, device=geom.device
         )
 
-    def forward(self, waveforms, *, chunk_center_s, **unused):
-        del unused
+    def forward(self, waveforms, **fixed_properties):
+        chunk_center_s = fixed_properties["chunk_center_s"]
         waveforms = self.erp.interp_at_time(
             t_s=chunk_center_s.item(), waveforms=waveforms
         )

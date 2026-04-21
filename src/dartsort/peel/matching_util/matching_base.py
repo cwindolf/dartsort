@@ -139,6 +139,7 @@ class ChunkTemplateData:
     upsampling: bool
     scaling: bool
     needs_fine_pass: bool
+    needs_residual: bool
     up_factor: int
     prewhiten: bool
     inv_lambda: Tensor
@@ -176,7 +177,7 @@ class ChunkTemplateData:
         self,
         *,
         peaks: "MatchingPeaks",
-        residual: Tensor,
+        residual: Tensor | None,
         conv: Tensor,
         padding: int = 0,
     ) -> "MatchingPeaks":
@@ -185,9 +186,9 @@ class ChunkTemplateData:
     def whiten_traces(self, traces: Tensor, out: Tensor | None = None):
         assert not self.prewhiten
         if out is not None:
-            return out.copy_(traces)
+            return out.copy_(traces.T)
         else:
-            return traces
+            return traces.T.contiguous()
 
     # this one is just for debugging / unit testing
     def reconstruct_up_templates(self):

@@ -88,7 +88,7 @@ def fill_geom_holes(geom):
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
-    min_distance = pdist(geom, metric="sqeuclidean").min() / 2  # type: ignore
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
 
     # find all shifted site positions
     # TODO make this not quadratic
@@ -570,7 +570,7 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
 
     for c in range(len(geom)):
         if radius is not None:
-            dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)  # type: ignore
+            dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)
             subset[c] = dists <= radius**2
         elif n_channels_subset is not None:
             low = max(0, c - n_channels_subset // 2)
@@ -719,7 +719,7 @@ def get_channel_subset(
 
     return take_along_dim(
         input=waveforms,  # type: ignore
-        indices=inds,  # type: ignore
+        indices=inds,
         dim=waveforms.ndim - 1,
         out=out,
     )
