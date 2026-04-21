@@ -219,7 +219,33 @@ class BasePeeler(BModule):
             return
         chunks_to_do = chunk_starts_samples[next_chunk_index:]
 
-        if total_residual_snips is not None:
+        if (
+            total_residual_snips is not None
+            and ensure_coverage
+            and stop_after_n_waveforms is not None
+        ):
+            assert residual_snips_per_chunk is None
+            resids_remaining = total_residual_snips - resids_so_far
+            chunks_remaining = len(chunks_to_do)
+            chunks_done = n_chunks_orig - chunks_remaining
+            chunks_cover = int(np.floor(ensure_coverage * n_chunks_orig))
+            chunks_cover_remaining = chunks_cover - chunks_done
+            if chunks_cover_remaining == 0:
+                assert resids_remaining == 0
+                residual_snips_per_chunk = 0
+            else:
+                residual_snips_per_chunk = divide_randomly(
+                    resids_remaining,
+                    chunks_cover_remaining,
+                    self.fit_subsampling_random_state,
+                    len(chunks_to_do),
+                )
+                logger.dartsortdebug(
+                    f"Will draw {residual_snips_per_chunk[:chunks_cover_remaining].mean():.1f} "
+                    f"residual snips on average per coverage chunk ({chunks_cover_remaining} "
+                    "remaining to hit coverage)."
+                )
+        elif total_residual_snips is not None:
             assert residual_snips_per_chunk is None
             resids_remaining = total_residual_snips - resids_so_far
             residual_snips_per_chunk = divide_randomly(
@@ -546,7 +572,9 @@ class BasePeeler(BModule):
         # not that something else couldn't happen...
         with delay_keyboard_interrupt:
             if not ignore_resuming:
-                output_h5["last_chunk_index"][()] = output_h5["last_chunk_index"][()] + 1
+                output_h5["last_chunk_index"][()] = (
+                    output_h5["last_chunk_index"][()] + 1
+                )
                 output_h5["last_chunk_start"][()] = chunk_start_samples
 
             if residual_file is not None:

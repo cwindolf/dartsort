@@ -886,7 +886,7 @@ def sorting_isis(sorting: DARTsortSorting):
     isis_ms = np.zeros(len(sorting))
     for uid in sorting.unit_ids:
         inu = np.flatnonzero(sorting.labels == uid)
-        t_ms = sorting.times_seconds[inu] * 1000  # ty:ignore[unresolved-attribute]
+        t_ms = sorting.times_seconds[inu] * 1000
         isi = np.diff(t_ms)
         isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
         isi = np.minimum(isi[1:], isi[:-1])
@@ -1511,7 +1511,13 @@ def fit_reweighting(
     return sample_p
 
 
-def divide_randomly(n_things, n_bins, rg):
+def divide_randomly(
+    n_things: int,
+    n_bins: int,
+    rg: int | np.random.Generator,
+    zero_pad_to_more_bins: int | None = None,
+) -> np.ndarray:
+    """Randomly divide n_things among n_bins, with optional zero padding on the right."""
     things_per_bin = np.zeros(n_bins, dtype=np.int64)
     n_even_split = n_things // n_bins
     things_per_bin += n_even_split
@@ -1522,4 +1528,10 @@ def divide_randomly(n_things, n_bins, rg):
         choices = rg.choice(n_bins, size=n_things_remaining)
         np.add.at(things_per_bin, choices, 1)
     assert things_per_bin.sum() == n_things
+
+    if zero_pad_to_more_bins is not None:
+        assert zero_pad_to_more_bins >= n_bins
+        pad = zero_pad_to_more_bins - n_bins
+        things_per_bin = np.pad(things_per_bin, [(0, pad)])
+
     return things_per_bin

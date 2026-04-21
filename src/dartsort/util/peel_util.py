@@ -74,7 +74,13 @@ def run_peeler(
 
     # run main
     n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
-    n_resid_now = 0 if is_subsampling else n_resid_snips
+    if is_subsampling and ensure_coverage is not None:
+        n_resid_now = n_resid_snips
+    elif is_subsampling:
+        # can't know how many snips to extract per chunk...
+        n_resid_now = 0
+    else:
+        n_resid_now = n_resid_snips
     peeler.peel(
         output_hdf5_filename,
         chunk_starts_samples=chunk_starts_samples,
@@ -87,7 +93,7 @@ def run_peeler(
         ensure_coverage=ensure_coverage,
         shuffle=is_subsampling or shuffle,
     )
-    if n_resid_snips and is_subsampling:
+    if n_resid_now == 0 and n_resid_snips > 0:
         peeler.run_subsampled_peeling(
             output_hdf5_filename,
             chunk_length_samples=peeler.spike_length_samples,
