@@ -466,10 +466,16 @@ def get_channels_in_probe(waveforms, max_channels, channel_index):
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
     waveforms = waveforms.permute(0, 2, 1)
+    waveforms = waveforms.to(device=channel_index.device)
     in_probe_index = channel_index < channel_index.shape[0]
     channels_in_probe = in_probe_index[max_channels]
     waveforms_in_probe = waveforms[channels_in_probe]
     return channels_in_probe, waveforms_in_probe
+
+
+def assert_all_finite_in_probe(waveforms, max_channels, channel_index, message=""):
+    _, waveforms = get_channels_in_probe(waveforms, max_channels, channel_index)
+    assert waveforms.isfinite().all(), f"Blow up: {message}"
 
 
 def set_channels_in_probe(
@@ -479,8 +485,9 @@ def set_channels_in_probe(
     in_place=False,
 ):
     waveforms_full_dest = waveforms_full_dest.permute(0, 2, 1)
-    if not in_place:
-        waveforms_full_dest = waveforms_full_dest.clone()
+    waveforms_full_dest = torch.asarray(
+        waveforms_full_dest, copy=not in_place, device=waveforms_in_probe_src.device
+    )
     waveforms_full_dest[channels_in_probe] = waveforms_in_probe_src
     return waveforms_full_dest.permute(0, 2, 1)
 

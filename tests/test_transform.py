@@ -133,6 +133,10 @@ def test_all_transformers():
         for j, name in enumerate(transformers_by_class_name)
         if name not in skip_me
     ]
+    move_me_last = {"DebugMatchingPursuitDenoiser"}
+    starters = [ck for ck in class_names_and_kwargs if ck[0] not in move_me_last]
+    enders = [ck for ck in class_names_and_kwargs if ck[0] in move_me_last]
+    class_names_and_kwargs = starters + enders
 
     pipeline = WaveformPipeline.from_class_names_and_kwargs(
         geom,
@@ -141,6 +145,7 @@ def test_all_transformers():
         waveform_cfg=default_waveform_cfg,
         sampling_frequency=30_000.0,
     )
+    pipeline.safe = True
     if torch.cuda.is_available():
         pipeline = pipeline.to(torch.device("cuda"))
 

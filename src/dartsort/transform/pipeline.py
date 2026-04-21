@@ -10,6 +10,7 @@ from ..util.internal_config import (
     WaveformConfig,
     ComputationConfig,
 )
+from ..util.waveform_util import assert_all_finite_in_probe
 from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
 
@@ -17,6 +18,7 @@ class WaveformPipeline(torch.nn.Module):
     def __init__(
         self,
         transformers: Sequence[BaseWaveformModule],
+        channel_index: torch.Tensor | None = None,
         kwargs_to_store=None,
         waveform_cfg=None,
         sampling_frequency=30_000.0,
@@ -27,6 +29,11 @@ class WaveformPipeline(torch.nn.Module):
         self.kwargs_to_store = kwargs_to_store
         self.sampling_frequency = sampling_frequency
         self.waveform_cfg = waveform_cfg
+        if channel_index is not None:
+            self.register_buffer("channel_index", channel_index.clone())
+        else:
+            self.channel_index = None
+        self.safe = False
 
     def __len__(self):
         return len(self.transformers)
@@ -124,6 +131,7 @@ class WaveformPipeline(torch.nn.Module):
 
         return cls(
             transformers,
+            channel_index=channel_index,
             kwargs_to_store=class_names_and_kwargs,
             waveform_cfg=waveform_cfg,
             sampling_frequency=sampling_frequency,
@@ -206,6 +214,14 @@ class WaveformPipeline(torch.nn.Module):
             elif transformer.is_denoiser:
                 features["waveforms"] = waveforms = transformer(**features)
 
+            if self.safe:
+                assert_all_finite_in_probe(
+                    waveforms,
+                    features["channels"],
+                    self.channel_index,
+                    str(transformer),
+                )
+
         return waveforms, features
 
     def fit(
@@ -231,7 +247,13 @@ class WaveformPipeline(torch.nn.Module):
         features["waveforms"] = waveforms
         del waveforms
 
-        for transformer in self.transformers:
+        if self.safe:
+            assert torch.is_tensor(features["waveforms"])
+            assert_all_finite_in_probe(
+                features["waveforms"], features["channels"], self.channel_index, "Init"
+            )
+
+        for tix, transformer in enumerate(self.transformers):
             if transformer.needs_fit():
                 transformer.train()
                 transformer.fit(
@@ -252,6 +274,17 @@ class WaveformPipeline(torch.nn.Module):
                 features.update(transformer.transform(**features))
             elif transformer.is_denoiser:
                 features["waveforms"] = transformer(**features)
+
+            if self.safe:
+                assert torch.is_tensor(features["waveforms"])
+                this = str(type(transformer).__name__)
+                prev = ">".join(str(type(t).__name__) for t in self.transformers[:tix])
+                assert_all_finite_in_probe(
+                    features["waveforms"],
+                    features["channels"],
+                    self.channel_index,
+                    f"({tix}): {this} <- [{prev}]",
+                )
 
         assert not features["waveforms"].requires_grad
         assert not self.needs_fit()
