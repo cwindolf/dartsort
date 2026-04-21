@@ -421,7 +421,7 @@ class DARTsortSorting:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
             try:
-                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # pyright: ignore[reportCallIssue]
+                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
                 h5p = h5p.relative_to(sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
@@ -708,7 +708,7 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         base_dir = sorting.parent
         stem = sorting.stem
         # TODO how to type this better... don't understand.
-        geom = channel_index = None  # type: ignore
+        geom = channel_index = None
     else:
         assert isinstance(sorting, DARTsortSorting)
         if sorting.parent_h5_path is None:
@@ -718,14 +718,14 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         base_dir = h5_path.parent
         stem = h5_path.stem
 
-        geom = getattr(sorting, "geom", None)  # type: ignore
-        channel_index = getattr(sorting, "channel_index", None)  # type: ignore
+        geom = getattr(sorting, "geom", None)
+        channel_index = getattr(sorting, "channel_index", None)
 
     model_dir = base_dir / f"{stem}_models"
     if geom is None or channel_index is None:
         with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
-            geom: np.ndarray = h5["geom"][:]  # type: ignore
-            channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
+            geom: np.ndarray = h5["geom"][:]
+            channel_index: np.ndarray = h5["channel_index"][:]
     assert geom is not None
     assert channel_index is not None
 
@@ -776,12 +776,12 @@ def load_stored_tsvd(
 
 def get_labels(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r") as h5:
-        return h5["labels"][:]  # type: ignore
+        return h5["labels"][:]
 
 
 def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]  # type: ignore
+        return h5["residual"][:]
 
 
 def sorting_isis(sorting: DARTsortSorting):
@@ -789,7 +789,7 @@ def sorting_isis(sorting: DARTsortSorting):
     isis_ms = np.zeros(len(sorting))
     for uid in sorting.unit_ids:
         inu = np.flatnonzero(sorting.labels == uid)
-        t_ms = sorting.times_seconds[inu] * 1000  # type: ignore
+        t_ms = sorting.times_seconds[inu] * 1000  # ty:ignore[unresolved-attribute]
         isi = np.diff(t_ms)
         isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
         isi = np.minimum(isi[1:], isi[:-1])
@@ -1312,13 +1312,14 @@ def subsample_waveforms(
         h5 = h5py.File(hdf5_filename)
     elif need_open:
         raise ValueError("Need h5 or hdf5_filename.")
+    assert h5 is not None
 
     try:
-        channels: np.ndarray = h5["channels"][:]  # type: ignore
+        channels: np.ndarray = h5["channels"][:]
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            wfshape = h5[waveforms_dataset_name].shape  # type: ignore
+            wfshape = h5[waveforms_dataset_name].shape
             emptywf = torch.zeros(wfshape)
             return emptywf, dict(channels=emptyi)
         weights = fit_reweighting(
@@ -1336,19 +1337,19 @@ def subsample_waveforms(
             if not replace:
                 choices.sort()
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}  # type: ignore
+                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
                 waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
                     ichoices
                 ]
                 fixed_properties = {
-                    k: h5[k][uchoices][ichoices]  # type: ignore
+                    k: h5[k][uchoices][ichoices]
                     for k in fixed_property_keys
                 }
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]  # type: ignore
-            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}  # type: ignore
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
     finally:
         if need_open:
             h5.close()
@@ -1368,7 +1369,7 @@ def subsample_waveforms(
 
 
 def fit_reweighting(
-    voltages: np.ndarray | None = None,  # type: ignore
+    voltages: np.ndarray | torch.Tensor | None = None,
     h5=None,
     hdf5_path=None,
     log_voltages=True,
@@ -1385,7 +1386,7 @@ def fit_reweighting(
             voltages = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
-                voltages: np.ndarray = h5[voltages_dataset_name][:]  # type: ignore
+                voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             assert False
     assert isinstance(voltages, np.ndarray)
@@ -1393,14 +1394,16 @@ def fit_reweighting(
     from ..clustering.density import get_smoothed_density
 
     if torch.is_tensor(voltages):
-        voltages = voltages.numpy(force=True)
+        v = voltages.numpy(force=True)
+    else:
+        v = voltages
     if log_voltages:
-        sign = np.sign(voltages)
-        voltages = sign * np.log(np.abs(voltages))
-    voltages = np.nan_to_num(voltages)
-    sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
+        sign = np.sign(v)
+        v = sign * np.log(np.abs(v))
+    v = np.nan_to_num(v)
+    sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
-    dens = get_smoothed_density(voltages[:, None], sigma=sigma)
+    dens = get_smoothed_density(v[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
