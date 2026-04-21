@@ -36,6 +36,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+doc = ["spinx", "myst-parser", "sphinx-autobuild", "versioningit", "poethepoet"]
 vis = ["matplotlib", "seaborn"]
 dev = ["pytest", "pytest-cov"]
 gpu = ["cupy"]
@@ -50,6 +51,9 @@ full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykerne
 
 [tool.versioningit]
 # use their defaults
+
+[tool.poe.tasks]
+"livedoc" = "sphinx-autobuild docs/source docs/_build/html"
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
