@@ -304,11 +304,19 @@ def best_shared_pconv(
 
 
 def scaled_normeuc_from_dots(
-    dots: Tensor, scale_var: float = 0.01**2, scale_boundary: float = 1.0 / 3.0
+    dots: Tensor,
+    scale_var: float = 0.01**2,
+    scale_boundary: float = 1.0 / 3.0,
+    scale_min: float | None = None,
+    scale_max: float | None = None,
 ) -> Tensor:
     inv_lambda = 1.0 / scale_var
-    scale_max = 1.0 + scale_boundary
-    scale_min = 1.0 / scale_max
+    if scale_min is None:
+        assert scale_max is None
+        scale_max = 1.0 + scale_boundary
+        scale_min = 1.0 / scale_max
+    else:
+        assert scale_max is not None
 
     normsq = dots.diagonal().contiguous()
 
@@ -804,7 +812,7 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size):
+    for i0 in trange(0, npair, batch_size, desc="WeightedNormEuc"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]
@@ -846,7 +854,7 @@ def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size):
+    for i0 in trange(0, npair, batch_size, desc="WeightedNormSup"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]
@@ -889,7 +897,7 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size):
+    for i0 in trange(0, npair, batch_size, desc="MaxZ"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]
@@ -962,7 +970,9 @@ def scaled_normeuc_distance(
     dots[jj, ii] = dots[ii, jj]
     dots.diagonal().copy_(normsq)
 
-    return scaled_normeuc_from_dots(dots)
+    return scaled_normeuc_from_dots(
+        dots, scale_var=scale_std**2, scale_min=scale_min, scale_max=scale_max
+    )
 
 
 def woodbury_kl_divergence(C, mu, W=None, mus=None, Ws=None, out=None, batch_size=8):

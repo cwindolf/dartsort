@@ -392,6 +392,7 @@ def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
     load_feature_names=("times_seconds", "geom", "channel_index"),
+    motion_h5_name="motionthreshold.h5",
     detection_h5_names=("subtraction.h5", "threshold.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
@@ -405,6 +406,7 @@ def load_dartsort_step_sortings(
     use, although its not a guarantee... h5 locking... need to figure it out.
     """
     mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
+    sorting_dir = resolve_path(sorting_dir, strict=True)
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
             detection_h5_path = cast(Path, sorting_dir / dh5n)
@@ -438,6 +440,17 @@ def load_dartsort_step_sortings(
 
     if name_formatter is None:
         name_formatter = _same
+
+    motion_h5 = sorting_dir / motion_h5_name
+    if motion_h5.exists():
+        yield (
+            f"00_{motion_h5.stem}",
+            DARTsortSorting.from_peeling_hdf5(
+                motion_h5,
+                load_simple_features=load_simple_features,
+                load_feature_names=load_feature_names,
+            ),
+        )
 
     for step, h5 in enumerate(h5s):
         if not h5.exists():

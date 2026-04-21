@@ -272,7 +272,7 @@ class DARTsortGroundTruthComparison:
         self._template_distances = dists
 
     def _calculate_greedy_confusion_and_detection(self):
-        from ..evaluate.hybrid_util import greedy_match, greedy_match_counts
+        from ..evaluate.hybrid_util import greedy_match_counts
 
         if self._unsorted_detection is not None:
             return

@@ -505,7 +505,7 @@ class RefinementConfig:
     adaptive_feature_scales: bool = False
 
     # stable waveform feature controls
-    cov_radius: float = 500.0
+    cov_radius: float = 200.0
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
@@ -763,7 +763,8 @@ class MotionEstimationConfig:
 class ComputationConfig:
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
-    n_jobs_small: int = 8
+    n_jobs_small: int = -2
+    n_jobs_small_gpu: int = 4
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
 
@@ -780,11 +781,16 @@ class ComputationConfig:
         return torch.device(self.device)
 
     def actual_n_jobs(self, small: bool = False):
-        if small:
-            return self.n_jobs_small
-        if self.actual_device().type == "cuda":
-            return self.n_jobs_gpu
-        return self.n_jobs_cpu
+        if self.actual_device().type == "cpu":
+            if small:
+                return self.n_jobs_small
+            else:
+                return self.n_jobs_cpu
+        else:
+            if small:
+                return self.n_jobs_small_gpu
+            else:
+                return self.n_jobs_gpu
 
     def is_multi_gpu(self):
         if self.n_jobs_gpu in (0, 1):
@@ -802,7 +808,6 @@ default_waveform_cfg = WaveformConfig()
 default_featurization_cfg = FeaturizationConfig()
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
-default_template_cfg = TemplateConfig()
 default_template_cfg = TemplateConfig()
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()

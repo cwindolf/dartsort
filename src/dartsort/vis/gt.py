@@ -149,11 +149,13 @@ class MetricRegPlot(ComparisonPlot):
                 line_kws=dict(color="k"),
                 **({} if qcolor else dict(color=self.color)),
             )
-        if self.log_x and self.log_y:
+        log_x = self.log_x and len(df_show)
+        log_y = self.log_y and len(df_show)
+        if log_x and log_y:
             ax.loglog()
-        elif self.log_x:
+        elif log_x:
             ax.semilogx()
-        elif self.log_y:
+        elif log_y:
             ax.semilogy()
         met = df[self.y].mean().item()
         n_inf_y = np.logical_not(finite_y).sum()
@@ -261,7 +263,8 @@ class TemplateDistancesHistogram(ComparisonPlot):
         x = min_gt_dist_for_tested_units[finite]
         bins = np.logspace(np.log10(d.min()), np.log10(vm), 96)
         ax.hist(x, bins=bins, color="orange", log=True)
-        ax.semilogx()
+        if x.shape[0]:
+            ax.semilogx()
         ax.grid(which="both")
         ax.set_ylabel("count")
         ninf = np.logical_not(finite).sum()

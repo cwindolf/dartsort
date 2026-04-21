@@ -592,7 +592,7 @@ class NeighborQDAMatrices(UnitPlot):
         for ax, (sc, ol), title in zip(
             axes, [(score, iou), (min_ratio, coverage)], ["qda/iou", "ratio/coverage"]
         ):
-            im = ax.imshow(
+            ax.imshow(
                 sc,
                 vmin=0,
                 cmap="plasma",
@@ -944,7 +944,7 @@ def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
     if not namebyamp:
         return f"unit{unit_id:04d}.{ext}"
     if sorting_analysis is None:
-        raise ValueError(f"Need a sorting_analysis if namebyamp.")
+        raise ValueError("Need a sorting_analysis if namebyamp.")
     amp = float(sorting_analysis.unit_amplitudes(unit_id).item())
     amp = f"{amp:07.2f}"
     return f"amp{amp}_unit{unit_id:04d}.{ext}"

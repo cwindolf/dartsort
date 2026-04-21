@@ -184,16 +184,20 @@ class MetricColumn(VersusPlot):
                     **_box_kw,
                     **ckw,
                 )
+            
+            logx = self.logx and x is not None and sdf[x].values.size
+            logy = logy and sdf[met].values.size
+            symlogy = symlogy and sdf[met].values.size
 
-            if logy and self.logx and not self.box:
+            if logy and logx and not self.box:
                 ax.loglog()
             elif logy and not self.box:
                 ax.semilogy()
-            elif self.logx and not self.box:
+            elif logx and not self.box:
                 ax.semilogx()
             elif symlogy and not self.box:
                 ax.set_yscale("symlog")
-                if self.logx:
+                if logx:
                     ax.set_xscale("log")
             ax.set_ylabel(met, color=_c[met], fontsize="small")
             ax.grid(which="both")

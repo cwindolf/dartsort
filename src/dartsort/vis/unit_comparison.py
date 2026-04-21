@@ -7,7 +7,6 @@ import numpy as np
 import seaborn as sns
 from matplotlib.colors import FuncNorm
 from matplotlib.lines import Line2D
-from matplotlib.scale import FuncScale
 
 try:
     from matplotlib_venn import venn2
@@ -459,7 +458,8 @@ class TemplateDistanceHistogram(UnitComparisonPlot):
         x = x[np.isfinite(x)]
         ax.hist(x, color="orange", bins=bins)
         ax.grid(which="both")
-        ax.semilogx()
+        if x.size:
+            ax.semilogx()
         ax.set_xlabel("tested template distance to GT")
         ax.set_ylabel("count")
         ax.axvline(d[unit_id][tested_unit_id], c="k", label="Hung. match dist.")
@@ -710,7 +710,7 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
 
         match_dt = comparison.matched_misalignment(unit_id)
         if match_dt is None:
-            ax.text(0, 0, f"ST shape mismatch (SI issue...?)")
+            ax.text(0, 0, "ST shape mismatch (SI issue...?)")
             ax.axis("off")
             return
 
@@ -858,7 +858,7 @@ class CollidednessBreakdown(UnitComparisonPlot):
             bins = np.linspace(mn, mx, self.n_bins + 1)
 
         labels = ["tp", "fn", "unsorted_fn"]
-        labels = [l for l, c in zip(labels, colls) if c.size]
+        labels = [ll for ll, c in zip(labels, colls) if c.size]
         colls = [c for c in colls if c.size]
         colors = [_class_colors[k] for k in labels]
         ax.hist(
@@ -867,8 +867,6 @@ class CollidednessBreakdown(UnitComparisonPlot):
         if self.log_x:
             ax.set_xscale("log")
         elif self.sqrt_x:
-            from matplotlib.scale import FuncScale
-
             ax.set_xscale("function", functions=(np.sqrt, np.square))
         ax.grid()
         ticks = [0, 10, 25, 50, 100, 200, 350, 600]

@@ -71,6 +71,10 @@ class DARTsortUserConfig:
         default=-2,
         doc="Max workers to use for small jobs.",
     )
+    n_jobs_small_gpu: int = argfield(
+        default=4,
+        doc="Max workers to use for small jobs running on GPU.",
+    )
     device: str | None = argfield(
         default=None,
         arg_type=str,

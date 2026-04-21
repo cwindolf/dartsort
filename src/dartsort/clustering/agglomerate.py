@@ -212,6 +212,8 @@ def template_distances(
     spatial_sing = torch.asarray(sbt.spatial_singular, device=device)
 
     need_whiten_mul = template_merge_cfg.whitening.strategy == "postwhiten"
+    if allow_whitening_fail and template_data.whitener is None:
+        need_whiten_mul = False
     if need_whiten_mul:
         ww = torch.asarray(template_data.whitener).to(spatial_sing)
         k, r, c = spatial_sing.shape
