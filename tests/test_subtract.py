@@ -50,8 +50,8 @@ def fakedata():
     geom = np.c_[h["x"], h["y"]][:n_channels]
 
     # template main channel traces
-    t0 = np.exp(-(((np.arange(121) - 42) / 10) ** 2))
-    t1 = np.exp(-(((np.arange(121) - 42) / 30) ** 2))
+    t0 = np.exp(-(((np.arange(121) - 42) / 4) ** 2))
+    t1 = np.exp(-(((np.arange(121) - 42) / 8) ** 2))
     t2 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 10) ** 2))
     t3 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 30) ** 2))
 
