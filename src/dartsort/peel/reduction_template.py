@@ -62,7 +62,7 @@ class ReductionTemplateData(TemplateData):
             sorting,
             max_spikes=template_cfg.spikes_per_unit,
             recording=recording,
-            waveform_cfg=waveform_cfg,
+            waveform_cfg=_handle_internal_pad(recording, waveform_cfg, template_cfg)[1],
         )
         sorting = sorting.ensure_no_missing()
 
@@ -195,22 +195,9 @@ class TemplateReduction(GrabAndFeaturize):
         channel_index = full_channel_index(len(geom), to_torch=True)
 
         # internal realignment
-        trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
-        do_align = (
-            template_cfg.use_svd
-            and template_cfg.svd_alignment_iterations
-            and template_cfg.svd_alignment_ms
+        do_align, padded_waveform_cfg, trough, tslice, align_pad = _handle_internal_pad(
+            recording, waveform_cfg, template_cfg
         )
-        if do_align:
-            padded_waveform_cfg = waveform_cfg.pad(template_cfg.svd_alignment_ms)
-            tslice = waveform_cfg.relative_slice(
-                padded_waveform_cfg, sampling_frequency=recording.sampling_frequency
-            )
-            align_pad = tslice.start
-        else:
-            padded_waveform_cfg = waveform_cfg
-            tslice = None
-            align_pad = 0
 
         # handle tsvd fit preferences
         pad_spike_len = padded_waveform_cfg.spike_length_samples(
@@ -437,3 +424,26 @@ class TemplateReduction(GrabAndFeaturize):
             svd_mean = svd_mean.numpy(force=True)
 
         return counts, raw_mean, raw_std, svd_mean
+
+
+def _handle_internal_pad(
+    recording: BaseRecording, waveform_cfg: WaveformConfig, template_cfg: TemplateConfig
+):
+    trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+    do_align = (
+        template_cfg.use_svd
+        and template_cfg.svd_alignment_iterations
+        and template_cfg.svd_alignment_ms
+    )
+    if do_align:
+        padded_waveform_cfg = waveform_cfg.pad(template_cfg.svd_alignment_ms)
+        tslice = waveform_cfg.relative_slice(
+            padded_waveform_cfg, sampling_frequency=recording.sampling_frequency
+        )
+        align_pad = tslice.start
+    else:
+        padded_waveform_cfg = waveform_cfg
+        tslice = None
+        align_pad = 0
+
+    return do_align, padded_waveform_cfg, trough, tslice, align_pad
