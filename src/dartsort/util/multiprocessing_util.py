@@ -146,6 +146,19 @@ def pool_from_cfg(
     )
 
 
+def handle_negative_jobs(n_jobs: int):
+    try:
+        n_cores = os.process_cpu_count()  # type: ignore
+    except AttributeError:
+        n_cores = multiprocessing.cpu_count()
+    if n_jobs < 0:
+        n_jobs = n_cores + (n_jobs + 1)
+    assert n_jobs >= 0
+    do_parallel = n_jobs >= 1
+    n_jobs = max(1, min(n_jobs, n_cores))
+    return do_parallel, n_jobs
+
+
 def get_pool(
     n_jobs,
     context="spawn",
@@ -157,14 +170,7 @@ def get_pool(
     check_local=False,
     multi_gpu=False,
 ):
-    try:
-        n_cores = os.process_cpu_count()  # type: ignore
-    except AttributeError:
-        n_cores = multiprocessing.cpu_count()
-    if n_jobs < 0:
-        n_jobs = n_cores + (n_jobs + 1)
-    do_parallel = n_jobs >= 1
-    n_jobs = max(1, min(n_jobs, n_cores))
+    do_parallel, n_jobs = handle_negative_jobs(n_jobs)
 
     if do_parallel and isinstance(cls, str):
         if cls == "threading_unless_multigpu":
