@@ -196,6 +196,7 @@ class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     n_residual_snips: int = 2 * 4096
+    residual_sampling_target_density: float = 0.25
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
     fit_sampling: FitSamplingMethod = "amp_reweighted"

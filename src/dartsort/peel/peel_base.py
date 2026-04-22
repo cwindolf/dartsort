@@ -685,25 +685,20 @@ class BasePeeler(BModule):
             temp_hdf5_filename = Path(temp_dir) / "peeler_fit.h5"
             waveforms = fixed_properties = None
             try:
+                if featurization_pipeline.needs_residual():
+                    n_resid_snips = self.fit_sampling_cfg.n_residual_snips
+                else:
+                    n_resid_snips = 0
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
                     computation_cfg=computation_cfg,
                     task_name="Load examples for feature fitting",
+                    total_residual_snips=n_resid_snips,
                 )
-                if featurization_pipeline.needs_residual():
-                    self.run_subsampled_peeling(
-                        temp_hdf5_filename,
-                        chunk_length_samples=self.spike_length_samples,
-                        residual_to_h5=True,
-                        skip_features=True,
-                        ignore_resuming=True,
-                        computation_cfg=computation_cfg,
-                        n_chunks=self.fit_sampling_cfg.n_residual_snips,
-                        task_name="Residual snips",
-                        overwrite=False,
-                        ordered=True,
-                        skip_last=True,
-                    )
+
+                # park myself on cpu while models fit in case they need
+                # to take up space
+                self.to("cpu")
 
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
@@ -809,6 +804,7 @@ class BasePeeler(BModule):
         chunk_length_samples=None,
         n_chunks: int | None = None,
         residual_to_h5=False,
+        total_residual_snips: int | None = None,
         skip_features=False,
         ignore_resuming=False,
         skip_last=False,
@@ -829,13 +825,32 @@ class BasePeeler(BModule):
         else:
             assert not ordered
             chunk_starts = None
+
+        if total_residual_snips is not None:
+            assert n_chunks is None
+            # ensure minimal coverage to get residual snips
+            clen = chunk_length_samples or self.chunk_length_samples
+            snips_per_chunk = clen / self.spike_length_samples
+            n_chunks_needed = total_residual_snips / snips_per_chunk
+            n_chunks_needed /= self.fit_sampling_cfg.residual_sampling_target_density
+            Tf = self.recording.get_num_frames()
+            coverage = n_chunks_needed / (Tf / clen)
+            logger.dartsortdebug(
+                f"Subsampled peeling will request coverage {coverage:.2f} "
+                f"to help with grabbing {total_residual_snips} residual snips."
+            )
+        else:
+            coverage = None
+
         return self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
             chunk_length_samples=chunk_length_samples,
             stop_after_n_waveforms=self.fit_sampling_cfg.max_waveforms_fit,
+            ensure_coverage=coverage,
             ignore_resuming=ignore_resuming,
             residual_to_h5=residual_to_h5,
+            total_residual_snips=total_residual_snips,
             skip_features=skip_features,
             computation_cfg=computation_cfg,
             overwrite=overwrite,

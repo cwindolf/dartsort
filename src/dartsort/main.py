@@ -327,8 +327,6 @@ def _dartsort_impl(
         step_clus_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = _matching_step_cfgs(
             is_final, is_subsampling, cfg
         )
-        print(f"{samp_cfg=}")
-        print(f"{step_feat_cfg.use_gmm_classifier=}")
 
         logger.dartsortdebug(f"-- Matching {step}")
         sorting = match(

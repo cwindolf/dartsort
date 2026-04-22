@@ -145,8 +145,7 @@ def motion_needs_peaks(
         return False
 
     # assert sorting's chunk starts, sorted, match full recording's
-    # so, this means sorting could have been shuffled but was not run with
-    # run_subsampled_peeling()
+    # so, this means sorting could have been shuffled
     # this function not designed for that kind of sorting
     targ_chunk_starts = np.arange(
         0, recording.get_num_samples(), cfg.initial_detection_cfg.chunk_length_samples
