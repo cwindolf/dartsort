@@ -342,30 +342,35 @@ def _matching_step_cfgs(
     FitSamplingConfig,
 ]:
     clus_cfg = cfg.clustering_cfg if cfg.recluster_after_first_matching else None
-
     gmm_as_classifier = (
         is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
     if not cfg.final_refinement:
+        clus_cfg = None
+        gmm_clus_cfg = None
         ref_cfgs = []
     elif gmm_as_classifier:
+        clus_cfg = None
+        gmm_clus_cfg = clus_cfg
         ref_cfgs = [cfg.agglomerate_cfg]
     else:
+        gmm_clus_cfg = None
         ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
 
     if cfg.final_refinement and gmm_as_classifier:
+        still_need_projs_saved = cfg.recluster_after_first_matching
         feat_cfg = replace(
             cfg.featurization_cfg,
-            save_input_tpca_projs=False,
+            save_input_tpca_projs=still_need_projs_saved,
             compute_input_tpca_projs_regardless=True,
             use_gmm_classifier=True,
-            pre_gmm_clustering_cfg=clus_cfg,
+            pre_gmm_clustering_cfg=gmm_clus_cfg,
             gmm_clustering_features_cfg=cfg.clustering_features_cfg,
             pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
             gmm_refinement_cfg=cfg.refinement_cfg,
         )
         samp_cfg = cfg.refinement_cfg.sampling_cfg
-        clus_cfg = None
+        assert clus_cfg is None
     else:
         feat_cfg = cfg.featurization_cfg
         samp_cfg = cfg.peeler_sampling_cfg
