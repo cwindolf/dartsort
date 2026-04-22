@@ -1,16 +1,19 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
+from pathlib import Path
 from typing import Sequence
 
 import torch
+from spikeinterface.core import BaseRecording
 
-from ..util.data_util import SpikeDataset
+from ..util.data_util import SpikeDataset, yield_chunks
 from ..util.internal_config import (
     FeaturizationConfig,
     WaveformConfig,
     ComputationConfig,
 )
 from ..util.waveform_util import assert_all_finite_in_probe
+from ..util.py_util import resolve_path
 from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
 
@@ -29,11 +32,16 @@ class WaveformPipeline(torch.nn.Module):
         self.kwargs_to_store = kwargs_to_store
         self.sampling_frequency = sampling_frequency
         self.waveform_cfg = waveform_cfg
+        self.register_buffer("_device_tracker", torch.zeros((0,)))
         if channel_index is not None:
             self.register_buffer("channel_index", channel_index.clone())
         else:
             self.channel_index = None
         self.safe = False
+
+    @property
+    def device(self):
+        return self._device_tracker.device
 
     def __len__(self):
         return len(self.transformers)
@@ -57,12 +65,16 @@ class WaveformPipeline(torch.nn.Module):
         # extra state in there.
         pass
 
-    def spike_datasets(self) -> list[SpikeDataset]:
+    def spike_datasets(
+        self, up_to_index: int | None = None, force_save: bool = False
+    ) -> list[SpikeDataset]:
         datasets = []
-        for transformer in self.transformers:
+        for tix, transformer in enumerate(self.transformers):
+            if tix == up_to_index:
+                break
             if transformer.is_featurizer:
                 assert isinstance(transformer, BaseWaveformFeaturizer)
-                datasets.extend(transformer.spike_datasets)
+                datasets.extend(transformer.spike_datasets(force_save=force_save))
         return datasets
 
     @classmethod
@@ -186,12 +198,11 @@ class WaveformPipeline(torch.nn.Module):
     def needs_residual(self):
         return any(t.needs_residual for t in self.transformers)
 
-    def forward(self, waveforms, **fixed_properties):
-        """
-        fixed_properties usually contains max_channels, and may contain other relevant
-        unchanging aspects of spikes like weights (used in fit()) or temporal shifts
-        (used in pca slice logic).
-        """
+    def needs_more_features(self):
+        return any(t.needs_more_features for t in self.transformers)
+
+    def forward(self, waveforms, *, up_to_index: int | None = None, **fixed_properties):
+        """Run waveforms and fixed properties through pipeline, extracting features and denoising."""
         waveforms = torch.asarray(waveforms)
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
         assert waveforms.ndim == 3
@@ -204,7 +215,9 @@ class WaveformPipeline(torch.nn.Module):
         if not waveforms.shape[0]:
             return waveforms, features
 
-        for transformer in self.transformers:
+        for tix, transformer in enumerate(self.transformers):
+            if tix == up_to_index:
+                break
             if transformer.is_featurizer and transformer.is_denoiser:
                 waveforms, new_features = transformer(**features)
                 features.update(waveforms=waveforms, **new_features)
@@ -226,15 +239,17 @@ class WaveformPipeline(torch.nn.Module):
 
     def fit(
         self,
-        recording,
-        waveforms,
+        recording: BaseRecording,
+        waveforms: torch.Tensor,
         computation_cfg: ComputationConfig,
-        **fixed_properties,
+        *,
+        hdf5_filename: str | Path | None = None,
+        waveforms_dataset_name: str = "waveforms",
+        **fixed_properties: torch.Tensor,
     ):
+        """Fit my transformers in sequence, giving each the outputs of its predecessors."""
         waveforms = torch.asarray(waveforms)
-        h5_path = fixed_properties.pop("hdf5_filename", None)
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
-        fixed_properties["hdf5_filename"] = h5_path
         assert waveforms.ndim == 3
         for v in fixed_properties.values():
             if torch.is_tensor(v):
@@ -247,6 +262,9 @@ class WaveformPipeline(torch.nn.Module):
         features["waveforms"] = waveforms
         del waveforms
 
+        if hdf5_filename is not None:
+            hdf5_filename = resolve_path(hdf5_filename, strict=True)
+
         if self.safe:
             assert torch.is_tensor(features["waveforms"])
             assert_all_finite_in_probe(
@@ -254,10 +272,22 @@ class WaveformPipeline(torch.nn.Module):
             )
 
         for tix, transformer in enumerate(self.transformers):
+            if transformer.fits_from_disk:
+                assert hdf5_filename is not None
+                self.transform_to_disk(
+                    hdf5_filename=hdf5_filename,
+                    waveforms_dataset_name=waveforms_dataset_name,
+                    up_to_index=tix,
+                )
+
             if transformer.needs_fit():
                 transformer.train()
                 transformer.fit(
-                    recording=recording, computation_cfg=computation_cfg, **features
+                    recording=recording,
+                    computation_cfg=computation_cfg,
+                    hdf5_filename=hdf5_filename,
+                    pipeline=self,
+                    **features,
                 )
             transformer.eval()
             transformer.requires_grad_(False)
@@ -290,9 +320,56 @@ class WaveformPipeline(torch.nn.Module):
         assert not self.needs_fit()
 
     def precompute(self):
+        """Give my transformers the chance to precompute stuff."""
         for transformer in self.transformers:
             transformer.precompute()
         assert not self.needs_precompute()
+
+    def transform_to_disk(
+        self,
+        hdf5_filename: str | Path,
+        waveforms_dataset_name: str = "waveforms",
+        up_to_index: int | None = None,
+    ):
+        """Save my features to new h5 datasets by running in batches through waveforms saved in h5."""
+        from ..util.data_util import DARTsortSorting
+        from h5py import File
+
+        if not up_to_index:
+            return
+
+        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        dev = self.device
+
+        # use sorting as a way to load all 1d features, which transformers
+        # may want to depend on. but this won't load waveforms (which is good).
+        sorting = DARTsortSorting.from_peeling_hdf5(hdf5_filename)
+        n = len(sorting)
+        fixed_properties = {
+            k: torch.asarray(v) for k, v in sorting.spike_feature_dict.items()
+        }
+
+        # what will we save?
+        datasets = self.spike_datasets(up_to_index, force_save=True)
+
+        # open h5, create new datasets, loop over batches and save feats
+        with File(hdf5_filename, mode="r+", libver="latest", locking=False) as h5:
+            wfs = h5[waveforms_dataset_name]
+            outs = {
+                ds.name: h5.create_dataset(
+                    ds.name, dtype=ds.dtype, shape=(n, *ds.shape_per_spike)
+                )
+                for ds in datasets
+            }
+            for sli, chk in yield_chunks(wfs, desc_prefix="Transform to disk"):
+                chk_fp = {k: v[sli].to(device=dev) for k, v in fixed_properties.items()}
+                _, chk_feat = self(
+                    waveforms=torch.asarray(chk, device=dev),
+                    **chk_fp,
+                    up_to_index=up_to_index,
+                )
+                for ds in datasets:
+                    outs[ds.name][sli] = chk_feat[ds.name].numpy(force=True)
 
     def __iter__(self):
         return iter(self.transformers)

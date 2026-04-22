@@ -8,8 +8,13 @@ from torch import Tensor
 from ..util.data_util import DARTsortSorting
 from ..util.drift_util import get_stable_channels
 from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
-from ..util.interpolation_util import SpikeNeighborhoods, StableFeaturesInterpolator, interpolate_by_chunk
+from ..util.interpolation_util import (
+    SpikeNeighborhoods,
+    StableFeaturesInterpolator,
+    interpolate_by_chunk,
+)
 from ..util.job_util import ensure_computation_config
+from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
@@ -29,24 +34,24 @@ minimal_features_cfg = ClusteringFeaturesConfig(
 class SimpleMatrixFeatures:
     n: int
     features: np.ndarray
-    x: np.ndarray
-    z: np.ndarray
-    z_reg: np.ndarray
-    xyza: np.ndarray
+    x: np.ndarray | None
+    z: np.ndarray | None
+    z_reg: np.ndarray | None
+    xyza: np.ndarray | None
     signed_amplitudes: np.ndarray
     amplitudes: np.ndarray
 
     def mask(self, mask) -> Self:
-        x = self.x[mask]
+        a = self.amplitudes[mask]
         return self.__class__(
-            n=x.shape[0],
+            n=a.shape[0],
             features=self.features[mask],
-            x=x,
-            z=self.z[mask],
-            z_reg=self.z_reg[mask],
-            xyza=self.xyza[mask],
+            x=None if self.x is None else self.x[mask],
+            z=None if self.z is None else self.z[mask],
+            z_reg=None if self.z_reg is None else self.z_reg[mask],
+            xyza=None if self.xyza is None else self.xyza[mask],
             signed_amplitudes=self.signed_amplitudes[mask],
-            amplitudes=self.amplitudes[mask],
+            amplitudes=a,
         )
 
     @classmethod
@@ -59,21 +64,29 @@ class SimpleMatrixFeatures:
         computation_cfg: ComputationConfig | None,
     ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
-        xyza = getattr(sorting, clustering_features_cfg.localizations_dataset_name)
-        x = xyza[:, 0]
-        z = xyza[:, 2]
         t_s = sorting.times_seconds
-        z_reg = motion.correct_s(t_s, z)
+        xyza = getattr(
+            sorting, clustering_features_cfg.localizations_dataset_name, None
+        )
+        if xyza is not None:
+            x = xyza[:, 0]
+            z = xyza[:, 2]
+            z_reg = motion.correct_s(t_s, z)
+        else:
+            x = z = z_reg = None
 
         features = []
 
         if clustering_features_cfg.use_z:
+            assert z is not None
+            assert z_reg is not None
             if clustering_features_cfg.motion_aware:
                 features.append(z_reg[:, None])
             else:
                 features.append(z[:, None])
 
         if clustering_features_cfg.use_x:
+            assert x is not None
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
         amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
@@ -109,12 +122,13 @@ class SimpleMatrixFeatures:
                 motion_depth_mode=clustering_features_cfg.motion_depth_mode,
             )
             mainchan_ci = single_channel_index(len(motion.geom))
+            _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
             schan, *_ = get_stable_channels(
                 motion=motion,
                 channels=sorting.channels,
                 channel_index=mainchan_ci,
                 n_pitches_shift=n_pitches_shift,
-                workers=computation_cfg.n_jobs_small,
+                workers=workers,
             )
             mask = np.ones((1,), dtype=bool)
             mask = np.broadcast_to(mask, len(schan))
@@ -165,7 +179,7 @@ class SimpleMatrixFeatures:
                 pcs = pcs.numpy(force=True)
             features.append(pcs)
 
-        n = x.shape[0]
+        n = t_s.shape[0]
         if len(features):
             features = np.concatenate(features, axis=1)
         else:
@@ -204,13 +218,14 @@ class StableWaveformFeatures:
         shifts, n_pitches_shift = motion.pitch_shifts(
             sorting=sorting, motion_depth_mode=clustering_features_cfg.motion_depth_mode
         )
+        _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
         res = get_stable_channels(
             motion=motion,
             channels=sorting.channels,
             channel_index=sorting.channel_index,
             n_pitches_shift=n_pitches_shift,
             core_radius=None,
-            workers=computation_cfg.n_jobs_small,
+            workers=workers,
             device=computation_cfg.actual_device(),
         )
         channels, neighborhoods, neighborhood_ids = res[:3]

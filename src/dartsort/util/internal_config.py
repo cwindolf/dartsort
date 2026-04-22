@@ -195,6 +195,7 @@ default_fit_max_reweighting = 4.0
 class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
+    more_waveforms_fit: int = 2000 * 1024
     n_residual_snips: int = 2 * 4096
     residual_sampling_target_density: float = 0.25
     seed: int = 0
@@ -207,9 +208,6 @@ class FitSamplingConfig:
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
 default_clustering_fit_sampling_cfg = FitSamplingConfig(
     max_waveforms_fit=500_000, n_waveforms_fit=500_000
-)
-default_refinement_fit_sampling_cfg = FitSamplingConfig(
-    max_waveforms_fit=2000 * 1024, n_waveforms_fit=2000 * 1024
 )
 
 
@@ -427,7 +425,7 @@ ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 @cfg_dataclass
 class RefinementConfig:
     refinement_strategy: str = "tmm"
-    sampling_cfg: FitSamplingConfig = default_refinement_fit_sampling_cfg
+    sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
     # pcmerge
     pc_merge_threshold: float = 0.1
@@ -937,6 +935,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     peeler_fit_sampling_cfg = FitSamplingConfig(
         n_waveforms_fit=cfg.n_waveforms_fit,
         max_waveforms_fit=cfg.max_waveforms_fit,
+        more_waveforms_fit=cfg.gmm_max_spikes,
         fit_sampling=cfg.fit_sampling,
         n_residual_snips=n_residual_snips,
     )
@@ -1022,6 +1021,12 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         svd_alignment_iterations=cfg.svd_alignment_iterations,
         svd_alignment_ms=cfg.alignment_ms / 2,
     )
+    clus_sampling_cfg = FitSamplingConfig(
+            n_waveforms_fit=cfg.clustering_max_spikes,
+            max_waveforms_fit=cfg.clustering_max_spikes,
+            more_waveforms_fit=cfg.gmm_max_spikes,
+            fit_sampling=cfg.fit_sampling,
+        )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
@@ -1035,19 +1040,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         hellinger_strong=cfg.hellinger_strong,
         hellinger_weak=cfg.hellinger_weak,
         mop=cfg.dpc_mop,
-        sampling_cfg=FitSamplingConfig(
-            n_waveforms_fit=cfg.clustering_max_spikes,
-            max_waveforms_fit=cfg.clustering_max_spikes,
-            fit_sampling=cfg.fit_sampling,
-        ),
+        sampling_cfg=clus_sampling_cfg,
     )
 
     if cfg.gmm_metric == "cosine":
         dist_thresh = cfg.gmm_cosine_threshold
-    elif cfg.gmm_metric == "kl":
-        dist_thresh = cfg.gmm_kl_threshold
-    elif cfg.gmm_metric == "euclidean":
-        dist_thresh = cfg.gmm_euclidean_threshold
     elif cfg.gmm_metric == "normeuc":
         dist_thresh = cfg.gmm_normeuc_threshold
     elif cfg.gmm_metric == "scaled_normeuc":
@@ -1084,11 +1081,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         initialize_at_rank_0=cfg.initialize_at_rank_0,
         n_total_iters=cfg.n_later_refinement_iters,
         n_em_iters=cfg.n_em_iters,
-        sampling_cfg=FitSamplingConfig(
-            n_waveforms_fit=cfg.gmm_max_spikes,
-            max_waveforms_fit=cfg.gmm_max_spikes,
-            fit_sampling=cfg.fit_sampling,
-        ),
+        sampling_cfg=clus_sampling_cfg,
         em_converged_atol=cfg.gmm_em_atol,
         val_proportion=cfg.gmm_val_proportion,
         distance_metric=cfg.gmm_metric,

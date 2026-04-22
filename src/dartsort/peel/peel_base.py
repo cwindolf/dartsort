@@ -6,7 +6,7 @@ from itertools import repeat
 from pathlib import Path
 from sys import getrefcount
 from threading import Lock, local
-from typing import Any, TypedDict
+from typing import Any, Sequence, TypedDict
 
 import h5py
 import numpy as np
@@ -26,8 +26,8 @@ from ..util.data_util import (
 )
 from ..util.internal_config import (
     FitSamplingConfig,
-    default_peeling_fit_sampling_cfg,
     WaveformConfig,
+    default_peeling_fit_sampling_cfg,
     default_waveform_cfg,
 )
 from ..util.logging_util import get_logger
@@ -68,7 +68,7 @@ class BasePeeler(BModule):
         chunk_margin_samples: int = 0,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
-        fixed_property_keys=("channels",),
+        fixed_property_keys: Sequence[str] = ("channels", "times_seconds"),
         dtype=torch.float,
     ):
         if recording.get_num_segments() > 1:
@@ -96,7 +96,7 @@ class BasePeeler(BModule):
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
         self.featurization_pipeline: WaveformPipeline | None = featurization_pipeline
-        self.fixed_property_keys: tuple[str] | list[str] = fixed_property_keys
+        self.fixed_property_keys: Sequence[str] = fixed_property_keys
 
         # subclasses can append to this if they want to store more fixed
         # arrays in the output h5 file
@@ -224,6 +224,7 @@ class BasePeeler(BModule):
             and ensure_coverage
             and stop_after_n_waveforms is not None
         ):
+            assert 0 <= ensure_coverage <= 1
             assert residual_snips_per_chunk is None
             resids_remaining = total_residual_snips - resids_so_far
             chunks_remaining = len(chunks_to_do)
@@ -491,9 +492,8 @@ class BasePeeler(BModule):
             last_dimension_indices=None,
             margin=self.chunk_margin_samples,
         )
-        chunk = torch.tensor(
-            chunk, device=self.b.channel_index.device, dtype=self.dtype
-        )
+        device = self.b.channel_index.device
+        chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
         return_waveforms = not skip_features and bool(self.featurization_pipeline)
         peel_result = self.peel_chunk(
             chunk,
@@ -503,6 +503,11 @@ class BasePeeler(BModule):
             return_waveforms=return_waveforms,
             return_residual=return_residual or bool(n_resid_snips),
         )
+        if peel_result["n_spikes"] > 0 and to_cpu:
+            t_s = self.recording.sample_index_to_time(
+                peel_result["times_samples"].numpy(force=True)
+            )
+            peel_result["times_seconds"] = torch.asarray(t_s, device=device)
 
         if peel_result["n_spikes"] > 0 and return_waveforms:
             chunk_start_s = self.recording.sample_index_to_time(chunk_start_samples)
@@ -532,14 +537,9 @@ class BasePeeler(BModule):
                     peel_result["residual"] = peel_result["residual"].cpu()
 
         # add times in seconds
-        segment = self.recording.segments[0]
-        chunk_result["chunk_start_seconds"] = segment.sample_index_to_time(
+        chunk_result["chunk_start_seconds"] = self.recording.sample_index_to_time(
             chunk_start_samples
         )
-        if peel_result["n_spikes"] and to_cpu:
-            chunk_result["times_seconds"] = segment.sample_index_to_time(
-                chunk_result["times_samples"]
-            )
 
         if n_resid_snips:
             chunk_result["resid_snips"], resid_times_samples = extract_random_snips(
@@ -689,11 +689,13 @@ class BasePeeler(BModule):
                     n_resid_snips = self.fit_sampling_cfg.n_residual_snips
                 else:
                     n_resid_snips = 0
+                more = featurization_pipeline.needs_more_features()
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
                     computation_cfg=computation_cfg,
                     task_name="Load examples for feature fitting",
                     total_residual_snips=n_resid_snips,
+                    more=more,
                 )
 
                 # park myself on cpu while models fit in case they need
@@ -714,7 +716,6 @@ class BasePeeler(BModule):
                     fixed_property_keys=self.fixed_property_keys,
                     device=device,
                 )
-                fixed_properties["hdf5_filename"] = temp_hdf5_filename  # type: ignore
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 
@@ -723,6 +724,8 @@ class BasePeeler(BModule):
                     recording=self.recording,
                     waveforms=waveforms,
                     computation_cfg=computation_cfg,
+                    hdf5_filename=temp_hdf5_filename,
+                    waveforms_dataset_name="peeled_waveforms_fit",
                     **fixed_properties,
                 )
                 assert getrefcount(waveforms) <= 2
@@ -807,6 +810,7 @@ class BasePeeler(BModule):
         total_residual_snips: int | None = None,
         skip_features=False,
         ignore_resuming=False,
+        more=False,
         skip_last=False,
         computation_cfg=None,
         task_name=None,
@@ -834,7 +838,8 @@ class BasePeeler(BModule):
             n_chunks_needed = total_residual_snips / snips_per_chunk
             n_chunks_needed /= self.fit_sampling_cfg.residual_sampling_target_density
             Tf = self.recording.get_num_frames()
-            coverage = n_chunks_needed / (Tf / clen)
+            coverage = min(1.0, n_chunks_needed / (Tf / clen))
+            assert coverage >= 0
             logger.dartsortdebug(
                 f"Subsampled peeling will request coverage {coverage:.2f} "
                 f"to help with grabbing {total_residual_snips} residual snips."
@@ -842,11 +847,16 @@ class BasePeeler(BModule):
         else:
             coverage = None
 
+        if more:
+            stop_after_n_waveforms = self.fit_sampling_cfg.more_waveforms_fit
+        else:
+            stop_after_n_waveforms = self.fit_sampling_cfg.max_waveforms_fit
+
         return self.peel(
             hdf5_filename,
             chunk_starts_samples=chunk_starts,
             chunk_length_samples=chunk_length_samples,
-            stop_after_n_waveforms=self.fit_sampling_cfg.max_waveforms_fit,
+            stop_after_n_waveforms=stop_after_n_waveforms,
             ensure_coverage=coverage,
             ignore_resuming=ignore_resuming,
             residual_to_h5=residual_to_h5,

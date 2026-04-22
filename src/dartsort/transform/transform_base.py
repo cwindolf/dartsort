@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Iterable, Self
+from typing import Any, Iterable, Self, TYPE_CHECKING
 
 from spikeinterface.core import BaseRecording
 import torch
@@ -11,6 +11,8 @@ from ..util.internal_config import (
     ComputationConfig,
     default_waveform_cfg,
 )
+if TYPE_CHECKING:
+    from .pipeline import WaveformPipeline
 
 
 class BaseWaveformModule(BModule):
@@ -18,6 +20,8 @@ class BaseWaveformModule(BModule):
     is_featurizer = False
     default_name = ""
     needs_residual = False
+    fits_from_disk = False
+    needs_more_features = False
 
     def __init__(
         self,
@@ -86,8 +90,10 @@ class BaseWaveformModule(BModule):
         recording: BaseRecording,
         waveforms: torch.Tensor,
         *,
+        hdf5_filename: Path | None = None,
         computation_cfg: ComputationConfig,
         channels: torch.Tensor,
+        pipeline:"WaveformPipeline | None" = None,
         **spike_data: torch.Tensor,
     ) -> Any:
         del recording, spike_data
@@ -188,9 +194,8 @@ class BaseWaveformFeaturizer(BaseWaveformModule):
         # returns dict {feat name: feature, ...}
         raise NotImplementedError
 
-    @property
-    def spike_datasets(self) -> Iterable[SpikeDataset]:
-        if not self.saving:
+    def spike_datasets(self, force_save: bool = False) -> Iterable[SpikeDataset]:
+        if not self.saving and not force_save:
             return ()
         if self.is_multi:
             assert isinstance(self.dtype, (list, tuple))
@@ -266,13 +271,12 @@ class Passthrough(BaseWaveformDenoiser, BaseWaveformFeaturizer):
         del pipeline_waveforms  # passthrough!
         return waveforms, pipeline_features
 
-    @property
-    def spike_datasets(self):
+    def spike_datasets(self, force_save=False):
         datasets = []
         if self.pipeline is not None:
             for t in self.pipeline.transformers:
                 if t.is_featurizer:
-                    datasets.extend(t.spike_datasets)
+                    datasets.extend(t.spike_datasets())
         return datasets
 
     def transform(self, waveforms, **spike_data):

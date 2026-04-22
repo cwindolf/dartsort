@@ -38,7 +38,7 @@ class ThresholdAndFeaturize(BasePeeler):
         thinning: float | None = None,
         dtype=torch.float,
     ):
-        fixed_prop_keys = ("channels",)
+        fixed_prop_keys = ("channels", "times_seconds")
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
         spike_length_samples = waveform_cfg.spike_length_samples(

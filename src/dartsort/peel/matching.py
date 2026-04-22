@@ -63,7 +63,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         else:
             raise ValueError("Need either a MatchingTemplates or a builder.")
 
-        fixed_prop_keys = ("channels", "labels")
+        fixed_prop_keys = ("channels", "labels", "times_seconds")
         if save_collidedness:
             fixed_prop_keys = fixed_prop_keys + ("collidedness",)
 

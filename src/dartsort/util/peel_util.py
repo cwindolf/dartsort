@@ -6,7 +6,7 @@ import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from ..peel.peel_base import BasePeeler
-from . import job_util
+from .job_util import ensure_computation_config
 from .data_util import DARTsortSorting
 from .internal_config import ComputationConfig, FeaturizationConfig
 from .py_util import resolve_path
@@ -43,8 +43,7 @@ def run_peeler(
         and featurization_cfg.do_localization
         and not featurization_cfg.nn_localization
     )
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
+    computation_cfg = ensure_computation_config(computation_cfg)
 
     is_subsampling = stop_after_n_spikes is not None
     is_subsampling = is_subsampling and ensure_coverage != 1.0

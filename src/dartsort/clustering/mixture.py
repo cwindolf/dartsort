@@ -42,7 +42,16 @@ import math
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Literal, NamedTuple, Optional, Self, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Iterable,
+    Literal,
+    NamedTuple,
+    Optional,
+    Self,
+    cast,
+    get_args,
+)
 
 import numpy as np
 import torch
@@ -54,11 +63,11 @@ from tqdm.auto import tqdm, trange
 
 from ..util.data_util import DARTsortSorting, subset_sorting_by_spike_count
 from ..util.internal_config import (
+    ClusteringFeaturesConfig,
+    ComponentDistanceMetric,
     ComputationConfig,
     DARTsortInternalConfig,
     RefinementConfig,
-    ComponentDistanceMetric,
-    ClusteringFeaturesConfig,
 )
 from ..util.interpolation_util import (
     NeighborhoodFiller,
@@ -88,6 +97,9 @@ from .cluster_util import linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
 from .kmeans import kmeans
 
+if TYPE_CHECKING:
+    from ..transform.temporal_pca import BaseTemporalPCA
+
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
 prop_check_atol = 2e-4
@@ -101,6 +113,7 @@ def tmm_demix(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    tpca: "BaseTemporalPCA | None" = None,
     refinement_cfg: RefinementConfig,
     stable_features: StableWaveformFeatures | None = None,
     clustering_features_cfg: ClusteringFeaturesConfig | None = None,
@@ -125,6 +138,7 @@ def tmm_demix(
         sorting=sorting,
         motion=motion,
         stable_features=stable_features,
+        tpca=tpca,
         clustering_features_cfg=clustering_features_cfg,
         refinement_cfg=refinement_cfg,
         seed=seed,
@@ -2451,8 +2465,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         candidate_count: int | None,
         duties: Tensor | None,
     ) -> Scores:
+        x = features.view(len(features), -1)
         wx, noise_logliks = _whiten_and_noise_score_batch(
-            x=features, neighb_ids=neighborhood_ids, neighb_cov=self.neighb_cov
+            x=x, neighb_ids=neighborhood_ids, neighb_cov=self.neighb_cov
         )
         batch = SpikeDataBatch(
             batch=None,
@@ -3803,6 +3818,7 @@ def get_truncated_datasets(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    tpca: "BaseTemporalPCA | None" = None,
     clustering_features_cfg: ClusteringFeaturesConfig | None,
     refinement_cfg: RefinementConfig,
     device: torch.device,
@@ -3847,6 +3863,7 @@ def get_truncated_datasets(
         noise = EmbeddedNoise.estimate_from_hdf5(
             sorting.parent_h5_path,
             motion=motion,
+            tpca=tpca,
             rank=feature_rank,
             zero_radius=refinement_cfg.cov_radius,
             cov_kind=refinement_cfg.cov_kind,
@@ -3987,7 +4004,7 @@ def get_full_neighborhood_data(
     rg = np.random.default_rng(rg)
 
     # indices that train/val splits will live inside (full split is not restricted)
-    n_fit = refinement_cfg.sampling_cfg.n_waveforms_fit
+    n_fit = refinement_cfg.sampling_cfg.more_waveforms_fit
     if fit_indices is None and len(sorting) > n_fit:
         fit_indices = rg.choice(len(sorting), size=n_fit, replace=False)
         fit_indices.sort()
@@ -4048,6 +4065,7 @@ def instantiate_and_bootstrap_tmm(
     *,
     sorting: DARTsortSorting,
     motion: MotionInfo,
+    tpca: "BaseTemporalPCA | None" = None,
     clustering_features_cfg: ClusteringFeaturesConfig | None,
     stable_features: StableWaveformFeatures | None,
     refinement_cfg: RefinementConfig,
@@ -4074,6 +4092,7 @@ def instantiate_and_bootstrap_tmm(
         get_truncated_datasets(
             sorting=sorting,
             motion=motion,
+            tpca=tpca,
             stable_features=stable_features,
             clustering_features_cfg=clustering_features_cfg,
             refinement_cfg=refinement_cfg,

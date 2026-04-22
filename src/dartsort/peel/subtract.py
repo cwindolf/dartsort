@@ -52,10 +52,9 @@ class SubtractionPeeler(BasePeeler):
         save_collidedness=False,
         dtype=torch.float,
     ):
+        fixed_property_keys = ("channels", "times_seconds")
         if p.realign_to_denoiser:
-            fixed_property_keys = ("channels", "time_shifts")
-        else:
-            fixed_property_keys = ("channels",)
+            fixed_property_keys = fixed_property_keys + ("time_shifts",)
         if save_collidedness:
             fixed_property_keys = fixed_property_keys + ("collidedness",)
         spike_length_samples = waveform_cfg.spike_length_samples(
@@ -437,6 +436,8 @@ class SubtractionPeeler(BasePeeler):
                     recording=self.recording,
                     waveforms=waveforms,
                     computation_cfg=computation_cfg,
+                    hdf5_filename=temp_hdf5_filename,
+                    waveforms_dataset_name="subtract_fit_waveforms",
                     **fixed_properties,
                 )
                 fit_denoise = fit_denoise.to("cpu")

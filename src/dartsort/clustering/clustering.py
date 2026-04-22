@@ -1,5 +1,5 @@
 import gc
-from typing import Literal, Self, Sequence, cast
+from typing import Literal, Self, Sequence, cast, TYPE_CHECKING
 
 import numpy as np
 import sklearn.cluster
@@ -21,6 +21,9 @@ from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
 from . import agglomerate, cluster_util, density, forward_backward, mixture, refine_util
 from .clustering_features import SimpleMatrixFeatures, StableWaveformFeatures
+
+if TYPE_CHECKING:
+    from ..transform.temporal_pca import BaseTemporalPCA
 
 clustering_strategies: dict[str, "type[Clusterer]"] = {}
 refinement_strategies: dict[str, "type[Refinement]"] = {}
@@ -699,6 +702,7 @@ class TMMRefinement(Refinement):
         sorting: DARTsortSorting,
         motion: MotionInfo,
         skip_final_assign_and_return_mix_data=False,
+        tpca: "BaseTemporalPCA | None" = None,
     ):
 
         subsampling, ixs = self.handle_sampling(features)
@@ -706,6 +710,7 @@ class TMMRefinement(Refinement):
         res = mixture.tmm_demix(
             sorting=sorting,
             motion=motion,
+            tpca=tpca,
             refinement_cfg=self.refinement_cfg,
             computation_cfg=self.computation_cfg,
             stable_features=stable_features,
@@ -740,6 +745,7 @@ class TMMRefinement(Refinement):
         stable_features: StableWaveformFeatures | None,
         sorting: DARTsortSorting,
         motion: MotionInfo,
+        tpca: "BaseTemporalPCA",
     ):
         sorting = self.clusterer.cluster(
             features=features,
@@ -754,6 +760,7 @@ class TMMRefinement(Refinement):
             sorting=sorting,
             motion=motion,
             skip_final_assign_and_return_mix_data=True,
+            tpca=tpca,
         )
         return mix_data
 

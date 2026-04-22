@@ -101,6 +101,16 @@ class DARTsortSorting:
     def n_units(self) -> int:
         return self.unit_ids.shape[0]
 
+    @property
+    def spike_feature_dict(self) -> dict[str, np.ndarray]:
+        d = self._ephemeral_features | self._persistent_features
+        d = {k: v for k, v in d.items() if not self._no_check_needed(k)}
+        d["times_samples"] = self.times_samples
+        d["channels"] = self.channels
+        if self.labels is not None:
+            d["labels"] = self.labels
+        return d
+
     def to_numpy_sorting(self) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
         assert self.labels is not None
@@ -389,6 +399,9 @@ class DARTsortSorting:
                         load_feature_names.append(k)
             elif load_feature_names is None:
                 load_feature_names = [k for k in h5.keys() if cls._no_check_needed(k)]
+            elif load_feature_names is not None:
+                basic_props = [k for k in h5.keys() if cls._no_check_needed(k)]
+                load_feature_names = list(load_feature_names) + basic_props
             assert load_feature_names is not None
             load_feature_names = [
                 k for k in load_feature_names if k not in already_loaded
@@ -1304,7 +1317,7 @@ def _read_by_chunk(mask, dataset, show_progress=True):
 def yield_chunks(
     dataset, show_progress=True, desc_prefix=None, fallback_chunk_length=4096
 ) -> Generator[tuple[slice, np.ndarray], None, None]:
-    """Iterate chunks of an h5py dataset
+    """Iterate chunks of an h5py dataset (or np.ndarray)
 
     The dataset can either not be chunked or chunked only on the first axis.
     """
@@ -1327,10 +1340,10 @@ def yield_chunks(
         chunks = (chunk[0] for chunk in chunks)
 
     if show_progress:
-        desc = dataset.name
+        desc = getattr(dataset, "name", "")
         if desc_prefix:
-            desc = f"{desc_prefix} {desc}"
-        if dataset.chunks is None:
+            desc = f"{desc_prefix} {desc}".strip()
+        if getattr(dataset, "chunks", None) is None:
             n_chunks = int(np.ceil(dataset.shape[0] / fallback_chunk_length))
         else:
             n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
@@ -1396,7 +1409,7 @@ def subsample_waveforms(
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
-    fixed_property_keys=("channels",),
+    fixed_property_keys=("channels", "times_seconds"),
     replace=True,
     h5=None,
     device: torch.device | str = "cpu",

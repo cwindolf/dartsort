@@ -351,8 +351,6 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_basis_shrinkage: float = 1.0
     prior_pseudocount: float = 0.0
     cov_kind: str = "factorizednoise"
-    gmm_euclidean_threshold: float = 5.0
-    gmm_kl_threshold: float = 2.0
     gmm_cosine_threshold: float = 0.8
     gmm_normeuc_threshold: float = 1.0
     gmm_scaled_normeuc_threshold: float = 1.5

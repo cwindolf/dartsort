@@ -803,14 +803,14 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
 @pytest.mark.parametrize("threshold", ["check"])
-def test_with_simkit(simulations, sim_name, threshold):
+def test_with_simkit(tmp_path, simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]
     template_data = sim["templates"]
     motion = sim["motion"]
     gt_st = sim["sorting"]
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         if threshold == "check":
             threshold = np.sqrt(
                 0.5 * np.square(template_data.templates).sum((1, 2)).min()
