@@ -47,7 +47,7 @@ def refractory_simulations(tmp_path_factory):
     sim_settings = config_grid(
         common_params=dict(
             probe_kwargs=dict(
-                num_columns=2, num_contact_per_column=4, y_shift_per_column=None
+                num_columns=2, num_contact_per_column=12, y_shift_per_column=None
             ),
             template_simulator_kwargs=dict(force_no_offset=True),
             temporal_jitter=1,
