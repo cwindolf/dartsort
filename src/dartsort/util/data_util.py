@@ -1528,7 +1528,8 @@ def divide_randomly(
     n_things: int,
     n_bins: int,
     rg: int | np.random.Generator,
-    zero_pad_to_more_bins: int | None = None,
+    pad_to_more_bins: int | None = None,
+    bin_limit: int | None = None,
 ) -> np.ndarray:
     """Randomly divide n_things among n_bins, with optional zero padding on the right."""
     things_per_bin = np.zeros(n_bins, dtype=np.int64)
@@ -1542,9 +1543,23 @@ def divide_randomly(
         np.add.at(things_per_bin, choices, 1)
     assert things_per_bin.sum() == n_things
 
-    if zero_pad_to_more_bins is not None:
-        assert zero_pad_to_more_bins >= n_bins
-        pad = zero_pad_to_more_bins - n_bins
+    if not pad_to_more_bins:
+        return things_per_bin
+    assert pad_to_more_bins >= n_bins
+    pad = pad_to_more_bins - n_bins
+    if not pad:
+        return things_per_bin
+
+    if bin_limit:
+        # if we missed some things, spread them over the pad bins
+        things_per_bin = np.minimum(things_per_bin, bin_limit)
+        remaining = n_things - things_per_bin.sum()
+        padding = divide_randomly(remaining, pad, rg)
+        things_per_bin = np.concatenate([things_per_bin, padding])
+    else:
         things_per_bin = np.pad(things_per_bin, [(0, pad)])
+
+    assert things_per_bin.shape == (pad_to_more_bins,)
+    assert things_per_bin.sum() == n_things
 
     return things_per_bin

@@ -219,6 +219,8 @@ class BasePeeler(BModule):
             return
         chunks_to_do = chunk_starts_samples[next_chunk_index:]
 
+        clen = chunk_length_samples or self.chunk_length_samples
+        max_resid_per_chk = clen // self.spike_length_samples
         if (
             total_residual_snips is not None
             and ensure_coverage
@@ -240,6 +242,7 @@ class BasePeeler(BModule):
                     chunks_cover_remaining,
                     self.fit_subsampling_random_state,
                     len(chunks_to_do),
+                    max_resid_per_chk,
                 )
                 logger.dartsortdebug(
                     f"Will draw {residual_snips_per_chunk[:chunks_cover_remaining].mean():.1f} "

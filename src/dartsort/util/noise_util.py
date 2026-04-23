@@ -1179,12 +1179,14 @@ def interpolate_residual_snippets(
         times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
+    assert snippets.shape[0] == times_s_np.shape[0]
 
     # allow out of order residual sampling
     order = np.argsort(times_s_np)
     if not np.array_equal(order, np.arange(len(order))):
         times_s_np = times_s_np[order]
         snippets = snippets[order]
+    assert snippets.shape[0] == times_s_np.shape[0]
 
     # tpca project
     if do_tpca:
@@ -1221,9 +1223,14 @@ def interpolate_residual_snippets(
     inds = []
     if motion is not None:
         if motion.time_bins_s.size <= 1:
-            dbin = 3 * np.ptp(times_s_np)
+            tt = np.concatenate([motion.time_bins_s, times_s_np])
+            dbin = 3 * np.ptp(tt)
         else:
-            dbin = np.diff(motion.time_bins_s).mean()
+            dt = np.diff(motion.time_bins_s)
+            assert (dt > 0).all()
+            dbin = dt.mean()
+        assert motion.time_bins_s[0] - dbin < times_s_np.min()
+        assert motion.time_bins_s[-1] + dbin > times_s_np.max()
         i0 = i1 = 0
         for j, tbc in enumerate(motion.time_bins_s):
             # math done this way to avoid float issues; asserts check it.
