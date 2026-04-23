@@ -90,7 +90,7 @@ def pc_merge(
         return PCMergeResult(sorting=sorting)
 
     # remove blank labels just in case
-    sorting = data_util.subset_sorting_by_spike_count(sorting)
+    sorting = sorting.flatten()
     assert sorting.labels is not None
     nu0 = sorting.labels.max() + 1
     if not nu0:
@@ -149,7 +149,13 @@ def pc_merge(
     )
     assert labels is not None
     labels = np.atleast_1d(labels)
-    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
+    k = ids.max() + 1
+    ul = np.unique(labels)
+    ul = ul[ul >= 0]
+    assert np.array_equal(ul, np.unique(ids))
+    assert ul.shape == (k,)
+    assert k == ul.max() + 1
+    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{k}.")
 
     sorting = sorting.ephemeral_replace(labels=labels)
     if debug:
@@ -163,5 +169,13 @@ def pc_merge(
             dists=torch.asarray(dists),
         )
 
-    sorting = reorder_by_depth(sorting, motion=motion)
+    xlabels = torch.from_numpy(labels[kept]).to(x.device)
+    means, counts = spiketorch.average_by_label(
+        x, xlabels, stable_features.channels[kept], n_reg_chans
+    )
+    sf = means.square_().sum(dim=1).sqrt_() * counts.sqrt()
+    sf = sf.numpy(force=True)
+    sorting = reorder_by_depth(
+        sorting, motion=motion, spatial_footprints=sf, geom=motion.rgeom
+    )
     return PCMergeResult(sorting=sorting)

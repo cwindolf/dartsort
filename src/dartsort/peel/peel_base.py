@@ -691,7 +691,7 @@ class BasePeeler(BModule):
                 if featurization_pipeline.needs_residual():
                     n_resid_snips = self.fit_sampling_cfg.n_residual_snips
                 else:
-                    n_resid_snips = 0
+                    n_resid_snips = None
                 more = featurization_pipeline.needs_more_features()
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
@@ -833,7 +833,7 @@ class BasePeeler(BModule):
             assert not ordered
             chunk_starts = None
 
-        if total_residual_snips is not None:
+        if total_residual_snips:
             assert n_chunks is None
             # ensure minimal coverage to get residual snips
             clen = chunk_length_samples or self.chunk_length_samples

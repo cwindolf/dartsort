@@ -139,7 +139,9 @@ def hierarchical_cluster(
             f"fcluster failed with {threshold=} and smallest pdist {pdist.min()}."
         ) from e
 
-    n_new = np.unique(new_ids).shape[0]
+    new_uniq = np.unique(new_ids)
+    n_new = new_uniq.shape[0]
+    assert np.array_equal(new_uniq, 1 + np.arange(n_new))
     n_old = new_ids.shape[0]
     n_merged = n_old - n_new
     merge_pct = 100 * n_merged / n_old
@@ -325,24 +327,38 @@ def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
     return labels
 
 
-def reorder_by_depth(sorting, motion=None):
+def reorder_by_depth(
+    sorting, motion=None, spatial_footprints=None, geom=None, centroids=None
+):
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]
 
     units, kept_labels = np.unique(kept_labels, return_inverse=True)
 
-    depths = sorting.point_source_localizations[kept, 2]
-    if motion is not None:
-        depths = motion.correct_s(sorting.times_seconds[kept], depths)
+    if spatial_footprints is not None:
+        assert centroids is None
+        assert geom is not None
+        assert spatial_footprints.shape[1] == geom.shape[0]
+        assert spatial_footprints.shape[0] == units.shape[0]
+        w = spatial_footprints / spatial_footprints.sum(1, keepdims=True)
+        assert np.isfinite(w).all()
+        centroids = w @ geom[:, 1]
 
-    centroids = np.zeros(units.size)
-    for u in range(units.size):
-        inu = np.flatnonzero(kept_labels == u)
-        centroids[u] = np.median(depths[inu])
+    if centroids is None:
+        depths = sorting.point_source_localizations[kept, 2]
+        if motion is not None:
+            depths = motion.correct_s(sorting.times_seconds[kept], depths)
+
+        centroids = np.zeros(units.size)
+        for u in range(units.size):
+            inu = np.flatnonzero(kept_labels == u)
+            centroids[u] = np.median(depths[inu])
+    assert centroids.shape[0] == units.shape[0]
 
     labels = sorting.labels.copy()
     # this one is some food for thought, lol.
-    labels[kept] = np.argsort(np.argsort(centroids))[kept_labels]
+    reorder = np.argsort(np.argsort(centroids, kind="stable"), kind="stable")
+    labels[kept] = reorder[kept_labels]
 
     return sorting.ephemeral_replace(labels=labels)
 

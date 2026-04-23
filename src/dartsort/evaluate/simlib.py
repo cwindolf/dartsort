@@ -190,6 +190,7 @@ def simulate_sorting(
             refractory_samples=refractory_samples,
             sampling_frequency=sampling_frequency,
         )
+        spike_times = spike_times[spike_times < n_samples - spike_length_samples]
         unit_proportions = firing_rates / global_rate
         spike_labels = rg.choice(num_units, p=unit_proportions, size=spike_times.size)
 

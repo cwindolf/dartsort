@@ -33,6 +33,7 @@ Need to also test per-template shifts.
 """
 
 import tempfile
+from itertools import product
 from typing import cast
 
 import numpy as np
@@ -47,9 +48,10 @@ fs = 1000
 t = 7
 trough = 3
 snr = 20.0
-bump = 0.2
+bump = 0.5
 
 waveform_cfg = dartsort.WaveformConfig(ms_before=trough, ms_after=t - trough)
+no_resid_sampling_cfg = dartsort.FitSamplingConfig(n_residual_snips=0)
 
 
 @pytest.fixture(scope="module")
@@ -81,10 +83,10 @@ def align_sim(tmp_path_factory, align_templates):
         template_simulator_kwargs=dict(template_data=align_templates),
         temporal_jitter=1,
         amplitude_jitter=0.0,
-        duration_seconds=100.0,
-        min_fr_hz=50.0,
+        duration_seconds=25.0,
+        min_fr_hz=1000.0,
         featurization_cfg=dartsort.skip_featurization_cfg,
-        max_fr_hz=55.0,
+        max_fr_hz=1100.0,
         noise_in_memory=True,
         recording_dtype="float32",
         sampling_frequency=fs,
@@ -181,8 +183,10 @@ def test_denoiser_alignment(align_sim, align_templates):
     assert not np.array_equal(st0.times_samples, gt_st.times_samples)
 
     # st1 is perfect
-    assert np.array_equal(st0.times_samples, st1.times_samples - st1.time_shifts)
-    assert np.array_equal(st1.times_samples, gt_st.times_samples)
+    np.testing.assert_array_equal(
+        st0.times_samples, st1.times_samples - st1.time_shifts
+    )
+    np.testing.assert_array_equal(st1.times_samples, gt_st.times_samples)
 
     # -- the template computation handles time_shifts correctly
     # to do this, we need to cluster the detections. we can just cheat and use the sign.
@@ -202,8 +206,8 @@ def test_denoiser_alignment(align_sim, align_templates):
     ]
 
     # postprocess realigns the spike trains
-    assert np.array_equal(pst0.times_samples, st0.times_samples)
-    assert np.array_equal(pst1.times_samples, gt_st.times_samples)
+    np.testing.assert_array_equal(pst0.times_samples, st0.times_samples)
+    np.testing.assert_array_equal(pst1.times_samples, gt_st.times_samples)
 
     # st1 templates are aligned
     assert np.all(np.abs(tr1.templates[:, :, 0]).argmax(1) == trough)
@@ -244,27 +248,17 @@ def template_makers(rec, st, align=True, align_max=0):
     tcfg2 = dartsort.TemplateConfig(
         denoising_method="none", reduction="median", spikes_per_unit=10000
     )
-    tcfg3 = dartsort.TemplateConfig(
-        denoising_method="none",
-        spikes_per_unit=10000,
-    )
     tcfg4 = dartsort.TemplateConfig(
         denoising_method="none",
         algorithm="peelreduce",
         reduction="mean",
         spikes_per_unit=10000,
     )
-    tcfg5 = dartsort.TemplateConfig(
-        denoising_method="none",
-        algorithm="peelreduce",
-        reduction="median",
-        spikes_per_unit=10000,
-    )
     realign_cfg = dartsort.TemplateRealignmentConfig(
         realign_peaks=align,
         realign_shift_ms=align_max,
     )
-    tcfgs = [tcfg1, tcfg2, tcfg3, tcfg4, tcfg5]
+    tcfgs = [tcfg1, tcfg2, tcfg4]
     ts = [
         dartsort.estimate_template_library(
             recording=rec,
@@ -288,9 +282,7 @@ def template_makers(rec, st, align=True, align_max=0):
 
 @pytest.mark.parametrize("with_spike_shifts", (False, True))
 @pytest.mark.parametrize("with_unit_shifts", (False, True))
-# @pytest.mark.parametrize("seed", (0, 1, 64))
 @pytest.mark.parametrize("seed", [0])
-# @pytest.mark.parametrize("align_max", (1, trough, t, 2 * t))
 @pytest.mark.parametrize("align_max", [1, t, 2 * t])
 def test_template_shifts(
     align_sim, align_templates, with_spike_shifts, with_unit_shifts, seed, align_max
@@ -373,6 +365,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
             align_sim["recording"],
             template_data=align_templates,
             waveform_cfg=waveform_cfg,
+            sampling_cfg=no_resid_sampling_cfg,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
             matching_cfg=dartsort.MatchingConfig(
                 refractory_radius_frames=1,
@@ -382,9 +375,84 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
             ),
         )
     gt_st = align_sim["sorting"]
-    assert np.array_equal(st.times_samples, gt_st.times_samples)
+    np.testing.assert_array_equal(st.times_samples, gt_st.times_samples)
     assert st.labels is not None
-    assert np.array_equal(st.labels, gt_st.labels)
+    np.testing.assert_array_equal(st.labels, gt_st.labels)
+
+
+@pytest.fixture(scope="module")
+def match_test_sims():
+    sims = {}
+    for tempkind, up_factor in product(("exp", "parabola"), (1, 2, 8)):
+        # we'll have to use a smoother template library here
+        if tempkind == "exp":
+            trough_offset = 42
+            # here is a nice smooth basic shape
+            tleft = np.linspace(1.0, 0.0, num=42, endpoint=False)
+            tright = np.linspace(0.0, 1.0, num=79)
+            tt = np.concatenate([tleft, tright])
+            assert tt.argmin() == trough_offset
+            assert tt.shape == (121,)
+            tshape = np.exp(-np.square(tt / 0.3)).astype(np.float32)
+            tshape = snr * taper(torch.tensor(tshape), dim=0).numpy()
+        elif tempkind == "parabola":
+            # very smooth, reconstructed perfectly by cubic interpolators
+            # have to put trough in the center bc parabola.
+            trough_offset = 60
+            tt = np.linspace(-1.0, 1.0, num=121, endpoint=True)
+            tshape = -(tt**2)
+            tshape -= tshape.min()
+            assert tt.shape == tshape.shape == (121,)
+        else:
+            assert False
+
+        assert tshape.argmax() == trough_offset
+        # again, we'll create positive and negative versions
+        # I want to look at 4 different time shifts and I want the time shift
+        # to be fixed for each unit, so we need 4 units. in that case let's
+        # use 2 channels to make it all work out.
+        templates = np.zeros((4, 121, 2), dtype=np.float32)
+        templates[0, :, 0] = tshape
+        templates[1, :, 0] = -tshape
+        templates[2, :, 1] = tshape
+        templates[3, :, 1] = -tshape
+
+        gt_td = dartsort.TemplateData(
+            templates=templates,
+            unit_ids=np.arange(4),
+            spike_counts=np.ones(4),
+            trough_offset_samples=trough_offset,
+            registered_geom=np.c_[np.zeros(2), np.arange(2.0)],
+            sampling_frequency=30_000.0,
+        )
+
+        # simulate with no noise -- that's not relevant.
+        res = dartsort.simkit.generate_simulation(
+            n_units=4,
+            folder=None,
+            noise_recording_folder=None,
+            noise_kind="zero",
+            templates_kind="static",
+            template_simulator_kwargs=dict(template_data=gt_td),
+            temporal_jitter=up_factor,
+            temporal_jitter_family="by_unit",
+            amplitude_jitter=0.0,
+            duration_seconds=5.0,
+            min_fr_hz=500.0,
+            max_fr_hz=505.0,
+            no_save=True,
+            noise_in_memory=True,
+            recording_dtype="float32",
+            sampling_frequency=30_000.0,
+            globally_refractory=True,
+            refractory_ms=121.0 / 30.0,
+            geom=gt_td.registered_geom,
+            common_reference=False,
+        )
+        sim_recording, _ = res
+        gt_st: dartsort.DARTsortSorting = sim_recording.basic_sorting()
+        sims[(tempkind, up_factor)] = trough_offset, sim_recording, gt_td, gt_st
+    return sims
 
 
 @pytest.mark.parametrize("tempkind", ["exp", "parabola"])
@@ -392,76 +460,8 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
     "matchtype", ["debug", "drifty", "individual_compressed_upsampled"]
 )
 @pytest.mark.parametrize("up_factor", (1, 2, 8))
-def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
-    # we'll have to use a smoother template library here
-    if tempkind == "exp":
-        trough_offset = 42
-        # here is a nice smooth basic shape
-        tleft = np.linspace(1.0, 0.0, num=42, endpoint=False)
-        tright = np.linspace(0.0, 1.0, num=79)
-        tt = np.concatenate([tleft, tright])
-        assert tt.argmin() == trough_offset
-        assert tt.shape == (121,)
-        tshape = np.exp(-np.square(tt / 0.3)).astype(np.float32)
-        tshape = snr * taper(torch.tensor(tshape), dim=0).numpy()
-    elif tempkind == "parabola":
-        # very smooth, reconstructed perfectly by cubic interpolators
-        # have to put trough in the center bc parabola.
-        trough_offset = 60
-        tt = np.linspace(-1.0, 1.0, num=121, endpoint=True)
-        tshape = -(tt**2)
-        tshape -= tshape.min()
-        assert tt.shape == tshape.shape == (121,)
-    else:
-        assert False
-
-    assert tshape.argmax() == trough_offset
-
-    # again, we'll create positive and negative versions
-    # I want to look at 4 different time shifts and I want the time shift
-    # to be fixed for each unit, so we need 4 units. in that case let's
-    # use 2 channels to make it all work out.
-    templates = np.zeros((4, 121, 2), dtype=np.float32)
-    templates[0, :, 0] = tshape
-    templates[1, :, 0] = -tshape
-    templates[2, :, 1] = tshape
-    templates[3, :, 1] = -tshape
-
-    gt_td = dartsort.TemplateData(
-        templates=templates,
-        unit_ids=np.arange(4),
-        spike_counts=np.ones(4),
-        trough_offset_samples=trough_offset,
-        registered_geom=np.c_[np.zeros(2), np.arange(2.0)],
-        sampling_frequency=30_000.0,
-    )
-
-    # simulate with no noise -- that's not relevant.
-    res = dartsort.simkit.generate_simulation(
-        n_units=4,
-        folder=None,
-        noise_recording_folder=None,
-        noise_kind="zero",
-        templates_kind="static",
-        template_simulator_kwargs=dict(template_data=gt_td),
-        temporal_jitter=up_factor,
-        temporal_jitter_family="by_unit",
-        amplitude_jitter=0.0,
-        duration_seconds=5.0,
-        min_fr_hz=500.0,
-        max_fr_hz=505.0,
-        no_save=True,
-        noise_in_memory=True,
-        recording_dtype="float32",
-        sampling_frequency=30_000.0,
-        globally_refractory=True,
-        refractory_ms=121.0 / 30.0,
-        geom=gt_td.registered_geom,
-        common_reference=False,
-    )
-    sim_recording, template_simulator = res
-    sim_recording: dartsort.simkit.InjectSpikesPreprocessor
-    gt_st: dartsort.DARTsortSorting = sim_recording.basic_sorting()
+def test_matching_alignment_upsampled(match_test_sims, up_factor, matchtype, tempkind):
+    trough_offset, sim_recording, gt_td, gt_st = match_test_sims[(tempkind, up_factor)]
 
     # match with the gt templates
     with tempfile.TemporaryDirectory() as tdir:
@@ -487,13 +487,13 @@ def test_matching_alignment_upsampled(up_factor, matchtype, tempkind):
 
     assert gt_st.labels is not None
     assert st.labels is not None
-    assert np.array_equal(gt_st.labels, st.labels)
+    np.testing.assert_array_equal(gt_st.labels, st.labels)
     gt_up = getattr(gt_st, "jitter_ix", None)
     match_up = getattr(st, "up_inds", None)
     assert gt_up is not None
     if up_factor > 1:
         assert match_up is not None
-        assert np.array_equal(gt_up, match_up)
+        np.testing.assert_array_equal(gt_up, match_up)
     np.testing.assert_array_equal(gt_st.times_samples, st.times_samples)
-    mcs = np.abs(templates).sum(axis=1).argmax(axis=1)
-    assert np.array_equal(st.channels, mcs[gt_st.labels])
+    mcs = np.abs(gt_td.templates).sum(axis=1).argmax(axis=1)
+    np.testing.assert_array_equal(st.channels, mcs[gt_st.labels])

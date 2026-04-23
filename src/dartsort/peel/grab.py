@@ -11,7 +11,6 @@ from ..util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
     WaveformConfig,
-    default_peeling_fit_sampling_cfg,
     default_waveform_cfg,
 )
 from ..util.waveform_util import make_channel_index
@@ -37,7 +36,7 @@ class GrabAndFeaturize(BasePeeler):
         times_samples,
         fixed_properties: Mapping[str, np.ndarray | torch.Tensor] | None = None,
         chunk_length_samples=30_000,
-        fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+        fit_sampling_cfg: FitSamplingConfig = FitSamplingConfig(n_residual_snips=0),
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         dtype=torch.float,
     ):
@@ -49,6 +48,7 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        assert not fit_sampling_cfg.n_residual_snips
         super().__init__(
             recording=recording,
             channel_index=channel_index,

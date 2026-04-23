@@ -49,7 +49,7 @@ class MatchingTemplates(BModule):
         global _extra_checks
         _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
         if _extra_checks:
-            logger.dartsortverbose(f"Extra checks enabled in matching.")
+            logger.dartsortverbose("Extra checks enabled in matching.")
         return cls._registry[matching_cfg.template_type]._from_config(
             save_folder=save_folder,
             recording=recording,

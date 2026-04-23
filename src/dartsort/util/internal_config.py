@@ -334,7 +334,9 @@ class TemplateConfig:
     # low rank denoising?
     denoising_rank: int = 5
     denoising_fit_radius: float = 75.0
-    denoising_fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg
+    denoising_fit_sampling_cfg: FitSamplingConfig = replace(
+        default_peeling_fit_sampling_cfg, n_residual_snips=0
+    )
     template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
     svd_alignment_iterations: int = 0
