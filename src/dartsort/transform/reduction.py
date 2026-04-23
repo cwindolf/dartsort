@@ -229,7 +229,6 @@ def _reduction_init(
     h5 = h5py.File(hdf5_path, "r", locking=False, swmr=True, libver="latest")
     labels = torch.asarray(labels, dtype=torch.int32, device=dev)
     if "indices" in h5:
-        print('ixs')
         labels = labels[h5["indices"][:]]
     _reduction_stuff.ctx = _ReductionStuff(
         h5=h5,

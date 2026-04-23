@@ -178,13 +178,14 @@ def svd_lowrank_helper(
     niter=21,
     M=None,
     with_loadings: bool = False,
+    device=None,
 ) -> tuple[Tensor | None, Tensor, Tensor, Tensor]:
     assert x.ndim == 2
     q = min(rank + n_oversamples, *x.shape)
     orig_dtype = x.dtype
-    x = x.to(dtype=fit_dtype)
+    x = x.to(dtype=fit_dtype, device=device)
     if M is not None:
-        M = M.to(dtype=fit_dtype)
+        M = M.to(dtype=fit_dtype, device=device)
     U, S, V = torch.svd_lowrank(x, q=q, M=M, niter=niter)
     U = U[..., :rank]
     S = S[..., :rank]

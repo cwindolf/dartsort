@@ -325,16 +325,19 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         # make a validation set for early stopping
         if self.val_split_p:
             n_train = int(np.ceil(self.val_split_p * len(waveforms)))
-            istrain = np.zeros(len(waveforms), dtype=bool)
-            istrain[rg.choice(len(waveforms), size=n_train, replace=False)] = True
-            isval = np.logical_not(istrain)
-            val_waveforms = waveforms[isval]
-            val_amps = amps[isval]
-            val_channels = channels[isval]
-            waveforms = waveforms[istrain]
-            amps = amps[istrain]
-            channels = channels[istrain]
-            weights = weights[istrain] if weights is not None else None
+            n_val = min(len(waveforms) - n_train, self.epoch_size)
+            istrain = np.ones(len(waveforms), dtype=bool)
+            val_ix = rg.choice(len(waveforms), size=n_val, replace=False)
+            val_ix.sort()
+            istrain[val_ix] = False
+            val_waveforms = waveforms[val_ix]
+            val_amps = amps[val_ix]
+            val_channels = channels[val_ix]
+            train_ix = np.flatnonzero(istrain)
+            waveforms = waveforms[train_ix]
+            amps = amps[train_ix]
+            channels = channels[train_ix]
+            weights = weights[train_ix] if weights is not None else None
         else:
             # early stopping will just be done on the train wfs
             val_waveforms = waveforms

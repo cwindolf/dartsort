@@ -58,7 +58,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         )
 
         # behavior
-        self.saving = save_feature 
+        self.saving = save_feature
         self.rank = rank
         self.centered = centered
         self.whiten = whiten
@@ -92,14 +92,20 @@ class BaseTemporalPCA(BaseWaveformModule):
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
+        self.random_state = np.random.default_rng(self.random_state)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
-            self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
             choices = self.random_state.choice(
                 len(weights), p=weights, size=self.max_waveforms
             )
+            choices.sort()
+            choices = torch.from_numpy(choices)
+            waveforms = waveforms[choices]
+            channels = channels[choices]
+        elif waveforms.shape[0] > self.max_waveforms:
+            choices = self.random_state.choice(len(channels), size=self.max_waveforms)
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
@@ -119,7 +125,6 @@ class BaseTemporalPCA(BaseWaveformModule):
         _, waveforms_fit = get_channels_in_probe(
             waveforms, channels, train_channel_index
         )
-        waveforms_fit = waveforms_fit.to(self.b.channel_index.device)
 
         if self.centered:
             mean = waveforms_fit.mean(0)
@@ -140,6 +145,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             niter=self.niter,
             M=M,
             with_loadings=False,
+            device=self.b.channel_index.device,
         )
 
         self.b.mean.copy_(mean)

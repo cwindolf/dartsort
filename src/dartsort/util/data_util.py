@@ -1447,16 +1447,16 @@ def subsample_waveforms(
             )
             if not replace:
                 choices.sort()
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices, show_progress=True)
+                weights = weights[choices]
+                fixed_properties = {k: batched_h5_read(h5[k], choices) for k in fixed_property_keys}
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
-                    ichoices
-                ]
-                fixed_properties = {
-                    k: h5[k][uchoices][ichoices] for k in fixed_property_keys
-                }
+                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices, show_progress=True)
+                waveforms = waveforms[ichoices]
+                weights = weights[uchoices[ichoices]]
+                fixed_properties = {k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys}
+                fixed_properties = {k: v[ichoices] for k, v in fixed_properties.items()}
         else:
             waveforms: np.ndarray = h5[waveforms_dataset_name][:]
             fixed_properties = {k: h5[k][:] for k in fixed_property_keys}

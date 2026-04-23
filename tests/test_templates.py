@@ -434,6 +434,7 @@ def test_main_object():
         motion=motion,
         waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
+    del tdata
 
 
 @pytest.mark.parametrize("unit_ids", [np.arange(5), np.array([0, 0, 1, 1, 2])])
@@ -461,7 +462,7 @@ def test_pconv(tmp_path, unit_ids):
     overlaps[(1, 2)] = overlaps[(2, 1)] = (temps[1] * temps[2]).sum()
     overlaps[(2, 3)] = overlaps[(3, 2)] = (temps[3] * temps[2]).sum()
 
-    print(f"--------- no drift")
+    print("--------- no drift")
     tdata = templates.TemplateData(
         templates=temps,
         unit_ids=unit_ids,
@@ -529,7 +530,7 @@ def test_pconv(tmp_path, unit_ids):
     # drifting version
     # rigid drift from -1 to 0 to 1, note pitch=1
     # same templates but padded
-    print(f"--------- rigid drift")
+    print("--------- rigid drift")
     tempspad = np.pad(temps, [(0, 0), (0, 0), (1, 1)])
     svd_compressed = template_util.svd_compress_templates(tempspad, rank=1)
     reg_geom = np.c_[np.zeros(c + 2), np.arange(c + 2).astype(float)]
