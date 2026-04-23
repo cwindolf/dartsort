@@ -66,7 +66,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
     def transform(self, waveforms: torch.Tensor, **spike_data: torch.Tensor):
         assert waveforms.shape[1] == self.feature_dim
         assert waveforms.shape[2] == self.output_channels
-        labels = spike_data["labels"]
+        labels = spike_data["labels"].long()
 
         # if median, early out
         if not self.online:
