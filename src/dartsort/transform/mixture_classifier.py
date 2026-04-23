@@ -178,7 +178,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.erp: StableFeaturesInterpolator = stable_features.erp
         self.tmm: "TruncatedMixtureModel" = mix_data.tmm
         self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.obs_ix.clone())
-        self.workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))
+        self.workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))[1]
         neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
         self.register_buffer("neighb_candidates", neighb_candidates)
         self.register_buffer("neighb_candidate_counts", (neighb_candidates >= 0).sum(1))
