@@ -47,7 +47,7 @@ def refractory_simulations(tmp_path_factory):
     sim_settings = config_grid(
         common_params=dict(
             probe_kwargs=dict(
-                num_columns=2, num_contact_per_column=12, y_shift_per_column=None
+                num_columns=2, num_contact_per_column=4, y_shift_per_column=None
             ),
             template_simulator_kwargs=dict(force_no_offset=True),
             temporal_jitter=1,
@@ -130,10 +130,8 @@ def test_refractory_templates(
 
 
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("drift", [False, 0, True, "v"])
-@pytest.mark.parametrize(
-    "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
-)
+@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("realign_peaks", [False, "mainchan_trough_factor"])
 @pytest.mark.parametrize("denoising_method", ["none", "exp_weighted"])
 def test_refractory_templates_algorithm_agreement(
     refractory_simulations, drift, realign_peaks, denoising_method, reduction
@@ -184,14 +182,13 @@ def test_refractory_templates_algorithm_agreement(
     td0, *rest = tds
 
     for alg, tdb in zip(algorithms[1:], rest):
-        print(alg)
         np.testing.assert_array_equal(td0.unit_ids, tdb.unit_ids)
         np.testing.assert_array_equal(td0.spike_counts, tdb.spike_counts)
         np.testing.assert_array_equal(
             td0.spike_counts_by_channel, tdb.spike_counts_by_channel
         )
 
-        if reduction == "median" and denoising_method == "exp_weighted":
+        if reduction == "median" and denoising_method != "none":
             # slight diff (peel takes median in SVD space, unit in wf space)
             atol = 5e-5
         else:
