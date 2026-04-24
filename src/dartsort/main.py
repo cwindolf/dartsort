@@ -324,8 +324,8 @@ def _dartsort_impl(
 
         _nspk = None if is_final else cfg.subsampling_spikes
         _pres = 1.0 if is_final else cfg.subsampling_presence
-        step_clus_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = _matching_step_cfgs(
-            is_final, is_subsampling, cfg
+        step_clus_cfg, step_clfeat_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = (
+            _matching_step_cfgs(is_final, is_subsampling, cfg)
         )
 
         logger.dartsortdebug(f"-- Matching {step}")
@@ -362,7 +362,7 @@ def _dartsort_impl(
                 motion=motion,
                 refinement_cfgs=step_ref_cfgs,
                 clustering_cfg=step_clus_cfg,
-                clustering_features_cfg=cfg.clustering_features_cfg,
+                clustering_features_cfg=step_clfeat_cfg,
                 _save_cfg=cfg,
                 _save_dir=output_dir,
                 _save_initial_name=f"recluster{step}",

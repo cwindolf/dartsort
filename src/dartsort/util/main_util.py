@@ -10,6 +10,7 @@ from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     DARTsortInternalConfig,
     ClusteringConfig,
+    ClusteringFeaturesConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     RefinementConfig,
@@ -337,6 +338,7 @@ def _matching_step_cfgs(
     is_final: bool, is_subsampling: bool, cfg: DARTsortInternalConfig
 ) -> tuple[
     ClusteringConfig | None,
+    ClusteringFeaturesConfig,
     Sequence[RefinementConfig | None],
     FeaturizationConfig,
     FitSamplingConfig,
@@ -356,6 +358,7 @@ def _matching_step_cfgs(
     else:
         gmm_clus_cfg = None
         ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
+    clfeat_cfg = cfg.clustering_features_cfg
 
     if cfg.final_refinement and gmm_as_classifier:
         still_need_projs_saved = cfg.recluster_after_first_matching
@@ -371,8 +374,10 @@ def _matching_step_cfgs(
         )
         samp_cfg = cfg.refinement_cfg.sampling_cfg
         assert clus_cfg is None
+        if not still_need_projs_saved:
+            clfeat_cfg = replace(cfg.clustering_features_cfg, n_main_channel_pcs=0)
     else:
         feat_cfg = cfg.featurization_cfg
         samp_cfg = cfg.peeler_sampling_cfg
 
-    return clus_cfg, ref_cfgs, feat_cfg, samp_cfg
+    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
