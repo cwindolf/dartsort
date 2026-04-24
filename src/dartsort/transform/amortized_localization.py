@@ -402,6 +402,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 val_loss = 0.0
                 with torch.no_grad():
                     self.eval()
+                    n_examples = 0
                     for waveform_batch, amps_batch, chans_batch in val_loader:
                         waveform_batch = waveform_batch.to(device=my_dev)
                         amps_batch = amps_batch.to(device=my_dev)
@@ -420,6 +421,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                             loss = loss + kld
                         val_loss += loss.item()
                         valbatch += 1
+                        n_examples += chans_batch.numel()
+                        if n_examples >= self.epoch_size:
+                            break
                     self.train()
 
                 nbatch = max(1.0, np.ceil(n_examples / self.batch_size))
