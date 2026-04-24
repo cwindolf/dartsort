@@ -835,7 +835,7 @@ class SpikeNeighborhoods(BModule):
     def __init__(
         self,
         n_channels: int,
-        neighborhood_ids: torch.Tensor,
+        neighborhood_ids: torch.Tensor | None,
         neighborhoods: torch.Tensor,
         device=None,
         name="full",
@@ -857,13 +857,14 @@ class SpikeNeighborhoods(BModule):
         super().__init__()
         self.name = name
         self.n_channels = n_channels
-        neighborhood_ids = torch.asarray(
-            neighborhood_ids, dtype=torch.long, device=device
-        )
-        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long, device=device)
-        self.register_buffer("neighborhood_ids", neighborhood_ids)
         self.register_buffer("chans_arange", torch.arange(n_channels))
+        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long, device=device)
         self.register_buffer("neighborhoods", neighborhoods)
+        if neighborhood_ids is not None:
+            neighborhood_ids = torch.asarray(
+                neighborhood_ids, dtype=torch.long, device=device
+            )
+        self.register_buffer_or_none("neighborhood_ids", neighborhood_ids)
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as an indicator matrix
@@ -938,6 +939,7 @@ class SpikeNeighborhoods(BModule):
         return self.b.chans_arange[self.b.indicators[:, id] == 0]
 
     def neighborhood_members(self, id):
+        assert self.get_optional_buffer("neighborhood_ids") is not None
         return (self.b.neighborhood_ids == id).nonzero().view(-1)
 
     def adjacency(self, overlap=0.5):

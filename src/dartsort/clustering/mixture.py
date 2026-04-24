@@ -356,24 +356,25 @@ class NeighborhoodCovariance:
         )
 
 
-@databag
-class NeighborhoodLUT:
+class NeighborhoodLUT(BModule):
     """Which labels coincided with which spike neighborhoods? Need this all over the place."""
 
-    unit_ids: Tensor
-    neighb_ids: Tensor
-    # lut[unit_ids, neighb_ids] = arange(n_lut)
-    # everything else is n_lut (not -1)
-    lut: Tensor
+    def __init__(self, unit_ids: Tensor, neighb_ids: Tensor, lut: Tensor):
+        super().__init__()
+        self.register_buffer("unit_ids", unit_ids)
+        self.register_buffer("neighb_ids", neighb_ids)
+        # lut[unit_ids, neighb_ids] = arange(n_lut)
+        # everything else is n_lut (not -1)
+        self.register_buffer("lut", lut)
 
-    def __eq__(self, other: object) -> bool:
+    def eq(self, other: object) -> bool:
         if not isinstance(other, NeighborhoodLUT):
             return False
-        if not torch.equal(self.unit_ids, other.unit_ids):
+        if not torch.equal(self.b.unit_ids, other.b.unit_ids):
             return False
-        if not torch.equal(self.neighb_ids, other.neighb_ids):
+        if not torch.equal(self.b.neighb_ids, other.b.neighb_ids):
             return False
-        return torch.equal(self.lut, other.lut)
+        return torch.equal(self.b.lut, other.b.lut)
 
     def full_proposal_candidates(self, pad_shape_to: int | None = None) -> Tensor:
         n_proposed = max_units_per_neighb(self)
@@ -384,7 +385,7 @@ class NeighborhoodLUT:
 
 
 def lut_blank_units(lut: NeighborhoodLUT) -> Tensor:
-    return (lut.lut == lut.unit_ids.shape[0]).all(1).nonzero(as_tuple=True)[0]
+    return (lut.b.lut == lut.b.unit_ids.shape[0]).all(1).nonzero(as_tuple=True)[0]
 
 
 @databag
@@ -422,7 +423,7 @@ class LUTParams:
     ):
         signal_rank = 0 if bases is None else bases.shape[1]
         self = cls._new_empty(
-            lut.unit_ids.shape[0],
+            lut.b.unit_ids.shape[0],
             signal_rank,
             dim_obs=neighb_cov.max_nc_obs * neighb_cov.feat_rank,
             dim_miss_near=neighb_cov.max_nc_miss_near * neighb_cov.feat_rank,
@@ -441,7 +442,7 @@ class LUTParams:
         lut: NeighborhoodLUT,
         batch_size=64,
     ):
-        self._resize_(lut.unit_ids.shape[0])
+        self._resize_(lut.b.unit_ids.shape[0])
         for i0 in range(0, self.n_lut, batch_size):
             i1 = min(self.n_lut, i0 + batch_size)
             # nb, this initializes constplogdet with the noise part
@@ -921,9 +922,9 @@ class DenseSpikeData:
         return batches
 
     def lut_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
-        lut_ixs = lut.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
+        lut_ixs = lut.b.lut[unit_ids[None, :], self.neighborhood_ids[:, None]]
         assert lut_ixs.shape == (len(self.x), unit_ids.shape[0])
-        covered = lut_ixs < lut.unit_ids.shape[0]
+        covered = lut_ixs < lut.b.unit_ids.shape[0]
         return covered
 
     def slice_by_coverage(self, unit_ids: Tensor, lut: NeighborhoodLUT):
@@ -1115,7 +1116,7 @@ class BatchedSpikeData:
         if pnoid:
             assert torch.equal(
                 self.un_adj,
-                (self.un_adj_lut.lut < self.un_adj_lut.unit_ids.shape[0]).float(),
+                (self.un_adj_lut.b.lut < self.un_adj_lut.b.unit_ids.shape[0]).float(),
             )
 
     def batches(
@@ -1156,7 +1157,7 @@ class BatchedSpikeData:
 
         new_lut = un_adj_lut is not None
         if un_adj_lut is not None:
-            assert un_adj_lut.lut.shape[0] == n_units
+            assert un_adj_lut.b.lut.shape[0] == n_units
 
         if self.candidates is None:
             assert un_adj_lut is not None
@@ -1322,7 +1323,7 @@ class StreamingSpikeData(BatchedSpikeData):
         # it is an error to assign candidates which would lead to the LUT
         # changing, but that error cannot occur, because I would never
         # propose such candidates!
-        assert distances.shape[0] == self.un_adj_lut.lut.shape[0]
+        assert distances.shape[0] == self.un_adj_lut.b.lut.shape[0]
         return False, self.un_adj_lut
 
     def update_adjacency(
@@ -1389,7 +1390,7 @@ class StreamingSpikeData(BatchedSpikeData):
         )
 
     def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
-        self.update_adjacency(n_units=un_adj_lut.lut.shape[0], un_adj_lut=un_adj_lut)
+        self.update_adjacency(n_units=un_adj_lut.b.lut.shape[0], un_adj_lut=un_adj_lut)
         return self
 
 
@@ -1545,7 +1546,9 @@ class TruncatedSpikeData(BatchedSpikeData):
             self.update_adjacency(distances.shape[0], expand_lut=expand_lut)
 
         lut_padded = F.pad(
-            self.un_adj_lut.lut, (0, 0, 0, 1), value=self.un_adj_lut.unit_ids.shape[0]
+            self.un_adj_lut.b.lut,
+            (0, 0, 0, 1),
+            value=self.un_adj_lut.b.unit_ids.shape[0],
         )
         top_lut_ixs = lut_padded[
             self.candidates[:, : self.n_candidates], self.neighborhood_ids[:, None]
@@ -1841,8 +1844,8 @@ class BaseMixtureModel(BModule):
         unit_ids: Tensor,
         signal_rank: int,
         neighb_cov: NeighborhoodCovariance,
-        noise: EmbeddedNoise,
-        erp: NeighborhoodFiller,
+        noise: EmbeddedNoise | None,
+        erp: NeighborhoodFiller | None,
         p: TMMParams,
     ):
         super().__init__()
@@ -1850,9 +1853,9 @@ class BaseMixtureModel(BModule):
         self.unit_ids = unit_ids
         self.n_units = unit_ids.shape[0]
         self.signal_rank = signal_rank
-        self.erp = erp
+        self.erp: NeighborhoodFiller | None = erp
         self.neighb_cov = neighb_cov
-        self.noise = noise
+        self.noise: EmbeddedNoise | None = noise
 
     # -- subclasses implement
 
@@ -1926,6 +1929,7 @@ class BaseMixtureModel(BModule):
             distance_kind = self.p.distance_kind
 
         if self.p.whiten_dist:
+            assert self.noise is not None
             x = self.noise.whiten_full(self.centroids)
         else:
             x = self.centroids
@@ -1957,8 +1961,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         noise_log_prop: Tensor | None,
         neighb_cov: NeighborhoodCovariance,
         noise: EmbeddedNoise,
-        erp: NeighborhoodFiller,
+        erp: NeighborhoodFiller | None,
         lut_puff: float = 1.5,
+        known_lut: NeighborhoodLUT | None = None,
         seed: int | np.random.Generator | torch.Generator = 0,
         p: TMMParams,
     ):
@@ -1987,11 +1992,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # needs to be initialized before doing anything serious
         # see bootstrapping stage of initialize_and_bootstrap_tmm
-        self.lut = NeighborhoodLUT(
-            unit_ids=torch.arange(0),
-            neighb_ids=torch.arange(0),
-            lut=torch.arange(0)[None],
-        )
+        self.lut_params: LUTParams | None = None
+        if known_lut is None:
+            self.lut = NeighborhoodLUT(
+                unit_ids=torch.arange(0),
+                neighb_ids=torch.arange(0),
+                lut=torch.arange(0)[None],
+            )
+        else:
+            self.lut = known_lut
 
         if bases is not None:
             assert bases.shape[0] == self.n_units
@@ -1999,15 +2008,66 @@ class TruncatedMixtureModel(BaseMixtureModel):
             self.signal_rank = bases.shape[1]
         else:
             self.signal_rank = 0
-
         self.rg = spawn_torch_rg(seed, device=means.device)
-        self.lut_params: LUTParams | None = None
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        motion: MotionInfo,
+        state_dict,
+        feature_rank: int,
+        neighborhoods: SpikeNeighborhoods,
+        refinement_cfg: RefinementConfig,
+    ):
+        noise_dict = {
+            k.removeprefix("noise."): v
+            for k, v in state_dict.items()
+            if k.startswith("noise.")
+        }
+        ca = noise_dict.pop("chans_arange")
+        assert ca.shape == motion.rgeom.shape[:1]
+        del noise_dict['channel_vt_zpad']  # TODO: don't save?
+        del noise_dict['mean_full']  # TODO: don't save?
+        cov_kind = refinement_cfg.cov_kind.removesuffix("noise")
+        noise = EmbeddedNoise(
+            rank=feature_rank,
+            n_channels=motion.rgeom.shape[0],
+            cov_kind=cov_kind,
+            zero_radius=refinement_cfg.cov_radius,
+            **noise_dict,
+        )
+        neighb_cov = NeighborhoodCovariance.from_noise_and_neighborhoods(
+            prgeom=pad_geom(motion.rgeom),
+            noise=noise,
+            neighborhoods=neighborhoods,
+            neighb_overlap=refinement_cfg.neighb_overlap,
+        )
+        lut_dict = {
+            k.removeprefix("lut."): v
+            for k, v in state_dict.items()
+            if k.startswith("lut.")
+        }
+        lut = NeighborhoodLUT(**lut_dict)
+        return cls(
+            log_proportions=state_dict["log_proportions"],
+            means=state_dict["means"],
+            bases=state_dict["bases"],
+            noise_log_prop=state_dict["noise_log_prop"],
+            neighb_cov=neighb_cov,
+            noise=noise,
+            erp=None,
+            lut_puff=1.0,
+            known_lut=lut,
+            p=TMMParams.from_refinement_cfg(refinement_cfg),
+        )
 
     def change_rank(
         self, new_signal_rank: int, train_data: TruncatedSpikeData, train_scores: Scores
     ):
-        assert self.b.bases is None
+        assert self.get_optional_buffer("bases") is None
         assert self.signal_rank == 0
+        assert self.erp is not None
+        assert self.noise is not None
         if new_signal_rank == 0:
             return
         _, _, _means, bases = initialize_parameters_by_unit(
@@ -2063,6 +2123,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             puff=p.split_k,
         )
         assert means is not None
+        if pnoid:
+            assert log_props.isfinite().all()
+            assert noise_log_prop.isfinite().all()
+            assert means.isfinite().all()
         return cls(
             neighb_cov=neighb_cov,
             erp=erp,
@@ -2356,7 +2420,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 batch.neighborhood_ids,
                 static_size=batch.candidate_count,
             )
-            lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
+            lut_ixs = self.lut.b.lut[unit_ixs, neighb_ixs]
             batch_sparse_ixs.append(
                 (spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs)
             )
@@ -2548,7 +2612,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 static_size=static_size,
                 allow_blanks=allow_blanks,
             )
-            lut_ixs = self.lut.lut[unit_ixs, neighb_ixs]
+            lut_ixs = self.lut.b.lut[unit_ixs, neighb_ixs]
         else:
             assert candidate_ixs is not None
             assert unit_ixs is not None
@@ -2597,7 +2661,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # TODO cut this?
             data.erase_candidates()
             lut = data.bootstrap_candidates(distances=distances, un_adj_lut=self.lut)
-            assert lut == self.lut
+            assert lut.eq(self.lut)
             # self.update_lut(lut, no_parameter_changes=True)
             target_data = data
         else:
@@ -2647,7 +2711,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             )
             if lut_changed and target_data.proposal_is_complete:
                 # it can't actually change.
-                assert lut == self.lut
+                assert lut.eq(self.lut)
             else:
                 self.update_lut(lut, no_parameter_changes=True)
             if target_data.proposal_is_complete:
@@ -2664,7 +2728,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         return scores
 
     def update_lut(self, lut: NeighborhoodLUT, no_parameter_changes: bool = False):
-        if no_parameter_changes and self.lut == lut:
+        if no_parameter_changes and self.lut.eq(lut):
             return
         self.lut = lut
         if self.lut_params is None:
@@ -2689,6 +2753,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_labels: Tensor,
         debug: bool = False,
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
+        assert self.noise is not None
+        assert self.erp is not None
+
         group_size = group.numel()
         single = group_size == 1
         k = min(self.p.max_group_size, self.p.split_k)
@@ -2703,7 +2770,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             return None, None
 
         # kmeans on interp whitened feats
-        assert self.erp is not None
         kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
             data=split_data,
             k=k,
@@ -2984,7 +3050,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # restrict my merge such that units which don't overlap at all aren't
         # considered. to trim search, but also because bad solutions can
         # occur in that case.
-        un_adj = (self.lut.lut < self.lut.unit_ids.shape[0]).float()
+        un_adj = (self.lut.b.lut < self.lut.b.unit_ids.shape[0]).float()
         uu_not_adj = (un_adj @ self.neighb_cov.neighb_adj @ un_adj.T) == 0
         distances.masked_fill_(uu_not_adj, torch.inf)
         distances.diagonal().zero_()
@@ -3014,7 +3080,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             # restrict my merge such that units which don't overlap at all aren't
             # considered. to trim search, but also because bad solutions can
             # occur in that case.
-            un_adj = (self.lut.lut[group] < self.lut.unit_ids.shape[0]).float()
+            un_adj = (self.lut.b.lut[group] < self.lut.b.unit_ids.shape[0]).float()
             uu_adj = un_adj @ un_adj.T > 0
             if pair_mask is None:
                 pair_mask = uu_adj
@@ -3725,8 +3791,8 @@ class TMMStack(BaseMixtureModel):
         )
         self.tmms = tmms
         if pnoid:
-            nb = self.tmms[0].lut.lut.shape[1]
-            assert all(t.lut.lut.shape[1] == nb for t in self.tmms)
+            nb = self.tmms[0].lut.b.lut.shape[1]
+            assert all(t.lut.b.lut.shape[1] == nb for t in self.tmms)
 
     # this is used intermediately only intermediately in brute_merge,
     # and only these methods are called
@@ -3735,17 +3801,17 @@ class TMMStack(BaseMixtureModel):
         unit_ids = []
         neighb_ids = []
         for tmm, start_ix in zip(self.tmms, self.start_ixs):
-            unit_ids.append(tmm.lut.unit_ids + start_ix)
-            neighb_ids.append(tmm.lut.neighb_ids)
+            unit_ids.append(tmm.lut.b.unit_ids + start_ix)
+            neighb_ids.append(tmm.lut.b.neighb_ids)
         unit_ids = torch.concatenate(unit_ids)
         neighb_ids = torch.concatenate(neighb_ids)
         assert unit_ids.shape == neighb_ids.shape
         if pnoid:
             assert torch.equal(unit_ids.unique().cpu(), torch.arange(self.n_units))
         lut = torch.full(
-            (self.n_units, self.tmms[0].lut.lut.shape[1]),
+            (self.n_units, self.tmms[0].lut.b.lut.shape[1]),
             unit_ids.shape[0],
-            device=self.tmms[0].lut.lut.device,
+            device=self.tmms[0].lut.b.lut.device,
         )
         lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
         return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
@@ -4736,6 +4802,8 @@ def _fit_subset_models(
     id_to_subset: dict,
     max_fit_at_once: int,
 ):
+    assert mm.erp is not None
+    assert mm.noise is not None
     n_subsets = len(id_to_subset)
     subset_resps = responsibilities.new_empty((responsibilities.shape[0], n_subsets))
     for s in range(n_subsets):
@@ -5569,7 +5637,7 @@ def candidate_adjacencies(
         un_adj_lut = combine_luts(expand_from_lut, un_adj_lut)
 
     # lut -> adjacency matrix
-    un_adj = un_adj_lut.lut < un_adj_lut.unit_ids.shape[0]
+    un_adj = un_adj_lut.b.lut < un_adj_lut.b.unit_ids.shape[0]
     assert un_adj.any()
     un_adj = un_adj.float()
 
@@ -5610,11 +5678,11 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
     assert len(luts) > 0
     if len(luts) == 1:
         return luts[0]
-    adj = luts[0].lut < luts[0].unit_ids.shape[0]
+    adj = luts[0].b.lut < luts[0].b.unit_ids.shape[0]
     for ll in luts[1:]:
         adj.logical_or_(ll.lut < ll.unit_ids.shape[0])
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
-    lut = torch.full_like(luts[0].lut, unit_ids.shape[0])
+    lut = torch.full_like(luts[0].b.lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
     return NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
 
@@ -5626,14 +5694,14 @@ def candidate_search_sets(
     n_search: int,
     eps: float = 1e-8,
 ):
-    n_lut = un_adj_lut.unit_ids.shape[0]
+    n_lut = un_adj_lut.b.unit_ids.shape[0]
 
     # get lut-indexed version with extra lut index for topk below
-    s = distances[un_adj_lut.unit_ids]
+    s = distances[un_adj_lut.b.unit_ids]
 
     # don't want to match with myself
     inf = s.new_full((1, 1), torch.inf).broadcast_to((n_lut, 1))
-    s.scatter_(dim=1, index=un_adj_lut.unit_ids[:, None], src=inf)
+    s.scatter_(dim=1, index=un_adj_lut.b.unit_ids[:, None], src=inf)
 
     # avoid nans if there are exact 0 distances
     s.clamp_(min=eps)
@@ -5642,7 +5710,7 @@ def candidate_search_sets(
     s.reciprocal_()
 
     # multiply by neighborhood-unit adjacency to set non olap to 0
-    s *= un_adj.T[un_adj_lut.neighb_ids, : distances.shape[0]]
+    s *= un_adj.T[un_adj_lut.b.neighb_ids, : distances.shape[0]]
 
     # take topk, and fill invalids (s=0) with -1
     tops, topunits = torch.topk(s, k=n_search, dim=1)
@@ -5654,21 +5722,21 @@ def candidate_search_sets(
 
 
 def max_units_per_neighb(lut: NeighborhoodLUT):
-    coverage = lut.lut < lut.unit_ids.shape[0]
+    coverage = lut.b.lut < lut.b.unit_ids.shape[0]
     return int(coverage.sum(dim=0).amax())
 
 
 def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
     """Returns n_neighbs x max possible proposed units array, basically transposing the LUT's nonzeros."""
-    n_neighbs = lut.lut.shape[1]
-    n_lut = lut.unit_ids.shape[0]
+    n_neighbs = lut.b.lut.shape[1]
+    n_lut = lut.b.unit_ids.shape[0]
     proposals = torch.full((n_neighbs, max_proposed), -1)
     for neighb_id in range(n_neighbs):
-        row = lut.lut[:, neighb_id]
+        row = lut.b.lut[:, neighb_id]
         (row_valid,) = (row < n_lut).nonzero(as_tuple=True)
         n_row = row_valid.numel()
         assert n_row <= max_proposed
-        proposals[neighb_id, :n_row] = lut.unit_ids[row[row_valid]]
+        proposals[neighb_id, :n_row] = lut.b.unit_ids[row[row_valid]]
     return proposals
 
 
@@ -5784,9 +5852,9 @@ def _bootstrap_top(
 ):
     # use a un_adj_lut index-dependent probability here to avoid re-using
     # the current label
-    p = un_adj.T[un_adj_lut.neighb_ids]
-    zero = p.new_zeros((1, 1)).broadcast_to((un_adj_lut.unit_ids.shape[0], 1))
-    p.scatter_(dim=1, index=un_adj_lut.unit_ids[:, None], src=zero)
+    p = un_adj.T[un_adj_lut.b.neighb_ids]
+    zero = p.new_zeros((1, 1)).broadcast_to((un_adj_lut.b.unit_ids.shape[0], 1))
+    p.scatter_(dim=1, index=un_adj_lut.b.unit_ids[:, None], src=zero)
 
     # pad with an extra ncand-1 "unit"s of epsilons to allow no-replacement
     # sampling even when p is blank for my lut. they will get filled with -1s
@@ -5804,7 +5872,7 @@ def _bootstrap_top(
         i1 = min(N, i0 + batch_size)
         uu = candidates[i0:i1, 0]
         nn = neighborhood_ids[i0:i1]
-        ll = un_adj_lut.lut[uu, nn]
+        ll = un_adj_lut.b.lut[uu, nn]
         torch.multinomial(
             p[ll],
             n_candidates - 1,
@@ -5823,11 +5891,11 @@ def _get_explore_sampling_data(
 ):
     # for each lut ix (unit-neighb pair), figure out which units overlap
     # the neighborhood, less the main unit
-    p = explore_adj.T[un_adj_lut.neighb_ids]
+    p = explore_adj.T[un_adj_lut.b.neighb_ids]
 
     # zero out top unit probs
-    zero = p.new_zeros((1, 1)).broadcast_to((un_adj_lut.unit_ids.shape[0], 1))
-    p.scatter_(dim=1, index=un_adj_lut.unit_ids[:, None], src=zero)
+    zero = p.new_zeros((1, 1)).broadcast_to((un_adj_lut.b.unit_ids.shape[0], 1))
+    p.scatter_(dim=1, index=un_adj_lut.b.unit_ids[:, None], src=zero)
 
     # since we're already including the main unit's search neighbors in the
     # candidate set elsewhere, zero out their probs too
@@ -6080,8 +6148,8 @@ def _update_lut_mean_batch(
        term if needed.
     """
     n = i1 - i0
-    uu = lut.unit_ids[i0:i1]
-    nn = lut.neighb_ids[i0:i1]
+    uu = lut.b.unit_ids[i0:i1]
+    nn = lut.b.neighb_ids[i0:i1]
 
     # grab these units' means with one channel of zero padding
     mpad = means.new_zeros((n, neighb_cov.feat_rank, neighb_cov.n_channels + 1))
@@ -6135,8 +6203,8 @@ def _update_lut_ppca_batch(
     """
     M = bases.shape[1]
     n = i1 - i0
-    uu = lut.unit_ids[i0:i1]
-    nn = lut.neighb_ids[i0:i1]
+    uu = lut.b.unit_ids[i0:i1]
+    nn = lut.b.neighb_ids[i0:i1]
 
     # to start, we need the observed part of W. grab as for muo above.
     bpad = F.pad(
@@ -6228,13 +6296,13 @@ def _score_batch(
             static_size=static_size,
             allow_blanks=allow_blanks,
         )
-        lut_ixs = lut.lut[unit_ixs, neighb_ixs]
+        lut_ixs = lut.b.lut[unit_ixs, neighb_ixs]
     else:
         assert candidate_ixs is not None
         assert neighb_ixs is not None
         assert lut_ixs is not None
     if pnoid:
-        assert (lut_ixs < lut.unit_ids.shape[0]).all()
+        assert (lut_ixs < lut.b.unit_ids.shape[0]).all()
 
     lls = whitenedx.new_full((n, Ctot + int(not skip_noise)), fill_value=-torch.inf)
     if not skip_noise:
@@ -6743,7 +6811,7 @@ def _finalize_e_stats(
     Uhat_batch = means.new_ones((batch_size, hat_dim, hat_dim))
 
     # reweighting
-    denom = stats.N[lut.unit_ids].clamp_(min=torch.finfo(stats.N.dtype).tiny)
+    denom = stats.N[lut.b.unit_ids].clamp_(min=torch.finfo(stats.N.dtype).tiny)
     Nlut_N = torch.div(stats.Nlut, denom, out=denom)
     if pnoid:
         assert torch.isfinite(Nlut_N).all()
@@ -6752,8 +6820,8 @@ def _finalize_e_stats(
     for i0 in range(0, lut_params.n_lut, batch_size):
         # batch indices
         i1 = min(lut_params.n_lut, i0 + batch_size)
-        uu = lut.unit_ids[i0:i1]
-        nn = lut.neighb_ids[i0:i1]
+        uu = lut.b.unit_ids[i0:i1]
+        nn = lut.b.neighb_ids[i0:i1]
         What = What_batch[: i1 - i0]
         Uhat = Uhat_batch[: i1 - i0]
 
@@ -6799,12 +6867,12 @@ def _get_u_from_ulut(lut: NeighborhoodLUT, stats: SufficientStatistics):
 
     Nz = (stats.N == 0).to(dtype=stats.N.dtype)
 
-    Nlut_N = stats.Nlut / (stats.N + Nz)[lut.unit_ids]
+    Nlut_N = stats.Nlut / (stats.N + Nz)[lut.b.unit_ids]
     assert Nlut_N.isfinite().all()
     stats.Ulut *= Nlut_N[:, None, None]
 
     U = stats.Ulut.new_zeros((n_units, hat_dim, hat_dim))
-    ix = lut.unit_ids[:, None, None].broadcast_to(stats.Ulut.shape)
+    ix = lut.b.unit_ids[:, None, None].broadcast_to(stats.Ulut.shape)
     U[:, :-1, :].scatter_add_(dim=0, index=ix, src=stats.Ulut)
     U[:, -1:, :-1] = U[:, :-1, -1:].mT
     U[:, -1, -1] = 1.0
@@ -6865,3 +6933,15 @@ def _assert_sameids(aids, bids):
             raise AssertionError(f"{aids=} did not equal {bids=}")
         else:
             torch.testing.assert_close(aids, bids)
+
+
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals(
+        [
+            TruncatedMixtureModel,
+            SpikeNeighborhoods,
+            NeighborhoodCovariance,
+            LUTParams,
+            NeighborhoodLUT,
+        ]
+    )

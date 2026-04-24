@@ -255,7 +255,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
     fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
-    n_residual_snips: int = 2 * 4096
+    n_residual_snips: int = 4 * 4096
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 250_000

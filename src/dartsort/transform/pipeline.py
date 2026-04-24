@@ -24,6 +24,7 @@ class WaveformPipeline(torch.nn.Module):
         channel_index: torch.Tensor | None = None,
         kwargs_to_store=None,
         waveform_cfg=None,
+        motion=None,
         sampling_frequency=30_000.0,
     ):
         super().__init__()
@@ -38,6 +39,7 @@ class WaveformPipeline(torch.nn.Module):
         else:
             self.channel_index = None
         self.safe = False
+        self.motion = motion
 
     @property
     def device(self):
@@ -58,6 +60,8 @@ class WaveformPipeline(torch.nn.Module):
             extra_state["waveform_cfg"] = self.waveform_cfg
         if self.sampling_frequency is not None:
             extra_state["sampling_frequency"] = self.sampling_frequency
+        if self.motion is not None:
+            extra_state["motion"] = self.motion
         return extra_state
 
     def set_extra_state(self, state):
@@ -84,6 +88,7 @@ class WaveformPipeline(torch.nn.Module):
         class_names_and_kwargs = extra_state.get("class_names_and_kwargs")
         waveform_cfg = extra_state.get("waveform_cfg")
         sampling_frequency = extra_state.get("sampling_frequency")
+        motion = extra_state.get("motion")
         if class_names_and_kwargs is None:
             raise ValueError(
                 "Can't load a featurization pipeline from state dict if it "
@@ -100,6 +105,8 @@ class WaveformPipeline(torch.nn.Module):
             sampling_frequency=sampling_frequency,
         )
         self.precompute()
+        if motion is not None:
+            self.attach_motion(motion)
         # strict=False is needed here, because some transformers don't have
         # parameters initialized until their pre-load hooks are called, and
         # the strict check happens before that...
@@ -354,6 +361,8 @@ class WaveformPipeline(torch.nn.Module):
 
         # open h5, create new datasets, loop over batches and save feats
         with File(hdf5_filename, mode="r+", libver="latest", locking=False) as h5:
+            if all(ds.name in h5 for ds in datasets):
+                return
             wfs = h5[waveforms_dataset_name]
             outs = {
                 ds.name: h5.create_dataset(

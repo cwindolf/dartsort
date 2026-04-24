@@ -33,6 +33,9 @@ class BModule(Module):
     def b(self) -> "BufGetter":
         return self.___bgetter
 
+    def get_optional_buffer(self, name: str) -> Tensor | None:
+        return getattr(self.b, name)
+
     def register_cpu_buffer(self, name: str, buf: Tensor | None):
         self.___cpu_buffers[name] = buf
 

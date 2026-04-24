@@ -15,11 +15,11 @@ from ..util.internal_config import (
 )
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from .transform_base import BaseWaveformFeaturizer
 
 if TYPE_CHECKING:
     from ..clustering.mixture import MixtureModelAndDatasets, TruncatedMixtureModel
-    from ..util.interpolation_util import StableFeaturesInterpolator
 
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
@@ -93,6 +93,17 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
 
     def attach_motion(self, motion: MotionInfo):
         self.motion = motion
+
+    def needs_precompute(self):
+        if not hasattr(self, "tmm"):
+            return False
+        else:
+            return self.tmm.lut_params is None
+
+    def precompute(self):
+        if not hasattr(self, "tmm"):
+            return
+        self.tmm.update_lut(self.tmm.lut)
 
     def fit(
         self,
@@ -176,12 +187,69 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             self.register_buffer("neighborhood_ids_map", nid_map)
 
         self.erp: StableFeaturesInterpolator = stable_features.erp
+        # these guys are bad for torch.save() with weights only
+        # and not needed for inference
+        # one could implement serialization logic for them, I just didn't
+        mix_data.tmm.erp = None
         self.tmm: "TruncatedMixtureModel" = mix_data.tmm
         self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.obs_ix.clone())
-        self.workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))[1]
+        self.workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))[
+            1
+        ]
         neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
         self.register_buffer("neighb_candidates", neighb_candidates)
         self.register_buffer("neighb_candidate_counts", (neighb_candidates >= 0).sum(1))
+
+    def _other_pre_load_state(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        from ..clustering.mixture import TruncatedMixtureModel
+        from ..util.interpolation_util import SpikeNeighborhoods
+
+        assert hasattr(self, "motion")
+        assert self.motion is not None
+
+        # reconstruct non-__init__ modules...
+        stripped_dict = {k.removeprefix(prefix): v for k, v in state_dict.items()}
+        for k in (
+            "neighb_candidates",
+            "neighb_candidate_counts",
+            "neighborhood_ids_map",
+            "neighborhoods",
+        ):
+            if k in stripped_dict:
+                self.register_buffer(k, stripped_dict[k])
+        neighborhoods = SpikeNeighborhoods(
+            self.motion.rgeom.shape[0],
+            neighborhood_ids=None,
+            neighborhoods=self.b.neighborhoods,
+        )
+        self.erp = StableFeaturesInterpolator(
+            source_geom=pad_geom(self.motion.geom),
+            target_geom=pad_geom(self.motion.rgeom),
+            channel_index=self.b.channel_index.clone(),
+            params=self.clustering_features_cfg.interp_params,
+        )
+
+        tmm_dict = {
+            k.removeprefix("tmm."): v
+            for k, v in stripped_dict.items()
+            if k.startswith("tmm.")
+        }
+        self.tmm = TruncatedMixtureModel.from_state_dict(
+            self.motion,
+            tmm_dict,
+            neighborhoods=neighborhoods,
+            feature_rank=self.clustering_features_cfg.feature_rank,
+            refinement_cfg=self.gmm_refinement_cfg,
+        )
 
     def transform(self, waveforms, *, channels, **spike_data):
         t_s = spike_data["times_seconds"]

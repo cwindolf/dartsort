@@ -14,8 +14,9 @@ from ..util.interpolation_util import (
     interpolate_by_chunk,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
+from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
 from . import cluster_util
@@ -28,6 +29,8 @@ minimal_features_cfg = ClusteringFeaturesConfig(
     use_x=False,
     use_z=False,
 )
+
+logger = get_logger(__name__)
 
 
 @databag
@@ -267,6 +270,8 @@ class StableWaveformFeatures:
                     params=clustering_features_cfg.interp_params.normalize(),
                     device=computation_cfg.actual_device(),
                 )
+
+        logger.dartsortdebug(f"StableWaveformFeatures {features.shape=}.")
 
         return cls(
             channels=channels,

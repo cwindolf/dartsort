@@ -1521,7 +1521,7 @@ class SpatialWhitener(BModule):
 
     @classmethod
     def from_numpy(cls, whitener: np.ndarray):
-        logger.dartsortverbose(f"Load whitener from numpy.")
+        logger.dartsortverbose("Load whitener from numpy.")
         return cls(whitener=torch.asarray(whitener))
 
     def to_numpy(self) -> np.ndarray:

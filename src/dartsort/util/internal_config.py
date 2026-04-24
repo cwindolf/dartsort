@@ -196,7 +196,7 @@ class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
-    n_residual_snips: int = 2 * 4096
+    n_residual_snips: int = 4 * 4096
     residual_sampling_target_density: float = 0.25
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
@@ -1024,11 +1024,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         svd_alignment_ms=cfg.alignment_ms / 2,
     )
     clus_sampling_cfg = FitSamplingConfig(
-            n_waveforms_fit=cfg.clustering_max_spikes,
-            max_waveforms_fit=cfg.clustering_max_spikes,
-            more_waveforms_fit=cfg.gmm_max_spikes,
-            fit_sampling=cfg.fit_sampling,
-        )
+        n_waveforms_fit=cfg.clustering_max_spikes,
+        max_waveforms_fit=cfg.clustering_max_spikes,
+        more_waveforms_fit=cfg.gmm_max_spikes,
+        fit_sampling=cfg.fit_sampling,
+    )
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
@@ -1275,3 +1275,21 @@ waveforms_only_featurization_cfg = FeaturizationConfig(
     save_input_waveforms=True,
 )
 skip_featurization_cfg = FeaturizationConfig(skip=True)
+
+
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals(
+        [
+            WaveformConfig,
+            FitSamplingConfig,
+            ClusteringConfig,
+            ClusteringFeaturesConfig,
+            FeaturizationConfig,
+            RefinementConfig,
+            InterpolationParams,
+            TemplateMergeConfig,
+            TemplateConfig,
+            TemplateRealignmentConfig,
+            WhiteningConfig,
+        ]
+    )
