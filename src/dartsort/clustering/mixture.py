@@ -2571,7 +2571,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         n_candidates: int,
         candidate_count: int | None,
         duties: Tensor | None,
-    ) -> Scores:
+    ) -> tuple[Tensor, Scores]:
         x = features.view(len(features), -1)
         wx, noise_logliks = _whiten_and_noise_score_batch(
             x=x, neighb_ids=neighborhood_ids, neighb_cov=self.neighb_cov
@@ -2587,9 +2587,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
             CmoCooinvx=None,
             candidate_count=candidate_count,
         )
-        return self.score_batch(
+        scores = self.score_batch(
             batch=batch, n_candidates=n_candidates, allow_blanks=True
         )
+        labels = labels_from_scores_(scores)
+        return labels, scores
 
     def score_batch(
         self,

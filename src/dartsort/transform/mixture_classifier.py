@@ -299,7 +299,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         # soft assignment
         cand_count = self.b.neighb_candidate_counts[neighborhood_ids].sum()
         candidates = self.b.neighb_candidates[neighborhood_ids]
-        scores = self.tmm.score_features(
+        labels, scores = self.tmm.score_features(
             features=features,
             candidates=candidates,
             neighborhood_ids=neighborhood_ids,
@@ -309,7 +309,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         )
 
         return {
-            "labels": scores.candidates[:, 0].to(dtype=torch.int32),
+            "labels": labels.to(dtype=torch.int32),
             "gmm_candidates": scores.candidates.to(dtype=torch.int32),
             "gmm_log_liks": scores.log_liks,
             "gmm_responsibilities": scores.responsibilities,
