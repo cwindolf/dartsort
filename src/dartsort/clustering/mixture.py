@@ -388,28 +388,40 @@ def lut_blank_units(lut: NeighborhoodLUT) -> Tensor:
     return (lut.b.lut == lut.b.unit_ids.shape[0]).all(1).nonzero(as_tuple=True)[0]
 
 
-@databag
-class LUTParams:
+class LUTParams(BModule):
     """Holds precomputed terms which depend on neighborhood and GMM parameters."""
 
-    signal_rank: int
-    n_lut: int
-    latent_prior_std: float
-
-    # unit- and neighborhood-dependent terms
-    muo: Tensor
-    Linvmuo: Tensor
-    CmoCooinvmuo: Tensor
-    # low-rank model observed-data log determinant plus other constant lik terms
-    constplogdet: Tensor
-
-    # signal_rank > 0 only
-    TWoCooinvsqrt: Tensor | None
-    TWoCooinvmuo: Tensor | None
-    # T, zero-padded on inner dim with an extra column
-    Tpad: Tensor | None
-    # main factor for using inverse lemma to compute likelihoods
-    wburyroot: Tensor | None
+    def __init__(
+        self,
+        signal_rank: int,
+        n_lut: int,
+        latent_prior_std: float,
+        # unit- and neighborhood-dependent terms
+        muo: Tensor,
+        Linvmuo: Tensor,
+        CmoCooinvmuo: Tensor,
+        # low-rank model observed-data log determinant plus other constant lik terms
+        constplogdet: Tensor,
+        # signal_rank > 0 only
+        TWoCooinvsqrt: Tensor | None,
+        TWoCooinvmuo: Tensor | None,
+        # T, zero-padded on inner dim with an extra column
+        Tpad: Tensor | None,
+        # main factor for using inverse lemma to compute likelihoods
+        wburyroot: Tensor | None,
+    ):
+        super().__init__()
+        self.signal_rank = signal_rank
+        self.n_lut = n_lut
+        self.latent_prior_std = latent_prior_std
+        self.register_buffer("muo", muo, persistent=False)
+        self.register_buffer("Linvmuo", Linvmuo, persistent=False)
+        self.register_buffer("CmoCooinvmuo", CmoCooinvmuo, persistent=False)
+        self.register_buffer("constplogdet", constplogdet, persistent=False)
+        self.register_buffer_or_none("TWoCooinvsqrt", TWoCooinvsqrt, persistent=False)
+        self.register_buffer_or_none("TWoCooinvmuo", TWoCooinvmuo, persistent=False)
+        self.register_buffer_or_none("Tpad", Tpad, persistent=False)
+        self.register_buffer_or_none("wburyroot", wburyroot, persistent=False)
 
     @classmethod
     def from_lut(
@@ -502,44 +514,44 @@ class LUTParams:
 
         self.n_lut = n_lut_new
 
-        self.muo.resize_(n_lut_new, *self.muo.shape[1:])
-        self.muo.fill_(0.0)
-        self.Linvmuo.resize_(n_lut_new, *self.Linvmuo.shape[1:])
-        self.Linvmuo.fill_(0.0)
-        self.CmoCooinvmuo.resize_(n_lut_new, *self.CmoCooinvmuo.shape[1:])
-        self.CmoCooinvmuo.fill_(0.0)
-        self.constplogdet.resize_(n_lut_new, *self.constplogdet.shape[1:])
-        self.constplogdet.fill_(0.0)
+        self.b.muo.resize_(n_lut_new, *self.b.muo.shape[1:])
+        self.b.muo.fill_(0.0)
+        self.b.Linvmuo.resize_(n_lut_new, *self.b.Linvmuo.shape[1:])
+        self.b.Linvmuo.fill_(0.0)
+        self.b.CmoCooinvmuo.resize_(n_lut_new, *self.b.CmoCooinvmuo.shape[1:])
+        self.b.CmoCooinvmuo.fill_(0.0)
+        self.b.constplogdet.resize_(n_lut_new, *self.b.constplogdet.shape[1:])
+        self.b.constplogdet.fill_(0.0)
         if not self.signal_rank:
             return
         assert self.TWoCooinvsqrt is not None
         assert self.TWoCooinvmuo is not None
         assert self.Tpad is not None
         assert self.wburyroot is not None
-        self.TWoCooinvsqrt.resize_(n_lut_new, *self.TWoCooinvsqrt.shape[1:])
-        self.TWoCooinvsqrt.fill_(0.0)
-        self.TWoCooinvmuo.resize_(n_lut_new, *self.TWoCooinvmuo.shape[1:])
-        self.TWoCooinvmuo.fill_(0.0)
-        self.Tpad.resize_(n_lut_new, *self.Tpad.shape[1:])
-        self.Tpad.fill_(0.0)
-        self.wburyroot.resize_(n_lut_new, *self.wburyroot.shape[1:])
-        self.wburyroot.fill_(0.0)
+        self.b.TWoCooinvsqrt.resize_(n_lut_new, *self.b.TWoCooinvsqrt.shape[1:])
+        self.b.TWoCooinvsqrt.fill_(0.0)
+        self.b.TWoCooinvmuo.resize_(n_lut_new, *self.b.TWoCooinvmuo.shape[1:])
+        self.b.TWoCooinvmuo.fill_(0.0)
+        self.b.Tpad.resize_(n_lut_new, *self.b.Tpad.shape[1:])
+        self.b.Tpad.fill_(0.0)
+        self.b.wburyroot.resize_(n_lut_new, *self.b.wburyroot.shape[1:])
+        self.b.wburyroot.fill_(0.0)
 
     def check(self):
-        assert self.muo.isfinite().all()
-        assert self.Linvmuo.isfinite().all()
-        assert self.CmoCooinvmuo.isfinite().all()
-        assert self.constplogdet.isfinite().all()
+        assert self.b.muo.isfinite().all()
+        assert self.b.Linvmuo.isfinite().all()
+        assert self.b.CmoCooinvmuo.isfinite().all()
+        assert self.b.constplogdet.isfinite().all()
         if not self.signal_rank:
             return
-        assert self.TWoCooinvsqrt is not None
-        assert self.TWoCooinvmuo is not None
-        assert self.Tpad is not None
-        assert self.wburyroot is not None
-        assert self.TWoCooinvsqrt.isfinite().all()
-        assert self.TWoCooinvmuo.isfinite().all()
-        assert self.Tpad.isfinite().all()
-        assert self.wburyroot.isfinite().all()
+        assert self.b.TWoCooinvsqrt is not None
+        assert self.b.TWoCooinvmuo is not None
+        assert self.b.Tpad is not None
+        assert self.b.wburyroot is not None
+        assert self.b.TWoCooinvsqrt.isfinite().all()
+        assert self.b.TWoCooinvmuo.isfinite().all()
+        assert self.b.Tpad.isfinite().all()
+        assert self.b.wburyroot.isfinite().all()
 
 
 # -- messenger classes
@@ -2026,8 +2038,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         }
         ca = noise_dict.pop("chans_arange")
         assert ca.shape == motion.rgeom.shape[:1]
-        del noise_dict['channel_vt_zpad']  # TODO: don't save?
-        del noise_dict['mean_full']  # TODO: don't save?
+        del noise_dict["channel_vt_zpad"]  # TODO: don't save?
+        del noise_dict["mean_full"]  # TODO: don't save?
         cov_kind = refinement_cfg.cov_kind.removesuffix("noise")
         noise = EmbeddedNoise(
             rank=feature_rank,
@@ -6162,7 +6174,7 @@ def _update_lut_mean_batch(
 
     # extract observed part (muo)
     obs_ix = neighb_cov.obs_ix[nn][:, None, :]
-    mu_obs_out = lut_params.muo.view(
+    mu_obs_out = lut_params.b.muo.view(
         lut_params.n_lut, neighb_cov.feat_rank, neighb_cov.max_nc_obs
     )
     muo = torch.take_along_dim(mpad, obs_ix, dim=2, out=mu_obs_out[i0:i1])
@@ -6170,17 +6182,19 @@ def _update_lut_mean_batch(
 
     # Linvmuo, CmoCooinvmuo
     torch.bmm(
-        neighb_cov.Linv[nn], muo[:, :, None], out=lut_params.Linvmuo[i0:i1, :, None]
+        neighb_cov.Linv[nn], muo[:, :, None], out=lut_params.b.Linvmuo[i0:i1, :, None]
     )
     torch.bmm(
-        muo[:, None], neighb_cov.CooinvCom[nn], out=lut_params.CmoCooinvmuo[i0:i1, None]
+        muo[:, None],
+        neighb_cov.CooinvCom[nn],
+        out=lut_params.b.CmoCooinvmuo[i0:i1, None],
     )
 
     # constplogdet. add in the signal-rank-0-only terms.
-    lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)
+    lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore
     lut_params.constplogdet[i0:i1] += neighb_cov.logdet[nn]
     if pnoid:
-        assert lut_params.constplogdet[i0:i1].isfinite().all()
+        assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore
 
 
 def _update_lut_ppca_batch(
@@ -6236,22 +6250,22 @@ def _update_lut_ppca_batch(
 
     # Tpad, logdet. Tpad was initialized with zeros.
     assert lut_params.Tpad is not None
-    lut_params.Tpad[i0:i1, :, :-1] = T
+    lut_params.Tpad[i0:i1, :, :-1] = T  # type: ignore
     cap_logdet = L.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
     lut_params.constplogdet[i0:i1] += cap_logdet
     if pnoid:
-        assert lut_params.constplogdet[i0:i1].isfinite().all()
+        assert lut_params.b.constplogdet[i0:i1].isfinite().all()
 
     # precomputed products with T
     assert lut_params.TWoCooinvsqrt is not None
     assert lut_params.TWoCooinvmuo is not None
-    TWoCooinvsqrt = torch.bmm(T, WoCooinvsqrt, out=lut_params.TWoCooinvsqrt[i0:i1])
-    Linvmuo = lut_params.Linvmuo[i0:i1, :, None]
-    torch.bmm(TWoCooinvsqrt, Linvmuo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])
+    TWoCooinvsqrt = torch.bmm(T, WoCooinvsqrt, out=lut_params.TWoCooinvsqrt[i0:i1])  # type: ignore
+    Linvmuo = lut_params.b.Linvmuo[i0:i1, :, None]
+    torch.bmm(TWoCooinvsqrt, Linvmuo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])  # type: ignore
 
     # Woodbury root
     assert lut_params.wburyroot is not None
-    torch.bmm(WoCooinvsqrt.mT, Linv.mT, out=lut_params.wburyroot[i0:i1])
+    torch.bmm(WoCooinvsqrt.mT, Linv.mT, out=lut_params.wburyroot[i0:i1])  # type: ignore
 
 
 # -- em math impls

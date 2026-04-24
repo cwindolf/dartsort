@@ -40,13 +40,17 @@ class BModule(Module):
         self.___cpu_buffers[name] = buf
 
     def register_buffer_or_none(
-        self, name: str, buf: Tensor | None, on_device: bool = True
+        self,
+        name: str,
+        buf: Tensor | None,
+        on_device: bool = True,
+        persistent=True,
     ):
         if buf is None:
             setattr(self, name, None)
             self.register_cpu_buffer(name, None)
         elif on_device:
-            self.register_buffer(name, buf)
+            self.register_buffer(name, buf, persistent=persistent)
         else:
             self.register_cpu_buffer(name, buf)
 

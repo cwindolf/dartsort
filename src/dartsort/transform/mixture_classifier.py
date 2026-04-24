@@ -250,6 +250,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             feature_rank=self.clustering_features_cfg.feature_rank,
             refinement_cfg=self.gmm_refinement_cfg,
         )
+        self.tmm.lut_params = None
 
     def transform(self, waveforms, *, channels, **spike_data):
         t_s = spike_data["times_seconds"]
