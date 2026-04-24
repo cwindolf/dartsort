@@ -260,47 +260,78 @@ class MixtureModelAndDatasets(NamedTuple):
     val_ixs: Tensor | None
 
 
-@databag
-class NeighborhoodCovariance:
-    """Holds precomputed terms which depend only on the neighborhood."""
+class NeighborhoodCovariance(BModule):
+    def __init__(
+        self,
+        feat_rank: int,
+        max_nc_obs: int,
+        max_nc_miss_near: int,
+        n_channels: int,
+        prgeom: Tensor,
+        neighb_adj: Tensor,
+        nobs: Tensor,
+        obs_ix: Tensor,
+        miss_near_ix: Tensor,
+        miss_full_mask: Tensor,
+        logdet: Tensor,
+        Cooinv: Tensor,
+        CooinvCom: Tensor,
+        Linv: Tensor,
+        full_Linv: Tensor,
+    ):
+        """Holds precomputed terms which depend only on the neighborhood
 
-    feat_rank: int
-    # most observed channels in any neighborhood
-    max_nc_obs: int
-    # most missing channels (inside the cov zero radius)
-    max_nc_miss_near: int
-    # total n channels
-    n_channels: int
-    # not really used, but helpful to keep it here for vis
-    prgeom: Tensor
-    # adjacency of neighborhoods
-    neighb_adj: Tensor
-
-    # -- indexing
-    # number of observed features (rank*chans) by neighborhood
-    # TODO: if we only use this for liks, maybe pre-bake the log2pi?
-    nobs: Tensor
-    # observed channels (just the neighborhoods array)
-    obs_ix: Tensor
-    # channels within zero rad of observed
-    miss_near_ix: Tensor
-    # indicator of missingness (not restricted by zero rad)
-    miss_full_mask: Tensor
-    # miss_ix_full not used
-
-    # -- matrices
-    # log det of observed covariance
-    logdet: Tensor
-    Cooinv: Tensor
-    # Com is observed to miss-near
-    CooinvCom: Tensor
-    # Coo = LL', and this is Linv. Cinv=Linv'Linv, so this multiplies from the left.
-    Linv: Tensor
-    full_Linv: Tensor
+        Arguments
+        ---------
+        feat_rank: int
+            most observed channels in any neighborhood
+        max_nc_obs: int
+            most missing channels (inside the cov zero radius)
+        max_nc_miss_near: int
+            total n channels
+        n_channels: int
+            not really used, but helpful to keep it here for vis
+        prgeom: Tensor
+            adjacency of neighborhoods
+        neighb_adj: Tensor
+        nobs: Tensor
+            number of observed features (rank*chans) by neighborhood
+        obs_ix: Tensor
+            observed channels (just the neighborhoods array)
+        miss_near_ix: Tensor
+            channels within zero rad of observed
+        miss_full_mask: Tensor
+            indicator of missingness (not restricted by zero rad)
+            miss_ix_full not used
+        logdet: Tensor
+            log det of observed covariance
+        Cooinv: Tensor
+        CooinvCom: Tensor
+            Com is observed to miss-near
+        Linv: Tensor
+            Coo = LL', and this is Linv. Cinv=Linv'Linv, so this multiplies from the left.
+        full_Linv: Tensor
+        """
+        super().__init__()
+        self.feat_rank = feat_rank
+        self.max_nc_obs = max_nc_obs
+        self.max_nc_miss_near = max_nc_miss_near
+        self.n_channels = n_channels
+        self.register_buffer("prgeom", prgeom, persistent=False)
+        self.register_buffer("neighb_adj", neighb_adj, persistent=False)
+        self.register_buffer("nobs", nobs, persistent=False)
+        self.register_buffer("obs_ix", obs_ix, persistent=False)
+        self.register_buffer("miss_near_ix", miss_near_ix, persistent=False)
+        self.register_buffer("miss_full_mask", miss_full_mask, persistent=False)
+        self.register_buffer("logdet", logdet, persistent=False)
+        self.register_buffer("Cooinv", Cooinv, persistent=False)
+        self.register_buffer("CooinvCom", CooinvCom, persistent=False)
+        self.register_buffer("Linv", Linv, persistent=False)
+        self.register_buffer("full_Linv", full_Linv, persistent=False)
 
     def __post_init__(self):
         """Shape validation / documentation."""
-        nneighb = self.nobs.shape[0]
+        nneighb = self.b.nobs.shape[0]
         obsdim = self.feat_rank * self.max_nc_obs
         neardim = self.feat_rank * self.max_nc_miss_near
         assert self.nobs.shape == (nneighb,)
@@ -2122,7 +2153,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         p: TMMParams,
     ) -> Self:
         """Constructor for the full mixture model, called by from_config()"""
-        rg = spawn_torch_rg(seed, device=neighb_cov.obs_ix.device)
+        rg = spawn_torch_rg(seed, device=neighb_cov.b.obs_ix.device)
         log_props, noise_log_prop, means, bases = initialize_parameters_by_unit(
             data=data,
             signal_rank=signal_rank,
@@ -3063,7 +3094,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # considered. to trim search, but also because bad solutions can
         # occur in that case.
         un_adj = (self.lut.b.lut < self.lut.b.unit_ids.shape[0]).float()
-        uu_not_adj = (un_adj @ self.neighb_cov.neighb_adj @ un_adj.T) == 0
+        uu_not_adj = (un_adj @ self.neighb_cov.b.neighb_adj @ un_adj.T) == 0
         distances.masked_fill_(uu_not_adj, torch.inf)
         distances.diagonal().zero_()
         return tree_groups(
@@ -5423,7 +5454,7 @@ def _whiten_impute_and_noise_score(
     batch_size=1024,
 ):
     wx = torch.empty_like(x)
-    assert neighborhoods.n_neighborhoods == neighb_cov.obs_ix.shape[0]
+    assert neighborhoods.n_neighborhoods == neighb_cov.b.obs_ix.shape[0]
 
     noise_loglik = wx.new_zeros((len(x),))
     CmoCooinvx = wx.new_empty(
@@ -5433,10 +5464,10 @@ def _whiten_impute_and_noise_score(
     for ni in range(neighborhoods.n_neighborhoods):
         inni = neighborhoods.neighborhood_members(ni)
 
-        right_factor = neighb_cov.Linv[ni].T
-        neighb_CooinvCom = neighb_cov.CooinvCom[ni]
+        right_factor = neighb_cov.b.Linv[ni].T
+        neighb_CooinvCom = neighb_cov.b.CooinvCom[ni]
 
-        nll_const = neighb_cov.logdet[ni] + LOG_2PI * neighb_cov.nobs[ni]
+        nll_const = neighb_cov.b.logdet[ni] + LOG_2PI * neighb_cov.b.nobs[ni]
 
         for bs in range(0, inni.numel(), batch_size):
             binni = inni[bs : bs + batch_size]
@@ -5466,10 +5497,12 @@ def _whiten_impute_and_noise_score(
 def _whiten_and_noise_score_batch(
     *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
-    batch_whitener = neighb_cov.Linv[neighb_ids]
+    batch_whitener = neighb_cov.b.Linv[neighb_ids]
     wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
     nll = torch.linalg.vector_norm(wx, dim=1).square_()
-    nll.add_(neighb_cov.logdet[neighb_ids]).add_(LOG_2PI * neighb_cov.nobs[neighb_ids])
+    nll.add_(neighb_cov.b.logdet[neighb_ids]).add_(
+        LOG_2PI * neighb_cov.b.nobs[neighb_ids]
+    )
     nll.mul_(-0.5)
     return wx, nll
 
@@ -6173,7 +6206,7 @@ def _update_lut_mean_batch(
     )
 
     # extract observed part (muo)
-    obs_ix = neighb_cov.obs_ix[nn][:, None, :]
+    obs_ix = neighb_cov.b.obs_ix[nn][:, None, :]
     mu_obs_out = lut_params.b.muo.view(
         lut_params.n_lut, neighb_cov.feat_rank, neighb_cov.max_nc_obs
     )
@@ -6182,17 +6215,17 @@ def _update_lut_mean_batch(
 
     # Linvmuo, CmoCooinvmuo
     torch.bmm(
-        neighb_cov.Linv[nn], muo[:, :, None], out=lut_params.b.Linvmuo[i0:i1, :, None]
+        neighb_cov.b.Linv[nn], muo[:, :, None], out=lut_params.b.Linvmuo[i0:i1, :, None]
     )
     torch.bmm(
         muo[:, None],
-        neighb_cov.CooinvCom[nn],
+        neighb_cov.b.CooinvCom[nn],
         out=lut_params.b.CmoCooinvmuo[i0:i1, None],
     )
 
     # constplogdet. add in the signal-rank-0-only terms.
     lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore
-    lut_params.constplogdet[i0:i1] += neighb_cov.logdet[nn]
+    lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]
     if pnoid:
         assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore
 
@@ -6226,11 +6259,11 @@ def _update_lut_ppca_batch(
         (0, 1),
         value=0.0,
     )
-    Wo = bpad.take_along_dim(indices=neighb_cov.obs_ix[nn][:, None, None, :], dim=3)
+    Wo = bpad.take_along_dim(indices=neighb_cov.b.obs_ix[nn][:, None, None, :], dim=3)
     Wo = Wo.view(n, M, neighb_cov.feat_rank * neighb_cov.max_nc_obs)
 
     # next, the capaciatance is I + Wo Cooinv Wo'. always pos def.
-    WoCooinvsqrt = Wo.bmm(neighb_cov.Linv[nn].mT)
+    WoCooinvsqrt = Wo.bmm(neighb_cov.b.Linv[nn].mT)
     cap = WoCooinvsqrt.bmm(WoCooinvsqrt.mT)
     cap.diagonal(dim1=-2, dim2=-1).add_(latent_prior_std**-2)
     if pnoid:
@@ -6807,14 +6840,14 @@ def _finalize_e_stats(
     assert means.ndim == 2
 
     if prior_pseudocount:
-        term = means @ neighb_cov.full_Linv.T
+        term = means @ neighb_cov.b.full_Linv.T
         term = term.square_().sum(dim=1).mean()
         term *= -0.5 * prior_pseudocount
         stats.elbo += term
 
     if prior_pseudocount and bases is not None:
         K, r = bases.shape[:2]
-        term = bases.view(K * r, -1) @ neighb_cov.full_Linv.T
+        term = bases.view(K * r, -1) @ neighb_cov.b.full_Linv.T
         term = term.square_().sum(dim=1).view(K, r).mean(dim=0).sum()
         term *= -0.5 * prior_pseudocount
         stats.elbo += term
@@ -6848,17 +6881,17 @@ def _finalize_e_stats(
             Uhat[:, -1:, :-1] = stats.Ulut[i0:i1, :, -1:].mT
             What[:, :-1, :, :-1] = bases[uu].view(i1 - i0, hat_dim - 1, frank, nc)
 
-        obs_ix = neighb_cov.obs_ix[nn][:, None, None, :]
+        obs_ix = neighb_cov.b.obs_ix[nn][:, None, None, :]
         Whatobs = What.take_along_dim(dim=3, indices=obs_ix)
         Whatobs = Whatobs.view(i1 - i0, hat_dim, frank * neighb_cov.max_nc_obs)
-        WoCooinvCom = Whatobs.bmm(neighb_cov.CooinvCom[nn])
+        WoCooinvCom = Whatobs.bmm(neighb_cov.b.CooinvCom[nn])
         WoCooinvCom = WoCooinvCom.view(i1 - i0, hat_dim, frank, ncm)
 
         w_wcc = What  # first make Wmiss in place
-        ix = neighb_cov.miss_near_ix[nn, None, None].broadcast_to(WoCooinvCom.shape)
+        ix = neighb_cov.b.miss_near_ix[nn, None, None].broadcast_to(WoCooinvCom.shape)
         w_wcc.scatter_add_(dim=3, index=ix, src=WoCooinvCom._neg_view())
         w_wcc = w_wcc[..., :-1]
-        w_wcc *= neighb_cov.miss_full_mask[nn][:, None, None, :]
+        w_wcc *= neighb_cov.b.miss_full_mask[nn][:, None, None, :]
         w_wcc = w_wcc.reshape(i1 - i0, hat_dim, frank * nc)
 
         # apply reweighting
