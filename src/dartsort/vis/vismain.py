@@ -245,7 +245,7 @@ def visualize_all_sorting_steps(
     if motion is None:
         motion = try_load_motion_info(dartsort_dir, motion_pkl)
 
-    fnames = ["times_seconds", "geom", "channel_index"]
+    fnames = ["times_seconds", "geom", "channel_index", "template_inds"]
     if make_scatterplots or make_sorting_summaries:
         fnames += [
             "point_source_localizations",

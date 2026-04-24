@@ -104,9 +104,9 @@ class WaveformPipeline(torch.nn.Module):
             waveform_cfg=waveform_cfg,
             sampling_frequency=sampling_frequency,
         )
-        self.precompute()
         if motion is not None:
             self.attach_motion(motion)
+        self.precompute()
         # strict=False is needed here, because some transformers don't have
         # parameters initialized until their pre-load hooks are called, and
         # the strict check happens before that...

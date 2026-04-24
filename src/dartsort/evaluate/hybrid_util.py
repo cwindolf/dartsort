@@ -391,7 +391,7 @@ def _same(x):
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
-    load_feature_names=("times_seconds", "geom", "channel_index"),
+    load_feature_names=("times_seconds", "geom", "channel_index", "template_inds"),
     motion_h5_name="motionthreshold.h5",
     detection_h5_names=("subtraction.h5", "threshold.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
@@ -449,6 +449,7 @@ def load_dartsort_step_sortings(
                 motion_h5,
                 load_simple_features=load_simple_features,
                 load_feature_names=load_feature_names,
+                allow_missing=True,
             ),
         )
 
@@ -459,6 +460,7 @@ def load_dartsort_step_sortings(
             h5,
             load_simple_features=load_simple_features,
             load_feature_names=load_feature_names,
+            allow_missing=True,
         )
 
         # initial clust or later step res?
@@ -482,7 +484,18 @@ def load_dartsort_step_sortings(
                     st0.ephemeral_replace(labels=np.load(npy)),
                 )
         else:
-            yield (name_formatter(h5.stem), st0)
+            assert st0.labels is not None
+            match_reas = hasattr(st0, "template_inds") and not np.array_equal(
+                st0.template_inds, st0.labels
+            )
+            if match_reas:
+                yield (
+                    name_formatter(h5.stem),
+                    st0.ephemeral_replace(labels=st0.template_inds),
+                )
+                yield (name_formatter(f"{h5.stem}_assign"), st0)
+            else:
+                yield (name_formatter(h5.stem), st0)
 
         # reclustering, if applicable
         reclustr = recluster_format.format(step=step)

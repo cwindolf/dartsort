@@ -349,6 +349,7 @@ class DARTsortSorting:
         load_feature_names: Sequence[str] | None = None,
         load_simple_features=True,
         load_all_features=False,
+        allow_missing=False,
     ) -> Self:
         """Load sorting from .hdf5 format saved by peelers
 
@@ -406,6 +407,8 @@ class DARTsortSorting:
             load_feature_names = [
                 k for k in load_feature_names if k not in already_loaded
             ]
+            if allow_missing:
+                load_feature_names = [k for k in load_feature_names if k in h5]
             persistent_features = {
                 k: cast(h5py.Dataset, h5[k])[:] for k in load_feature_names
             }
@@ -732,10 +735,7 @@ def try_get_denoising_pipeline(sorting: DARTsortSorting):
     return dn, geom, channel_index
 
 
-def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
-    """Look for the pipeline in the usual place."""
-    from dartsort.transform import WaveformPipeline
-
+def _get_featurization_loading_meta(sorting):
     if isinstance(sorting, Path):
         base_dir = sorting.parent
         stem = sorting.stem
@@ -753,7 +753,6 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         geom = getattr(sorting, "geom", None)
         channel_index = getattr(sorting, "channel_index", None)
 
-    model_dir = base_dir / f"{stem}_models"
     if geom is None or channel_index is None:
         with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
             geom: np.ndarray = h5["geom"][:]
@@ -761,20 +760,59 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
     assert geom is not None
     assert channel_index is not None
 
+    model_dir = base_dir / f"{stem}_models"
+    return geom, channel_index, model_dir
+
+
+def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
+    """Look for the pipeline in the usual place."""
+    from dartsort.transform import WaveformPipeline
+
+    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+
     if not featurization_pipeline_pt.exists():
         raise ValueError(f"No file at {featurization_pipeline_pt=}")
+
     pipeline = WaveformPipeline.from_state_dict_pt(
         geom, channel_index, featurization_pipeline_pt
     )
     return pipeline, featurization_pipeline_pt
 
 
-def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
+def get_tpca(sorting, name_prefix="collisioncleaned"):
     """Look for the TemporalPCAFeaturizer in the usual place."""
-    pipeline, _ = get_featurization_pipeline(sorting)
-    return pipeline.get_transformer(tpca_name)
+    from ..transform import transformers_by_class_name
+
+    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+    featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+
+    d = torch.load(featurization_pipeline_pt)
+    kw = d["_extra_state"]["class_names_and_kwargs"]
+    tpca_kw = [
+        (ix, k, v)
+        for ix, (k, v) in enumerate(kw)
+        if k in ("TemporalPCA", "TemporalPCAFeaturizer")
+        and v["name_prefix"] == name_prefix
+    ]
+    assert len(tpca_kw) == 1
+    ix, clsname, kw = tpca_kw[0]
+    tpca = transformers_by_class_name[clsname](
+        geom=geom, channel_index=channel_index, **kw
+    )
+    prefix = f"transformers.{ix}."
+    params = {k.removeprefix(prefix): v for k, v in d.items() if k.startswith(prefix)}
+    for k, v in params.items():
+        if  k == '_extra_state':
+            tpca.spike_length_samples = v['spike_length_samples']
+            tpca._needs_fit = v['needs_fit']
+            assert len(v) == 2
+            continue
+        tpca.register_buffer(k, v)
+
+    return tpca
 
 
 def load_stored_tsvd(
@@ -1447,15 +1485,23 @@ def subsample_waveforms(
             )
             if not replace:
                 choices.sort()
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices, show_progress=True)
+                waveforms = batched_h5_read(
+                    h5[waveforms_dataset_name], choices, show_progress=True
+                )
                 weights = weights[choices]
-                fixed_properties = {k: batched_h5_read(h5[k], choices) for k in fixed_property_keys}
+                fixed_properties = {
+                    k: batched_h5_read(h5[k], choices) for k in fixed_property_keys
+                }
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices, show_progress=True)
+                waveforms = batched_h5_read(
+                    h5[waveforms_dataset_name], uchoices, show_progress=True
+                )
                 waveforms = waveforms[ichoices]
                 weights = weights[uchoices[ichoices]]
-                fixed_properties = {k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys}
+                fixed_properties = {
+                    k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys
+                }
                 fixed_properties = {k: v[ichoices] for k, v in fixed_properties.items()}
         else:
             waveforms: np.ndarray = h5[waveforms_dataset_name][:]
