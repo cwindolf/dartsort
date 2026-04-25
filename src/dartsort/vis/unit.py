@@ -780,16 +780,16 @@ def default_plots(sorting_analysis=None):
         ACG(),
         ISIHistogram(),
         XZScatter(),
-        PCAScatter(),
         TimeZScatter(),
         TimeRegZScatter(),
         TimeAmpScatter(),
         RawWaveformPlot(),
-        TPCAWaveformPlot(),
         NearbyCoarseTemplatesPlot(),
         CoarseTemplateDistancePlot(),
         NeighborCCGPlot(),
     ]
+    if sorting_analysis is not None and sorting_analysis.has_pca():
+        p.append([PCAScatter(), TPCAWaveformPlot()])
     if sorting_analysis is not None and sorting_analysis.qda is not None:
         p.append(NeighborQDAMatrices())
     return p

@@ -42,7 +42,7 @@ spike_sklearn_tsvd_template_cfg = TemplateConfig(svd_method="spike_sklearn")
 # simkit fixture based test of all algorithms with a global
 # refractory sorting that has no noise
 # can do one with tiny drift and do allclose to test motion pipeline
-@pytest.fixture
+@pytest.fixture(scope="module")
 def refractory_simulations(tmp_path_factory):
     sim_settings = config_grid(
         common_params=dict(

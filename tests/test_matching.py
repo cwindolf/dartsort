@@ -40,7 +40,7 @@ RES_ATOL = 1e-10
 CONV_ATOL = 1e-4
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def refractory_sim(request, tmp_path_factory):
     """Globally refractory sims can be matched perfectly"""
     upsampling, scaling, nc = request.param

@@ -5,7 +5,7 @@ import torch
 from dartsort.clustering import kmeans
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def blobs():
     """Any kmeans should cluster this perfectly."""
     snr = 10

@@ -657,6 +657,10 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf_cols = np.searchsorted(
                 conf_col_labels, tested_neighb_ids, sorter=col_order
             )
+            keep = conf_cols < comparison.tested_analysis.sorting.n_units
+            tested_neighb_ids = tested_neighb_ids[keep]
+            conf_cols = conf_cols[keep]
+            
             conf_cols = col_order[conf_cols]
             # sometimes a nearest template has no spikes. sad but true.
             conf_cols_found = tested_neighb_ids == conf_cols
@@ -675,6 +679,8 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             suffix = ""
 
         conf = np.nan_to_num(conf)
+        if not conf.size:
+            return
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
         conf = np.abs(np.clip(conf, 0.0, None))

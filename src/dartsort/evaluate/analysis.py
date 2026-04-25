@@ -125,6 +125,11 @@ class DARTsortAnalysis:
         elif has_hdf5 and model_dir is not None:
             template_npz = model_dir / "template_data.npz"
             can_reload = sorting.has_persistent_labels()
+            if can_reload and sorting._has_dataset("template_inds"):
+                assert sorting.labels is not None
+                can_reload = np.array_equal(
+                    sorting.labels, sorting.template_inds
+                )
             if can_reload and template_npz.exists():
                 logger.info(f"Reloading templates from {template_npz}...")
                 template_data = TemplateData.from_npz(template_npz)
@@ -309,6 +314,9 @@ class DARTsortAnalysis:
             return getattr(self, fname)[which]
         else:
             return self.sorting.slice_feature_by_name(fname, mask=which)
+
+    def has_pca(self):
+        return self.sorting._has_dataset(self.tpca_features_dset)
 
     # cluster-dependent feature loading methods
 

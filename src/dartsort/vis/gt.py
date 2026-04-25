@@ -81,6 +81,7 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
         col_order = agreement.columns
+        col_order = col_order[col_order < comparison.template_distances.shape[1]]
         dist = comparison.template_distances[row_order, :][:, col_order]
 
         ax = panel.subplots()

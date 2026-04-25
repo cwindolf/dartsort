@@ -37,7 +37,7 @@ two_jobs_cfg_spawn = ComputationConfig(
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def fakedata():
     T_s = 3.5
     fs = 30000

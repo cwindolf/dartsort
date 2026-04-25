@@ -72,7 +72,7 @@ def test_shifted_waveforms():
     assert np.array_equal(shifted_avg, [[0.0, 0, 0, 1, 0, 0, 0]])
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def example_geoms():
     geom = simlib.generate_geom(num_contact_per_column=48, sort_x_down=False)
     geom0 = geom
