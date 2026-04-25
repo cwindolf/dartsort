@@ -1203,9 +1203,8 @@ class ToFullProbeInterpolator(BModule):
             )
             assert disp.shape[1] == 1
             tgeom = self.b.rgeom.clone()
-            depth_shift = torch.tensor(
-                disp[:, 0], device=tgeom.device, dtype=tgeom.dtype
-            )
+            depth_shift = torch.asarray(disp[:, 0], dtype=tgeom.dtype)
+            depth_shift = depth_shift.to(device=tgeom.device, non_blocking=True)
             tgeom[:, 1] += depth_shift
         else:
             tgeom = self.b.rgeom

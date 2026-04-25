@@ -31,6 +31,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
 from ..util.motion import MotionInfo
+from ..util.spiketorch import spawn_torch_rg
 from ..util.torch_util import BModule
 from ..util.waveform_util import make_channel_index
 
@@ -1162,6 +1163,7 @@ def interpolate_residual_snippets(
     rank: int | None = None,
     batch_size=64,
     show_progress=True,
+    generator=False,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from . import data_util, interpolation_util
@@ -1254,13 +1256,28 @@ def interpolate_residual_snippets(
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    snips_out = snippets.new_empty((snippets.shape[0], dim, registered_geom.shape[0]))
-    for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
-        batch = snippets[i0:i1].to(device=device)
-        if tpca is not None:
-            batch = tpca.force_embed(batch)[:, :dim]
-        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(snips_out)
-    return snips_out
+    if generator:
+        for i0, i1, tbc in (
+            tqdm(inds, desc="Interpolate resid") if show_progress else inds
+        ):
+            batch = snippets[i0:i1].to(device=device, non_blocking=True)
+            if tpca is not None:
+                batch = tpca.force_embed(batch)[:, :dim]
+            yield erp.interp_at_time(t_s=tbc, waveforms=batch)
+    else:
+        snips_out = snippets.new_empty(
+            (snippets.shape[0], dim, registered_geom.shape[0])
+        )
+        for i0, i1, tbc in (
+            tqdm(inds, desc="Interpolate resid") if show_progress else inds
+        ):
+            batch = snippets[i0:i1].to(device=device)
+            if tpca is not None:
+                batch = tpca.force_embed(batch)[:, :dim]
+            snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(
+                snips_out
+            )
+        return snips_out
 
 
 def fp_control_threshold(
@@ -1423,9 +1440,8 @@ def residual_covariance(
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     seed: int = 0,
+    batch_size=256,
 ):
-    from dartsort.util.drift_util import registered_geometry
-
     assert sorting.parent_h5_path is not None
 
     if do_interpolation:
@@ -1437,7 +1453,7 @@ def residual_covariance(
             else:
                 rgeom = motion.rgeom
             rgeom = rgeom.astype(np.float32)
-        snippets = interpolate_residual_snippets(
+        snipgen = interpolate_residual_snippets(
             motion=motion,
             hdf5_path=sorting.parent_h5_path,
             geom=geom,
@@ -1447,20 +1463,35 @@ def residual_covariance(
             do_tpca=False,
             residual_times_s_dataset_name=residual_times_s_dataset_name,
             residual_dataset_name=residual_dataset_name,
+            generator=True,
+            batch_size=batch_size,
         )
     else:
-        snippets = sorting._load_dataset(residual_dataset_name)
-    snippets = torch.asarray(snippets, device=device)
+        snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
 
-    if do_interpolation:
-        isna = snippets.isnan()
-        nna = isna.sum()
-        if nna:
-            rvs = np.random.default_rng(seed).normal(size=nna)
-            rvs = torch.asarray(rvs).to(snippets)
-            snippets[isna] = rvs
+    rg = spawn_torch_rg(seed=seed, device=device)
+    cov = None
+    N = 0
+    for snip in snipgen:
+        snip = torch.asarray(snip).to(device=device, non_blocking=True)
+        nc = snip.shape[2]
+        snip = snip.view(-1, nc)
+        if cov is None:
+            cov = snip.new_zeros((nc, nc))
 
-    return torch.cov(snippets.view(-1, snippets.shape[2]).T)
+        isna = snip.isnan()
+        rvs = torch.randn(
+            size=snip.shape, generator=rg, device=device, dtype=snip.dtype
+        )
+        snip.masked_scatter_(isna, rvs)
+
+        scov = torch.cov(snip.T)
+        n = snip.shape[0]
+        N += n
+        w = n / N
+        cov += scov.sub_(cov).mul_(w)
+
+    return cov
 
 
 def fullzca_whitener(

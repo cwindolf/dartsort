@@ -656,6 +656,15 @@ class DARTsortSorting:
             assert isinstance(dset, h5py.Dataset)
             return dset[()]
 
+    def _yield_dataset(self, dataset_name: str, batch_size: int = 1024):
+        assert self.parent_h5_path is not None
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            dset = h5[dataset_name]
+            assert isinstance(dset, h5py.Dataset)
+            for i0 in range(0, dset.shape[0], batch_size):
+                i1 = min(dset.shape[0], i0 + batch_size)
+                yield dset[i0:i1]
+
     def slice_feature_by_name(
         self, dataset_name: str, mask: np.ndarray | slice = slice(None)
     ) -> np.ndarray:
