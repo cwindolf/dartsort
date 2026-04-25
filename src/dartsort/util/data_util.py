@@ -649,6 +649,16 @@ class DARTsortSorting:
                 f"Feature {feature_name}'s shape {feature.shape} didn't agree with spike count {self.n_spikes}."
             )
 
+    def _has_dataset(self, dataset_name: str) -> bool:
+        if dataset_name in self._ephemeral_features:
+            return True
+        if dataset_name in self._persistent_features:
+            return True
+        if self.parent_h5_path is None:
+            return False
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            return dataset_name in h5
+
     def _load_dataset(self, dataset_name: str) -> np.ndarray:
         assert self.parent_h5_path is not None
         with h5py.File(self.parent_h5_path, "r", locking=False) as h5:

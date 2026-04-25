@@ -1072,8 +1072,6 @@ class EmbeddedNoise(BModule):
         snippets = interpolate_residual_snippets(
             motion=motion,
             hdf5_path=hdf5_path,
-            geom=geom,
-            registered_geom=motion.rgeom,
             interp_params=interp_params,
             tpca=tpca,
             device=device,
@@ -1148,12 +1146,10 @@ class EmbeddedNoise(BModule):
         return np.log(probs)
 
 
-def interpolate_residual_snippets(
+def generate_interpolated_residual_snippets(
     *,
     motion: MotionInfo,
     hdf5_path: str | Path,
-    geom,
-    registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
@@ -1163,13 +1159,10 @@ def interpolate_residual_snippets(
     rank: int | None = None,
     batch_size=64,
     show_progress=True,
-    generator=False,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
     from . import data_util, interpolation_util
     from ..transform import BaseTemporalPCA
-
-    assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1256,28 +1249,49 @@ def interpolate_residual_snippets(
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    if generator:
-        for i0, i1, tbc in (
-            tqdm(inds, desc="Interpolate resid") if show_progress else inds
-        ):
-            batch = snippets[i0:i1].to(device=device, non_blocking=True)
-            if tpca is not None:
-                batch = tpca.force_embed(batch)[:, :dim]
-            yield erp.interp_at_time(t_s=tbc, waveforms=batch)
-    else:
-        snips_out = snippets.new_empty(
-            (snippets.shape[0], dim, registered_geom.shape[0])
-        )
-        for i0, i1, tbc in (
-            tqdm(inds, desc="Interpolate resid") if show_progress else inds
-        ):
-            batch = snippets[i0:i1].to(device=device)
-            if tpca is not None:
-                batch = tpca.force_embed(batch)[:, :dim]
-            snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(
-                snips_out
-            )
-        return snips_out
+    for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
+        batch = snippets[i0:i1].to(device=device, non_blocking=True)
+        if tpca is not None:
+            batch = tpca.force_embed(batch)[:, :dim]
+        yield erp.interp_at_time(t_s=tbc, waveforms=batch)
+
+
+def interpolate_residual_snippets(
+    *,
+    motion: MotionInfo,
+    hdf5_path: str | Path,
+    residual_times_s_dataset_name="residual_times_seconds",
+    residual_dataset_name="residual",
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
+    do_tpca: bool,
+    tpca: "PCA | BaseTemporalPCA | None" = None,
+    device: torch.device | str | None = None,
+    rank: int | None = None,
+    batch_size=64,
+    show_progress=True,
+):
+    with h5py.File(hdf5_path, "r", locking=False) as h5:
+        n = h5[residual_dataset_name].shape[0]
+    snips_out = None
+    i0 = 0
+    for snip in generate_interpolated_residual_snippets(
+        motion=motion,
+        hdf5_path=hdf5_path,
+        residual_times_s_dataset_name=residual_times_s_dataset_name,
+        residual_dataset_name=residual_dataset_name,
+        interp_params=interp_params,
+        do_tpca=do_tpca,
+        tpca=tpca,
+        device=device,
+        rank=rank,
+        batch_size=batch_size,
+        show_progress=show_progress,
+    ):
+        if snips_out is None:
+            snips_out = snip.new_empty((n, *snip.shape[1:]))
+        snips_out[i0 : i0 + snip.shape[0]] = snip.to(snips_out)
+        i0 += snip.shape[0]
+    return snips_out
 
 
 def fp_control_threshold(
@@ -1453,17 +1467,14 @@ def residual_covariance(
             else:
                 rgeom = motion.rgeom
             rgeom = rgeom.astype(np.float32)
-        snipgen = interpolate_residual_snippets(
+        snipgen = generate_interpolated_residual_snippets(
             motion=motion,
             hdf5_path=sorting.parent_h5_path,
-            geom=geom,
-            registered_geom=rgeom,
             interp_params=interp_params,
             device=device,
             do_tpca=False,
             residual_times_s_dataset_name=residual_times_s_dataset_name,
             residual_dataset_name=residual_dataset_name,
-            generator=True,
             batch_size=batch_size,
         )
     else:
