@@ -92,12 +92,12 @@ class BaseTemporalPCA(BaseWaveformModule):
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
-        self.random_state = np.random.default_rng(self.random_state)
+        rg = np.random.default_rng(self.random_state)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
-            choices = self.random_state.choice(
+            choices = rg.choice(
                 len(weights), p=weights, size=self.max_waveforms
             )
             choices.sort()
@@ -105,7 +105,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             waveforms = waveforms[choices]
             channels = channels[choices]
         elif waveforms.shape[0] > self.max_waveforms:
-            choices = self.random_state.choice(len(channels), size=self.max_waveforms)
+            choices = rg.choice(len(channels), size=self.max_waveforms)
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
