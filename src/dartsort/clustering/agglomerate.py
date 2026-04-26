@@ -437,7 +437,14 @@ def _qda_job(ij):
     assert np.isclose(binc[bc], 0.0)
     assert binc.shape[0] == 2 * bc + 1
 
-    kde = FFTKDE(bw="ISJ").fit(dll)
+    try:
+        kde = FFTKDE(bw="ISJ").fit(dll)
+    except ValueError as e:
+        logger.dartsortdebug(f"KDEpy error: {str(e)}")
+        p.score[i, j] = p.score[j, i] = 0.0
+        p.min_ratio[i, j] = p.min_ratio[j, i] = 0.0
+        return
+
     kde = cast(np.ndarray, kde.evaluate(binc))
     score, min_ratio = bimod_stats(kde)
     p.score[i, j] = p.score[j, i] = score

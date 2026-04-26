@@ -861,7 +861,7 @@ class DARTsortInternalConfig:
     preprocessing: PreprocessingStrategy = "none"
     final_refinement: bool = True
     matching_iterations: int = 1
-    recluster_after_first_matching: bool = True
+    recluster_after_first_matching: bool = False
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
     subsampling_spikes: int | None = 2_048_000
