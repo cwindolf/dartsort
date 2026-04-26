@@ -1,4 +1,3 @@
-import gc
 import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -43,8 +42,11 @@ from .util.internal_config import (
     default_waveform_cfg,
     to_internal_config,
 )
+from .util.job_util import ensure_computation_config
 from .util.logging_util import get_logger
 from .util.main_util import (
+    _matching_step_cfgs,
+    cleanup_and_log_gpu_usage,
     ds_all_to_workdir,
     ds_dump_config,
     ds_fast_forward,
@@ -54,7 +56,6 @@ from .util.main_util import (
     ds_save_intermediate_labels,
     ds_save_motion,
     motion_needs_peaks,
-    _matching_step_cfgs,
 )
 from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
@@ -468,6 +469,7 @@ def subtract(
     model_subdir="subtraction_models",
 ) -> DARTsortSorting | None:
     output_dir = resolve_path(output_dir)
+    computation_cfg = ensure_computation_config(computation_cfg)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording=recording,
@@ -492,6 +494,10 @@ def subtract(
         ensure_coverage=ensure_coverage,
         shuffle=shuffle,
     )
+
+    del subtraction_peeler
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post subtract ({hdf5_filename}):")
+
     return detections
 
 
@@ -518,13 +524,14 @@ def match(
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
     template_data: TemplateData | None = None,
-    template_npz_filename="template_data.npz",
+    template_npz="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
     whitener: SpatialWhitener | None = None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
+    computation_cfg = ensure_computation_config(computation_cfg)
 
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
@@ -550,7 +557,7 @@ def match(
             featurization_cfg=featurization_cfg,
             tsvd=template_denoising_tsvd,
             whitener=whitener,
-            template_npz_path=model_dir / template_npz_filename,
+            template_npz_path=model_dir / template_npz,
         )
         if prev_step_name is not None:
             assert sorting is not None
@@ -560,6 +567,9 @@ def match(
                 output_dir=output_dir,
                 cfg=save_cfg,
             )
+        cleanup_and_log_gpu_usage(
+            computation_cfg, f"Post templates ({model_subdir}/{template_npz}):"
+        )
 
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
@@ -586,6 +596,10 @@ def match(
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
+
+    del matching_peeler
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post match ({hdf5_filename}):")
+
     return sorting
 
 
@@ -644,6 +658,7 @@ def threshold(
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
+    computation_cfg = ensure_computation_config(computation_cfg)
     thresholder = ThresholdAndFeaturize.from_config(
         recording=recording,
         waveform_cfg=waveform_cfg,
@@ -666,6 +681,10 @@ def threshold(
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
+
+    del thresholder
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post threshold ({hdf5_filename}):")
+
     return sorting
 
 
@@ -686,6 +705,7 @@ def cluster(
     _save_refined_name_fmt="refined0{stepname}",
     _save_dir=None,
 ):
+    computation_cfg = ensure_computation_config(computation_cfg)
     if features is None:
         assert clustering_features_cfg is not None
         features = SimpleMatrixFeatures.from_config(
@@ -724,7 +744,6 @@ def cluster(
     )
 
     del features, clusterer
-    gc.collect()
-    torch.cuda.empty_cache()
+    cleanup_and_log_gpu_usage(computation_cfg, "Post cluster:")
 
     return result

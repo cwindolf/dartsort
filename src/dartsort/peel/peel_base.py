@@ -942,6 +942,7 @@ class BasePeeler(BModule):
         overwrite=False,
         chunk_size=1024,
         libver="latest",
+        locking=False,
         residual_to_h5=False,
         skip_features=False,
         known_spike_count: int | None = None,
@@ -961,24 +962,32 @@ class BasePeeler(BModule):
         if exists and overwrite:
             # overwriting, destroy destroy
             output_hdf5_filename.unlink()
-            output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
+            output_h5 = h5py.File(
+                output_hdf5_filename, "w", libver=libver, locking=locking
+            )
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
             output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
             output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
         elif exists and ignore_resuming:
             # ignore the previous chunk structure, don't touch it, ignore ignore.
-            output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
+            output_h5 = h5py.File(
+                output_hdf5_filename, "r+", libver=libver, locking=locking
+            )
             n_spikes = len(output_h5["times_samples"])
         elif exists:
             # exists and possibly resuming
-            output_h5 = h5py.File(output_hdf5_filename, "r+", libver=libver)
+            output_h5 = h5py.File(
+                output_hdf5_filename, "r+", libver=libver, locking=locking
+            )
             n_spikes = len(output_h5["times_samples"])
             # check chunks match, or else what are we even doin!
             _stored_chunks = output_h5["chunk_starts_samples"][:]
             assert np.array_equal(chunk_starts_samples, _stored_chunks)
         else:
             # create create
-            output_h5 = h5py.File(output_hdf5_filename, "w", libver=libver)
+            output_h5 = h5py.File(
+                output_hdf5_filename, "w", libver=libver, locking=locking
+            )
             output_h5.create_dataset("last_chunk_start", data=-1, dtype=np.int64)
             output_h5.create_dataset("last_chunk_index", data=-1, dtype=np.int64)
             output_h5.create_dataset("chunk_starts_samples", data=chunk_starts_samples)
@@ -1055,11 +1064,11 @@ class BasePeeler(BModule):
         try:
             yield output_h5, h5_spike_datasets, residual_file, n_spikes
         finally:
-            self.to("cpu")
             output_h5.close()
             if save_residual:
                 assert residual_file is not None
                 residual_file.close()
+            self.to("cpu")
 
     # -- thread-local rngs. they're not thread safe, and locals can't be pickled
 

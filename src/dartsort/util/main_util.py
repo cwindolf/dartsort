@@ -1,16 +1,19 @@
+import gc
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+import torch
 from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
-    DARTsortInternalConfig,
     ClusteringConfig,
     ClusteringFeaturesConfig,
+    ComputationConfig,
+    DARTsortInternalConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     RefinementConfig,
@@ -381,3 +384,16 @@ def _matching_step_cfgs(
         samp_cfg = cfg.peeler_sampling_cfg
 
     return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
+
+
+def cleanup_and_log_gpu_usage(computation_cfg: ComputationConfig, message=""):
+    dev = computation_cfg.actual_device()
+    gc.collect()
+
+    if dev.type != "cuda":
+        return
+
+    torch.cuda.empty_cache()
+
+    message = f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
+    logger.dartsortdebug(message)

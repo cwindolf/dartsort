@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Sequence, TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from ..util.data_util import DARTsortSorting
@@ -192,11 +193,19 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         # one could implement serialization logic for them, I just didn't
         mix_data.tmm.erp = None
         self.tmm: "TruncatedMixtureModel" = mix_data.tmm
+        # special handling of unmatched neighborhoods
+        self.tmm.neighb_cov.pad_with_extra_neighborhood_for_noise_score_()
         self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.obs_ix.clone())
-        self.workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))[
-            1
-        ]
+        _, self.workers = handle_negative_jobs(
+            computation_cfg.actual_n_jobs(small=True)
+        )
         neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
+        # pad both these to allow unknown neighborhoods
+        # TODO: if this is common, consider reworking candidate logic for inference.
+        # could, for instance, precompute all possible neighborhoods and allow candidates
+        # when neighborhoods are subsets of existing LUT neighborhoods. or, could expand
+        # the search at inference time (like explore steps).
+        neighb_candidates = F.pad(neighb_candidates, (0, 0, 0, 1), value=-1)
         self.register_buffer("neighb_candidates", neighb_candidates)
         self.register_buffer("neighb_candidate_counts", (neighb_candidates >= 0).sum(1))
 
@@ -225,6 +234,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             "neighborhoods",
         ):
             if k in stripped_dict:
+                print(k, stripped_dict[k].shape)
                 self.register_buffer(k, stripped_dict[k])
         neighborhoods = SpikeNeighborhoods(
             self.motion.rgeom.shape[0],
@@ -349,7 +359,7 @@ def neighborhood_mapping_at_time(
     assert index.shape[1] == neighborhoods.shape[1]
     mapping = _outer_all_equal(index, neighborhoods)
     _chans, _chan_nids = mapping.nonzero(as_tuple=True)
-    nid_map = _chans.new_full((channel_index.shape[0],), neighborhoods.shape[0] + 1)
+    nid_map = _chans.new_full((channel_index.shape[0],), neighborhoods.shape[0])
     nid_map[_chans] = _chan_nids
 
     return index, nid_map

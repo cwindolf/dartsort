@@ -12,12 +12,16 @@ from ..util.internal_config import (
     default_waveform_cfg,
     raw_template_cfg,
 )
+from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.spikeio import read_waveforms_channel_index
 from ..util.waveform_util import make_channel_index
 
 if TYPE_CHECKING:
     from .templates import TemplateData
+
+
+logger = get_logger(__name__)
 
 
 def fit_tsvd(
@@ -36,6 +40,7 @@ def fit_tsvd(
     svd_method = template_cfg.svd_method
 
     if svd_method == "collisioncleaned":
+        logger.dartsortdebug(f"Load stored {svd_method=} TSVD.")
         tsvd = load_stored_tsvd(sorting, trim_rank_to=template_cfg.denoising_rank)
         assert isinstance(tsvd, (TruncatedSVD, PCA))
         return tsvd
@@ -51,6 +56,7 @@ def fit_tsvd(
             )
         else:
             td = svd_input_templates
+        logger.dartsortdebug(f"Compute {svd_method=} TSVD.")
         pca = pca_from_templates(
             td,
             rank=template_cfg.denoising_rank,

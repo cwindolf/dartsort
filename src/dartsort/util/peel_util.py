@@ -6,9 +6,9 @@ import torch
 
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from ..peel.peel_base import BasePeeler
-from .job_util import ensure_computation_config
 from .data_util import DARTsortSorting
 from .internal_config import ComputationConfig, FeaturizationConfig
+from .job_util import ensure_computation_config
 from .py_util import resolve_path
 
 

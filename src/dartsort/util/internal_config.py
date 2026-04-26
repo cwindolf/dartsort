@@ -393,7 +393,9 @@ class TemplateRealignmentConfig:
 
 @cfg_dataclass
 class TemplateMergeConfig:
-    distance_kind: Literal["scaled_normeuc", "deconv", "max"] = "scaled_normeuc"
+    distance_kind: Literal[
+        "scaled_normeuc", "deconv", "max", "weighted_scaled_normeuc"
+    ] = "weighted_scaled_normeuc"
     linkage: str = "complete"
     merge_distance_threshold: float = 0.05
     cross_merge_distance_threshold: float = 0.5
@@ -403,10 +405,12 @@ class TemplateMergeConfig:
     amplitude_scaling_boundary: float = 1.0 / 3.0
     svd_compression_rank: int = 10
     max_shift_ms: float = 1.5
+    weighted_dist_min_iou: float = 0.75
+    weighted_dist_radius: float = 100.0
 
     template_cfg: TemplateConfig | None = TemplateConfig()
     waveform_cfg: WaveformConfig = WaveformConfig()
-    whitening: WhiteningConfig = WhiteningConfig(strategy="postwhiten")
+    whitening: WhiteningConfig = WhiteningConfig()
 
     def to_template_config(self, template_cfg: TemplateConfig | None = None):
         if template_cfg is None:
@@ -494,10 +498,12 @@ class RefinementConfig:
 
     # other agglomeration parameters
     qda_link: Literal["single", "complete"] = "single"
-    qda_threshold: float = 0.2
+    qda_uni_score: float = 0.95
+    qda_threshold: float = 0.35
     qda_min_ratio: float = 0.1
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
+    qda_force_merge_for_temp_dist_below: float = 0.25
 
     # forward_backward parameters
     chunk_size_s: float = 300.0

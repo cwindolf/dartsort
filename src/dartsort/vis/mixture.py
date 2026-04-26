@@ -44,7 +44,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
-from .analysis_plots import distance_matrix_dendro
+from .analysis_plots import distance_matrix_dendro, centered_bins, bimod_stats
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
 from .waveforms import geomplot
@@ -98,14 +98,14 @@ class MixtureVisData:
             inu_train.sort()
 
         neighb_ids = self.train_data.neighborhood_ids[inu_train].cpu()
-        chans = self.tmm.neighb_cov.obs_ix.cpu()[neighb_ids]
+        chans = self.tmm.neighb_cov.b.obs_ix.cpu()[neighb_ids]
         return inu_train, chans.numpy(force=True)
 
     def chans_in_radius(self, unit_id: int, radius: float):
         mean = self.tmm.b.means[unit_id].view(self.tmm.neighb_cov.feat_rank, -1)
         my_chan = mean.square().sum(0).argmax()
-        my_xy = self.tmm.neighb_cov.prgeom[my_chan]
-        dxy = self.tmm.neighb_cov.prgeom - my_xy
+        my_xy = self.tmm.neighb_cov.b.prgeom[my_chan]
+        dxy = self.tmm.neighb_cov.b.prgeom - my_xy
         inf_dist = dxy.abs_().amax(dim=1)
         (close,) = (inf_dist < radius).cpu().nonzero(as_tuple=True)
         return close
@@ -168,7 +168,7 @@ class MixtureVisData:
 
     def full_lut_scores(self, show_progress=2, n_candidates=None):
         lut0 = self.tmm.lut
-        lut1 = torch.ones_like(lut0.lut)
+        lut1 = torch.ones_like(lut0.b.lut)
         unit_ids, neighb_ids = lut1.nonzero(as_tuple=True)
         lut1[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0]).to(lut1)
         new_lut = NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut1)
@@ -272,7 +272,7 @@ class ChansHeatmap(MixtureComponentPlot):
         cf0, cf1 = right.subfigures(nrows=2, hspace=0)
         cax0 = cf0.add_axes((0.01, 0.25, 0.2, 0.5))
         cax1 = cf1.add_axes((0.01, 0.25, 0.2, 0.5))
-        xy = mix_data.tmm.neighb_cov.prgeom.numpy(force=True)
+        xy = mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True)
         s = ax.scatter(*xy[support].T, c=ptp, lw=2, s=5)
         plt.colorbar(s, cax=cax1, aspect=20, label="ptp", pad=0.0)
         s = ax.scatter(*xy[uchans].T, c=counts, lw=0, cmap=self.cmap, s=5)
@@ -741,7 +741,7 @@ class MeanView(MixtureComponentPlot):
             alpha=self.alpha,
             ax=ax,
             max_abs_amp=maa,
-            geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+            geom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
             show_zero=self.show_zero,
             linewidth=0.5,
             return_chans=True,
@@ -752,7 +752,7 @@ class MeanView(MixtureComponentPlot):
             waveforms=mean_recon[:, :, pchans],
             channels=pchans[None],
             max_abs_amp=maa,
-            geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+            geom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
             color=glasbey1024[unit_id % len(glasbey1024)],
             ax=ax,
             show_zero=False,
@@ -802,6 +802,7 @@ class CovarianceView(MixtureComponentPlot):
         feat_nan = feat_nan[:, :, chan_set.cpu()]
         feat_nan = feat_nan.view(feat_nan.shape[0], -1)
         # -- with interp
+        assert mix_data.tmm.erp is not None
         feat_interp = mix_data.tmm.erp.interp_to_chans(
             waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
@@ -818,6 +819,7 @@ class CovarianceView(MixtureComponentPlot):
         cov_interp = torch.cov(feat_interp.T)
 
         # noise covariance
+        assert mix_data.tmm.noise is not None
         cov_noise = mix_data.tmm.noise.marginal_covariance(channels=chan_set).to_dense()
         assert cov_noise.shape == cov_interp.shape
 
@@ -999,7 +1001,7 @@ class SplitView(MixtureComponentPlot):
             chans_by_km = {}
             for ll in kmeans_labels.unique():
                 neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == ll]
-                chans_l = mix_data.tmm.neighb_cov.obs_ix[neighbs_l]
+                chans_l = mix_data.tmm.neighb_cov.b.obs_ix[neighbs_l]
                 chans_l = chans_l[chans_l < mix_data.tmm.neighb_cov.n_channels]
                 chans_by_km[ll.item()] = chans_l.numpy(force=True)
         else:
@@ -1427,7 +1429,7 @@ def fit_mixture_for_vis(
         full_inunits=sparsify_labels(full_labels),
         tpca=tpca,
         inf_diag_unit_distance_matrix=dists,
-        prgeom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+        prgeom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
         distance_cache={},
     )
 
@@ -1626,6 +1628,8 @@ def vis_split_interpolation(
 ):
     if erp is None:
         erp = mix_data.tmm.erp
+    assert erp is not None
+    assert mix_data.tmm.noise is not None
 
     split_data = mix_data.train_data.dense_slice_by_unit(
         unit_id,
@@ -1779,7 +1783,7 @@ def vis_obs_interpolation(
     origf = torch.asarray(origf).to(sgeom)
     chans = torch.asarray(mix_data.sorting.channels[fix]).to(channel_index)
     shifts = torch.asarray(-disp).to(sgeom)
-    tchans = mix_data.tmm.neighb_cov.obs_ix[mix_data.train_data.neighborhood_ids[trix]]
+    tchans = mix_data.tmm.neighb_cov.b.obs_ix[mix_data.train_data.neighborhood_ids[trix]]
     for name, erp in (erps or {}).items():
         features[name] = erp.interp(
             features=origf,
@@ -1831,37 +1835,6 @@ def vis_obs_interpolation(
 
 def _bold(x):
     return f"$\\mathbf{{{x}}}$"
-
-
-def centered_bins(x, dx=1.0):
-    if x is None or not x.size:
-        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
-    vm = np.abs(x).max()
-    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
-    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    assert bin_centers.size == bin_edges.size - 1
-    assert bin_centers.size % 2
-    assert vm < min(-bin_centers.min(), bin_centers.max())
-    return bin_edges, bin_centers
-
-
-def bimod_stats(h):
-    assert h.ndim == 1
-    assert h.size % 2
-    cix = h.shape[0] // 2
-    h0 = h[cix]
-    da = h[:cix].max()
-    db = h[cix + 1 :].max()
-    dd = min(da, db)
-    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
-        a = 0.0
-    elif np.isclose(dd, 0.0):
-        a = np.inf
-    else:
-        a = h0 / dd
-    b = h0 / max(da, db)
-    return a, b
 
 
 def fstr(x):

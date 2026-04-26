@@ -342,6 +342,14 @@ class NeighborhoodCovariance(BModule):
         assert self.Cooinv.shape == (nneighb, obsdim, obsdim)
         assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
 
+    def pad_with_extra_neighborhood_for_noise_score_(self):
+        noise_score_keys = ("Linv", "logdet", "nobs")
+        for k in noise_score_keys:
+            v = getattr(self, k)
+            ndim = v.ndim
+            v = F.pad(v, [0, 0] * (ndim - 1) + [0, 1])
+            self.register_buffer(k, v)
+
     @classmethod
     def from_noise_and_neighborhoods(
         cls,
@@ -543,15 +551,15 @@ class LUTParams(BModule):
         if n_lut_new == self.n_lut:
             return
 
-        self.n_lut = n_lut_new
+        self.n_lut = n0 = n_lut_new
 
-        self.b.muo.resize_(n_lut_new, *self.b.muo.shape[1:])
+        self.b.muo.resize_(n0, *self.b.muo.shape[1:])
         self.b.muo.fill_(0.0)
-        self.b.Linvmuo.resize_(n_lut_new, *self.b.Linvmuo.shape[1:])
+        self.b.Linvmuo.resize_(n0, *self.b.Linvmuo.shape[1:])
         self.b.Linvmuo.fill_(0.0)
-        self.b.CmoCooinvmuo.resize_(n_lut_new, *self.b.CmoCooinvmuo.shape[1:])
+        self.b.CmoCooinvmuo.resize_(n0, *self.b.CmoCooinvmuo.shape[1:])
         self.b.CmoCooinvmuo.fill_(0.0)
-        self.b.constplogdet.resize_(n_lut_new, *self.b.constplogdet.shape[1:])
+        self.b.constplogdet.resize_(n0, *self.b.constplogdet.shape[1:])
         self.b.constplogdet.fill_(0.0)
         if not self.signal_rank:
             return
@@ -559,13 +567,13 @@ class LUTParams(BModule):
         assert self.TWoCooinvmuo is not None
         assert self.Tpad is not None
         assert self.wburyroot is not None
-        self.b.TWoCooinvsqrt.resize_(n_lut_new, *self.b.TWoCooinvsqrt.shape[1:])
+        self.b.TWoCooinvsqrt.resize_(n0, *self.b.TWoCooinvsqrt.shape[1:])
         self.b.TWoCooinvsqrt.fill_(0.0)
-        self.b.TWoCooinvmuo.resize_(n_lut_new, *self.b.TWoCooinvmuo.shape[1:])
+        self.b.TWoCooinvmuo.resize_(n0, *self.b.TWoCooinvmuo.shape[1:])
         self.b.TWoCooinvmuo.fill_(0.0)
-        self.b.Tpad.resize_(n_lut_new, *self.b.Tpad.shape[1:])
+        self.b.Tpad.resize_(n0, *self.b.Tpad.shape[1:])
         self.b.Tpad.fill_(0.0)
-        self.b.wburyroot.resize_(n_lut_new, *self.b.wburyroot.shape[1:])
+        self.b.wburyroot.resize_(n0, *self.b.wburyroot.shape[1:])
         self.b.wburyroot.fill_(0.0)
 
     def check(self):

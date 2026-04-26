@@ -249,7 +249,7 @@ class DeveloperConfig(DARTsortUserConfig):
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     cluster_strategy: str = "dpc"
     refinement_strategy: str = "tmm"
-    recluster_after_first_matching: bool = True
+    recluster_after_first_matching: bool = False
 
     # general peeling
     n_waveforms_fit: int = 40_000
@@ -367,7 +367,7 @@ class DeveloperConfig(DARTsortUserConfig):
     agg_no_qda_template_distance: float = 0.2
     agg_qda_linkage: Literal["single", "complete"] = "single"
     agg_template_linkage: Literal["single", "complete"] = "complete"
-    agg_template_whiten_strategy: WhiteningStrategy = "postwhiten"
+    agg_template_whiten_strategy: WhiteningStrategy = "none"
 
     # store extra intermediates@
     save_subtracted_waveforms: bool = False

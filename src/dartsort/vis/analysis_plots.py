@@ -358,6 +358,37 @@ def isi_hist(
     axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
 
+def centered_bins(x, dx=1.0):
+    if x is None or not x.size:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
+    vm = np.abs(x).max()
+    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
+    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    assert bin_centers.size == bin_edges.size - 1
+    assert bin_centers.size % 2
+    assert vm < min(-bin_centers.min(), bin_centers.max())
+    return bin_edges, bin_centers
+
+
+def bimod_stats(h):
+    assert h.ndim == 1
+    assert h.size % 2
+    cix = h.shape[0] // 2
+    h0 = h[cix]
+    da = h[:cix].max()
+    db = h[cix + 1 :].max()
+    dd = min(da, db)
+    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
+        a = 0.0
+    elif np.isclose(dd, 0.0):
+        a = np.inf
+    else:
+        a = h0 / dd
+    b = h0 / max(da, db)
+    return a, b
+
+
 def correlogram(times_a, times_b: np.ndarray | None = None, max_lag=50):
     lags = np.arange(-max_lag, max_lag + 1)
     ccg = np.zeros(len(lags), dtype=int)

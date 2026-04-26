@@ -303,7 +303,7 @@ class TemplateReduction(GrabAndFeaturize):
         if interp_late:
             assert interp is not None
             transformers.append(interp)
-        if template_cfg.whitening == "postwhiten":
+        if template_cfg.whitening.strategy == "postwhiten":
             assert whitener is not None
             transformers.append(
                 WaveformWhitener(

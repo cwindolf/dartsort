@@ -30,8 +30,15 @@ from ..util.spiketorch import (
     best_shared_pconv,
     scaled_normeuc_from_dots,
     shared_temporal_pconv,
+    weighted_best_lagged_scaled_normeuc_dist,
 )
-from .cluster_util import linkage_mask, recluster, sparsify_labels
+from .cluster_util import (
+    linkage_mask,
+    recluster,
+    sparsify_labels,
+    closest_registered_channels,
+)
+from ..util.waveform_util import make_channel_index
 from .mixture import Scores
 
 logger = get_logger(__name__)
@@ -108,15 +115,29 @@ def agglomerate(
         computation_cfg=computation_cfg,
     )
 
-    qda_mask = np.all(
+    coverage_mask = np.logical_and(
+        qda_res.coverage >= refinement_cfg.qda_min_coverage,
+        qda_res.iou >= refinement_cfg.qda_min_iou,
+    )
+    qda_mask_uni = np.logical_and(
+        coverage_mask,
+        qda_res.score >= refinement_cfg.qda_uni_score,
+    )
+    qda_mask_bi = np.all(
         [
-            qda_res.coverage >= refinement_cfg.qda_min_coverage,
-            qda_res.iou >= refinement_cfg.qda_min_iou,
+            coverage_mask,
             qda_res.score >= refinement_cfg.qda_threshold,
             qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
         ],
         axis=0,
     )
+    qda_mask = np.logical_or(qda_mask_uni, qda_mask_bi)
+    force_mask = linkage_mask(
+        tdist.distances,
+        linkage_method=template_merge_cfg.linkage,
+        threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
+    )
+    qda_mask = np.logical_or(qda_mask, force_mask)
     np.fill_diagonal(qda_mask, True)
     assert np.all(qda_mask <= mask)
     qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
@@ -144,6 +165,8 @@ class TemplateDistanceResult:
     shifts: np.ndarray
     r2: np.ndarray
     template_data: TemplateData
+    spatial_weights: np.ndarray | None
+    spatial_iou: np.ndarray | None
 
 
 def template_distances(
@@ -165,6 +188,12 @@ def template_distances(
         raise ValueError(
             "prewhiten_postapply does not make sense for template distance."
         )
+
+    if template_data is not None and template_cfg is not None:
+        if template_merge_cfg.whitening.strategy == "none":
+            assert template_cfg.whitening.strategy in ("none", "prewhiten_postapply")
+        else:
+            assert template_cfg.whitening == template_merge_cfg.whitening
 
     need_whitening = template_merge_cfg.whitening.strategy != "none"
     if template_data is None:
@@ -211,14 +240,6 @@ def template_distances(
     tcomp = torch.asarray(sbt.temporal_components, device=device)
     spatial_sing = torch.asarray(sbt.spatial_singular, device=device)
 
-    need_whiten_mul = template_merge_cfg.whitening.strategy == "postwhiten"
-    if allow_whitening_fail and template_data.whitener is None:
-        need_whiten_mul = False
-    if need_whiten_mul:
-        ww = torch.asarray(template_data.whitener).to(spatial_sing)
-        k, r, c = spatial_sing.shape
-        spatial_sing = (spatial_sing.view(k * r, c) @ ww.T).view(k, r, c)
-
     tconv = shared_temporal_pconv(
         temporal_comps=tcomp, up_temporal_comps=tcomp[:, None]
     )
@@ -236,11 +257,31 @@ def template_distances(
     tconv = tconv[:, :, center - max_shift : center + 1 + max_shift]
     tconv = tconv.contiguous()
 
-    best_conv, best_lag = best_shared_pconv(tconv, spatial_sing)
-
-    # convert conv to distance
+    spatial_weights = spatial_iou = None
     if template_merge_cfg.distance_kind == "scaled_normeuc":
-        dist = scaled_normeuc_from_dots(best_conv)
+        best_conv, best_lag = best_shared_pconv(tconv, spatial_sing)
+        dist = scaled_normeuc_from_dots(
+            best_conv,
+            scale_var=template_merge_cfg.amplitude_scaling_variance,
+            scale_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        )
+    elif template_merge_cfg.distance_kind == "weighted_scaled_normeuc":
+        assert sorting is not None
+        assert motion is not None
+        spatial_weights = count_radial_weights(
+            sorting=sorting,
+            motion=motion,
+            radius=template_merge_cfg.weighted_dist_radius,
+        )
+        dist, best_lag, iou = weighted_best_lagged_scaled_normeuc_dist(
+            tconv=tconv,
+            spatial_sing=spatial_sing,
+            weights=torch.asarray(spatial_weights).to(spatial_sing),
+            scale_var=template_merge_cfg.amplitude_scaling_variance,
+            scale_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        )
+        dist.masked_fill_(iou < template_merge_cfg.weighted_dist_min_iou, torch.inf)
+        spatial_iou = iou.numpy(force=True)
     else:
         raise ValueError(f"{template_merge_cfg.distance_kind=} not implemented.")
 
@@ -250,6 +291,8 @@ def template_distances(
         shifts=best_lag.numpy(force=True),
         r2=cast(np.ndarray, sbt.r2),
         template_data=template_data,
+        spatial_weights=spatial_weights,
+        spatial_iou=spatial_iou,
     )
 
 
@@ -330,7 +373,7 @@ def qda(
 
         results = pool.map(_qda_job, np.c_[ii, jj])
         if show_progress:
-            results = tqdm(results, desc=f"QDA:{n_jobs}")
+            results = tqdm(results, desc=f"QDA:{n_jobs}", total=ii.shape[0])
 
         for _ in results:
             pass
@@ -467,3 +510,40 @@ def bimod_stats(h):
         a = h0 / dd
     b = h0 / max(da, db)
     return a, b
+
+
+def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: float):
+    assert sorting.labels is not None
+    kept = np.flatnonzero(sorting.labels >= 0)
+
+    # which reg chans do the spikes land on?
+    x, z = motion.geom[sorting.channels[kept]].T
+    cc = closest_registered_channels(
+        times_seconds=sorting.times_seconds[kept], x=x, z_abs=z, motion=motion
+    )
+
+    # count by label
+    ll = sorting.labels[kept]
+    counts = np.zeros((ll.max() + 1, motion.rgeom.shape[0]), dtype=np.int64)
+    np.add.at(counts, (ll, cc), 1)
+
+    # get radial neighborhoods
+    ci = make_channel_index(motion.rgeom, radius, to_torch=False)
+
+    # puff out with radial neighborhood and sum up the counts by label
+    weights = np.zeros(counts.shape)
+    for uu in range(counts.shape[0]):
+        row = counts[uu]
+        ii = np.flatnonzero(row)
+        if not ii.size:
+            continue
+        vv = row[ii]
+        vv = vv / vv.sum()
+
+        for channel, value in zip(ii, vv):
+            cixs = ci[channel]
+            cixs = cixs[cixs < motion.rgeom.shape[0]]
+            weights[uu, cixs] += value
+
+    weights /= weights.max(axis=1, keepdims=True)
+    return weights

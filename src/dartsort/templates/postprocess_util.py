@@ -549,8 +549,6 @@ def flag_possible_cc_error_spikes(
     subtraction_cfg: SubtractionConfig,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    from ..util.py_util import timer
-
     times = sorting.times_samples
     channels = sorting.channels
     amps = getattr(sorting, amplitudes_dataset_name)
