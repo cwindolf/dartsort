@@ -37,6 +37,7 @@ from .cluster_util import (
     recluster,
     sparsify_labels,
     closest_registered_channels,
+    reorder_by_depth,
 )
 from ..util.waveform_util import make_channel_index
 from .mixture import Scores
@@ -69,6 +70,9 @@ def agglomerate(
     if template_merge_cfg is None:
         assert refinement_cfg is not None
         template_merge_cfg = refinement_cfg.template_merge_cfg
+
+    if template_data is None:
+        sorting = sorting.flatten()
 
     tdist = template_distances(
         sorting=sorting,
@@ -151,6 +155,8 @@ def agglomerate(
         threshold=0.5,
         link=template_merge_cfg.linkage,
     )
+    agg_sorting = reorder_by_depth(agg_sorting, motion=motion)
+
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
         merge_mapping=new_ids,
@@ -273,6 +279,7 @@ def template_distances(
             motion=motion,
             radius=template_merge_cfg.weighted_dist_radius,
         )
+        assert np.isfinite(spatial_weights).all()
         dist, best_lag, iou = weighted_best_lagged_scaled_normeuc_dist(
             tconv=tconv,
             spatial_sing=spatial_sing,
@@ -552,5 +559,6 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
             cixs = cixs[cixs < motion.rgeom.shape[0]]
             weights[uu, cixs] += value
 
-    weights /= weights.max(axis=1, keepdims=True)
+    denom = weights.max(axis=1, keepdims=True).clip(min=1e-10)  # avoid div by 0
+    weights /= denom
     return weights

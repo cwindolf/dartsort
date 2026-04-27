@@ -340,7 +340,6 @@ class DeveloperConfig(DARTsortUserConfig):
     n_refinement_iters: int = 1
     n_later_refinement_iters: int = 1
     n_em_iters: int = 250
-    channels_strategy: Literal["count", "all"] = "count"
     gmm_cl_alpha: float = 0.05
     gmm_cl_split_only: bool = True
     gmm_em_atol: float = 5e-3
@@ -364,7 +363,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # agglomeration
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"
     agg_qda_max_template_distance: float = 0.6
-    agg_no_qda_template_distance: float = 0.2
+    agg_no_qda_template_distance: float = 0.3
     agg_qda_linkage: Literal["single", "complete"] = "single"
     agg_template_linkage: Literal["single", "complete"] = "complete"
     agg_template_whiten_strategy: WhiteningStrategy = "none"

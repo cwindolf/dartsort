@@ -286,7 +286,6 @@ def visualize_all_sorting_steps(
                     continue
                 if not Path(h5p).stem.startswith("match"):
                     continue
-            assert all(hasattr(step_sorting, fn) for fn in fnames)
             prog.write(f"Vis step  {j}: {step_name}.\n{step_sorting}")
             step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
             visualize_sorting(

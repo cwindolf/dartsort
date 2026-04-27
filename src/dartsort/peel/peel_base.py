@@ -17,7 +17,6 @@ from sympy import divisors
 from tqdm.auto import tqdm
 
 from ..transform import WaveformPipeline
-from ..util import job_util
 from ..util.data_util import (
     SpikeDataset,
     divide_randomly,
@@ -30,7 +29,9 @@ from ..util.internal_config import (
     default_peeling_fit_sampling_cfg,
     default_waveform_cfg,
 )
+from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
+from ..util.main_util import cleanup_and_log_gpu_usage
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule
@@ -132,6 +133,7 @@ class BasePeeler(BModule):
         if self.needs_precompute() or self.needs_fit():
             self.load_models(save_folder)
         if self.needs_precompute() or self.needs_fit():
+            computation_cfg = ensure_computation_config(computation_cfg)
             if self.needs_precompute():
                 self.precompute_models(
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
@@ -142,6 +144,8 @@ class BasePeeler(BModule):
                     save_folder, overwrite=overwrite, computation_cfg=computation_cfg
                 )
             self.save_models(save_folder)
+
+            cleanup_and_log_gpu_usage(computation_cfg, "After model fits:")
         assert not self.needs_precompute()
         assert not self.needs_fit()
 
@@ -276,8 +280,7 @@ class BasePeeler(BModule):
         compute_residual = save_residual or residual_to_h5
         if chunk_length_samples is None:
             chunk_length_samples = self.chunk_length_samples
-        if computation_cfg is None:
-            computation_cfg = job_util.get_global_computation_config()
+        computation_cfg = ensure_computation_config(computation_cfg)
 
         to_cpu = output_hdf5_filename is not None
 
@@ -662,12 +665,10 @@ class BasePeeler(BModule):
     def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
         if self.featurization_pipeline is None:
             return
-
         if not self.featurization_pipeline.needs_fit():
             return
 
-        if computation_cfg is None:
-            computation_cfg = job_util.get_global_computation_config()
+        computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
 
         # disable self's featurization pipeline, replacing it with a waveform

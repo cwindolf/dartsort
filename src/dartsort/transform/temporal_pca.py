@@ -355,9 +355,13 @@ class BaseTemporalPCA(BaseWaveformModule):
             self.register_buffer("_temporal_ix", _temporal_ix)
             nt = self.b._temporal_ix.numel()
         self.nt = nt
-        self.register_buffer("mean", torch.zeros(nt))
-        self.register_buffer("components", torch.zeros(self.rank, nt))
-        self.register_buffer("whitener", torch.zeros(self.rank))
+        if not hasattr(self, "components"):
+            self.register_buffer("mean", torch.zeros(nt))
+            self.register_buffer("components", torch.zeros(self.rank, nt))
+            self.register_buffer("whitener", torch.zeros(self.rank))
+        else:
+            assert self.b.mean.shape == (nt,)
+            assert self.b.components.shape == (self.rank, nt)
         self.to(self.b.channel_index.device)
 
     def initialize_from_sklearn(self, pca, spike_length_samples: int):

@@ -335,6 +335,9 @@ def reorder_by_depth(
 
     units, kept_labels = np.unique(kept_labels, return_inverse=True)
 
+    if geom is None and motion is not None:
+        geom = motion.rgeom
+
     if spatial_footprints is not None:
         assert centroids is None
         assert geom is not None

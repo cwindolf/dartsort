@@ -318,13 +318,21 @@ def weighted_best_lagged_scaled_normeuc_dist(
     assert rank == rank_ == rank__
     lag_offset = conv_len // 2
 
-    d_out = spatial_sing.new_empty((n_units, n_units))
-    lag_out = torch.empty_like(d_out, dtype=torch.int32)
-    iou_out = torch.empty_like(d_out)
+    # initialize so that blanks and diagonal entries (not computed) are correct
+    d_out = spatial_sing.new_full((n_units, n_units), torch.inf)
+    d_out.diagonal().zero_()
+    lag_out = torch.zeros_like(d_out, dtype=torch.int32)
+    iou_out = torch.zeros_like(d_out)
 
     itriu = torch.triu_indices(n_units, n_units, offset=1)
     ii = itriu[0]
     jj = itriu[1]
+
+    not_blank = (weights.sum(1) > 0).cpu()
+    triuvalid = not_blank[ii].logical_and_(not_blank[jj])
+    ii = ii[triuvalid]
+    jj = jj[triuvalid]
+
     ntriu = ii.shape[0]
 
     d_flat = d_out.new_empty((ntriu,))
@@ -402,9 +410,6 @@ def weighted_best_lagged_scaled_normeuc_dist(
     lag_flat -= lag_offset
     lag_out[ii, jj] = lag_flat
     lag_out[jj, ii] = -lag_flat
-
-    lag_out.diagonal().zero_()
-    d_out.diagonal().zero_()
 
     return d_out, lag_out, iou_out
 

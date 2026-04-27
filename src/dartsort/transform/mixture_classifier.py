@@ -1,4 +1,13 @@
-"""Fit and apply the GMM of clustering/mixture.py as a transform node."""
+"""Fit and apply the GMM of clustering/mixture.py as a transform node.
+
+TODO:
+ - I don't love that this depends on the neighborhoods in advance in this way.
+   If there's a new neighborhood encountered in transform(), we should handle
+   that. Could do this by checking all neighborhoods in fit()? Or dropping the
+   precomputation neighb_cov/lut stuff entirely if possible to do that efficiently?
+ - Trim down the TMM. This class should probably just take only what's needed from
+   the TMM (only some bufs used for inference) and toss the rest.
+"""
 
 from dataclasses import replace
 from typing import Sequence, TYPE_CHECKING
@@ -234,7 +243,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             "neighborhoods",
         ):
             if k in stripped_dict:
-                print(k, stripped_dict[k].shape)
                 self.register_buffer(k, stripped_dict[k])
         neighborhoods = SpikeNeighborhoods(
             self.motion.rgeom.shape[0],

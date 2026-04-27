@@ -443,7 +443,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     continue
 
                 # positive if cur is smaller than prev
-                adiff = min(mse_history[:-1]) - mse
+                adiff = min(mse_history[:-1]) - val_loss
                 rdiff = adiff / min(mse_history[:-1])
                 if rdiff < self.convergence_rtol or adiff < self.convergence_atol:
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")

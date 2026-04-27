@@ -503,7 +503,7 @@ class RefinementConfig:
     qda_min_ratio: float = 0.1
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
-    qda_force_merge_for_temp_dist_below: float = 0.25
+    qda_force_merge_for_temp_dist_below: float = 0.3
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -1221,7 +1221,9 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_cfg=template_cfg,
         )
         agg_cfg = RefinementConfig(
-            refinement_strategy="agglomerate", template_merge_cfg=agg_tmcfg
+            refinement_strategy="agglomerate",
+            template_merge_cfg=agg_tmcfg,
+            qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
         )
     else:
         assert False

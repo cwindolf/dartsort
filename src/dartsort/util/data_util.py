@@ -830,6 +830,7 @@ def get_tpca(sorting, name_prefix="collisioncleaned"):
             assert len(v) == 2
             continue
         tpca.register_buffer(k, v)
+    tpca.initialize_spike_length_dependent_params()
 
     return tpca
 

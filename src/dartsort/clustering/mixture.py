@@ -348,7 +348,7 @@ class NeighborhoodCovariance(BModule):
             v = getattr(self, k)
             ndim = v.ndim
             v = F.pad(v, [0, 0] * (ndim - 1) + [0, 1])
-            self.register_buffer(k, v)
+            self.register_buffer(k, v, persistent=False)
 
     @classmethod
     def from_noise_and_neighborhoods(
