@@ -280,7 +280,7 @@ class DeveloperConfig(DARTsortUserConfig):
     min_template_count: int = 20
     template_interp_kind: Literal["tps", "clampna"] = "tps"
     matching_interp_kind: Literal["tps", "clampna"] = "tps"
-    matching_svd_rank: int = 10
+    matching_svd_rank: int = 5
     channel_selection_radius: float | None = argfield(
         default=None, arg_type=float_or_none
     )

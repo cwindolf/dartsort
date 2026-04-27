@@ -201,9 +201,6 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
 
         self.erp: StableFeaturesInterpolator = stable_features.erp
 
-        del mix_data.train_data
-        del mix_data.val_data
-
         # de-puff the lut for space reasons
         mix_data.tmm.lut_params = None
         mix_data.tmm.update_lut(mix_data.tmm.lut, puff=0.0)

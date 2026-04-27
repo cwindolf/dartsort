@@ -687,7 +687,7 @@ class MatchingConfig:
 
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
-    template_svd_compression_rank: int = 10
+    template_svd_compression_rank: int = 5
     up_factor: int = 4
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -706,8 +706,8 @@ class MatchingConfig:
     up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4"
     drift_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     upsampling_compression_map: Literal["yass", "none"] = "yass"
-    whitening: WhiteningConfig = WhiteningConfig()
-    whiten_features: bool = True
+    whitening: WhiteningConfig = WhiteningConfig(strategy="prewhiten_postapply")
+    whiten_features: bool = False
     margin_factor: int = 2
     max_fp_per_input_spike: float = 2.5
 
@@ -816,6 +816,9 @@ default_featurization_cfg = FeaturizationConfig()
 default_subtraction_cfg = SubtractionConfig()
 default_thresholding_cfg = ThresholdingConfig()
 default_template_cfg = TemplateConfig()
+default_matching_template_cfg = TemplateConfig(
+    whitening=WhiteningConfig(strategy="prewhiten_postapply")
+)
 default_clustering_cfg = ClusteringConfig()
 default_clustering_features_cfg = ClusteringFeaturesConfig()
 default_matching_cfg = MatchingConfig()
@@ -842,7 +845,7 @@ class DARTsortInternalConfig:
     initial_detection_cfg: SubtractionConfig | MatchingConfig | ThresholdingConfig = (
         default_subtraction_cfg
     )
-    template_cfg: TemplateConfig = default_template_cfg
+    template_cfg: TemplateConfig = default_matching_template_cfg
     clustering_cfg: ClusteringConfig = default_clustering_cfg
     clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
@@ -1199,7 +1202,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             merge_distance_threshold=cfg.agg_no_qda_template_distance,
             waveform_cfg=waveform_cfg,
             whitening=agg_whiten_cfg,
-            template_cfg=template_cfg,
+            template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
         )
         agg_cfg = RefinementConfig(
             refinement_strategy="agglomerate",
@@ -1218,7 +1221,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             merge_distance_threshold=cfg.agg_qda_max_template_distance,
             waveform_cfg=waveform_cfg,
             whitening=agg_whiten_cfg,
-            template_cfg=template_cfg,
+            template_cfg=replace(template_cfg, whitening=agg_whiten_cfg),
         )
         agg_cfg = RefinementConfig(
             refinement_strategy="agglomerate",
