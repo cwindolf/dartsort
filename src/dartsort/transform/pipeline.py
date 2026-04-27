@@ -342,7 +342,7 @@ class WaveformPipeline(torch.nn.Module):
         from ..util.data_util import DARTsortSorting
         from h5py import File
 
-        if not up_to_index:
+        if up_to_index == 0:
             return
 
         hdf5_filename = resolve_path(hdf5_filename, strict=True)

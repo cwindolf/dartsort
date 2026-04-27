@@ -302,7 +302,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             source_shifts = self.motion.disp_at_s(
                 times_s=t_s.numpy(force=True), depths_um=z
             )
-            source_shifts = torch.asarray(source_shifts, device=waveforms.device)
+            source_shifts = -torch.asarray(source_shifts, device=waveforms.device)
             target_channels = target_channels_map[channels]
             features = self.erp.interp(
                 features=features,

@@ -420,8 +420,10 @@ def _qda_job(ij):
 
     i, j = ij
 
-    ini = p.inus[i]
-    inj = p.inus[j]
+    ini = p.inus.get(i)
+    inj = p.inus.get(j)
+    if ini is None or inj is None:
+        return
     inij = np.concatenate((ini, inj), axis=0)
     overlap, imask, jmask, iou, cov = _ioucov(i, j, ini, inj, inij, p.cand)
     p.iou[i, j] = p.iou[j, i] = iou
