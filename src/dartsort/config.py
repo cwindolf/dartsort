@@ -288,9 +288,9 @@ class DeveloperConfig(DARTsortUserConfig):
     matching_template_min_amplitude: float = 1.0
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     trough_factor: float = 3.0
-    whiten_strategy: WhiteningStrategy = "none"
+    whiten_strategy: WhiteningStrategy = "prewhiten_postapply"
     whiten_estimator: WhiteningEstimator = "localzca"
-    whiten_features: bool = True
+    whiten_features: bool = False
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
     svd_alignment_iterations: int = 0

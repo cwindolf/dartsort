@@ -2780,18 +2780,19 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return scores
 
-    def update_lut(self, lut: NeighborhoodLUT, no_parameter_changes: bool = False):
+    def update_lut(self, lut: NeighborhoodLUT, no_parameter_changes: bool = False, puff: float | None = None):
         if no_parameter_changes and self.lut.eq(lut):
             return
         self.lut = lut
         if self.lut_params is None:
+            puff = puff if puff is not None else self.lut_puff
             self.lut_params = LUTParams.from_lut(
                 self.b.means,
                 self.b.bases,
                 self.neighb_cov,
                 lut,
                 latent_prior_std=self.p.latent_prior_std,
-                puff=self.lut_puff,
+                puff=puff,
             )
         else:
             self.lut_params.update(self.b.means, self.b.bases, self.neighb_cov, lut)

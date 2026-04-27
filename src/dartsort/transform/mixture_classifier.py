@@ -7,14 +7,17 @@ TODO:
    precomputation neighb_cov/lut stuff entirely if possible to do that efficiently?
  - Trim down the TMM. This class should probably just take only what's needed from
    the TMM (only some bufs used for inference) and toss the rest.
+ - Figure out the memory story... seems like this is either taking up a lot of space
+   or preventing torch from freeing stuff due to the fitting process??
 """
 
+import gc
 from dataclasses import replace
-from typing import Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
@@ -23,9 +26,9 @@ from ..util.internal_config import (
     RefinementConfig,
     WaveformConfig,
 )
+from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
-from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from .transform_base import BaseWaveformFeaturizer
 
 if TYPE_CHECKING:
@@ -113,7 +116,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
     def precompute(self):
         if not hasattr(self, "tmm"):
             return
-        self.tmm.update_lut(self.tmm.lut)
+        self.tmm.update_lut(self.tmm.lut, puff=0.0)
 
     def fit(
         self,
@@ -197,6 +200,14 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             self.register_buffer("neighborhood_ids_map", nid_map)
 
         self.erp: StableFeaturesInterpolator = stable_features.erp
+
+        del mix_data.train_data
+        del mix_data.val_data
+
+        # de-puff the lut for space reasons
+        mix_data.tmm.lut_params = None
+        mix_data.tmm.update_lut(mix_data.tmm.lut, puff=0.0)
+
         # these guys are bad for torch.save() with weights only
         # and not needed for inference
         # one could implement serialization logic for them, I just didn't
@@ -209,6 +220,12 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             computation_cfg.actual_n_jobs(small=True)
         )
         neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
+
+        del mix_data
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # pad both these to allow unknown neighborhoods
         # TODO: if this is common, consider reworking candidate logic for inference.
         # could, for instance, precompute all possible neighborhoods and allow candidates
