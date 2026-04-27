@@ -62,17 +62,26 @@ class timer:
     assert np.isclose(tic.dt, 0)
     """
 
-    def __init__(self, name="timer", loglevel=DARTSORTVERBOSE):
+    def __init__(self, name="timer", results_dict=None, loglevel=DARTSORTVERBOSE):
         self.loglevel = loglevel
         self.name = name
+        self.results_dict = results_dict
+
+    def start(self):
+        self.t0 = time.time()
+
+    def stop(self):
+        self.dt = time.time() - self.t0
+        logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
+        if self.results_dict is not None:
+            self.results_dict[self.name] = self.dt
 
     def __enter__(self):
-        self.start = time.time()
+        self.start()
         return self
 
     def __exit__(self, *args):
-        self.dt = time.time() - self.start
-        logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
+        self.stop()
 
 
 class NoKeyboardInterrupt:

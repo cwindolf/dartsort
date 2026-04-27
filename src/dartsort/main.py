@@ -61,7 +61,7 @@ from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
-from .util.py_util import dartcopytree, resolve_path
+from .util.py_util import dartcopytree, resolve_path, timer
 
 logger = get_logger(__name__)
 
@@ -206,7 +206,10 @@ def _dartsort_impl(
     overwrite=False,
 ):
     """Internal helper function which implements dartsort's main logic."""
-    ret = {}
+    ret: dict[str, Any] = {"timing": {}}
+
+    total_timer = timer("total", ret["timing"])
+    total_timer.start()
 
     # are we storing files in the work dir or the output dir?
     store_dir = output_dir if work_dir is None else work_dir
@@ -245,13 +248,14 @@ def _dartsort_impl(
 
     if next_step == 0:
         # first step: initial detection and motion estimation
-        sorting = initial_detection(
-            output_dir=store_dir,
-            recording=recording,
-            cfg=cfg,
-            overwrite=overwrite,
-            motion=motion,
-        )
+        with timer("initial_detection", ret["timing"]):
+            sorting = initial_detection(
+                output_dir=store_dir,
+                recording=recording,
+                cfg=cfg,
+                overwrite=overwrite,
+                motion=motion,
+            )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
         is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
@@ -261,21 +265,22 @@ def _dartsort_impl(
             ret["sorting"] = sorting
             return ret
 
-        if motion is None:
-            logger.dartsortdebug("-- Estimate motion")
-            motion = get_motion_info(
-                output_directory=store_dir,
-                recording=recording,
-                sorting=sorting,
-                detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
-                motion_cfg=cfg.motion_estimation_cfg,
-                computation_cfg=cfg.computation_cfg,
-                sampling_cfg=cfg.peeler_sampling_cfg,
-                waveform_cfg=cfg.waveform_cfg,
-                overwrite=overwrite,
-            )
-        ret["motion"] = motion
-        ds_save_motion(motion, output_dir, work_dir, overwrite)
+        with timer("motion", ret["timing"]):
+            if motion is None:
+                logger.dartsortdebug("-- Estimate motion")
+                motion = get_motion_info(
+                    output_directory=store_dir,
+                    recording=recording,
+                    sorting=sorting,
+                    detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
+                    motion_cfg=cfg.motion_estimation_cfg,
+                    computation_cfg=cfg.computation_cfg,
+                    sampling_cfg=cfg.peeler_sampling_cfg,
+                    waveform_cfg=cfg.waveform_cfg,
+                    overwrite=overwrite,
+                )
+            ret["motion"] = motion
+            ds_save_motion(motion, output_dir, work_dir, overwrite)
 
         if cfg.dredge_only:
             ret["sorting"] = sorting
@@ -287,16 +292,17 @@ def _dartsort_impl(
             cfg.initial_refinement_cfg,
             cfg.post_refinement_cfg,
         ]
-        sorting = cluster(
-            recording,
-            sorting,
-            motion=motion,
-            refinement_cfgs=r_cfgs,
-            clustering_cfg=cfg.clustering_cfg,
-            clustering_features_cfg=cfg.clustering_features_cfg,
-            _save_cfg=cfg,
-            _save_dir=output_dir,
-        )
+        with timer("cluster0", ret["timing"]):
+            sorting = cluster(
+                recording,
+                sorting,
+                motion=motion,
+                refinement_cfgs=r_cfgs,
+                clustering_cfg=cfg.clustering_cfg,
+                clustering_features_cfg=cfg.clustering_features_cfg,
+                _save_cfg=cfg,
+                _save_dir=output_dir,
+            )
         logger.info(f"First clustering: {sorting}")
         ds_save_intermediate_labels(
             step_name="refined0",
@@ -330,45 +336,47 @@ def _dartsort_impl(
         )
 
         logger.dartsortdebug(f"-- Matching {step}")
-        sorting = match(
-            output_dir=store_dir,
-            recording=recording,
-            sorting=sorting,
-            motion=motion,
-            sampling_cfg=samp_cfg,
-            template_cfg=cfg.template_cfg,
-            waveform_cfg=cfg.waveform_cfg,
-            featurization_cfg=step_feat_cfg,
-            matching_cfg=cfg.matching_cfg,
-            overwrite=overwrite,
-            computation_cfg=cfg.computation_cfg,
-            stop_after_n_spikes=_nspk,
-            ensure_coverage=_pres,
-            hdf5_filename=f"matching{step}.h5",
-            model_subdir=f"matching{step}_models",
-            previous_detection_cfg=previous_detection_cfg,
-            prev_step_name=f"refined{step - 1}",
-            save_cfg=cfg,
-        )
+        with timer(f"matching{step}", ret["timing"]):
+            sorting = match(
+                output_dir=store_dir,
+                recording=recording,
+                sorting=sorting,
+                motion=motion,
+                sampling_cfg=samp_cfg,
+                template_cfg=cfg.template_cfg,
+                waveform_cfg=cfg.waveform_cfg,
+                featurization_cfg=step_feat_cfg,
+                matching_cfg=cfg.matching_cfg,
+                overwrite=overwrite,
+                computation_cfg=cfg.computation_cfg,
+                stop_after_n_spikes=_nspk,
+                ensure_coverage=_pres,
+                hdf5_filename=f"matching{step}.h5",
+                model_subdir=f"matching{step}_models",
+                previous_detection_cfg=previous_detection_cfg,
+                prev_step_name=f"refined{step - 1}",
+                save_cfg=cfg,
+            )
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
 
         if is_final and not cfg.final_refinement:
             break
 
-        if step_clus_cfg or step_ref_cfgs is not None and len(step_ref_cfgs):
-            sorting = cluster(
-                recording=recording,
-                sorting=sorting,
-                motion=motion,
-                refinement_cfgs=step_ref_cfgs,
-                clustering_cfg=step_clus_cfg,
-                clustering_features_cfg=step_clfeat_cfg,
-                _save_cfg=cfg,
-                _save_dir=output_dir,
-                _save_initial_name=f"recluster{step}",
-                _save_refined_name_fmt=f"refined{step}{{stepname}}",
-            )
+        with timer(f"cluster{step}", ret["timing"]):
+            if step_clus_cfg or step_ref_cfgs is not None and len(step_ref_cfgs):
+                sorting = cluster(
+                    recording=recording,
+                    sorting=sorting,
+                    motion=motion,
+                    refinement_cfgs=step_ref_cfgs,
+                    clustering_cfg=step_clus_cfg,
+                    clustering_features_cfg=step_clfeat_cfg,
+                    _save_cfg=cfg,
+                    _save_dir=output_dir,
+                    _save_initial_name=f"recluster{step}",
+                    _save_refined_name_fmt=f"refined{step}{{stepname}}",
+                )
         ds_save_intermediate_labels(
             step_name=f"refined{step}",
             step_sorting=sorting,
@@ -387,6 +395,8 @@ def _dartsort_impl(
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting
+
+    total_timer.stop()
 
     return ret
 
