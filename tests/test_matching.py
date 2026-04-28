@@ -132,7 +132,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         cfg_kw["up_method"] = "keys4"
     else:
         assert False
-    matching_cfg = MatchingConfig(**cfg_kw)
+    matching_cfg = MatchingConfig(**cfg_kw, whitening=dartsort.WhiteningConfig())
     matcher = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
         template_data=template_data,
@@ -375,7 +375,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             np.testing.assert_allclose(wf, true_wf, atol=cc_atol, err_msg="ccwf")
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def tiny_up_sim():
     recording_length_samples = 2000
     n_channels = 11
@@ -417,13 +417,22 @@ def tiny_up_sim():
             ]
             trough_shifts.append(np.abs(temp[:, c]).argmax() - trough_offset_samples)
             rec0[
-                t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
+                t - trough_offset_samples : t
+                - trough_offset_samples
+                + spike_length_samples
             ] += temp
         rec0 = si.NumpyRecording(rec0, 30_000)
         rec0.set_dummy_probe_from_locations(geom)
         # rec1 = rec0.save_to_folder(tmp_path / "rec")
 
-        sim[(up_factor, up_offset)] = rec0, templates, no_motion, times, labels, upsampling_indices
+        sim[(up_factor, up_offset)] = (
+            rec0,
+            templates,
+            no_motion,
+            times,
+            labels,
+            upsampling_indices,
+        )
     return sim
 
 
@@ -791,7 +800,9 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
     tempconf = dartsort.TemplateConfig(
         denoising_method="none", registered_templates=False
     )
-    matchconf = dartsort.MatchingConfig(threshold=threshold)
+    matchconf = dartsort.MatchingConfig(
+        threshold=threshold, whitening=dartsort.WhiteningConfig()
+    )
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
@@ -834,7 +845,9 @@ def test_with_simkit(tmp_path, simulations, sim_name, threshold):
             motion=motion,
             template_data=template_data,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
-            matching_cfg=dartsort.MatchingConfig(threshold=threshold),
+            matching_cfg=dartsort.MatchingConfig(
+                threshold=threshold, whitening=dartsort.WhiteningConfig()
+            ),
         )
         print(f"{threshold=} {st=}")
         assert len(st) > 0.9 * len(gt_st)
