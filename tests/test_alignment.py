@@ -372,6 +372,7 @@ def test_matching_alignment_basic(align_sim, align_templates, matchtype):
                 up_factor=1,
                 template_type=matchtype,
                 up_method="keys4" if matchtype == "drifty" else "direct",
+                whitening=dartsort.WhiteningConfig(),
             ),
         )
     gt_st = align_sim["sorting"]
@@ -481,6 +482,7 @@ def test_matching_alignment_upsampled(match_test_sims, up_factor, matchtype, tem
                 template_type=matchtype,
                 up_method="keys4" if matchtype == "drifty" else "direct",
                 template_min_channel_amplitude=0.0,
+                whitening=dartsort.WhiteningConfig(),
             ),
             template_cfg=dartsort.TemplateConfig(template_min_channel_amplitude=0.0),
         )

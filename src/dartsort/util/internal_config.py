@@ -999,6 +999,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_min_channel_amplitude=cfg.matching_template_min_amplitude,
             refractory_radius_frames=cfg.refractory_radius_frames,
             template_svd_compression_rank=cfg.matching_svd_rank,
+            whitening=WhiteningConfig(),  # we don't know how to whiten yet
         )
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")

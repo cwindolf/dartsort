@@ -31,6 +31,7 @@ def scatter_spike_features(
     probe_margin_um=100,
     t_min=-np.inf,
     t_max=np.inf,
+    to_show=None,
     s=1,
     linewidth=0,
     limits="probe_margin",
@@ -103,7 +104,8 @@ def scatter_spike_features(
             if geom is None:
                 geom = h5["geom"][:]
 
-    to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
+    if to_show is None:
+        to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
     if x is not None:
         to_show = to_show[np.isfinite(x[to_show])]
     if depths_um is not None:
@@ -294,6 +296,8 @@ def scatter_time_vs_depth(
                 depths_um = depths_um[:, 2]
         if amplitudes is None:
             amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
+        if labels is None and sorting.labels is not None:
+            labels = sorting.labels
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
@@ -531,6 +535,7 @@ def scatter_feature_vs_depth(
     pad_to_max=False,
     annotate_labels=False,
     label_colors=glasbey1024,
+    c=None,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -580,12 +585,14 @@ def scatter_feature_vs_depth(
         if sorting.labels is not None and sorting.labels.max() > 0:
             labels = sorting.labels
 
-    if labels is None:
+    if c is None and labels is None:
         c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
         amplitude_cmap = plt.get_cmap(amplitude_cmap)
         c = amplitude_cmap(c / amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False
+    elif c is not None:
+        c = plt.get_cmap(amplitude_cmap)(c[to_show])
     else:
         order = np.concatenate(
             (

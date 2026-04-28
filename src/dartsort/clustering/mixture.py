@@ -129,8 +129,6 @@ def tmm_demix(
 
     Infers #units using a cross-validation criterion evaluated over proposed
     splits and merges.
-
-    TODO output the soft assignments as extra features of the returned sorting.
     """
     prog_level = 1 + logger.isEnabledFor(DARTSORTVERBOSE)
 
