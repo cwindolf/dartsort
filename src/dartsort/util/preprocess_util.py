@@ -7,14 +7,15 @@ from .internal_config import PreprocessingStrategy
 preprocessing_strategies = {}
 
 
-def none(rec: BaseRecording) -> BaseRecording:
+def none(rec: BaseRecording, dtype: str) -> BaseRecording:
+    del dtype
     return rec
 
 
 preprocessing_strategies["none"] = none
 
 
-def ibllike(rec: BaseRecording) -> BaseRecording:
+def ibllike(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
     if "inter_sample_shift" in rec._properties:
@@ -30,13 +31,15 @@ def ibllike(rec: BaseRecording) -> BaseRecording:
     rec = si.scale(rec, gain=1.0 / nl)
     rec = si.highpass_spatial_filter(rec)
 
+    rec = rec.astype(dtype)
+
     return rec
 
 
 preprocessing_strategies["ibllike"] = ibllike
 
 
-def ibllikecmr(rec: BaseRecording) -> BaseRecording:
+def ibllikecmr(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
     if "inter_sample_shift" in rec._properties:
@@ -52,6 +55,8 @@ def ibllikecmr(rec: BaseRecording) -> BaseRecording:
     rec = si.scale(rec, gain=1.0 / nl)
     rec = si.common_reference(rec)
 
+    rec = rec.astype(dtype)
+
     return rec
 
 
@@ -59,6 +64,8 @@ preprocessing_strategies["ibllikecmr"] = ibllikecmr
 
 
 def preprocess(
-    rec: BaseRecording, strategy: PreprocessingStrategy = "none"
+    rec: BaseRecording,
+    strategy: PreprocessingStrategy = "none",
+    dtype: str = "float32",
 ) -> BaseRecording:
-    return preprocessing_strategies[strategy](rec)
+    return preprocessing_strategies[strategy](rec, dtype)
