@@ -862,6 +862,7 @@ class DARTsortInternalConfig:
     dredge_only: bool = False
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     preprocessing: PreprocessingStrategy = "none"
+    preprocessing_dtype: Literal["float16", "float32"] = "float32"
     final_refinement: bool = True
     matching_iterations: int = 1
     recluster_after_first_matching: bool = False
@@ -1248,6 +1249,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         motion_estimation_cfg=motion_estimation_cfg,
         computation_cfg=computation_cfg,
         preprocessing=cfg.preprocessing,
+        preprocessing_dtype=cfg.preprocessing_dtype,
         detection_type=cfg.detection_type,
         dredge_only=cfg.dredge_only,
         matching_iterations=cfg.matching_iterations,

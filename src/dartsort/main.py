@@ -123,7 +123,7 @@ def dartsort(
     ds_handle_link_from(cfg, output_dir)
 
     # preprocess
-    recording = preprocess(recording, cfg.preprocessing)
+    recording = preprocess(recording, cfg.preprocessing, cfg.preprocessing_dtype)
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:

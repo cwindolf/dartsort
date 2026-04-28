@@ -41,6 +41,14 @@ class DARTsortUserConfig:
         "whitening is handled internally. See util/preprocess_util.py if you're "
         "curious about the details of the methods.",
     )
+    preprocessing_dtype: Literal["float16", "float32"] = argfield(
+        default="float32",
+        arg_type=str,
+        doc="If you have a lot of data and you're using a workflow where it is important "
+        "to save a preprocessed copy of the recording, float16 is a good option. Only "
+        "relevant if preprocessing != 'none'. If the recording isn't getting saved, "
+        "stick to float32."
+    )
     subsampling_spikes: int | None = argfield(
         default=2_048_000,
         arg_type=int_or_none,
