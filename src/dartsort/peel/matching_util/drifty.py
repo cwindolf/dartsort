@@ -41,7 +41,12 @@ from torch import Tensor
 
 from ...templates import TemplateData
 from ...templates.template_util import shared_basis_compress_templates
-from ...util.internal_config import ComputationConfig, MatchingConfig, WhiteningStrategy, tps_interp_clampna_extrap_params
+from ...util.internal_config import (
+    ComputationConfig,
+    MatchingConfig,
+    WhiteningStrategy,
+    tps_interp_clampna_extrap_params,
+)
 from ...util.interpolation_util import (
     FromFullProbeInterpolator,
     InterpolationParams,
@@ -52,7 +57,7 @@ from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
 from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
-from ...util.spiketorch import shared_temporal_pconv, full_shared_pconv
+from ...util.spiketorch import full_shared_pconv, shared_temporal_pconv
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import (
     ChunkTemplateData,

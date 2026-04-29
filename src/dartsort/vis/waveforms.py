@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Rectangle
-import numpy as np
-import torch
 
 from .colors import glasbey1024
 
@@ -15,7 +15,7 @@ def geomplot(
     max_channels=None,
     channel_index=None,
     channels=None,
-    geom=None,
+    geom: np.ndarray | torch.Tensor,
     ax=None,
     z_extension=1.0,
     x_extension=0.8,
@@ -90,6 +90,8 @@ def geomplot(
                 np.arange(geom.shape[0])[None, :]
                 * np.ones(geom.shape[0], dtype=int)[:, None]
             )
+        assert max_channels is not None
+        assert channel_index is not None
         max_channels = np.atleast_1d(max_channels)
         n_channels, C = channel_index.shape
         assert geom.shape == (n_channels, 2)
@@ -328,11 +330,13 @@ def geomplot_templates(
     maxamp = np.nanmax(np.abs(unit_templates))
 
     if linestyles is None:
-        linestyles = '-' * len(unit_ids)
+        linestyles = "-" * len(unit_ids)
 
     labels = []
     handles = []
-    for uid, color, template, ls in reversed(list(zip(unit_ids, colors, unit_templates, linestyles))):
+    for uid, color, template, ls in reversed(
+        list(zip(unit_ids, colors, unit_templates, linestyles))
+    ):
         lines = geomplot(
             template[None],
             max_channels=[chan],
