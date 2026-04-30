@@ -379,6 +379,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # store extra intermediates@
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
+    always_save_final_tpca_feature: bool = False
     precomputed_templates_npz: str | None = argfield(default=None, arg_type=str_or_none)
     save_everything_on_error: bool = False
     link_from: str | None = argfield(default=None, arg_type=str_or_none)
