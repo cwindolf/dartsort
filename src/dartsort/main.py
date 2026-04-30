@@ -55,6 +55,7 @@ from .util.main_util import (
     ds_save_features,
     ds_save_intermediate_labels,
     ds_save_motion,
+    ds_save_timing,
     motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
@@ -397,6 +398,8 @@ def _dartsort_impl(
     ret["sorting"] = sorting
 
     total_timer.stop()
+    logger.dartsortdebug(f"Timing: {ret['timing']}")
+    ds_save_timing(ret["timing"], output_dir)
 
     return ret
 

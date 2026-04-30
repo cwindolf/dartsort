@@ -1277,8 +1277,7 @@ default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
 unshifted_raw_template_cfg = TemplateConfig(
-    registered_templates=False,
-    denoising_method="none",
+    registered_templates=False, denoising_method="none"
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,

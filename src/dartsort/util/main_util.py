@@ -1,4 +1,5 @@
 import gc
+import json
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -87,8 +88,6 @@ def ds_save_intermediate_labels(
 
 
 def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
-    import json
-
     json_path = output_dir / "_dartsort_internal_config.json"
     with open(json_path, "w") as jsonf:
         json.dump(asdict(internal_cfg), jsonf)
@@ -364,7 +363,9 @@ def _matching_step_cfgs(
     clfeat_cfg = cfg.clustering_features_cfg
 
     if cfg.final_refinement and gmm_as_classifier:
-        still_need_projs_saved = cfg.recluster_after_first_matching
+        still_need_projs_saved = (
+            cfg.recluster_after_first_matching or cfg.always_save_final_tpca_feature
+        )
         feat_cfg = replace(
             cfg.featurization_cfg,
             save_input_tpca_projs=still_need_projs_saved,
@@ -385,6 +386,12 @@ def _matching_step_cfgs(
 
     return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
 
+
+def ds_save_timing(timings: dict[str, float], output_dir: Path):
+    if (output_dir / "timing.json").exists():
+        return
+    with open(output_dir / "timing.json", "w") as jsonf:
+        json.dump(timings, jsonf)
 
 def cleanup_and_log_gpu_usage(computation_cfg: ComputationConfig, message=""):
     dev = computation_cfg.actual_device()

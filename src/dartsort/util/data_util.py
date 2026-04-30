@@ -608,15 +608,15 @@ class DARTsortSorting:
         nu = self.n_units
         unit_str = f"{nu} unit" + "s" * (nu > 1)
         feat_str = " "
-        if self._persistent_features:
-            s = ", ".join(self._persistent_features)
-            feat_str += f"Loaded HDF5 features: {s}. "
         if self._ephemeral_features:
             s = ", ".join(self._ephemeral_features)
-            feat_str += f"Features: {s}. "
+            feat_str += f" Features: {s}."
+        if self._persistent_features:
+            s = ", ".join(self._persistent_features)
+            feat_str += f" HDF5 features: {s}"
         h5_str = ""
         if self.parent_h5_path:
-            h5_str = f"From HDF5 file {self.parent_h5_path}."
+            h5_str = f" from {self.parent_h5_path}."
         if self.labels is not None:
             noise_prop = (self.labels < 0).mean().item()
             noise_pct = 100 * noise_prop
