@@ -171,7 +171,7 @@ def str_or_none(s):
 # files and paths
 
 
-def resolve_path(p: str | Path | Traversable | None, strict=False) -> Path:
+def resolve_path(p: str | Path | Traversable | None, strict=False, mkdir=False, parents=False) -> Path:
     if p is None:
         raise ValueError("Can't resolve path None.")
     if isinstance(p, Traversable):
@@ -180,6 +180,8 @@ def resolve_path(p: str | Path | Traversable | None, strict=False) -> Path:
     p = p.expanduser()
     p = p.absolute()
     p = p.resolve(strict=strict)
+    if mkdir:
+        p.mkdir(parents=parents, exist_ok=True)
     return p
 
 
