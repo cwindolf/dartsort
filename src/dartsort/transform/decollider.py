@@ -7,23 +7,20 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import (
     DataLoader,
-    Dataset,
-    Sampler,
     StackDataset,
     TensorDataset,
 )
 from tqdm.auto import trange
 
-from ..util.spiketorch import reindex, spawn_torch_rg
 from ..util.logging_util import get_logger
+from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
-    BaseMultichannelDenoiser,
-    get_noise,
-    AsyncSameChannelRecordingNoiseDataset,
     AOTIndicesWeightedRandomBatchSampler,
+    AsyncSameChannelRecordingNoiseDataset,
+    BaseMultichannelDenoiser,
     NoneDataset,
+    get_noise,
 )
-
 
 logger = get_logger(__name__)
 
@@ -146,21 +143,23 @@ class Decollider(BaseMultichannelDenoiser):
             return
         self.initialize_shapes()
         if self.exz_estimator in ("n2n", "n3n"):
-            self.eyz = self.get_mlp(
+            self.eyz: torch.nn.Module = self.get_mlp(
                 res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims
             )
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz = self.get_mlp(res_type=self.emz_res_type, output_layer="linear")
+            self.emz: torch.nn.Module = self.get_mlp(
+                res_type=self.emz_res_type, output_layer="linear"
+            )
         if self.inference_kind == "amortized":
-            self.inf_net = self.get_mlp(
+            self.inf_net: torch.nn.Module = self.get_mlp(
                 res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
             )
         if self.separate_cycle_net:
-            self.den_net = self.get_mlp(
+            self.den_net: torch.nn.Module = self.get_mlp(
                 res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
             )
         else:
-            self.den_net = self.inf_net
+            self.den_net: torch.nn.Module = self.inf_net
         self.to(self.device)
 
     def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
@@ -403,7 +402,7 @@ class Decollider(BaseMultichannelDenoiser):
                         output_l1_alpha=self.output_l1_alpha,
                     )
                     loss = sum(loss_dict.values())
-                    loss.backward()  # type: ignore
+                    loss.backward()
                     optimizer.step()
 
                     for k, v in loss_dict.items():
@@ -473,7 +472,7 @@ class Decollider(BaseMultichannelDenoiser):
                     self.step_callback(self, epoch, val_loss)
 
                 # Print loss summary
-                loss_str = f"Train {loss:.4f} " + "|".join(  # type: ignore
+                loss_str = f"Train {loss:.4f} " + "|".join(
                     f"{k}: {v:.3f}" for k, v in train_losses.items()
                 )
                 if val_data is not None:
@@ -482,7 +481,7 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                 pbar.set_description(f"Epochs [{loss_str}]")
 
-                self.step_scheduler(scheduler, loss, val_loss)  # type: ignore
+                self.step_scheduler(scheduler, loss, val_loss)
 
         train_df = pd.DataFrame.from_records(train_records)
         return train_df
@@ -602,9 +601,9 @@ class Decollider(BaseMultichannelDenoiser):
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class DecolliderDataLoader:
     loader: DataLoader
-    sampler: Sampler | None
-    noise_dataset: Dataset
-    cycle_noise_dataset: Dataset | NoneDataset
+    sampler: AOTIndicesWeightedRandomBatchSampler | None
+    noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset
+    cycle_noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
     spike_length_samples: int
 
     def __len__(self):
@@ -625,18 +624,18 @@ class DecolliderDataLoader:
         if hasattr(self.sampler, "refresh"):
             self.sampler.refresh()
             if hasattr(self.noise_dataset, "refresh"):
-                self.noise_dataset.refresh(self.sampler.indices)
+                self.noise_dataset.refresh(self.sampler.indices)  # type: ignore
             if self.cycle_noise_dataset is not None and hasattr(
                 self.cycle_noise_dataset, "refresh"
             ):
-                self.cycle_noise_dataset.refresh(self.sampler.indices)
+                self.cycle_noise_dataset.refresh(self.sampler.indices)  # type: ignore
         else:
             assert not hasattr(self.noise_dataset, "refresh")
 
     def cleanup(self):
         if hasattr(self.noise_dataset, "cleanup"):
-            self.noise_dataset.cleanup()
+            self.noise_dataset.cleanup()  # type: ignore
         if self.cycle_noise_dataset is not None and hasattr(
             self.cycle_noise_dataset, "cleanup"
         ):
-            self.cycle_noise_dataset.cleanup()
+            self.cycle_noise_dataset.cleanup()  # type: ignore

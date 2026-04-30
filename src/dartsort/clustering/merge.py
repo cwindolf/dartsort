@@ -74,7 +74,7 @@ def merge_templates(
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
-        **dist_matrix_kwargs,  # type: ignore
+        **dist_matrix_kwargs,
     )
 
     # now run hierarchical clustering
@@ -172,8 +172,8 @@ def calculate_merge_distances(
 
         tixa = res.template_indices_a
         tixb = res.template_indices_b
-        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms  # type: ignore
-        sup_shifts[tixa, tixb] = res.shifts  # type: ignore
+        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms
+        sup_shifts[tixa, tixb] = res.shifts
 
     units = template_data.unit_ids
     dists = sup_dists
@@ -356,7 +356,7 @@ def get_deconv_resid_decrease_iter(
         amplitude_scaling_boundary=amplitude_scaling_boundary,
         ignore_empty_channels=ignore_empty_channels,
         distance_kind=distance_kind,
-        max_shift=max_shift_samples,  # type: ignore
+        max_shift=max_shift_samples,
         conv_batch_size=conv_batch_size,
         units_batch_size=units_batch_size,
         device=device,
@@ -377,7 +377,7 @@ def combine_templates(template_data_a, template_data_b):
     ids_a = template_data_a.unit_ids
     ids_b = template_data_b.unit_ids + ids_a.max() + 1
     unit_ids = np.concatenate((ids_a, ids_b))
-    templates = np.row_stack((template_data_a.templates, template_data_b.templates))
+    templates = np.concatenate((template_data_a.templates, template_data_b.templates), axis=0)
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )

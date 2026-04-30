@@ -255,7 +255,7 @@ def iterate_compressed_pairwise_convolutions(
         ignore_empty_channels=ignore_empty_channels,
     )
 
-    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)  # type: ignore
+    n_jobs, Executor, context, rank_queue = get_pool(n_jobs, with_rank_queue=True)
     with Executor(
         n_jobs,
         mp_context=context,
@@ -445,13 +445,13 @@ def conv_to_resid(
 
         if distance_kind in ("scaled_normeuc", "deconv"):
             if amplitude_scaling_variance:
-                norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda  # type: ignore
+                norm_reduction = 2.0 * scaling * b - np.square(scaling) * a - inv_lambda
             else:
                 norm_reduction = 2.0 * best_conv - template_b_norms[j]
             deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
             # deconv_resid_norms[j] /= template_a_norms[j]
         elif distance_kind == "max":
-            deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()  # type: ignore
+            deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()
             # deconv_resid_norms[j] /= np.abs(ta[j]).max()
         else:
             assert False
