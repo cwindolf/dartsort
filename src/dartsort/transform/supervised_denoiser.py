@@ -6,13 +6,12 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from tqdm.auto import trange
 
-
+from ..util import waveform_util
 from ._multichan_denoiser_kit import (
+    AsyncBatchDataset,
     BaseMultichannelDenoiser,
     RefreshableDataLoader,
-    AsyncBatchDataset,
 )
-from ..util import waveform_util
 
 
 class SupervisedDenoiser(BaseMultichannelDenoiser):

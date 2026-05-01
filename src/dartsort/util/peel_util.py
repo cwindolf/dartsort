@@ -9,7 +9,7 @@ from ..peel.peel_base import BasePeeler
 from .data_util import DARTsortSorting
 from .internal_config import ComputationConfig, FeaturizationConfig
 from .job_util import ensure_computation_config
-from .py_util import resolve_path
+from .py_util import resolve_path, timer
 
 
 def run_peeler(
@@ -65,11 +65,12 @@ def run_peeler(
     _ensure_torch_linalg(computation_cfg)
 
     # fit models if needed
-    peeler.load_or_fit_and_save_models(
-        model_dir, overwrite=overwrite, computation_cfg=computation_cfg
-    )
-    if fit_only:
-        return
+    with timer(f"model fits ({peeler.__class__.__name__})"):
+        peeler.load_or_fit_and_save_models(
+            model_dir, overwrite=overwrite, computation_cfg=computation_cfg
+        )
+        if fit_only:
+            return
 
     # run main
     n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
@@ -80,32 +81,34 @@ def run_peeler(
         n_resid_now = 0
     else:
         n_resid_now = n_resid_snips
-    peeler.peel(
-        output_hdf5_filename,
-        chunk_starts_samples=chunk_starts_samples,
-        overwrite=overwrite,
-        residual_filename=residual_filename,
-        show_progress=show_progress,
-        computation_cfg=computation_cfg,
-        total_residual_snips=n_resid_now,
-        stop_after_n_waveforms=stop_after_n_spikes,
-        ensure_coverage=ensure_coverage,
-        shuffle=is_subsampling or shuffle,
-    )
-    if n_resid_now == 0 and n_resid_snips > 0:
-        peeler.run_subsampled_peeling(
+    with timer(f"peel ({peeler.__class__.__name__})"):
+        peeler.peel(
             output_hdf5_filename,
-            chunk_length_samples=peeler.spike_length_samples,
-            residual_to_h5=True,
-            skip_features=True,
-            ignore_resuming=True,
+            chunk_starts_samples=chunk_starts_samples,
+            overwrite=overwrite,
+            residual_filename=residual_filename,
+            show_progress=show_progress,
             computation_cfg=computation_cfg,
-            n_chunks=n_resid_snips,
-            task_name="Residual snips",
-            overwrite=False,
-            ordered=True,
-            skip_last=True,
+            total_residual_snips=n_resid_now,
+            stop_after_n_waveforms=stop_after_n_spikes,
+            ensure_coverage=ensure_coverage,
+            shuffle=is_subsampling or shuffle,
         )
+    if n_resid_now == 0 and n_resid_snips > 0:
+        with timer(f"residuals ({peeler.__class__.__name__})"):
+            peeler.run_subsampled_peeling(
+                output_hdf5_filename,
+                chunk_length_samples=peeler.spike_length_samples,
+                residual_to_h5=True,
+                skip_features=True,
+                ignore_resuming=True,
+                computation_cfg=computation_cfg,
+                n_chunks=n_resid_snips,
+                task_name="Residual snips",
+                overwrite=False,
+                ordered=True,
+                skip_last=True,
+            )
 
     # do localization
     if do_localization_later:

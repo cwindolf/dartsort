@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Self, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, cast
 
 import h5py
 import linear_operator
@@ -387,7 +387,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
             assert obj.isfinite().all()
 
             # find peaks...
-            peak_times, peak_units, peak_energies = detect_and_deduplicate(  # type: ignore
+            peak_times, peak_units, peak_energies = detect_and_deduplicate(
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
@@ -593,15 +593,15 @@ class EmbeddedNoise(BModule):
             assert channels_targ.ndim == 1
 
         if self.cov_kind == "factorized":
-            rank_root = self.b.rank_vt.T * self.b.rank_std  # type: ignore
-            rank_cov = cast(Tensor, rank_root @ rank_root.T)
+            rank_root = self.b.rank_vt.T * self.b.rank_std
+            rank_cov = rank_root @ rank_root.T
             rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
             x = rank_cov.bmm(x)
 
-            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std  # type: ignore
+            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std
             chan_root_right = (
                 self.b.channel_vt_zpad.T[channels_targ] * self.b.channel_std
-            )  # type: ignore
+            )
             if chan_root_right.ndim == 2:
                 targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
                 chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
@@ -616,7 +616,7 @@ class EmbeddedNoise(BModule):
                 channels_src == self.n_channels, -2, channels_src
             )
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
-            chan_cov = eyes * self.b.global_std**2  # type: ignore
+            chan_cov = eyes * self.b.global_std**2
             return x.bmm(chan_cov)
         elif self.cov_kind == "full":
             # this branch is for debugging. it is slow.
@@ -624,8 +624,8 @@ class EmbeddedNoise(BModule):
                 channels_targ = channels_targ[None, :].broadcast_to(
                     (n, channels_targ.numel())
                 )
-            cov_zpad = F.pad(self.full_cov, (0, 1, 0, 0, 0, 1))[None]  # type: ignore
-            cov = cov_zpad.take_along_dim(  # type: ignore
+            cov_zpad = F.pad(self.b.full_cov, (0, 1, 0, 0, 0, 1))[None]
+            cov = cov_zpad.take_along_dim(
                 indices=channels_src[:, None, :, None, None], dim=2
             )
             assert cov.shape == (
@@ -703,7 +703,7 @@ class EmbeddedNoise(BModule):
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
                 if not isinstance(fcov, operators.ConstantDiagLinearOperator):
-                    fcov = operators.CholLinearOperator(fcov.cholesky())  # type: ignore
+                    fcov = operators.CholLinearOperator(fcov.cholesky())
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
@@ -866,10 +866,10 @@ class EmbeddedNoise(BModule):
         global_std = global_var.sqrt()
 
         if cov_kind == "scalar":
-            return cls(mean=mean, global_std=global_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, **init_kw)  # type: ignore
 
         if cov_kind == "by_rank":
-            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)  # type: ignore
 
         if cov_kind == "diagonal":
             full_var = torch.where(
@@ -878,7 +878,7 @@ class EmbeddedNoise(BModule):
                 full_var,
             )
             full_std = full_var.sqrt()
-            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)  # type: ignore
 
         if cov_kind == "full":
             x = x.view(n, rank * n_channels)
@@ -888,7 +888,7 @@ class EmbeddedNoise(BModule):
             assert torch.is_tensor(vcov)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
-            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
+            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)  # type: ignore
 
         assert cov_kind.startswith("factorized")
         # handle rank part first, then the spatial part
@@ -1045,7 +1045,7 @@ class EmbeddedNoise(BModule):
             channel_std=channel_std,
             channel_vt=channel_vt,
             zero_radius=zero_radius,
-            **init_kw,
+            **init_kw,  # type: ignore
         )
 
     @classmethod
@@ -1161,8 +1161,8 @@ def generate_interpolated_residual_snippets(
     show_progress=True,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from . import data_util, interpolation_util
     from ..transform import BaseTemporalPCA
+    from . import data_util, interpolation_util
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"

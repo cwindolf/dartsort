@@ -26,7 +26,9 @@ def ibllike(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = si.common_reference(rec)
 
     nl = si.get_noise_levels(
-        rec, return_in_uV=False, seed=0, num_chunks_per_segment=100
+        rec,
+        return_in_uV=False,
+        random_slices_kwargs=dict(seed=0, num_chunks_per_segment=100),
     )
     rec = si.scale(rec, gain=1.0 / nl)
     rec = si.highpass_spatial_filter(rec)
@@ -50,7 +52,9 @@ def ibllikecmr(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = si.common_reference(rec)
 
     nl = si.get_noise_levels(
-        rec, return_in_uV=False, seed=0, num_chunks_per_segment=100
+        rec,
+        return_in_uV=False,
+        random_slices_kwargs=dict(seed=0, num_chunks_per_segment=100),
     )
     rec = si.scale(rec, gain=1.0 / nl)
     rec = si.common_reference(rec)

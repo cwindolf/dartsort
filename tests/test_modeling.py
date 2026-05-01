@@ -1,18 +1,17 @@
 from itertools import product
+
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
 
-
 from dartsort.clustering import mixture
-from dartsort.util.internal_config import RefinementConfig, ClusteringFeaturesConfig
+from dartsort.util.internal_config import ClusteringFeaturesConfig, RefinementConfig
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
+from dartsort.util.motion import MotionInfo
 from dartsort.util.spiketorch import spawn_torch_rg
 from dartsort.util.testing_util import mixture_testing_util
-from dartsort.util.motion import MotionInfo
-
 
 logger = get_logger(__name__)
 
@@ -182,6 +181,8 @@ def test_truncated_mixture(
                     unit_id, gen=tmm.rg, min_count=tmm.p.min_count, labels=train_labels
                 )
                 assert split_data is not None
+                assert tmm.erp is not None
+                assert tmm.noise is not None
                 kmeans_responsibliities, *_ = mixture.try_kmeans(
                     data=split_data,
                     k=kmeansk,

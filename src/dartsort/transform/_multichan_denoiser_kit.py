@@ -1,19 +1,17 @@
-from threading import Thread
 from queue import Queue
+from threading import Thread
 
 import h5py
+import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, Sampler, DataLoader
-import numpy as np
+from torch.utils.data import DataLoader, Dataset, Sampler
 
-from .transform_base import BaseWaveformDenoiser
-from ..util.waveform_util import regularize_channel_index
-from ..util.spiketorch import get_relative_index, reindex
+from ..util import nn_util, spikeio
 from ..util.logging_util import get_logger
-from ..util import nn_util
-from ..util import spikeio
-
+from ..util.spiketorch import get_relative_index, reindex
+from ..util.waveform_util import regularize_channel_index
+from .transform_base import BaseWaveformDenoiser
 
 logger = get_logger(__name__)
 
@@ -123,7 +121,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             f"Initialize {self.__class__.__name__} with {self.spike_length_samples=}."
         )
         # we don't know these dimensions til we see a spike
-        self.wf_dim = self.spike_length_samples * self.model_channel_index.shape[1]
+        assert self.spike_length_samples is not None
+        self.wf_dim = self.spike_length_samples * self.b.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
     def get_optimizer(self):
@@ -183,7 +182,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             output_layer = "gated_linear" if self.signal_gates else "linear"
         return nn_util.get_waveform_mlp(
             self.spike_length_samples,
-            self.model_channel_index.shape[1],
+            self.b.model_channel_index.shape[1],
             self.hidden_dims,
             self.output_dim,
             norm_kind=self.norm_kind,
@@ -208,7 +207,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         return reindex(channels, waveforms, self.irrelative_index)
 
     def get_masks(self, channels):
-        return self.model_channel_index[channels] < self.n_channels
+        return self.b.model_channel_index[channels] < self.n_channels
 
     # -- these two below are used for storing pretrained net weights
 
@@ -435,7 +434,9 @@ class AOTIndicesRefreshableDataLoader(RefreshableDataLoader):
         epoch_size=None,
     ):
         if in_order:
-            self.sampler = AOTIndicesWeightedRandomBatchSampler(
+            sampler = AOTIndicesInOrderBatchSampler(len(dataset), batch_size=batch_size)
+        else:
+            sampler = AOTIndicesWeightedRandomBatchSampler(
                 len(dataset),
                 weights=weights,
                 replacement=replacement,
@@ -443,16 +444,12 @@ class AOTIndicesRefreshableDataLoader(RefreshableDataLoader):
                 generator=generator,
                 epoch_size=epoch_size,
             )
-        else:
-            self.sampler = AOTIndicesInOrderBatchSampler(
-                len(dataset), batch_size=batch_size
-            )
-        super().__init__(dataset, sampler=self.sampler)
+        super().__init__(dataset, sampler=sampler)
 
     def refresh(self):
-        self.sampler.refresh()
+        self.sampler.refresh()  # type: ignore
         if hasattr(self.dataset, "refresh"):
-            self.dataset.refresh(indices)
+            self.dataset.refresh(self.indices)  # type: ignore
 
 
 class AsyncBatchDataset(RefreshableDataset):
@@ -543,9 +540,10 @@ class AsyncBatchDataset(RefreshableDataset):
 class AsyncSameChannelNoiseDataset(AsyncBatchDataset):
     def __init__(
         self,
+        *,
         channel_index,
         n_examples=None,
-        channels=None,
+        channels,
         spike_length_samples=121,
         generator=None,
         chunk_size=2048,
@@ -626,7 +624,7 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
         assert self._dataset.ndim == 3
         assert self._dataset.shape[2] == len(channel_index)
         self.noise_snip_len = self._dataset.shape[1]
-        self.nsnips = len(self._datasset)
+        self.nsnips = len(self._dataset)
         self._tix_rel = torch.arange(spike_length_samples)
         self._tix_max = self.noise_snip_len - spike_length_samples
 

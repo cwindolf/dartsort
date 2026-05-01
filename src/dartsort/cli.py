@@ -1,9 +1,10 @@
 import argparse
-import spikeinterface.core as sc
 import logging
 
-from .util import cli_util
+import spikeinterface.core as sc
+
 from . import config, main
+from .util import cli_util
 
 
 def dartsort_cli():

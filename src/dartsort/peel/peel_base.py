@@ -807,7 +807,7 @@ class BasePeeler(BModule):
 
     def run_subsampled_peeling(
         self,
-        hdf5_filename,
+        hdf5_filename: str | Path,
         chunk_length_samples=None,
         n_chunks: int | None = None,
         residual_to_h5=False,
@@ -857,7 +857,7 @@ class BasePeeler(BModule):
             stop_after_n_waveforms = self.fit_sampling_cfg.max_waveforms_fit
 
         return self.peel(
-            hdf5_filename,
+            output_hdf5_filename=hdf5_filename,
             chunk_starts_samples=chunk_starts,
             chunk_length_samples=chunk_length_samples,
             stop_after_n_waveforms=stop_after_n_waveforms,
@@ -873,19 +873,23 @@ class BasePeeler(BModule):
             shuffle=chunk_starts is None,
         )
 
-    def save_models(self, save_folder):
-        if self.featurization_pipeline is not None:
-            Path(save_folder).mkdir(exist_ok=True)
-            torch.save(
-                self.featurization_pipeline.state_dict(),
-                Path(save_folder) / "featurization_pipeline.pt",
-            )
+    def save_models(self, save_folder: str | Path):
+        if self.featurization_pipeline is None:
+            return
 
-    def load_models(self, save_folder):
+        save_folder = Path(save_folder)
+        save_folder.mkdir(exist_ok=True)
+        torch.save(
+            self.featurization_pipeline.state_dict(),
+            save_folder / "featurization_pipeline.pt",
+        )
+
+    def load_models(self, save_folder: str | Path):
+        save_folder = Path(save_folder)
         if not save_folder.exists():
             return
 
-        feats_pt = Path(save_folder) / "featurization_pipeline.pt"
+        feats_pt = save_folder / "featurization_pipeline.pt"
         if feats_pt.exists():
             assert self.featurization_pipeline is not None
             state_dict = torch.load(feats_pt)
@@ -893,7 +897,7 @@ class BasePeeler(BModule):
 
     def check_resuming(
         self,
-        output_hdf5_filename,
+        output_hdf5_filename: str | Path,
         chunk_starts_samples: np.ndarray,
         stop_after_n_waveforms: int | None = None,
         ensure_coverage: float | None = None,
@@ -937,7 +941,7 @@ class BasePeeler(BModule):
     @contextmanager
     def initialize_files(
         self,
-        output_hdf5_filename,
+        output_hdf5_filename: str | Path | None,
         chunk_starts_samples: np.ndarray,
         residual_filename=None,
         overwrite=False,

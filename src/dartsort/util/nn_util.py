@@ -116,14 +116,14 @@ class UNetLinear(nn.Module):
         self.blocks_in = nn.ModuleList()
         self.blocks_out = nn.ModuleList()
 
-        inner_gated = nonlinearity = torch.nn.GLU
+        inner_gated = nonlinearity == torch.nn.GLU
 
         *in_dims, middle_dim = half_hidden_dims
         out_dims = in_dims[::-1]
 
         current_dim = input_dim
         out_dims_in = []
-        for out_dim in half_hiddden_dims:
+        for out_dim in half_hidden_dims:
             block_layers = []
             block_layers.append(nn.Linear(current_dim, (1 + inner_gated) * out_dim))
             norm = get_norm((1 + inner_gated) * out_dim, norm_kind)
@@ -147,7 +147,7 @@ class UNetLinear(nn.Module):
             cat_dim = out_dims_in.pop()
             current_dim = current_dim + cat_dim
 
-            block_layers = [Cat()]
+            block_layers: list[nn.Module] = [Cat()]
             block_layers.append(nn.Linear(current_dim, (1 + inner_gated) * out_dim))
             norm = get_norm((1 + inner_gated) * out_dim, norm_kind)
             if norm is not None:
@@ -184,6 +184,8 @@ def get_mlp(
     if isinstance(nonlinearity, str):
         nonlinearity = getattr(torch.nn, nonlinearity)
     gated = nonlinearity == torch.nn.GLU
+
+    out_dim = -1
 
     if res_type == "blocks_concat":
         current_dim = input_dim
@@ -334,7 +336,6 @@ def get_norm(n_features, norm_kind=None):
 
 
 class ResidualForm(nn.Module):
-
     def __init__(self, module):
         super().__init__()
         self.module = module

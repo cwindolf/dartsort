@@ -194,7 +194,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             _chans, _chan_nids = ci_eq_neighb.nonzero(as_tuple=True)
             nid_map = _chans.new_full(
                 (self.b.channel_index.shape[0],),
-                mix_data.tmm.neighb_cov.obs_ix.shape[0] + 1,
+                mix_data.tmm.neighb_cov.b.obs_ix.shape[0] + 1,
             )
             nid_map[_chans] = _chan_nids
             self.register_buffer("neighborhood_ids_map", nid_map)
@@ -212,7 +212,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.tmm: "TruncatedMixtureModel" = mix_data.tmm
         # special handling of unmatched neighborhoods
         self.tmm.neighb_cov.pad_with_extra_neighborhood_for_noise_score_()
-        self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.obs_ix.clone())
+        self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.b.obs_ix.clone())
         _, self.workers = handle_negative_jobs(
             computation_cfg.actual_n_jobs(small=True)
         )

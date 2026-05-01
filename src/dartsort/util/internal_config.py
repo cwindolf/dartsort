@@ -883,6 +883,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
+    always_save_final_tpca_feature: bool = False
     save_everything_on_error: bool = False
 
 
@@ -1268,6 +1269,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         link_step=cfg.link_step,
         subsampling_spikes=cfg.subsampling_spikes,
         subsampling_presence=cfg.subsampling_presence,
+        always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
     )
 
 
@@ -1275,8 +1277,7 @@ default_dartsort_cfg = DARTsortInternalConfig()
 
 # configs which are commonly used for specific tasks
 unshifted_raw_template_cfg = TemplateConfig(
-    registered_templates=False,
-    denoising_method="none",
+    registered_templates=False, denoising_method="none"
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
