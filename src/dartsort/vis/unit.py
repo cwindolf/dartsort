@@ -151,7 +151,7 @@ class XZScatter(UnitPlot):
         if axis is None:
             axis = panel.subplots()
 
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         assert sorting_analysis.x is not None
         assert sorting_analysis.amplitudes is not None
         x = sorting_analysis.x[in_unit]
@@ -249,7 +249,7 @@ class TimeFeatScatter(UnitPlot):
         axis = panel.subplots()
         assert sorting_analysis.times_seconds is not None
         assert sorting_analysis.amplitudes is not None
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None

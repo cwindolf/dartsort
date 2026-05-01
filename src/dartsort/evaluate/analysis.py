@@ -97,6 +97,7 @@ class DARTsortAnalysis:
         ),
         clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
         computation_cfg: ComputationConfig | None = None,
+        allow_qda: bool = True,
         vis_radius: float = 50.0,
         vis_neighborhood_p: float = np.inf,
     ):
@@ -165,7 +166,7 @@ class DARTsortAnalysis:
             trough_offset_samples = spike_length_samples = 0
             coarse_template_data = merge_distances = merge_lags = merge_r2 = None
 
-        if template_data is not None and hasattr(sorting, "gmm_candidates"):
+        if allow_qda and template_data is not None and hasattr(sorting, "gmm_candidates"):
             assert sorting.labels is not None
             c0 = sorting.gmm_candidates[:, 0]
             lk = np.flatnonzero(sorting.labels >= 0)
@@ -280,9 +281,13 @@ class DARTsortAnalysis:
             spike_counts=spike_counts,
         )
 
-    def in_unit(self, unit_id):
+    def in_unit(self, unit_id, at_most: int | None = None):
         assert self.sorting.labels is not None
-        return np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        m = np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        if bool(at_most) and (at_most < m.shape[0]):
+            m = np.random.default_rng(0).choice(m, size=at_most, replace=False)
+            m.sort()
+        return m
 
     def in_template(self, template_index):
         template_indices = getattr(self.sorting, "template_inds", None)

@@ -44,6 +44,7 @@ def visualize_sorting(
     make_versus=True,
     analysis=None,
     single_unit_ids=None,
+    allow_qda=True,
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -113,6 +114,7 @@ def visualize_sorting(
         gt_comparison_with_distances=gt_comparison_with_distances,
         n_units=n_units,
         single_unit_ids=single_unit_ids,
+        allow_qda=allow_qda,
     )
     sum_png, unit_sum_dir, comp_png, unit_comp_dir, vs_png, mix_dir = paths_or_nones
 
@@ -217,6 +219,7 @@ def visualize_all_sorting_steps(
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     gt_comparison_with_distances=True,
+    allow_qda=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
     step_name_filter: Callable | None = None,
@@ -304,6 +307,7 @@ def visualize_all_sorting_steps(
                 gt_analysis=gt_analysis,
                 other_analyses=other_analyses,
                 n_units=n_units,
+                allow_qda=allow_qda,
                 single_unit_ids=single_unit_ids,
                 exhaustive_gt=exhaustive_gt,
                 gt_comparison_with_distances=gt_comparison_with_distances,
@@ -380,6 +384,7 @@ def _plan_vis(
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     exhaustive_gt=True,
+    allow_qda=True,
     gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
@@ -488,6 +493,7 @@ def _plan_vis(
             name=sorting_name,
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,
+            allow_qda=allow_qda,
         )
 
     if make_mixture_summaries is None and hasattr(sorting, "gmm_candidates"):
