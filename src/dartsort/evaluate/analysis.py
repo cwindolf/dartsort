@@ -128,9 +128,7 @@ class DARTsortAnalysis:
             can_reload = sorting.has_persistent_labels()
             if can_reload and sorting._has_dataset("template_inds"):
                 assert sorting.labels is not None
-                can_reload = np.array_equal(
-                    sorting.labels, sorting.template_inds
-                )
+                can_reload = np.array_equal(sorting.labels, sorting.template_inds)
             if can_reload and template_npz.exists():
                 logger.info(f"Reloading templates from {template_npz}...")
                 template_data = TemplateData.from_npz(template_npz)
@@ -166,7 +164,11 @@ class DARTsortAnalysis:
             trough_offset_samples = spike_length_samples = 0
             coarse_template_data = merge_distances = merge_lags = merge_r2 = None
 
-        if allow_qda and template_data is not None and hasattr(sorting, "gmm_candidates"):
+        if (
+            allow_qda
+            and template_data is not None
+            and hasattr(sorting, "gmm_candidates")
+        ):
             assert sorting.labels is not None
             c0 = sorting.gmm_candidates[:, 0]
             lk = np.flatnonzero(sorting.labels >= 0)

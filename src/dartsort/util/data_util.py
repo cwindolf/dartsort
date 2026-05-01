@@ -824,9 +824,9 @@ def get_tpca(sorting, name_prefix="collisioncleaned"):
     prefix = f"transformers.{ix}."
     params = {k.removeprefix(prefix): v for k, v in d.items() if k.startswith(prefix)}
     for k, v in params.items():
-        if  k == '_extra_state':
-            tpca.spike_length_samples = v['spike_length_samples']
-            tpca._needs_fit = v['needs_fit']
+        if k == "_extra_state":
+            tpca.spike_length_samples = v["spike_length_samples"]
+            tpca._needs_fit = v["needs_fit"]
             assert len(v) == 2
             continue
         tpca.register_buffer(k, v)
@@ -974,33 +974,25 @@ def get_top_assignment_weights(
     raise NotImplementedError  # TODO
 
 
-def explode_soft_assignment_sorting(
+def merged_responsibilities(
     sorting: DARTsortSorting,
     responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
-) -> DARTsortSorting:
-    """Convert a hard-assigned sorting to a soft-assigned one
-
-    Each spike will be represented multiple times, once in each
-    unit that supports it in the soft assignment candidates array.
-    There will be a "soft_assignment_weight" feature attached to
-    the output sorting.
-    """
-    from .spiketorch import entropy
-
+):
+    print('hi')
     labels = sorting.labels
-    assert labels is not None
-    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+    assert labels is not None, "0"
 
     candidates = cast(np.ndarray, getattr(sorting, candidates_key))
     responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+    assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
 
     notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
     clabels = np.where(notnoise, candidates[:, 0], -1)
 
     lvalid = labels >= 0
     cvalid = clabels >= 0
-    assert np.array_equal(lvalid, cvalid)
+    assert np.array_equal(lvalid, cvalid), "2"
 
     Klabel = labels.max() + 1
     Kcand = candidates.max() + 1
@@ -1015,7 +1007,7 @@ def explode_soft_assignment_sorting(
     luniq, lcount = np.unique(lc[:, 0], return_counts=True)
     luniq_check = np.unique(labels)
     luniq_check = luniq_check[luniq_check >= 0]
-    assert np.array_equal(luniq_check, luniq)
+    assert np.array_equal(luniq_check, luniq), "3"
     mergedl = luniq[lcount > 1]
     mergedr = responsibilities[:, : candidates.shape[1]].copy()
     for ll in mergedl:
@@ -1035,6 +1027,34 @@ def explode_soft_assignment_sorting(
         c[sixu, cix[sixfirst]] = ll
         mergedr[sixu, cix[sixfirst]] = wsum
 
+    return dict(K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c)
+
+
+def explode_soft_assignment_sorting(
+    sorting: DARTsortSorting,
+    responsibilities_key="gmm_responsibilities",
+    candidates_key="gmm_candidates",
+) -> DARTsortSorting:
+    """Convert a hard-assigned sorting to a soft-assigned one
+
+    Each spike will be represented multiple times, once in each
+    unit that supports it in the soft assignment candidates array.
+    There will be a "soft_assignment_weight" feature attached to
+    the output sorting.
+    """
+    from .spiketorch import entropy
+
+    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+
+    mgr = merged_responsibilities(
+        sorting,
+        responsibilities_key=responsibilities_key,
+        candidates_key=candidates_key,
+    )
+    mergedr = mgr["merged_responsibilities"]
+    c = mgr["merged_candidates"]
+    Klabel = mgr["K"]
+
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
     # okay, having deduplicated, we are now ready to explode
@@ -1047,6 +1067,7 @@ def explode_soft_assignment_sorting(
     times_samples = sorting.times_samples[spike_ix]
 
     # store weight as a feature
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
     feats = dict(
         soft_assignment_weight=mergedr[spike_ix, candidate_ix],
         times_seconds=t_s[spike_ix],
@@ -1071,7 +1092,7 @@ def candidates_to_labels(clabels, labels, Klabel, Kcand):
     lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
     lc = lc[(lc >= 0).all(axis=1)]
     # each candidate only appears once -- it is a merge.
-    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1]), "ctol"
     ctol = np.full((Kcand + 1,), fill_value=Klabel)
     ctol[lc[:, 1]] = lc[:, 0]
     return lc, ctol

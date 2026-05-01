@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import string
-from typing import Literal
 import warnings
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -272,12 +272,12 @@ class DARTsortGroundTruthComparison:
         self._template_distances = dists
 
     def _calculate_greedy_confusion_and_detection(self):
-        from ..evaluate.hybrid_util import greedy_match_counts
-
         if self._unsorted_detection is not None:
             return
         if self.verbose:
             print("Calculate unsorted detection...")
+        from dartsort.evaluate.hybrid_util import greedy_match_counts
+
         frames_per_ms = self.gt_analysis.recording.sampling_frequency / 1000
         delta_frames = self.delta_time * frames_per_ms
         greedy_res = greedy_match_counts(
@@ -352,6 +352,81 @@ class DARTsortGroundTruthComparison:
                 only_tested_indices
             ],
         )
+
+    def tp_spike_matching(self):
+        """
+        Returns
+        -------
+        tested_index_of_gt: np.ndarray
+            tested_index_of_gt[i] is the index of the matching tested spike for the ith
+            gt spike
+        gt_index_of_tested: np.ndarray
+            gt_index_of_tested[i] is the index of the matching gt spike for the ith
+            tested spike
+        """
+        assert self.gt_analysis.sorting.labels is not None
+        assert self.tested_analysis.sorting.labels is not None
+        assert self.comparison.hungarian_match_12 is not None
+        tested_index_of_gt = np.full_like(self.gt_analysis.sorting.labels, -1)
+        gt_index_of_tested = np.full_like(self.tested_analysis.sorting.labels, -1)
+
+        for gt_unit_id in self.gt_analysis.unit_ids:
+            tested_unit_id = self.comparison.hungarian_match_12[gt_unit_id]
+            if tested_unit_id < 0:
+                continue
+
+            in_gt_unit = np.flatnonzero(self.gt_analysis.sorting.labels == gt_unit_id)
+            gt_labels = self.comparison.get_labels1(gt_unit_id)[0]
+            assert gt_labels.shape == in_gt_unit.shape, 1
+
+            in_tested_unit = np.flatnonzero(
+                self.tested_analysis.sorting.labels == tested_unit_id
+            )
+            tested_labels = self.comparison.get_labels2(tested_unit_id)[0]
+            assert tested_labels.shape == in_tested_unit.shape, 2
+
+            gt_tp_ix = in_gt_unit[gt_labels == "TP"]
+            tested_tp_ix = in_tested_unit[tested_labels == "TP"]
+            assert gt_tp_ix.shape == tested_tp_ix.shape, 3
+
+            tested_index_of_gt[gt_tp_ix] = tested_tp_ix
+            gt_index_of_tested[tested_tp_ix] = gt_tp_ix
+
+        return tested_index_of_gt, gt_index_of_tested
+
+    def spike_matching(self, fn_method="none"):
+        tested_index_of_gt, gt_index_of_tested = self.tp_spike_matching()
+        if fn_method == "none":
+            pass
+        elif fn_method == "nearest":
+            from ..evaluate.hybrid_util import greedy_match_counts
+
+            gt_fn = np.flatnonzero(tested_index_of_gt < 0)
+            tested_fn = np.flatnonzero(gt_index_of_tested < 0)
+            gt_sorting_fn = self.gt_analysis.sorting.mask(gt_fn)
+            tested_sorting_fn = self.tested_analysis.sorting.mask(tested_fn)
+            frames_per_ms = self.gt_analysis.recording.sampling_frequency / 1000
+            delta_frames = int(self.delta_time * frames_per_ms)
+            greedy_res = greedy_match_counts(
+                gt_sorting_fn, tested_sorting_fn, radius_frames=delta_frames
+            )
+            gtfn_index_of_testedfn = greedy_res["test2gt_spike"]
+
+            testedfn_index_of_gtfn = np.full_like(gt_fn, -1)
+            testedix = np.flatnonzero(gtfn_index_of_testedfn >= 0)
+            gtix = gtfn_index_of_testedfn[testedix]
+            testedfn_index_of_gtfn[gtix] = testedix
+
+            assert tested_fn.shape == gtfn_index_of_testedfn.shape, 1
+            assert gt_fn.shape == testedfn_index_of_gtfn.shape, 2
+            tmask = testedfn_index_of_gtfn >= 0
+            tested_index_of_gt[gt_fn[tmask]] = testedfn_index_of_gtfn[tmask]
+
+            gmask = gtfn_index_of_testedfn >= 0
+            gt_index_of_tested[tested_fn[gmask]] = gtfn_index_of_testedfn[gmask]
+        else:
+            assert False
+        return tested_index_of_gt, gt_index_of_tested
 
     def get_greedy_correspondence_in_si_match(self):
         tlabels = self.tested_analysis.sorting.labels
