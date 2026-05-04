@@ -179,7 +179,7 @@ def smoothed_dipscore_at(
             else:
                 assert False
 
-            dens = dens[order]  # type: ignore
+            dens = dens[order]
             if null not in ("isotonic", "isotoniconesideunnormed"):
                 dens /= (dens * spacings).sum()
 

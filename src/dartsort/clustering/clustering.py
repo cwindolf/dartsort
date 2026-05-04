@@ -322,7 +322,7 @@ class DensityPeaksClusterer(Clusterer):
         assert clustering_cfg is not None
         computation_cfg = ensure_computation_config(computation_cfg)
         uhdversion = clustering_cfg.cluster_strategy == "density_peaks_uhdversion"
-        workers = handle_negative_jobs(computation_cfg.actual_n_jobs(small=True))[1]
+        workers = handle_negative_jobs(computation_cfg.n_jobs_small)[1]
         return cls(
             knn_k=clustering_cfg.knn_k,
             sigma_local=clustering_cfg.sigma_local,

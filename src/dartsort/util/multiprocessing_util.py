@@ -1,12 +1,12 @@
-from concurrent.futures import CancelledError, ProcessPoolExecutor
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 import multiprocessing
 import os
-from multiprocessing import get_context
 import queue
+from concurrent.futures import CancelledError, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from multiprocessing import get_context
 
-from .job_util import ensure_computation_config
 from .internal_config import ComputationConfig
+from .job_util import ensure_computation_config
 
 have_cloudpickle = False
 cloudpickle = None
@@ -135,10 +135,11 @@ def pool_from_cfg(
     with_rank_queue=False,
     check_local=False,
     small: bool = False,
+    cpu: bool = False,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
     return get_pool(
-        computation_cfg.actual_n_jobs(small=small),
+        computation_cfg.actual_n_jobs(small=small, cpu=cpu),
         cls=computation_cfg.executor,
         with_rank_queue=with_rank_queue,
         check_local=check_local,

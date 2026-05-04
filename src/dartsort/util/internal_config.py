@@ -787,8 +787,8 @@ class ComputationConfig:
             return torch.device("cpu")
         return torch.device(self.device)
 
-    def actual_n_jobs(self, small: bool = False):
-        if self.actual_device().type == "cpu":
+    def actual_n_jobs(self, small: bool = False, cpu: bool = False):
+        if cpu or self.actual_device().type == "cpu":
             if small:
                 return self.n_jobs_small
             else:

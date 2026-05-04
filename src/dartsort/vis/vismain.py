@@ -1,7 +1,7 @@
 import warnings
 from logging import getLogger
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,7 +43,7 @@ def visualize_sorting(
     make_mixture_summaries=None,
     make_versus=True,
     analysis=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
     allow_qda=True,
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
@@ -174,6 +174,15 @@ def visualize_sorting(
         fig.savefig(vs_png, dpi=dpi)
         plt.close(fig)
 
+    if unit_sum_dir is not None or mix_dir is not None:
+        if single_unit_ids == "gtrelevant":
+            assert gt_cmp is not None
+            single_unit_ids = gt_cmp.relevant_tested_units()
+        elif single_unit_ids == "existing":
+            single_unit_ids = []
+            for pngp in unit_sum_dir.glob("unit*.png"):
+                single_unit_ids.append(int(pngp.stem.removeprefix("unit")))
+
     if unit_sum_dir is not None:
         unit.make_all_summaries(
             analysis,
@@ -233,7 +242,7 @@ def visualize_all_sorting_steps(
     exhaustive_gt=True,
     start_from_matching=False,
     n_units=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
     stop_after=None,
     dpi=200,
     overwrite=False,
@@ -248,8 +257,16 @@ def visualize_all_sorting_steps(
     if motion is None:
         motion = try_load_motion_info(dartsort_dir, motion_pkl)
 
-    fnames = ["times_seconds", "geom", "channel_index", "template_inds"]
-    if make_scatterplots or make_sorting_summaries:
+    fnames = [
+        "times_seconds",
+        "geom",
+        "channel_index",
+        "template_inds",
+        "gmm_candidates",
+        "gmm_log_liks",
+        "gmm_responsibilities",
+    ]
+    if make_scatterplots or make_sorting_summaries or make_unit_summaries:
         fnames += [
             "point_source_localizations",
             amplitudes_dataset_name,
@@ -390,7 +407,7 @@ def _plan_vis(
     computation_cfg=None,
     seed=0,
     n_units=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -405,7 +422,12 @@ def _plan_vis(
     is_labeled = sorting.n_units > 1
 
     if is_labeled:
-        if single_unit_ids is not None:
+        if single_unit_ids == "gtrelevant":
+            check_ids = sorting.unit_ids
+        elif single_unit_ids == "existing":
+            assert overwrite
+            check_ids = []
+        elif single_unit_ids is not None:
             check_ids = single_unit_ids
         elif n_units:
             check_ids = sorting.unit_ids
@@ -443,6 +465,7 @@ def _plan_vis(
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
         need_comp = overwrite or not comparison_png.exists()
+        need_comp = need_comp or (single_unit_ids == "gtrelevant" and need_summaries)
         need_analysis = need_analysis or need_comp
         need_comparison = need_comparison or need_comp
         if not need_comp:
@@ -458,7 +481,7 @@ def _plan_vis(
             # TODO: unit_comparison.all_summaries_done
             assert gt_analysis is not None
             need_ucomps = not unit.all_summaries_done(
-                single_unit_ids or gt_analysis.sorting.unit_ids,
+                gt_analysis.sorting.unit_ids,
                 unit_comparison_dir,
                 sorting_analysis=gt_analysis,
                 namebyamp=True,
@@ -502,6 +525,8 @@ def _plan_vis(
         lk = np.flatnonzero(sorting.labels >= 0)
         is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
         make_mixture_summaries = is_gmm
+        if is_gmm:
+            logger.info("Will make GMM plots.")
     elif make_mixture_summaries is None:
         make_mixture_summaries = False
 

@@ -13,9 +13,9 @@ from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
+from KDEpy import FFTKDE
 from matplotlib.legend_handler import HandlerTuple
 from tqdm.auto import tqdm
-from KDEpy import FFTKDE
 
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
 from ..util.job_util import get_global_computation_config
@@ -23,11 +23,11 @@ from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, ge
 from . import layout
 from .analysis_plots import (
     bar,
+    bimod_stats,
+    centered_bins,
     correlogram,
     isi_hist,
     plot_correlogram,
-    centered_bins,
-    bimod_stats,
 )
 from .colors import glasbey1024
 from .waveforms import geomplot, geomplot_templates
@@ -849,14 +849,14 @@ def default_plots(sorting_analysis=None):
         ACG(),
         ISIHistogram(),
         XZScatter(),
-        TimeZScatter(),
-        TimeRegZScatter(),
         TimeAmpScatter(),
         RawWaveformPlot(),
         NearbyCoarseTemplatesPlot(),
         CoarseTemplateDistancePlot(),
         NeighborCCGPlot(),
     ]
+    if sorting_analysis is not None and sorting_analysis.has_localizations():
+        p.extend([TimeZScatter(), TimeRegZScatter()])
     if sorting_analysis is not None and sorting_analysis.has_pca():
         p.extend([PCAScatter(), TPCAWaveformPlot()])
     if sorting_analysis is not None and sorting_analysis.qda is not None:

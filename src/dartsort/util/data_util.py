@@ -364,7 +364,11 @@ class DARTsortSorting:
         load_all_features : bool
         """
         h5_path = resolve_path(h5_path, strict=True)
-        logger.dartsortdebug("Read features %s from %s", load_feature_names, h5_path)
+        if load_feature_names is None:
+            _lfn = []
+        else:
+            _lfn = [str(fn) for fn in load_feature_names]
+        logger.dartsortdebug("Read features %s from %s", _lfn, h5_path)
 
         with h5py.File(h5_path, "r", libver="latest", locking=False) as h5:
             times_samples = cast(h5py.Dataset, h5[times_samples_dataset])[:]

@@ -639,6 +639,11 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = conf[gt_neighb_ids][:, tested_neighb_ids]
             conf_rows = gt_neighb_ids
             conf_cols = tested_neighb_ids
+        elif self.confusion_kind == "greedyprec":
+            conf = comparison.greedy_prec
+            conf = conf[gt_neighb_ids][:, tested_neighb_ids]
+            conf_rows = gt_neighb_ids
+            conf_cols = tested_neighb_ids
         else:
             assert False
 
@@ -660,7 +665,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             keep = conf_cols < comparison.tested_analysis.sorting.n_units
             tested_neighb_ids = tested_neighb_ids[keep]
             conf_cols = conf_cols[keep]
-            
+
             conf_cols = col_order[conf_cols]
             # sometimes a nearest template has no spikes. sad but true.
             conf_cols_found = tested_neighb_ids == conf_cols
@@ -903,7 +908,9 @@ def _get_default_unit_comparison_plots():
         NearbyTemplatesDistanceMatrix(),
         # NearbyTemplatesConfusionMatrix(),
         NearbyTemplatesConfusionMatrix(confusion_kind="siagreement"),
-        NearbyTemplatesConfusionMatrix(confusion_kind="greedy"),
+        NearbyTemplatesConfusionMatrix(
+            confusion_kind="greedyprec", neighbor_method="greedy"
+        ),
         NearbyTemplatesConfusionMatrix(
             neighbor_method="siagreement", confusion_kind="siagreement"
         ),

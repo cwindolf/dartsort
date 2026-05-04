@@ -322,6 +322,9 @@ class DARTsortAnalysis:
         else:
             return self.sorting.slice_feature_by_name(fname, mask=which)
 
+    def has_localizations(self):
+        return self.x is not None
+
     def has_pca(self):
         return self.sorting._has_dataset(self.tpca_features_dset)
 

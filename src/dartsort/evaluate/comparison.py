@@ -174,6 +174,15 @@ class DARTsortGroundTruthComparison:
         self._calculate_greedy_confusion_and_detection()
         return self._greedy_prec
 
+    def relevant_tested_units(self, gt_unit_id: int | None = None, threshold=0.05):
+        if gt_unit_id is None:
+            tested_units = set()
+            for gt_unit_id in self.gt_analysis.unit_ids:
+                tested_units.update(self.relevant_tested_units(gt_unit_id=gt_unit_id))
+            return tested_units
+        ag = self.agreement_scores.loc[gt_unit_id]
+        return ag.index[ag.values >= threshold]
+
     def unit_collidedness(self):
         uids = self.gt_analysis.sorting.unit_ids
         c = np.full(len(uids), np.nan)
