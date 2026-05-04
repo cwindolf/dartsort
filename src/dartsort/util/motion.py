@@ -1,5 +1,5 @@
-from dataclasses import replace
 import pickle
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, cast
 
@@ -8,20 +8,20 @@ from dredge.motion_util import MotionEstimate
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
-from torch import Tensor, is_tensor, asarray
+from torch import Tensor, asarray, is_tensor
 
 if TYPE_CHECKING:
     from .data_util import DARTsortSorting
 from .drift_util import get_pitch, registered_geometry
 from .internal_config import (
     ComputationConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
     MotionEstimationConfig,
     WaveformConfig,
-    FitSamplingConfig,
-    FeaturizationConfig,
     default_motion_estimation_cfg,
-    default_waveform_cfg,
     default_peeling_fit_sampling_cfg,
+    default_waveform_cfg,
 )
 from .job_util import ensure_computation_config
 from .py_util import databag, resolve_path

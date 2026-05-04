@@ -736,7 +736,7 @@ class MotionEstimationConfig:
     spatial_bin_length_um: float = 1.0
     temporal_bin_length_s: float = 1.0
     window_step_um: float = 400.0
-    window_scale_um: float = 450.0
+    window_scale_um: float = 600.0
     window_margin_um: float | None = argfield(default=None, arg_type=float)
     max_dt_s: float = 500.0
     max_disp_um: float | None = argfield(
@@ -754,7 +754,7 @@ class MotionEstimationConfig:
         doc="Motion bins exceeding this speed will be replaced by interpolation.",
     )
     max_dist_from_median_um: float = argfield(
-        default=500.0,
+        default=250.0,
         arg_type=float,
         doc="Motion bins farther than this from the local median will be replaced by interpolation.",
     )

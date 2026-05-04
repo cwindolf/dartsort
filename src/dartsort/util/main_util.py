@@ -179,7 +179,9 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if link_denoising:
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
-        link_patterns.extend(["subtraction.h5", "motion.pkl", "subtraction_models"])
+        link_patterns.extend(
+            ["subtraction.h5", "motion.pkl", "motionthreshold.h5", "subtraction_models"]
+        )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
     if link_matching1:
@@ -192,6 +194,9 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
             targ.parent.mkdir(exist_ok=True)
             if targ.exists():
                 logger.dartsortdebug(f"{targ} exists, won't link.")
+                continue
+            if not src.exists():
+                logger.dartsortdebug(f"{src} doesn't exist, won't link.")
                 continue
             logger.dartsortdebug(f"Link {targ} -> {src}.")
             targ.symlink_to(src)
@@ -392,6 +397,7 @@ def ds_save_timing(timings: dict[str, float], output_dir: Path):
         return
     with open(output_dir / "timing.json", "w") as jsonf:
         json.dump(timings, jsonf)
+
 
 def cleanup_and_log_gpu_usage(computation_cfg: ComputationConfig, message=""):
     dev = computation_cfg.actual_device()

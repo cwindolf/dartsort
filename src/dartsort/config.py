@@ -220,7 +220,7 @@ class DARTsortUserConfig:
     spatial_bin_length_um: Annotated[float, Field(gt=0)] = 1.0
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
-    window_scale_um: Annotated[float, Field(gt=0)] = 450.0
+    window_scale_um: Annotated[float, Field(gt=0)] = 600.0
     window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
         default=None, arg_type=float_or_none
     )
