@@ -84,6 +84,9 @@ ignore = ["F722"]
 [tool.ty.src]
 include = ["src", "tests"]
 
+[tool.ty.analysis]
+replace-imports-with-any = ["hdbscan"]
+
 [tool.ty.rules]
 "unsupported-base" = "ignore"
 "invalid-key" = "ignore"

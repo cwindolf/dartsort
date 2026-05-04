@@ -32,14 +32,14 @@ from ..util.spiketorch import (
     shared_temporal_pconv,
     weighted_best_lagged_scaled_normeuc_dist,
 )
+from ..util.waveform_util import make_channel_index
 from .cluster_util import (
+    closest_registered_channels,
     linkage_mask,
     recluster,
-    sparsify_labels,
-    closest_registered_channels,
     reorder_by_depth,
+    sparsify_labels,
 )
-from ..util.waveform_util import make_channel_index
 from .mixture import Scores
 
 logger = get_logger(__name__)

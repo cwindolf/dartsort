@@ -1,21 +1,15 @@
 import numpy as np
 from scipy.signal import find_peaks
-from scipy.stats import norm
 
 from . import density
-
-try:
-    from isosplit import up_down_isotonic_regression, jisotonic5  # type: ignore
-except ImportError:
-    up_down_isotonic_regression = lambda *a, **k: None
-    jisotonic5 = None
-    pass
 
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
 
 
 def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     """Unimodal to the right of cut, increasing to the left. Continuity at the border."""
+    from isosplit import jisotonic5, up_down_isotonic_regression  # type: ignore
+
     assert jisotonic5 is not None
     if weights is None:
         weights = np.ones_like(f)
@@ -50,6 +44,8 @@ def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
 
 def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
     """Like above, but fits truncated normal to xs > cut with MoM."""
+    from scipy.stats import norm
+
     if weights is None:
         weights = np.ones_like(f)
 
@@ -115,6 +111,8 @@ def smoothed_dipscore_at(
     null="isotoniconesideunnormed",
     debug_info=None,
 ):
+    from isosplit import up_down_isotonic_regression  # type: ignore
+
     if samples.size < 3:
         return 0.0
 

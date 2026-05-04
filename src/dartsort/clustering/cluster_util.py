@@ -1,16 +1,9 @@
 from typing import cast
 
 import h5py
-
-try:
-    from hdbscan import HDBSCAN
-except ImportError:
-    from sklearn.cluster import HDBSCAN
-
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
-from sklearn.neighbors import KNeighborsClassifier
 
 from ..util import data_util, waveform_util
 from ..util.data_util import DARTsortSorting
@@ -420,6 +413,11 @@ def recursive_hdbscan_clustering(
     cluster_selection_epsilon=1,
     recursive=True,
 ):
+    try:
+        from hdbscan import HDBSCAN
+    except ImportError:
+        from sklearn.cluster import HDBSCAN
+
     clusterer = HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -459,6 +457,8 @@ def recursive_hdbscan_clustering(
 
 
 def knn_reassign_outliers(labels, features):
+    from sklearn.neighbors import KNeighborsClassifier
+
     outliers = labels < 0
     outliers_idx = np.flatnonzero(outliers)
     if not outliers_idx.size:

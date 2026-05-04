@@ -5,13 +5,10 @@ import numba
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
-from scipy.stats import bernoulli
 from torch import Tensor
 from tqdm.auto import tqdm, trange
 
@@ -89,6 +86,8 @@ def get_smoothed_density(
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
     histogram is liable to be way too big.
     """
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.ndimage import gaussian_filter
     # figure out what bandwidths we'll be working on
 
     if do_ramp := bool(sigma_low):
@@ -1058,6 +1057,7 @@ def _density_peaks_clustering_uhd_implementation(
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
+    from scipy.stats import bernoulli
     # n = len(X)
 
     if ramp_triage_before_clustering and geom is not None:

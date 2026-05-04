@@ -6,7 +6,6 @@ from typing import Self, cast
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.stats import norm
 from spikeinterface.core import BaseRecording
 from torch import Tensor
 
@@ -520,6 +519,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return fine_peaks
 
     def pick_threshold(self):
+        from scipy.stats import norm
+
         # TODO: remove?
         if self.is_scaling and self.p.amplitude_scaling_variance < torch.inf:
             # adjust threshold by the scaling prior's constant term

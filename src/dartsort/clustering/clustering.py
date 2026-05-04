@@ -1,13 +1,11 @@
 import gc
-from typing import Literal, Self, Sequence, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, Self, Sequence, cast
 
 import numpy as np
 import sklearn.cluster
 import torch
 from spikeinterface.core import BaseRecording
 
-from ..util.job_util import ensure_computation_config
-from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.data_util import DARTsortSorting, chunk_time_ranges, fit_reweighting
 from ..util.internal_config import (
     ClusteringConfig,
@@ -17,8 +15,10 @@ from ..util.internal_config import (
     WaveformConfig,
     default_waveform_cfg,
 )
+from ..util.job_util import ensure_computation_config
 from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
+from ..util.multiprocessing_util import handle_negative_jobs
 from . import agglomerate, cluster_util, density, forward_backward, mixture, refine_util
 from .clustering_features import SimpleMatrixFeatures, StableWaveformFeatures
 
