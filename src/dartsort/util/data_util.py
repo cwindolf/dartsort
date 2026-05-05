@@ -722,6 +722,8 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
     elif f.name.endswith(".npz"):
         st = DARTsortSorting.load(f)
+    elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
+        st = DARTsortSorting.load(f / "dartsort_sorting.npz")
     else:
         raise ValueError(f"Not sure how to load {f}.")
 
