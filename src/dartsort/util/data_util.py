@@ -715,13 +715,21 @@ class DARTsortSorting:
             return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
-def load_h5(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
     f = resolve_path(f, strict=True)
-    st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
+
+    if f.name.endswith(".h5"):
+        st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
+    elif f.name.endswith(".npz"):
+        st = DARTsortSorting.load(f)
+    else:
+        raise ValueError(f"Not sure how to load {f}.")
+
     if labels_stem:
         labels_npy = f.parent / f"{labels_stem}.npy"
         if labels_npy.exists():
             st = st.ephemeral_replace(labels=np.load(labels_npy))
+
     return st
 
 
@@ -983,7 +991,7 @@ def merged_responsibilities(
     responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
 ):
-    print('hi')
+    print("hi")
     labels = sorting.labels
     assert labels is not None, "0"
 
@@ -1031,7 +1039,9 @@ def merged_responsibilities(
         c[sixu, cix[sixfirst]] = ll
         mergedr[sixu, cix[sixfirst]] = wsum
 
-    return dict(K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c)
+    return dict(
+        K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c
+    )
 
 
 def explode_soft_assignment_sorting(
