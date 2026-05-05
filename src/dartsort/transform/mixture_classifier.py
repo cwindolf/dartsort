@@ -111,12 +111,20 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         if not hasattr(self, "tmm"):
             return False
         else:
-            return self.tmm.lut_params is None
+            return (
+                self.tmm.lut_params is None
+                or not hasattr(self, "neighb_candidates")
+                or self.tmm.neighb_cov.b.Linv.shape[0]
+                < self.b.neighb_candidates.shape[0]
+            )
 
     def precompute(self):
         if not hasattr(self, "tmm"):
             return
         self.tmm.update_lut(self.tmm.lut, puff=0.0)
+        self.update_proposals()
+        # special handling of unmatched neighborhoods
+        self.tmm.neighb_cov.pad_for_noise_score_(self.b.neighb_candidates.shape[0])
 
     def fit(
         self,
@@ -210,24 +218,22 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         # one could implement serialization logic for them, I just didn't
         mix_data.tmm.erp = None
         self.tmm: "TruncatedMixtureModel" = mix_data.tmm
-        # special handling of unmatched neighborhoods
-        self.tmm.neighb_cov.pad_with_extra_neighborhood_for_noise_score_()
         self.register_buffer("neighborhoods", mix_data.tmm.neighb_cov.b.obs_ix.clone())
         _, self.workers = handle_negative_jobs(
             computation_cfg.actual_n_jobs(small=True)
         )
-        neighb_candidates = mix_data.tmm.lut.full_proposal_candidates()
-
         del mix_data
-
         gc.collect()
         torch.cuda.empty_cache()
+        self.precompute()
 
+    def update_proposals(self):
         # pad both these to allow unknown neighborhoods
         # TODO: if this is common, consider reworking candidate logic for inference.
         # could, for instance, precompute all possible neighborhoods and allow candidates
         # when neighborhoods are subsets of existing LUT neighborhoods. or, could expand
         # the search at inference time (like explore steps).
+        neighb_candidates = self.tmm.lut.full_proposal_candidates()
         neighb_candidates = F.pad(neighb_candidates, (0, 0, 0, 1), value=-1)
         self.register_buffer("neighb_candidates", neighb_candidates)
         self.register_buffer("neighb_candidate_counts", (neighb_candidates >= 0).sum(1))
@@ -359,9 +365,10 @@ def neighborhood_mapping_at_time(
     # of the matching? it will crash atm, which is good
 
     # shifted geom neighborhoods at time
-    disp = motion.disp_at_s(
-        times_s=t_s.numpy(force=True), depths_um=motion.geom[:, 1], grid=True
-    )
+    t_s = t_s.numpy(force=True)
+    if t_s.size > 1:
+        t_s = t_s.mean()
+    disp = motion.disp_at_s(times_s=t_s, depths_um=motion.geom[:, 1], grid=True)
     assert disp.shape == (motion.geom.shape[0], 1)
     shifted_geom = motion.geom.copy()
     shifted_geom[:, 1] -= disp[:, 0]

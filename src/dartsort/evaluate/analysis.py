@@ -100,6 +100,7 @@ class DARTsortAnalysis:
         allow_qda: bool = True,
         vis_radius: float = 50.0,
         vis_neighborhood_p: float = np.inf,
+        featurization_pipeline_pt=None,
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -113,7 +114,8 @@ class DARTsortAnalysis:
             # no-drift motion
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
-        if has_hdf5 and vis_radius and (tpca := get_tpca(sorting)) is not None:
+        tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+        if has_hdf5 and vis_radius and tpca is not None:
             sklearn_tpca = tpca.to_sklearn()
             tpca_temporal_slice = sklearn_tpca.temporal_slice
         else:

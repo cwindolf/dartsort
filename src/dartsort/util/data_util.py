@@ -725,7 +725,7 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
     elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
         st = DARTsortSorting.load(f / "dartsort_sorting.npz")
     else:
-        raise ValueError(f"Not sure how to load {f}.")
+        raise ValueError(f"Not sure how to load '{f}'.")
 
     if labels_stem:
         labels_npy = f.parent / f"{labels_stem}.npy"
@@ -797,7 +797,7 @@ def _get_featurization_loading_meta(sorting):
     return geom, channel_index, model_dir
 
 
-def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
+def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=None):
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
 
@@ -810,17 +810,18 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         raise ValueError(f"No file at {featurization_pipeline_pt=}")
 
     pipeline = WaveformPipeline.from_state_dict_pt(
-        geom, channel_index, featurization_pipeline_pt
+        geom, channel_index, featurization_pipeline_pt, motion
     )
-    return pipeline, featurization_pipeline_pt
+    return pipeline
 
 
-def get_tpca(sorting, name_prefix="collisioncleaned"):
+def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=None):
     """Look for the TemporalPCAFeaturizer in the usual place."""
     from ..transform import transformers_by_class_name
 
     geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
-    featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+    if featurization_pipeline_pt is None:
+        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
 
     d = torch.load(featurization_pipeline_pt)
     kw = d["_extra_state"]["class_names_and_kwargs"]
@@ -860,7 +861,7 @@ def load_stored_tsvd(
     if not isinstance(sorting, Path) and sorting.parent_h5_path is None:
         logger.info("Couldn't load stored basis.")
         return None
-    pipeline, pt_path = get_featurization_pipeline(sorting)
+    pipeline = get_featurization_pipeline(sorting)
     tsvd = pipeline.get_transformer(tsvd_name)
     assert tsvd is not None
     assert tsvd.name == tsvd_name
@@ -871,7 +872,6 @@ def load_stored_tsvd(
         assert not trim_rank_to
     logger.info(
         "Loaded stored basis from %s (%s; components shape: %s).",
-        pt_path,
         tsvd_name,
         tsvd.components_.shape,
     )
@@ -954,6 +954,22 @@ def sorting_from_spikeinterface(
         computation_cfg=computation_cfg,
         workers=workers,
     )
+
+
+def filter_link_h5(in_h5_path: str | Path, out_h5_path: str | Path, keep_filter):
+    in_h5_path = resolve_path(in_h5_path, strict=True)
+    out_h5_path = resolve_path(out_h5_path)
+    assert not out_h5_path.exists()
+
+    with h5py.File(in_h5_path, "r", locking=False) as h5in:
+        dset_keys = list(h5in.keys())
+
+    dset_keys = [k for k in dset_keys if keep_filter(k)]
+    assert dset_keys
+
+    with h5py.File(out_h5_path, "w", locking=False) as h5out:
+        for k in dset_keys:
+            h5out[k] = h5py.ExternalLink(in_h5_path, k)
 
 
 def get_labels(h5_path) -> np.ndarray:

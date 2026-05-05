@@ -497,6 +497,9 @@ class RefinementConfig:
     template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(linkage="single")
 
     # other agglomeration parameters
+    glom_max_firing_corr: float | None = -0.1
+    glom_firing_corr_dt: float = 0.5
+    glom_firing_corr_method: Literal["binsqrt"] = "binsqrt"
     qda_link: Literal["single", "complete"] = "single"
     qda_uni_score: float = 0.95
     qda_threshold: float = 0.35

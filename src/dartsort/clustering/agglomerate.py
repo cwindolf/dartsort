@@ -51,6 +51,7 @@ class Agglomeration:
     merge_mapping: np.ndarray
     distances: np.ndarray
     shifts: np.ndarray
+    firing_corr: np.ndarray | None
 
 
 def agglomerate(
@@ -100,6 +101,7 @@ def agglomerate(
             merge_mapping=new_ids,
             distances=tdist.distances,
             shifts=tdist.shifts,
+            firing_corr=None,
         )
 
     # tdist tells us the possible merges
@@ -108,6 +110,22 @@ def agglomerate(
         linkage_method=template_merge_cfg.linkage,
         threshold=template_merge_cfg.merge_distance_threshold,
     )
+
+    # only QDA within negatively correlated firing enemies
+    if refinement_cfg.glom_max_firing_corr is not None:
+        fcorr = firing_corr(
+            sorting,
+            dt=refinement_cfg.glom_firing_corr_dt,
+            method=refinement_cfg.glom_firing_corr_method,
+        )
+        _oldsum = mask[np.triu_indices_from(mask)].sum()
+        mask = np.logical_and(mask, fcorr <= refinement_cfg.glom_max_firing_corr)
+        _newsum = mask[np.triu_indices_from(mask)].sum()
+        logger.dartsortdebug(
+            f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
+        )
+    else:
+        fcorr = None
 
     # restrict mask by overlap criteria
     qda_res = qda(
@@ -141,7 +159,12 @@ def agglomerate(
         linkage_method=template_merge_cfg.linkage,
         threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
     )
+    _oldsum = mask[np.triu_indices_from(mask)].sum()
     qda_mask = np.logical_or(qda_mask, force_mask)
+    _newsum = mask[np.triu_indices_from(mask)].sum()
+    logger.dartsortdebug(
+        f"Small distance brought merge pair count from {_oldsum} -> {_newsum}."
+    )
     np.fill_diagonal(qda_mask, True)
     assert np.all(qda_mask <= mask)
     qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
@@ -162,6 +185,7 @@ def agglomerate(
         merge_mapping=new_ids,
         distances=tdist.distances,
         shifts=tdist.shifts,
+        firing_corr=fcorr,
     )
 
 
@@ -326,6 +350,27 @@ def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
 
 @databag
 class QDAResult:
+    """Unit pair QDA metrics
+
+    Algorithm:
+     - For a pair of units i,j, grab all the spikes which both units
+       assign a likelihood to (their candidate set intersection)
+     - Compute coverage statistics:
+        - Let #i be the number of spikes for which i is a candidate, sim #j.
+        - Let #union be the number of spikes for which either is a candidate
+        - Let #inter be the number of spikes in the intersection
+        - Let `iou[i,j]` be #inter / #union
+        - Let `cov[i,j]` be min(#inter / #i, #inter / #j)
+     - Use a 1d KDE to estimate the density of the difference in likelihoods
+       of the intersection spikes, lik[j] - lik[i]. Note that 0 is the decision
+       boundary above which a spike comes from unit j, below which i.
+       Call that KDE f(l)
+     - Compute bimodality statistics
+        - Let fi = max_{l<0} f(l), fj = max_{l>0} f(l)
+        - Let `score[i,j]` = f(0) / min(fi,fj)
+        - Let `min_ratio[i,j]` = f(0) / max(fi,fj)
+    """
+
     score: np.ndarray
     min_ratio: np.ndarray
     iou: np.ndarray
@@ -380,7 +425,13 @@ def qda(
 
         results = pool.map(_qda_job, np.c_[ii, jj])
         if show_progress:
-            results = tqdm(results, desc=f"QDA:{n_jobs}", total=ii.shape[0])
+            results = tqdm(
+                results,
+                desc=f"QDA:{n_jobs}",
+                total=ii.shape[0],
+                mininterval=0.5,
+                smoothing=0.0,
+            )
 
         for _ in results:
             pass
@@ -564,3 +615,14 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
     denom = weights.max(axis=1, keepdims=True).clip(min=1e-10)  # avoid div by 0
     weights /= denom
     return weights
+
+
+def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
+    if method != "binsqrt":
+        assert False
+
+    tsg = sorting.to_tsgroup()
+    fr = tsg.count(bin_size=dt) / dt
+    fr = np.sqrt(fr.values)
+
+    return np.corrcoef(fr, rowvar=False)

@@ -340,11 +340,14 @@ class NeighborhoodCovariance(BModule):
         assert self.Cooinv.shape == (nneighb, obsdim, obsdim)
         assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
 
-    def pad_with_extra_neighborhood_for_noise_score_(self):
+    def pad_for_noise_score_(self, new_n_neighbs: int):
         noise_score_keys = ("Linv", "logdet", "nobs")
         for k in noise_score_keys:
             v = getattr(self, k)
             ndim = v.ndim
+            if v.shape[0] >= new_n_neighbs:
+                assert torch.all(v[new_n_neighbs - 1 :] == 0)
+                continue
             v = F.pad(v, [0, 0] * (ndim - 1) + [0, 1])
             self.register_buffer(k, v, persistent=False)
 
@@ -403,6 +406,44 @@ class NeighborhoodLUT(BModule):
         # lut[unit_ids, neighb_ids] = arange(n_lut)
         # everything else is n_lut (not -1)
         self.register_buffer("lut", lut)
+
+    @classmethod
+    def from_units_and_neighbs(
+        cls, *, unit_ids: Tensor, neighb_ids: Tensor, n_units: int, n_neighbs: int
+    ) -> Self:
+        n_lut = unit_ids.shape[0]
+        lut = unit_ids.new_full((n_units, n_neighbs), n_lut, dtype=torch.long)
+        lut[unit_ids, neighb_ids] = torch.arange(n_lut, device=lut.device)
+        return cls(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut)
+
+    @classmethod
+    def from_mask(cls, mask: Tensor) -> Self:
+        uu, nn = mask.nonzero(as_tuple=True)
+        return cls.from_units_and_neighbs(
+            unit_ids=uu, neighb_ids=nn, n_units=mask.shape[0], n_neighbs=mask.shape[1]
+        )
+
+    @classmethod
+    def from_candidates_and_neighborhoods(
+        cls,
+        *,
+        candidates: Tensor,
+        neighborhoods: SpikeNeighborhoods,
+        neighb_supset: Tensor,
+        n_units: int,
+        neighborhood_ids: Tensor | None,
+    ) -> Self:
+        if neighborhood_ids is None:
+            neighborhood_ids = neighborhoods.b.neighborhood_ids
+        assert (candidates.shape[0],) == neighborhood_ids.shape
+        co = coincidence_matrix(
+            x=candidates,
+            y=neighborhood_ids,
+            nx=n_units,
+            ny=neighborhoods.n_neighborhoods,
+        )
+        co = co.float() @ neighb_supset
+        return cls.from_mask(co)
 
     def eq(self, other: object) -> bool:
         if not isinstance(other, NeighborhoodLUT):
@@ -1649,7 +1690,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         _count_candidates(self.candidates, self.batch_candidate_counts, self.batch_size)
 
         # update lut for caller
-        lut = lut_from_candidates_and_neighborhoods(
+        lut = NeighborhoodLUT.from_candidates_and_neighborhoods(
             candidates=self.candidates,
             neighborhoods=self.neighborhoods,
             neighborhood_ids=self.neighborhood_ids,
@@ -2300,7 +2341,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if pnoid:
             assert (responsibilities > 0).any(dim=1).all()
             assert (candidates >= 0).any(dim=1).all()
-        lut = lut_from_candidates_and_neighborhoods(
+        lut = NeighborhoodLUT.from_candidates_and_neighborhoods(
             candidates=candidates,
             neighborhoods=data.neighborhoods,
             neighborhood_ids=data.neighborhood_ids,
@@ -2778,7 +2819,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         return scores
 
-    def update_lut(self, lut: NeighborhoodLUT, no_parameter_changes: bool = False, puff: float | None = None):
+    def update_lut(
+        self,
+        lut: NeighborhoodLUT,
+        no_parameter_changes: bool = False,
+        puff: float | None = None,
+    ):
         if no_parameter_changes and self.lut.eq(lut):
             return
         self.lut = lut
@@ -5680,7 +5726,7 @@ def candidate_adjacencies(
 ):
     if un_adj_lut is None:
         assert labels is not None
-        un_adj_lut = lut_from_candidates_and_neighborhoods(
+        un_adj_lut = NeighborhoodLUT.from_candidates_and_neighborhoods(
             candidates=labels,
             neighborhoods=neighborhoods,
             neighborhood_ids=neighborhood_ids,
@@ -5701,31 +5747,6 @@ def candidate_adjacencies(
         explore_adj = explore_adj @ neighb_adj
 
     return un_adj_lut, un_adj, explore_adj
-
-
-def lut_from_candidates_and_neighborhoods(
-    *,
-    candidates: Tensor,
-    neighborhoods: SpikeNeighborhoods,
-    neighb_supset: Tensor,
-    n_units: int,
-    neighborhood_ids: Tensor,
-) -> NeighborhoodLUT:
-    if neighborhood_ids is None:
-        neighborhood_ids = neighborhoods.b.neighborhood_ids
-    assert (candidates.shape[0],) == neighborhood_ids.shape
-    co = coincidence_matrix(
-        x=candidates,
-        y=neighborhood_ids,
-        nx=n_units,
-        ny=neighborhoods.n_neighborhoods,
-    )
-    co = co.float() @ neighb_supset
-    uu, nn = co.nonzero(as_tuple=True)
-    n_lut = uu.shape[0]
-    lut = co.new_full(co.shape, n_lut, dtype=torch.long)
-    lut[uu, nn] = torch.arange(n_lut, device=co.device)
-    return NeighborhoodLUT(unit_ids=uu, neighb_ids=nn, lut=lut)
 
 
 def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:

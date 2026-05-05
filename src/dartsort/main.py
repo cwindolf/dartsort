@@ -3,9 +3,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Sequence
 
-import torch
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording, Motion
+from torch import Tensor
 
 from .clustering import SimpleMatrixFeatures, StableWaveformFeatures, get_clusterer
 from .config import DARTsortUserConfig, DeveloperConfig
@@ -660,7 +660,7 @@ def threshold(
     featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     featurization_pipeline: WaveformPipeline | None = None,
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
-    extract_channel_index: torch.Tensor | None = None,
+    extract_channel_index: Tensor | None = None,
     chunk_starts_samples=None,
     stop_after_n_spikes: int | None = None,
     ensure_coverage: float | None = None,

@@ -8,13 +8,16 @@ from spikeinterface.core import BaseRecording
 
 from ..util.data_util import SpikeDataset, yield_chunks
 from ..util.internal_config import (
+    ComputationConfig,
     FeaturizationConfig,
     WaveformConfig,
-    ComputationConfig,
 )
-from ..util.waveform_util import assert_all_finite_in_probe
+from ..util.logging_util import get_logger
 from ..util.py_util import resolve_path
+from ..util.waveform_util import assert_all_finite_in_probe
 from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
+
+logger = get_logger(__name__)
 
 
 class WaveformPipeline(torch.nn.Module):
@@ -70,10 +73,15 @@ class WaveformPipeline(torch.nn.Module):
         pass
 
     def spike_datasets(
-        self, up_to_index: int | None = None, force_save: bool = False
+        self,
+        start_index: int | None = None,
+        up_to_index: int | None = None,
+        force_save: bool = False,
     ) -> list[SpikeDataset]:
         datasets = []
         for tix, transformer in enumerate(self.transformers):
+            if start_index is not None and tix < start_index:
+                continue
             if tix == up_to_index:
                 break
             if transformer.is_featurizer:
@@ -82,13 +90,13 @@ class WaveformPipeline(torch.nn.Module):
         return datasets
 
     @classmethod
-    def from_state_dict_pt(cls, geom, channel_index, state_dict_pt):
+    def from_state_dict_pt(cls, geom, channel_index, state_dict_pt, motion=None):
         state_dict = torch.load(state_dict_pt)
         extra_state = state_dict.get("_extra_state", {})
         class_names_and_kwargs = extra_state.get("class_names_and_kwargs")
         waveform_cfg = extra_state.get("waveform_cfg")
         sampling_frequency = extra_state.get("sampling_frequency")
-        motion = extra_state.get("motion")
+        motion = extra_state.get("motion", motion)
         if class_names_and_kwargs is None:
             raise ValueError(
                 "Can't load a featurization pipeline from state dict if it "
@@ -208,7 +216,14 @@ class WaveformPipeline(torch.nn.Module):
     def needs_more_features(self):
         return any(t.needs_more_features for t in self.transformers)
 
-    def forward(self, waveforms, *, up_to_index: int | None = None, **fixed_properties):
+    def forward(
+        self,
+        waveforms,
+        *,
+        up_to_index: int | None = None,
+        start_index: int | None = None,
+        **fixed_properties,
+    ):
         """Run waveforms and fixed properties through pipeline, extracting features and denoising."""
         waveforms = torch.asarray(waveforms)
         fixed_properties = {k: torch.asarray(v) for k, v in fixed_properties.items()}
@@ -223,6 +238,8 @@ class WaveformPipeline(torch.nn.Module):
             return waveforms, features
 
         for tix, transformer in enumerate(self.transformers):
+            if start_index is not None and tix < start_index:
+                continue
             if tix == up_to_index:
                 break
             if transformer.is_featurizer and transformer.is_denoiser:
@@ -330,17 +347,22 @@ class WaveformPipeline(torch.nn.Module):
         """Give my transformers the chance to precompute stuff."""
         for transformer in self.transformers:
             transformer.precompute()
-        assert not self.needs_precompute()
+        for tf in self.transformers:
+            if tf.needs_precompute():
+                raise ValueError(f"Precompute didn't stick in transformer {tf}.")
 
     def transform_to_disk(
         self,
         hdf5_filename: str | Path,
-        waveforms_dataset_name: str = "waveforms",
+        waveforms_dataset_name: str | None = "waveforms",
+        other_dset_names: Sequence[str] | None = None,
+        start_index: int | None = None,
         up_to_index: int | None = None,
     ):
         """Save my features to new h5 datasets by running in batches through waveforms saved in h5."""
-        from ..util.data_util import DARTsortSorting
         from h5py import File
+
+        from ..util.data_util import DARTsortSorting
 
         if up_to_index == 0:
             return
@@ -355,15 +377,22 @@ class WaveformPipeline(torch.nn.Module):
         fixed_properties = {
             k: torch.asarray(v) for k, v in sorting.spike_feature_dict.items()
         }
+        other_dset_names = other_dset_names or []
 
         # what will we save?
-        datasets = self.spike_datasets(up_to_index, force_save=True)
+        datasets = self.spike_datasets(
+            start_index=start_index, up_to_index=up_to_index, force_save=True
+        )
+        logger.dartsortdebug(
+            f"transform_to_disk will create {[d.name for d in datasets]}"
+        )
 
         # open h5, create new datasets, loop over batches and save feats
         with File(hdf5_filename, mode="r+", libver="latest", locking=False) as h5:
             if all(ds.name in h5 for ds in datasets):
                 return
-            wfs = h5[waveforms_dataset_name]
+            wfs = h5[waveforms_dataset_name] if waveforms_dataset_name else None
+            other_dsets = {od: h5[od] for od in other_dset_names}
             outs = {
                 ds.name: h5.create_dataset(
                     ds.name, dtype=ds.dtype, shape=(n, *ds.shape_per_spike)
@@ -372,9 +401,15 @@ class WaveformPipeline(torch.nn.Module):
             }
             for sli, chk in yield_chunks(wfs, desc_prefix="Transform to disk"):
                 chk_fp = {k: v[sli].to(device=dev) for k, v in fixed_properties.items()}
+                other_fp = {
+                    k: torch.asarray(ds[sli], device=dev)
+                    for k, ds in other_dsets.items()
+                }
                 _, chk_feat = self(
                     waveforms=torch.asarray(chk, device=dev),
                     **chk_fp,
+                    **other_fp,
+                    start_index=start_index,
                     up_to_index=up_to_index,
                 )
                 for ds in datasets:

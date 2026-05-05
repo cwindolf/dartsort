@@ -507,11 +507,11 @@ def visualize_denoiser(
     )
 
     for j in range(n_show):
-        for tr, c, l in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
-            axes[0, j].plot(tr[j], color=c, lw=1, label=l)
+        for tr, c, ll in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
+            axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
         if j == n_show - 1:
             axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
-        for i, (wf, l) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
+        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
             im = axes[i + 1, j].imshow(
                 wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
             )
@@ -519,7 +519,7 @@ def visualize_denoiser(
             if j == n_show - 1:
                 plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3)
             if j == 0:
-                axes[i + 1, j].set_ylabel(l)
+                axes[i + 1, j].set_ylabel(ll)
     if suptitle:
         fig.suptitle(suptitle)
     return fig
