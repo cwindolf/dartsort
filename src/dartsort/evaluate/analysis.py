@@ -114,7 +114,10 @@ class DARTsortAnalysis:
             # no-drift motion
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
-        tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+        if has_hdf5:
+            tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+        else:
+            tpca = None
         if has_hdf5 and vis_radius and tpca is not None:
             sklearn_tpca = tpca.to_sklearn()
             tpca_temporal_slice = sklearn_tpca.temporal_slice

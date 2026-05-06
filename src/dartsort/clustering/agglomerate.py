@@ -119,13 +119,15 @@ def agglomerate(
             method=refinement_cfg.glom_firing_corr_method,
         )
         _oldsum = mask[np.triu_indices_from(mask)].sum()
-        mask = np.logical_and(mask, fcorr <= refinement_cfg.glom_max_firing_corr)
+        fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
+        mask = np.logical_and(mask, fcorr_mask)
+        np.fill_diagonal(mask, True)
         _newsum = mask[np.triu_indices_from(mask)].sum()
         logger.dartsortdebug(
             f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
         )
     else:
-        fcorr = None
+        fcorr = fcorr_mask = None
 
     # restrict mask by overlap criteria
     qda_res = qda(
@@ -159,14 +161,12 @@ def agglomerate(
         linkage_method=template_merge_cfg.linkage,
         threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
     )
-    _oldsum = mask[np.triu_indices_from(mask)].sum()
     qda_mask = np.logical_or(qda_mask, force_mask)
-    _newsum = mask[np.triu_indices_from(mask)].sum()
-    logger.dartsortdebug(
-        f"Small distance brought merge pair count from {_oldsum} -> {_newsum}."
-    )
     np.fill_diagonal(qda_mask, True)
-    assert np.all(qda_mask <= mask)
+    if fcorr_mask is None:
+        assert np.all(qda_mask <= mask)
+    else:
+        assert np.all((qda_mask & fcorr_mask) <= mask)
     qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
