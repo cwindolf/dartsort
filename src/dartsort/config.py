@@ -236,7 +236,7 @@ class DARTsortUserConfig:
         doc="Motion bins exceeding this speed will be replaced by interpolation.",
     )
     max_dist_from_median_um: float = argfield(
-        default=500.0,
+        default=250.0,
         arg_type=float,
         doc="Motion bins farther than this from the local median will be replaced by interpolation.",
     )
