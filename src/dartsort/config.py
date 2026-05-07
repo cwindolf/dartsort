@@ -23,13 +23,9 @@ class DARTsortUserConfig:
     """User-facing configuration options"""
 
     # -- high level behavior
-    dredge_only: bool = argfield(
-        False, doc="Whether to stop after initial localization and motion tracking."
-    )
-    matching_iterations: int = argfield(
-        default=1,
-        doc="By default, 1 template matching step is carried out using templates "
-        "estimated from the initial detection round.",
+    do_motion_estimation: bool = argfield(
+        default=True,
+        doc="Set this to false if your data is super stable or already motion-corrected.",
     )
     preprocessing: PreprocessingStrategy = argfield(
         default="none",
@@ -64,6 +60,11 @@ class DARTsortUserConfig:
         "fraction of the recording, to make sure there's good coverage of "
         "conditions for template estimation.",
     )
+    matching_iterations: int = argfield(
+        default=1,
+        doc="By default, 1 template matching step is carried out using templates "
+        "estimated from the initial detection round.",
+    )
 
     # -- computer options
     n_jobs_cpu: int = argfield(
@@ -94,6 +95,7 @@ class DARTsortUserConfig:
     chunk_length_samples: int = 30_000
 
     # -- storage behavior
+    # TODO: document
     work_in_tmpdir: bool = False
     copy_recording_to_tmpdir: bool = False
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
@@ -202,17 +204,12 @@ class DARTsortUserConfig:
     )
 
     # -- matching parameters
+    # TODO: document
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
     amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 1.0 / 3.0
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
 
     # -- motion estimation parameters
-    do_motion_estimation: bool = argfield(
-        default=True,
-        doc="Set this to false if your data is super stable or already motion-corrected.",
-    )
-
-    # DREDge parameters
     rigid: bool = argfield(
         default=False, doc="Use rigid registration and ignore the window parameters."
     )
@@ -241,6 +238,9 @@ class DARTsortUserConfig:
         doc="Motion bins farther than this from the local median will be replaced by interpolation.",
     )
     median_neighborhood_bins: int = 51
+    dredge_only: bool = argfield(
+        False, doc="Whether to stop after initial localization and motion tracking."
+    )
 
 
 @cfg_dataclass
