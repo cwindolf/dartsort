@@ -56,6 +56,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         gmm_refinement_cfg: RefinementConfig,
         waveform_cfg: WaveformConfig,
         sampling_frequency: float = 30_000.0,
+        save_neighborhood_ids: bool = False,
     ):
         self.motion = motion
         self.clustering_cfg = clustering_cfg
@@ -84,6 +85,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
 
         assert name is None
         name = ("labels", "gmm_candidates", "gmm_log_liks", "gmm_responsibilities")
+        if save_neighborhood_ids:
+            name = name + ("neighborhood_ids",)
         super().__init__(
             channel_index=channel_index,
             geom=geom,
@@ -96,8 +99,13 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         ncand = gmm_refinement_cfg.n_candidates
         assert gmm_refinement_cfg.robust_strategy == "none"  # not implemented atm
         self.n_candidates = ncand
+        self.save_neighborhood_ids = save_neighborhood_ids
         self.shape = [(), (ncand,), (ncand + 1,), (ncand + 1,)]
         self.dtype = [torch.int32, torch.int32, torch.float32, torch.float32]
+        if save_neighborhood_ids:
+            self.shape += [()]
+            self.dtype += [torch.int32]
+        self.save_neighborhood_ids = save_neighborhood_ids
         self.motion: MotionInfo | None = None
         self.channel_index_np = self.b.channel_index.numpy(force=True)
         self.workers = 1
@@ -349,12 +357,15 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             duties=None,
         )
 
-        return {
+        res = {
             "labels": labels.to(dtype=torch.int32),
             "gmm_candidates": scores.candidates.to(dtype=torch.int32),
             "gmm_log_liks": scores.log_liks,
             "gmm_responsibilities": scores.responsibilities,
         }
+        if self.save_neighborhood_ids:
+            res["neighborhood_ids"] = neighborhood_ids.to(dtype=torch.int32)
+        return res
 
 
 def neighborhood_mapping_at_time(
