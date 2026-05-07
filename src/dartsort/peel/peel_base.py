@@ -632,7 +632,6 @@ class BasePeeler(BModule):
     def fit_models(
         self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
     ):
-        cleanup_and_log_gpu_usage(ensure_computation_config(computation_cfg), "top of fit")
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
@@ -723,7 +722,6 @@ class BasePeeler(BModule):
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 
-                cleanup_and_log_gpu_usage(computation_cfg, "peel: Usage before model fits:")
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
                     recording=self.recording,

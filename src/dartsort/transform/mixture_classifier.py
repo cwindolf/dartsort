@@ -11,7 +11,6 @@ TODO:
    or preventing torch from freeing stuff due to the fitting process??
 """
 
-import gc
 import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING, Sequence
