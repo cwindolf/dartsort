@@ -722,6 +722,9 @@ class BasePeeler(BModule):
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 
+                featurization_pipeline.register_cpu_workers(
+                    computation_cfg.actual_n_jobs(small=True, cpu=True)
+                )
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
                     recording=self.recording,

@@ -210,6 +210,10 @@ class WaveformPipeline(torch.nn.Module):
         for t in self.transformers:
             t.attach_motion(motion)
 
+    def register_cpu_workers(self, workers: int):
+        for t in self.transformers:
+            t.register_cpu_workers(workers)
+
     def needs_residual(self):
         return any(t.needs_residual for t in self.transformers)
 
@@ -399,7 +403,7 @@ class WaveformPipeline(torch.nn.Module):
                 )
                 for ds in datasets
             }
-            for sli, chk in yield_chunks(wfs, desc_prefix="Transform to disk"):
+            for sli, chk in yield_chunks(wfs, desc_prefix="Transform to disk", show_progress=False):
                 chk_fp = {k: v[sli].to(device=dev) for k, v in fixed_properties.items()}
                 other_fp = {
                     k: torch.asarray(ds[sli], device=dev)

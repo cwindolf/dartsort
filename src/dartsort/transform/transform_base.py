@@ -182,6 +182,9 @@ class BaseWaveformModule(BModule):
     def attach_motion(self, motion):
         pass
 
+    def register_cpu_workers(self, workers: int):
+        pass
+
     def precompute(self):
         pass
 

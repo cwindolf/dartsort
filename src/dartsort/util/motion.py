@@ -330,9 +330,9 @@ class MotionInfo:
         probe_disp = probe_disp.astype(depths_um.dtype)
 
         if shift_mode == "floor":
-            n_pitches_shift = (probe_disp / self.pitch).astype(int)
+            n_pitches_shift = (probe_disp / self.pitch).astype(np.int32)
         elif shift_mode == "round":
-            n_pitches_shift = np.round(probe_disp / self.pitch).astype(int)
+            n_pitches_shift = np.round(probe_disp / self.pitch).astype(np.int32)
         else:
             assert False
 

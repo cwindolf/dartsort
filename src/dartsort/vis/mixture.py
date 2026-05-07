@@ -5,9 +5,9 @@ from typing import Iterable, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from KDEpy import FFTKDE
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
-from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
@@ -28,8 +28,8 @@ from ..transform import TemporalPCA
 from ..util import spiketorch
 from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
 from ..util.internal_config import (
-    ComputationConfig,
     ClusteringFeaturesConfig,
+    ComputationConfig,
     InterpolationParams,
     RefinementConfig,
     default_clustering_features_cfg,
@@ -44,7 +44,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
-from .analysis_plots import distance_matrix_dendro, centered_bins, bimod_stats
+from .analysis_plots import bimod_stats, centered_bins, distance_matrix_dendro
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
 from .waveforms import geomplot
@@ -1783,7 +1783,9 @@ def vis_obs_interpolation(
     origf = torch.asarray(origf).to(sgeom)
     chans = torch.asarray(mix_data.sorting.channels[fix]).to(channel_index)
     shifts = torch.asarray(-disp).to(sgeom)
-    tchans = mix_data.tmm.neighb_cov.b.obs_ix[mix_data.train_data.neighborhood_ids[trix]]
+    tchans = mix_data.tmm.neighb_cov.b.obs_ix[
+        mix_data.train_data.neighborhood_ids[trix]
+    ]
     for name, erp in (erps or {}).items():
         features[name] = erp.interp(
             features=origf,

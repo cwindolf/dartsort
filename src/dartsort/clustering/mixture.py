@@ -326,6 +326,7 @@ class NeighborhoodCovariance(BModule):
         self.register_buffer("CooinvCom", CooinvCom, persistent=False)
         self.register_buffer("Linv", Linv, persistent=False)
         self.register_buffer("full_Linv", full_Linv, persistent=False)
+        self.register_buffer("lik_const", logdet + LOG_2PI * nobs, persistent=False)
 
     def __post_init__(self):
         """Shape validation / documentation."""
@@ -341,7 +342,7 @@ class NeighborhoodCovariance(BModule):
         assert self.CooinvCom.shape == (nneighb, obsdim, neardim)
 
     def pad_for_noise_score_(self, new_n_neighbs: int):
-        noise_score_keys = ("Linv", "logdet", "nobs")
+        noise_score_keys = ("Linv", "logdet", "nobs", "lik_const")
         for k in noise_score_keys:
             v = getattr(self, k)
             ndim = v.ndim
@@ -5341,8 +5342,8 @@ def submasks(mask: Tensor, skip_empty=True):
 def labels_from_scores_(scores: Scores, remove_noise: bool = True) -> Tensor:
     """Pick either top candidate or noise."""
     if pnoid:
-        Nc = scores.candidates.shape[1]
-        assert (scores.log_liks[:, 0, None] >= scores.log_liks[:, :Nc]).all()
+        nc = scores.candidates.shape[1]
+        assert (scores.log_liks[:, 0, None] >= scores.log_liks[:, :nc]).all()
     labels = scores.candidates[:, 0].clone()
     if remove_noise:
         noise_better = scores.log_liks[:, -1] > scores.log_liks[:, 0]
@@ -5552,13 +5553,21 @@ def _whiten_impute_and_noise_score(
 def _whiten_and_noise_score_batch(
     *, x: Tensor, neighb_ids: Tensor, neighb_cov: NeighborhoodCovariance
 ):
-    batch_whitener = neighb_cov.b.Linv[neighb_ids]
+    return _whiten_and_noise_score_batch_k(
+        x, neighb_ids, neighb_cov.b.Linv, neighb_cov.b.lik_const
+    )
+
+
+@torch.jit.script
+def _whiten_and_noise_score_batch_k(
+    x: Tensor, neighb_ids: Tensor, Linv: Tensor, lik_const: Tensor
+):
+    batch_whitener = Linv[neighb_ids]
     wx = torch.bmm(batch_whitener, x[:, :, None])[:, :, 0]
     nll = torch.linalg.vector_norm(wx, dim=1).square_()
-    nll.add_(neighb_cov.b.logdet[neighb_ids]).add_(
-        LOG_2PI * neighb_cov.b.nobs[neighb_ids]
-    )
-    nll.mul_(-0.5)
+    const = lik_const[neighb_ids]
+    nll += const
+    nll *= -0.5
     return wx, nll
 
 

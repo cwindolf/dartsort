@@ -116,6 +116,9 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
     def attach_motion(self, motion: MotionInfo):
         self.motion = motion
 
+    def register_cpu_workers(self, workers: int):
+        self.workers = workers
+
     def needs_precompute(self):
         if not hasattr(self, "tmm"):
             return False
@@ -134,6 +137,13 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.update_proposals()
         # special handling of unmatched neighborhoods
         self.tmm.neighb_cov.pad_for_noise_score_(self.b.neighb_candidates.shape[0])
+        assert self.motion is not None
+        geomp = np.pad(self.motion.geom, [(0, 1), (0, 0)], constant_values=np.nan)
+        self.static_neighbs = geomp[self.channel_index_np]
+        cii, cjj = np.nonzero(
+            self.channel_index_np < len(self.channel_index_np)
+        )
+        self.channel_index_valid_inds = cii, cjj
 
     def fit(
         self,
@@ -320,6 +330,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
                 neighborhoods=self.b.neighborhoods,
                 channel_index=self.channel_index_np,
                 workers=self.workers,
+                static_neighbs=self.static_neighbs,
+                channel_index_valid_inds=self.channel_index_valid_inds,
             )
         else:
             target_channels_map = self.b.channel_index
@@ -374,28 +386,48 @@ def neighborhood_mapping_at_time(
     channel_index: np.ndarray,
     neighborhoods: torch.Tensor,
     workers: int = 4,
+    shift_mode="round",
+    static_neighbs: np.ndarray | None = None,
+    channel_index_valid_inds: tuple[np.ndarray, np.ndarray] | None = None,
 ):
-    # TODO... what if a new neighborhood is observed during rest
-    # of the matching? it will crash atm, which is good
+    # replicates static_channel_neighborhoods
 
     # shifted geom neighborhoods at time
     t_s = t_s.numpy(force=True)
     if t_s.size > 1:
         t_s = t_s.mean()
-    disp = motion.disp_at_s(times_s=t_s, depths_um=motion.geom[:, 1], grid=True)
-    assert disp.shape == (motion.geom.shape[0], 1)
-    shifted_geom = motion.geom.copy()
-    shifted_geom[:, 1] -= disp[:, 0]
+    probe_disp = -motion.disp_at_s(times_s=t_s, depths_um=motion.geom[:, 1], grid=True)
+    assert probe_disp.shape == (motion.geom.shape[0], 1)
+    if shift_mode == "floor":
+        n_pitches_shift = (probe_disp / motion.pitch).astype(np.int32)
+    elif shift_mode == "round":
+        n_pitches_shift = np.round(probe_disp / motion.pitch).astype(np.int32)
+    else:
+        assert False
+
+    if channel_index_valid_inds is None:
+        cii, cjj = np.nonzero(channel_index < len(channel_index))
+    else:
+        cii, cjj = channel_index_valid_inds
+
+    shift = n_pitches_shift * motion.pitch
+    if static_neighbs is None:
+        geomp = np.pad(motion.geom, [(0, 1), (0, 0)], constant_values=np.nan)
+        shifted_neighbs = geomp[channel_index]
+    else:
+        shifted_neighbs = static_neighbs.copy()
+    shifted_neighbs[:, :, 1] += shift
+
+    # uneighbxz, uinv = np.unique(shifted_neighbs[cii, cjj], axis=0, return_inverse=True)
 
     # match shifted geom channels to rgeom channels
-    _, channels = motion.rgeom_kdt.query(
-        shifted_geom, distance_upper_bound=motion.min_dist, workers=workers
+    _, umatch = motion.rgeom_kdt.query(
+        shifted_neighbs[cii, cjj], distance_upper_bound=motion.min_dist, workers=workers
     )
 
     # get shifted channel neighborhoods
     index = np.full(channel_index.shape, motion.rgeom.shape[0])
-    ii, jj = np.nonzero(channel_index < len(channel_index))
-    index[ii, jj] = channels[channel_index[ii, jj]]
+    index[cii, cjj] = umatch#[uinv]
 
     # mapping between these and `neighborhoods`
     index = torch.asarray(index, device=neighborhoods.device)

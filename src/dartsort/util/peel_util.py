@@ -81,6 +81,10 @@ def run_peeler(
         n_resid_now = 0
     else:
         n_resid_now = n_resid_snips
+    if peeler.featurization_pipeline is not None:
+        peeler.featurization_pipeline.register_cpu_workers(
+            computation_cfg.actual_n_jobs(small=True, cpu=True)
+        )
     with timer(f"peel ({peeler.__class__.__name__})"):
         peeler.peel(
             output_hdf5_filename,
