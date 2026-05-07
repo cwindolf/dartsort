@@ -494,7 +494,7 @@ class BasePeeler(BModule):
             self.recording.segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
-            last_dimension_indices=None,
+            channel_indices=None,
             margin=self.chunk_margin_samples,
         )
         device = self.b.channel_index.device

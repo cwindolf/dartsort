@@ -834,7 +834,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             self.parent_recording_segment,
             start_frame=start_frame,
             end_frame=end_frame,
-            last_dimension_indices=None,
+            channel_indices=None,
             margin=self.margin,
             add_zeros=True,
         )
