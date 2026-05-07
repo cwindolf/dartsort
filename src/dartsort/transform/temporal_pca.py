@@ -112,6 +112,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             channels = channels[choices]
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         self.dtype = waveforms.dtype
+        channels = channels.to(device=waveforms.device)
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
@@ -171,6 +172,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         assert t_ <= t
         assert time_shifts.shape == (n,)
         time_ix = self._temporal_ix[None, :, None] + time_shifts[:, None, None]
+        time_ix = time_ix.to(device=waveforms.device)
         waveforms = waveforms.take_along_dim(dim=1, indices=time_ix)
         assert waveforms.shape == (n, t_, c)
         return waveforms

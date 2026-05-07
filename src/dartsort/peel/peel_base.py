@@ -31,10 +31,9 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
-from ..util.main_util import cleanup_and_log_gpu_usage
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
-from ..util.torch_util import BModule
+from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
 _lock = Lock()
@@ -145,7 +144,7 @@ class BasePeeler(BModule):
                 )
             self.save_models(save_folder)
 
-            cleanup_and_log_gpu_usage(computation_cfg, "After model fits:")
+            cleanup_and_log_gpu_usage(computation_cfg, "peel: Usage after model fits:")
         assert not self.needs_precompute()
         assert not self.needs_fit()
 
@@ -633,6 +632,7 @@ class BasePeeler(BModule):
     def fit_models(
         self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
     ):
+        cleanup_and_log_gpu_usage(ensure_computation_config(computation_cfg), "top of fit")
         with torch.no_grad():
             if self.peeling_needs_fit():
                 self.precompute_peeling_data(
@@ -704,7 +704,7 @@ class BasePeeler(BModule):
 
                 # park myself on cpu while models fit in case they need
                 # to take up space
-                self.to("cpu")
+                self.to(device="cpu")
 
                 # fit featurization pipeline and reassign
                 # work in a try finally so we can delete the temp file
@@ -723,6 +723,7 @@ class BasePeeler(BModule):
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 
+                cleanup_and_log_gpu_usage(computation_cfg, "peel: Usage before model fits:")
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
                     recording=self.recording,
@@ -736,7 +737,7 @@ class BasePeeler(BModule):
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:
-                self.to("cpu")
+                self.to(device="cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()
                 del waveforms, fixed_properties

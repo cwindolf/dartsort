@@ -46,7 +46,6 @@ from .util.job_util import ensure_computation_config
 from .util.logging_util import get_logger
 from .util.main_util import (
     _matching_step_cfgs,
-    cleanup_and_log_gpu_usage,
     ds_all_to_workdir,
     ds_dump_config,
     ds_fast_forward,
@@ -63,6 +62,7 @@ from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
 from .util.py_util import dartcopytree, resolve_path, timer
+from .util.torch_util import cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
 

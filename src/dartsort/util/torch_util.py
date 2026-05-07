@@ -1,5 +1,16 @@
+import gc
+from typing import TYPE_CHECKING
+
+import torch
 from torch import Tensor
 from torch.nn import Module
+
+from .logging_util import get_logger
+
+if TYPE_CHECKING:
+    from .internal_config import ComputationConfig
+
+logger = get_logger(__name__)
 
 
 class BModule(Module):
@@ -90,3 +101,16 @@ class BufGetter:
         elif key in self.buffers:
             return self.buffers[key]
         raise AttributeError(f"BufGetter didn't find {key=}.")
+
+
+def cleanup_and_log_gpu_usage(computation_cfg: "ComputationConfig", message=""):
+    dev = computation_cfg.actual_device()
+    gc.collect()
+
+    if dev.type != "cuda":
+        return
+
+    torch.cuda.empty_cache()
+
+    message = f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
+    logger.dartsortdebug(message)

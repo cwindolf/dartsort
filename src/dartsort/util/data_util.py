@@ -716,6 +716,7 @@ class DARTsortSorting:
 
 
 def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+    """Load a spike train from h5, npz, or folder."""
     f = resolve_path(f, strict=True)
 
     if f.name.endswith(".h5"):
@@ -1585,7 +1586,7 @@ def subsample_waveforms(
         del h5
 
     device = torch.device(device)
-    waveformsr = torch.as_tensor(waveforms, device=device)
+    waveformsr = torch.as_tensor(waveforms)
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }

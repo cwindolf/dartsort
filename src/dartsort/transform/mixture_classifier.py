@@ -12,6 +12,7 @@ TODO:
 """
 
 import gc
+import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING, Sequence
 
@@ -29,6 +30,7 @@ from ..util.internal_config import (
 from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.torch_util import cleanup_and_log_gpu_usage
 from .transform_base import BaseWaveformFeaturizer
 
 if TYPE_CHECKING:
@@ -222,9 +224,11 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         _, self.workers = handle_negative_jobs(
             computation_cfg.actual_n_jobs(small=True)
         )
+        assert sys.getrefcount(mix_data) <= 2, sys.getrefcount(mix_data)
         del mix_data
-        gc.collect()
-        torch.cuda.empty_cache()
+        cleanup_and_log_gpu_usage(
+            computation_cfg=computation_cfg, message="{self.__class__.__name__}: Free"
+        )
         self.precompute()
 
     def update_proposals(self):

@@ -370,31 +370,24 @@ class Decollider(BaseMultichannelDenoiser):
                 # Training phase
                 self.train()
                 train_losses = {}
-                for (
-                    waveform_batch,
-                    channels_batch,
-                    noise_batch,
-                    cnoise_batch,
-                ) in train_data:
-                    waveform_batch = waveform_batch.to(self.device)
-                    channels_batch = channels_batch.to(self.device)
-                    waveform_batch = reindex(
-                        channels_batch,
-                        waveform_batch,
+                for waveform_b, channels_b, noise_b, cnoise_b in train_data:
+                    waveform_b = waveform_b.to(self.device)
+                    channels_b = channels_b.to(self.device)
+                    waveform_b = reindex(
+                        channels_b,
+                        waveform_b,
                         self.relative_index,
                         pad_value=0.0,
                     )
 
                     optimizer.zero_grad()
-                    m = noise_batch.to(waveform_batch)
-                    ell = None
-                    if cnoise_batch is not None:
-                        ell = cnoise_batch.to(waveform_batch)
-                    mask = self.get_masks(channels_batch).to(waveform_batch)
-                    fres = self.train_forward(waveform_batch, m, ell, mask)
+                    m = noise_b.to(waveform_b)
+                    ell = None if cnoise_b is None else cnoise_b.to(waveform_b)
+                    mask = self.get_masks(channels_b).to(waveform_b)
+                    fres = self.train_forward(waveform_b, m, ell, mask)
                     loss_dict = self.loss(
                         mask,
-                        waveform_batch,
+                        waveform_b,
                         m,
                         fres,
                         l1_alpha=self.l1_alpha,
@@ -421,28 +414,20 @@ class Decollider(BaseMultichannelDenoiser):
                     self.eval()
                     val_losses = {}
                     with torch.no_grad():
-                        for (
-                            waveform_batch,
-                            channels_batch,
-                            noise_batch,
-                            ell_batch,
-                        ) in val_data:
-                            waveform_batch = waveform_batch.to(self.device)
-                            channels_batch = channels_batch.to(self.device)
-                            noise_batch = noise_batch.to(self.device)
-                            if ell_batch is not None:
-                                ell_batch = ell_batch.to(self.device)
+                        for waveform_b, channels_b, noise_b, ell_b in val_data:
+                            waveform_b = waveform_b.to(self.device)
+                            channels_b = channels_b.to(self.device)
+                            noise_b = noise_b.to(self.device)
+                            ell_b = None if ell_b is None else ell_b.to(self.device)
 
-                            waveform_batch, mask = self.to_nn_channels(
-                                waveform_batch, channels_batch
+                            waveform_b, mask = self.to_nn_channels(
+                                waveform_b, channels_b
                             )
-                            m = noise_batch.to(waveform_batch)
-                            fres = self.train_forward(
-                                waveform_batch, m, ell_batch, mask
-                            )
+                            m = noise_b.to(waveform_b)
+                            fres = self.train_forward(waveform_b, m, ell_b, mask)
                             loss_dict = self.loss(
                                 mask,
-                                waveform_batch,
+                                waveform_b,
                                 m,
                                 fres,
                                 l1_alpha=self.l1_alpha,
@@ -458,11 +443,8 @@ class Decollider(BaseMultichannelDenoiser):
                     val_loss = sum(val_losses.values())
                     train_records[-1]["val_loss"] = val_loss
 
-                    if (
-                        self.earlystop_eps is not None
-                        and last_val_loss is not None
-                        and val_loss - last_val_loss > self.earlystop_eps
-                    ):
+                    can_val = not (self.earlystop_eps is None or last_val_loss is None)
+                    if can_val and val_loss - last_val_loss > self.earlystop_eps:
                         if epoch >= self.min_epochs:
                             print(f"Early stopping after {epoch} epochs.")
                             break
@@ -603,7 +585,9 @@ class DecolliderDataLoader:
     loader: DataLoader
     sampler: AOTIndicesWeightedRandomBatchSampler | None
     noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset
-    cycle_noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
+    cycle_noise_dataset: (
+        AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
+    )
     spike_length_samples: int
 
     def __len__(self):
