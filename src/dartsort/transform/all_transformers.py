@@ -3,6 +3,7 @@ import torch.serialization
 from .amortized_localization import AmortizedLocalization
 from .amplitudes import AmplitudeFeatures, AmplitudeVector, MaxAmplitude, Voltage
 from .decollider import Decollider
+from .denoising_scorer import DenoisingScorer
 from .enforce_decrease import EnforceDecrease
 from .fixed_prop import FixedProperty
 from .interp import WaveformInterpolator
@@ -32,6 +33,7 @@ all_transformers: list[type[BaseWaveformModule]] = [
     BaseTemporalPCA,
     DebugMatchingPursuitDenoiser,
     Decollider,
+    DenoisingScorer,
     EnforceDecrease,
     FixedProperty,
     FullProbeTemporalPCAEmbedder,

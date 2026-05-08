@@ -275,30 +275,34 @@ def threshold_chunk(
             voltages=energies,
             waveforms=energies.view(-1, spike_length_samples, n_index),
         )
-    keep = convexity_filter(
-        traces,
-        times_rel,
-        channels,
-        threshold=convexity_threshold,
-        radius=convexity_radius,
-    )
-    times_rel = times_rel[keep]
-    channels = channels[keep]
-    energies = energies[keep]
+    if convexity_threshold:
+        keep = convexity_filter(
+            traces,
+            times_rel,
+            channels,
+            threshold=convexity_threshold,
+            radius=convexity_radius,
+        )
+        times_rel = times_rel[keep]
+        channels = channels[keep]
+        energies = energies[keep]
+        del keep
 
     orig_times_rel = times_rel
     orig_channels = channels
-    keep, times_rel, channels = perturb_detections(
-        times_rel,
-        channels,
-        thinning=thinning,
-        time_jitter=time_jitter,
-        spatial_jitter_channel_index=spatial_jitter_channel_index,
-        rg=rg,
-    )
-    orig_times_rel = orig_times_rel[keep]
-    orig_channels = orig_channels[keep]
-    energies = energies[keep]
+    if thinning is not None or time_jitter or spatial_jitter_channel_index is not None:
+        keep, times_rel, channels = perturb_detections(
+            times_rel,
+            channels,
+            thinning=thinning,
+            time_jitter=time_jitter,
+            spatial_jitter_channel_index=spatial_jitter_channel_index,
+            rg=rg,
+        )
+        orig_times_rel = orig_times_rel[keep]
+        orig_channels = orig_channels[keep]
+        energies = energies[keep]
+        del keep
 
     # want only peaks in the chunk
     min_time = left_margin + trough_offset_samples

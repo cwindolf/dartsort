@@ -53,6 +53,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         reference="main_channel",
         softmax_noise_floor=False,
         channelwise_dropout_p=0.00,
+        decay_power=1,
         epoch_size=50_000,
         val_split_p=0.3,
         random_seed=0,
@@ -71,6 +72,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         self.amplitude_kind = amplitude_kind
         self.radius = radius
+        self.decay_power = decay_power
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
         self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim + softmax_noise_floor
@@ -177,7 +179,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         dx = z[:, 0, None] - local_geom[:, :, 0]
         dz = z[:, 2, None] - local_geom[:, :, 1]
         y = F.softplus(z[:, 1]).unsqueeze(1)
-        dists = torch.sqrt(dx**2 + dz**2 + y**2)
+        dists = dx**2 + dz**2 + y**2
+        if self.decay_power == 1:
+            dists = dists.sqrt_()
+        elif self.decay_power == 2:
+            pass
+        else:
+            assert False
         return dists
 
     def get_alphas(self, obs_amps, pred_amps_alpha1, masks, return_pred=False):

@@ -633,6 +633,7 @@ def _add_localization_and_ampvec(fc):
                     "localization_model": fc.localization_model,
                     "radius": fc.localization_radius,
                     "softmax_noise_floor": fc.localization_noise_floor,
+                    "decay_power": fc.localization_decay_power,
                 },
             )
         )

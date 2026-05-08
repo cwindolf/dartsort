@@ -59,8 +59,10 @@ class Decollider(BaseMultichannelDenoiser):
         scaling="max",
         signal_gates=True,
         step_callback=None,
-        # my args. todo: port over common ones.
         epoch_size=200 * 256,
+        warmup_epochs=0,
+        warmup_k=1,
+        # my args. todo: port over common ones.
         inference_z_samples=10,
         detach_amortizer=True,
         exz_estimator="n3n",
@@ -70,7 +72,7 @@ class Decollider(BaseMultichannelDenoiser):
         emz_res_type="none",
         l4_alpha=0,
         l1_alpha=0,
-        output_l1_alpha=1e-5,
+        output_l1_alpha=0.0,
         cycle_loss_alpha=1.0,
         separate_cycle_net=False,
         detach_cycle_loss=False,
@@ -112,9 +114,10 @@ class Decollider(BaseMultichannelDenoiser):
             scaling=scaling,
             signal_gates=signal_gates,
             step_callback=step_callback,
+            warmup_epochs=warmup_epochs,
+            warmup_k=warmup_k,
+            epoch_size=epoch_size,
         )
-
-        self.epoch_size = epoch_size
         self.queue_chunks = queue_chunks
 
         self.inference_z_samples = inference_z_samples
@@ -144,19 +147,25 @@ class Decollider(BaseMultichannelDenoiser):
         self.initialize_shapes()
         if self.exz_estimator in ("n2n", "n3n"):
             self.eyz: torch.nn.Module = self.get_mlp(
-                res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims
+                res_type=self.eyz_res_type,
+                hidden_dims=self.eyz_net_hidden_dims,
+                message="eyz",
             )
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
             self.emz: torch.nn.Module = self.get_mlp(
-                res_type=self.emz_res_type, output_layer="linear"
+                res_type=self.emz_res_type, output_layer="linear", message="emz"
             )
         if self.inference_kind == "amortized":
             self.inf_net: torch.nn.Module = self.get_mlp(
-                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                message="inf",
             )
         if self.separate_cycle_net:
             self.den_net: torch.nn.Module = self.get_mlp(
-                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                message="den",
             )
         else:
             self.den_net: torch.nn.Module = self.inf_net

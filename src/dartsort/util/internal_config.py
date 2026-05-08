@@ -568,6 +568,7 @@ class FeaturizationConfig:
     localization_radius: float = 100.0
     # these are saved always if do_localization
     localization_amplitude_type: Literal["peak", "ptp"] = "peak"
+    localization_decay_power: int = 1
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
@@ -767,6 +768,7 @@ class MotionEstimationConfig:
     tpca_rank: int = 8
     localization_radius_um: float = 100.0
     threshold_cfg: ThresholdingConfig = ThresholdingConfig()
+    spike_denoising_score: float = 10.0
 
 
 @cfg_dataclass
@@ -1150,7 +1152,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         peak_sign=cfg.peak_sign,
     )
     motion_estimation_cfg = MotionEstimationConfig(
-        **motion_kw, tpca_rank=cfg.temporal_pca_rank, threshold_cfg=motion_threshold_cfg
+        **motion_kw,
+        tpca_rank=cfg.temporal_pca_rank,
+        threshold_cfg=motion_threshold_cfg,
+        spike_denoising_score=cfg.initial_threshold,
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,

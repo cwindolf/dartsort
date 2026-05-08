@@ -24,8 +24,11 @@ from .internal_config import (
     default_waveform_cfg,
 )
 from .job_util import ensure_computation_config
+from .logging_util import get_logger
 from .py_util import databag, resolve_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
+
+logger = get_logger(__name__)
 
 
 def try_load_motion_info(
@@ -389,11 +392,12 @@ def threshold_for_motion(
     sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     waveform_cfg: WaveformConfig = default_waveform_cfg,
     overwrite: bool = False,
+    featurization_kw: dict | None = None,
     show_progress: bool = False,
 ):
     """Thresholding detection and localization to get spikes for motion estimation."""
     from ..main import threshold
-    from ..transform import WaveformPipeline
+    from ..transform import DenoisingScorer, WaveformPipeline
     from .data_util import try_get_denoising_pipeline
     from .waveform_util import make_channel_index
 
@@ -410,6 +414,7 @@ def threshold_for_motion(
         extract_radius=rad,
         localization_radius=rad,
         tpca_rank=motion_cfg.tpca_rank,
+        **(featurization_kw or {}),
     )
     if previous_sorting is not None:
         denoising_pipeline, geom, channel_index = try_get_denoising_pipeline(
@@ -434,11 +439,12 @@ def threshold_for_motion(
         sampling_frequency=recording.sampling_frequency,
     )
     if denoising_pipeline is not None:
+        denoising_scorer = DenoisingScorer(denoising_pipeline)
         pipeline = WaveformPipeline(
-            transformers=denoising_pipeline.transformers + pipeline.transformers
+            transformers=[denoising_scorer] + list(pipeline.transformers)
         )
 
-    return threshold(
+    threshold_st = threshold(
         output_dir=output_directory,
         recording=recording,
         waveform_cfg=waveform_cfg,
@@ -454,3 +460,12 @@ def threshold_for_motion(
         model_subdir=model_subdir,
         computation_cfg=computation_cfg,
     )
+    if motion_cfg.spike_denoising_score:
+        scores = getattr(threshold_st, denoising_scorer.name)
+        mask = scores >= motion_cfg.spike_denoising_score
+        logger.dartsortdebug(
+            f"Score threshold retained {100 * mask.mean():.1f}% of motion threshold spikes."
+        )
+        threshold_st = threshold_st.mask(np.flatnonzero(mask))
+
+    return threshold_st
