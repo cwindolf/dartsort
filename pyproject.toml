@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-doc = ["spinx", "myst-parser", "sphinx-autobuild", "versioningit", "poethepoet"]
+doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "versioningit", "poethepoet", "graphviz"]
 vis = ["matplotlib", "seaborn"]
 dev = ["pytest", "pytest-cov"]
 gpu = ["cupy"]

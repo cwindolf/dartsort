@@ -1,5 +1,5 @@
+"""Simple thresholding spike detection."""
 import warnings
-from typing import Literal
 
 import numpy as np
 import torch

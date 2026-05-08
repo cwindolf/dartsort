@@ -1,3 +1,4 @@
+"""High-level spike sorting toolbox functions."""
 import gc
 import traceback
 from pathlib import Path

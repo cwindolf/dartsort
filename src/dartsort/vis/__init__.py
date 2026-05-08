@@ -1,3 +1,4 @@
+"Vis helpers. Install with [vis]."
 try:
     import seaborn
 except ImportError:

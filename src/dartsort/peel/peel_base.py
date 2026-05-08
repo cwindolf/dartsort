@@ -1,3 +1,4 @@
+"""Home of the BasePeeler, where shared logic for other modules here lives."""
 import gc
 import tempfile
 from concurrent.futures import CancelledError

@@ -1,3 +1,4 @@
+"""A peeler implementing mean or median reduction for estimating template waveforms."""
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,7 +21,6 @@ from ..util.data_util import (
     get_top_assignment_weights,
     subsample_by_count_and_valid_time,
 )
-from ..util.drift_util import registered_geometry
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,

@@ -1,3 +1,6 @@
+"""Module where "peeler" classes live, which can run spike detection, extraction, and featurization pipelines. 
+"""
+
 from .grab import GrabAndFeaturize
 from .matching import ObjectiveUpdateTemplateMatchingPeeler
 from .subtract import SubtractionPeeler, subtract_chunk

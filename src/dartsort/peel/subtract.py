@@ -1,3 +1,4 @@
+"""Neural-net based substitute for template matching."""
 import gc
 import tempfile
 import warnings
@@ -482,13 +483,13 @@ class SubtractionPeeler(BasePeeler):
         )
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
-            temp_hdf5_filename = Path(temp_dir) / f"subtraction_denoiser0_fit.h5"
+            temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser0_fit.h5"
             try:
                 trainer.peel(
                     temp_hdf5_filename,
                     shuffle=True,
                     stop_after_n_waveforms=self.p.first_denoiser_max_waveforms_fit,
-                    task_name=f"Load examples for initial denoiser fitting",
+                    task_name="Load examples for initial denoiser fitting",
                     computation_cfg=computation_cfg,
                 )
 
