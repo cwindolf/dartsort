@@ -811,7 +811,7 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=N
         raise ValueError(f"No file at {featurization_pipeline_pt=}")
 
     pipeline = WaveformPipeline.from_state_dict_pt(
-        geom, channel_index, featurization_pipeline_pt, motion
+        geom, featurization_pipeline_pt, motion
     )
     return pipeline
 

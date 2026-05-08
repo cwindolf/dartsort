@@ -90,9 +90,10 @@ class WaveformPipeline(torch.nn.Module):
         return datasets
 
     @classmethod
-    def from_state_dict_pt(cls, geom, channel_index, state_dict_pt, motion=None):
+    def from_state_dict_pt(cls, geom, state_dict_pt, motion=None):
         state_dict = torch.load(state_dict_pt)
         extra_state = state_dict.get("_extra_state", {})
+        channel_index = state_dict["channel_index"]
         class_names_and_kwargs = extra_state.get("class_names_and_kwargs")
         waveform_cfg = extra_state.get("waveform_cfg")
         sampling_frequency = extra_state.get("sampling_frequency")

@@ -4,6 +4,10 @@ import torch
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Rectangle
+from spikeinterface.core.baserecording import BaseRecording
+
+from dartsort.transform.transform_base import BaseWaveformDenoiser
+from dartsort.util.data_util import DARTsortSorting
 
 from .colors import glasbey1024
 
@@ -358,3 +362,58 @@ def geomplot_templates(
     axis.set_yticks([])
     if title:
         axis.set_title(title)
+
+
+def inspect_denoiser(
+    rec: BaseRecording,
+    st: DARTsortSorting,
+    denoiser: BaseWaveformDenoiser,
+    count: int = 8,
+    vmax=5.0,
+    sizew=1.5,
+    sizeh=1.0,
+    sizes=1.0,
+    seed: int = 0,
+):
+    from ..util.spikeio import read_waveforms_channel_index
+
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=count,
+        squeeze=False,
+        figsize=(sizes * sizew * count, sizes * sizeh * 3),
+        layout="constrained",
+        sharey=True,
+        sharex=True,
+        gridspec_kw=dict(hspace=0.0, wspace=0.0),
+    )
+
+    rg = np.random.default_rng(seed)
+    ix = rg.choice(len(st), size=count, replace=False)
+    ci = denoiser.b.channel_index.numpy(force=True)
+    tt = st.times_samples[ix]
+    cc = st.channels[ix]
+    wf0 = read_waveforms_channel_index(
+        rec,
+        tt,
+        ci,
+        cc,
+    )
+    wf0 = wf0.astype(np.float32)
+    wf1 = denoiser(torch.asarray(wf0), channels=torch.asarray(cc))
+    wf1 = wf1.numpy(force=True)
+    wf2 = wf0 - wf1
+
+    for col, *wfs in zip(axes.T, wf0, wf1, wf2):
+        for ax, wf in zip(col, wfs):
+            ax.imshow(
+                wf.T,
+                vmin=-vmax,
+                vmax=vmax,
+                interpolation="none",
+                cmap="seismic",
+                aspect="auto",
+            )
+            (ax.axis("off"),)
+
+    return fig, axes

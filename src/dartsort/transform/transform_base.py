@@ -1,16 +1,16 @@
 from pathlib import Path
-from typing import Any, Iterable, Self, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterable, Self
 
-from spikeinterface.core import BaseRecording
 import torch
+from spikeinterface.core import BaseRecording
 
 from ..util.data_util import SpikeDataset
-from ..util.torch_util import BModule
 from ..util.internal_config import (
-    WaveformConfig,
     ComputationConfig,
+    WaveformConfig,
     default_waveform_cfg,
 )
+from ..util.torch_util import BModule
 
 if TYPE_CHECKING:
     from .pipeline import WaveformPipeline
@@ -147,12 +147,13 @@ class BaseWaveformModule(BModule):
     ):
         # wish torch would strip the prefix for us?
         extra_state_keys = [k for k in state_dict.keys() if k.endswith("_extra_state")]
-        assert len(extra_state_keys) == 1
-        extra_state = state_dict[extra_state_keys[0]]
+        assert len(extra_state_keys) <= 1
+        if extra_state_keys:
+            extra_state = state_dict[extra_state_keys[0]]
 
-        # some modules want to know the spike length before loading the state dict
-        # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
-        self.spike_length_samples = extra_state["spike_length_samples"]
+            # some modules want to know the spike length before loading the state dict
+            # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
+            self.spike_length_samples = extra_state["spike_length_samples"]
 
         # and this is how subclasses use that info
         # if state dict was dumped before fit, then sls was never known and we
