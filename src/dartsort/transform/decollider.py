@@ -60,8 +60,6 @@ class Decollider(BaseMultichannelDenoiser):
         signal_gates=True,
         step_callback=None,
         epoch_size=200 * 256,
-        warmup_epochs=0,
-        warmup_k=1,
         # my args. todo: port over common ones.
         inference_z_samples=10,
         detach_amortizer=True,
@@ -114,8 +112,6 @@ class Decollider(BaseMultichannelDenoiser):
             scaling=scaling,
             signal_gates=signal_gates,
             step_callback=step_callback,
-            warmup_epochs=warmup_epochs,
-            warmup_k=warmup_k,
             epoch_size=epoch_size,
         )
         self.queue_chunks = queue_chunks

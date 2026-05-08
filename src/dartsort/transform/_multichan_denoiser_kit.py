@@ -39,8 +39,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         min_epochs=10,
         earlystop_eps=None,
         epoch_size=200 * 256,
-        warmup_epochs=0,
-        warmup_k=1,
         random_seed=0,
         res_type="none",
         lr_schedule="CosineAnnealingLR",
@@ -84,8 +82,6 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.earlystop_eps = earlystop_eps
         self.res_type = res_type
         self.inference_batch_size = inference_batch_size
-        self.warmup_epochs = warmup_epochs
-        self.warmup_k = warmup_k
         self.epoch_size = epoch_size
 
         model_channel_index = regularize_channel_index(
@@ -188,48 +184,23 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             hidden_dims = self.hidden_dims
         if output_layer is None:
             output_layer = "gated_linear" if self.signal_gates else "linear"
-        warmup_k = self.warmup_k if self.warmup_epochs else 1
-        nets = [
-            nn_util.get_waveform_mlp(
-                self.spike_length_samples,
-                self.b.model_channel_index.shape[1],
-                hidden_dims,
-                self.output_dim,
-                norm_kind=self.norm_kind,
-                channelwise_dropout_p=self.channelwise_dropout_p,
-                separated_mask_input=True,
-                return_initial_shape=True,
-                initial_conv_fullheight=self.with_conv_fullheight,
-                final_conv_fullheight=self.with_conv_fullheight,
-                output_layer=output_layer,
-                res_type=res_type,
-                nonlinearity=self.nonlinearity,
-                log_transform=log_transform,
-                scaling=self.scaling,
-            )
-            for _ in range(warmup_k)
-        ]
-        nets = [net.to(device=self.device) for net in nets]
-        if not self.warmup_epochs:
-            return nets[0]
-
-        with torch.enable_grad():
-            losses = warmup(
-                nets=nets,
-                device=self.device,
-                n_examples=self.warmup_epochs * self.epoch_size,
-                batch_size=self.batch_size,
-                example_shape=(
-                    self.spike_length_samples,
-                    self.b.model_channel_index.shape[1],
-                ),  # type: ignore
-                message=f"Warm up {message}: ",
-                learning_rate=self.learning_rate,
-                opt_cls=self.optimizer,
-            )
-        lstr = ", ".join([f"{ll:0.3f}" for ll in losses])
-        logger.dartsortdebug(f"Warmup losses: {lstr}")
-        return nets[np.argmin(losses)]
+        return nn_util.get_waveform_mlp(
+            self.spike_length_samples,
+            self.b.model_channel_index.shape[1],
+            hidden_dims,
+            self.output_dim,
+            norm_kind=self.norm_kind,
+            channelwise_dropout_p=self.channelwise_dropout_p,
+            separated_mask_input=True,
+            return_initial_shape=True,
+            initial_conv_fullheight=self.with_conv_fullheight,
+            final_conv_fullheight=self.with_conv_fullheight,
+            output_layer=output_layer,
+            res_type=res_type,
+            nonlinearity=self.nonlinearity,
+            log_transform=log_transform,
+            scaling=self.scaling,
+        )
 
     def to_nn_channels(self, waveforms, channels):
         waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
@@ -689,49 +660,3 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
             assert data.shape[1] == self.spike_length_samples
 
         return data
-
-
-def warmup(
-    *,
-    nets: list[torch.nn.Module],
-    device: torch.device,
-    n_examples: int = 50 * 200 * 256,
-    batch_size: int = 32,
-    example_shape: torch.Size | tuple[int, ...],
-    seed: int = 0,
-    message: str = "",
-    opt_cls=torch.optim.AdamW,
-    learning_rate: float = 0.001,
-):
-    """Try to initialize weights more reliably
-
-    This actually really doesn't work.
-
-    See https://www.nature.com/articles/s42256-026-01215-x
-    """
-    gen = torch.Generator(device=device)
-    gen.manual_seed(seed)
-    for net in nets:
-        net.train()
-
-    if isinstance(opt_cls, str):
-        opt_cls = getattr(torch.optim, opt_cls)
-    opt = opt_cls([p for net in nets for p in net.parameters()], lr=learning_rate)
-
-    prog = trange(0, n_examples, batch_size, desc=message)
-    mask = torch.ones((batch_size, 1, *example_shape[1:]), device=device)
-    for i, _ in enumerate(prog):
-        opt.zero_grad()
-        x = torch.randn(size=(batch_size, *example_shape), generator=gen, device=device)
-        losses = [F.mse_loss(x, net((x, mask))) for net in nets]
-        loss = sum(losses)
-        assert torch.is_tensor(loss)
-        loss.backward()
-        opt.step()
-
-        if not i % 10:
-            lls = [float(ll.item()) for ll in losses]
-            lls = ",".join(f"{ll:.3f}".lstrip("0") for ll in lls)
-            prog.set_description(f"{message}loss={lls}", refresh=False)
-
-    return [float(ll.item()) for ll in losses]
