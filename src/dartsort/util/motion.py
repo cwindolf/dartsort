@@ -73,7 +73,7 @@ def get_motion_info(
         assert sorting is not None
         assert sampling_cfg is not None
         assert waveform_cfg is not None
-        motion_sorting = threshold_for_motion(
+        motion_sorting = detect_for_motion(
             output_directory=output_directory,
             recording=recording,
             previous_sorting=sorting,
@@ -380,7 +380,7 @@ class MotionInfo:
             return None
 
 
-def threshold_for_motion(
+def detect_for_motion(
     *,
     output_directory: Path | str,
     hdf5_filename="motionthreshold.h5",
@@ -397,7 +397,9 @@ def threshold_for_motion(
 ):
     """Thresholding detection and localization to get spikes for motion estimation."""
     from ..main import threshold
-    from ..transform import DenoisingScorer, WaveformPipeline
+    from ..peel import Shaver
+    from ..transform import WaveformPipeline
+    from ..util.peel_util import run_peeler
     from .data_util import try_get_denoising_pipeline
     from .waveform_util import make_channel_index
 
@@ -438,34 +440,39 @@ def threshold_for_motion(
         channel_index=channel_index,
         sampling_frequency=recording.sampling_frequency,
     )
-    if denoising_pipeline is not None:
-        denoising_scorer = DenoisingScorer(denoising_pipeline)
-        pipeline = WaveformPipeline(
-            transformers=[denoising_scorer] + list(pipeline.transformers)
+    if denoising_pipeline is None:
+        return threshold(
+            output_dir=output_directory,
+            recording=recording,
+            waveform_cfg=waveform_cfg,
+            thresholding_cfg=motion_cfg.threshold_cfg,
+            featurization_cfg=featurization_cfg,
+            featurization_pipeline=pipeline,
+            sampling_cfg=sampling_cfg,
+            extract_channel_index=channel_index,
+            chunk_starts_samples=None,
+            overwrite=overwrite,
+            show_progress=show_progress,
+            hdf5_filename=hdf5_filename,
+            model_subdir=model_subdir,
+            computation_cfg=computation_cfg,
         )
-
-    threshold_st = threshold(
-        output_dir=output_directory,
+    shaver = Shaver.from_config(
         recording=recording,
         waveform_cfg=waveform_cfg,
         thresholding_cfg=motion_cfg.threshold_cfg,
         featurization_cfg=featurization_cfg,
         featurization_pipeline=pipeline,
         sampling_cfg=sampling_cfg,
+        denoising_pipeline=denoising_pipeline,
         extract_channel_index=channel_index,
-        chunk_starts_samples=None,
-        overwrite=overwrite,
-        show_progress=show_progress,
+    )
+    return run_peeler(
+        peeler=shaver,
+        output_directory=output_directory,
         hdf5_filename=hdf5_filename,
         model_subdir=model_subdir,
         computation_cfg=computation_cfg,
+        featurization_cfg=featurization_cfg,
+        show_progress=show_progress,
     )
-    if motion_cfg.spike_denoising_score:
-        scores = getattr(threshold_st, denoising_scorer.name)
-        mask = scores >= motion_cfg.spike_denoising_score
-        logger.dartsortdebug(
-            f"Score threshold retained {100 * mask.mean():.1f}% of motion threshold spikes."
-        )
-        threshold_st = threshold_st.mask(np.flatnonzero(mask))
-
-    return threshold_st

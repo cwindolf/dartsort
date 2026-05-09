@@ -14,7 +14,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files  # pyright: ignore[reportMissingImports]
+        from importlib_resources import files  # type: ignore
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -679,6 +679,7 @@ class ThresholdingConfig:
     time_jitter: int = 0
     spatial_jitter_radius: float = 0.0
     trough_priority: float | None = 2.0
+    shave_score: float = 10.0
 
 
 @cfg_dataclass
@@ -1150,6 +1151,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         detection_threshold=cfg.motion_voltage_threshold,
         chunk_length_samples=cfg.chunk_length_samples,
         peak_sign=cfg.peak_sign,
+        shave_score=cfg.initial_threshold,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **motion_kw,
