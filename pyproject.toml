@@ -27,6 +27,7 @@ dependencies = [
   "pandas",
   "probeinterface",
   "pydantic",
+  "pynapple",
   "scipy>=1.13",
   "scikit-learn",
   "spikeinterface>=0.101.2",
