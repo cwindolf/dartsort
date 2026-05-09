@@ -15,14 +15,6 @@ from torch import Tensor
 from torch.fft import irfft, rfft
 from tqdm.auto import trange
 
-HAVE_CUPY = False
-try:
-    import cupy as cp
-
-    HAVE_CUPY = True
-except ImportError:
-    cp = None  # type: ignore
-
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
@@ -572,18 +564,8 @@ def ravel_multi_index(multi_index, dims):
         out += s * multi_index[j]
     return out.view(-1)
 
-    # collect multi indices
-    # multi_index = torch.broadcast_tensors(*multi_index)
-    # multi_index = torch.stack(multi_index)
-    # # stride along each axis
-    # strides = multi_index.new_tensor([1, *reversed(dims[1:])]).cumprod(0).flip(0)
-    # # apply strides (along first axis) and reshape
-    # strides = strides.view(-1, *([1] * (multi_index.ndim - 1)))
-    # raveled_indices = (strides * multi_index).sum(0)
-    # return raveled_indices.view(-1)
 
-
-def torch_add_at_(dest, ix, src, sign=1):
+def add_at_(dest, ix, src, sign=1):
     """Pytorch version of np.{add,subtract}.at
 
     Adds src into dest in place at indices (in dest) specified
@@ -605,37 +587,6 @@ def torch_add_at_(dest, ix, src, sign=1):
         elif sign != 1:
             src = sign * src
     dest.view(-1).scatter_add_(0, flat_ix.to(dest.device), src)
-
-
-def cupy_add_at_(dest, ix, src, sign=1):
-    assert cp is not None
-    if torch.is_tensor(dest):
-        assert dest.device.type == "cuda"
-    dest = cp.asarray(dest)
-    if isinstance(ix, tuple):
-        ix = tuple(cp.asarray(ii) for ii in ix)
-    else:
-        ix = cp.asarray(ix)
-    if not isinstance(src, (float, int)):
-        src = cp.asarray(src)
-    if sign == 1:
-        cp.add.at(dest, ix, src)
-    elif sign == -1:
-        cp.subtract.at(dest, ix, src)
-    else:
-        raise NotImplementedError(f"Need to implement {sign=} in cupy_add_at_.")
-
-
-add_at_ = torch_add_at_
-
-
-def try_cupy_add_at_(dest, ix, src, sign=1):
-    if not HAVE_CUPY or dest.device.type != "cuda":
-        if dest.device.type == "cuda":
-            warnings.warn("No cupy.")
-        return torch_add_at_(dest, ix, src, sign)
-    else:
-        return cupy_add_at_(dest, ix, src, sign)
 
 
 def grab_spikes(
@@ -1488,7 +1439,7 @@ def average_by_label(x, labels, channels, n_channels, weights=None):
         wu.div_(counts[u][cu])
 
         wxu = x[in_u].mul_(wu[:, None])
-        torch_add_at_(
+        add_at_(
             out[u, None],
             (
                 torch.zeros_like(in_u)[:, None, None],

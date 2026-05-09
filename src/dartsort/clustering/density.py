@@ -1153,7 +1153,7 @@ def _density_peaks_clustering_uhd_implementation(
             reg_density = get_smoothed_density(
                 X[inliers_first],
                 inliers=inliers,
-                sigma=sigma_regional,
+                sigma=sigma_regional,  # type: ignore
                 sigma_low=sigma_regional_low,
                 min_bin_size=min_bin_size,
             )

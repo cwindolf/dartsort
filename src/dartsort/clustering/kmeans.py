@@ -5,7 +5,7 @@ from torch import Tensor
 from tqdm.auto import trange
 
 try:
-    import cupy  # type: ignore[reportMissingImports]
+    import cupy  # type: ignore
 
     del cupy
 

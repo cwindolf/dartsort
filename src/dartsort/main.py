@@ -13,7 +13,7 @@ from .peel import (
     GrabAndFeaturize,
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    ThresholdAndFeaturize,
+    Threshold,
 )
 from .templates import TemplateData, estimate_template_library
 from .transform import WaveformPipeline
@@ -672,7 +672,7 @@ def threshold(
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
-    thresholder = ThresholdAndFeaturize.from_config(
+    thresholder = Threshold.from_config(
         recording=recording,
         waveform_cfg=waveform_cfg,
         thresholding_cfg=thresholding_cfg,
