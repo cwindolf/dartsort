@@ -8,9 +8,9 @@ import torch
 from test_util import dense_layout
 
 from dartsort.transform import WaveformPipeline, transformers_by_class_name
-from dartsort.util.waveform_util import make_channel_index
 from dartsort.util.internal_config import default_waveform_cfg
 from dartsort.util.job_util import get_global_computation_config
+from dartsort.util.waveform_util import make_channel_index
 
 
 def _check_state_equal(d1, d2, class_names_and_kwargs):
@@ -127,6 +127,7 @@ def test_all_transformers():
         "FullProbeTemporalPCAEmbedder",
         "WaveformWhitener",
         "TruncatedMixtureModelTransformer",
+        "DenoisingScorer",
     }
     class_names_and_kwargs = [
         (name, {"name_prefix": j, **smoke_test_kwargs.get(name, {})})

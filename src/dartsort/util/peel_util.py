@@ -4,6 +4,8 @@ import h5py
 import numpy as np
 import torch
 
+from dartsort.util.multiprocessing_util import handle_negative_jobs
+
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
 from ..peel.peel_base import BasePeeler
 from .data_util import DARTsortSorting
@@ -82,9 +84,9 @@ def run_peeler(
     else:
         n_resid_now = n_resid_snips
     if peeler.featurization_pipeline is not None:
-        peeler.featurization_pipeline.register_cpu_workers(
-            computation_cfg.actual_n_jobs(small=True, cpu=True)
-        )
+        workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
+        _, workers = handle_negative_jobs(workers)
+        peeler.featurization_pipeline.register_cpu_workers(workers)
     with timer(f"peel ({peeler.__class__.__name__})"):
         peeler.peel(
             output_hdf5_filename,

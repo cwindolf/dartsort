@@ -31,7 +31,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
-from ..util.multiprocessing_util import pool_from_cfg
+from ..util.multiprocessing_util import pool_from_cfg, handle_negative_jobs
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
@@ -722,9 +722,9 @@ class BasePeeler(BModule):
                 if not len(waveforms):
                     raise ValueError("Found no spikes when trying to fit featurizers.")
 
-                featurization_pipeline.register_cpu_workers(
-                    computation_cfg.actual_n_jobs(small=True, cpu=True)
-                )
+                workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
+                _, workers = handle_negative_jobs(workers)
+                featurization_pipeline.register_cpu_workers(workers)
                 featurization_pipeline = featurization_pipeline.to(device)
                 featurization_pipeline.fit(
                     recording=self.recording,
