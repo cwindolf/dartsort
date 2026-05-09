@@ -59,7 +59,7 @@ class Shaver(BasePeeler):
             fixed_property_keys=fixed_prop_keys,
         )
         self.p = p
-        self.peel_kind = f"Threshold {p.detection_threshold}"
+        self.peel_kind = f"Shave {p.detection_threshold}"
         self.denoising_pipeline = denoising_pipeline
         self.dedup_batch_size = self.nearest_batch_length()
 
@@ -122,15 +122,6 @@ class Shaver(BasePeeler):
 
     def out_datasets(self):
         datasets = super().out_datasets()
-        if self.is_random:
-            datasets.append(
-                SpikeDataset(name="orig_times_samples", shape_per_spike=(), dtype=float)
-            )
-            datasets.append(
-                SpikeDataset(name="orig_channels", shape_per_spike=(), dtype=float)
-            )
-        if self.save_collidedness:
-            datasets.append(SpikeDataset("collidedness", (), "float32"))
         datasets.append(SpikeDataset(name="voltages", shape_per_spike=(), dtype=float))
         return datasets
 

@@ -40,6 +40,7 @@ def dredge_estimate_motion(
     a = a[valid]
 
     # run registration
+    print(motion_cfg.smoothing_um)
     dredge_motion_est, _ = dredge_register(
         amps=a,
         depths_um=z,
@@ -55,6 +56,8 @@ def dredge_estimate_motion(
         max_disp_um=motion_cfg.max_disp_um,
         max_dt_s=motion_cfg.max_dt_s,
         mincorr=motion_cfg.correlation_threshold,
+        gaussian_smoothing_sigma_um=motion_cfg.smoothing_um,
+        gaussian_smoothing_sigma_s=motion_cfg.smoothing_s,
         device=device,
     )
     dredge_motion_est = speed_limit_filter(

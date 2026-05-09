@@ -702,7 +702,7 @@ def shave_chunk(
     remove_exact_duplicates=True,
     trough_priority=None,
 ) -> tuple[torch.Tensor, PeelingBatchResult]:
-    times_rel, channels, energies = detect_and_deduplicate(
+    times_rel, channels = detect_and_deduplicate(
         traces,
         detection_threshold,
         peak_channel_index=peak_channel_index,
@@ -713,9 +713,16 @@ def shave_chunk(
         dedup_temporal_radius=temporal_dedup_radius_samples,
         remove_exact_duplicates=remove_exact_duplicates,
         relative_peak_radius=relative_peak_radius,
-        return_energies=True,
+        return_energies=False,
         trough_priority=trough_priority,
     )
+    # throw away spikes which cannot be extracted
+    post_trough_samples = spike_length_samples - trough_offset_samples
+    max_trough_time = traces.shape[0] - post_trough_samples
+    keep = times_rel == times_rel.clamp(trough_offset_samples, max_trough_time)
+    (keep,) = keep.nonzero(as_tuple=True)
+    times_rel = times_rel[keep]
+    channels = channels[keep]
     features = dict(voltages=traces[times_rel, channels])
     if not times_rel.numel():
         return traces, PeelingBatchResult(
@@ -735,7 +742,7 @@ def shave_chunk(
         already_padded=True,
     )
     original_waveforms = waveforms
-    waveforms, features = denoising_pipeline(waveforms, channels=channels)
+    waveforms, features = denoising_pipeline(waveforms, channels=channels, **features)
     if (
         waveforms.untyped_storage().data_ptr()
         == original_waveforms.untyped_storage().data_ptr()
@@ -751,7 +758,7 @@ def shave_chunk(
     if resid_keep is not None:
         if not resid_keep.numel():
             return traces[:, :-1], PeelingBatchResult(
-                n_spikes=0, times_rel=times_rel, channels=channels, voltages=energies
+                n_spikes=0, times_rel=times_rel, channels=channels
             )
         if resid_keep.numel() < len(original_waveforms):
             waveforms = waveforms[resid_keep]
@@ -787,7 +794,7 @@ def shave_chunk(
             features[k] = ft[valid]
     if not valid.numel():
         return residual[:, :-1], PeelingBatchResult(
-            n_spikes=0, times_rel=times_rel, channels=channels, voltages=energies
+            n_spikes=0, times_rel=times_rel, channels=channels
         )
 
     # collision-cleaned waveforms
@@ -801,14 +808,11 @@ def shave_chunk(
         buffer=0,
         already_padded=True,
     )
+    features["waveforms"] = waveforms
 
     # offset times for caller
     times_rel -= left_margin
     res = PeelingBatchResult(
-        n_spikes=times_rel.numel(),
-        times_rel=times_rel,
-        channels=channels,
-        waveforms=waveforms,
-        **features,
+        n_spikes=times_rel.numel(), times_rel=times_rel, **features
     )
     return residual[:, :-1], res

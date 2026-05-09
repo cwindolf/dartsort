@@ -43,7 +43,7 @@ class DARTsortUserConfig:
         doc="If you have a lot of data and you're using a workflow where it is important "
         "to save a preprocessed copy of the recording, float16 is a good option. Only "
         "relevant if preprocessing != 'none'. If the recording isn't getting saved, "
-        "stick to float32."
+        "stick to float32.",
     )
     subsampling_spikes: int | None = argfield(
         default=2_048_000,
@@ -216,6 +216,12 @@ class DARTsortUserConfig:
     probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: Annotated[float, Field(gt=0)] = 1.0
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
+    smoothing_um: Annotated[float, Field(gt=0)] | None = argfield(
+        default=3.0, arg_type=float_or_none
+    )
+    smoothing_s: Annotated[float, Field(gt=0)] | None = argfield(
+        default=3.0, arg_type=float_or_none
+    )
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
     window_scale_um: Annotated[float, Field(gt=0)] = 600.0
     window_margin_um: Annotated[float, Field(gt=0)] | None = argfield(
