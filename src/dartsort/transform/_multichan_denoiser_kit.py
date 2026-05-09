@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Sampler
-from tqdm.auto import trange
 
 from ..util import nn_util, spikeio
 from ..util.logging_util import get_logger

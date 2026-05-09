@@ -5,7 +5,7 @@ from torch import Tensor
 from tqdm.auto import trange
 
 try:
-    import cupy  # type: ignore
+    import cupy  # type: ignore # ty: ignore[unisued-type-ignore-comment]
 
     del cupy
 

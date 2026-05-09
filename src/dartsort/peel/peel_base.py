@@ -31,7 +31,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
-from ..util.multiprocessing_util import pool_from_cfg, handle_negative_jobs
+from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
 
