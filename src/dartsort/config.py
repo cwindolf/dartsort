@@ -220,7 +220,7 @@ class DARTsortUserConfig:
         default=3.0, arg_type=float_or_none
     )
     smoothing_s: Annotated[float, Field(gt=0)] | None = argfield(
-        default=3.0, arg_type=float_or_none
+        default=None, arg_type=float_or_none
     )
     window_step_um: Annotated[float, Field(gt=0)] = 400.0
     window_scale_um: Annotated[float, Field(gt=0)] = 600.0

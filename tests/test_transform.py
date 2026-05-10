@@ -81,7 +81,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
         )
 
         # now tith from_state_dict_pt
-        pipeline2 = WaveformPipeline.from_state_dict_pt(geom, channel_index, pt)
+        pipeline2 = WaveformPipeline.from_state_dict_pt(geom, pt)
         assert pipeline2.needs_fit() == nf
         _check_state_equal(
             orig_state_dict, pipeline2.state_dict(), class_names_and_kwargs

@@ -39,7 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 gpu = ["cupy"]
-full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykernel", "black"]
+full = ["matplotlib", "seaborn", "pytest", "matplotlib-venn", "pytest-cov", "ipywidgets", "ipykernel", "black", "cupy"]
 test = [
   "pytest",
   "pytest-cov",

@@ -741,7 +741,7 @@ class MotionEstimationConfig:
     spatial_bin_length_um: float = 1.0
     temporal_bin_length_s: float = 1.0
     smoothing_um: float | None = 3.0
-    smoothing_s: float | None = 3.0
+    smoothing_s: float | None = None
     window_step_um: float = 400.0
     window_scale_um: float = 600.0
     window_margin_um: float | None = argfield(default=None, arg_type=float)
