@@ -1,21 +1,15 @@
 import numpy as np
 from scipy.signal import find_peaks
-from scipy.stats import norm
 
 from . import density
-
-try:
-    from isosplit import up_down_isotonic_regression, jisotonic5  # type: ignore[reportMissingImports]
-except ImportError:
-    up_down_isotonic_regression = lambda *a, **k: None
-    jisotonic5 = None
-    pass
 
 # todo: replace all isosplit stuff with things based on scipy's isotonic regression.
 
 
 def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     """Unimodal to the right of cut, increasing to the left. Continuity at the border."""
+    from isosplit import jisotonic5, up_down_isotonic_regression  # type: ignore
+
     assert jisotonic5 is not None
     if weights is None:
         weights = np.ones_like(f)
@@ -50,6 +44,8 @@ def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
 
 def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
     """Like above, but fits truncated normal to xs > cut with MoM."""
+    from scipy.stats import norm
+
     if weights is None:
         weights = np.ones_like(f)
 
@@ -115,6 +111,8 @@ def smoothed_dipscore_at(
     null="isotoniconesideunnormed",
     debug_info=None,
 ):
+    from isosplit import up_down_isotonic_regression  # type: ignore
+
     if samples.size < 3:
         return 0.0
 
@@ -181,13 +179,13 @@ def smoothed_dipscore_at(
             else:
                 assert False
 
-            dens = dens[order]  # type: ignore
+            dens = dens[order]
             if null not in ("isotonic", "isotoniconesideunnormed"):
                 dens /= (dens * spacings).sum()
 
             dens_err = (np.abs(dens - densities) * spacings).sum()
             if score_kind == "ks":
-                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()  # type: ignore
+                my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()
             elif score_kind == "tv":
                 my_score = 0.5 * dens_err
             else:

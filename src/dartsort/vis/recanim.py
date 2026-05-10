@@ -1,19 +1,18 @@
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, RegularPolygon
-from matplotlib.collections import PatchCollection
+import numpy as np
+import seaborn as sns
 from matplotlib.animation import FuncAnimation
 from matplotlib.backend_bases import ResizeEvent
-import numpy as np
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Rectangle, RegularPolygon
 from tqdm.auto import trange
-import seaborn as sns
 
-from .colors import glasbey1024
 from ..localize.localize_util import localize_waveforms
+from .colors import glasbey1024
 
 glasbey1024a = np.c_[glasbey1024, np.ones(len(glasbey1024))]
 _t = np.array([1.0, 1, 1, 0])
 _LW = 1
-_MAX_SC = 512
 
 
 class RecordingAnimation:
@@ -188,16 +187,18 @@ class RecordingAnimation:
         self.signal_ax.set_ylim([z0, z1])
 
         self._has_drawn = True
+        assert self.vlines is not None
         for vl in self.vlines:
             vl.set_xdata(
                 2
                 * [(frame_ix + self.offset_frames) / self.recording.sampling_frequency]
             )
-        return self.artists + [imr, ims]
+        return self.artists + [imr, ims]  # type: ignore
 
     def animate(self, start_frame=None, end_frame=None):
         if self.figure is None:
             self.initialize_figure()
+        assert self.figure is not None
         # if not self._has_drawn:
         #     self.draw_frame(0)
 
@@ -227,6 +228,7 @@ class RecordingAnimation:
     def update_somas(self, frame_ix):
         signals = self.unit_mainchan_signal[frame_ix + self.offset_frames]
         facecolors = self.to_color(signals)
+        assert self.soma_patches is not None
         self.soma_patches.set_facecolor(facecolors)
 
     def update_contacts(self, frame_ix):
@@ -235,6 +237,7 @@ class RecordingAnimation:
             end_frame=frame_ix + self.offset_frames + 1,
         )
         facecolors = self.to_color(signals.ravel())
+        assert self.contact_patches is not None
         self.contact_patches.set_facecolor(facecolors)
 
     def update_recording(self, frame_ix):
@@ -245,6 +248,7 @@ class RecordingAnimation:
         if self.recording_im is not None:
             self.recording_im.set_data(chunk[:, ::-1].T)
             self.recording_im.set_extent(self.extent(frame_ix))
+        assert self.recording_ax is not None
         self.recording_im = self.recording_ax.imshow(
             chunk[:, ::-1].T,
             extent=self.extent(frame_ix),
@@ -265,6 +269,7 @@ class RecordingAnimation:
             self.signal_im.set_data(chunk.T)
             self.signal_im.set_extent(self.extent(frame_ix))
             return self.signal_im
+        assert self.signal_ax is not None
         self.signal_im = self.signal_ax.imshow(
             chunk.T,
             extent=self.extent(frame_ix),
@@ -309,6 +314,7 @@ class RecordingAnimation:
             zlim_start = zmin, zmax
 
         zmin0, zmax0 = zlim_start
+        assert self.zlim_target is not None
         zmin1, zmax1 = self.zlim_target
         if frame_s > self.zlim_target_s:
             return [zmin1, zmax1]

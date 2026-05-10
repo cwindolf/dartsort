@@ -1,18 +1,28 @@
+import warnings
 from collections import namedtuple
 from copy import copy
 from pathlib import Path
-from typing import Generator, Sequence, cast, Self, Literal
-import warnings
+from typing import TYPE_CHECKING, Generator, Literal, Self, Sequence, cast
 
 import h5py
 import numpy as np
 import torch
-from spikeinterface.core import NumpySorting, get_random_data_chunks
+from spikeinterface.core import (
+    BaseRecording,
+    BaseSorting,
+    NumpySorting,
+    get_random_data_chunks,
+)
 from tqdm.auto import tqdm
 
 from ..detect import detect_and_deduplicate
-from ..util.logging_util import get_logger
-from ..util.py_util import resolve_path
+from .internal_config import WaveformConfig, default_waveform_cfg
+from .logging_util import get_logger
+
+if TYPE_CHECKING:
+    from .motion import MotionInfo
+from .job_util import ensure_computation_config
+from .py_util import resolve_path
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -68,13 +78,13 @@ class DARTsortSorting:
             assert labels.dtype.kind == "i"
         self.labels = labels
 
-        self._loaded_persistent_features = []
+        self._persistent_features: dict[str, np.ndarray] = {}
         if persistent_features is not None:
             for k, v in persistent_features.items():
                 check_shape = not self._no_check_needed(k)
                 self._register_persistent_feature(k, v, check_shape=check_shape)
 
-        self._ephemeral_feature_names = []
+        self._ephemeral_features: dict[str, np.ndarray] = {}
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
                 check_shape = not self._no_check_needed(k)
@@ -90,6 +100,16 @@ class DARTsortSorting:
     @property
     def n_units(self) -> int:
         return self.unit_ids.shape[0]
+
+    @property
+    def spike_feature_dict(self) -> dict[str, np.ndarray]:
+        d = self._ephemeral_features | self._persistent_features
+        d = {k: v for k, v in d.items() if not self._no_check_needed(k)}
+        d["times_samples"] = self.times_samples
+        d["channels"] = self.channels
+        if self.labels is not None:
+            d["labels"] = self.labels
+        return d
 
     def to_numpy_sorting(self) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
@@ -112,7 +132,8 @@ class DARTsortSorting:
             "channels": self.channels,
             "labels": self.labels,
         }
-        fnames = self._loaded_persistent_features + self._ephemeral_feature_names
+        _pnames = list(self._persistent_features.keys())
+        fnames = _pnames + list(self._ephemeral_features.keys())
         if include_1d_features:
             for k in fnames:
                 v = getattr(self, k)
@@ -140,7 +161,7 @@ class DARTsortSorting:
         If there is a weight_key feature, this will produce
         a TsGroup with Tsd entries. Else, regular Ts.
         """
-        from pynapple.core.ts_group import TsGroup, Ts, Tsd
+        from pynapple.core.ts_group import Ts, Tsd, TsGroup
 
         assert self.labels is not None
 
@@ -179,8 +200,8 @@ class DARTsortSorting:
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
         other = copy(self)
-        other._ephemeral_feature_names = self._ephemeral_feature_names.copy()
-        other._loaded_persistent_features = self._loaded_persistent_features.copy()
+        other._ephemeral_features = self._ephemeral_features.copy()
+        other._persistent_features = self._persistent_features.copy()
         return other
 
     def ephemeral_replace(
@@ -204,8 +225,8 @@ class DARTsortSorting:
             return False
         if self.labels is None:
             return False
-        if "labels" in self._ephemeral_feature_names:
-            assert "labels" not in self._loaded_persistent_features
+        if "labels" in self._ephemeral_features:
+            assert "labels" not in self._persistent_features
             return False
         try:
             return np.array_equal(self.labels, self._load_dataset("labels"))
@@ -213,6 +234,15 @@ class DARTsortSorting:
             return False
 
     # interface for setting features
+
+    def __getattr__(self, name: str) -> np.ndarray:
+        if "_ephemeral_features" in self.__dict__:
+            if name in self._ephemeral_features:
+                return self._ephemeral_features[name]
+        if "_persistent_features" in self.__dict__:
+            if name in self._persistent_features:
+                return self._persistent_features[name]
+        raise AttributeError
 
     def add_ephemeral_feature(
         self,
@@ -230,7 +260,7 @@ class DARTsortSorting:
         if check_shape:
             self._check_shape(feature_name, feature)
 
-        already_ephemeral = feature_name in self._ephemeral_feature_names
+        already_ephemeral = feature_name in self._ephemeral_features
         already_attr = hasattr(self, feature_name)
         if already_ephemeral:
             assert already_attr
@@ -238,29 +268,19 @@ class DARTsortSorting:
             raise ValueError(
                 f"Can't add feature {feature_name}, since it already exists."
             )
-        if not already_ephemeral:
-            self._ephemeral_feature_names.append(feature_name)
         logger.dartsortverbose(
             "Attach ephemeral feature %s with shape %s.", feature_name, feature.shape
         )
-        setattr(self, feature_name, feature)
+        self._ephemeral_features[feature_name] = feature
 
     def remove_ephemeral_feature(self, feature_name: str):
-        assert feature_name in self._ephemeral_feature_names
-        assert hasattr(self, feature_name)
+        assert feature_name in self._ephemeral_features
         logger.dartsortverbose("Remove ephemeral feature %s.", feature_name)
-        self._ephemeral_feature_names = [
-            k for k in self._ephemeral_feature_names if k != feature_name
-        ]
-        delattr(self, feature_name)
+        del self._ephemeral_features[feature_name]
 
     def unload_persistent_feature(self, feature_name: str):
-        assert feature_name in self._loaded_persistent_features
-        assert hasattr(self, feature_name)
-        self._loaded_persistent_features = [
-            k for k in self._loaded_persistent_features if k != feature_name
-        ]
-        delattr(self, feature_name)
+        assert feature_name in self._persistent_features
+        del self._persistent_features[feature_name]
 
     def add_feature(
         self,
@@ -275,9 +295,9 @@ class DARTsortSorting:
             self._register_persistent_feature(feature_name, feature, check_shape)
 
     def remove_feature(self, feature_name: str):
-        if feature_name in self._loaded_persistent_features:
+        if feature_name in self._persistent_features:
             self.unload_persistent_feature(feature_name)
-        elif feature_name in self._ephemeral_feature_names:
+        elif feature_name in self._ephemeral_features:
             self.remove_ephemeral_feature(feature_name)
         else:
             raise ValueError(f"Sorting doesn't have {feature_name}.")
@@ -298,10 +318,10 @@ class DARTsortSorting:
             check_shape = not self._no_check_needed(feature_name)
         if check_shape:
             self._check_shape(feature_name, feature)
-        if feature_name in self._loaded_persistent_features:
+        if feature_name in self._persistent_features:
             raise ValueError(f"Persistent feature {feature_name} already exists.")
-        self._loaded_persistent_features.append(feature_name)
-        setattr(self, feature_name, feature)
+        self._persistent_features[feature_name] = feature
+
         try:
             with h5py.File(
                 self.parent_h5_path, "r+", libver="latest", locking=False
@@ -329,6 +349,7 @@ class DARTsortSorting:
         load_feature_names: Sequence[str] | None = None,
         load_simple_features=True,
         load_all_features=False,
+        allow_missing=False,
     ) -> Self:
         """Load sorting from .hdf5 format saved by peelers
 
@@ -343,7 +364,11 @@ class DARTsortSorting:
         load_all_features : bool
         """
         h5_path = resolve_path(h5_path, strict=True)
-        logger.dartsortdebug("Read features %s from %s", load_feature_names, h5_path)
+        if load_feature_names is None:
+            _lfn = []
+        else:
+            _lfn = [str(fn) for fn in load_feature_names]
+        logger.dartsortdebug("Read features %s from %s", _lfn, h5_path)
 
         with h5py.File(h5_path, "r", libver="latest", locking=False) as h5:
             times_samples = cast(h5py.Dataset, h5[times_samples_dataset])[:]
@@ -379,10 +404,15 @@ class DARTsortSorting:
                         load_feature_names.append(k)
             elif load_feature_names is None:
                 load_feature_names = [k for k in h5.keys() if cls._no_check_needed(k)]
+            elif load_feature_names is not None:
+                basic_props = [k for k in h5.keys() if cls._no_check_needed(k)]
+                load_feature_names = list(load_feature_names) + basic_props
             assert load_feature_names is not None
             load_feature_names = [
                 k for k in load_feature_names if k not in already_loaded
             ]
+            if allow_missing:
+                load_feature_names = [k for k in load_feature_names if k in h5]
             persistent_features = {
                 k: cast(h5py.Dataset, h5[k])[:] for k in load_feature_names
             }
@@ -421,14 +451,17 @@ class DARTsortSorting:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = resolve_path(self.parent_h5_path, strict=True)
             try:
-                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # pyright: ignore[reportCallIssue]
+                h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
                 h5p = h5p.relative_to(sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
-        for k in self._ephemeral_feature_names:
-            data[k] = getattr(self, k)
-        data["ephemeral_feature_names"] = np.array(self._ephemeral_feature_names)
-        data["loaded_persistent_features"] = np.array(self._loaded_persistent_features)
+        data.update(self._ephemeral_features)
+        data["ephemeral_feature_names"] = np.array(
+            list(self._ephemeral_features.keys())
+        )
+        data["loaded_persistent_features"] = np.array(
+            list(self._persistent_features.keys())
+        )
         np.savez(sorting_npz, **data, allow_pickle=False)
 
     @classmethod
@@ -501,7 +534,7 @@ class DARTsortSorting:
             labels = self.labels[mask]
 
         eph = {}
-        for k in self._ephemeral_feature_names:
+        for k in self._ephemeral_features:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
             if self._no_check_needed(k):
@@ -511,7 +544,7 @@ class DARTsortSorting:
         eph["mask_indices"] = mask
 
         per = {}
-        for k in self._loaded_persistent_features:
+        for k in self._persistent_features:
             assert k != "mask_indices"  # no recursion...
             v = getattr(self, k)
             if self._no_check_needed(k):
@@ -532,7 +565,7 @@ class DARTsortSorting:
     def ensure_no_missing(self):
         assert self.labels is not None
         no_missing = np.all(self.labels >= 0)
-        if "mask_indices" in self._ephemeral_feature_names:
+        if "mask_indices" in self._ephemeral_features:
             assert no_missing
         if no_missing:
             return self
@@ -579,15 +612,15 @@ class DARTsortSorting:
         nu = self.n_units
         unit_str = f"{nu} unit" + "s" * (nu > 1)
         feat_str = " "
-        if self._loaded_persistent_features:
-            s = ", ".join(self._loaded_persistent_features)
-            feat_str += f"Loaded HDF5 features: {s}. "
-        if self._ephemeral_feature_names:
-            s = ", ".join(self._ephemeral_feature_names)
-            feat_str += f"Features: {s}. "
+        if self._ephemeral_features:
+            s = ", ".join(self._ephemeral_features)
+            feat_str += f" Features: {s}."
+        if self._persistent_features:
+            s = ", ".join(self._persistent_features)
+            feat_str += f" HDF5 features: {s}"
         h5_str = ""
         if self.parent_h5_path:
-            h5_str = f"From HDF5 file {self.parent_h5_path}."
+            h5_str = f" from {self.parent_h5_path}."
         if self.labels is not None:
             noise_prop = (self.labels < 0).mean().item()
             noise_pct = 100 * noise_prop
@@ -620,12 +653,31 @@ class DARTsortSorting:
                 f"Feature {feature_name}'s shape {feature.shape} didn't agree with spike count {self.n_spikes}."
             )
 
+    def _has_dataset(self, dataset_name: str) -> bool:
+        if dataset_name in self._ephemeral_features:
+            return True
+        if dataset_name in self._persistent_features:
+            return True
+        if self.parent_h5_path is None:
+            return False
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            return dataset_name in h5
+
     def _load_dataset(self, dataset_name: str) -> np.ndarray:
         assert self.parent_h5_path is not None
         with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
             dset = h5[dataset_name]
             assert isinstance(dset, h5py.Dataset)
-            return dset[:]
+            return dset[()]
+
+    def _yield_dataset(self, dataset_name: str, batch_size: int = 1024):
+        assert self.parent_h5_path is not None
+        with h5py.File(self.parent_h5_path, "r", locking=False) as h5:
+            dset = h5[dataset_name]
+            assert isinstance(dset, h5py.Dataset)
+            for i0 in range(0, dset.shape[0], batch_size):
+                i1 = min(dset.shape[0], i0 + batch_size)
+                yield dset[i0:i1]
 
     def slice_feature_by_name(
         self, dataset_name: str, mask: np.ndarray | slice = slice(None)
@@ -634,8 +686,8 @@ class DARTsortSorting:
             return getattr(self, dataset_name)[mask]
 
         # otherwise, we don't have it loaded
-        assert dataset_name not in self._ephemeral_feature_names
-        assert dataset_name not in self._loaded_persistent_features
+        assert dataset_name not in self._ephemeral_features
+        assert dataset_name not in self._persistent_features
 
         # but we can try to load it
         if self.parent_h5_path is None:
@@ -663,8 +715,25 @@ class DARTsortSorting:
             return _read_by_chunk(h5_mask, dset, show_progress=False)
 
 
-def load_h5(f: str | Path) -> DARTsortSorting:
-    return DARTsortSorting.from_peeling_hdf5(h5_path=f)
+def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
+    """Load a spike train from h5, npz, or folder."""
+    f = resolve_path(f, strict=True)
+
+    if f.name.endswith(".h5"):
+        st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
+    elif f.name.endswith(".npz"):
+        st = DARTsortSorting.load(f)
+    elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
+        st = DARTsortSorting.load(f / "dartsort_sorting.npz")
+    else:
+        raise ValueError(f"Not sure how to load '{f}'.")
+
+    if labels_stem:
+        labels_npy = f.parent / f"{labels_stem}.npy"
+        if labels_npy.exists():
+            st = st.ephemeral_replace(labels=np.load(labels_npy))
+
+    return st
 
 
 def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
@@ -694,21 +763,18 @@ def try_get_denoising_pipeline(sorting: DARTsortSorting):
     from dartsort.transform import WaveformPipeline
 
     geom = torch.asarray(getattr(sorting, "geom"))
-    channel_index = torch.asarray(getattr(sorting, "subtract_channel_index"))
-    dn = WaveformPipeline.from_state_dict_pt(geom, channel_index, candidates[0])
+    channel_index = torch.asarray(getattr(sorting, "sub_channel_index"))
+    dn = WaveformPipeline.from_state_dict_pt(geom, candidates[0])
     dn = dn.eval()
     return dn, geom, channel_index
 
 
-def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
-    """Look for the pipeline in the usual place."""
-    from dartsort.transform import WaveformPipeline
-
+def _get_featurization_loading_meta(sorting):
     if isinstance(sorting, Path):
         base_dir = sorting.parent
         stem = sorting.stem
         # TODO how to type this better... don't understand.
-        geom = channel_index = None  # type: ignore
+        geom = channel_index = None
     else:
         assert isinstance(sorting, DARTsortSorting)
         if sorting.parent_h5_path is None:
@@ -718,31 +784,71 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None):
         base_dir = h5_path.parent
         stem = h5_path.stem
 
-        geom = getattr(sorting, "geom", None)  # type: ignore
-        channel_index = getattr(sorting, "channel_index", None)  # type: ignore
+        geom = getattr(sorting, "geom", None)
+        channel_index = getattr(sorting, "channel_index", None)
 
-    model_dir = base_dir / f"{stem}_models"
     if geom is None or channel_index is None:
         with h5py.File(base_dir / f"{stem}.h5", "r", locking=False) as h5:
-            geom: np.ndarray = h5["geom"][:]  # type: ignore
-            channel_index: np.ndarray = h5["channel_index"][:]  # type: ignore
+            geom: np.ndarray = h5["geom"][:]
+            channel_index: np.ndarray = h5["channel_index"][:]
     assert geom is not None
     assert channel_index is not None
 
+    model_dir = base_dir / f"{stem}_models"
+    return geom, channel_index, model_dir
+
+
+def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=None):
+    """Look for the pipeline in the usual place."""
+    from dartsort.transform import WaveformPipeline
+
+    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+
     if not featurization_pipeline_pt.exists():
         raise ValueError(f"No file at {featurization_pipeline_pt=}")
+
     pipeline = WaveformPipeline.from_state_dict_pt(
-        geom, channel_index, featurization_pipeline_pt
+        geom, featurization_pipeline_pt, motion
     )
-    return pipeline, featurization_pipeline_pt
+    return pipeline
 
 
-def get_tpca(sorting, tpca_name="collisioncleaned_tpca_features"):
+def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=None):
     """Look for the TemporalPCAFeaturizer in the usual place."""
-    pipeline, _ = get_featurization_pipeline(sorting)
-    return pipeline.get_transformer(tpca_name)
+    from ..transform import transformers_by_class_name
+
+    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+    if featurization_pipeline_pt is None:
+        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+
+    d = torch.load(featurization_pipeline_pt)
+    kw = d["_extra_state"]["class_names_and_kwargs"]
+    tpca_kw = [
+        (ix, k, v)
+        for ix, (k, v) in enumerate(kw)
+        if k in ("TemporalPCA", "TemporalPCAFeaturizer")
+        and v["name_prefix"] == name_prefix
+    ]
+    assert len(tpca_kw) == 1
+    ix, clsname, kw = tpca_kw[0]
+    tpca = transformers_by_class_name[clsname](
+        geom=geom, channel_index=channel_index, **kw
+    )
+    prefix = f"transformers.{ix}."
+    params = {k.removeprefix(prefix): v for k, v in d.items() if k.startswith(prefix)}
+    for k, v in params.items():
+        if k == "_extra_state":
+            tpca.spike_length_samples = v["spike_length_samples"]
+            tpca._needs_fit = v["needs_fit"]
+            assert len(v) == 2
+            continue
+        tpca.register_buffer(k, v)
+    tpca.initialize_spike_length_dependent_params()
+
+    return tpca
 
 
 def load_stored_tsvd(
@@ -756,7 +862,7 @@ def load_stored_tsvd(
     if not isinstance(sorting, Path) and sorting.parent_h5_path is None:
         logger.info("Couldn't load stored basis.")
         return None
-    pipeline, pt_path = get_featurization_pipeline(sorting)
+    pipeline = get_featurization_pipeline(sorting)
     tsvd = pipeline.get_transformer(tsvd_name)
     assert tsvd is not None
     assert tsvd.name == tsvd_name
@@ -767,21 +873,114 @@ def load_stored_tsvd(
         assert not trim_rank_to
     logger.info(
         "Loaded stored basis from %s (%s; components shape: %s).",
-        pt_path,
         tsvd_name,
         tsvd.components_.shape,
     )
     return tsvd
 
 
+def sorting_from_spike_train(
+    times_samples: np.ndarray,
+    labels: np.ndarray,
+    sampling_frequency: float = 30_000.0,
+    recording: BaseRecording | None = None,
+    motion: "MotionInfo | None" = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    infer_channels: bool = True,
+    computation_cfg=None,
+    workers=4,
+):
+    if recording is not None:
+        sampling_frequency = recording.sampling_frequency
+        times_s = recording.sample_index_to_time(times_samples)
+    else:
+        times_s = times_samples / sampling_frequency
+    st = DARTsortSorting(
+        times_samples=times_samples,
+        labels=labels,
+        channels=np.zeros_like(labels),
+        sampling_frequency=sampling_frequency,
+        ephemeral_features=dict(times_seconds=times_s),
+    )
+    if not infer_channels:
+        return st, None
+    assert recording is not None
+
+    from ..templates.templib import quick_mean_templates
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+    if motion is None:
+        from .motion import MotionInfo
+
+        motion = MotionInfo.static(recording.get_channel_locations())
+
+    qmt = quick_mean_templates(
+        recording=recording,
+        sorting=st,
+        motion=motion,
+        waveform_cfg=waveform_cfg,
+        computation_cfg=computation_cfg,
+    )
+    channels = qmt.main_channels()[labels]
+    amplitudes = np.ptp(qmt.templates, axis=1).max(1)[labels]
+    x, z = motion.rgeom[channels].T
+    if motion is not None and motion.drifting:
+        # displaced channels
+        z = motion.uncorrect_s(times_s, z)
+        _, channels = motion.geom_kdt.query(np.c_[x, z], workers=workers)
+    pos = np.c_[x, 0 * x, z, 0 * z]
+    st = st.ephemeral_replace(
+        channels=channels, amplitudes=amplitudes, point_source_localizations=pos
+    )
+    return st, qmt
+
+
+def sorting_from_spikeinterface(
+    si_sorting: BaseSorting,
+    recording: BaseRecording | None = None,
+    motion: "MotionInfo | None" = None,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    infer_channels: bool = True,
+    computation_cfg=None,
+    workers=4,
+):
+    sv = si_sorting.to_spike_vector()
+    return sorting_from_spike_train(
+        times_samples=sv["sample_index"],  # type: ignore
+        labels=sv["unit_index"],  # type: ignore
+        recording=recording,
+        motion=motion,
+        waveform_cfg=waveform_cfg,
+        infer_channels=infer_channels,
+        computation_cfg=computation_cfg,
+        workers=workers,
+    )
+
+
+def filter_link_h5(in_h5_path: str | Path, out_h5_path: str | Path, keep_filter):
+    in_h5_path = resolve_path(in_h5_path, strict=True)
+    out_h5_path = resolve_path(out_h5_path)
+    assert not out_h5_path.exists()
+
+    with h5py.File(in_h5_path, "r", locking=False) as h5in:
+        dset_keys = list(h5in.keys())
+
+    dset_keys = [k for k in dset_keys if keep_filter(k)]
+    assert dset_keys
+
+    with h5py.File(out_h5_path, "w", locking=False) as h5out:
+        for k in dset_keys:
+            h5out[k] = h5py.ExternalLink(in_h5_path, k)
+
+
 def get_labels(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r") as h5:
-        return h5["labels"][:]  # type: ignore
+        return h5["labels"][:]
 
 
 def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]  # type: ignore
+        return h5["residual"][:]
 
 
 def sorting_isis(sorting: DARTsortSorting):
@@ -789,7 +988,7 @@ def sorting_isis(sorting: DARTsortSorting):
     isis_ms = np.zeros(len(sorting))
     for uid in sorting.unit_ids:
         inu = np.flatnonzero(sorting.labels == uid)
-        t_ms = sorting.times_seconds[inu] * 1000  # type: ignore
+        t_ms = sorting.times_seconds[inu] * 1000
         isi = np.diff(t_ms)
         isi = np.concatenate([[np.inf], np.abs(isi), [np.inf]])
         isi = np.minimum(isi[1:], isi[:-1])
@@ -806,33 +1005,25 @@ def get_top_assignment_weights(
     raise NotImplementedError  # TODO
 
 
-def explode_soft_assignment_sorting(
+def merged_responsibilities(
     sorting: DARTsortSorting,
     responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
-) -> DARTsortSorting:
-    """Convert a hard-assigned sorting to a soft-assigned one
-
-    Each spike will be represented multiple times, once in each
-    unit that supports it in the soft assignment candidates array.
-    There will be a "soft_assignment_weight" feature attached to
-    the output sorting.
-    """
-    from .spiketorch import entropy
-
+):
+    print("hi")
     labels = sorting.labels
-    assert labels is not None
-    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+    assert labels is not None, "0"
 
     candidates = cast(np.ndarray, getattr(sorting, candidates_key))
     responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
+    assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
 
     notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
     clabels = np.where(notnoise, candidates[:, 0], -1)
 
     lvalid = labels >= 0
     cvalid = clabels >= 0
-    assert np.array_equal(lvalid, cvalid)
+    assert np.array_equal(lvalid, cvalid), "2"
 
     Klabel = labels.max() + 1
     Kcand = candidates.max() + 1
@@ -847,7 +1038,7 @@ def explode_soft_assignment_sorting(
     luniq, lcount = np.unique(lc[:, 0], return_counts=True)
     luniq_check = np.unique(labels)
     luniq_check = luniq_check[luniq_check >= 0]
-    assert np.array_equal(luniq_check, luniq)
+    assert np.array_equal(luniq_check, luniq), "3"
     mergedl = luniq[lcount > 1]
     mergedr = responsibilities[:, : candidates.shape[1]].copy()
     for ll in mergedl:
@@ -867,6 +1058,36 @@ def explode_soft_assignment_sorting(
         c[sixu, cix[sixfirst]] = ll
         mergedr[sixu, cix[sixfirst]] = wsum
 
+    return dict(
+        K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c
+    )
+
+
+def explode_soft_assignment_sorting(
+    sorting: DARTsortSorting,
+    responsibilities_key="gmm_responsibilities",
+    candidates_key="gmm_candidates",
+) -> DARTsortSorting:
+    """Convert a hard-assigned sorting to a soft-assigned one
+
+    Each spike will be represented multiple times, once in each
+    unit that supports it in the soft assignment candidates array.
+    There will be a "soft_assignment_weight" feature attached to
+    the output sorting.
+    """
+    from .spiketorch import entropy
+
+    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+
+    mgr = merged_responsibilities(
+        sorting,
+        responsibilities_key=responsibilities_key,
+        candidates_key=candidates_key,
+    )
+    mergedr = mgr["merged_responsibilities"]
+    c = mgr["merged_candidates"]
+    Klabel = mgr["K"]
+
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
     # okay, having deduplicated, we are now ready to explode
@@ -879,6 +1100,7 @@ def explode_soft_assignment_sorting(
     times_samples = sorting.times_samples[spike_ix]
 
     # store weight as a feature
+    responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
     feats = dict(
         soft_assignment_weight=mergedr[spike_ix, candidate_ix],
         times_seconds=t_s[spike_ix],
@@ -903,7 +1125,7 @@ def candidates_to_labels(clabels, labels, Klabel, Kcand):
     lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
     lc = lc[(lc >= 0).all(axis=1)]
     # each candidate only appears once -- it is a merge.
-    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1])
+    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1]), "ctol"
     ctol = np.full((Kcand + 1,), fill_value=Klabel)
     ctol[lc[:, 1]] = lc[:, 0]
     return lc, ctol
@@ -1165,7 +1387,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
+    start_time_s, end_time_s = recording.segments[0].sample_index_to_time(
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
@@ -1207,11 +1429,11 @@ def _read_by_chunk(mask, dataset, show_progress=True):
 def yield_chunks(
     dataset, show_progress=True, desc_prefix=None, fallback_chunk_length=4096
 ) -> Generator[tuple[slice, np.ndarray], None, None]:
-    """Iterate chunks of an h5py dataset
+    """Iterate chunks of an h5py dataset (or np.ndarray)
 
     The dataset can either not be chunked or chunked only on the first axis.
     """
-    if dataset.chunks is None:
+    if not hasattr(dataset, "chunks") or dataset.chunks is None:
         chunks = (
             slice(s, min(s + fallback_chunk_length, len(dataset)))
             for s in range(0, len(dataset), fallback_chunk_length)
@@ -1230,10 +1452,10 @@ def yield_chunks(
         chunks = (chunk[0] for chunk in chunks)
 
     if show_progress:
-        desc = dataset.name
+        desc = getattr(dataset, "name", "")
         if desc_prefix:
-            desc = f"{desc_prefix} {desc}"
-        if dataset.chunks is None:
+            desc = f"{desc_prefix} {desc}".strip()
+        if getattr(dataset, "chunks", None) is None:
             n_chunks = int(np.ceil(dataset.shape[0] / fallback_chunk_length))
         else:
             n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
@@ -1299,7 +1521,7 @@ def subsample_waveforms(
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
-    fixed_property_keys=("channels",),
+    fixed_property_keys=("channels", "times_seconds"),
     replace=True,
     h5=None,
     device: torch.device | str = "cpu",
@@ -1312,13 +1534,14 @@ def subsample_waveforms(
         h5 = h5py.File(hdf5_filename)
     elif need_open:
         raise ValueError("Need h5 or hdf5_filename.")
+    assert h5 is not None
 
     try:
-        channels: np.ndarray = h5["channels"][:]  # type: ignore
+        channels: np.ndarray = h5["channels"][:]
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            wfshape = h5[waveforms_dataset_name].shape  # type: ignore
+            wfshape = h5[waveforms_dataset_name].shape
             emptywf = torch.zeros(wfshape)
             return emptywf, dict(channels=emptyi)
         weights = fit_reweighting(
@@ -1328,34 +1551,42 @@ def subsample_waveforms(
             fit_max_reweighting=fit_max_reweighting,
             voltages_dataset_name=voltages_dataset_name,
         )
-        fixed_property_keys = [k for k in fixed_property_keys if k in h5]
+        for k in fixed_property_keys:
+            assert k in h5, k
         if n_wf > n_waveforms_fit and not subsample_by_weighting:
             choices = random_state.choice(
                 n_wf, p=weights, size=n_waveforms_fit, replace=replace
             )
             if not replace:
                 choices.sort()
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], choices)
-                fixed_properties = {k: h5[k][choices] for k in fixed_property_keys}  # type: ignore
+                waveforms = batched_h5_read(
+                    h5[waveforms_dataset_name], choices, show_progress=True
+                )
+                weights = weights[choices]
+                fixed_properties = {
+                    k: batched_h5_read(h5[k], choices) for k in fixed_property_keys
+                }
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
-                waveforms = batched_h5_read(h5[waveforms_dataset_name], uchoices)[
-                    ichoices
-                ]
+                waveforms = batched_h5_read(
+                    h5[waveforms_dataset_name], uchoices, show_progress=True
+                )
+                waveforms = waveforms[ichoices]
+                weights = weights[uchoices[ichoices]]
                 fixed_properties = {
-                    k: h5[k][uchoices][ichoices]  # type: ignore
-                    for k in fixed_property_keys
+                    k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys
                 }
+                fixed_properties = {k: v[ichoices] for k, v in fixed_properties.items()}
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]  # type: ignore
-            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}  # type: ignore
+            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
     finally:
         if need_open:
             h5.close()
         del h5
 
     device = torch.device(device)
-    waveformsr = torch.as_tensor(waveforms, device=device)
+    waveformsr = torch.as_tensor(waveforms)
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }
@@ -1368,7 +1599,7 @@ def subsample_waveforms(
 
 
 def fit_reweighting(
-    voltages: np.ndarray | None = None,  # type: ignore
+    voltages: np.ndarray | torch.Tensor | None = None,
     h5=None,
     hdf5_path=None,
     log_voltages=True,
@@ -1385,7 +1616,7 @@ def fit_reweighting(
             voltages = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
-                voltages: np.ndarray = h5[voltages_dataset_name][:]  # type: ignore
+                voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
             assert False
     assert isinstance(voltages, np.ndarray)
@@ -1393,14 +1624,18 @@ def fit_reweighting(
     from ..clustering.density import get_smoothed_density
 
     if torch.is_tensor(voltages):
-        voltages = voltages.numpy(force=True)
+        v = voltages.numpy(force=True)
+    else:
+        v = voltages
+    del voltages
+
     if log_voltages:
-        sign = np.sign(voltages)
-        voltages = sign * np.log(np.abs(voltages))
-    voltages = np.nan_to_num(voltages)
-    sigma = 1.06 * voltages.std() * np.power(len(voltages), -0.2)
+        sign = np.sign(v)
+        v = sign * np.log(np.abs(v))
+    v = np.nan_to_num(v)
+    sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
-    dens = get_smoothed_density(voltages[:, None], sigma=sigma)
+    dens = get_smoothed_density(v[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
@@ -1409,7 +1644,14 @@ def fit_reweighting(
     return sample_p
 
 
-def divide_randomly(n_things, n_bins, rg):
+def divide_randomly(
+    n_things: int,
+    n_bins: int,
+    rg: int | np.random.Generator,
+    pad_to_more_bins: int | None = None,
+    bin_limit: int | None = None,
+) -> np.ndarray:
+    """Randomly divide n_things among n_bins, with optional zero padding on the right."""
     things_per_bin = np.zeros(n_bins, dtype=np.int64)
     n_even_split = n_things // n_bins
     things_per_bin += n_even_split
@@ -1420,4 +1662,24 @@ def divide_randomly(n_things, n_bins, rg):
         choices = rg.choice(n_bins, size=n_things_remaining)
         np.add.at(things_per_bin, choices, 1)
     assert things_per_bin.sum() == n_things
+
+    if not pad_to_more_bins:
+        return things_per_bin
+    assert pad_to_more_bins >= n_bins
+    pad = pad_to_more_bins - n_bins
+    if not pad:
+        return things_per_bin
+
+    if bin_limit:
+        # if we missed some things, spread them over the pad bins
+        things_per_bin = np.minimum(things_per_bin, bin_limit)
+        remaining = n_things - things_per_bin.sum()
+        padding = divide_randomly(remaining, pad, rg)
+        things_per_bin = np.concatenate([things_per_bin, padding])
+    else:
+        things_per_bin = np.pad(things_per_bin, [(0, pad)])
+
+    assert things_per_bin.shape == (pad_to_more_bins,)
+    assert things_per_bin.sum() == n_things
+
     return things_per_bin

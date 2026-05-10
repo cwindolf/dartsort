@@ -13,7 +13,9 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files  # pyright: ignore
+        from importlib_resources import (
+            files,  # type: ignore # ty: ignore[unisued-type-ignore-comment]
+        )
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -190,6 +192,7 @@ def simulate_sorting(
             refractory_samples=refractory_samples,
             sampling_frequency=sampling_frequency,
         )
+        spike_times = spike_times[spike_times < n_samples - spike_length_samples]
         unit_proportions = firing_rates / global_rate
         spike_labels = rg.choice(num_units, p=unit_proportions, size=spike_times.size)
 
@@ -237,7 +240,7 @@ def generate_geom(
         num_contact_per_column=num_contact_per_column,
         xpitch=xpitch,
         ypitch=ypitch,
-        y_shift_per_column=y_shift_per_column,
+        y_shift_per_column=np.asarray(y_shift_per_column),
     )
     geom = p.contact_positions
     assert geom is not None
@@ -273,7 +276,7 @@ default_sim_featurization_cfg = FeaturizationConfig(
 )
 
 
-def add_features(h5_path, recording, featurization_cfg):
+def add_features(h5_path, recording, featurization_cfg, computation_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = cast(h5py.Dataset, h5["geom"])[:]
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
@@ -282,13 +285,13 @@ def add_features(h5_path, recording, featurization_cfg):
             return
         featurization_cfg = replace(featurization_cfg, do_localization=len(geom) > 1)
         gt_pipeline = WaveformPipeline.from_config(
-            featurization_cfg,
-            WaveformConfig(),
+            featurization_cfg=featurization_cfg,
+            waveform_cfg=WaveformConfig(),
             geom=geom,
             channel_index=channel_index,
             sampling_frequency=recording.sampling_frequency,
         )
-        gt_pipeline.fit(recording, waveforms, **fixed_properties)
+        gt_pipeline.fit(recording, waveforms, computation_cfg, **fixed_properties)
         models_dir = h5_path.parent / f"{h5_path.stem}_models"
         models_dir.mkdir(exist_ok=True)
         torch.save(gt_pipeline.state_dict(), models_dir / "featurization_pipeline.pt")
@@ -307,8 +310,8 @@ def add_features(h5_path, recording, featurization_cfg):
             _, feats = gt_pipeline(
                 chunk, channels=cast(h5py.Dataset, h5["channels"])[sli]
             )
-            for k, v in feats.items():
-                f_dsets[k][sli] = v.numpy(force=True)
+            for k in f_dsets:
+                f_dsets[k][sli] = feats[k].numpy(force=True)
 
 
 def simulate_twostate_switching(

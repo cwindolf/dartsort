@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import string
-from typing import Literal
 import warnings
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -100,6 +100,7 @@ class DARTsortGroundTruthComparison:
         """Make sure that all GT and tested units are present."""
         if self._agreement_scores is not None:
             return self._agreement_scores
+        assert self.comparison.agreement_scores is not None
         a = self.comparison.agreement_scores.copy()
         gtids = np.arange(self.gt_analysis.sorting.unit_ids.max() + 1)
         tids = np.arange(self.tested_analysis.sorting.unit_ids.max() + 1)
@@ -173,6 +174,15 @@ class DARTsortGroundTruthComparison:
         self._calculate_greedy_confusion_and_detection()
         return self._greedy_prec
 
+    def relevant_tested_units(self, gt_unit_id: int | None = None, threshold=0.05):
+        if gt_unit_id is None:
+            tested_units = set()
+            for gt_unit_id in self.gt_analysis.unit_ids:
+                tested_units.update(self.relevant_tested_units(gt_unit_id=gt_unit_id))
+            return tested_units
+        ag = self.agreement_scores.loc[gt_unit_id]
+        return ag.index[ag.values >= threshold]
+
     def unit_collidedness(self):
         uids = self.gt_analysis.sorting.unit_ids
         c = np.full(len(uids), np.nan)
@@ -205,9 +215,7 @@ class DARTsortGroundTruthComparison:
                 if udt.size:
                     match_dt_rms[j] = np.sqrt(np.square(udt).mean())
             except ValueError as e:
-                warnings.warn(
-                    f"ValueError in misalignment. SI matching bug. {e=}"  # type: ignore
-                )
+                warnings.warn(f"ValueError in misalignment. SI matching bug. {e=}")
         return match_dt_rms
 
     def matched_misalignment(self, gt_unit_id):
@@ -273,12 +281,12 @@ class DARTsortGroundTruthComparison:
         self._template_distances = dists
 
     def _calculate_greedy_confusion_and_detection(self):
-        from ..evaluate.hybrid_util import greedy_match, greedy_match_counts
-
         if self._unsorted_detection is not None:
             return
         if self.verbose:
             print("Calculate unsorted detection...")
+        from dartsort.evaluate.hybrid_util import greedy_match_counts
+
         frames_per_ms = self.gt_analysis.recording.sampling_frequency / 1000
         delta_frames = self.delta_time * frames_per_ms
         greedy_res = greedy_match_counts(
@@ -354,6 +362,81 @@ class DARTsortGroundTruthComparison:
             ],
         )
 
+    def tp_spike_matching(self):
+        """
+        Returns
+        -------
+        tested_index_of_gt: np.ndarray
+            tested_index_of_gt[i] is the index of the matching tested spike for the ith
+            gt spike
+        gt_index_of_tested: np.ndarray
+            gt_index_of_tested[i] is the index of the matching gt spike for the ith
+            tested spike
+        """
+        assert self.gt_analysis.sorting.labels is not None
+        assert self.tested_analysis.sorting.labels is not None
+        assert self.comparison.hungarian_match_12 is not None
+        tested_index_of_gt = np.full_like(self.gt_analysis.sorting.labels, -1)
+        gt_index_of_tested = np.full_like(self.tested_analysis.sorting.labels, -1)
+
+        for gt_unit_id in self.gt_analysis.unit_ids:
+            tested_unit_id = self.comparison.hungarian_match_12[gt_unit_id]
+            if tested_unit_id < 0:
+                continue
+
+            in_gt_unit = np.flatnonzero(self.gt_analysis.sorting.labels == gt_unit_id)
+            gt_labels = self.comparison.get_labels1(gt_unit_id)[0]
+            assert gt_labels.shape == in_gt_unit.shape, 1
+
+            in_tested_unit = np.flatnonzero(
+                self.tested_analysis.sorting.labels == tested_unit_id
+            )
+            tested_labels = self.comparison.get_labels2(tested_unit_id)[0]
+            assert tested_labels.shape == in_tested_unit.shape, 2
+
+            gt_tp_ix = in_gt_unit[gt_labels == "TP"]
+            tested_tp_ix = in_tested_unit[tested_labels == "TP"]
+            assert gt_tp_ix.shape == tested_tp_ix.shape, 3
+
+            tested_index_of_gt[gt_tp_ix] = tested_tp_ix
+            gt_index_of_tested[tested_tp_ix] = gt_tp_ix
+
+        return tested_index_of_gt, gt_index_of_tested
+
+    def spike_matching(self, fn_method="none"):
+        tested_index_of_gt, gt_index_of_tested = self.tp_spike_matching()
+        if fn_method == "none":
+            pass
+        elif fn_method == "nearest":
+            from ..evaluate.hybrid_util import greedy_match_counts
+
+            gt_fn = np.flatnonzero(tested_index_of_gt < 0)
+            tested_fn = np.flatnonzero(gt_index_of_tested < 0)
+            gt_sorting_fn = self.gt_analysis.sorting.mask(gt_fn)
+            tested_sorting_fn = self.tested_analysis.sorting.mask(tested_fn)
+            frames_per_ms = self.gt_analysis.recording.sampling_frequency / 1000
+            delta_frames = int(self.delta_time * frames_per_ms)
+            greedy_res = greedy_match_counts(
+                gt_sorting_fn, tested_sorting_fn, radius_frames=delta_frames
+            )
+            gtfn_index_of_testedfn = greedy_res["test2gt_spike"]
+
+            testedfn_index_of_gtfn = np.full_like(gt_fn, -1)
+            testedix = np.flatnonzero(gtfn_index_of_testedfn >= 0)
+            gtix = gtfn_index_of_testedfn[testedix]
+            testedfn_index_of_gtfn[gtix] = testedix
+
+            assert tested_fn.shape == gtfn_index_of_testedfn.shape, 1
+            assert gt_fn.shape == testedfn_index_of_gtfn.shape, 2
+            tmask = testedfn_index_of_gtfn >= 0
+            tested_index_of_gt[gt_fn[tmask]] = testedfn_index_of_gtfn[tmask]
+
+            gmask = gtfn_index_of_testedfn >= 0
+            gt_index_of_tested[tested_fn[gmask]] = gtfn_index_of_testedfn[gmask]
+        else:
+            assert False
+        return tested_index_of_gt, gt_index_of_tested
+
     def get_greedy_correspondence_in_si_match(self):
         tlabels = self.tested_analysis.sorting.labels
         gt_labels_for_tested = np.full_like(tlabels, -1)
@@ -402,7 +485,7 @@ class DARTsortGroundTruthComparison:
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         tp_waves = self.gt_analysis.unit_raw_waveforms(
-            which=ind_groups["matched_gt_indices"],  # type: ignore
+            which=ind_groups["matched_gt_indices"],
             **waveform_kw,  # type: ignore
         )
         if tp_waves is None:
@@ -419,7 +502,7 @@ class DARTsortGroundTruthComparison:
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         fn_waves = self.gt_analysis.unit_raw_waveforms(
-            which=ind_groups["only_gt_indices"],  # type: ignore
+            which=ind_groups["only_gt_indices"],
             **waveform_kw,  # type: ignore
         )
         if fn_waves is None:
@@ -432,7 +515,7 @@ class DARTsortGroundTruthComparison:
         # load FP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         fp_waves = self.tested_analysis.unit_raw_waveforms(
-            which=ind_groups["only_tested_indices"],  # type: ignore
+            which=ind_groups["only_tested_indices"],
             **waveform_kw,  # type: ignore
         )
         if fp_waves is None:
@@ -446,7 +529,7 @@ class DARTsortGroundTruthComparison:
             w["unsorted_tp"] = w["unsorted_fn"] = None
         else:
             utp_waves = self.gt_analysis.unit_raw_waveforms(
-                which=ind_groups["unsorted_tp_indices"],  # type: ignore
+                which=ind_groups["unsorted_tp_indices"],
                 **waveform_kw,  # type: ignore
             )
             if utp_waves is None:
@@ -456,7 +539,7 @@ class DARTsortGroundTruthComparison:
                 w["which_unsorted_tp"] = utp_waves.which
                 w["unsorted_tp"] = utp_waves.waveforms
             ufn_waves = self.gt_analysis.unit_raw_waveforms(
-                which=ind_groups["unsorted_fn_indices"],  # type: ignore
+                which=ind_groups["unsorted_fn_indices"],
                 **waveform_kw,  # type: ignore
             )
             if ufn_waves is None:

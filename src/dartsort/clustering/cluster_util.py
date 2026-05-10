@@ -1,35 +1,118 @@
 from typing import cast
 
 import h5py
-
-try:
-    from hdbscan import HDBSCAN
-except ImportError:
-    from sklearn.cluster import HDBSCAN  # type: ignore
-
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial import KDTree
-from sklearn.neighbors import KNeighborsClassifier
 
-from ..util import data_util, drift_util, waveform_util
+from ..util import data_util, waveform_util
+from ..util.data_util import DARTsortSorting
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from dredge.motion_util import IdentityMotionEstimate
-
 
 logger = get_logger(__name__)
 
 
-def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps=1e-5):
+def recluster(
+    *,
+    sorting: DARTsortSorting,
+    dists: np.ndarray,
+    unit_ids: np.ndarray | None = None,
+    shifts: np.ndarray | None = None,
+    unit_snrs: np.ndarray | None = None,
+    threshold=0.25,
+    link="complete",
+):
+    """Distance-based hierarchical clustering of units
+
+    Arguments
+    ---------
+    sorting: DARTsortSorting,
+    dists: np.ndarray
+    unit_ids: np.ndarray | None, default None
+    shifts: np.ndarray | None, default None
+        shifts[i, j] is how far ahead unit i is from unit j, so, it's
+        like trough[i] - trough[j]
+    unit_snrs: np.ndarray | None, default None,
+    threshold=0.25,
+    link="complete",
+    """
+    new_labels, new_ids = hierarchical_cluster(
+        sorting.labels, dists, linkage_method=link, threshold=threshold
+    )
+    if unit_ids is not None:
+        assert np.array_equal(unit_ids, np.arange(dists.shape[0]))
+    assert new_labels is not None
+    new_sorting = apply_reclustering(
+        sorting=sorting, merge_mapping=new_ids, shifts=shifts, unit_snrs=unit_snrs
+    )
+    return new_sorting, new_ids
+
+
+def apply_reclustering(
+    sorting: DARTsortSorting,
+    merge_mapping: np.ndarray,
+    new_labels: np.ndarray | None = None,
+    shifts: np.ndarray | None = None,
+    unit_snrs: np.ndarray | None = None,
+) -> DARTsortSorting:
+    assert sorting.labels is not None
+
+    if new_labels is None:
+        new_labels = np.full_like(sorting.labels, -1)
+        kept = np.flatnonzero(sorting.labels >= 0)
+        new_labels[kept] = merge_mapping[sorting.labels[kept]]
+
+    if shifts is None:
+        return sorting.ephemeral_replace(labels=new_labels)
+    assert unit_snrs is not None
+
+    # find original labels in each cluster
+    clust_inverse = {i: [] for i in merge_mapping}
+    for orig_label, new_label in enumerate(merge_mapping):
+        clust_inverse[new_label].append(orig_label)
+
+    # align to best snr unit
+    times_updated = sorting.times_samples.copy()
+    for new_label, orig_labels in clust_inverse.items():
+        # we don't need to realign clusters which didn't change
+        if len(orig_labels) <= 1:
+            continue
+
+        orig_snrs = unit_snrs[orig_labels]
+        best_orig = orig_labels[orig_snrs.argmax()]
+        for ogl in np.setdiff1d(orig_labels, [best_orig]):
+            in_orig_unit = np.flatnonzero(sorting.labels == ogl)
+            # this is like trough[best] - trough[ogl]
+            shift_og_best = shifts[best_orig, ogl]
+            # if >0, trough of og is behind trough of best.
+            # subtracting will move trough of og to the right.
+            times_updated[in_orig_unit] -= shift_og_best
+
+    return sorting.ephemeral_replace(times_samples=times_updated, labels=new_labels)
+
+
+def hierarchical_cluster(
+    labels: np.ndarray | None,
+    distances: np.ndarray,
+    linkage_method="complete",
+    threshold=1.0,
+    eps=1e-5,
+):
     """"""
     n = distances.shape[0]
     assert eps < threshold  # that would be confusing.
     if n <= 1:
         return labels, np.arange(n)
     pdist = distances[np.triu_indices(n, k=1)]
+    assert not np.isnan(pdist).any()
+    assert not np.isneginf(pdist).any()
+    finite = np.isfinite(pdist)
+    if not finite.any():
+        return labels, np.arange(n)
     # tolearate some numerical zeros.
     pdist[np.logical_and(pdist > -eps, pdist < 0)] = 0.0
+
     if pdist.min() > threshold:
         if labels is None:
             return None, np.arange(n)
@@ -37,7 +120,6 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
             ids = np.unique(labels)
             return labels, ids[ids >= 0]
 
-    finite = np.isfinite(pdist)
     if not finite.all():
         inf = max(0, pdist[finite].max()) + threshold + 1.0
         pdist[np.logical_not(finite)] = inf
@@ -49,8 +131,20 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
         raise ValueError(
             f"fcluster failed with {threshold=} and smallest pdist {pdist.min()}."
         ) from e
-    # offset by 1, I think always, but I don't want to be wrong?
-    new_ids -= new_ids.min()
+
+    new_uniq = np.unique(new_ids)
+    n_new = new_uniq.shape[0]
+    assert np.array_equal(new_uniq, 1 + np.arange(n_new))
+    n_old = new_ids.shape[0]
+    n_merged = n_old - n_new
+    merge_pct = 100 * n_merged / n_old
+    logger.info(
+        f"{linkage_method} link merged {n_merged} units "
+        f"({n_old} -> {n_new}, {merge_pct:.1f}% reduction)."
+    )
+
+    # offset by 1
+    new_ids -= 1
 
     if labels is None:
         new_labels = None
@@ -60,6 +154,30 @@ def agglomerate(labels, distances, linkage_method="complete", threshold=1.0, eps
         new_labels[kept] = new_ids[labels[kept]]
 
     return new_labels, new_ids
+
+
+def linkage_mask(
+    distances: np.ndarray, linkage_method="complete", threshold=1.0
+) -> np.ndarray:
+    _, ids = hierarchical_cluster(
+        labels=None,
+        distances=distances,
+        linkage_method=linkage_method,
+        threshold=threshold,
+    )
+    mask = ids[:, None] == ids[None, :]
+    assert mask.any(1).all()
+    return mask
+
+
+def sparsify_labels(labels: np.ndarray) -> dict[int, np.ndarray]:
+    assert labels.ndim == 1
+    ids = np.unique(labels)
+    ids = ids[ids >= 0]
+    inj = {}
+    for j in ids:
+        inj[j] = np.flatnonzero(labels == j)
+    return inj
 
 
 def leafsets(Z, max_distance=np.inf):
@@ -202,24 +320,41 @@ def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
     return labels
 
 
-def reorder_by_depth(sorting, motion=None):
+def reorder_by_depth(
+    sorting, motion=None, spatial_footprints=None, geom=None, centroids=None
+):
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]
 
     units, kept_labels = np.unique(kept_labels, return_inverse=True)
 
-    depths = sorting.point_source_localizations[kept, 2]
-    if motion is not None:
-        depths = motion.correct_s(sorting.times_seconds[kept], depths)
+    if geom is None and motion is not None:
+        geom = motion.rgeom
 
-    centroids = np.zeros(units.size)
-    for u in range(units.size):
-        inu = np.flatnonzero(kept_labels == u)
-        centroids[u] = np.median(depths[inu])
+    if spatial_footprints is not None:
+        assert centroids is None
+        assert geom is not None
+        assert spatial_footprints.shape[1] == geom.shape[0]
+        assert spatial_footprints.shape[0] == units.shape[0]
+        w = spatial_footprints / spatial_footprints.sum(1, keepdims=True)
+        assert np.isfinite(w).all()
+        centroids = w @ geom[:, 1]
+
+    if centroids is None:
+        depths = sorting.point_source_localizations[kept, 2]
+        if motion is not None:
+            depths = motion.correct_s(sorting.times_seconds[kept], depths)
+
+        centroids = np.zeros(units.size)
+        for u in range(units.size):
+            inu = np.flatnonzero(kept_labels == u)
+            centroids[u] = np.median(depths[inu])
+    assert centroids.shape[0] == units.shape[0]
 
     labels = sorting.labels.copy()
     # this one is some food for thought, lol.
-    labels[kept] = np.argsort(np.argsort(centroids))[kept_labels]
+    reorder = np.argsort(np.argsort(centroids, kind="stable"), kind="stable")
+    labels[kept] = reorder[kept_labels]
 
     return sorting.ephemeral_replace(labels=labels)
 
@@ -278,6 +413,11 @@ def recursive_hdbscan_clustering(
     cluster_selection_epsilon=1,
     recursive=True,
 ):
+    try:
+        from hdbscan import HDBSCAN
+    except ImportError:
+        from sklearn.cluster import HDBSCAN
+
     clusterer = HDBSCAN(
         min_cluster_size=min_cluster_size,
         cluster_selection_epsilon=cluster_selection_epsilon,
@@ -317,6 +457,8 @@ def recursive_hdbscan_clustering(
 
 
 def knn_reassign_outliers(labels, features):
+    from sklearn.neighbors import KNeighborsClassifier
+
     outliers = labels < 0
     outliers_idx = np.flatnonzero(outliers)
     if not outliers_idx.size:
@@ -339,7 +481,7 @@ def get_main_channel_pcs(
     mask[which] = True
     channels = sorting.channels[which]
 
-    features = getattr(sorting, "collisioncleaned_tpca_features", None)
+    features = getattr(sorting, dataset_name, None)
     channel_index = getattr(sorting, "channel_index", None)
     if features is not None and channel_index is not None:
         features = features[which][:, :rank]

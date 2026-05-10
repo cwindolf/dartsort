@@ -7,23 +7,20 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import (
     DataLoader,
-    Dataset,
-    Sampler,
     StackDataset,
     TensorDataset,
 )
 from tqdm.auto import trange
 
-from ..util.spiketorch import reindex, spawn_torch_rg
 from ..util.logging_util import get_logger
+from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
-    BaseMultichannelDenoiser,
-    get_noise,
-    AsyncSameChannelRecordingNoiseDataset,
     AOTIndicesWeightedRandomBatchSampler,
+    AsyncSameChannelRecordingNoiseDataset,
+    BaseMultichannelDenoiser,
     NoneDataset,
+    get_noise,
 )
-
 
 logger = get_logger(__name__)
 
@@ -35,6 +32,8 @@ class Decollider(BaseMultichannelDenoiser):
         self,
         channel_index,
         geom,
+        waveform_cfg,
+        sampling_frequency=30_000.0,
         hidden_dims=(1024, 1024),
         norm_kind="none",
         name=None,
@@ -60,8 +59,8 @@ class Decollider(BaseMultichannelDenoiser):
         scaling="max",
         signal_gates=True,
         step_callback=None,
-        # my args. todo: port over common ones.
         epoch_size=200 * 256,
+        # my args. todo: port over common ones.
         inference_z_samples=10,
         detach_amortizer=True,
         exz_estimator="n3n",
@@ -71,7 +70,7 @@ class Decollider(BaseMultichannelDenoiser):
         emz_res_type="none",
         l4_alpha=0,
         l1_alpha=0,
-        output_l1_alpha=1e-5,
+        output_l1_alpha=0.0,
         cycle_loss_alpha=1.0,
         separate_cycle_net=False,
         detach_cycle_loss=False,
@@ -86,6 +85,8 @@ class Decollider(BaseMultichannelDenoiser):
         super().__init__(
             geom=geom,
             channel_index=channel_index,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
             name=name,
             name_prefix=name_prefix,
             hidden_dims=hidden_dims,
@@ -111,9 +112,8 @@ class Decollider(BaseMultichannelDenoiser):
             scaling=scaling,
             signal_gates=signal_gates,
             step_callback=step_callback,
+            epoch_size=epoch_size,
         )
-
-        self.epoch_size = epoch_size
         self.queue_chunks = queue_chunks
 
         self.inference_z_samples = inference_z_samples
@@ -142,25 +142,36 @@ class Decollider(BaseMultichannelDenoiser):
             return
         self.initialize_shapes()
         if self.exz_estimator in ("n2n", "n3n"):
-            self.eyz = self.get_mlp(
-                res_type=self.eyz_res_type, hidden_dims=self.eyz_net_hidden_dims
+            self.eyz: torch.nn.Module = self.get_mlp(
+                res_type=self.eyz_res_type,
+                hidden_dims=self.eyz_net_hidden_dims,
+                message="eyz",
             )
         if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz = self.get_mlp(res_type=self.emz_res_type, output_layer="linear")
+            self.emz: torch.nn.Module = self.get_mlp(
+                res_type=self.emz_res_type, output_layer="linear", message="emz"
+            )
         if self.inference_kind == "amortized":
-            self.inf_net = self.get_mlp(
-                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
+            self.inf_net: torch.nn.Module = self.get_mlp(
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                message="inf",
             )
         if self.separate_cycle_net:
-            self.den_net = self.get_mlp(
-                res_type=self.e_exz_y_res_type, hidden_dims=self.inf_net_hidden_dims
+            self.den_net: torch.nn.Module = self.get_mlp(
+                res_type=self.e_exz_y_res_type,
+                hidden_dims=self.inf_net_hidden_dims,
+                message="den",
             )
         else:
-            self.den_net = self.inf_net
+            self.den_net: torch.nn.Module = self.inf_net
         self.to(self.device)
 
-    def fit(self, recording, waveforms, *, channels, weights=None, **unused):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
+        weights = spike_data.get("weights")
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
         train_data, val_data = self._construct_datasets_from_waveforms(
             waveforms, channels, recording, weights
         )
@@ -364,31 +375,24 @@ class Decollider(BaseMultichannelDenoiser):
                 # Training phase
                 self.train()
                 train_losses = {}
-                for (
-                    waveform_batch,
-                    channels_batch,
-                    noise_batch,
-                    cnoise_batch,
-                ) in train_data:
-                    waveform_batch = waveform_batch.to(self.device)
-                    channels_batch = channels_batch.to(self.device)
-                    waveform_batch = reindex(
-                        channels_batch,
-                        waveform_batch,
+                for waveform_b, channels_b, noise_b, cnoise_b in train_data:
+                    waveform_b = waveform_b.to(self.device)
+                    channels_b = channels_b.to(self.device)
+                    waveform_b = reindex(
+                        channels_b,
+                        waveform_b,
                         self.relative_index,
                         pad_value=0.0,
                     )
 
                     optimizer.zero_grad()
-                    m = noise_batch.to(waveform_batch)
-                    ell = None
-                    if cnoise_batch is not None:
-                        ell = cnoise_batch.to(waveform_batch)
-                    mask = self.get_masks(channels_batch).to(waveform_batch)
-                    fres = self.train_forward(waveform_batch, m, ell, mask)
+                    m = noise_b.to(waveform_b)
+                    ell = None if cnoise_b is None else cnoise_b.to(waveform_b)
+                    mask = self.get_masks(channels_b).to(waveform_b)
+                    fres = self.train_forward(waveform_b, m, ell, mask)
                     loss_dict = self.loss(
                         mask,
-                        waveform_batch,
+                        waveform_b,
                         m,
                         fres,
                         l1_alpha=self.l1_alpha,
@@ -396,7 +400,7 @@ class Decollider(BaseMultichannelDenoiser):
                         output_l1_alpha=self.output_l1_alpha,
                     )
                     loss = sum(loss_dict.values())
-                    loss.backward()  # type: ignore
+                    loss.backward()
                     optimizer.step()
 
                     for k, v in loss_dict.items():
@@ -415,28 +419,20 @@ class Decollider(BaseMultichannelDenoiser):
                     self.eval()
                     val_losses = {}
                     with torch.no_grad():
-                        for (
-                            waveform_batch,
-                            channels_batch,
-                            noise_batch,
-                            ell_batch,
-                        ) in val_data:
-                            waveform_batch = waveform_batch.to(self.device)
-                            channels_batch = channels_batch.to(self.device)
-                            noise_batch = noise_batch.to(self.device)
-                            if ell_batch is not None:
-                                ell_batch = ell_batch.to(self.device)
+                        for waveform_b, channels_b, noise_b, ell_b in val_data:
+                            waveform_b = waveform_b.to(self.device)
+                            channels_b = channels_b.to(self.device)
+                            noise_b = noise_b.to(self.device)
+                            ell_b = None if ell_b is None else ell_b.to(self.device)
 
-                            waveform_batch, mask = self.to_nn_channels(
-                                waveform_batch, channels_batch
+                            waveform_b, mask = self.to_nn_channels(
+                                waveform_b, channels_b
                             )
-                            m = noise_batch.to(waveform_batch)
-                            fres = self.train_forward(
-                                waveform_batch, m, ell_batch, mask
-                            )
+                            m = noise_b.to(waveform_b)
+                            fres = self.train_forward(waveform_b, m, ell_b, mask)
                             loss_dict = self.loss(
                                 mask,
-                                waveform_batch,
+                                waveform_b,
                                 m,
                                 fres,
                                 l1_alpha=self.l1_alpha,
@@ -452,11 +448,8 @@ class Decollider(BaseMultichannelDenoiser):
                     val_loss = sum(val_losses.values())
                     train_records[-1]["val_loss"] = val_loss
 
-                    if (
-                        self.earlystop_eps is not None
-                        and last_val_loss is not None
-                        and val_loss - last_val_loss > self.earlystop_eps
-                    ):
+                    can_val = not (self.earlystop_eps is None or last_val_loss is None)
+                    if can_val and val_loss - last_val_loss > self.earlystop_eps:
                         if epoch >= self.min_epochs:
                             print(f"Early stopping after {epoch} epochs.")
                             break
@@ -466,7 +459,7 @@ class Decollider(BaseMultichannelDenoiser):
                     self.step_callback(self, epoch, val_loss)
 
                 # Print loss summary
-                loss_str = f"Train {loss:.4f} " + "|".join(  # type: ignore
+                loss_str = f"Train {loss:.4f} " + "|".join(
                     f"{k}: {v:.3f}" for k, v in train_losses.items()
                 )
                 if val_data is not None:
@@ -475,7 +468,7 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                 pbar.set_description(f"Epochs [{loss_str}]")
 
-                self.step_scheduler(scheduler, loss, val_loss)  # type: ignore
+                self.step_scheduler(scheduler, loss, val_loss)
 
         train_df = pd.DataFrame.from_records(train_records)
         return train_df
@@ -595,9 +588,11 @@ class Decollider(BaseMultichannelDenoiser):
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class DecolliderDataLoader:
     loader: DataLoader
-    sampler: Sampler | None
-    noise_dataset: Dataset
-    cycle_noise_dataset: Dataset | NoneDataset
+    sampler: AOTIndicesWeightedRandomBatchSampler | None
+    noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset
+    cycle_noise_dataset: (
+        AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
+    )
     spike_length_samples: int
 
     def __len__(self):
@@ -618,18 +613,18 @@ class DecolliderDataLoader:
         if hasattr(self.sampler, "refresh"):
             self.sampler.refresh()
             if hasattr(self.noise_dataset, "refresh"):
-                self.noise_dataset.refresh(self.sampler.indices)
+                self.noise_dataset.refresh(self.sampler.indices)  # type: ignore
             if self.cycle_noise_dataset is not None and hasattr(
                 self.cycle_noise_dataset, "refresh"
             ):
-                self.cycle_noise_dataset.refresh(self.sampler.indices)
+                self.cycle_noise_dataset.refresh(self.sampler.indices)  # type: ignore
         else:
             assert not hasattr(self.noise_dataset, "refresh")
 
     def cleanup(self):
         if hasattr(self.noise_dataset, "cleanup"):
-            self.noise_dataset.cleanup()
+            self.noise_dataset.cleanup()  # type: ignore
         if self.cycle_noise_dataset is not None and hasattr(
             self.cycle_noise_dataset, "cleanup"
         ):
-            self.cycle_noise_dataset.cleanup()
+            self.cycle_noise_dataset.cleanup()  # type: ignore

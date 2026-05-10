@@ -6,7 +6,11 @@ import pytest
 import torch
 
 from dartsort.evaluate import simkit, simlib
-from dartsort.util.internal_config import FeaturizationConfig, MotionEstimationConfig
+from dartsort.util.internal_config import (
+    FeaturizationConfig,
+    MotionEstimationConfig,
+    ComputationConfig,
+)
 from dartsort.util.motion import get_motion_info
 from dartsort.util.noise_util import StationaryFactorizedNoise
 
@@ -83,11 +87,15 @@ def test_exact_injections(tmp_path, tmp_path_factory, globally_refractory, noise
             inj = np.flatnonzero(jj == j)
             assert np.diff(ii[inj]).min() >= ((fs / 1000) * refractory_ms)
             assert inj.size > (minfr * 0.5)
-    np.testing.assert_allclose(sim["templates"].templates, simple_template_library, atol=1e-5)
+    np.testing.assert_allclose(
+        sim["templates"].templates, simple_template_library, atol=1e-5
+    )
     assert not sim["motion"].drifting
     u, c = np.unique(st.labels, return_counts=True)
     np.testing.assert_equal(c, sim["unit_info_df"].gt_spike_count.values)
-    np.testing.assert_allclose(st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5)
+    np.testing.assert_allclose(
+        st.ptp_amplitudes, 1.0 + st.labels.astype(f_dt), atol=1e-5
+    )
 
 
 @pytest.mark.parametrize("globally_refractory", [False])
@@ -119,7 +127,7 @@ def test_reproducible_and_residual(
             probe_kwargs=dict(num_contact_per_column=12),
             noise_kind=noise_kind,
             globally_refractory=globally_refractory,
-            n_jobs=n_jobs,
+            computation_cfg=ComputationConfig.from_n_jobs(n_jobs),
             sampling_frequency=10_000.0,
             duration_seconds=8.1,
             templates_kind=templates_kind.removesuffix("grid"),
@@ -178,7 +186,6 @@ def test_reproducible_and_residual(
             np.testing.assert_allclose(noise.kernel_fft, 1.0, atol=0.05)
         else:
             gs, gv = simlib.rbf_kernel_sqrt(st0.geom)
-            gtk = np.load(simlib.default_temporal_kernel_npy)
             gc = gs * gv.T
             gc = gc @ gc.T
             np.testing.assert_allclose(noise.spatial_std, gs[::-1], atol=0.05)
@@ -189,8 +196,8 @@ def test_reproducible_and_residual(
 @pytest.mark.parametrize("drift_type", ["triangle"])
 def test_motion(tmp_path, drift_speed, drift_type):
     sim = simkit.generate_simulation(
-        tmp_path / f"sim",
-        tmp_path / f"noise",
+        tmp_path / "sim",
+        tmp_path / "noise",
         n_units=256,
         probe_kwargs=dict(
             num_columns=1, num_contact_per_column=96, y_shift_per_column=None
@@ -228,7 +235,7 @@ def test_motion(tmp_path, drift_speed, drift_type):
     ).dredge_motion_est
     assert me1 is not None
     d1 = me1.displacement.ravel()
-    np.testing.assert_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)  # type: ignore
+    np.testing.assert_equal(me0.time_bin_centers_s, me1.time_bin_centers_s)
     assert np.isclose(
         np.mean(np.square(np.diff(d0)[1:-1] - np.diff(d1)[1:-1])), 0.0, atol=0.1
     )

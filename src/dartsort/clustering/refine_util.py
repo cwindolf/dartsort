@@ -3,13 +3,13 @@ import numpy as np
 import torch
 
 from ..transform.temporal_pca import BaseTemporalPCA
-from ..util import data_util, job_util, spiketorch
+from ..util import data_util, spiketorch
 from ..util.internal_config import ComputationConfig, RefinementConfig
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.py_util import databag
-from .cluster_util import agglomerate, reorder_by_depth
-from .gmm.stable_features import StableSpikeDataset
+from .cluster_util import hierarchical_cluster, reorder_by_depth
+from .clustering_features import StableWaveformFeatures
 
 logger = get_logger(__name__)
 
@@ -32,7 +32,7 @@ def get_noise_log_priors(noise, sorting, refinement_cfg):
             raise ValueError(f"{templates_npz} is not there?")
 
         with h5py.File(h5_name, "r", locking=False) as h5:
-            matching_labels = h5["labels"][:]  # type: ignore
+            matching_labels = h5["labels"][:]
 
         template_data = TemplateData.from_npz(templates_npz)
         tpca = data_util.get_tpca(sorting)
@@ -79,19 +79,18 @@ class PCMergeResult:
 def pc_merge(
     *,
     sorting: data_util.DARTsortSorting,
+    stable_features: StableWaveformFeatures,
     refinement_cfg: RefinementConfig,
     motion: MotionInfo,
     computation_cfg: ComputationConfig | None = None,
     debug: bool = False,
 ) -> PCMergeResult:
     assert refinement_cfg.refinement_strategy == "pcmerge"
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
     if not refinement_cfg.pc_merge_threshold:
         return PCMergeResult(sorting=sorting)
 
     # remove blank labels just in case
-    sorting = data_util.subset_sorting_by_spike_count(sorting)
+    sorting = sorting.flatten()
     assert sorting.labels is not None
     nu0 = sorting.labels.max() + 1
     if not nu0:
@@ -104,25 +103,13 @@ def pc_merge(
     assert subset_sorting.labels is not None
 
     # make stable features, no need for core features though.
-    data = StableSpikeDataset.from_sorting(
-        subset_sorting,
-        motion=motion,
-        core_radius=None,
-        discard_triaged=True,
-        interp_params=refinement_cfg.interp_params.normalize(),
-        split_proportions=None,
-        split_names=("train",),
-        device=computation_cfg.actual_device(),
-    )
-
-    # average by unit
-    kept = data.kept_indices
-    n = len(kept)
-    x = data._train_extract_features.view(n, -1, data.n_channels_extract)
+    kept = np.flatnonzero(subset_sorting.labels >= 0)
+    x = stable_features.features[kept]
     x = x[:, : refinement_cfg.pc_merge_rank]
     xlabels = torch.from_numpy(subset_sorting.labels[kept]).to(x.device)
+    n_reg_chans = motion.rgeom.shape[0]
     means, counts = spiketorch.average_by_label(
-        x, xlabels, data._train_extract_channels, data.n_channels
+        x, xlabels, stable_features.channels[kept], n_reg_chans
     )
 
     # compute distances
@@ -131,7 +118,7 @@ def pc_merge(
     elif refinement_cfg.pc_merge_metric == "maxz":
         x = x.square_()
         meansq, _ = spiketorch.average_by_label(
-            x, xlabels, data._train_extract_channels, data.n_channels
+            x, xlabels, stable_features.channels, n_reg_chans
         )
         stddev = meansq.sub_(means.square()).sqrt_()
         stddev = stddev.clamp_(min=torch.finfo(stddev.dtype).tiny)
@@ -139,7 +126,7 @@ def pc_merge(
         dists = spiketorch.maxz_distance(
             means, stderr, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
-    elif refinement_cfg.pc_merge_metric == "normeuc":
+    elif refinement_cfg.pc_merge_metric.endswith("normeuc"):
         dists = spiketorch.weighted_normeuc_distance(
             means, counts, min_iou=refinement_cfg.pc_merge_min_iou
         )
@@ -154,15 +141,21 @@ def pc_merge(
         raise ValueError(f"Have not implemented {refinement_cfg.pc_merge_metric=}.")
 
     # linkage
-    labels, ids = agglomerate(
-        sorting.labels,
-        dists,
+    labels, ids = hierarchical_cluster(
+        labels=sorting.labels,
+        distances=np.asarray(dists),
         linkage_method=refinement_cfg.pc_merge_linkage,
         threshold=refinement_cfg.pc_merge_threshold,
     )
     assert labels is not None
     labels = np.atleast_1d(labels)
-    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{ids.max() + 1}.")
+    k = ids.max() + 1
+    ul = np.unique(labels)
+    ul = ul[ul >= 0]
+    assert np.array_equal(ul, np.unique(ids))
+    assert ul.shape == (k,)
+    assert k == ul.max() + 1
+    logger.dartsortdebug(f"pc_merge: Unit count {nu0}->{k}.")
 
     sorting = sorting.ephemeral_replace(labels=labels)
     if debug:
@@ -176,5 +169,13 @@ def pc_merge(
             dists=torch.asarray(dists),
         )
 
-    sorting = reorder_by_depth(sorting, motion=motion)
+    xlabels = torch.from_numpy(labels[kept]).to(x.device)
+    means, counts = spiketorch.average_by_label(
+        x, xlabels, stable_features.channels[kept], n_reg_chans
+    )
+    sf = means.square_().sum(dim=1).sqrt_() * counts.sqrt()
+    sf = sf.numpy(force=True)
+    sorting = reorder_by_depth(
+        sorting, motion=motion, spatial_footprints=sf, geom=motion.rgeom
+    )
     return PCMergeResult(sorting=sorting)

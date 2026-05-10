@@ -1,19 +1,19 @@
 from pathlib import Path
-from typing import overload, Literal
 
 import h5py
 import numpy as np
 import torch
 
+from dartsort.util.multiprocessing_util import handle_negative_jobs
+
 from ..localize.localize_util import check_resume_or_overwrite, localize_hdf5
-from .data_util import DARTsortSorting
-from . import job_util
-from .py_util import resolve_path
 from ..peel.peel_base import BasePeeler
-from .internal_config import FeaturizationConfig, ComputationConfig
+from .data_util import DARTsortSorting
+from .internal_config import ComputationConfig, FeaturizationConfig
+from .job_util import ensure_computation_config
+from .py_util import resolve_path, timer
 
 
-@overload
 def run_peeler(
     peeler: BasePeeler,
     *,
@@ -25,61 +25,12 @@ def run_peeler(
     chunk_starts_samples: np.ndarray | None = None,
     overwrite: bool = False,
     residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[True],
-    localization_dataset_name="point_source_localizations",
-) -> None: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: Literal[False] = False,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting: ...
-
-
-@overload
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
+    skip_resid_snips: bool = False,
     show_progress: bool = True,
     fit_only: bool = False,
-    localization_dataset_name="point_source_localizations",
-) -> DARTsortSorting | None: ...
-
-
-def run_peeler(
-    peeler: BasePeeler,
-    *,
-    output_directory: str | Path,
-    hdf5_filename: str,
-    model_subdir: str,
-    featurization_cfg: FeaturizationConfig,
-    computation_cfg: ComputationConfig | None = None,
-    chunk_starts_samples: np.ndarray | None = None,
-    overwrite: bool = False,
-    residual_filename: str | Path | None = None,
-    show_progress: bool = True,
-    fit_only: bool = False,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
+    shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
     output_directory = resolve_path(output_directory)
@@ -94,8 +45,10 @@ def run_peeler(
         and featurization_cfg.do_localization
         and not featurization_cfg.nn_localization
     )
-    if computation_cfg is None:
-        computation_cfg = job_util.get_global_computation_config()
+    computation_cfg = ensure_computation_config(computation_cfg)
+
+    is_subsampling = stop_after_n_spikes is not None
+    is_subsampling = is_subsampling and ensure_coverage != 1.0
 
     if peeler_is_done(
         peeler,
@@ -104,6 +57,9 @@ def run_peeler(
         chunk_starts_samples=chunk_starts_samples,
         do_localization=do_localization_later,
         localization_dataset_name=localization_dataset_name,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
+        shuffle=is_subsampling or shuffle,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -111,42 +67,54 @@ def run_peeler(
     _ensure_torch_linalg(computation_cfg)
 
     # fit models if needed
-    peeler.load_or_fit_and_save_models(
-        model_dir, overwrite=overwrite, computation_cfg=computation_cfg
-    )
-    if fit_only:
-        return
+    with timer(f"model fits ({peeler.__class__.__name__})"):
+        peeler.load_or_fit_and_save_models(
+            model_dir, overwrite=overwrite, computation_cfg=computation_cfg
+        )
+        if fit_only:
+            return
 
     # run main
-    n_resid_now = featurization_cfg.n_residual_snips * int(
-        not featurization_cfg.residual_later
-    )
-    peeler.peel(
-        output_hdf5_filename,
-        chunk_starts_samples=chunk_starts_samples,
-        overwrite=overwrite,
-        residual_filename=residual_filename,
-        show_progress=show_progress,
-        computation_cfg=computation_cfg,
-        total_residual_snips=n_resid_now,
-        stop_after_n_waveforms=featurization_cfg.stop_after_n,
-        shuffle=featurization_cfg.shuffle,
-    )
-
-    if featurization_cfg.residual_later:
-        peeler.run_subsampled_peeling(
+    n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
+    if is_subsampling and ensure_coverage is not None:
+        n_resid_now = n_resid_snips
+    elif is_subsampling:
+        # can't know how many snips to extract per chunk...
+        n_resid_now = 0
+    else:
+        n_resid_now = n_resid_snips
+    if peeler.featurization_pipeline is not None:
+        workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
+        _, workers = handle_negative_jobs(workers)
+        peeler.featurization_pipeline.register_cpu_workers(workers)
+    with timer(f"peel ({peeler.__class__.__name__})"):
+        peeler.peel(
             output_hdf5_filename,
-            chunk_length_samples=peeler.spike_length_samples,
-            residual_to_h5=True,
-            skip_features=True,
-            ignore_resuming=True,
+            chunk_starts_samples=chunk_starts_samples,
+            overwrite=overwrite,
+            residual_filename=residual_filename,
+            show_progress=show_progress,
             computation_cfg=computation_cfg,
-            n_chunks=featurization_cfg.n_residual_snips,
-            task_name="Residual snips",
-            overwrite=False,
-            ordered=True,
-            skip_last=True,
+            total_residual_snips=n_resid_now,
+            stop_after_n_waveforms=stop_after_n_spikes,
+            ensure_coverage=ensure_coverage,
+            shuffle=is_subsampling or shuffle,
         )
+    if n_resid_now == 0 and n_resid_snips > 0:
+        with timer(f"residuals ({peeler.__class__.__name__})"):
+            peeler.run_subsampled_peeling(
+                output_hdf5_filename,
+                chunk_length_samples=peeler.spike_length_samples,
+                residual_to_h5=True,
+                skip_features=True,
+                ignore_resuming=True,
+                computation_cfg=computation_cfg,
+                n_chunks=n_resid_snips,
+                task_name="Residual snips",
+                overwrite=False,
+                ordered=True,
+                skip_last=True,
+            )
 
     # do localization
     if do_localization_later:
@@ -172,9 +140,12 @@ def peeler_is_done(
     overwrite=False,
     n_residual_snips=0,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     do_localization=True,
     localization_dataset_name="point_source_localizations",
     main_channels_dataset_name="channels",
+    shuffle=False,
 ):
     if overwrite:
         return False
@@ -186,7 +157,7 @@ def peeler_is_done(
         with h5py.File(output_hdf5_filename, "r") as h5:
             if "residual" not in h5:
                 return False
-            if len(h5["residual"]) < n_residual_snips:  # type: ignore
+            if len(h5["residual"]) < n_residual_snips:
                 return False
 
     if do_localization:
@@ -202,14 +173,17 @@ def peeler_is_done(
         )
         return done
 
-    last_chunk_start, n_residual_snips = peeler.check_resuming(
+    chunk_starts_samples = peeler.get_chunk_starts(
+        chunk_starts_samples=chunk_starts_samples, subsampled=shuffle, n_chunks=np.inf
+    )
+    done, *_ = peeler.check_resuming(
         output_hdf5_filename,
+        chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_waveforms=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=False,
     )
-    chunk_starts_samples = peeler.get_chunk_starts(
-        chunk_starts_samples=chunk_starts_samples
-    )
-    return last_chunk_start >= max(chunk_starts_samples)
+    return done
 
 
 def _ensure_torch_linalg(computation_cfg):

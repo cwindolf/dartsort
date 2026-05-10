@@ -5,7 +5,6 @@ from typing import Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import adjusted_rand_score
 
 
 def simulate_moppca(
@@ -30,10 +29,8 @@ def simulate_moppca(
     from dartsort.transform import TemporalPCAFeaturizer
     from dartsort.util.data_util import DARTsortSorting
     from dartsort.util.noise_util import EmbeddedNoise
-    from dartsort.clustering.gmm.stable_features import (
-        StableSpikeDataset,
-        SpikeNeighborhoods,
-    )
+    from dartsort.clustering import StableWaveformFeatures
+    from dartsort.util.interpolation_util import SpikeNeighborhoods
 
     N = Nper * K
 
@@ -113,7 +110,7 @@ def simulate_moppca(
         freq = rg.uniform(0.2, 1.0, size=(K, rank, 1, M))
         amp = rg.uniform(1.0, 2.0, size=(K, rank, 1, M))
         domain = np.linspace(0, 2 * np.pi, endpoint=False, num=nc)
-        W = amp * np.exp(-(np.sin(phase + freq * domain[:, None])**2))
+        W = amp * np.exp(-(np.sin(phase + freq * domain[:, None]) ** 2))
     elif t_w == "zero":
         W = np.zeros((K, rank, nc, M))
     else:
@@ -205,27 +202,18 @@ def simulate_moppca(
         rank=rank,
     )
     _tpca = _tpca.to(device)
-    splits = rg.binomial(1, p=0.3, size=N)
 
     prgeom = 15.0 * torch.arange(nc, dtype=torch.float)
     prgeom = torch.stack((torch.zeros(nc), prgeom), dim=1)
     prgeom = F.pad(prgeom, (0, 0, 0, 1), value=torch.nan)
 
-    data = StableSpikeDataset(
-        original_sorting=init_sorting,
-        kept_indices=np.arange(N),
-        prgeom=prgeom,
-        tpca=_tpca,
-        extract_channels=channels,
-        core_channels=channels,
-        core_features=x,
-        train_extract_features=x[splits == 0],
-        split_names=["train", "val"],
-        split_mask=torch.from_numpy(splits),
-        device=device,
+    data = StableWaveformFeatures(
+        channels=channels,
+        features=x,
+        neighborhoods=neighbs,
+        erp=None,  # type: ignore
     )
 
-    data = data.to(device)
     x = x.to(device)
     noise = noise.to(device)
     neighbs = neighbs.to(device)
@@ -233,6 +221,7 @@ def simulate_moppca(
     noise_log_priors = noise_log_priors[labels]
 
     return dict(
+        prgeom=prgeom,
         data=data,
         init_sorting=init_sorting,
         neighborhoods=neighbs,
@@ -249,7 +238,6 @@ def simulate_moppca(
         noise_log_priors=noise_log_priors,
         n_channels=nc,
     )
-
 
 
 def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
@@ -288,4 +276,3 @@ def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
 
     muerr = mu - umu
     return muerr, werr
-

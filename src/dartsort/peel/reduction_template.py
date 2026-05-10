@@ -20,7 +20,6 @@ from ..util.data_util import (
     get_top_assignment_weights,
     subsample_by_count_and_valid_time,
 )
-from ..util.drift_util import registered_geometry
 from ..util.internal_config import (
     ComputationConfig,
     TemplateConfig,
@@ -63,7 +62,7 @@ class ReductionTemplateData(TemplateData):
             sorting,
             max_spikes=template_cfg.spikes_per_unit,
             recording=recording,
-            waveform_cfg=waveform_cfg,
+            waveform_cfg=_handle_internal_pad(recording, waveform_cfg, template_cfg)[1],
         )
         sorting = sorting.ensure_no_missing()
 
@@ -145,6 +144,15 @@ class ReductionTemplateData(TemplateData):
         else:
             assert False
 
+        spike_counts = count.max(axis=1)
+        if motion.drifting:
+            msk = np.logical_or(
+                count >= template_cfg.min_count_at_shift,
+                count >= template_cfg.min_fraction_at_shift * spike_counts[:, None],
+            )
+            msk = msk[:, None, :].astype(templates.dtype)
+            templates *= msk
+
         if whitener is None:
             whitener_np = None
         else:
@@ -154,12 +162,14 @@ class ReductionTemplateData(TemplateData):
             unit_ids=unit_ids,
             templates=templates,
             raw_std_dev=raw_std,
-            spike_counts=count.max(axis=1),
+            spike_counts=spike_counts,
             spike_counts_by_channel=count,
             registered_geom=motion.rgeom,
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            sampling_frequency=recording.sampling_frequency,
+            whiten_strategy=template_cfg.whitening.strategy,
         )
 
 
@@ -168,7 +178,7 @@ class ReductionTemplateData(TemplateData):
 
 class TemplateReduction(GrabAndFeaturize):
     @classmethod
-    def from_config(  # type: ignore[override]
+    def from_config(  # type: ignore
         cls,
         recording: BaseRecording,
         *,
@@ -184,14 +194,29 @@ class TemplateReduction(GrabAndFeaturize):
         geom = torch.asarray(motion.geom)
         channel_index = full_channel_index(len(geom), to_torch=True)
 
+        # internal realignment
+        do_align, padded_waveform_cfg, trough, tslice, align_pad = _handle_internal_pad(
+            recording, waveform_cfg, template_cfg
+        )
+
         # handle tsvd fit preferences
+        pad_spike_len = padded_waveform_cfg.spike_length_samples(
+            recording.sampling_frequency
+        )
         if template_cfg.use_svd and tsvd is not None:
             if isinstance(tsvd, FullProbeTemporalPCAEmbedder):
-                pass
+                if do_align:
+                    raise ValueError("Haven't handled svd alignment in this case.")
             else:
                 assert tsvd.components_.shape[0] == template_cfg.denoising_rank
                 tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
-                    channel_index=channel_index, pca=tsvd
+                    channel_index=channel_index,
+                    pca=tsvd,
+                    alignment_iterations=template_cfg.svd_alignment_iterations,
+                    temporal_slice=tslice,
+                    trough=trough,
+                    spike_length_samples=pad_spike_len,
+                    align_pad=align_pad,
                 )
         elif template_cfg.use_svd and template_cfg.svd_method != "peeler":
             tsvd = fit_tsvd(
@@ -203,7 +228,13 @@ class TemplateReduction(GrabAndFeaturize):
             )
             assert tsvd.components_.shape[0] == template_cfg.denoising_rank
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
-                channel_index=channel_index, pca=tsvd
+                channel_index=channel_index,
+                pca=tsvd,
+                alignment_iterations=template_cfg.svd_alignment_iterations,
+                temporal_slice=tslice,
+                trough=trough,
+                spike_length_samples=pad_spike_len,
+                align_pad=align_pad,
             )
         elif template_cfg.use_svd:
             tsvd = FullProbeTemporalPCAEmbedder(
@@ -212,6 +243,10 @@ class TemplateReduction(GrabAndFeaturize):
                 geom=geom,
                 fit_radius=template_cfg.denoising_fit_radius,
                 max_waveforms=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
+                alignment_iterations=template_cfg.svd_alignment_iterations,
+                temporal_slice=tslice,
+                trough=trough,
+                align_pad=align_pad,
             )
         else:
             tsvd = None
@@ -222,7 +257,11 @@ class TemplateReduction(GrabAndFeaturize):
         if whitener is None:
             assert template_cfg.whitening.strategy == "none"
         else:
-            assert template_cfg.whitening.strategy in ("prewhiten", "postwhiten")
+            assert template_cfg.whitening.strategy in (
+                "prewhiten",
+                "prewhiten_postapply",
+                "postwhiten",
+            )
         if template_cfg.whitening.strategy == "prewhiten":
             assert whitener is not None
             transformers.append(
@@ -234,7 +273,6 @@ class TemplateReduction(GrabAndFeaturize):
             interp = WaveformInterpolator(
                 geom=geom,
                 channel_index=channel_index,
-                motion=motion,
                 params=template_cfg.template_interp_params,
             )
         else:
@@ -265,7 +303,7 @@ class TemplateReduction(GrabAndFeaturize):
         if interp_late:
             assert interp is not None
             transformers.append(interp)
-        if template_cfg.whitening == "postwhiten":
+        if template_cfg.whitening.strategy == "postwhiten":
             assert whitener is not None
             transformers.append(
                 WaveformWhitener(
@@ -287,6 +325,8 @@ class TemplateReduction(GrabAndFeaturize):
 
         # assemble pipeline
         fp = WaveformPipeline(transformers=transformers)
+        fp.attach_motion(motion)
+        fp.precompute()
         logger.dartsortverbose("Template pipeline: %s", fp)
 
         # grab weights and labels for fixed_properties
@@ -295,6 +335,12 @@ class TemplateReduction(GrabAndFeaturize):
         if template_cfg.weighted:
             weights = get_top_assignment_weights(sorting)
             fixed_properties["template_weights"] = weights
+        if (c := getattr(sorting, "alignment_signs", None)) is not None:
+            fixed_properties["alignment_signs"] = c
+        else:
+            fixed_properties["alignment_signs"] = np.ones(
+                sorting.channels.shape, dtype=np.float32
+            )
 
         return cls(
             channel_index=channel_index,
@@ -304,12 +350,7 @@ class TemplateReduction(GrabAndFeaturize):
             fixed_properties=fixed_properties,
             chunk_length_samples=template_cfg.grab_chunk_length_samples,
             fit_sampling_cfg=template_cfg.denoising_fit_sampling_cfg,
-            trough_offset_samples=waveform_cfg.trough_offset_samples(
-                recording.sampling_frequency
-            ),
-            spike_length_samples=waveform_cfg.spike_length_samples(
-                recording.sampling_frequency
-            ),
+            waveform_cfg=padded_waveform_cfg,
         )
 
     def temporal_svd(self) -> PCA | None:
@@ -383,3 +424,26 @@ class TemplateReduction(GrabAndFeaturize):
             svd_mean = svd_mean.numpy(force=True)
 
         return counts, raw_mean, raw_std, svd_mean
+
+
+def _handle_internal_pad(
+    recording: BaseRecording, waveform_cfg: WaveformConfig, template_cfg: TemplateConfig
+):
+    trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
+    do_align = (
+        template_cfg.use_svd
+        and template_cfg.svd_alignment_iterations
+        and template_cfg.svd_alignment_ms
+    )
+    if do_align:
+        padded_waveform_cfg = waveform_cfg.pad(template_cfg.svd_alignment_ms)
+        tslice = waveform_cfg.relative_slice(
+            padded_waveform_cfg, sampling_frequency=recording.sampling_frequency
+        )
+        align_pad = tslice.start
+    else:
+        padded_waveform_cfg = waveform_cfg
+        tslice = None
+        align_pad = 0
+
+    return do_align, padded_waveform_cfg, trough, tslice, align_pad

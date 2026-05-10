@@ -1,7 +1,6 @@
 import warnings
 
 import numpy as np
-from scipy.cluster.hierarchy import fcluster, linkage
 
 from ..peel.matching_util.pairwise_util import (
     construct_shift_indices,
@@ -12,6 +11,7 @@ from ..util import job_util
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, TemplateMergeConfig
 from ..util.logging_util import get_logger
+from .cluster_util import recluster
 
 logger = get_logger(__name__)
 
@@ -20,9 +20,8 @@ def merge_templates(
     sorting: DARTsortSorting,
     template_data: TemplateData,
     max_shift_samples=40,
-    superres_linkage=np.max,
     linkage="complete",
-    distance_kind="rms",
+    distance_kind="scaled_normeuc",
     sym_function=np.minimum,
     merge_distance_threshold=0.25,
     temporal_upsampling_factor=1,
@@ -40,7 +39,7 @@ def merge_templates(
     """Template distance based merge
 
     Pass in a sorting, recording and template config to make templates,
-    and this will merge them (with superres). Or, if you have templates
+    and this will merge them. Or, if you have templates
     already, pass them into template_data and we can skip the template
     construction.
 
@@ -48,9 +47,6 @@ def merge_templates(
     ---------
     max_shift_samples
         Max offset during matching
-    superres_linkage
-        How to combine distances between two units' superres templates
-        By default, it's the max.
     amplitude_scaling_*
         Optionally allow scaling during matching
 
@@ -60,7 +56,6 @@ def merge_templates(
     """
     computation_cfg = job_util.ensure_computation_config(computation_cfg)
     dist_matrix_kwargs = dict(
-        superres_linkage=superres_linkage,
         sym_function=sym_function,
         max_shift_samples=max_shift_samples,
         temporal_upsampling_factor=temporal_upsampling_factor,
@@ -79,17 +74,17 @@ def merge_templates(
         device=computation_cfg.actual_device(),
         n_jobs=computation_cfg.actual_n_jobs(),
         show_progress=show_progress,
-        **dist_matrix_kwargs,  # type: ignore
+        **dist_matrix_kwargs,
     )
 
     # now run hierarchical clustering
     merged_sorting, new_unit_ids = recluster(
-        sorting,
-        units,
-        dists,
-        shifts,
-        template_snrs,
-        merge_distance_threshold=merge_distance_threshold,
+        sorting=sorting,
+        unit_ids=units,
+        dists=dists,
+        shifts=shifts.T,
+        unit_snrs=template_snrs,
+        threshold=merge_distance_threshold,
         link=linkage,
     )
 
@@ -129,7 +124,6 @@ def get_merge_distances(
 
 def calculate_merge_distances(
     template_data,
-    superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=40,
     temporal_upsampling_factor=1,
@@ -178,29 +172,15 @@ def calculate_merge_distances(
 
         tixa = res.template_indices_a
         tixb = res.template_indices_b
-        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms  # type: ignore
-        sup_shifts[tixa, tixb] = res.shifts  # type: ignore
+        sup_dists[tixa, tixb] = res.deconv_resid_decreases / res.template_a_norms
+        sup_shifts[tixa, tixb] = res.shifts
 
-    # apply linkage to reduce across superres templates
-    units = np.unique(template_data.unit_ids)
-    if units.size < n_templates:
-        dists = np.full((units.size, units.size), np.inf)
-        shifts = np.zeros((units.size, units.size), dtype=int)
-        for ia, ua in enumerate(units):
-            in_ua = np.flatnonzero(template_data.unit_ids == ua)
-            for ib, ub in enumerate(units):
-                in_ub = np.flatnonzero(template_data.unit_ids == ub)
-                in_pair = (in_ua[:, None], in_ub[None, :])
-                dists[ia, ib] = superres_linkage(sup_dists[in_pair])
-                shifts[ia, ib] = np.median(sup_shifts[in_pair])
-        coarse_td = template_data.coarsen(with_locs=False)
-        template_snrs = np.ptp(coarse_td.templates, 1).max(1) / coarse_td.spike_counts
-    else:
-        dists = sup_dists
-        shifts = sup_shifts
-        template_snrs = (
-            np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
-        )
+    units = template_data.unit_ids
+    dists = sup_dists
+    shifts = sup_shifts
+    template_snrs = (
+        np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
+    )
 
     dists = sym_function(dists, dists.T)
     np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
@@ -215,7 +195,6 @@ def calculate_merge_distances(
 def cross_match_distance_matrix(
     template_data_a,
     template_data_b,
-    superres_linkage=np.max,
     sym_function=np.minimum,
     max_shift_samples=40,
     temporal_upsampling_factor=1,
@@ -237,7 +216,6 @@ def cross_match_distance_matrix(
     )
     units, dists, shifts, template_snrs = calculate_merge_distances(
         template_data,
-        superres_linkage=superres_linkage,
         sym_function=sym_function,
         max_shift_samples=max_shift_samples,
         temporal_upsampling_factor=temporal_upsampling_factor,
@@ -298,68 +276,6 @@ def cross_match_distance_matrix(
         a_kept,
         b_kept,
     )
-
-
-def recluster(
-    sorting,
-    units,
-    dists,
-    shifts,
-    template_snrs,
-    merge_distance_threshold=0.25,
-    link="complete",
-):
-    # upper triangle not including diagonal, aka condensed distance matrix in scipy
-    pdist = dists[np.triu_indices(dists.shape[0], k=1)]
-    # scipy hierarchical clustering only supports finite values, so let's just
-    # drop in a huge value here
-    finite = np.isfinite(pdist)
-    if not finite.any():
-        return sorting, np.arange(dists.shape[0])
-    assert units.shape[0] == dists.shape[0] == dists.shape[1]
-
-    pdist[~finite] = 1_000_000 + pdist[finite].max()
-    Z = linkage(pdist, method=link)
-    # extract flat clustering using our max dist threshold
-    new_labels = fcluster(Z, merge_distance_threshold, criterion="distance")
-    assert new_labels.min() == 1  # start at 1 for some reason
-    new_labels -= 1
-
-    # update labels
-    labels_updated = np.full_like(sorting.labels, -1)
-    kept = np.flatnonzero(np.isin(sorting.labels, units))
-    labels_updated[kept] = new_labels[sorting.labels[kept]]
-
-    # update times according to shifts
-    times_updated = sorting.times_samples.copy()
-
-    # find original labels in each cluster
-    clust_inverse = {i: [] for i in new_labels}
-    for orig_label, new_label in enumerate(new_labels):
-        clust_inverse[new_label].append(orig_label)
-    n_merges = sum(len(v) - 1 for v in clust_inverse.values())
-    logger.dartsortdebug(f"Merged {n_merges} templates.")
-
-    # align to best snr unit
-    for new_label, orig_labels in clust_inverse.items():
-        # we don't need to realign clusters which didn't change
-        if len(orig_labels) <= 1:
-            continue
-
-        orig_snrs = template_snrs[orig_labels]
-        best_orig = orig_labels[orig_snrs.argmax()]
-        for ogl in np.setdiff1d(orig_labels, [best_orig]):
-            in_orig_unit = np.flatnonzero(sorting.labels == ogl)
-            # this is like trough[best] - trough[ogl]
-            shift_og_best = shifts[ogl, best_orig]
-            # if >0, trough of og is behind trough of best.
-            # subtracting will move trough of og to the right.
-            times_updated[in_orig_unit] -= shift_og_best
-
-    new_sorting = sorting.ephemeral_replace(
-        times_samples=times_updated, labels=labels_updated
-    )
-    return new_sorting, new_labels
 
 
 def get_deconv_resid_decrease_iter(
@@ -440,7 +356,7 @@ def get_deconv_resid_decrease_iter(
         amplitude_scaling_boundary=amplitude_scaling_boundary,
         ignore_empty_channels=ignore_empty_channels,
         distance_kind=distance_kind,
-        max_shift=max_shift_samples,  # type: ignore
+        max_shift=max_shift_samples,
         conv_batch_size=conv_batch_size,
         units_batch_size=units_batch_size,
         device=device,
@@ -461,7 +377,7 @@ def combine_templates(template_data_a, template_data_b):
     ids_a = template_data_a.unit_ids
     ids_b = template_data_b.unit_ids + ids_a.max() + 1
     unit_ids = np.concatenate((ids_a, ids_b))
-    templates = np.row_stack((template_data_a.templates, template_data_b.templates))
+    templates = np.concatenate((template_data_a.templates, template_data_b.templates), axis=0)
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )
@@ -478,6 +394,8 @@ def combine_templates(template_data_a, template_data_b):
         spike_counts=spike_counts,
         registered_geom=rgeom,
         spike_counts_by_channel=spike_counts_by_channel,
+        trough_offset_samples=template_data_a.trough_offset_samples,
+        sampling_frequency=template_data_a.sampling_frequency,
     )
 
     cross_mask = np.logical_and(

@@ -32,7 +32,7 @@ def _test_lowranksolve(cov_kind="eye"):
     y = rg.multivariate_normal(mean=mean, cov=cov, size=N)
 
     # log liks
-    rv = multivariate_normal(mean=mean, cov=cov)  # type: ignore
+    rv = multivariate_normal(mean=mean, cov=cov)
     scipy_lls = rv.logpdf(y)
 
     # convert to torch for below
@@ -48,7 +48,7 @@ def _test_lowranksolve(cov_kind="eye"):
         cov0s = [dense_eye, diag_eye]
     elif cov_kind == "random":
         cov0 = operators.DenseLinearOperator(torch.tensor(cov0, dtype=torch.float))
-        chol_cov0 = operators.CholLinearOperator(cov0.cholesky())  # type: ignore
+        chol_cov0 = operators.CholLinearOperator(cov0.cholesky())
         cov0s = [cov0, chol_cov0]
     else:
         assert False

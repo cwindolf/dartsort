@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install -U pip  # seems necessary to make sure pip is my pip
           pip install --extra-index-url https://download.pytorch.org/whl/cpu torch
-          pip install -e dartsort/[full]
+          pip install -e dartsort/[full,test]
 
       - name: pytest
         run: |

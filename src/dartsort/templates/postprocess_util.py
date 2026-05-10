@@ -1,7 +1,7 @@
 import gc
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -40,6 +40,7 @@ def estimate_template_library(
     motion: MotionInfo | None = None,
     min_template_snr: float = 0.0,
     min_template_ptp: float = 0.0,
+    always_keep_ptp: float = 0.0,
     min_template_count: int = 0,
     max_cc_flag_rate: float = 1.0,
     cc_flag_entropy_cutoff: float = 0.0,
@@ -120,8 +121,10 @@ def estimate_template_library(
         assert templates0 is not None
         count_mask = templates0.spike_counts >= min_template_count
         snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
-        amp_mask = ptp(templates0.templates).max(1) >= min_template_ptp
+        amp = ptp(templates0.templates).max(1)
+        amp_mask = amp >= min_template_ptp
         mask = count_mask & snr_mask & amp_mask
+        mask |= amp >= always_keep_ptp
         flag_mask = cc_flag_criterion(
             sorting,
             detection_cfg,
@@ -248,6 +251,8 @@ def realign_and_chuck_noisy_template_units(
         whitener=template_data.whitener,
         tsvd=template_data.tsvd,
         properties=properties,
+        sampling_frequency=template_data.sampling_frequency,
+        whiten_strategy=template_data.whiten_strategy,
     )
     if template_save_folder is not None:
         if template_npz_filename is not None:
@@ -338,6 +343,8 @@ def featurization_basis_from_templates(
             unit_ids=templates0.unit_ids,
             spike_counts=templates0.spike_counts,
             spike_counts_by_channel=templates0.spike_counts_by_channel,
+            sampling_frequency=templates0.sampling_frequency,
+            whiten_strategy=templates0.whiten_strategy,
         )
     pca = pca_from_templates(
         templates,
@@ -371,25 +378,45 @@ def _handle_merge(
 
     from ..clustering.merge import merge_templates
 
-    merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
-    merge_res = merge_templates(
-        sorting=sorting,
-        template_data=template_data,
-        max_shift_samples=merge_shift_samples,
-        linkage=merge_cfg.linkage,
-        merge_distance_threshold=merge_cfg.merge_distance_threshold,
-        temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
-        amplitude_scaling_variance=merge_cfg.amplitude_scaling_variance,
-        amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
-        svd_compression_rank=merge_cfg.svd_compression_rank,
-        min_spatial_cosine=merge_cfg.min_spatial_cosine,
-        computation_cfg=computation_cfg,
-        show_progress=True,
-    )
-    sorting = merge_res["sorting"]
-    new_unit_ids = merge_res["new_unit_ids"]
-    del merge_res
-    assert sorting.labels is not None
+    if template_cfg.denoising_method == "svd":
+        # use new shared basis stuff
+        from ..clustering.agglomerate import agglomerate
+
+        agg = agglomerate(
+            sorting=sorting,
+            recording=recording,
+            motion=motion,
+            template_data=template_data,
+            template_merge_cfg=merge_cfg,
+            computation_cfg=computation_cfg,
+            waveform_cfg=waveform_cfg,
+            refinement_cfg=None,
+        )
+        new_unit_ids = agg.merge_mapping
+        sorting = agg.agglomerated_sorting
+        assert sorting.labels is not None
+        del agg
+    else:
+        # TODO: remove old impl?
+        merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
+        merge_res = merge_templates(
+            sorting=sorting,
+            template_data=template_data,
+            max_shift_samples=merge_shift_samples,
+            linkage=merge_cfg.linkage,
+            merge_distance_threshold=merge_cfg.merge_distance_threshold,
+            temporal_upsampling_factor=merge_cfg.temporal_upsampling_factor,
+            amplitude_scaling_variance=merge_cfg.amplitude_scaling_variance,
+            amplitude_scaling_boundary=merge_cfg.amplitude_scaling_boundary,
+            svd_compression_rank=merge_cfg.svd_compression_rank,
+            min_spatial_cosine=merge_cfg.min_spatial_cosine,
+            computation_cfg=computation_cfg,
+            show_progress=True,
+        )
+        sorting = cast(DARTsortSorting, merge_res["sorting"])
+        new_unit_ids = merge_res["new_unit_ids"]
+        del merge_res
+        assert sorting.labels is not None
 
     # determine which units were merged and recompute only those templates
     ul, ui, uc = np.unique(new_unit_ids, return_index=True, return_counts=True)
@@ -522,12 +549,10 @@ def flag_possible_cc_error_spikes(
     subtraction_cfg: SubtractionConfig,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    from ..util.py_util import timer
-
     times = sorting.times_samples
     channels = sorting.channels
     amps = getattr(sorting, amplitudes_dataset_name)
-    xy = sorting.geom[channels]  # type: ignore
+    xy = sorting.geom[channels]
     n = len(times)
 
     # rescale units so that the max allowed temporal and spatial dists are 10
@@ -536,10 +561,9 @@ def flag_possible_cc_error_spikes(
     kdt_subtract = KDTree(np.c_[times, xy_subtract])
 
     # get all possible neighbors
-    with timer("a"):
-        sdm = kdt_subtract.sparse_distance_matrix(
-            kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
-        )
+    sdm = kdt_subtract.sparse_distance_matrix(
+        kdt_subtract, max_distance=1.0, p=np.inf, output_type="ndarray"
+    )
     # this is more an adjacency matrix. 0s will be discarded later.
     v = np.ones(sdm["i"].shape, dtype=np.float32)
     coo = coo_array((v, (sdm["i"], sdm["j"])), shape=(n, n), dtype=v.dtype)
@@ -548,10 +572,9 @@ def flag_possible_cc_error_spikes(
     if subtraction_cfg.spatial_dedup_radius_um:
         xy_dedup = xy / subtraction_cfg.spatial_dedup_radius_um
         kdt_dedup = KDTree(np.c_[times, xy_dedup])
-        with timer("b"):
-            sdm_dedup = kdt_dedup.sparse_distance_matrix(
-                kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
-            )
+        sdm_dedup = kdt_dedup.sparse_distance_matrix(
+            kdt_dedup, max_distance=1.0, p=np.inf, output_type="ndarray"
+        )
         del kdt_dedup, xy_dedup
         v = np.ones(sdm_dedup["i"].shape, dtype=np.float32)
         coo_dedup = coo_array(

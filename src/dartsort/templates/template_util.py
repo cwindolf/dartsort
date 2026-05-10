@@ -266,6 +266,7 @@ class SharedBasisTemplates:
     # n, rank, chans
     spatial_singular: np.ndarray
     spike_counts_by_channel: np.ndarray | None
+    r2: np.ndarray | None
 
 
 def shared_basis_compress_templates(
@@ -274,7 +275,8 @@ def shared_basis_compress_templates(
     rank=5,
     computation_cfg=None,
     precomputed_basis: np.ndarray | None = None,
-):
+    with_r2: bool = False,
+) -> SharedBasisTemplates:
     computation_cfg = ensure_computation_config(computation_cfg)
     dev = computation_cfg.actual_device()
     if hasattr(template_data, "templates"):
@@ -292,8 +294,12 @@ def shared_basis_compress_templates(
         temporal_comps = get_shared_temporal_basis(
             templates, rank, dev, min_channel_amplitude
         )
-        assert temporal_comps.shape == (rank, t)
+        assert temporal_comps.shape[1] == t
+        assert temporal_comps.ndim == 2
+        assert temporal_comps.shape[0] <= rank
+        rank = temporal_comps.shape[0]
     else:
+        rank = min(rank, precomputed_basis.shape[0])
         assert precomputed_basis.shape == (rank, t)
         temporal_comps = precomputed_basis
 
@@ -307,27 +313,35 @@ def shared_basis_compress_templates(
     assert np.isfinite(temporal_comps).all()
     assert np.isfinite(spatial_sing).all()
 
-    if logger.isEnabledFor(DARTSORTVERBOSE):
+    if with_r2 or logger.isEnabledFor(DARTSORTVERBOSE):
         recon = torch.asarray(np.einsum("rt,nrc->ntc", temporal_comps, spatial_sing))
         templates = torch.asarray(templates)
         err = recon.sub_(templates).square_().sum(dim=(1, 2)).cpu()
         ss = templates.square().sum(dim=(1, 2)).cpu()
         r2 = 1.0 - err / ss
+        r2 = r2.numpy(force=True)
         logger.dartsortverbose(
-            "Shared basis reconstructed templates with min, mean, max R^2s: "
+            f"Shared basis reconstructed {len(r2)} templates with min, mean, max R^2s: "
             f"{r2.min().item():0.3f}, {r2.mean().item():0.3f}, {r2.max().item():0.3f}."
         )
+    else:
+        r2 = None
 
     return SharedBasisTemplates(
         unit_ids=unit_ids,
         temporal_components=temporal_comps,
         spatial_singular=spatial_sing,
         spike_counts_by_channel=counts,
+        r2=r2,
     )
 
 
 def get_shared_temporal_basis(
-    templates: np.ndarray, rank: int, device: torch.device, min_channel_amplitude: float
+    templates: np.ndarray,
+    rank: int,
+    device: torch.device,
+    min_channel_amplitude: float,
+    eps=1e-6,
 ) -> np.ndarray:
     n, t, c = templates.shape
     rank = min(rank, t)
@@ -358,6 +372,12 @@ def get_shared_temporal_basis(
         logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
         cov.diagonal().add_(1e-5)
     vals, U = torch.linalg.eigh(cov)
+    big_enough = vals > eps
+    nbig = big_enough.sum()
+    if nbig < rank:
+        logger.dartsortdebug(f"Shared basis only needed rank {nbig}.")
+        assert nbig > 0
+    rank = min(nbig, rank)
     temporal_comps = U[:, -rank:]
     # to rank-major
     temporal_comps = temporal_comps.T.contiguous()
@@ -374,7 +394,7 @@ def temporally_upsample_templates(
     n, t, c = templates.shape
     tp = np.arange(t).astype(float)
     erp = interp1d(tp, templates, axis=1, bounds_error=True, kind=kind)
-    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # type: ignore[reportCallIssue]
+    tup = np.arange(t, step=1.0 / temporal_upsampling_factor)  # type: ignore
     tup.clip(0, t - 1, out=tup)
     upsampled_templates = erp(tup)
     upsampled_templates = upsampled_templates.reshape(

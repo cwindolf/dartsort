@@ -88,7 +88,7 @@ def fill_geom_holes(geom):
     # we have to be careful about floating point error here
     # two sites may be different due to floating point error
     # we know they are the same if their distance is smaller than:
-    min_distance = pdist(geom, metric="sqeuclidean").min() / 2  # type: ignore
+    min_distance = pdist(geom, metric="sqeuclidean").min() / 2
 
     # find all shifted site positions
     # TODO make this not quadratic
@@ -466,10 +466,16 @@ def get_channels_in_probe(waveforms, max_channels, channel_index):
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
     waveforms = waveforms.permute(0, 2, 1)
+    waveforms = waveforms.to(device=channel_index.device)
     in_probe_index = channel_index < channel_index.shape[0]
     channels_in_probe = in_probe_index[max_channels]
     waveforms_in_probe = waveforms[channels_in_probe]
     return channels_in_probe, waveforms_in_probe
+
+
+def assert_all_finite_in_probe(waveforms, max_channels, channel_index, message=""):
+    _, waveforms = get_channels_in_probe(waveforms, max_channels, channel_index)
+    assert waveforms.isfinite().all(), f"Blow up: {message}"
 
 
 def set_channels_in_probe(
@@ -479,8 +485,9 @@ def set_channels_in_probe(
     in_place=False,
 ):
     waveforms_full_dest = waveforms_full_dest.permute(0, 2, 1)
-    if not in_place:
-        waveforms_full_dest = waveforms_full_dest.clone()
+    waveforms_full_dest = torch.asarray(
+        waveforms_full_dest, copy=not in_place, device=waveforms_in_probe_src.device
+    )
     waveforms_full_dest[channels_in_probe] = waveforms_in_probe_src
     return waveforms_full_dest.permute(0, 2, 1)
 
@@ -570,7 +577,7 @@ def get_channel_index_mask(geom, channel_index, radius=None, n_channels_subset=N
 
     for c in range(len(geom)):
         if radius is not None:
-            dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)  # type: ignore
+            dists = npx.square(geom[c][None] - pgeom[channel_index[c]]).sum(1)
             subset[c] = dists <= radius**2
         elif n_channels_subset is not None:
             low = max(0, c - n_channels_subset // 2)
@@ -719,7 +726,7 @@ def get_channel_subset(
 
     return take_along_dim(
         input=waveforms,  # type: ignore
-        indices=inds,  # type: ignore
+        indices=inds,
         dim=waveforms.ndim - 1,
         out=out,
     )

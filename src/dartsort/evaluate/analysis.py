@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering import merge
+from ..clustering.agglomerate import QDAResult, qda, template_distances
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -55,6 +55,8 @@ class DARTsortAnalysis:
     coarse_template_data: TemplateData | None
     motion: MotionInfo
     merge_distances: np.ndarray | None
+    merge_lags: np.ndarray | None
+    merge_r2: np.ndarray | None
     geom: np.ndarray
     registered_geom: np.ndarray
     extract_channel_index: np.ndarray | None
@@ -64,12 +66,15 @@ class DARTsortAnalysis:
     z: np.ndarray | None
     registered_z: np.ndarray | None
     shifting: bool
+    probe_disp: np.ndarray | None
+    stable_vis_channels: np.ndarray | None
     times_seconds: np.ndarray | None
     amplitudes: np.ndarray | None
     unit_ids: np.ndarray
     spike_counts: np.ndarray
     amplitude_vectors: np.ndarray | None
     erp: StableFeaturesInterpolator | None
+    qda: QDAResult | None
     sklearn_tpca: PCA | None
     tpca_temporal_slice: slice
     name: str | None = None
@@ -92,8 +97,10 @@ class DARTsortAnalysis:
         ),
         clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
         computation_cfg: ComputationConfig | None = None,
+        allow_qda: bool = True,
         vis_radius: float = 50.0,
         vis_neighborhood_p: float = np.inf,
+        featurization_pipeline_pt=None,
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -107,8 +114,12 @@ class DARTsortAnalysis:
             # no-drift motion
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
-        if has_hdf5 and vis_radius and (tpca := get_tpca(sorting)) is not None:
-            sklearn_tpca = tpca.to_sklearn()  # type: ignore
+        if has_hdf5:
+            tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+        else:
+            tpca = None
+        if has_hdf5 and vis_radius and tpca is not None:
+            sklearn_tpca = tpca.to_sklearn()
             tpca_temporal_slice = sklearn_tpca.temporal_slice
         else:
             sklearn_tpca = None
@@ -120,6 +131,9 @@ class DARTsortAnalysis:
         elif has_hdf5 and model_dir is not None:
             template_npz = model_dir / "template_data.npz"
             can_reload = sorting.has_persistent_labels()
+            if can_reload and sorting._has_dataset("template_inds"):
+                assert sorting.labels is not None
+                can_reload = np.array_equal(sorting.labels, sorting.template_inds)
             if can_reload and template_npz.exists():
                 logger.info(f"Reloading templates from {template_npz}...")
                 template_data = TemplateData.from_npz(template_npz)
@@ -136,17 +150,47 @@ class DARTsortAnalysis:
 
         if template_data is not None:
             coarse_template_data = template_data.coarsen()
-            merge_distances = merge.get_merge_distances(
+            dres = template_distances(
+                sorting=sorting,
+                recording=recording,
+                motion=motion,
                 template_data=coarse_template_data,
                 template_merge_cfg=template_merge_cfg,
+                template_cfg=template_cfg,
                 computation_cfg=computation_cfg,
-                sampling_frequency=recording.sampling_frequency,
-            )[1]
+                allow_whitening_fail=True,
+            )
+            merge_distances = dres.distances
+            merge_lags = dres.shifts
+            merge_r2 = dres.r2
             trough_offset_samples = template_data.trough_offset_samples
             spike_length_samples = template_data.spike_length_samples
         else:
             trough_offset_samples = spike_length_samples = 0
-            coarse_template_data = merge_distances = None
+            coarse_template_data = merge_distances = merge_lags = merge_r2 = None
+
+        if (
+            allow_qda
+            and template_data is not None
+            and hasattr(sorting, "gmm_candidates")
+        ):
+            assert sorting.labels is not None
+            c0 = sorting.gmm_candidates[:, 0]
+            lk = np.flatnonzero(sorting.labels >= 0)
+            is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
+            if is_gmm:
+                logger.info("Analyze GMM.")
+                assert merge_distances is not None
+                qdares = qda(
+                    mask=None,
+                    sorting=sorting,
+                    computation_cfg=computation_cfg,
+                    show_progress=True,
+                )
+            else:
+                qdares = None
+        else:
+            qdares = None
 
         channel_index = getattr(sorting, "channel_index", None)
         amplitudes = getattr(
@@ -168,17 +212,41 @@ class DARTsortAnalysis:
         else:
             x = z = reg_z = None
 
+        vis_channel_index = make_channel_index(
+            geom=motion.rgeom,
+            radius=vis_radius,
+            p=vis_neighborhood_p,
+            to_torch=False,
+        )
+        probe_disp, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+
         device = computation_cfg.actual_device()
         if vis_radius and channel_index is not None:
-            # interping to geom with shifts on fly rather than rgeom.
             erp = StableFeaturesInterpolator(
                 source_geom=pad_geom(motion.geom, device=device),
-                target_geom=pad_geom(motion.geom, device=device),
+                target_geom=pad_geom(motion.rgeom, device=device),
                 channel_index=torch.asarray(channel_index, device=device),
                 params=clustering_features_cfg.interp_params,
             )
+            schan_res = get_stable_channels(
+                motion=motion,
+                channels=sorting.channels,
+                channel_index=channel_index,
+                core_radius=vis_radius,
+                n_pitches_shift=n_pitches_shift,
+            )
+            stable_vis_channels = schan_res[3]
         else:
             erp = None
+            stable_vis_channels = None
+
+        if channel_index is None:
+            channel_index = make_channel_index(
+                geom=motion.geom,
+                radius=vis_radius,
+                p=vis_neighborhood_p,
+                to_torch=False,
+            )
 
         unit_ids, spike_counts = np.unique(sorting.labels, return_counts=True)  # type: ignore
         spike_counts = spike_counts[unit_ids >= 0]
@@ -191,15 +259,14 @@ class DARTsortAnalysis:
             coarse_template_data=coarse_template_data,
             motion=motion,
             merge_distances=merge_distances,
+            merge_lags=merge_lags,
+            merge_r2=merge_r2,
             geom=motion.geom,
             registered_geom=motion.rgeom,
             extract_channel_index=channel_index,
-            vis_channel_index=make_channel_index(
-                geom=motion.rgeom,
-                radius=vis_radius,
-                p=vis_neighborhood_p,
-                to_torch=False,
-            ),
+            vis_channel_index=vis_channel_index,
+            probe_disp=probe_disp,
+            stable_vis_channels=stable_vis_channels,
             xyza=xyza,
             x=x,
             z=z,
@@ -209,6 +276,7 @@ class DARTsortAnalysis:
             amplitudes=amplitudes,
             amplitude_vectors=amplitude_vecs,
             erp=erp,
+            qda=qdares,
             sklearn_tpca=sklearn_tpca,
             tpca_temporal_slice=tpca_temporal_slice,
             name=name,
@@ -220,9 +288,13 @@ class DARTsortAnalysis:
             spike_counts=spike_counts,
         )
 
-    def in_unit(self, unit_id):
+    def in_unit(self, unit_id, at_most: int | None = None):
         assert self.sorting.labels is not None
-        return np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        m = np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        if bool(at_most) and (at_most < m.shape[0]):
+            m = np.random.default_rng(0).choice(m, size=at_most, replace=False)
+            m.sort()
+        return m
 
     def in_template(self, template_index):
         template_indices = getattr(self.sorting, "template_inds", None)
@@ -254,6 +326,12 @@ class DARTsortAnalysis:
             return getattr(self, fname)[which]
         else:
             return self.sorting.slice_feature_by_name(fname, mask=which)
+
+    def has_localizations(self):
+        return self.x is not None
+
+    def has_pca(self):
+        return self.sorting._has_dataset(self.tpca_features_dset)
 
     # cluster-dependent feature loading methods
 
@@ -322,32 +400,27 @@ class DARTsortAnalysis:
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=None,
+            channels=None,
         )
 
     def tpca_features(self, which: np.ndarray):
         assert self.erp is not None
+        assert self.stable_vis_channels is not None
+        assert self.probe_disp is not None
         features = self.sorting.slice_feature_by_name(
             self.tpca_features_dset, mask=which
         )
         device = self.erp.b.source_geom.device
         channels = torch.asarray(self.sorting.channels[which], device=device)
-        if self.motion.drifting:
-            assert self.z is not None
-            assert self.registered_z is not None
-            # target will be geom - shift
-            # want to move from original position to reg pos = z - disp
-            # so, should take shift=disp=z-reg_z
-            shifts = self.z[which] - self.registered_z[which]
-            shifts = torch.asarray(shifts, device=device).float()
-        else:
-            shifts = torch.zeros(channels.shape, device=device)
+        shifts = torch.asarray(self.probe_disp[which], device=device)
+        targ_chans = torch.asarray(self.stable_vis_channels[which], device=device)
         features = self.erp.interp(
             features=torch.asarray(features, device=device),
             source_main_channels=channels,
-            target_channels=self.erp.b.channel_index[channels],
-            source_shifts=shifts,
+            target_channels=targ_chans,
+            source_shifts=shifts.float(),
         )
-        return features.numpy(force=True)
+        return features.numpy(force=True), targ_chans.numpy(force=True)
 
     def unit_tpca_waveforms(
         self,
@@ -376,7 +449,7 @@ class DARTsortAnalysis:
         if not which.size:
             return None
 
-        tpca_embeds = self.tpca_features(which=which)
+        tpca_embeds, channels = self.tpca_features(which=which)
         n, rank, c = tpca_embeds.shape
         tpca_embeds = tpca_embeds.transpose(0, 2, 1).reshape(n * c, rank)
         waveforms = np.full(
@@ -389,16 +462,14 @@ class DARTsortAnalysis:
         t = waveforms.shape[1]
         waveforms = waveforms.reshape(n, c, t).transpose(0, 2, 1)
 
-        waveforms, main_channel = self.unit_select_channels(
-            unit_id=unit_id, which=which, waveforms=waveforms
-        )
         return WaveformsBag(
             which=which,
             waveforms=waveforms,
-            main_channel=main_channel,
+            main_channel=self.unit_max_channel(unit_id),
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=self.tpca_temporal_slice,
+            channels=channels,
         )
 
     def unit_pca_features(
@@ -419,10 +490,18 @@ class DARTsortAnalysis:
             return None, None
 
         waveforms = tpca_waves.waveforms
+        if self.motion.drifting:
+            assert tpca_waves.channels is not None
+            uchans, cinv = np.unique(tpca_waves.channels, return_inverse=True)
+            w = np.full_like(
+                waveforms, shape=(*waveforms.shape[:2], uchans.size), fill_value=np.nan
+            )
+            np.put_along_axis(w, cinv[:, None], waveforms, axis=2)
+            waveforms = w
 
-        # remove chans with no signal at all
+        # remove chans with too little signal
         not_entirely_nan_channels = np.flatnonzero(
-            np.isfinite(waveforms[:, 0]).any(axis=0)
+            np.isfinite(waveforms[:, 0]).mean(axis=0) > 0.05
         )
         if (
             not_entirely_nan_channels.size
@@ -470,7 +549,7 @@ class DARTsortAnalysis:
             covered_chans = get_stable_channels(
                 motion=self.motion,
                 channels=self.sorting.channels[which],
-                channel_index=self.sorting.channel_index,  # type: ignore
+                channel_index=self.sorting.channel_index,
                 n_pitches_shift=n_pitches_shift,
             )[0]
         else:
@@ -560,7 +639,7 @@ class DARTsortAnalysis:
             inu = self.in_unit(uid)
             if not inu.size > 1:
                 continue
-            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
+            t_ms = self.sorting.times_seconds[inu] * 1000
             isi = np.diff(t_ms)
             viol_rates[j] = (np.abs(isi) < dt_ms).mean()
         return viol_rates
@@ -574,3 +653,4 @@ class WaveformsBag:
     main_channel: int
     geom: np.ndarray
     channel_index: np.ndarray
+    channels: np.ndarray | None

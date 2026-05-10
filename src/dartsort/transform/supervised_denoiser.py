@@ -6,14 +6,12 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from tqdm.auto import trange
 
-
-from ._multichan_denoiser_kit import (
-    BaseMultichannelDenoiser,
-    RefreshableDataset,
-    RefreshableDataLoader,
-    AsyncBatchDataset,
-)
 from ..util import waveform_util
+from ._multichan_denoiser_kit import (
+    AsyncBatchDataset,
+    BaseMultichannelDenoiser,
+    RefreshableDataLoader,
+)
 
 
 class SupervisedDenoiser(BaseMultichannelDenoiser):
@@ -33,8 +31,11 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
             pred = self.to_orig_channels(pred, channels)
         return pred
 
-    def fit(self, recording, waveforms, *, gt_waveforms, channels, **unused):
-        super().fit(recording, waveforms, channels=channels)
+    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
+        gt_waveforms = spike_data["gt_waveforms"]
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
         train_loader, val_loader = self._waveforms_to_loaders(
             waveforms, gt_waveforms, channels
         )

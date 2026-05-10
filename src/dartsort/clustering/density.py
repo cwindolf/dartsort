@@ -5,13 +5,10 @@ import numba
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
-from scipy.stats import bernoulli
 from torch import Tensor
 from tqdm.auto import tqdm, trange
 
@@ -89,10 +86,12 @@ def get_smoothed_density(
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
     histogram is liable to be way too big.
     """
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.ndimage import gaussian_filter
     # figure out what bandwidths we'll be working on
 
     if do_ramp := bool(sigma_low):
-        min_sigma = min(sigma, sigma_low)
+        min_sigma = min(sigma, sigma_low)  # type: ignore
     else:
         min_sigma = sigma
 
@@ -286,7 +285,6 @@ def guess_mode(
         distance_upper_bound=outlier_sigma * sigma0,
         workers=workers,
     )
-    inliers = cast(np.ndarray, inliers)
 
     if sigma == "rule_of_thumb":
         sigma_dens = (
@@ -418,8 +416,8 @@ def kdt_density(
     max_dist = max_sigma * sigma_regional
 
     jobs = range(0, n, batch_size)
-    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")  # type: ignore
-    with Executor(  # type: ignore
+    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
+    with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_kdtdens_init,
@@ -721,8 +719,7 @@ def gmm_density_peaks(
     Arguments
     ---------
     X : (N_spikes, n_features) array
-        For instance, the features property of a SimpleMatrix object as obtained
-        from get_clustering_features()
+        For instance, the features property of a SimpleMatrixFeatures
     channels: (N_spikes,) array
         The channels to which each spike belongs.
         TODO: currently used in controlling the number of components, but it may
@@ -816,7 +813,7 @@ def gmm_density_peaks(
         if show_progress:
             logger.info("Clean...")
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
-    res["labels"] = labels  # type: ignore
+    res["labels"] = labels
 
     if mop:
         # use k-dtree dpc to mop up any remaining clusters...
@@ -1060,6 +1057,7 @@ def _density_peaks_clustering_uhd_implementation(
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
+    from scipy.stats import bernoulli
     # n = len(X)
 
     if ramp_triage_before_clustering and geom is not None:
@@ -1076,7 +1074,7 @@ def _density_peaks_clustering_uhd_implementation(
             np.minimum(distances_to_geom, radius_triage_before_clustering)
             / radius_triage_before_clustering
         )
-        which_to_discard = bernoulli.rvs(probabilities).astype("bool")  # type: ignore
+        which_to_discard = bernoulli.rvs(probabilities).astype("bool")
         inliers_first[idx_low_ptp[which_to_discard]] = False
         inliers_first = np.arange(len(X))[inliers_first]
     else:
@@ -1155,7 +1153,7 @@ def _density_peaks_clustering_uhd_implementation(
             reg_density = get_smoothed_density(
                 X[inliers_first],
                 inliers=inliers,
-                sigma=sigma_regional,
+                sigma=sigma_regional,  # type: ignore # ty: ignore[unisued-type-ignore-comment]
                 sigma_low=sigma_regional_low,
                 min_bin_size=min_bin_size,
             )

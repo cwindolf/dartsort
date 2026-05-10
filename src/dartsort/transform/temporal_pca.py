@@ -1,10 +1,11 @@
-from typing import Self, cast
 from dataclasses import replace
+from typing import Self, cast
 
 import numpy as np
 import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
+from ..util.internal_config import WaveformConfig, default_waveform_cfg
 from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -26,7 +27,10 @@ class BaseTemporalPCA(BaseWaveformModule):
         self,
         channel_index,
         geom=None,
+        waveform_cfg: WaveformConfig = default_waveform_cfg,
+        sampling_frequency: float = 30_000.0,
         rank=8,
+        save_feature: bool = True,
         whiten=False,
         centered=False,
         fit_radius=None,
@@ -45,10 +49,16 @@ class BaseTemporalPCA(BaseWaveformModule):
                 raise ValueError("TemporalPCA with fit_radius!=None requires geom.")
 
         super().__init__(
-            channel_index=channel_index, geom=geom, name=name, name_prefix=name_prefix
+            channel_index=channel_index,
+            geom=geom,
+            name=name,
+            name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
 
         # behavior
+        self.saving = save_feature
         self.rank = rank
         self.centered = centered
         self.whiten = whiten
@@ -68,48 +78,41 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.shape = (rank, channel_index.shape[1])
         self.nt = None
 
-    def initialize_spike_length_dependent_params(self):
-        nt = self.spike_length_samples
-        assert nt is not None
-        if self.nt is not None:
-            assert nt == self.nt
-            return
-        if self.temporal_slice is None:
-            self._temporal_ix = None
-        else:
-            self.register_buffer("_temporal_ix", torch.arange(nt)[self.temporal_slice])
-            nt = self.b._temporal_ix.numel()
-        self.nt = nt
-        self.register_buffer("mean", torch.zeros(nt))
-        self.register_buffer("components", torch.zeros(self.rank, nt))
-        self.register_buffer("whitener", torch.zeros(self.rank))
-        self.to(self.b.channel_index.device)
-
     def fit(
         self,
         recording,
         waveforms,
         *,
+        computation_cfg,
         channels,
-        weights=None,
-        time_shifts=None,
-        **unused,
+        **spike_data,
     ):
-        super().fit(recording, waveforms, channels=channels, weights=weights)
+        weights = spike_data.get("weights", None)
+        time_shifts = spike_data.get("time_shifts", None)
+        super().fit(
+            recording, waveforms, computation_cfg=computation_cfg, channels=channels
+        )
+        rg = np.random.default_rng(self.random_state)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
-            self.random_state = np.random.default_rng(self.random_state)
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
-            choices = self.random_state.choice(
+            choices = rg.choice(
                 len(weights), p=weights, size=self.max_waveforms
             )
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
             channels = channels[choices]
+        elif waveforms.shape[0] > self.max_waveforms:
+            choices = rg.choice(len(channels), size=self.max_waveforms)
+            choices.sort()
+            choices = torch.from_numpy(choices)
+            waveforms = waveforms[choices]
+            channels = channels[choices]
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         self.dtype = waveforms.dtype
+        channels = channels.to(device=waveforms.device)
         if self.fit_radius is not None:
             waveforms, train_channel_index = channel_subset_by_radius(
                 waveforms,
@@ -123,7 +126,6 @@ class BaseTemporalPCA(BaseWaveformModule):
         _, waveforms_fit = get_channels_in_probe(
             waveforms, channels, train_channel_index
         )
-        waveforms_fit = waveforms_fit.to(self.b.channel_index.device)
 
         if self.centered:
             mean = waveforms_fit.mean(0)
@@ -144,6 +146,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             niter=self.niter,
             M=M,
             with_loadings=False,
+            device=self.b.channel_index.device,
         )
 
         self.b.mean.copy_(mean)
@@ -169,6 +172,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         assert t_ <= t
         assert time_shifts.shape == (n,)
         time_ix = self._temporal_ix[None, :, None] + time_shifts[:, None, None]
+        time_ix = time_ix.to(device=waveforms.device)
         waveforms = waveforms.take_along_dim(dim=1, indices=time_ix)
         assert waveforms.shape == (n, t_, c)
         return waveforms
@@ -278,7 +282,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
             n_components=rank,
-            random_state=self.random_state,  # type: ignore
+            random_state=self.random_state,
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)
@@ -293,12 +297,14 @@ class BaseTemporalPCA(BaseWaveformModule):
     def from_sklearn(
         cls,
         channel_index,
+        spike_length_samples: int,
         pca: PCA | TruncatedSVD,
         temporal_slice=None,
         trim_rank_to: int | None = None,
+        **constructor_kwargs,
     ) -> Self:
         if isinstance(pca, PCA):
-            whiten = pca.whiten  # type: ignore
+            whiten = pca.whiten
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
@@ -307,9 +313,13 @@ class BaseTemporalPCA(BaseWaveformModule):
         if trim_rank_to:
             rank = min(rank, trim_rank_to)
         self = cls(
-            channel_index, rank=rank, whiten=whiten, temporal_slice=temporal_slice
+            channel_index=channel_index,
+            rank=rank,
+            whiten=whiten,
+            temporal_slice=temporal_slice,
+            **constructor_kwargs,
         )
-        self.initialize_from_sklearn(pca)
+        self.initialize_from_sklearn(pca, spike_length_samples=spike_length_samples)
         return self
 
     @classmethod
@@ -331,14 +341,33 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.b.whitener.copy_(other.whitener)
         return self
 
-    def initialize_from_sklearn(self, pca):
+    def initialize_spike_length_dependent_params(self):
+        assert isinstance(self.spike_length_samples, int)
+        nt = self.spike_length_samples
+        if self.temporal_slice is not None and self.temporal_slice != slice(None):
+            nt = self.temporal_slice.stop - self.temporal_slice.start
+        assert nt is not None
+        if self.nt is not None:
+            assert nt == self.nt
+            return
         if self.temporal_slice is None:
-            self.spike_length_samples = pca.components_.shape[1]
+            self._temporal_ix = None
         else:
-            # not really -- this is a hack.
-            self.spike_length_samples = (
-                self.temporal_slice.stop - self.temporal_slice.start
-            )
+            _temporal_ix = torch.arange(self.spike_length_samples)[self.temporal_slice]
+            self.register_buffer("_temporal_ix", _temporal_ix)
+            nt = self.b._temporal_ix.numel()
+        self.nt = nt
+        if not hasattr(self, "components"):
+            self.register_buffer("mean", torch.zeros(nt))
+            self.register_buffer("components", torch.zeros(self.rank, nt))
+            self.register_buffer("whitener", torch.zeros(self.rank))
+        else:
+            assert self.b.mean.shape == (nt,)
+            assert self.b.components.shape == (self.rank, nt)
+        self.to(self.b.channel_index.device)
+
+    def initialize_from_sklearn(self, pca, spike_length_samples: int):
+        self.spike_length_samples = spike_length_samples
         self.initialize_spike_length_dependent_params()
         if hasattr(pca, "mean_"):
             self.b.mean.copy_(torch.from_numpy(pca.mean_))
@@ -390,7 +419,39 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
 class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
     default_name = "temporal_pca"
 
-    def forward(self, waveforms, *, time_shifts=None, **unused):
+    def __init__(
+        self,
+        trough: int = 42,
+        alignment_iterations: int = 0,
+        align_pad: int = 0,
+        **super_kwargs,
+    ):
+        super().__init__(**super_kwargs)
+        self.alignment_iterations = alignment_iterations
+        self.align_pad = align_pad
+        self.trough = trough
+
+    def forward(self, waveforms, *, channels, **spike_data):
+        alignment_signs = spike_data["alignment_signs"]
+        time_shifts = spike_data.get("time_shifts")
+        if not self.alignment_iterations:
+            waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
+            return self.force_embed(waveforms)
+
+        assert time_shifts is None
+
+        # align on main channel
+        w = waveforms.take_along_dim(indices=channels[:, None, None], dim=2)
+        time_shifts = torch.zeros_like(channels)
+        for _ in range(self.alignment_iterations):
+            x = self._temporal_slice(w, time_shifts=time_shifts)
+            r = self.force_project(x)[:, :, 0]
+            r *= alignment_signs[:, None]
+            pk = r.argmax(dim=1)
+            time_shifts += pk - self.trough
+            time_shifts.masked_fill_(time_shifts.abs() > self.align_pad, 0)
+
+        # shifted embeds
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         return self.force_embed(waveforms)
 

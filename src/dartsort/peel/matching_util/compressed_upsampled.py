@@ -385,6 +385,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     shifts_a: Tensor | None
     shifts_b: Tensor | None
     prewhiten: bool = False
+    needs_residual: bool = True
 
     def convolve(self, traces, padding=0, out=None):
         """Convolve the objective templates with traces."""
@@ -457,7 +458,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         )
 
     def fine_match(
-        self, *, peaks: MatchingPeaks, residual: Tensor, conv: Tensor, padding: int = 0
+        self, *, peaks: MatchingPeaks, residual: Tensor | None, conv: Tensor, padding: int = 0
     ):
         """Determine superres ids, temporal upsampling, and scaling
 
@@ -481,6 +482,7 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         template_inds : array
         objs : array
         """
+        assert residual is not None
         if not self.needs_fine_pass:
             return peaks
         if not peaks.n_spikes:

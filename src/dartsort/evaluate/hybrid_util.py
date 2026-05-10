@@ -163,7 +163,7 @@ def closest_clustering(
     gt_pos /= rescale
     peel_pos /= rescale
     peelix2gtix = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
-    labels = peelix2gtix.copy()  # type: ignore
+    labels = peelix2gtix.copy()
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
     return peel_st.ephemeral_replace(labels=labels, gt_match_ix=peelix2gtix)
@@ -219,7 +219,7 @@ def greedy_match(
         d, i = test_kdtree.query(
             gt_coords[gt_ix],
             k=1,
-            distance_upper_bound=min(thresh, max_val),  # type: ignore
+            distance_upper_bound=min(thresh, max_val),
             workers=workers,
             p=p,
         )
@@ -391,7 +391,8 @@ def _same(x):
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
-    load_feature_names=("times_seconds", "geom", "channel_index"),
+    load_feature_names=("times_seconds", "geom", "channel_index", "template_inds"),
+    motion_h5_name="motionthreshold.h5",
     detection_h5_names=("subtraction.h5", "threshold.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
@@ -405,6 +406,7 @@ def load_dartsort_step_sortings(
     use, although its not a guarantee... h5 locking... need to figure it out.
     """
     mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
+    sorting_dir = resolve_path(sorting_dir, strict=True)
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
             detection_h5_path = cast(Path, sorting_dir / dh5n)
@@ -439,6 +441,18 @@ def load_dartsort_step_sortings(
     if name_formatter is None:
         name_formatter = _same
 
+    motion_h5 = sorting_dir / motion_h5_name
+    if motion_h5.exists():
+        yield (
+            f"00_{motion_h5.stem}",
+            DARTsortSorting.from_peeling_hdf5(
+                motion_h5,
+                load_simple_features=load_simple_features,
+                load_feature_names=load_feature_names,
+                allow_missing=True,
+            ),
+        )
+
     for step, h5 in enumerate(h5s):
         if not h5.exists():
             continue
@@ -446,6 +460,7 @@ def load_dartsort_step_sortings(
             h5,
             load_simple_features=load_simple_features,
             load_feature_names=load_feature_names,
+            allow_missing=True,
         )
 
         # initial clust or later step res?
@@ -469,7 +484,18 @@ def load_dartsort_step_sortings(
                     st0.ephemeral_replace(labels=np.load(npy)),
                 )
         else:
-            yield (name_formatter(h5.stem), st0)
+            assert st0.labels is not None
+            match_reas = hasattr(st0, "template_inds") and not np.array_equal(
+                st0.template_inds, st0.labels
+            )
+            if match_reas:
+                yield (
+                    name_formatter(h5.stem),
+                    st0.ephemeral_replace(labels=st0.template_inds),
+                )
+                yield (name_formatter(f"{h5.stem}_assign"), st0)
+            else:
+                yield (name_formatter(h5.stem), st0)
 
         # reclustering, if applicable
         reclustr = recluster_format.format(step=step)
@@ -482,14 +508,21 @@ def load_dartsort_step_sortings(
 
         # refinement steps
         stepstr = step_format.format(step=step)
-        for npy in sorted(sorting_dir.glob(f"{stepstr}*.npy")):
-            stem = npy.stem.removesuffix("_labels")
-            if stem == stepstr:
-                continue
-            yield (
-                name_formatter(stem),
-                st0.ephemeral_replace(labels=np.load(npy)),
-            )
+        npys = list(sorting_dir.glob(f"{stepstr}*.npy"))
+        npzs = list(sorting_dir.glob(f"{stepstr}*.npz"))
+        for npx in sorted(npys + npzs):
+            stem = npx.stem.removesuffix("_labels")
+            if npx.name.endswith(".npy"):
+                if stem == stepstr:
+                    continue
+                yield (
+                    name_formatter(stem),
+                    st0.ephemeral_replace(labels=np.load(npx)),
+                )
+            elif npx.name.endswith(".npz"):
+                yield (name_formatter(stem), DARTsortSorting.load(npx))
+            else:
+                assert False
 
 
 def load_dartsort_step_unit_info_dataframes(

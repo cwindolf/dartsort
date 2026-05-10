@@ -15,7 +15,7 @@ from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
 from ..util.interpolation_util import (
     InterpolationParams,
-    default_interpolation_params,
+    tps_interp_params,
     interp_precompute,
     kernel_interpolate,
 )
@@ -338,7 +338,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         trough_offset_samples=42,
         interp_method: Literal["griddata", "dart"] = "dart",
         griddata_method: str = "cubic",
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = tps_interp_params,
     ):
         self.geom = geom
         self.geom_kdt = KDTree(geom)
@@ -409,7 +409,7 @@ class TemplateLibrarySimulator(BaseTemplateSimulator):
         pos_margin_um_z=25.0,
         seed=0,
         dtype="float32",
-        interp_params: InterpolationParams = default_interpolation_params,
+        interp_params: InterpolationParams = tps_interp_params,
         **kwargs,
     ):
         rg = np.random.default_rng(seed)

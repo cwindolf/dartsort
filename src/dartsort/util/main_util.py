@@ -1,17 +1,54 @@
+import json
 import shutil
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import DARTsortInternalConfig
+from ..util.internal_config import (
+    ClusteringConfig,
+    ClusteringFeaturesConfig,
+    DARTsortInternalConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
+    RefinementConfig,
+)
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo, try_load_motion_info
 from ..util.py_util import dartcopy2, dartcopytree, resolve_path
 
 logger = get_logger(__name__)
+
+
+def ds_save_intermediate_sorting(
+    step_name: str,
+    step_sorting: DARTsortSorting,
+    output_dir: Path | str | None,
+    cfg: DARTsortInternalConfig | None,
+    work_dir: str | Path | None = None,
+):
+    if cfg is not None and not cfg.save_intermediate_labels:
+        return
+    if output_dir is None:
+        return
+    output_dir = resolve_path(output_dir, strict=True)
+    if work_dir is None:
+        store_dir = output_dir
+    else:
+        store_dir = resolve_path(work_dir, strict=True)
+
+    step_npz = store_dir / f"{step_name}.npz"
+    logger.info(f"Saving {step_name} labels to {step_npz}")
+    logger.info(f"{step_name}: {step_sorting}.")
+    step_sorting.save(step_npz)
+
+    if work_dir is not None:
+        targ_npz = output_dir / step_npz.name
+        logger.info(f"Copy {step_npz} -> {targ_npz}.")
+        dartcopy2(cfg, step_npz, targ_npz)
 
 
 def ds_save_intermediate_labels(
@@ -48,8 +85,6 @@ def ds_save_intermediate_labels(
 
 
 def ds_dump_config(internal_cfg: DARTsortInternalConfig, output_dir: Path):
-    import json
-
     json_path = output_dir / "_dartsort_internal_config.json"
     with open(json_path, "w") as jsonf:
         json.dump(asdict(internal_cfg), jsonf)
@@ -101,6 +136,30 @@ def ds_save_motion(
     motion.save(output_directory=output_dir, overwrite=overwrite)
 
 
+def motion_needs_peaks(
+    cfg: DARTsortInternalConfig, recording: BaseRecording, sorting: DARTsortSorting
+):
+    if cfg.subsampling_presence == 1.0:
+        return False
+    if cfg.subsampling_spikes is None:
+        return False
+
+    # assert sorting's chunk starts, sorted, match full recording's
+    # so, this means sorting could have been shuffled
+    # this function not designed for that kind of sorting
+    targ_chunk_starts = np.arange(
+        0, recording.get_num_samples(), cfg.initial_detection_cfg.chunk_length_samples
+    )
+    my_chunk_starts = sorting._load_dataset("chunk_starts_samples")
+    assert np.array_equal(targ_chunk_starts, np.sort(my_chunk_starts))
+
+    # check if sorting quit early
+    last_chunk_start = sorting._load_dataset("last_chunk_start").item()
+    complete = my_chunk_starts[-1] == last_chunk_start
+
+    return not complete
+
+
 def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if cfg.link_from is None:
         return
@@ -117,7 +176,9 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if link_denoising:
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
-        link_patterns.extend(["subtraction.h5", "motion.pkl", "subtraction_models"])
+        link_patterns.extend(
+            ["subtraction.h5", "motion.pkl", "motionthreshold.h5", "subtraction_models"]
+        )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
     if link_matching1:
@@ -130,6 +191,9 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
             targ.parent.mkdir(exist_ok=True)
             if targ.exists():
                 logger.dartsortdebug(f"{targ} exists, won't link.")
+                continue
+            if not src.exists():
+                logger.dartsortdebug(f"{src} doesn't exist, won't link.")
                 continue
             logger.dartsortdebug(f"Link {targ} -> {src}.")
             targ.symlink_to(src)
@@ -272,3 +336,61 @@ def ds_fast_forward(
         prev_sorting = prev_sorting.ephemeral_replace(labels=prev_labels)
 
     return cur_step, prev_sorting, motion
+
+
+def _matching_step_cfgs(
+    is_final: bool, is_subsampling: bool, cfg: DARTsortInternalConfig
+) -> tuple[
+    ClusteringConfig | None,
+    ClusteringFeaturesConfig,
+    Sequence[RefinementConfig | None],
+    FeaturizationConfig,
+    FitSamplingConfig,
+]:
+    clus_cfg = cfg.clustering_cfg if cfg.recluster_after_first_matching else None
+    gmm_as_classifier = (
+        is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
+    )
+    if not cfg.final_refinement:
+        clus_cfg = None
+        gmm_clus_cfg = None
+        ref_cfgs = []
+    elif gmm_as_classifier:
+        clus_cfg = None
+        gmm_clus_cfg = clus_cfg
+        ref_cfgs = [cfg.agglomerate_cfg]
+    else:
+        gmm_clus_cfg = None
+        ref_cfgs = [cfg.pre_refinement_cfg, cfg.refinement_cfg, cfg.agglomerate_cfg]
+    clfeat_cfg = cfg.clustering_features_cfg
+
+    if cfg.final_refinement and gmm_as_classifier:
+        still_need_projs_saved = (
+            cfg.recluster_after_first_matching or cfg.always_save_final_tpca_feature
+        )
+        feat_cfg = replace(
+            cfg.featurization_cfg,
+            save_input_tpca_projs=still_need_projs_saved,
+            compute_input_tpca_projs_regardless=True,
+            use_gmm_classifier=True,
+            pre_gmm_clustering_cfg=gmm_clus_cfg,
+            gmm_clustering_features_cfg=cfg.clustering_features_cfg,
+            pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
+            gmm_refinement_cfg=cfg.refinement_cfg,
+        )
+        samp_cfg = cfg.refinement_cfg.sampling_cfg
+        assert clus_cfg is None
+        if not still_need_projs_saved:
+            clfeat_cfg = replace(cfg.clustering_features_cfg, n_main_channel_pcs=0)
+    else:
+        feat_cfg = cfg.featurization_cfg
+        samp_cfg = cfg.peeler_sampling_cfg
+
+    return clus_cfg, clfeat_cfg, ref_cfgs, feat_cfg, samp_cfg
+
+
+def ds_save_timing(timings: dict[str, float], output_dir: Path):
+    if (output_dir / "timing.json").exists():
+        return
+    with open(output_dir / "timing.json", "w") as jsonf:
+        json.dump(timings, jsonf)

@@ -9,7 +9,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files  # type: ignore
+        from importlib_resources import files
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -24,6 +24,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
         self,
         channel_index,
         geom=None,
+        waveform_cfg=None,
+        sampling_frequency=None,
         denoiser=None,
         batch_size=1024,
         in_place=False,
@@ -65,7 +67,6 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
             channels_in_probe,
             in_place=self.in_place,
         )
-
         return waveforms
 
     @classmethod

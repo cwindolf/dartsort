@@ -1,9 +1,13 @@
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Rectangle
-import numpy as np
-import torch
+from spikeinterface.core.baserecording import BaseRecording
+
+from dartsort.transform.transform_base import BaseWaveformDenoiser
+from dartsort.util.data_util import DARTsortSorting
 
 from .colors import glasbey1024
 
@@ -15,7 +19,7 @@ def geomplot(
     max_channels=None,
     channel_index=None,
     channels=None,
-    geom=None,
+    geom: np.ndarray | torch.Tensor,
     ax=None,
     z_extension=1.0,
     x_extension=0.8,
@@ -90,6 +94,8 @@ def geomplot(
                 np.arange(geom.shape[0])[None, :]
                 * np.ones(geom.shape[0], dtype=int)[:, None]
             )
+        assert max_channels is not None
+        assert channel_index is not None
         max_channels = np.atleast_1d(max_channels)
         n_channels, C = channel_index.shape
         assert geom.shape == (n_channels, 2)
@@ -159,7 +165,7 @@ def geomplot(
                 lw.append(linewidths[j])
     dx = xmax - xmin
     xpad = dx / 2 - xlim_factor * dx / 2
-    ax.set_xlim([xmin + xpad, xmax - xpad])
+    ax.set_xlim([xmin + xpad, xmax - xpad])  # type: ignore
 
     ann_offset = np.array([0, 0.33 * inter_chan_z]) * geom_scales
     chan_labels = (
@@ -169,13 +175,13 @@ def geomplot(
         if show_zero_kwargs is None:
             show_zero_kwargs = dict(color="gray", lw=0.8, linestyle="--")
         if show_zero:
-            ax.axhline(geom_plot[c, 1], **show_zero_kwargs)
+            ax.axhline(geom_plot[c, 1], **show_zero_kwargs)  # type: ignore
         if show_chan_label:
             ax.annotate(chan_labels[c], geom_plot[c] + ann_offset, size=6, color="gray")
         if show_trough:
-            ax.axvline(geom_plot[c, 0] + t_domain[trough_offset], **show_zero_kwargs)
+            ax.axvline(geom_plot[c, 0] + t_domain[trough_offset], **show_zero_kwargs)  # type: ignore
     lines = LineCollection(
-        np.array(draw),
+        np.array(draw),  # type: ignore
         colors=np.array(draw_colors) if draw_colors else None,
         **plot_kwargs,
     )
@@ -205,12 +211,13 @@ def geomplot(
         if msbar:
             min_z += max_abs_amp
         if bar_background:
+            barxx = [
+                xmax - T // 4 - 2,
+                min_z - max_abs_amp / 2 - subar / 10,
+            ]
             ax.add_patch(
                 Rectangle(
-                    [
-                        xmax - T // 4 - 2,
-                        min_z - max_abs_amp / 2 - subar / 10,
-                    ],
+                    barxx,  # type: ignore
                     4 + 7 + 2 + T // 8,
                     subar + subar / 5,
                     fc=bar_background,
@@ -218,12 +225,10 @@ def geomplot(
                     alpha=0.8,
                 )
             )
+        _xx = [xmax - T // 4, min_z - max_abs_amp / 2]
         ax.add_patch(
             Rectangle(
-                [
-                    xmax - T // 4,
-                    min_z - max_abs_amp / 2,
-                ],
+                _xx,  # type: ignore
                 4,
                 subar,
                 fc=bar_color,
@@ -272,17 +277,17 @@ def geomplot(
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
-            ax.set_ylim([min_z - 2 * max_abs_amp, max_z + 2 * max_abs_amp])
+            ax.set_ylim([min_z - 2 * max_abs_amp, max_z + 2 * max_abs_amp])  # type: ignore
     elif zlim == "tight":
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
-            ax.set_ylim([min_z - max_abs_amp, max_z + max_abs_amp])
+            ax.set_ylim([min_z - max_abs_amp, max_z + max_abs_amp])  # type: ignore
     elif isinstance(zlim, float):
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         max_z = max(geom_plot[c, 1] for c in unique_chans)
         if np.isfinite([min_z, max_z]).all():
-            ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])
+            ax.set_ylim([min_z - max_abs_amp * zlim, max_z + max_abs_amp * zlim])  # type: ignore
     elif zlim is False:
         pass
 
@@ -328,11 +333,13 @@ def geomplot_templates(
     maxamp = np.nanmax(np.abs(unit_templates))
 
     if linestyles is None:
-        linestyles = '-' * len(unit_ids)
+        linestyles = "-" * len(unit_ids)
 
     labels = []
     handles = []
-    for uid, color, template, ls in reversed(list(zip(unit_ids, colors, unit_templates, linestyles))):
+    for uid, color, template, ls in reversed(
+        list(zip(unit_ids, colors, unit_templates, linestyles))
+    ):
         lines = geomplot(
             template[None],
             max_channels=[chan],
@@ -355,3 +362,58 @@ def geomplot_templates(
     axis.set_yticks([])
     if title:
         axis.set_title(title)
+
+
+def inspect_denoiser(
+    rec: BaseRecording,
+    st: DARTsortSorting,
+    denoiser: BaseWaveformDenoiser,
+    count: int = 8,
+    vmax=5.0,
+    sizew=1.5,
+    sizeh=1.0,
+    sizes=1.0,
+    seed: int = 0,
+):
+    from ..util.spikeio import read_waveforms_channel_index
+
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=count,
+        squeeze=False,
+        figsize=(sizes * sizew * count, sizes * sizeh * 3),
+        layout="constrained",
+        sharey=True,
+        sharex=True,
+        gridspec_kw=dict(hspace=0.0, wspace=0.0),
+    )
+
+    rg = np.random.default_rng(seed)
+    ix = rg.choice(len(st), size=count, replace=False)
+    ci = denoiser.b.channel_index.numpy(force=True)
+    tt = st.times_samples[ix]
+    cc = st.channels[ix]
+    wf0 = read_waveforms_channel_index(
+        rec,
+        tt,
+        ci,
+        cc,
+    )
+    wf0 = wf0.astype(np.float32)
+    wf1 = denoiser(torch.asarray(wf0), channels=torch.asarray(cc))
+    wf1 = wf1.numpy(force=True)
+    wf2 = wf0 - wf1
+
+    for col, *wfs in zip(axes.T, wf0, wf1, wf2):
+        for ax, wf in zip(col, wfs):
+            ax.imshow(
+                wf.T,
+                vmin=-vmax,
+                vmax=vmax,
+                interpolation="none",
+                cmap="seismic",
+                aspect="auto",
+            )
+            (ax.axis("off"),)
+
+    return fig, axes

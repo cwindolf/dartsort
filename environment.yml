@@ -3,7 +3,7 @@ name: dartsort
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.12
   - h5py
   - matplotlib
   - numpy>=1.26
@@ -16,3 +16,4 @@ dependencies:
   - numba
   - pydantic
   - opt-einsum
+  - kdepy

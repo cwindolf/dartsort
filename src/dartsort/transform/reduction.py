@@ -63,15 +63,10 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         self.with_raw_std_dev = with_raw_std_dev
         self._initialize((self.feature_dim, output_channels))
 
-    def transform(
-        self,
-        waveforms: torch.Tensor,
-        *,
-        labels: torch.Tensor,
-        **fixed_properties,
-    ):
+    def transform(self, waveforms: torch.Tensor, **spike_data: torch.Tensor):
         assert waveforms.shape[1] == self.feature_dim
         assert waveforms.shape[2] == self.output_channels
+        labels = spike_data["labels"].long()
 
         # if median, early out
         if not self.online:
@@ -89,8 +84,8 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             batch_xsqbar = None
 
         # sum weight per unit
-        if "weights" in fixed_properties:
-            weights = fixed_properties["weights"]
+        if "weights" in spike_data:
+            weights = spike_data["weights"]
         else:
             weights = self.b.count.new_ones((1,)).broadcast_to(labels.shape)
         batch_w = self.b.count.new_zeros(self.n_units)
@@ -106,19 +101,19 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         batch_w = batch_w[:, None] * nz
 
         # Welford weights
-        self.count += batch_w
-        batch_w /= self.count
+        self.b.count += batch_w
+        batch_w /= self.b.count
         batch_w.nan_to_num_()
 
         # handle means
         labels_ix = labels[:, None, None].broadcast_to(wx.shape)
         batch_xbar.scatter_add_(dim=0, index=labels_ix, src=wx)
-        self.mean += batch_xbar.sub_(self.b.mean).mul_(batch_w[:, None])
+        self.b.mean += batch_xbar.sub_(self.b.mean).mul_(batch_w[:, None])
         if self.with_raw_std_dev:
             wxx = x.mul_(wx)
             assert batch_xsqbar is not None
             batch_xsqbar.scatter_add_(dim=0, index=labels_ix, src=wxx)
-            self.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
+            self.b.meansq += batch_xsqbar.sub_(self.b.meansq).mul_(batch_w[:, None])
 
         return {}
 
@@ -232,10 +227,13 @@ def _reduction_init(
 ):
     global _reduction_stuff
     h5 = h5py.File(hdf5_path, "r", locking=False, swmr=True, libver="latest")
+    labels = torch.asarray(labels, dtype=torch.int32, device=dev)
+    if "indices" in h5:
+        labels = labels[h5["indices"][:]]
     _reduction_stuff.ctx = _ReductionStuff(
         h5=h5,
         dataset=cast(h5py.Dataset, h5[dataset_name]),
-        labels=torch.asarray(labels, dtype=torch.int32, copy=True, device=dev),
+        labels=labels,
         dev=dev,
         do_std=do_std,
     )

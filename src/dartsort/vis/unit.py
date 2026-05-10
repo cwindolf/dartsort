@@ -8,21 +8,27 @@ Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
 
-from dataclasses import replace
 from pathlib import Path
-
-from tqdm.auto import tqdm
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
+from KDEpy import FFTKDE
 from matplotlib.legend_handler import HandlerTuple
+from tqdm.auto import tqdm
 
-from ..util.internal_config import raw_template_cfg
-from ..util.job_util import get_global_computation_config
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
-from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
+from ..util.job_util import get_global_computation_config
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, get_pool
 from . import layout
-from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
+from .analysis_plots import (
+    bar,
+    bimod_stats,
+    centered_bins,
+    correlogram,
+    isi_hist,
+    plot_correlogram,
+)
 from .colors import glasbey1024
 from .waveforms import geomplot, geomplot_templates
 
@@ -55,7 +61,7 @@ class UnitTextInfo(UnitPlot):
         if h5_path:
             msg += f"feature source: {h5_path.name}\n"
 
-        nspikes = (sorting_analysis.sorting.labels == unit_id).sum()
+        nspikes = cast(np.ndarray, sorting_analysis.sorting.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
 
         assert sorting_analysis.template_data is not None
@@ -68,12 +74,7 @@ class UnitTextInfo(UnitPlot):
             snr = ptp * np.sqrt(nspikes)
             msg += f"template snr: {snr:.1f}"
         else:
-            ptp = np.ptp(temps, 1).max(1).mean()
-            msg += f"mean superres maxptp: {ptp:0.1f}su\n"
-            in_unit = sorting_analysis.template_data.unit_mask(unit_id)
-            counts = sorting_analysis.template_data.spike_counts[in_unit]
-            snrs = np.ptp(temps, 1).max(1) * np.sqrt(counts)
-            msg += "template snrs:\n  " + ", ".join(f"{s:0.1f}" for s in snrs)
+            assert False
 
         axis.text(0, 0, msg, fontsize=6.5)
 
@@ -150,7 +151,7 @@ class XZScatter(UnitPlot):
         if axis is None:
             axis = panel.subplots()
 
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         assert sorting_analysis.x is not None
         assert sorting_analysis.amplitudes is not None
         x = sorting_analysis.x[in_unit]
@@ -164,7 +165,7 @@ class XZScatter(UnitPlot):
         pad = self.probe_margin_um
         valid = x == np.clip(x, geomx.min() - pad, geomx.max() + pad)
         valid &= z == np.clip(z, geomz.min() - pad, geomz.max() + pad)
-        amps = sorting_analysis.amplitudes[in_unit]
+        amps = sorting_analysis.amplitudes[in_unit][valid]
         c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
         s = axis.scatter(
             x[valid],
@@ -225,8 +226,9 @@ class PCAScatter(UnitPlot):
 
 
 class TimeFeatScatter(UnitPlot):
-    kind = "widescatter"
+    kind = "medium"
     width = 2
+    height = 0.75
 
     def __init__(
         self,
@@ -247,7 +249,7 @@ class TimeFeatScatter(UnitPlot):
         axis = panel.subplots()
         assert sorting_analysis.times_seconds is not None
         assert sorting_analysis.amplitudes is not None
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None
@@ -292,6 +294,7 @@ class WaveformPlot(UnitPlot):
         self,
         count=100,
         color="k",
+        color_by="z",
         alpha=0.1,
         show_template=True,
         template_color="orange",
@@ -308,6 +311,7 @@ class WaveformPlot(UnitPlot):
         self.legend = legend
         self.max_abs_template_scale = max_abs_template_scale
         self.title = title
+        self.color_by = color_by
 
     def get_waveforms(
         self, sorting_analysis: DARTsortAnalysis, unit_id: int
@@ -329,6 +333,19 @@ class WaveformPlot(UnitPlot):
             spike_length_samples = sorting_analysis.spike_length_samples - tslice.start
         if tslice is not None and tslice.stop is not None:
             spike_length_samples = tslice.stop - tslice.start
+
+        if not self.color_by or waves is None:
+            ckw = dict(color=self.color)
+        elif self.color_by == "z":
+            assert sorting_analysis.z is not None
+            cc = sorting_analysis.z[waves.which]
+            if cc.std() > 1e-12:
+                cc = (cc - cc.min()) / np.ptp(cc)
+            else:
+                cc = np.full_like(cc, 0.5)
+            ckw = dict(colors=plt.get_cmap("berlin")(cc))
+        else:
+            assert False
 
         max_abs_amp = None
         show_template = self.show_template
@@ -358,6 +375,7 @@ class WaveformPlot(UnitPlot):
                 )
             ls = geomplot(
                 waves.waveforms,
+                channels=waves.channels,
                 max_channels=np.full(len(waves.waveforms), waves.main_channel),
                 channel_index=waves.channel_index,
                 geom=waves.geom,
@@ -366,28 +384,24 @@ class WaveformPlot(UnitPlot):
                 subar=True,
                 msbar=False,
                 zlim="tight",
-                color=self.color,
                 alpha=self.alpha,
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
+                **ckw,
             )
             handles["waveforms"] = ls
 
         if show_template:
             assert templates is not None
-            if waves is None:
-                showchans = sorting_analysis.vis_channel_index[
-                    sorting_analysis.unit_max_channel(unit_id)
-                ]
-                geom = sorting_analysis.registered_geom
-            else:
-                showchans = waves.channel_index[waves.main_channel]
-                geom = waves.geom
-            showchans = showchans[showchans < len(geom)]
+            mc = sorting_analysis.unit_max_channel(unit_id)
+            channels = sorting_analysis.vis_channel_index[mc]
+            channels = channels[channels < len(sorting_analysis.vis_channel_index)]
+            cc = np.broadcast_to(channels, (len(templates), *channels.shape))
             ls = geomplot(
-                templates[:, :, showchans],
-                geom=geom[showchans],
+                templates[:, :, channels],
+                geom=sorting_analysis.registered_geom,
+                channels=cc,
                 ax=axis,
                 show_zero=False,
                 zlim="tight",
@@ -481,7 +495,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
     title = "coarse template distance"
     kind = "neighbors"
     width = 3
-    height = 1.25
+    height = 2
 
     def __init__(
         self,
@@ -522,12 +536,32 @@ class CoarseTemplateDistancePlot(UnitPlot):
             cmap="RdGy",
             origin="lower",
             interpolation="none",
+            aspect="auto",
         )
         if self.show_values:
-            for (j, i), label in np.ndenumerate(neighbor_dists):
-                axis.text(i, j, f"{label:.2f}", ha="center", va="center")
+            if sorting_analysis.merge_lags is not None:
+                lags = sorting_analysis.merge_lags[neighbor_ixs][:, neighbor_ixs]
+            else:
+                lags = None
+            for (i, j), d in np.ndenumerate(neighbor_dists):
+                txt = f"{d:.2f}".lstrip("0")
+                if lags is not None:
+                    txt += f":{lags[i, j].item():+d}"
+
+                axis.text(i, j, txt, ha="center", va="center")
         plt.colorbar(im, ax=axis, shrink=0.3)
-        axis.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+        if sorting_analysis.merge_r2 is not None:
+            r2 = sorting_analysis.merge_r2[neighbor_ixs]
+            if np.isclose(r2.min(), 1.0):
+                xt = neighbor_ids
+            else:
+                xt = [
+                    f"{nid.item()}\n" + f"{rr:.2f}".lstrip("0")
+                    for nid, rr in zip(neighbor_ids, r2)
+                ]
+        else:
+            xt = neighbor_ids
+        axis.set_xticks(range(len(neighbor_ids)), xt)
         axis.set_yticks(range(len(neighbor_ids)), neighbor_ids)
         for i, (tx, ty) in enumerate(
             zip(axis.xaxis.get_ticklabels(), axis.yaxis.get_ticklabels())
@@ -537,15 +571,83 @@ class CoarseTemplateDistancePlot(UnitPlot):
         axis.set_title(self.title)
 
 
-class NeighborCCGPlot(UnitPlot):
-    kind = "neighbors"
-    width = 3
-    height = 0.75
+class NeighborQDAMatrices(UnitPlot):
+    kind = "tall"
+    width = 2
+    height = 4
 
-    def __init__(self, n_neighbors=3, max_lag=50):
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id):
+        neighbor_ixs, neighbor_ids, _, _ = sorting_analysis.nearby_coarse_templates(
+            unit_id
+        )
+        colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
+        if not np.equal(neighbor_ids, unit_id).any():
+            panel.subplots().axis("off")
+            return
+        assert neighbor_ids[0] == unit_id
+
+        axes = panel.subplots(nrows=2)
+
+        qda = sorting_analysis.qda
+        assert np.array_equal(neighbor_ixs, neighbor_ids)
+        assert qda is not None
+
+        score = qda.score[neighbor_ixs][:, neighbor_ixs]
+        iou = qda.iou[neighbor_ixs][:, neighbor_ixs]
+        min_ratio = qda.min_ratio[neighbor_ixs][:, neighbor_ixs]
+        coverage = qda.coverage[neighbor_ixs][:, neighbor_ixs]
+
+        for ax, (sc, ol), title in zip(
+            axes, [(score, iou), (min_ratio, coverage)], ["qda/iou", "ratio/coverage"]
+        ):
+            ax.imshow(
+                sc,
+                vmin=0,
+                cmap="plasma",
+                origin="lower",
+                interpolation="none",
+                aspect="auto",
+            )
+            vm = sc.max()
+            for (i, j), d in np.ndenumerate(sc):
+                ostr = f"{ol[i, j]:.2f}".lstrip("0")
+                if ostr == ".00":
+                    ostr = "0"
+                else:
+                    ostr = ostr.rstrip("0")
+                dstr = f"{d:.2f}".lstrip("0")
+                if dstr == ".00":
+                    dstr = "0"
+                else:
+                    dstr = dstr.rstrip("0")
+                txt = f"{dstr}\n({ostr})"
+                ax.text(
+                    i, j, txt, ha="center", va="center", c="k" if d > vm / 2 else "w"
+                )
+            ax.set_xticks(range(len(neighbor_ids)), neighbor_ids)
+            ax.set_yticks(range(len(neighbor_ids)), neighbor_ids)
+            for i, (tx, ty) in enumerate(
+                zip(ax.xaxis.get_ticklabels(), ax.yaxis.get_ticklabels())
+            ):
+                tx.set_color(colors[i])
+                ty.set_color(colors[i])
+            ax.set_title(title)
+
+
+class NeighborCCGPlot(UnitPlot):
+    kind = "medium"
+
+    def __init__(self, n_neighbors=3, max_lag=50, with_merged_acg=False):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
+        self.with_merged_acg = with_merged_acg
+        if self.with_merged_acg:
+            self.height = 1.0
+            self.width = 3.0
+        else:
+            self.height = 1.75
+            self.width = 2
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
@@ -558,6 +660,8 @@ class NeighborCCGPlot(UnitPlot):
         )
         # assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        if not neighbor_ids.size:
+            return
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
         my_st = sorting_analysis.sorting.times_samples[
@@ -568,60 +672,92 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        axes = panel.subplots(
-            nrows=2, sharey="row", sharex=True, squeeze=False, ncols=len(neighb_sts)
-        )
+        if self.with_merged_acg:
+            axes = panel.subplots(
+                nrows=1 + self.with_merged_acg,
+                ncols=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+        else:
+            axes = panel.subplots(
+                ncols=1 + self.with_merged_acg,
+                nrows=len(neighb_sts),
+                sharey="row",
+                sharex=True,
+                squeeze=False,
+            )
+            axes = axes.T
         for j in range(len(neighb_sts)):
             clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
+            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
+            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
+
+            if not self.with_merged_acg:
+                continue
+
             merged_st = np.concatenate((my_st, neighb_sts[j]))
             merged_st.sort()
             alags, acg = correlogram(merged_st, max_lag=self.max_lag)
-
-            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
             bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
-        axes[0, 0].set_ylabel("ccg")
-        axes[1, 0].set_ylabel("merged acg")
-        axes[1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        if self.with_merged_acg:
+            axes[0, 0].set_ylabel("ccg")
+            axes[1, 0].set_ylabel("merged acg")
+            axes[-1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        else:
+            axes[-1, -1].set_xlabel("ccg")
 
 
 class NeighborQDAPlot(UnitPlot):
     kind = "neighbors"
-    width = 3
-    height = 2
 
-    def __init__(self, n_neighbors=6, log=True):
+    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
         super().__init__()
-        self.n_neighbors = n_neighbors
+        self.count = count
         self.log = log
+        self.ncols = ncols
+        self.width = 1.5 * ncols
+        self.height = 1.5 * count
+        self.kind = kind
+        self.kde_bin = kde_bin
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
-        (
-            neighbor_ixs,
-            neighbor_ids,
-            neighbor_dists,
-            neighbor_coarse_templates,
-        ) = sorting_analysis.nearby_coarse_templates(
-            unit_id, n_neighbors=self.n_neighbors + 1
+        neighbor_ixs, neighbor_ids, _, _ = sorting_analysis.nearby_coarse_templates(
+            unit_id
         )
-        assert sorting_analysis.sorting.labels is not None
-        # assert neighbor_ids[0] == unit_id
+        if not np.equal(neighbor_ids, unit_id).any():
+            panel.subplots().axis("off")
+            return
+        assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        neighbor_ixs = neighbor_ixs[1:]
+        if not neighbor_ids.size:
+            panel.subplots().axis("off")
+            return
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
+        candidates = sorting_analysis.sorting.gmm_candidates
+        log_liks = sorting_analysis.sorting.gmm_log_liks
+
         axes = panel.subplots(
-            nrows=2,
-            sharey="row",
-            sharex=False,
             squeeze=False,
-            ncols=len(neighbor_ids) // 2,
+            nrows=int(np.ceil(len(neighbor_ixs) / self.ncols)),
+            ncols=self.ncols,
+            gridspec_kw=dict(hspace=0.0, wspace=0.0),
         )
-        for ax, nid, color in zip(axes.flat, neighbor_ids, colors):
-            in_pair = np.flatnonzero(
-                np.isin(sorting_analysis.sorting.labels, [unit_id, nid])
-            )
-            cand = sorting_analysis.sorting.candidates[in_pair]  # type: ignore
-            ll = sorting_analysis.sorting.log_liks[in_pair]  # type: ignore
+        in_unit_id = sorting_analysis.in_unit(unit_id)
+        for ax, nix, nid, color in zip(axes.flat, neighbor_ixs, neighbor_ids, colors):
+            in_nid = sorting_analysis.in_unit(nid)
+            na = in_unit_id.size
+            nb = in_nid.size
+            if na + nb < 20:
+                ax.set_title(f"{nid}: {na=} {nb=}", fontsize="small")
+                continue
+
+            in_pair = np.concatenate([in_unit_id, in_nid])
+            cand = candidates[in_pair]
+            ll = log_liks[in_pair]
 
             my_mask = cand == unit_id
             nid_mask = cand == nid
@@ -629,69 +765,120 @@ class NeighborQDAPlot(UnitPlot):
             overlap = np.logical_and(nid_mask.any(1), my_mask.any(1))
             count = overlap.sum()
             iou = count / in_pair.shape[0]
-            ax.set_title(f"{nid}, SAiou: {iou.item():.2f}", fontsize="small")
+            cov = min(overlap[:na].sum() / na, overlap[na:].sum() / nb)
+            iout = f"{nid}: iou=" + f"{iou:.2f}".lstrip("0")
+            covt = f"{nid}: cov=" + f"{cov:.2f}".lstrip("0")
             if not count:
+                ax.set_title(f"{nid}: {iout}\n{covt}", fontsize="small")
                 continue
 
             _, my_ix = np.nonzero(my_mask[overlap])
             my_ll = np.take_along_axis(ll[overlap], my_ix[:, None], axis=1)[:, 0]
-
             _, their_ix = np.nonzero(nid_mask[overlap])
             their_ll = np.take_along_axis(ll[overlap], their_ix[:, None], axis=1)[:, 0]
+            dll = my_ll - their_ll
 
-            ax.hist(
-                my_ll - their_ll,
-                bins=32,
-                color=color,
-                histtype="step",
-                log=self.log,
-                density=True,
-            )
             ax.axvline(0, color="k", lw=0.8)
             ax.grid()
 
-        axes[0, 0].set_ylabel("density")
-        axes[1, 0].set_ylabel("density")
-        axes[1, axes.shape[1] // 2].set_xlabel("my ll - their ll")
+            if self.kind == "hist":
+                ax.hist(
+                    dll,
+                    bins=32,
+                    color=color,
+                    histtype="step",
+                    log=self.log,
+                    density=True,
+                )
+            elif self.kind == "kde":
+                bines, bincs = centered_bins(dll)
+                if not bincs.size:
+                    continue
+                hist, _ = np.histogram(dll, bins=bines)
+                hist = hist.astype(np.float64) / hist.sum()
+                ax.stairs(hist, edges=bines, color="k", zorder=10)
+                hsa, hsb = bimod_stats(hist)
+                hstat = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
+                try:
+                    kdest = FFTKDE(bw="ISJ").fit(dll)
+                except ValueError as e:
+                    ax.set_title(f"{iout}\n{covt}\n{hstat}", fontsize="small")
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"KDE fail, n={len(dll)}\n{str(e)[:10]}.",
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="center",
+                    )
+                    continue
+                kde = cast(np.ndarray, kdest.evaluate(bincs))
+                kde /= kde.sum()
+                ksa, ksb = bimod_stats(kde)
+                kstat = f"a:{fstr(ksa)}, b:{fstr(ksb)}"
+                if not np.isfinite(kde).all():
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"KDE nan\nn={len(dll)}",
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="center",
+                    )
+                else:
+                    ax.step(y=kde, x=bincs, color=color, zorder=11)
+                    if self.log:
+                        ax.semilogy()
+
+            ax.set_title(f"{iout}\n{covt}\n{hstat}\n{kstat}", fontsize="small")
+
+        for ax in axes.flat[len(neighbor_ids) :]:
+            ax.axis("off")
+        for ax in axes[:, 0]:
+            ax.set_ylabel("density")
+        for ax in axes[-1]:
+            ax.set_xlabel("my ll - their ll")
 
 
 # -- main routines
 
-default_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    PCAScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    TPCAWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
 
-no_pca_unit_plots = (
-    UnitTextInfo(),
-    ACG(),
-    ISIHistogram(),
-    XZScatter(),
-    TimeZScatter(),
-    TimeRegZScatter(),
-    TimeAmpScatter(),
-    RawWaveformPlot(),
-    NearbyCoarseTemplatesPlot(),
-    CoarseTemplateDistancePlot(),
-    NeighborCCGPlot(),
-)
+def default_plots(sorting_analysis=None):
+    p = [
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    ]
+    if sorting_analysis is not None and sorting_analysis.has_localizations():
+        p.extend([TimeZScatter(), TimeRegZScatter()])
+    if sorting_analysis is not None and sorting_analysis.has_pca():
+        p.extend([PCAScatter(), TPCAWaveformPlot()])
+    if sorting_analysis is not None and sorting_analysis.qda is not None:
+        p.extend([NeighborQDAMatrices(), NeighborQDAPlot()])
+    return p
 
 
-template_assignment_plots = (
-    UnitTextInfo(),
-    RawWaveformPlot(),
-)
+def no_pca_unit_plots(sorting_analysis=None):
+    del sorting_analysis
+    return (
+        UnitTextInfo(),
+        ACG(),
+        ISIHistogram(),
+        XZScatter(),
+        TimeZScatter(),
+        TimeRegZScatter(),
+        TimeAmpScatter(),
+        RawWaveformPlot(),
+        NearbyCoarseTemplatesPlot(),
+        CoarseTemplateDistancePlot(),
+        NeighborCCGPlot(),
+    )
 
 
 def make_unit_summary(
@@ -699,13 +886,15 @@ def make_unit_summary(
     unit_id,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
-    plots=default_plots,
+    plots=None,
     max_height=4,
     figsize=(16, 8.5),
     figure=None,
     gizmo_name="sorting_analysis",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots(sorting_analysis)
     # notify plots of global params
     for p in plots:
         p.notify_global_params(
@@ -720,7 +909,7 @@ def make_unit_summary(
         figsize=figsize,
         figure=figure,
         unit_id=unit_id,
-        **{gizmo_name: sorting_analysis},  # type: ignore
+        **{gizmo_name: sorting_analysis},
     )
 
     return figure
@@ -729,7 +918,7 @@ def make_unit_summary(
 def make_all_summaries(
     sorting_analysis: DARTsortAnalysis,
     save_folder,
-    plots=default_plots,
+    plots=None,
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
@@ -747,6 +936,8 @@ def make_all_summaries(
     taskname="summaries",
     **other_global_params,
 ):
+    if plots is None:
+        plots = default_plots(sorting_analysis)
     save_folder = Path(save_folder)
     if unit_ids is None:
         unit_ids = sorting_analysis.sorting.unit_ids
@@ -785,10 +976,10 @@ def make_all_summaries(
     )
     if n_jobs is None:
         n_jobs = get_global_computation_config().n_jobs_cpu
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     if n_jobs:
-        initargs = (cloudpickle.dumps(initargs),)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
-    with Executor(  # type: ignore
+        initargs = (cloudpickle.dumps(initargs),)  # type: ignore
+    with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
@@ -802,7 +993,7 @@ def make_all_summaries(
                 smoothing=0,
                 total=len(unit_ids),
             )
-        for res in results:
+        for _ in results:
             pass
 
 
@@ -822,7 +1013,7 @@ def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
     if not namebyamp:
         return f"unit{unit_id:04d}.{ext}"
     if sorting_analysis is None:
-        raise ValueError(f"Need a sorting_analysis if namebyamp.")
+        raise ValueError("Need a sorting_analysis if namebyamp.")
     amp = float(sorting_analysis.unit_amplitudes(unit_id).item())
     amp = f"{amp:07.2f}"
     return f"amp{amp}_unit{unit_id:04d}.{ext}"
@@ -881,7 +1072,7 @@ _summary_job_context = None
 def _summary_init(*args):
     global _summary_job_context
     if len(args) == 1:
-        args = cloudpickle.loads(args[0])
+        args = cloudpickle.loads(args[0])  # type: ignore
     _summary_job_context = SummaryJobContext(*args)
 
 
@@ -928,3 +1119,7 @@ def _summary_job(unit_id: int):
     fig.savefig(tmp_out, dpi=_summary_job_context.dpi)
     tmp_out.rename(final_out)
     plt.close(fig)
+
+
+def fstr(x):
+    return f"{x:0.2f}".lstrip("0")

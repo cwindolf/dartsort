@@ -7,12 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .data_util import yield_masked_chunks
-from .internal_config import (
-    InterpKernel,
-    InterpMethod,
-    InterpolationParams,
-    default_interpolation_params,
-)
+from .internal_config import InterpolationParams, tps_interp_params
 from .motion import MotionInfo
 from .torch_util import BModule
 from .waveform_util import make_channel_index
@@ -20,7 +15,7 @@ from .waveform_util import make_channel_index
 if TYPE_CHECKING:
     from .noise_util import EmbeddedNoise
 else:
-    EmbeddedNoise = None  # type: ignore
+    EmbeddedNoise = None
 
 
 def interpolate_by_chunk(
@@ -33,7 +28,7 @@ def interpolate_by_chunk(
     registered_geom,
     target_channels,
     trim_to_rank: int | None = None,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     device=None,
     store_on_device=False,
     show_progress=True,
@@ -142,14 +137,14 @@ def interpolate_by_chunk(
             allow_destroy=True,
         ).to(out)
 
-    return out
+    return erp, out
 
 
 def interp_precompute(
     source_geom=None,
     channel_index=None,
     source_pos=None,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     source_geom_is_padded=True,
 ):
     params = params.normalize()
@@ -195,14 +190,7 @@ def interp_precompute(
     design_inds = design_inds.to(source_pos.device)
     design_zeros = source_pos.new_zeros((design_vars, design_vars))
 
-    source_kernels = get_kernel(
-        source_pos,
-        kernel_name=params.kernel.removesuffix("normalized"),
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        normalized=params.method.endswith("normalized"),
-        smoothing_lambda=params.smoothing_lambda,
-    )
+    source_kernels = get_kernel(source_pos=source_pos, params=params)
     for j in range(ns):
         (present,) = valid[j].nonzero(as_tuple=True)
         kernel = source_kernels[j][present][:, present]
@@ -273,7 +261,7 @@ def kernel_interpolate(
     features,
     source_pos,
     target_pos,
-    params: InterpolationParams = default_interpolation_params,
+    params: InterpolationParams = tps_interp_params,
     precomputed_data=None,
     neighborhoods=None,
     solver_map=None,
@@ -322,12 +310,7 @@ def kernel_interpolate(
             features=features,
             source_pos=source_pos,
             target_pos=target_pos,
-            method=params.actual_extrap_method,
-            kernel_name=params.actual_extrap_kernel,
-            sigma=params.sigma,
-            rq_alpha=params.rq_alpha,
-            kriging_poly_degree=params.kriging_poly_degree,
-            smoothing_lambda=params.smoothing_lambda,
+            params=params,
             precomputed_data=precomputed_data,
             neighborhoods=neighborhoods,
             solver_map=solver_map,
@@ -343,12 +326,7 @@ def kernel_interpolate(
         features=features,
         source_pos=source_pos,
         target_pos=target_pos,
-        method=params.method,
-        kernel_name=params.kernel,
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        kriging_poly_degree=params.kriging_poly_degree,
-        smoothing_lambda=params.smoothing_lambda,
+        params=params,
         precomputed_data=precomputed_data,
         solver_map=solver_map,
         neighborhoods=neighborhoods,
@@ -372,12 +350,7 @@ def _kernel_interpolate(
     features: torch.Tensor,
     source_pos: torch.Tensor,
     target_pos: torch.Tensor,
-    method: InterpMethod,
-    kernel_name: InterpKernel,
-    sigma: float,
-    rq_alpha: float,
-    kriging_poly_degree: int,
-    smoothing_lambda: float,
+    params: InterpolationParams,
     precomputed_data,
     neighborhoods,
     solver_map=None,
@@ -391,18 +364,18 @@ def _kernel_interpolate(
     else:
         assert source_pos.ndim == target_pos.ndim == 3
     out_shape = (*features.shape[:2], target_pos.shape[1])
-    is_nearest = method == "nearest" or kernel_name == "nearest"
-    is_clampna = method == "clampna" or kernel_name == "clampna"
+    is_nearest = params.method == "nearest" or params.kernel == "nearest"
+    is_clampna = params.method == "clampna" or params.kernel == "clampna"
     do_nearest = is_nearest or is_clampna
     d = None
     if out is not None:
         assert out.shape == out_shape
-    if method == "nan" or kernel_name == "nan":
+    if params.method == "nan" or params.kernel == "nan":
         if out is None:
             return features.new_full(out_shape, torch.nan)
         else:
             return out.fill_(torch.nan)
-    elif method == "zero" or kernel_name == "zero":
+    elif params.method == "zero" or params.kernel == "zero":
         if out is None:
             return features.new_zeros(out_shape)
         else:
@@ -415,23 +388,15 @@ def _kernel_interpolate(
         if is_nearest:
             return out
         elif is_clampna:
-            out.masked_fill_(dmin > (2 * sigma) ** 2, torch.nan)
+            out.masked_fill_(dmin > (2 * params.sigma) ** 2, torch.nan)
             return out
         else:
             assert False
 
-    kernel = get_kernel(
-        source_pos=source_pos,
-        target_pos=target_pos,
-        kernel_name=kernel_name.removesuffix("normalized"),
-        sigma=sigma,
-        rq_alpha=rq_alpha,
-        normalized=method.endswith("normalized"),
-        smoothing_lambda=smoothing_lambda,
-    )
+    kernel = get_kernel(source_pos=source_pos, target_pos=target_pos, params=params)
 
     features = torch.nan_to_num(features, out=features if allow_destroy else None)
-    if method == "kriging":
+    if params.method == "kriging":
         assert precomputed_data is not None
         precomputed_data = precomputed_data.to(features)
         features = kriging_solve(
@@ -441,8 +406,8 @@ def _kernel_interpolate(
             solvers=precomputed_data,
             solver_map=solver_map,
             neighborhoods=neighborhoods,
-            sigma=sigma,
-            poly_degree=kriging_poly_degree,
+            sigma=params.sigma,
+            poly_degree=params.kriging_poly_degree,
         )
     else:
         features = torch.bmm(features, kernel, out=out)
@@ -457,16 +422,15 @@ def _kernel_interpolate(
 
 
 def get_kernel(
+    *,
     source_pos,
     target_pos=None,
-    kernel_name="rbf",
-    sigma=20.0,
-    rq_alpha=1.0,
-    normalized=False,
-    smoothing_lambda=0.0,
+    params: InterpolationParams,
 ):
     assert source_pos.ndim == 3
     assert source_pos.shape[2] in (1, 2, 3)
+    kernel_name = params.kernel.removesuffix("normalized")
+    normalized = params.method.endswith("normalized")
 
     if kernel_name == "zero":
         tc = source_pos.shape[1] if target_pos is None else target_pos.shape[1]
@@ -476,22 +440,34 @@ def get_kernel(
     elif kernel_name == "idw":
         kernel = idw_kernel(source_pos, target_pos)
     elif kernel_name == "rbf":
-        kernel = log_rbf(source_pos=source_pos, target_pos=target_pos, sigma=sigma)
+        kernel = log_rbf(
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
+        )
         if normalized:
             kernel = F.softmax(kernel, dim=1)
         else:
             kernel = kernel.exp_()
     elif kernel_name == "multiquadric":
         kernel = multiquadric_kernel(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
         )
     elif kernel_name == "rq":
         kernel = rq_kernel(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma, alpha=rq_alpha
+            source_pos=source_pos,
+            target_pos=target_pos,
+            sigma=params.sigma,
+            alpha=params.rq_alpha,
         )
     elif kernel_name == "thinplate":
         kernel = thin_plate_greens(
-            source_pos=source_pos, target_pos=target_pos, sigma=sigma
+            source_pos=source_pos, target_pos=target_pos, sigma=params.sigma
+        )
+    elif kernel_name == "polyharmonic":
+        kernel = polyharmonic_rbf(
+            source_pos=source_pos,
+            target_pos=target_pos,
+            sigma=params.sigma,
+            order=params.polyharmonic_order,
         )
     else:
         assert False
@@ -500,8 +476,8 @@ def get_kernel(
     if normalized and kernel_name not in ("rbf", "nearest"):
         kernel = kernel.div_(kernel.sum(dim=1, keepdim=True))
 
-    if smoothing_lambda:
-        kernel.diagonal(dim1=-2, dim2=-1).add_(smoothing_lambda)
+    if params.smoothing_lambda:
+        kernel.diagonal(dim1=-2, dim2=-1).add_(params.smoothing_lambda)
 
     return kernel
 
@@ -689,13 +665,7 @@ def bake_interpolation_1d(
     params = params.normalize()
 
     k = get_kernel(
-        source_pos=xx[None, :, None],
-        target_pos=xx_[None, :, None],
-        kernel_name=params.kernel,
-        normalized=params.method.endswith("normalized"),
-        sigma=params.sigma,
-        rq_alpha=params.rq_alpha,
-        smoothing_lambda=params.smoothing_lambda,
+        source_pos=xx[None, :, None], target_pos=xx_[None, :, None], params=params
     )
     nsrc = xx.shape[0]
     assert k.shape == (1, nsrc, xx_.shape[0])
@@ -779,7 +749,19 @@ def thin_plate_greens(source_pos, target_pos=None, sigma=1.0):
     r = rsq.sqrt()
     is_small = r < 1
     small = r.mul(r.pow(r).log_())
-    big = rsq.mul_(r.log_())
+    big = rsq.mul_(r.log())
+    kernel = torch.where(is_small, small, big)
+    return kernel
+
+
+def polyharmonic_rbf(source_pos, target_pos=None, sigma=1.0, order: int | float = 2.0):
+    rsq = get_rsq(source_pos, target_pos, sigma)
+    r = rsq.sqrt_()
+    if isinstance(order, int) and (order % 2):
+        return r.pow_(order)
+    is_small = r < 1
+    small = r.pow(order - 1).mul(r.pow(r).log_())
+    big = r.pow(order).mul_(r.log())
     kernel = torch.where(is_small, small, big)
     return kernel
 
@@ -853,12 +835,10 @@ class SpikeNeighborhoods(BModule):
     def __init__(
         self,
         n_channels: int,
-        neighborhood_ids,
-        neighborhoods,
-        features=None,
-        neighborhood_members=None,
+        neighborhood_ids: torch.Tensor | None,
+        neighborhoods: torch.Tensor,
         device=None,
-        name=None,
+        name="full",
     ):
         """SpikeNeighborhoods
 
@@ -877,9 +857,14 @@ class SpikeNeighborhoods(BModule):
         super().__init__()
         self.name = name
         self.n_channels = n_channels
-        self.register_buffer("neighborhood_ids", neighborhood_ids.long())
-        self.register_buffer("chans_arange", torch.arange(n_channels, dtype=torch.long))
-        self.register_buffer("neighborhoods", neighborhoods.long())
+        self.register_buffer("chans_arange", torch.arange(n_channels))
+        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long, device=device)
+        self.register_buffer("neighborhoods", neighborhoods)
+        if neighborhood_ids is not None:
+            neighborhood_ids = torch.asarray(
+                neighborhood_ids, dtype=torch.long, device=device
+            )
+        self.register_buffer_or_none("neighborhood_ids", neighborhood_ids)
         self.n_neighborhoods = len(neighborhoods)
 
         # store neighborhoods as an indicator matrix
@@ -902,46 +887,6 @@ class SpikeNeighborhoods(BModule):
         self.register_buffer("channel_counts", indicators.sum(0))
         self.register_buffer("_masks", torch.concatenate(masks, dim=0))
         self._mask_slices = mask_slices
-
-        if neighborhood_members is None:
-            # cache lookups
-            neighborhood_members = []
-            for j in range(len(neighborhoods)):
-                (in_nhood,) = torch.nonzero(neighborhood_ids == j, as_tuple=True)
-                in_nhood = in_nhood.long()
-                neighborhood_members.append(in_nhood.cpu())
-        assert len(neighborhood_members) == self.n_neighborhoods
-
-        # it's a pain to store dicts with register_buffer, so store offsets
-        _neighborhood_members = torch.empty(
-            sum(v.numel() for v in neighborhood_members), dtype=torch.long
-        )
-        self.neighborhood_members_slices = []
-        neighborhood_member_offset = 0
-        neighborhood_popcounts = []
-        for j in range(len(neighborhoods)):
-            nhoodmemsz = neighborhood_members[j].numel()
-            nhoodmemsl = slice(
-                neighborhood_member_offset, neighborhood_member_offset + nhoodmemsz
-            )
-            _neighborhood_members[nhoodmemsl] = neighborhood_members[j]
-            self.neighborhood_members_slices.append(nhoodmemsl)
-            neighborhood_member_offset += nhoodmemsz
-            neighborhood_popcounts.append(nhoodmemsz)
-        # self.register_buffer("_neighborhood_members", _neighborhood_members)
-        # seems that indices want to live on cpu.
-        self._neighborhood_members = _neighborhood_members.cpu()
-        self.register_buffer("popcounts", torch.tensor(neighborhood_popcounts))
-
-        if features is not None:
-            _features_valid = []
-            for j in range(len(neighborhoods)):
-                f = features[self.neighborhood_members(j)]
-                f = f[..., self.valid_mask(j).to(f.device)]
-                if device is not None and device.type == "cuda":
-                    f = f.pin_memory()
-                _features_valid.append(f)
-            self._features_valid = _features_valid
         self.to(device=device)
 
     @classmethod
@@ -952,20 +897,15 @@ class SpikeNeighborhoods(BModule):
         neighborhood_ids=None,
         neighborhoods=None,
         device=None,
-        deduplicate=False,
-        features=None,
-        name=None,
+        name="full",
     ):
         if neighborhood_ids is not None:
             assert neighborhoods is not None
-            return cls.from_known_ids(
+            return cls(
                 n_channels=n_channels,
                 neighborhood_ids=neighborhood_ids,
                 neighborhoods=neighborhoods,
                 device=device,
-                deduplicate=deduplicate,
-                features=features,
-                name=name,
             )
         if device is not None:
             channels = channels.to(device)
@@ -978,43 +918,7 @@ class SpikeNeighborhoods(BModule):
             n_channels=n_channels,
             neighborhoods=neighborhoods,
             neighborhood_ids=neighborhood_ids,
-            features=features,
             device=channels.device,
-            name=name,
-        )
-
-    @classmethod
-    def from_known_ids(
-        cls,
-        *,
-        n_channels: int,
-        neighborhood_ids,
-        neighborhoods,
-        device=None,
-        deduplicate=False,
-        features=None,
-        name=None,
-    ):
-        neighborhoods = torch.asarray(neighborhoods, dtype=torch.long)
-        neighborhood_ids = torch.asarray(neighborhood_ids, dtype=torch.long)
-        if device is not None:
-            neighborhoods = neighborhoods.to(device)
-            neighborhood_ids = neighborhood_ids.to(device)
-        if deduplicate:
-            neighborhoods, old2new = torch.unique(
-                neighborhoods, dim=0, return_inverse=True
-            )
-            neighborhood_ids = old2new[neighborhood_ids]
-            kept_ids, neighborhood_ids = torch.unique(
-                neighborhood_ids, return_inverse=True
-            )
-            neighborhoods = neighborhoods[kept_ids]
-        return cls(
-            n_channels=n_channels,
-            neighborhoods=neighborhoods,
-            neighborhood_ids=neighborhood_ids,
-            features=features,
-            device=device,
             name=name,
         )
 
@@ -1027,12 +931,6 @@ class SpikeNeighborhoods(BModule):
             name=self.name,
         )
 
-    def has_feature_cache(self):
-        return hasattr(self, "_features_valid")
-
-    def valid_mask(self, id):
-        return self._masks[self._mask_slices[id]]  # type: ignore
-
     def neighborhood_channels(self, id):
         nhc = self.b.neighborhoods[id]
         return nhc[nhc < self.n_channels]
@@ -1041,90 +939,8 @@ class SpikeNeighborhoods(BModule):
         return self.b.chans_arange[self.b.indicators[:, id] == 0]
 
     def neighborhood_members(self, id):
-        return self._neighborhood_members[self.neighborhood_members_slices[id]]
-
-    def neighborhood_features(
-        self, id, batch_start=None, batch_size=None, batch_buffer=None
-    ):
-        f = self._features_valid[id]
-        if batch_start is not None:
-            f = f[batch_start : batch_start + batch_size]
-        if batch_buffer is not None:
-            batch_buffer[: len(f)] = f
-            return batch_buffer[: len(f)]
-        else:
-            return f
-
-    def subset_neighborhoods(self, channels, min_coverage=1.0, batch_size=None):
-        """Return info on neighborhoods which cover the channel set well enough
-
-        Define coverage for a neighborhood and a channel group as the intersection
-        size divided by the neighborhood's size.
-
-        Returns
-        -------
-        neighborhood_info : list of tuples
-            Each entry is, in order,
-             - neighborhood id
-             - neighborhood channels array
-             - neighborhood member indices
-             - optional batch start
-            representing a batch of spikes living on that neighborhood.
-        n_spikes : int
-            The total number of spikes in the neighborhood.
-        """
-        inds = self.b.indicators[channels]
-        coverage = inds.sum(0) / self.b.channel_counts
-        (covered_ids,) = torch.nonzero(coverage >= min_coverage, as_tuple=True)
-        n_spikes = self.b.popcounts[covered_ids].sum()
-
-        neighborhood_info = []
-        for j in covered_ids:
-            jneighb = self.b.neighborhoods[j]
-            jmems = self.neighborhood_members(j)
-            if batch_size is None or len(jmems) < batch_size:
-                neighborhood_info.append((j, jneighb, jmems, None))
-            else:
-                for bs in range(0, len(jmems), batch_size):
-                    mem_batch = jmems[bs : bs + batch_size]
-                    neighborhood_info.append((j, jneighb, mem_batch, bs))
-
-        return covered_ids, neighborhood_info, n_spikes
-
-    def spike_neighborhoods(
-        self, channels, neighborhood_ids=None, spike_indices=None, min_coverage=1.0
-    ):
-        """Like subset_neighborhoods, but for an already chosen collection of spikes
-
-        This is used when subsetting log likelihood calculations.
-        In this case, the returned neighborhood_member_indices keys are relative:
-        spike_indices[neighborhood_member_indices] are the actual indices.
-        """
-        if neighborhood_ids is None:
-            assert spike_indices is not None
-            neighborhood_ids = self.b.neighborhood_ids[spike_indices]
-        assert neighborhood_ids is not None
-
-        covered_ids = torch.unique(neighborhood_ids)
-        if min_coverage:
-            covered_ids = covered_ids.to(self.indicators.device)
-            inds = self.b.indicators[channels][:, covered_ids]
-            coverage = inds.sum(0) / self.b.channel_counts[covered_ids]
-            covered = coverage >= min_coverage
-            covered_ids = covered_ids[covered].cpu()
-            neighborhood_ids = neighborhood_ids.cpu()
-
-        neighborhood_info = [
-            (
-                j,
-                self.b.neighborhoods[j],
-                *(neighborhood_ids == j).nonzero(as_tuple=True),
-                None,
-            )
-            for j in covered_ids
-        ]
-        n_spikes = self.b.popcounts[covered_ids].sum()
-        return neighborhood_info, n_spikes
+        assert self.get_optional_buffer("neighborhood_ids") is not None
+        return (self.b.neighborhood_ids == id).nonzero().view(-1)
 
     def adjacency(self, overlap=0.5):
         overlaps = self.b.indicators.T @ self.b.indicators
@@ -1183,6 +999,8 @@ class StableFeaturesInterpolator(BModule):
         # allows per-channel shifts with 2d input
         if source_shifts.ndim == 1:
             source_shifts = source_shifts.unsqueeze(1)
+
+        # handle x/z disp (wow, lol)
         if self.shift_dim == 0:
             source_shifts = torch.stack(
                 [source_shifts, torch.zeros_like(source_shifts)], dim=-1
@@ -1264,7 +1082,7 @@ class NeighborhoodInterpolator(NeighborhoodFiller):
         self,
         prgeom: torch.Tensor,
         neighborhoods: SpikeNeighborhoods,
-        params: InterpolationParams = default_interpolation_params,
+        params: InterpolationParams = tps_interp_params,
         batch_size: int = 1024,
     ):
         super().__init__()
@@ -1385,9 +1203,8 @@ class ToFullProbeInterpolator(BModule):
             )
             assert disp.shape[1] == 1
             tgeom = self.b.rgeom.clone()
-            depth_shift = torch.tensor(
-                disp[:, 0], device=tgeom.device, dtype=tgeom.dtype
-            )
+            depth_shift = torch.asarray(disp[:, 0], dtype=tgeom.dtype)
+            depth_shift = depth_shift.to(device=tgeom.device, non_blocking=True)
             tgeom[:, 1] += depth_shift
         else:
             tgeom = self.b.rgeom
@@ -1459,7 +1276,6 @@ class FromFullProbeInterpolator(BModule):
         solver_map = dist.argmin(1)
 
         # interpolate from static geom to shifted geom
-        n = waveforms.shape[0]
         return kernel_interpolate(
             features=waveforms,
             source_pos=self.b.rgeom,

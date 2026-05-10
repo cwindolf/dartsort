@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Self, cast
+from typing import TYPE_CHECKING, Self, cast
 
 import h5py
 import linear_operator
@@ -18,18 +18,20 @@ from sklearn.decomposition import PCA
 from torch import Tensor
 from tqdm.auto import tqdm, trange
 
-from ..transform.temporal_pca import BaseTemporalPCA
+if TYPE_CHECKING:
+    from ..transform.temporal_pca import BaseTemporalPCA
 from ..util import more_operators, spiketorch
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     ComputationConfig,
     InterpolationParams,
     WhiteningConfig,
-    default_template_interpolation_params,
+    tps_interp_clampna_extrap_params,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger
 from ..util.motion import MotionInfo
+from ..util.spiketorch import spawn_torch_rg
 from ..util.torch_util import BModule
 from ..util.waveform_util import make_channel_index
 
@@ -385,7 +387,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
             assert obj.isfinite().all()
 
             # find peaks...
-            peak_times, peak_units, peak_energies = detect_and_deduplicate(  # type: ignore
+            peak_times, peak_units, peak_energies = detect_and_deduplicate(
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
@@ -527,8 +529,8 @@ class EmbeddedNoise(BModule):
     def whitener(self, channels=slice(None)):
         cov = self.marginal_covariance(channels=channels)
         chol = cov.cholesky().to_dense()
-        chans_eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
-        whitener = torch.linalg.solve_triangular(chol, chans_eye, upper=False)
+        eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
+        whitener = torch.linalg.solve_triangular(chol, eye, upper=False)
         return whitener.reshape(cov.shape)
 
     def whiten(self, data, channels=slice(None)):
@@ -544,6 +546,13 @@ class EmbeddedNoise(BModule):
         # res = linear_operator.sqrt_inv_matmul(cov, data.unsqueeze(2))
         assert res.ndim == 3 and res.shape == (*data.shape, 1)
         return res
+
+    def whiten_full(self, data):
+        # self._full_whitener = None
+        if self._full_whitener is None:
+            self._full_whitener = self.whitener()
+        data = data.reshape(len(data), -1)
+        return data @ self._full_whitener
 
     def full_dense_cov(self, device=None):
         if self._full_cov is None:
@@ -584,15 +593,15 @@ class EmbeddedNoise(BModule):
             assert channels_targ.ndim == 1
 
         if self.cov_kind == "factorized":
-            rank_root = self.b.rank_vt.T * self.b.rank_std  # type: ignore
-            rank_cov = cast(Tensor, rank_root @ rank_root.T)
+            rank_root = self.b.rank_vt.T * self.b.rank_std
+            rank_cov = rank_root @ rank_root.T
             rank_cov = rank_cov[None].broadcast_to(n, *rank_cov.shape)
             x = rank_cov.bmm(x)
 
-            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std  # type: ignore
+            chan_root_left = self.b.channel_vt_zpad.T[channels_src] * self.b.channel_std
             chan_root_right = (
                 self.b.channel_vt_zpad.T[channels_targ] * self.b.channel_std
-            )  # type: ignore
+            )
             if chan_root_right.ndim == 2:
                 targ_shp = (chan_root_left.shape[0], *chan_root_right.shape)
                 chan_root_right = chan_root_right[None].broadcast_to(targ_shp)
@@ -607,7 +616,7 @@ class EmbeddedNoise(BModule):
                 channels_src == self.n_channels, -2, channels_src
             )
             eyes = (channels_src[:, :, None] == channels_targ[:, None, :]).float()
-            chan_cov = eyes * self.b.global_std**2  # type: ignore
+            chan_cov = eyes * self.b.global_std**2
             return x.bmm(chan_cov)
         elif self.cov_kind == "full":
             # this branch is for debugging. it is slow.
@@ -615,8 +624,8 @@ class EmbeddedNoise(BModule):
                 channels_targ = channels_targ[None, :].broadcast_to(
                     (n, channels_targ.numel())
                 )
-            cov_zpad = F.pad(self.full_cov, (0, 1, 0, 0, 0, 1))[None]  # type: ignore
-            cov = cov_zpad.take_along_dim(  # type: ignore
+            cov_zpad = F.pad(self.b.full_cov, (0, 1, 0, 0, 0, 1))[None]
+            cov = cov_zpad.take_along_dim(
                 indices=channels_src[:, None, :, None, None], dim=2
             )
             assert cov.shape == (
@@ -694,7 +703,7 @@ class EmbeddedNoise(BModule):
                 fcov = self._marginal_covariance()
                 self._full_cov_dense = fcov.to_dense()
                 if not isinstance(fcov, operators.ConstantDiagLinearOperator):
-                    fcov = operators.CholLinearOperator(fcov.cholesky())  # type: ignore
+                    fcov = operators.CholLinearOperator(fcov.cholesky())
                 self._full_cov = fcov
                 self._logdet = self._full_cov.logdet()
             if device is not None and device != self._full_cov.device:
@@ -726,7 +735,7 @@ class EmbeddedNoise(BModule):
         if channels_left is None:
             channels_left = channels
         nc = channels.numel()
-        ncl = channels_left.numel()
+        ncl = int(channels_left.numel())
 
         if have_left:
             if self.cov_kind in ("scalar", "diagonal_by_rank", "diagonal"):
@@ -736,8 +745,11 @@ class EmbeddedNoise(BModule):
                 #         f"for cov_kind={self.cov_kind} when the block overlaps "
                 #         "with the diagonal."
                 #     )
-                sz = self.rank * ncl, self.rank * nc
-                return operators.ZeroLinearOperator(*sz, dtype=self.b.global_std.dtype)
+                return operators.ZeroLinearOperator(
+                    self.rank * ncl,  # type: ignore
+                    self.rank * nc,  # type: ignore
+                    dtype=self.b.global_std.dtype,
+                )
 
         if self.cov_kind == "scalar":
             eye = operators.IdentityLinearOperator(self.rank * nc, device=self.device)
@@ -854,10 +866,10 @@ class EmbeddedNoise(BModule):
         global_std = global_var.sqrt()
 
         if cov_kind == "scalar":
-            return cls(mean=mean, global_std=global_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, **init_kw)  # type: ignore
 
         if cov_kind == "by_rank":
-            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, rank_std=rank_std, **init_kw)  # type: ignore
 
         if cov_kind == "diagonal":
             full_var = torch.where(
@@ -866,7 +878,7 @@ class EmbeddedNoise(BModule):
                 full_var,
             )
             full_std = full_var.sqrt()
-            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)
+            return cls(mean=mean, global_std=global_std, full_std=full_std, **init_kw)  # type: ignore
 
         if cov_kind == "full":
             x = x.view(n, rank * n_channels)
@@ -876,7 +888,7 @@ class EmbeddedNoise(BModule):
             assert torch.is_tensor(vcov)
             cov[present[:, None] & present[None, :]] = vcov.view(-1)
             cov = cov.reshape(rank, n_channels, rank, n_channels)
-            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)
+            return cls(mean=mean, global_std=global_std, full_cov=cov, **init_kw)  # type: ignore
 
         assert cov_kind.startswith("factorized")
         # handle rank part first, then the spatial part
@@ -1033,7 +1045,7 @@ class EmbeddedNoise(BModule):
             channel_std=channel_std,
             channel_vt=channel_vt,
             zero_radius=zero_radius,
-            **init_kw,
+            **init_kw,  # type: ignore
         )
 
     @classmethod
@@ -1043,7 +1055,8 @@ class EmbeddedNoise(BModule):
         mean_kind="zero",
         cov_kind="factorizednoise",
         motion: MotionInfo | None = None,
-        interp_params: InterpolationParams = default_template_interpolation_params,
+        tpca: "PCA | BaseTemporalPCA | None" = None,
+        interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
         device=None,
         rank: int | None = None,
         shrinkage=0.0,
@@ -1051,11 +1064,6 @@ class EmbeddedNoise(BModule):
         zero_radius: float | None = None,
         rgeom=None,
     ):
-        from dartsort.util.drift_util import registered_geometry
-
-        logger.dartsortdebug(
-            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=}"
-        )
 
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:]
@@ -1064,12 +1072,16 @@ class EmbeddedNoise(BModule):
         snippets = interpolate_residual_snippets(
             motion=motion,
             hdf5_path=hdf5_path,
-            geom=geom,
-            registered_geom=motion.rgeom,
             interp_params=interp_params,
+            tpca=tpca,
             device=device,
             rank=rank,
             do_tpca=True,
+        )
+        assert snippets.shape[0] > 1
+        logger.dartsortdebug(
+            f"Estimate embedded noise with {mean_kind=} {cov_kind=} {glasso_alpha=} "
+            f"from {snippets.shape=}."
         )
         if rank is not None:
             assert snippets.shape[1] == rank
@@ -1134,26 +1146,23 @@ class EmbeddedNoise(BModule):
         return np.log(probs)
 
 
-def interpolate_residual_snippets(
+def generate_interpolated_residual_snippets(
     *,
     motion: MotionInfo,
     hdf5_path: str | Path,
-    geom,
-    registered_geom,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
-    interp_params: InterpolationParams = default_template_interpolation_params,
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     do_tpca: bool,
-    tpca: PCA | BaseTemporalPCA | None = None,
+    tpca: "PCA | BaseTemporalPCA | None" = None,
     device: torch.device | str | None = None,
     rank: int | None = None,
     batch_size=64,
     show_progress=True,
 ):
     """PCA-embed and interpolate residual snippets to the registered probe"""
-    from dartsort.util import data_util, drift_util, interpolation_util
-
-    assert geom.shape[1] == 2, "Haven't implemented 3d probes here."
+    from ..transform import BaseTemporalPCA
+    from . import data_util, interpolation_util
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1165,6 +1174,14 @@ def interpolate_residual_snippets(
         times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
+    assert snippets.shape[0] == times_s_np.shape[0]
+
+    # allow out of order residual sampling
+    order = np.argsort(times_s_np)
+    if not np.array_equal(order, np.arange(len(order))):
+        times_s_np = times_s_np[order]
+        snippets = snippets[order]
+    assert snippets.shape[0] == times_s_np.shape[0]
 
     # tpca project
     if do_tpca:
@@ -1172,7 +1189,10 @@ def interpolate_residual_snippets(
             tpca = cast(BaseTemporalPCA, data_util.get_tpca(hdf5_path))
         elif not isinstance(tpca, BaseTemporalPCA):
             tpca = BaseTemporalPCA.from_sklearn(
-                channel_index=channel_index, pca=tpca, trim_rank_to=rank
+                channel_index=channel_index,
+                pca=tpca,
+                trim_rank_to=rank,
+                spike_length_samples=snippets.shape[1],
             )
 
         assert tpca is not None
@@ -1198,14 +1218,27 @@ def interpolate_residual_snippets(
     inds = []
     if motion is not None:
         if motion.time_bins_s.size <= 1:
-            dbin = 3 * np.ptp(times_s_np)
+            tt = np.concatenate([motion.time_bins_s, times_s_np])
+            dbin = 3 * np.ptp(tt)
         else:
-            dbin = np.diff(motion.time_bins_s).mean()
+            dt = np.diff(motion.time_bins_s)
+            assert (dt > 0).all()
+            dbin = dt.mean()
+        assert motion.time_bins_s[0] - dbin < times_s_np.min()
+        assert motion.time_bins_s[-1] + dbin > times_s_np.max()
         i0 = i1 = 0
-        for tbc in motion.time_bins_s:
-            left = tbc - 0.5 * dbin
+        for j, tbc in enumerate(motion.time_bins_s):
+            # math done this way to avoid float issues; asserts check it.
+            if j:
+                left = 0.5 * (motion.time_bins_s[j - 1] + tbc)
+            else:
+                left = tbc - dbin
+            if j < motion.time_bins_s.shape[0] - 1:
+                right = 0.5 * (motion.time_bins_s[j + 1] + tbc)
+            else:
+                right = tbc + dbin
             i0 = i0 + np.searchsorted(times_s_np[i0:], left)
-            i1 = i0 + np.searchsorted(times_s_np[i0:], left + dbin)
+            i1 = i0 + np.searchsorted(times_s_np[i0:], right)
             if len(inds):
                 assert i0 == inds[-1][1]
             for i00 in range(i0, i1, batch_size):
@@ -1216,12 +1249,48 @@ def interpolate_residual_snippets(
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    snips_out = snippets.new_empty((snippets.shape[0], dim, registered_geom.shape[0]))
     for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
-        batch = snippets[i0:i1].to(device=device)
+        batch = snippets[i0:i1].to(device=device, non_blocking=True)
         if tpca is not None:
             batch = tpca.force_embed(batch)[:, :dim]
-        snips_out[i0:i1] = erp.interp_at_time(t_s=tbc, waveforms=batch).to(snips_out)
+        yield erp.interp_at_time(t_s=tbc, waveforms=batch)
+
+
+def interpolate_residual_snippets(
+    *,
+    motion: MotionInfo,
+    hdf5_path: str | Path,
+    residual_times_s_dataset_name="residual_times_seconds",
+    residual_dataset_name="residual",
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
+    do_tpca: bool,
+    tpca: "PCA | BaseTemporalPCA | None" = None,
+    device: torch.device | str | None = None,
+    rank: int | None = None,
+    batch_size=64,
+    show_progress=True,
+):
+    with h5py.File(hdf5_path, "r", locking=False) as h5:
+        n = h5[residual_dataset_name].shape[0]
+    snips_out = None
+    i0 = 0
+    for snip in generate_interpolated_residual_snippets(
+        motion=motion,
+        hdf5_path=hdf5_path,
+        residual_times_s_dataset_name=residual_times_s_dataset_name,
+        residual_dataset_name=residual_dataset_name,
+        interp_params=interp_params,
+        do_tpca=do_tpca,
+        tpca=tpca,
+        device=device,
+        rank=rank,
+        batch_size=batch_size,
+        show_progress=show_progress,
+    ):
+        if snips_out is None:
+            snips_out = snip.new_empty((n, *snip.shape[1:]))
+        snips_out[i0 : i0 + snip.shape[0]] = snip.to(snips_out)
+        i0 += snip.shape[0]
     return snips_out
 
 
@@ -1379,15 +1448,14 @@ def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
     motion: MotionInfo,
-    interp_params: InterpolationParams = default_template_interpolation_params,
+    interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     device: torch.device | None = None,
     rgeom=None,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     seed: int = 0,
+    batch_size=256,
 ):
-    from dartsort.util.drift_util import registered_geometry
-
     assert sorting.parent_h5_path is not None
 
     if do_interpolation:
@@ -1399,30 +1467,42 @@ def residual_covariance(
             else:
                 rgeom = motion.rgeom
             rgeom = rgeom.astype(np.float32)
-        snippets = interpolate_residual_snippets(
+        snipgen = generate_interpolated_residual_snippets(
             motion=motion,
             hdf5_path=sorting.parent_h5_path,
-            geom=geom,
-            registered_geom=rgeom,
             interp_params=interp_params,
             device=device,
             do_tpca=False,
             residual_times_s_dataset_name=residual_times_s_dataset_name,
             residual_dataset_name=residual_dataset_name,
+            batch_size=batch_size,
         )
     else:
-        snippets = sorting._load_dataset(residual_dataset_name)
-    snippets = torch.asarray(snippets, device=device)
+        snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
 
-    if do_interpolation:
-        isna = snippets.isnan()
-        nna = isna.sum()
-        if nna:
-            rvs = np.random.default_rng(seed).normal(size=nna)
-            rvs = torch.asarray(rvs).to(snippets)
-            snippets[isna] = rvs
+    rg = spawn_torch_rg(seed=seed, device=device)
+    cov = None
+    N = 0
+    for snip in snipgen:
+        snip = torch.asarray(snip).to(device=device, non_blocking=True)
+        nc = snip.shape[2]
+        snip = snip.view(-1, nc)
+        if cov is None:
+            cov = snip.new_zeros((nc, nc))
 
-    return torch.cov(snippets.view(-1, snippets.shape[2]).T)
+        isna = snip.isnan()
+        rvs = torch.randn(
+            size=snip.shape, generator=rg, device=device, dtype=snip.dtype
+        )
+        snip.masked_scatter_(isna, rvs)
+
+        scov = torch.cov(snip.T)
+        n = snip.shape[0]
+        N += n
+        w = n / N
+        cov += scov.sub_(cov).mul_(w)
+
+    return cov
 
 
 def fullzca_whitener(
@@ -1483,7 +1563,7 @@ class SpatialWhitener(BModule):
 
     @classmethod
     def from_numpy(cls, whitener: np.ndarray):
-        logger.dartsortverbose(f"Load whitener from numpy.")
+        logger.dartsortverbose("Load whitener from numpy.")
         return cls(whitener=torch.asarray(whitener))
 
     def to_numpy(self) -> np.ndarray:
@@ -1511,13 +1591,18 @@ class SpatialWhitener(BModule):
         )
         geom = getattr(sorting, "geom", None)
         assert geom is not None
-        neighbs = make_channel_index(geom, radius=whiten_cfg.radius)
+        neighbs = make_channel_index(geom, radius=whiten_cfg.radius, to_torch=False)
         cov_np = cov.numpy(force=True).astype(np.float64)
         whitener = whitening_estimators[whiten_cfg.estimator](
             cov_np, channel_index=neighbs
         )
         whitener = torch.asarray(whitener).to(cov)
         return cls(whitener=whitener)
+
+    def whiten_traces_spatial_major(
+        self, x: Tensor, out: Tensor | None = None
+    ) -> Tensor:
+        return torch.mm(self.b.whitener, x.T, out=out)
 
     def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
         *shp, c = x.shape

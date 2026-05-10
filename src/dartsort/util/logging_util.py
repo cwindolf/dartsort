@@ -76,7 +76,7 @@ def warn_with_traceback(message, category, filename, lineno, file=None, line=Non
 # override warnings to show tracebacks when debugging
 if logger.isEnabledFor(DARTSORTVERBOSE):
     logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
-    warnings.showwarning = warn_with_traceback
+    warnings.showwarning = warn_with_traceback  # type: ignore
 
 
 def get_logger(*args, **kwargs) -> DARTsortLogger:
