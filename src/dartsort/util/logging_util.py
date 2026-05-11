@@ -1,6 +1,5 @@
 import os
 import warnings
-from datetime import timedelta
 from logging import (
     DEBUG,
     INFO,
@@ -202,14 +201,14 @@ class logress:
         dt = t - self.start
         rate = n / dt
         rate_str = f"{rate:.1f}{self.unit}/s"
-        elapsed = str(timedelta(dt)).removeprefix("00:")
+        elapsed = seconds_str(dt)
         if self.total:
             prop = n / self.total
             pct = 100 * prop
             prog_str = f"{n}/{self.total} ({pct:.1f}%)"
 
             eta = (1 - prop) * (dt / prop)
-            eta = str(timedelta(eta)).removeprefix("00:")
+            eta = seconds_str(dt)
             time_str = f"{elapsed}<{eta}"
         else:
             prog_str = f"{n}/?"
@@ -230,3 +229,16 @@ else:
 
     def progrange(*args, **kwargs):
         return logress(range(*args), **kwargs)
+
+
+def seconds_str(dt):
+    hours, remainder = divmod(dt, 3600)
+    hours = int(hours)
+    minutes, seconds = divmod(remainder, 60)
+    minutes = int(minutes)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:04.1f}"
+    elif minutes:
+        return f"{minutes:02d}:{seconds:04.1f}"
+    else:
+        return f"{seconds:0.2f}s"
