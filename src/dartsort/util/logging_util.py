@@ -165,7 +165,7 @@ class logress:
                 toc = perf_counter()
                 if n > nstart and (toc - tic) < mininterval:
                     continue
-                self.n = n
+                self.n = last_n = n
                 self._print(t=toc, check=False)
                 tic = toc
         finally:
