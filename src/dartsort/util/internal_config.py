@@ -575,8 +575,8 @@ class FeaturizationConfig:
     localization_noise_floor: bool = False
 
     # -- further info about denoising
-    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = default_pretrained_path
+    nn_denoiser_class_name: str = "Decollider"
+    nn_denoiser_pretrained_path: str | None = None
     nn_denoiser_train_epochs: int = 100
     nn_denoiser_epoch_size: int = 200 * 256
     nn_denoiser_extra_kwargs: dict | None = argfield(None, cli=False)
