@@ -13,7 +13,7 @@ from .util.internal_config import (
     TemplateSVDMethod,
     WhiteningEstimator,
     WhiteningStrategy,
-    default_pretrained_path,
+    default_pretrained_path,  # noqa
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
