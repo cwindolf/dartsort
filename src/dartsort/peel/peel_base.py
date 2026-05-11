@@ -83,6 +83,13 @@ class BasePeeler(BModule):
         self.spike_length_samples: int = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        if fit_sampling_cfg.residual_snip_ms:
+            self.resid_length_samples = waveform_cfg.ms_to_samples(
+                fit_sampling_cfg.residual_snip_ms,
+                sampling_frequency=recording.sampling_frequency,
+            )
+        else:
+            self.resid_length_samples = self.spike_length_samples
         self.fit_sampling_cfg = fit_sampling_cfg
         self.random_seed = fit_sampling_cfg.seed
         self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
@@ -550,7 +557,7 @@ class BasePeeler(BModule):
                 self.rg,
                 peel_result["residual"],
                 n_resid_snips,
-                self.spike_length_samples,
+                self.resid_length_samples,
             )
             resid_times_samples = chunk_start_samples + resid_times_samples
             chunk_result["residual_times_seconds"] = (
@@ -811,6 +818,7 @@ class BasePeeler(BModule):
         hdf5_filename: str | Path,
         chunk_length_samples=None,
         n_chunks: int | None = None,
+        stop_after_n_waveforms: int | None = None,
         residual_to_h5=False,
         total_residual_snips: int | None = None,
         skip_features=False,
@@ -852,7 +860,9 @@ class BasePeeler(BModule):
         else:
             coverage = None
 
-        if more:
+        if stop_after_n_waveforms is not None:
+            pass
+        elif more:
             stop_after_n_waveforms = self.fit_sampling_cfg.more_waveforms_fit
         else:
             stop_after_n_waveforms = self.fit_sampling_cfg.max_waveforms_fit
@@ -1038,9 +1048,9 @@ class BasePeeler(BModule):
                 output_h5.create_dataset(
                     "residual",
                     dtype=self.np_dtype,
-                    shape=(0, self.spike_length_samples, n_chans),
-                    maxshape=(None, self.spike_length_samples, n_chans),
-                    chunks=(chunk_size, self.spike_length_samples, n_chans),
+                    shape=(0, self.resid_length_samples, n_chans),
+                    maxshape=(None, self.resid_length_samples, n_chans),
+                    chunks=(chunk_size, self.resid_length_samples, n_chans),
                 )
             if "residual_times_seconds" not in output_h5:
                 output_h5.create_dataset(

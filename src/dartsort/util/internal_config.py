@@ -60,6 +60,9 @@ class WaveformConfig:
         else:
             return int(ms * (sampling_frequency / 1000.0))
 
+    def length_ms(self):
+        return self.ms_before + self.ms_after
+
     def trough_offset_samples(self, sampling_frequency: float = 30_000.0):
         sampling_frequency = np.round(sampling_frequency)
         return self.ms_to_samples(self.ms_before, sampling_frequency=sampling_frequency)
@@ -197,6 +200,7 @@ class FitSamplingConfig:
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
     n_residual_snips: int = 4 * 4096
+    residual_snip_ms: float | None = None
     residual_sampling_target_density: float = 0.25
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
@@ -646,6 +650,9 @@ class SubtractionConfig:
 
     # initial denoiser fitting parameters
     first_denoiser_max_waveforms_fit: int = 250_000
+    first_denoiser_noise_snips: int = 100 * 128
+    first_denoiser_noise_snip_length_mul: float = 2.5
+    first_denoiser_noise_density: float = 0.5
     first_denoiser_thinning: float = 0.0
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0

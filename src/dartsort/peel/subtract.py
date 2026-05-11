@@ -1,5 +1,6 @@
 import gc
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -458,6 +459,14 @@ class SubtractionPeeler(BasePeeler):
             convexity_radius=self.p.convexity_radius,
             spatial_jitter_radius=self.p.first_denoiser_spatial_jitter,
         )
+        rms = (
+            self.p.first_denoiser_noise_snip_length_mul * self.waveform_cfg.length_ms()
+        )
+        sampling_cfg = replace(
+            self.fit_sampling_cfg,
+            residual_snip_ms=rms,
+            residual_sampling_target_density=self.p.first_denoiser_noise_density,
+        )
         return threshold_to_fit(
             pipeline=fit_pipeline,
             recording=self.recording,
@@ -465,8 +474,9 @@ class SubtractionPeeler(BasePeeler):
             channel_index=self.b.sub_channel_index,
             spatial_dedup_radius=self.p.first_denoiser_spatial_dedup_radius,
             threshold_cfg=threshold_cfg,
-            sampling_cfg=self.fit_sampling_cfg,
+            sampling_cfg=sampling_cfg,
             max_waveforms_fit=self.p.first_denoiser_max_waveforms_fit,
+            n_residual_snips=self.p.first_denoiser_noise_snips,
             computation_cfg=computation_cfg,
             tmp_dir=tmp_dir,
         )

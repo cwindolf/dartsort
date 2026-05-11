@@ -71,7 +71,7 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 )
 
 
-@pytest.mark.parametrize("sdcfg", [scdn_sdcfg, decollider_sdcfg])
+@pytest.mark.parametrize("sdcfg", [decollider_sdcfg, scdn_sdcfg])
 @pytest.mark.parametrize("sim_size", ["mini"])
 def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
     sim_recording = simulations[f"driftn_sz{sim_size}"]["recording"]

@@ -1,6 +1,7 @@
 import dataclasses
 from typing import cast
 
+import h5py
 import numpy as np
 import pandas as pd
 import torch
@@ -15,6 +16,7 @@ from ..util.logging_util import get_logger, progrange
 from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
+    AsyncSameChannelHDF5NoiseDataset,
     AsyncSameChannelRecordingNoiseDataset,
     BaseMultichannelDenoiser,
     NoneDataset,
@@ -26,6 +28,7 @@ logger = get_logger(__name__)
 
 class Decollider(BaseMultichannelDenoiser):
     default_name = "decollider"
+    needs_residual = True
 
     def __init__(
         self,
@@ -166,13 +169,22 @@ class Decollider(BaseMultichannelDenoiser):
             self.den_net: torch.nn.Module = self.inf_net
         self.to(self.device)
 
-    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
+    def fit(
+        self,
+        recording,
+        waveforms,
+        *,
+        computation_cfg,
+        channels,
+        hdf5_filename=None,
+        **spike_data,
+    ):
         weights = spike_data.get("weights")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
         train_data, val_data = self._construct_datasets_from_waveforms(
-            waveforms, channels, recording, weights
+            waveforms, channels, recording, weights, hdf5_filename=hdf5_filename
         )
         with torch.enable_grad():
             res = self._fit(train_data, val_data)
@@ -360,6 +372,161 @@ class Decollider(BaseMultichannelDenoiser):
         train_data: "DecolliderDataLoader",
         val_data: "DecolliderDataLoader | None",
     ):
+        try:
+            train_records = self._run_train_loop(train_data, val_data)
+        finally:
+            train_data.destroy()
+            if val_data is not None:
+                val_data.destroy()
+
+        train_df = pd.DataFrame.from_records(train_records)
+        return train_df
+
+    def _construct_datasets_from_waveforms(
+        self,
+        waveforms,
+        channels,
+        recording,
+        weights=None,
+        hdf5_filename=None,
+        dataset_name="residual",
+    ):
+        rg = np.random.default_rng(self.random_seed)
+
+        val_size = 0
+        train_indices = slice(None)
+        val_indices = None
+        if self.val_split_p:
+            num_samples = len(waveforms)
+            val_size = int(self.val_split_p * num_samples)
+            train_size = num_samples - val_size
+            train_indices = rg.choice(num_samples, size=train_size, replace=False)
+            val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
+
+        can_load_h5 = _check_has_dataset(hdf5_filename, dataset_name)
+
+        spike_length_samples = waveforms.shape[1]
+
+        # training dataset
+        train_waveforms = waveforms[train_indices]
+        train_channels = channels[train_indices]
+        train_dataset = TensorDataset(train_waveforms, train_channels)
+        if can_load_h5:
+            logger.dartsortdebug(f"Load Decollider train noise data from {hdf5_filename}.")
+            train_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
+                hdf5_filename=hdf5_filename,
+                channels=train_channels.numpy(force=True),
+                channel_index=self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
+                dataset_name=dataset_name,
+            )
+        else:
+            logger.dartsortdebug("Load Decollider train noise data from recording.")
+            train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
+                recording,
+                train_channels.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
+            )
+        if self.cycle_loss_alpha and can_load_h5:
+            logger.dartsortdebug(f"Load Decollider cycle noise data from {hdf5_filename}.")
+            train_cycle_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
+                hdf5_filename=hdf5_filename,
+                channels=train_channels.numpy(force=True),
+                channel_index=self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
+                dataset_name=dataset_name,
+            )
+        elif self.cycle_loss_alpha:
+            logger.dartsortdebug("Load Decollider cycle noise data from recording.")
+            train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
+                recording,
+                train_channels.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
+            )
+        else:
+            train_cycle_noise_dataset = NoneDataset(len(train_channels))
+
+        train_stack_dataset = StackDataset(
+            train_dataset, train_noise_dataset, train_cycle_noise_dataset
+        )
+        train_weights = None if weights is None else weights[train_indices]
+        train_sampler = AOTIndicesWeightedRandomBatchSampler(
+            n_examples=len(train_channels),
+            weights=train_weights,
+            replacement=train_weights is not None,
+            batch_size=self.batch_size,
+            generator=spawn_torch_rg(rg),
+            epoch_size=self.epoch_size,
+        )
+        train_loader = DataLoader(
+            train_stack_dataset,
+            sampler=train_sampler,
+            num_workers=0,
+            batch_size=None,
+        )
+        train_data = DecolliderDataLoader(
+            loader=train_loader,
+            sampler=train_sampler,
+            noise_dataset=train_noise_dataset,
+            cycle_noise_dataset=train_cycle_noise_dataset,
+            spike_length_samples=spike_length_samples,
+        )
+
+        # initialize validation datasets only if val_split_p > 0
+        if val_size > 0:
+            val_waveforms = waveforms[val_indices]
+            val_channels = channels[val_indices]
+            val_noise = get_noise(
+                recording,
+                val_channels.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                rg=rg,
+            )
+            if self.cycle_loss_alpha:
+                cycle_val_noise = get_noise(
+                    recording,
+                    val_channels.numpy(force=True),
+                    self.b.model_channel_index.numpy(force=True),
+                    spike_length_samples=spike_length_samples,
+                    rg=rg,
+                )
+                cycle_val_noise = TensorDataset(cycle_val_noise)
+            else:
+                cycle_val_noise = NoneDataset(len(train_channels))
+            val_dataset = TensorDataset(val_waveforms, val_channels)
+            val_noise_dataset = TensorDataset(val_noise)
+
+            # val set does not need shuffling
+            val_loader = DataLoader(
+                val_dataset,
+                num_workers=self.n_data_workers,  # type: ignore
+                persistent_workers=bool(self.n_data_workers),
+                batch_size=self.batch_size,
+            )
+            val_data = DecolliderDataLoader(
+                loader=val_loader,
+                sampler=None,
+                noise_dataset=val_noise_dataset,
+                cycle_noise_dataset=cycle_val_noise,
+                spike_length_samples=spike_length_samples,
+            )
+        else:
+            val_data = None
+
+        return train_data, val_data
+
+    def _run_train_loop(self, train_data, val_data):
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
 
@@ -450,7 +617,7 @@ class Decollider(BaseMultichannelDenoiser):
                     can_val = not (self.earlystop_eps is None or last_val_loss is None)
                     if can_val and val_loss - last_val_loss > self.earlystop_eps:
                         if epoch >= self.min_epochs:
-                            print(f"Early stopping after {epoch} epochs.")
+                            logger.dartsortdebug(f"Early stopping after {epoch} epochs.")
                             break
                     last_val_loss = val_loss
 
@@ -468,129 +635,23 @@ class Decollider(BaseMultichannelDenoiser):
                 pbar.set_description(f"Epochs [{loss_str}]")
 
                 self.step_scheduler(scheduler, loss, val_loss)
-
-        train_df = pd.DataFrame.from_records(train_records)
-        return train_df
-
-    def _construct_datasets_from_waveforms(
-        self, waveforms, channels, recording, weights=None
-    ):
-        rg = np.random.default_rng(self.random_seed)
-
-        val_size = 0
-        train_indices = slice(None)
-        val_indices = None
-        if self.val_split_p:
-            num_samples = len(waveforms)
-            val_size = int(self.val_split_p * num_samples)
-            train_size = num_samples - val_size
-            train_indices = rg.choice(num_samples, size=train_size, replace=False)
-            val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
-
-        spike_length_samples = waveforms.shape[1]
-
-        # training dataset
-        train_waveforms = waveforms[train_indices]
-        train_channels = channels[train_indices]
-        train_dataset = TensorDataset(train_waveforms, train_channels)
-        train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
-            recording,
-            train_channels.numpy(force=True),
-            self.b.model_channel_index.numpy(force=True),
-            spike_length_samples=spike_length_samples,
-            generator=spawn_torch_rg(rg),
-            queue_chunks=self.queue_chunks,
-        )
-        if self.cycle_loss_alpha:
-            train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
-                recording,
-                train_channels.numpy(force=True),
-                self.b.model_channel_index.numpy(force=True),
-                spike_length_samples=spike_length_samples,
-                generator=spawn_torch_rg(rg),
-                queue_chunks=self.queue_chunks,
-            )
-        else:
-            train_cycle_noise_dataset = NoneDataset(len(train_channels))
-
-        train_stack_dataset = StackDataset(
-            train_dataset, train_noise_dataset, train_cycle_noise_dataset
-        )
-        train_weights = None if weights is None else weights[train_indices]
-        train_sampler = AOTIndicesWeightedRandomBatchSampler(
-            n_examples=len(train_channels),
-            weights=train_weights,
-            replacement=train_weights is not None,
-            batch_size=self.batch_size,
-            generator=spawn_torch_rg(rg),
-            epoch_size=self.epoch_size,
-        )
-        train_loader = DataLoader(
-            train_stack_dataset,
-            sampler=train_sampler,
-            num_workers=0,
-            batch_size=None,
-        )
-        train_data = DecolliderDataLoader(
-            loader=train_loader,
-            sampler=train_sampler,
-            noise_dataset=train_noise_dataset,
-            cycle_noise_dataset=train_cycle_noise_dataset,
-            spike_length_samples=spike_length_samples,
-        )
-
-        # initialize validation datasets only if val_split_p > 0
-        if val_size > 0:
-            val_waveforms = waveforms[val_indices]
-            val_channels = channels[val_indices]
-            val_noise = get_noise(
-                recording,
-                val_channels.numpy(force=True),
-                self.b.model_channel_index.numpy(force=True),
-                spike_length_samples=spike_length_samples,
-                rg=rg,
-            )
-            if self.cycle_loss_alpha:
-                cycle_val_noise = get_noise(
-                    recording,
-                    val_channels.numpy(force=True),
-                    self.b.model_channel_index.numpy(force=True),
-                    spike_length_samples=spike_length_samples,
-                    rg=rg,
-                )
-                cycle_val_noise = TensorDataset(cycle_val_noise)
-            else:
-                cycle_val_noise = NoneDataset(len(train_channels))
-            val_dataset = TensorDataset(val_waveforms, val_channels)
-            val_noise_dataset = TensorDataset(val_noise)
-
-            # val set does not need shuffling
-            val_loader = DataLoader(
-                val_dataset,
-                num_workers=self.n_data_workers,  # type: ignore
-                persistent_workers=bool(self.n_data_workers),
-                batch_size=self.batch_size,
-            )
-            val_data = DecolliderDataLoader(
-                loader=val_loader,
-                sampler=None,
-                noise_dataset=val_noise_dataset,
-                cycle_noise_dataset=cycle_val_noise,
-                spike_length_samples=spike_length_samples,
-            )
-        else:
-            val_data = None
-
-        return train_data, val_data
+        return train_records
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class DecolliderDataLoader:
     loader: DataLoader
     sampler: AOTIndicesWeightedRandomBatchSampler | None
-    noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset
+    noise_dataset: (
+        AsyncSameChannelRecordingNoiseDataset
+        | AsyncSameChannelHDF5NoiseDataset
+        | TensorDataset
+    )
     cycle_noise_dataset: (
-        AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
+        AsyncSameChannelRecordingNoiseDataset
+        | AsyncSameChannelHDF5NoiseDataset
+        | TensorDataset
+        | NoneDataset
     )
     spike_length_samples: int
 
@@ -627,3 +688,18 @@ class DecolliderDataLoader:
             self.cycle_noise_dataset, "cleanup"
         ):
             self.cycle_noise_dataset.cleanup()  # type: ignore
+
+    def destroy(self):
+        if hasattr(self.noise_dataset, "destroy"):
+            self.noise_dataset.destroy()  # type: ignore
+        if self.cycle_noise_dataset is not None and hasattr(
+            self.cycle_noise_dataset, "destroy"
+        ):
+            self.cycle_noise_dataset.destroy()  # type: ignore
+
+
+def _check_has_dataset(h5, dset):
+    if h5 is None:
+        return
+    with h5py.File(h5, "r", locking=False) as h5:
+        return dset in h5
