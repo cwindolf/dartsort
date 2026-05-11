@@ -666,7 +666,7 @@ class ThresholdingConfig:
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius_um: float = 150.0
-    relative_peak_radius_um: float = 35.0
+    relative_peak_radius_um: float | None = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
