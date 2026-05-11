@@ -30,7 +30,7 @@ dependencies = [
   "pynapple",
   "scipy>=1.13",
   "scikit-learn",
-  "spikeinterface>=0.101.2",
+  "spikeinterface>=0.104.0",
   "sympy",
   "torch>=2.0",
   "tqdm",
@@ -40,11 +40,7 @@ dependencies = [
 vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 gpu = ["cupy"]
 full = ["matplotlib", "seaborn", "pytest", "matplotlib-venn", "pytest-cov", "ipywidgets", "ipykernel", "black"]
-test = [
-  "pytest",
-  "pytest-cov",
-  "spikeinterface @ git+https://github.com/SpikeInterface/spikeinterface.git",
-]
+test = ["pytest", "pytest-cov"]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"
