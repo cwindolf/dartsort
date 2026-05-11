@@ -203,7 +203,10 @@ class logress:
 
         dt = t - self.start
         rate = n / dt
-        rate_str = f"{rate:.1f}{self.unit}/s"
+        if rate >= 1.0:
+            rate_str = f"{rate:.1f}{self.unit}/s"
+        else:
+            rate_str = f"{dt / n:.1f}s/{self.unit}"
         elapsed = seconds_str(dt)
         if self.total:
             prop = n / self.total
