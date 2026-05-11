@@ -1387,7 +1387,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording.segments[0].sample_index_to_time(
+    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
