@@ -1,16 +1,22 @@
 import os
-from logging import (
-    getLoggerClass,
-    addLevelName,
-    setLoggerClass,
-    NOTSET,
-    DEBUG,
-    getLogger,
-    getLevelNamesMapping,
-    basicConfig,
-)
 import warnings
+from datetime import timedelta
+from logging import (
+    DEBUG,
+    INFO,
+    NOTSET,
+    addLevelName,
+    basicConfig,
+    getLevelNamesMapping,
+    getLogger,
+    getLoggerClass,
+    setLoggerClass,
+)
+from time import perf_counter
 
+from tqdm.auto import tqdm as auto_tqdm
+from tqdm.auto import trange as auto_trange
+from tqdm.notebook import tqdm as notebook_tqdm
 
 DARTSORTVERBOSE = DEBUG + 4
 addLevelName(DARTSORTVERBOSE, "DSVERBOSE")
@@ -65,7 +71,8 @@ if "LOG_LEVEL" in os.environ:
 
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
-    import sys, traceback
+    import sys
+    import traceback
 
     log = file if hasattr(file, "write") else sys.stderr
     assert log is not None
@@ -89,3 +96,137 @@ logger.dartsortdebug(
     f"Logger is enabled for: DARTSORTDEBUG={logger.isEnabledFor(DARTSORTDEBUG)}, "
     f"DARTSORTVERBOSE={logger.isEnabledFor(DARTSORTVERBOSE)}."
 )
+
+
+class logress:
+    def __init__(
+        self,
+        iterable,
+        logger=logger,
+        miniters=100,
+        mininterval=60.0,
+        desc=None,
+        total=None,
+        smoothing=0.0,
+        unit="it",
+        level=INFO,
+        initial=0,
+        miniters_fraction=0.2,
+    ):
+        del smoothing
+
+        self.iterable = iterable
+        self.desc = desc
+        self.level = level
+        self.miniters = max(miniters, 1)
+        self.mininterval = mininterval
+        self.logger = logger
+        self.unit = unit
+        try:
+            self.total = len(iterable)
+            self.miniters = min(
+                self.miniters, max(1, int(miniters_fraction * self.total))
+            )
+        except TypeError:
+            self.total = total
+
+        self.n = initial
+        self.start = perf_counter()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+    def __iter__(self):
+        it = self.iterable
+        if not self.logger.isEnabledFor(self.level):
+            yield from it
+            return
+
+        n = self.n
+        miniters = self.miniters
+        mininterval = self.mininterval
+
+        last_n = n
+        start = perf_counter()
+        tic = start
+        nstart = n + 1
+
+        self.last_n = n
+        self.start = start
+        self.tic = tic
+        try:
+            for o in it:
+                yield o
+                n += 1
+                if n > nstart and n - last_n < miniters:
+                    continue
+                toc = perf_counter()
+                if n > nstart and (toc - tic) < mininterval:
+                    continue
+                self.n = n
+                self._print(t=toc, check=False)
+                tic = toc
+        finally:
+            self.n = self.last_n = n
+            self.tic = tic
+
+    def set_description(self, desc, refresh=False):
+        self.desc = desc
+        if refresh:
+            self._print()
+
+    def update(self, n):
+        self.n = n
+        self._print()
+
+    def write(self, s):
+        self.logger.log(self.level, s)
+
+    def close(self):
+        self._print(check=False)
+
+    def _print(self, t=None, check=True):
+        if t is None:
+            t = perf_counter()
+
+        n = self.n
+        if check:
+            if n - self.last_n < self.miniters:
+                return
+            if (t - self.tic) < self.mininterval:
+                return
+
+        dt = t - self.start
+        rate = n / dt
+        rate_str = f"{rate:.1f}{self.unit}/s"
+        elapsed = str(timedelta(dt)).removeprefix("00:")
+        if self.total:
+            prop = n / self.total
+            pct = 100 * prop
+            prog_str = f"{n}/{self.total} ({pct:.1f}%)"
+
+            eta = (1 - prop) * (dt / prop)
+            eta = str(timedelta(eta)).removeprefix("00:")
+            time_str = f"{elapsed}<{eta}"
+        else:
+            prog_str = f"{n}/?"
+            time_str = f"{elapsed}/?"
+
+        self.write(f"{self.desc}: [{prog_str}] ({rate_str}, {time_str})")
+
+        self.last_n = n
+        self.tic = t
+
+
+_is_notebook = issubclass(auto_tqdm, notebook_tqdm)
+if _is_notebook:
+    progbar = auto_tqdm
+    progrange = auto_trange
+else:
+    progbar = logress
+
+    def progrange(*args, **kwargs):
+        return logress(range(*args), **kwargs)

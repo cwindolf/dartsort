@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 from spikeinterface.comparison import GroundTruthComparison
-from tqdm.auto import tqdm
 
 from ..clustering import merge
+from ..util.logging_util import progbar
 from .analysis import DARTsortAnalysis
 
 
@@ -441,7 +441,7 @@ class DARTsortGroundTruthComparison:
         tlabels = self.tested_analysis.sorting.labels
         gt_labels_for_tested = np.full_like(tlabels, -1)
         to_ms = 1000.0 / self.gt_analysis.recording.sampling_frequency
-        for gtu in tqdm(self.gt_analysis.unit_ids, desc="Spike match"):
+        for gtu in progbar(self.gt_analysis.unit_ids, desc="Spike match"):
             tu = self.get_match(gtu)
             if tu < 0:
                 continue

@@ -8,7 +8,6 @@ import numpy as np
 import torch
 from KDEpy import FFTKDE
 from spikeinterface.core import BaseRecording
-from tqdm.auto import tqdm
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -22,7 +21,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import databag
@@ -425,7 +424,7 @@ def qda(
 
         results = pool.map(_qda_job, np.c_[ii, jj])
         if show_progress:
-            results = tqdm(
+            results = progbar(
                 results,
                 desc=f"QDA:{n_jobs}",
                 total=ii.shape[0],

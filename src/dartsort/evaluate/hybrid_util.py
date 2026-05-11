@@ -15,13 +15,13 @@ from spikeinterface.generation.drift_tools import (
     InjectDriftingTemplatesRecording,
     move_dense_templates,
 )
-from tqdm.auto import tqdm
 
 from ..config import DeveloperConfig
 from ..evaluate.analysis import DARTsortAnalysis
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, unshifted_raw_template_cfg
+from ..util.logging_util import progbar
 from ..util.motion import MotionInfo
 from ..util.py_util import resolve_path
 from . import analysis, comparison, simkit
@@ -208,7 +208,7 @@ def greedy_match(
 
     thresholds = np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx)
     if show_progress:
-        thresholds = tqdm(thresholds, desc="Greedy match")
+        thresholds = progbar(thresholds, desc="Greedy match")
 
     for j, thresh in enumerate(thresholds):
         test_unmatched = np.flatnonzero(assignments < 0)

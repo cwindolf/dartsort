@@ -3,12 +3,12 @@ from threading import local
 from typing import Literal, cast
 
 import h5py
-import torch
 import numpy as np
-from tqdm.auto import tqdm
+import torch
 
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
+from ..util.logging_util import progbar
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import databag
 from .transform_base import BaseWaveformFeaturizer
@@ -149,7 +149,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         ) as pool:
             results = pool.map(_reduction_job, range(self.n_units))
             if show_progress:
-                results = tqdm(
+                results = progbar(
                     results, total=self.n_units, desc=f"Medians:{dev.type}:{n_jobs}"
                 )
 

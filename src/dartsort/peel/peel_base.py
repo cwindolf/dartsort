@@ -14,7 +14,6 @@ import torch
 from spikeinterface.core import BaseRecording
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
-from tqdm.auto import tqdm
 
 from ..transform import WaveformPipeline
 from ..util.data_util import (
@@ -30,7 +29,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
@@ -313,13 +312,13 @@ class BasePeeler(BModule):
                 if show_progress:
                     s_chunk = chunk_length_samples / self.recording.sampling_frequency
                     dtag = computation_cfg.actual_device().type
-                    results = tqdm(
+                    results = progbar(
                         results,
                         total=n_chunks_orig,
                         initial=n_chunks_orig - len(chunks_to_do),
                         smoothing=0,
                         desc=f"{task_name}:{dtag} {s_chunk:.1f}s/it [spk/it=%%%]",
-                        mininterval=0.25,
+                        mininterval=1.0,
                     )
                 else:
                     dtag = s_chunk = None

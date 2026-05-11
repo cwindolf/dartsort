@@ -59,7 +59,6 @@ import torch.nn.functional as F
 from scipy.sparse.csgraph import connected_components
 from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
-from tqdm.auto import tqdm, trange
 
 from ..util.data_util import DARTsortSorting, subset_sorting_by_spike_count
 from ..util.internal_config import (
@@ -77,7 +76,13 @@ from ..util.interpolation_util import (
     pad_geom,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger
+from ..util.logging_util import (
+    DARTSORTDEBUG,
+    DARTSORTVERBOSE,
+    get_logger,
+    progbar,
+    progrange,
+)
 from ..util.main_util import ds_save_intermediate_labels, ds_save_intermediate_sorting
 from ..util.motion import MotionInfo
 from ..util.noise_util import EmbeddedNoise
@@ -1214,7 +1219,7 @@ class BatchedSpikeData:
         self, show_progress: bool = False, desc: str = "Batches"
     ) -> Iterable[SpikeDataBatch]:
         if show_progress:
-            batch_starts = trange(0, self.N, self.batch_size, desc=desc)
+            batch_starts = progrange(0, self.N, self.batch_size, desc=desc)
         else:
             batch_starts = range(0, self.N, self.batch_size)
         for b, i0 in enumerate(batch_starts):
@@ -2364,7 +2369,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     ):
         assert self.lut_params is not None
         if show_progress:
-            iters = trange(self.p.em_iters, desc="EM")
+            iters = progrange(self.p.em_iters, desc="EM")
         else:
             iters = range(self.p.em_iters)
         if min_iters is None:
@@ -2779,7 +2784,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert scores.responsibilities is not None
         assert max_iter >= 1
         if show_progress > 1 and not data.proposal_is_complete:
-            iters = trange(max_iter, desc="SoftAssign")
+            iters = progrange(max_iter, desc="SoftAssign")
             show_batch_progress = show_progress > 2 or data.proposal_is_complete
         else:
             iters = range(max_iter)
@@ -3117,7 +3122,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if _stop_after:
             split_groups = list(sg for _, sg in zip(range(_stop_after), split_groups))
         if show_progress:
-            split_groups = tqdm(split_groups, desc="Split", smoothing=0.0)
+            split_groups = progbar(split_groups, desc="Split", smoothing=0.0)
 
         train_labels = labels_from_scores_(train_scores)
         eval_labels = labels_from_scores_(eval_scores)
@@ -3240,7 +3245,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_labels = labels_from_scores_(eval_scores)
 
         if show_progress:
-            groups = tqdm(groups, desc="Merge", smoothing=0.0)
+            groups = progbar(groups, desc="Merge", smoothing=0.0)
 
         for group in groups:
             group_res = self.try_merge_group(
@@ -3373,7 +3378,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             distance=self.p.merge_max_distance, max_group_size=self.p.max_group_size
         )
         if show_progress:
-            groups = tqdm(groups, desc="Demolish", smoothing=0.0)
+            groups = progbar(groups, desc="Demolish", smoothing=0.0)
         demolished = torch.zeros_like(self.unit_ids, dtype=torch.bool)
         for j, group in enumerate(groups):
             group_res = evaluate_group_demolitions(

@@ -13,7 +13,8 @@ from scipy.spatial.distance import squareform
 from sklearn.utils.extmath import svd_flip
 from torch import Tensor
 from torch.fft import irfft, rfft
-from tqdm.auto import trange
+
+from .logging_util import progrange
 
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
@@ -419,7 +420,7 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size, desc="WeightedNormEuc"):
+    for i0 in progrange(0, npair, batch_size, desc="WeightedNormEuc"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]
@@ -953,7 +954,7 @@ def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size, desc="WeightedNormSup"):
+    for i0 in progrange(0, npair, batch_size, desc="WeightedNormSup"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]
@@ -996,7 +997,7 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
 
     weights = weights / weights.amax(dim=1, keepdims=True)
 
-    for i0 in trange(0, npair, batch_size, desc="MaxZ"):
+    for i0 in progrange(0, npair, batch_size, desc="MaxZ"):
         i1 = min(npair, i0 + batch_size)
 
         iii = ii[i0:i1]

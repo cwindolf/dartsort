@@ -6,9 +6,9 @@ import shutil
 import signal
 import subprocess
 import threading
-import time
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from time import perf_counter
 from typing import dataclass_transform
 
 from pydantic import ConfigDict
@@ -64,10 +64,10 @@ class timer:
         self.parent = None
 
     def start(self):
-        self.t0 = time.time()
+        self.t0 = perf_counter()
 
     def stop(self):
-        self.dt = time.time() - self.t0
+        self.dt = perf_counter() - self.t0
         logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
         if self.parent is not None and self.results_dict is not None:
             self.results_dict[f"{self.parent.name}: {self.name}"] = self.dt

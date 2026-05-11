@@ -13,11 +13,10 @@ from spikeinterface.core import (
     NumpySorting,
     get_random_data_chunks,
 )
-from tqdm.auto import tqdm
 
 from ..detect import detect_and_deduplicate
 from .internal_config import WaveformConfig, default_waveform_cfg
-from .logging_util import get_logger
+from .logging_util import get_logger, progbar
 
 if TYPE_CHECKING:
     from .motion import MotionInfo
@@ -187,7 +186,7 @@ class DARTsortSorting:
         l_reorder = self.labels[reorder]
         if w is not None:
             w = w[reorder]
-        for unit_id in tqdm(self.unit_ids, desc="TsGroup"):
+        for unit_id in progbar(self.unit_ids, desc="TsGroup"):
             inu = np.flatnonzero(l_reorder == unit_id)
             ut = t_s_reorder[inu]
             if w is None:
@@ -1459,7 +1458,7 @@ def yield_chunks(
             n_chunks = int(np.ceil(dataset.shape[0] / fallback_chunk_length))
         else:
             n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
-        chunks = tqdm(chunks, total=n_chunks, desc=desc)
+        chunks = progbar(chunks, total=n_chunks, desc=desc)
 
     for sli in chunks:
         yield sli, dataset[sli]

@@ -10,11 +10,10 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
 from torch import Tensor
-from tqdm.auto import tqdm, trange
 
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar, progrange
 from ..util.multiprocessing_util import get_pool
 from ..util.py_util import timer
 from .cluster_util import decrumb
@@ -50,7 +49,7 @@ def kdtree_inliers(
 
     inliers = np.zeros(kdtree.n, dtype=bool)
     if show_progress:
-        iters = trange(0, kdtree.n, batch_size, desc="KDTin")
+        iters = progrange(0, kdtree.n, batch_size, desc="KDTin")
     else:
         iters = range(0, kdtree.n, batch_size)
     for i0 in iters:
@@ -355,7 +354,7 @@ def bucket_density_ratio(
     density_ratio = torch.full((len(X),), -torch.inf, device=device)
 
     # for c in trange(len(scaled_geom), desc="bktdens"):
-    for c in trange(25, desc="bktdens"):
+    for c in progrange(25, desc="bktdens"):
         (inc,) = (channels == c).nonzero(as_tuple=True)
         (friends,) = chans_pair_mask[c][channels].nonzero(as_tuple=True)
         density_ratio[inc] = _local_sparse_dens_ratio(
@@ -424,7 +423,7 @@ def kdt_density(
         initargs=(kdtree, X, batch_size, sigma, sigma_regional, max_dist),
     ) as pool:
         density = np.full((n,), -np.inf)
-        for i0, i1, dens in tqdm(
+        for i0, i1, dens in progbar(
             pool.map(_kdtdens_job, jobs),
             total=len(jobs),
             smoothing=0.0,

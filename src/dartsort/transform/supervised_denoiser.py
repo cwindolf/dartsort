@@ -4,9 +4,9 @@ import h5py
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
-from tqdm.auto import trange
 
 from ..util import waveform_util
+from ..util.logging_util import progrange
 from ._multichan_denoiser_kit import (
     AsyncBatchDataset,
     BaseMultichannelDenoiser,
@@ -63,7 +63,7 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
         val_losses_per_epoch = []
         last_val_loss = None
 
-        with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
+        with progrange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 self.train()
                 train_loss_sum = 0.0

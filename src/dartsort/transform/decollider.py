@@ -10,9 +10,8 @@ from torch.utils.data import (
     StackDataset,
     TensorDataset,
 )
-from tqdm.auto import trange
 
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progrange
 from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
@@ -367,7 +366,7 @@ class Decollider(BaseMultichannelDenoiser):
         last_val_loss = None
         train_records = []
 
-        with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
+        with progrange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
             for epoch in pbar:
                 # deal with random indices...
                 train_data.refresh()

@@ -15,7 +15,6 @@ from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessorSegment,
     BaseRecordingSegment,
 )
-from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util.data_util import (
@@ -25,7 +24,7 @@ from ..util.data_util import (
     resolve_path,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import ptp
@@ -426,7 +425,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
-                    results = tqdm(
+                    results = progbar(
                         results,
                         total=len(chunk_starts),
                         desc="Extract GT features",

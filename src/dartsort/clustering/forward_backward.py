@@ -1,5 +1,4 @@
 import numpy as np
-from tqdm.auto import trange
 
 
 def forward_backward(
@@ -9,7 +8,6 @@ def forward_backward(
     feature_scales=(1, 1, 50),
     adaptive_feature_scales=False,
     motion=None,
-    verbose=True,
     min_cluster_size=25,
 ):
     """
@@ -54,10 +52,7 @@ def forward_backward(
     if motion is not None:
         z_reg = motion.correct_s(times_seconds, z_reg)
 
-    if verbose is True:
-        tbar = trange(len(chunk_sortings) - 1, desc="Ensembling chunks")
-    else:
-        tbar = range(len(chunk_sortings) - 1)
+    tbar = range(len(chunk_sortings) - 1)
     for k in tbar:
         idx_1 = np.flatnonzero(
             np.logical_and(

@@ -10,12 +10,11 @@ from torch.utils.data import (
     TensorDataset,
     WeightedRandomSampler,
 )
-from tqdm.auto import trange
 
-from dartsort.util import nn_util
-from dartsort.util.spiketorch import get_relative_index, ptp, reindex, spawn_torch_rg
-from dartsort.util.waveform_util import make_regular_channel_index
-
+from ..util import nn_util
+from ..util.logging_util import progrange
+from ..util.spiketorch import get_relative_index, ptp, reindex, spawn_torch_rg
+from ..util.waveform_util import make_regular_channel_index
 from .transform_base import BaseWaveformFeaturizer
 
 
@@ -347,7 +346,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         self.train()
         mse_history = []
-        with trange(self.n_epochs, desc="Train localizer", unit="epoch") as pbar:
+        with progrange(self.n_epochs, desc="Train localizer", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
                 total_mse = 0

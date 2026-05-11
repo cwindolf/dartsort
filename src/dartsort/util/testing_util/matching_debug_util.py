@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from scipy.signal import correlate
 from spikeinterface.core import BaseRecording
 from torch import Tensor
-from tqdm.auto import trange
 
 from ...peel.matching import (
     ChunkTemplateData,
@@ -20,6 +19,7 @@ from ...templates.templates import TemplateData
 from ..data_util import DARTsortSorting
 from ..internal_config import ComputationConfig, MatchingConfig
 from ..job_util import ensure_computation_config
+from ..logging_util import progrange
 from ..py_util import databag
 from ..waveform_util import upsample_multichan
 
@@ -97,7 +97,7 @@ def yield_step_results(
     cur_residual = chunk.clone()
 
     for it in (
-        trange(max_iter, desc="Match steps") if show_progress else range(max_iter)
+        progrange(max_iter, desc="Match steps") if show_progress else range(max_iter)
     ):
         pre_conv = chunk_data.convolve(cur_residual.T, padding=matcher.obj_pad_len)
         if obj_mode:
@@ -171,7 +171,6 @@ def visualize_step_results(
         vis_start = 0
     if vis_end is None:
         vis_end = chunk.shape[0]
-    vis_len = vis_end - vis_start
     chunk_sl = slice(vis_start, vis_end)
 
     if gt_sorting is not None:
@@ -280,8 +279,8 @@ def visualize_step_results(
                 obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
             )
         axes[-2].set_ylabel("pre-step " + ("obj" if obj_mode else "conv"))
-        for t, l in zip(times_samples, labels):
-            axes[-2].axvline(t, color=glasbey1024[l % len(glasbey1024)], lw=1, ls=":")
+        for t, ll in zip(times_samples, labels):
+            axes[-2].axvline(t, color=glasbey1024[ll % len(glasbey1024)], lw=1, ls=":")
         for j, c in enumerate(conv):
             axes[-1].plot(
                 obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
@@ -497,7 +496,12 @@ class DebugChunkTemplateData(ChunkTemplateData):
         mask[row_ix, time_ix] = value
 
     def fine_match(
-        self, *, peaks: MatchingPeaks, residual: Tensor | None, conv: Tensor, padding: int = 0
+        self,
+        *,
+        peaks: MatchingPeaks,
+        residual: Tensor | None,
+        conv: Tensor,
+        padding: int = 0,
     ) -> MatchingPeaks:
         nt = self.templates_up.shape[2]
         if not peaks.n_spikes:
@@ -516,8 +520,8 @@ class DebugChunkTemplateData(ChunkTemplateData):
         up_inds = torch.zeros_like(template_inds)
         scores = conv.new_zeros(times.shape)
 
-        for n, (t, l) in enumerate(zip(times, template_inds)):
-            bank = self.templates_up[l]
+        for n, (t, ll) in enumerate(zip(times, template_inds)):
+            bank = self.templates_up[ll]
             resid_chunk = residual[t : t + nt + 1]
             T = resid_chunk.shape[0]
             snips = [resid_chunk[t0 : t0 + nt] for t0 in range(T - nt + 1)]
@@ -526,12 +530,12 @@ class DebugChunkTemplateData(ChunkTemplateData):
             dots = torch.einsum("utc,stc->us", bank, snips)
             if self.scaling:
                 b = dots + self.inv_lambda
-                a = self.normsq_up[l, :, None] + self.inv_lambda
+                a = self.normsq_up[ll, :, None] + self.inv_lambda
                 sc = (b / a).clamp(min=self.scale_min, max=self.scale_max)
                 objs = -a * sc * sc + 2.0 * b * sc - self.inv_lambda
             else:
                 sc = None
-                objs = 2.0 * dots - self.normsq_up[l, :, None]
+                objs = 2.0 * dots - self.normsq_up[ll, :, None]
             objs[0].add_(1e-5)
             best_val, best_flat = objs.view(-1).max(dim=0)
             best_u = best_flat // dots.shape[1]
