@@ -40,7 +40,7 @@ class Decollider(BaseMultichannelDenoiser):
         batch_size=256,
         learning_rate=3e-4,
         weight_decay=0.0,
-        n_epochs=75,
+        n_epochs=100,
         pad_depth_only=True,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
