@@ -198,6 +198,8 @@ class logress:
                 return
             if (t - self.tic) < self.mininterval:
                 return
+        elif n == self.last_n:
+            return
 
         dt = t - self.start
         rate = n / dt
@@ -209,7 +211,7 @@ class logress:
             prog_str = f"{n}/{self.total} ({pct:.1f}%)"
 
             eta = (1 - prop) * (dt / prop)
-            eta = seconds_str(dt)
+            eta = seconds_str(eta)
             time_str = f"{elapsed}<{eta}"
         else:
             prog_str = f"{n}/?"
