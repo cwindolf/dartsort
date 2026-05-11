@@ -140,9 +140,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         assert self.motion is not None
         geomp = np.pad(self.motion.geom, [(0, 1), (0, 0)], constant_values=np.nan)
         self.static_neighbs = geomp[self.channel_index_np]
-        cii, cjj = np.nonzero(
-            self.channel_index_np < len(self.channel_index_np)
-        )
+        cii, cjj = np.nonzero(self.channel_index_np < len(self.channel_index_np))
         self.channel_index_valid_inds = cii, cjj
 
     def fit(
@@ -259,16 +257,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         self.register_buffer("neighb_candidates", neighb_candidates)
         self.register_buffer("neighb_candidate_counts", (neighb_candidates >= 0).sum(1))
 
-    def _other_pre_load_state(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
+    def _other_pre_load_state(self, state_dict, prefix):
         from ..clustering.mixture import TruncatedMixtureModel
         from ..util.interpolation_util import SpikeNeighborhoods
 
@@ -427,7 +416,7 @@ def neighborhood_mapping_at_time(
 
     # get shifted channel neighborhoods
     index = np.full(channel_index.shape, motion.rgeom.shape[0])
-    index[cii, cjj] = umatch#[uinv]
+    index[cii, cjj] = umatch
 
     # mapping between these and `neighborhoods`
     index = torch.asarray(index, device=neighborhoods.device)
