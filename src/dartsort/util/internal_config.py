@@ -572,7 +572,6 @@ class FeaturizationConfig:
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
-    localization_noise_floor: bool = False
 
     # -- further info about denoising
     nn_denoiser_class_name: str = "Decollider"
