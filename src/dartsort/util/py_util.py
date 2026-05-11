@@ -21,12 +21,6 @@ from .logging_util import DARTSORTVERBOSE, get_logger
 
 logger = get_logger(__name__)
 
-# check if we are installed in editable mode
-pkgname = sys.modules[__name__].__name__.split(".")[0]
-durl = Distribution.from_name(pkgname).read_text("direct_url.json")
-assert durl is not None
-EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
-
 
 # without this, pydantic allows unknown keys, so you can easily
 # make a typo in your parameter name!
