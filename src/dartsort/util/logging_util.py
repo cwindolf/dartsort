@@ -169,6 +169,7 @@ class logress:
                 self._print(t=toc, check=False)
                 tic = toc
         finally:
+            self.close()
             self.n = self.last_n = n
             self.tic = tic
 
