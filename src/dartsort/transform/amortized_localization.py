@@ -51,7 +51,6 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         min_epochs=10,
         scale_loss_by_mean=True,
         reference="main_channel",
-        softmax_noise_floor=False,
         channelwise_dropout_p=0.00,
         decay_power=1,
         epoch_size=50_000,
@@ -75,8 +74,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.decay_power = decay_power
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
-        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim + softmax_noise_floor
-        self.softmax_noise_floor = softmax_noise_floor
+        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim
         self.n_epochs = n_epochs
         self.learning_rate = learning_rate
         self.batch_size = batch_size
@@ -190,9 +188,10 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
     def get_alphas(self, obs_amps, pred_amps_alpha1, masks, return_pred=False):
         # least squares with no intercept
-        alphas = (masks * obs_amps * pred_amps_alpha1).sum(1) / (
-            masks * pred_amps_alpha1
-        ).square().sum(1)
+        a0 = masks * pred_amps_alpha1
+        numer = a0.mul(obs_amps).sum(dim=1)
+        denom = a0.square().sum(dim=1)
+        alphas = numer.div_(denom)
         if return_pred:
             return alphas, alphas.unsqueeze(1) * pred_amps_alpha1
         return alphas
@@ -210,13 +209,6 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         else:
             alphas = F.softplus(z[:, 3])
             pred_amps = alphas.unsqueeze(1) / dists
-
-        noise_floors = None
-        if self.softmax_noise_floor:
-            noise_floors = F.softplus(z[:, -1:]).broadcast_to(pred_amps.shape)
-            pred_amps_noise = torch.stack([pred_amps, noise_floors], dim=2)
-            weights = F.softmax(pred_amps_noise.log(), dim=2)
-            pred_amps = pred_amps_noise.mul(weights).sum(dim=2)
 
         return alphas, pred_amps
 
