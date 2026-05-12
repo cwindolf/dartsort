@@ -1010,7 +1010,6 @@ def merged_responsibilities(
     responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
 ):
-    print("hi")
     labels = sorting.labels
     assert labels is not None, "0"
 

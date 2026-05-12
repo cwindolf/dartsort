@@ -342,10 +342,6 @@ def bucket_density_ratio(
     lb -= max_dist_by_chan[:, None]
     lb -= max_dist_by_chan
     chans_pair_mask = lb <= max_dist
-    print(f"{chans_pair_mask.sum(1).min()=}")
-    print(f"{chans_pair_mask.sum(1).max()=}")
-    print(f"{max_dist_by_chan.max()=}")
-    print(f"{max_dist_by_chan.min()=}")
 
     device = computation_cfg.actual_device()
     channels = torch.asarray(channels, device=device, dtype=torch.long)
@@ -781,7 +777,6 @@ def gmm_density_peaks(
     res["kmeans_labels"] = res["labels"]
     n_components = len(cast(torch.Tensor, res["centroids"]))
     res["n_components_kept"] = n_components
-    print("nosqrt")
     maxdist = max_sigma * float(res["sigma"])  # * np.sqrt(X.shape[1])
     if use_hellinger:
         centroids = cast(torch.Tensor, res["centroids"]).numpy(force=True)
@@ -921,17 +916,12 @@ def gmmdpc_hellinger(
             centroids[disconnected],
             sigma,
             hellinger_threshold=hellinger_weak,
-            # centroids_b=centroids,
         )
         coo_weak = coo_array(
             (coo_weak.data, (coo_weak.coords[1], coo_weak.coords[0])),
             shape=(disconnected.size, disconnected.size),
-            # (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
-            # shape=(n_components, n_components),
         )
         weak_nhdn = coo_nhdn(coo_weak, log_proportions[disconnected])
-        # jj[disconnected] = weak_nhdn[disconnected]
-        print("weak2")
         jj[disconnected] = disconnected[weak_nhdn]
 
     _1 = np.ones((1,), dtype="float32")
