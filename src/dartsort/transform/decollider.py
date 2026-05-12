@@ -79,7 +79,7 @@ class Decollider(BaseMultichannelDenoiser):
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
-        queue_chunks=32,
+        queue_chunks=50,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -412,15 +412,18 @@ class Decollider(BaseMultichannelDenoiser):
         train_channels = channels[train_indices]
         train_dataset = TensorDataset(train_waveforms, train_channels)
         if can_load_h5:
-            logger.dartsortdebug(f"Load Decollider train noise data from {hdf5_filename}.")
+            logger.dartsortdebug(
+                f"Load Decollider train noise data from {hdf5_filename}."
+            )
             train_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
                 hdf5_filename=hdf5_filename,
                 channels=train_channels.numpy(force=True),
                 channel_index=self.b.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
-                generator=spawn_torch_rg(rg),
+                rg=np.random.default_rng(rg.spawn(1)[0]),
                 queue_chunks=self.queue_chunks,
                 dataset_name=dataset_name,
+                chunk_size=self.batch_size,
             )
         else:
             logger.dartsortdebug("Load Decollider train noise data from recording.")
@@ -433,15 +436,18 @@ class Decollider(BaseMultichannelDenoiser):
                 queue_chunks=self.queue_chunks,
             )
         if self.cycle_loss_alpha and can_load_h5:
-            logger.dartsortdebug(f"Load Decollider cycle noise data from {hdf5_filename}.")
+            logger.dartsortdebug(
+                f"Load Decollider cycle noise data from {hdf5_filename}."
+            )
             train_cycle_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
                 hdf5_filename=hdf5_filename,
                 channels=train_channels.numpy(force=True),
                 channel_index=self.b.model_channel_index.numpy(force=True),
                 spike_length_samples=spike_length_samples,
-                generator=spawn_torch_rg(rg),
+                rg=np.random.default_rng(rg.spawn(1)[0]),
                 queue_chunks=self.queue_chunks,
                 dataset_name=dataset_name,
+                chunk_size=self.batch_size,
             )
         elif self.cycle_loss_alpha:
             logger.dartsortdebug("Load Decollider cycle noise data from recording.")
@@ -542,8 +548,8 @@ class Decollider(BaseMultichannelDenoiser):
                 self.train()
                 train_losses = {}
                 for waveform_b, channels_b, noise_b, cnoise_b in train_data:
-                    waveform_b = waveform_b.to(self.device)
-                    channels_b = channels_b.to(self.device)
+                    waveform_b = waveform_b.to(device=self.device, non_blocking=True)
+                    channels_b = channels_b.to(device=self.device, non_blocking=True)
                     waveform_b = reindex(
                         channels_b,
                         waveform_b,
@@ -552,9 +558,20 @@ class Decollider(BaseMultichannelDenoiser):
                     )
 
                     optimizer.zero_grad()
-                    m = noise_b.to(waveform_b)
-                    ell = None if cnoise_b is None else cnoise_b.to(waveform_b)
-                    mask = self.get_masks(channels_b).to(waveform_b)
+                    m = noise_b.to(
+                        dtype=waveform_b.dtype, device=self.device, non_blocking=True
+                    )
+                    if cnoise_b is not None:
+                        ell = cnoise_b.to(
+                            dtype=waveform_b.dtype,
+                            device=self.device,
+                            non_blocking=True,
+                        )
+                    else:
+                        ell = None
+                    mask = self.get_masks(channels_b).to(
+                        dtype=waveform_b.dtype, device=self.device, non_blocking=True
+                    )
                     fres = self.train_forward(waveform_b, m, ell, mask)
                     loss_dict = self.loss(
                         mask,
@@ -617,7 +634,9 @@ class Decollider(BaseMultichannelDenoiser):
                     can_val = not (self.earlystop_eps is None or last_val_loss is None)
                     if can_val and val_loss - last_val_loss > self.earlystop_eps:
                         if epoch >= self.min_epochs:
-                            logger.dartsortdebug(f"Early stopping after {epoch} epochs.")
+                            logger.dartsortdebug(
+                                f"Early stopping after {epoch} epochs."
+                            )
                             break
                     last_val_loss = val_loss
 
