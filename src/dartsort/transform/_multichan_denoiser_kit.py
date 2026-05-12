@@ -648,6 +648,8 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
             # hacky but h5 reading is so slow... and this is so fast...
             with h5py.File(hdf5_filename, "r", locking=False) as h5:
                 self.count = h5[count_name][()]
+                # no links or funny business please. i can't check everything though!
+                assert h5.get(dataset_name, getclass=True) == h5py.Dataset
                 assert h5[dataset_name].chunks is None
                 assert h5[dataset_name].compression is None
                 dtype = h5[dataset_name].dtype

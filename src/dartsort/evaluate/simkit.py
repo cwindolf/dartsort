@@ -406,6 +406,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 # residual snippets
                 if n_residual_snips:
+                    nrs_dset = h5.create_dataset("n_residuals", data=np.zeros((), dtype=np.int64))
                     residual = h5.create_dataset(
                         "residual",
                         shape=(n_residual_snips, *self.segment.wf_shape),
@@ -458,6 +459,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert resid_ix is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
                     residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
+                    nrs_dset[()] = resid_ix + nrs
                     resid_ix += nrs
                 if residual is not None and resid_ix != n_residual_snips:
                     assert residual_times is not None
@@ -466,6 +468,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if residual is not None:
                     assert residual_times is not None
                     assert residual.shape[0] == residual_times.shape[0] == resid_ix
+                    assert nrs_dset[()] == resid_ix
                 assert i1_prev == n
             assert n_injected == n
 

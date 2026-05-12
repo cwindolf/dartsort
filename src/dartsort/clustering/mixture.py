@@ -3601,6 +3601,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # double check to fix up log props. should exp-sum to 1-noiseprop
         logsum = self.b.log_proportions.logsumexp(dim=0)
         targsum = torch.log(1.0 - self.b.noise_log_prop.exp())
+        print(f"{self.b.noise_log_prop.exp()=}")
+        print(f"{self.b.log_proportions.shape=}")
         _assert_propclose(logsum, targsum)
         self.b.log_proportions.add_(targsum - logsum)
         assert self.b.log_proportions[:new_n_units].isfinite().all()

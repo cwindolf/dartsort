@@ -1173,9 +1173,9 @@ def generate_interpolated_residual_snippets(
         times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:nr]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    assert snippets.shape[0] == times_s_np.shape[0]
+    assert snippets.shape[0] == times_s_np.shape[0] == nr
 
-    # allow out of order residual sampling
+    # allow out-of-order residual sampling
     order = np.argsort(times_s_np)
     if not np.array_equal(order, np.arange(len(order))):
         times_s_np = times_s_np[order]
@@ -1272,7 +1272,7 @@ def interpolate_residual_snippets(
     show_progress=True,
 ):
     with h5py.File(hdf5_path, "r", locking=False) as h5:
-        n = h5[residual_dataset_name].shape[0]
+        nr = h5["n_residuals"][()]
     snips_out = None
     i0 = 0
     for snip in generate_interpolated_residual_snippets(
@@ -1289,7 +1289,7 @@ def interpolate_residual_snippets(
         show_progress=show_progress,
     ):
         if snips_out is None:
-            snips_out = snip.new_empty((n, *snip.shape[1:]))
+            snips_out = snip.new_empty((nr, *snip.shape[1:]))
         snips_out[i0 : i0 + snip.shape[0]] = snip.to(snips_out)
         i0 += snip.shape[0]
     return snips_out
