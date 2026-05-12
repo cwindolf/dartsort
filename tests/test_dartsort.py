@@ -5,6 +5,7 @@ import warnings
 import pytest
 
 import dartsort
+from dartsort.transform.single_channel_denoiser import default_pretrained_path
 
 
 @pytest.mark.parametrize("do_motion_estimation", [True])
@@ -122,6 +123,9 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     if type == "threshold":
         cfg_add["voltage_threshold"] = 4.0
         cfg_add["deduplication_radius_um"] = 150.0
+    if type == "subtract":
+        cfg_add["nn_denoiser_class_name"] = "SingleChannelWaveformDenoiser"
+        cfg_add["nn_denoiser_pretrained_path"] = str(default_pretrained_path)
 
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,

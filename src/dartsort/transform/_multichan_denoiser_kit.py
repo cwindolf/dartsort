@@ -1,11 +1,9 @@
-from pyqtgraph.examples.glow import noise
 from queue import Queue
 from threading import Thread
 
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from ..util import nn_util, spikeio

@@ -2,12 +2,11 @@ import warnings
 from collections import namedtuple
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from fastplotlib.graphics.image import TYPE_CHECKING
 from spikeinterface.core import BaseRecording
 from torch import Tensor
 
