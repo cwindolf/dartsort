@@ -979,7 +979,8 @@ def get_labels(h5_path) -> np.ndarray:
 
 def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]
+        nr = h5["n_residuals"][()]
+        return h5["residual"][:nr]
 
 
 def sorting_isis(sorting: DARTsortSorting):

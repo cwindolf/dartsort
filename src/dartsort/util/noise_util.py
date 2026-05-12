@@ -1168,8 +1168,9 @@ def generate_interpolated_residual_snippets(
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
-        snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
-        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
+        nr = h5["n_residuals"][()]
+        snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:nr]
+        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:nr]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
     assert snippets.shape[0] == times_s_np.shape[0]
