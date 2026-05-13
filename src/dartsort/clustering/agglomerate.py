@@ -3,12 +3,11 @@
 from threading import local
 from typing import cast
 
-from KDEpy import FFTKDE
 import numba
 import numpy as np
 import torch
+from KDEpy import FFTKDE
 from spikeinterface.core import BaseRecording
-from tqdm.auto import tqdm
 
 from ..templates.template_util import shared_basis_compress_templates
 from ..templates.templates import TemplateData
@@ -22,7 +21,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import pool_from_cfg
 from ..util.py_util import databag
@@ -30,9 +29,17 @@ from ..util.spiketorch import (
     best_shared_pconv,
     scaled_normeuc_from_dots,
     shared_temporal_pconv,
+    weighted_best_lagged_scaled_normeuc_dist,
 )
-from .cluster_util import linkage_mask, recluster, sparsify_labels
-from .gmm.mixture import Scores
+from ..util.waveform_util import make_channel_index
+from .cluster_util import (
+    closest_registered_channels,
+    linkage_mask,
+    recluster,
+    reorder_by_depth,
+    sparsify_labels,
+)
+from .mixture import Scores
 
 logger = get_logger(__name__)
 
@@ -43,6 +50,7 @@ class Agglomeration:
     merge_mapping: np.ndarray
     distances: np.ndarray
     shifts: np.ndarray
+    firing_corr: np.ndarray | None
 
 
 def agglomerate(
@@ -62,6 +70,9 @@ def agglomerate(
     if template_merge_cfg is None:
         assert refinement_cfg is not None
         template_merge_cfg = refinement_cfg.template_merge_cfg
+
+    if template_data is None:
+        sorting = sorting.flatten()
 
     tdist = template_distances(
         sorting=sorting,
@@ -89,6 +100,7 @@ def agglomerate(
             merge_mapping=new_ids,
             distances=tdist.distances,
             shifts=tdist.shifts,
+            firing_corr=None,
         )
 
     # tdist tells us the possible merges
@@ -97,6 +109,24 @@ def agglomerate(
         linkage_method=template_merge_cfg.linkage,
         threshold=template_merge_cfg.merge_distance_threshold,
     )
+
+    # only QDA within negatively correlated firing enemies
+    if refinement_cfg.glom_max_firing_corr is not None:
+        fcorr = firing_corr(
+            sorting,
+            dt=refinement_cfg.glom_firing_corr_dt,
+            method=refinement_cfg.glom_firing_corr_method,
+        )
+        _oldsum = mask[np.triu_indices_from(mask)].sum()
+        fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
+        mask = np.logical_and(mask, fcorr_mask)
+        np.fill_diagonal(mask, True)
+        _newsum = mask[np.triu_indices_from(mask)].sum()
+        logger.dartsortdebug(
+            f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
+        )
+    else:
+        fcorr = fcorr_mask = None
 
     # restrict mask by overlap criteria
     qda_res = qda(
@@ -108,17 +138,34 @@ def agglomerate(
         computation_cfg=computation_cfg,
     )
 
-    qda_mask = np.all(
+    coverage_mask = np.logical_and(
+        qda_res.coverage >= refinement_cfg.qda_min_coverage,
+        qda_res.iou >= refinement_cfg.qda_min_iou,
+    )
+    qda_mask_uni = np.logical_and(
+        coverage_mask,
+        qda_res.score >= refinement_cfg.qda_uni_score,
+    )
+    qda_mask_bi = np.all(
         [
-            qda_res.coverage >= refinement_cfg.qda_min_coverage,
-            qda_res.iou >= refinement_cfg.qda_min_iou,
+            coverage_mask,
             qda_res.score >= refinement_cfg.qda_threshold,
             qda_res.min_ratio >= refinement_cfg.qda_min_ratio,
         ],
         axis=0,
     )
+    qda_mask = np.logical_or(qda_mask_uni, qda_mask_bi)
+    force_mask = linkage_mask(
+        tdist.distances,
+        linkage_method=template_merge_cfg.linkage,
+        threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
+    )
+    qda_mask = np.logical_or(qda_mask, force_mask)
     np.fill_diagonal(qda_mask, True)
-    assert np.all(qda_mask <= mask)
+    if fcorr_mask is None:
+        assert np.all(qda_mask <= mask)
+    else:
+        assert np.all((qda_mask & fcorr_mask) <= mask)
     qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
@@ -130,11 +177,14 @@ def agglomerate(
         threshold=0.5,
         link=template_merge_cfg.linkage,
     )
+    agg_sorting = reorder_by_depth(agg_sorting, motion=motion)
+
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
         merge_mapping=new_ids,
         distances=tdist.distances,
         shifts=tdist.shifts,
+        firing_corr=fcorr,
     )
 
 
@@ -144,6 +194,8 @@ class TemplateDistanceResult:
     shifts: np.ndarray
     r2: np.ndarray
     template_data: TemplateData
+    spatial_weights: np.ndarray | None
+    spatial_iou: np.ndarray | None
 
 
 def template_distances(
@@ -165,6 +217,12 @@ def template_distances(
         raise ValueError(
             "prewhiten_postapply does not make sense for template distance."
         )
+
+    if template_data is not None and template_cfg is not None:
+        if template_merge_cfg.whitening.strategy == "none":
+            assert template_cfg.whitening.strategy in ("none", "prewhiten_postapply")
+        else:
+            assert template_cfg.whitening == template_merge_cfg.whitening
 
     need_whitening = template_merge_cfg.whitening.strategy != "none"
     if template_data is None:
@@ -211,12 +269,6 @@ def template_distances(
     tcomp = torch.asarray(sbt.temporal_components, device=device)
     spatial_sing = torch.asarray(sbt.spatial_singular, device=device)
 
-    need_whiten_mul = template_merge_cfg.whitening.strategy == "postwhiten"
-    if need_whiten_mul:
-        ww = torch.asarray(template_data.whitener).to(spatial_sing)
-        k, r, c = spatial_sing.shape
-        spatial_sing = (spatial_sing.view(k * r, c) @ ww.T).view(k, r, c)
-
     tconv = shared_temporal_pconv(
         temporal_comps=tcomp, up_temporal_comps=tcomp[:, None]
     )
@@ -234,11 +286,32 @@ def template_distances(
     tconv = tconv[:, :, center - max_shift : center + 1 + max_shift]
     tconv = tconv.contiguous()
 
-    best_conv, best_lag = best_shared_pconv(tconv, spatial_sing)
-
-    # convert conv to distance
+    spatial_weights = spatial_iou = None
     if template_merge_cfg.distance_kind == "scaled_normeuc":
-        dist = scaled_normeuc_from_dots(best_conv)
+        best_conv, best_lag = best_shared_pconv(tconv, spatial_sing)
+        dist = scaled_normeuc_from_dots(
+            best_conv,
+            scale_var=template_merge_cfg.amplitude_scaling_variance,
+            scale_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        )
+    elif template_merge_cfg.distance_kind == "weighted_scaled_normeuc":
+        assert sorting is not None
+        assert motion is not None
+        spatial_weights = count_radial_weights(
+            sorting=sorting,
+            motion=motion,
+            radius=template_merge_cfg.weighted_dist_radius,
+        )
+        assert np.isfinite(spatial_weights).all()
+        dist, best_lag, iou = weighted_best_lagged_scaled_normeuc_dist(
+            tconv=tconv,
+            spatial_sing=spatial_sing,
+            weights=torch.asarray(spatial_weights).to(spatial_sing),
+            scale_var=template_merge_cfg.amplitude_scaling_variance,
+            scale_boundary=template_merge_cfg.amplitude_scaling_boundary,
+        )
+        dist.masked_fill_(iou < template_merge_cfg.weighted_dist_min_iou, torch.inf)
+        spatial_iou = iou.numpy(force=True)
     else:
         raise ValueError(f"{template_merge_cfg.distance_kind=} not implemented.")
 
@@ -248,35 +321,55 @@ def template_distances(
         shifts=best_lag.numpy(force=True),
         r2=cast(np.ndarray, sbt.r2),
         template_data=template_data,
+        spatial_weights=spatial_weights,
+        spatial_iou=spatial_iou,
     )
 
 
-def _get_non_train_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
-    is_train = getattr(sorting, "gmm_train", None)
+def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
     cand = getattr(sorting, "gmm_candidates", None)
     log_liks = getattr(sorting, "gmm_log_liks", None)
     resp = getattr(sorting, "gmm_responsibilities", None)
 
-    assert is_train is not None
     assert cand is not None
     assert log_liks is not None
     assert resp is not None
 
-    not_train = torch.asarray(np.flatnonzero(np.logical_not(is_train)))
-    cand = torch.asarray(cand[not_train])
-    log_liks = torch.asarray(log_liks[not_train])
-    resp = torch.asarray(resp[not_train])
+    cand = torch.asarray(cand)
+    log_liks = torch.asarray(log_liks)
+    resp = torch.asarray(resp)
 
     scores = Scores(
         candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
     )
     assert sorting.labels is not None
-    labels = sorting.labels[not_train]
+    labels = sorting.labels
     return labels, scores
 
 
 @databag
 class QDAResult:
+    """Unit pair QDA metrics
+
+    Algorithm:
+     - For a pair of units i,j, grab all the spikes which both units
+       assign a likelihood to (their candidate set intersection)
+     - Compute coverage statistics:
+        - Let #i be the number of spikes for which i is a candidate, sim #j.
+        - Let #union be the number of spikes for which either is a candidate
+        - Let #inter be the number of spikes in the intersection
+        - Let `iou[i,j]` be #inter / #union
+        - Let `cov[i,j]` be min(#inter / #i, #inter / #j)
+     - Use a 1d KDE to estimate the density of the difference in likelihoods
+       of the intersection spikes, lik[j] - lik[i]. Note that 0 is the decision
+       boundary above which a spike comes from unit j, below which i.
+       Call that KDE f(l)
+     - Compute bimodality statistics
+        - Let fi = max_{l<0} f(l), fj = max_{l>0} f(l)
+        - Let `score[i,j]` = f(0) / min(fi,fj)
+        - Let `min_ratio[i,j]` = f(0) / max(fi,fj)
+    """
+
     score: np.ndarray
     min_ratio: np.ndarray
     iou: np.ndarray
@@ -295,16 +388,16 @@ def qda(
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    ntlabels, ntscores = _get_non_train_scores(sorting)
+    glabels, gscores = _get_scores(sorting)
 
     if mask is None:
         mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)
 
     iou = np.zeros(mask.shape, dtype=np.float32)
     ctx = QDACtx(
-        inus=sparsify_labels(ntlabels),
-        cand=ntscores.candidates.numpy(force=True),
-        log_liks=ntscores.log_liks.numpy(force=True),
+        inus=sparsify_labels(glabels),
+        cand=gscores.candidates.numpy(force=True),
+        log_liks=gscores.log_liks.numpy(force=True),
         min_iou=min_iou,
         min_cov=min_cov,
         min_count=min_count,
@@ -316,7 +409,7 @@ def qda(
     )
 
     n_jobs, Executor, context, *_ = pool_from_cfg(
-        computation_cfg, check_local=True, small=True
+        computation_cfg, check_local=True, small=True, cpu=True
     )
     with Executor(
         max_workers=n_jobs,
@@ -331,7 +424,13 @@ def qda(
 
         results = pool.map(_qda_job, np.c_[ii, jj])
         if show_progress:
-            results = tqdm(results, desc=f"QDA:{n_jobs}")
+            results = progbar(
+                results,
+                desc=f"QDA:{n_jobs}",
+                total=ii.shape[0],
+                mininterval=0.5,
+                smoothing=0.0,
+            )
 
         for _ in results:
             pass
@@ -371,8 +470,10 @@ def _qda_job(ij):
 
     i, j = ij
 
-    ini = p.inus[i]
-    inj = p.inus[j]
+    ini = p.inus.get(i)
+    inj = p.inus.get(j)
+    if ini is None or inj is None:
+        return
     inij = np.concatenate((ini, inj), axis=0)
     overlap, imask, jmask, iou, cov = _ioucov(i, j, ini, inj, inij, p.cand)
     p.iou[i, j] = p.iou[j, i] = iou
@@ -395,7 +496,14 @@ def _qda_job(ij):
     assert np.isclose(binc[bc], 0.0)
     assert binc.shape[0] == 2 * bc + 1
 
-    kde = FFTKDE(bw="ISJ").fit(dll)
+    try:
+        kde = FFTKDE(bw="ISJ").fit(dll)
+    except ValueError as e:
+        logger.dartsortdebug(f"KDEpy error: {str(e)}")
+        p.score[i, j] = p.score[j, i] = 0.0
+        p.min_ratio[i, j] = p.min_ratio[j, i] = 0.0
+        return
+
     kde = cast(np.ndarray, kde.evaluate(binc))
     score, min_ratio = bimod_stats(kde)
     p.score[i, j] = p.score[j, i] = score
@@ -468,3 +576,52 @@ def bimod_stats(h):
         a = h0 / dd
     b = h0 / max(da, db)
     return a, b
+
+
+def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: float):
+    assert sorting.labels is not None
+    kept = np.flatnonzero(sorting.labels >= 0)
+
+    # which reg chans do the spikes land on?
+    x, z = motion.geom[sorting.channels[kept]].T
+    cc = closest_registered_channels(
+        times_seconds=sorting.times_seconds[kept], x=x, z_abs=z, motion=motion
+    )
+
+    # count by label
+    ll = sorting.labels[kept]
+    counts = np.zeros((ll.max() + 1, motion.rgeom.shape[0]), dtype=np.int64)
+    np.add.at(counts, (ll, cc), 1)
+
+    # get radial neighborhoods
+    ci = make_channel_index(motion.rgeom, radius, to_torch=False)
+
+    # puff out with radial neighborhood and sum up the counts by label
+    weights = np.zeros(counts.shape)
+    for uu in range(counts.shape[0]):
+        row = counts[uu]
+        ii = np.flatnonzero(row)
+        if not ii.size:
+            continue
+        vv = row[ii]
+        vv = vv / vv.sum()
+
+        for channel, value in zip(ii, vv):
+            cixs = ci[channel]
+            cixs = cixs[cixs < motion.rgeom.shape[0]]
+            weights[uu, cixs] += value
+
+    denom = weights.max(axis=1, keepdims=True).clip(min=1e-10)  # avoid div by 0
+    weights /= denom
+    return weights
+
+
+def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
+    if method != "binsqrt":
+        assert False
+
+    tsg = sorting.to_tsgroup()
+    fr = tsg.count(bin_size=dt) / dt
+    fr = np.sqrt(fr.values)
+
+    return np.corrcoef(fr, rowvar=False)

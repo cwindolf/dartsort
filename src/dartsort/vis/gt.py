@@ -72,15 +72,16 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
     width = 3
     height = 2
 
-    def __init__(self, trim_kind="auto", ordered=True, cmap=plt.cm.magma):
+    def __init__(self, trim_kind="auto", ordered=True, cmap="magma"):
         self.trim_kind = trim_kind
         self.ordered = ordered
-        self.cmap = cmap
+        self.cmap = plt.get_cmap(cmap)
 
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
         col_order = agreement.columns
+        col_order = col_order[col_order < comparison.template_distances.shape[1]]
         dist = comparison.template_distances[row_order, :][:, col_order]
 
         ax = panel.subplots()
@@ -149,11 +150,13 @@ class MetricRegPlot(ComparisonPlot):
                 line_kws=dict(color="k"),
                 **({} if qcolor else dict(color=self.color)),
             )
-        if self.log_x and self.log_y:
+        log_x = self.log_x and len(df_show)
+        log_y = self.log_y and len(df_show)
+        if log_x and log_y:
             ax.loglog()
-        elif self.log_x:
+        elif log_x:
             ax.semilogx()
-        elif self.log_y:
+        elif log_y:
             ax.semilogy()
         met = df[self.y].mean().item()
         n_inf_y = np.logical_not(finite_y).sum()
@@ -223,14 +226,16 @@ class TemplateDistanceMatrix(ComparisonPlot):
     width = 3
     height = 1
 
-    def __init__(self, cmap=plt.cm.magma):
-        self.cmap = cmap
+    def __init__(self, cmap="magma"):
+        self.cmap = plt.get_cmap(cmap)
 
     def draw(self, panel, comparison):
         agreement = comparison.comparison.get_ordered_agreement_scores()
         row_order = agreement.index
         col_order = np.array(agreement.columns)
-        col_order_ix = np.searchsorted(comparison.tested_analysis.sorting.unit_ids, col_order)
+        col_order_ix = np.searchsorted(
+            comparison.tested_analysis.sorting.unit_ids, col_order
+        )
         dist = comparison.template_distances[row_order, :][:, col_order_ix]
 
         ax = panel.subplots()
@@ -259,7 +264,8 @@ class TemplateDistancesHistogram(ComparisonPlot):
         x = min_gt_dist_for_tested_units[finite]
         bins = np.logspace(np.log10(d.min()), np.log10(vm), 96)
         ax.hist(x, bins=bins, color="orange", log=True)
-        ax.semilogx()
+        if x.shape[0]:
+            ax.semilogx()
         ax.grid(which="both")
         ax.set_ylabel("count")
         ninf = np.logical_not(finite).sum()

@@ -5,19 +5,15 @@ import numba
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import gaussian_filter
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist, squareform
-from scipy.stats import bernoulli
 from torch import Tensor
-from tqdm.auto import tqdm, trange
 
 from ..util.internal_config import ComputationConfig
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar, progrange
 from ..util.multiprocessing_util import get_pool
 from ..util.py_util import timer
 from .cluster_util import decrumb
@@ -53,7 +49,7 @@ def kdtree_inliers(
 
     inliers = np.zeros(kdtree.n, dtype=bool)
     if show_progress:
-        iters = trange(0, kdtree.n, batch_size, desc="KDTin")
+        iters = progrange(0, kdtree.n, batch_size, desc="KDTin")
     else:
         iters = range(0, kdtree.n, batch_size)
     for i0 in iters:
@@ -89,10 +85,12 @@ def get_smoothed_density(
     Outliers will be marked with NaN KDEs. Please pass inliers, or else your
     histogram is liable to be way too big.
     """
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.ndimage import gaussian_filter
     # figure out what bandwidths we'll be working on
 
     if do_ramp := bool(sigma_low):
-        min_sigma = min(sigma, sigma_low)
+        min_sigma = min(sigma, sigma_low)  # type: ignore
     else:
         min_sigma = sigma
 
@@ -286,7 +284,6 @@ def guess_mode(
         distance_upper_bound=outlier_sigma * sigma0,
         workers=workers,
     )
-    inliers = cast(np.ndarray, inliers)
 
     if sigma == "rule_of_thumb":
         sigma_dens = (
@@ -345,10 +342,6 @@ def bucket_density_ratio(
     lb -= max_dist_by_chan[:, None]
     lb -= max_dist_by_chan
     chans_pair_mask = lb <= max_dist
-    print(f"{chans_pair_mask.sum(1).min()=}")
-    print(f"{chans_pair_mask.sum(1).max()=}")
-    print(f"{max_dist_by_chan.max()=}")
-    print(f"{max_dist_by_chan.min()=}")
 
     device = computation_cfg.actual_device()
     channels = torch.asarray(channels, device=device, dtype=torch.long)
@@ -357,7 +350,7 @@ def bucket_density_ratio(
     density_ratio = torch.full((len(X),), -torch.inf, device=device)
 
     # for c in trange(len(scaled_geom), desc="bktdens"):
-    for c in trange(25, desc="bktdens"):
+    for c in progrange(25, desc="bktdens"):
         (inc,) = (channels == c).nonzero(as_tuple=True)
         (friends,) = chans_pair_mask[c][channels].nonzero(as_tuple=True)
         density_ratio[inc] = _local_sparse_dens_ratio(
@@ -418,15 +411,15 @@ def kdt_density(
     max_dist = max_sigma * sigma_regional
 
     jobs = range(0, n, batch_size)
-    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")  # type: ignore
-    with Executor(  # type: ignore
+    n_jobs, Executor, context = get_pool(n_jobs=n_threads, cls="ThreadPoolExecutor")
+    with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_kdtdens_init,
         initargs=(kdtree, X, batch_size, sigma, sigma_regional, max_dist),
     ) as pool:
         density = np.full((n,), -np.inf)
-        for i0, i1, dens in tqdm(
+        for i0, i1, dens in progbar(
             pool.map(_kdtdens_job, jobs),
             total=len(jobs),
             smoothing=0.0,
@@ -721,8 +714,7 @@ def gmm_density_peaks(
     Arguments
     ---------
     X : (N_spikes, n_features) array
-        For instance, the features property of a SimpleMatrix object as obtained
-        from get_clustering_features()
+        For instance, the features property of a SimpleMatrixFeatures
     channels: (N_spikes,) array
         The channels to which each spike belongs.
         TODO: currently used in controlling the number of components, but it may
@@ -785,7 +777,6 @@ def gmm_density_peaks(
     res["kmeans_labels"] = res["labels"]
     n_components = len(cast(torch.Tensor, res["centroids"]))
     res["n_components_kept"] = n_components
-    print("nosqrt")
     maxdist = max_sigma * float(res["sigma"])  # * np.sqrt(X.shape[1])
     if use_hellinger:
         centroids = cast(torch.Tensor, res["centroids"]).numpy(force=True)
@@ -816,7 +807,7 @@ def gmm_density_peaks(
         if show_progress:
             logger.info("Clean...")
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
-    res["labels"] = labels  # type: ignore
+    res["labels"] = labels
 
     if mop:
         # use k-dtree dpc to mop up any remaining clusters...
@@ -925,17 +916,12 @@ def gmmdpc_hellinger(
             centroids[disconnected],
             sigma,
             hellinger_threshold=hellinger_weak,
-            # centroids_b=centroids,
         )
         coo_weak = coo_array(
             (coo_weak.data, (coo_weak.coords[1], coo_weak.coords[0])),
             shape=(disconnected.size, disconnected.size),
-            # (coo_weak.data, (disconnected[coo_weak.coords[1]], coo_weak.coords[0])),
-            # shape=(n_components, n_components),
         )
         weak_nhdn = coo_nhdn(coo_weak, log_proportions[disconnected])
-        # jj[disconnected] = weak_nhdn[disconnected]
-        print("weak2")
         jj[disconnected] = disconnected[weak_nhdn]
 
     _1 = np.ones((1,), dtype="float32")
@@ -1060,6 +1046,7 @@ def _density_peaks_clustering_uhd_implementation(
     """
     if l2_norm is passed as argument, it will be used to compute density and nhdn
     """
+    from scipy.stats import bernoulli
     # n = len(X)
 
     if ramp_triage_before_clustering and geom is not None:
@@ -1076,7 +1063,7 @@ def _density_peaks_clustering_uhd_implementation(
             np.minimum(distances_to_geom, radius_triage_before_clustering)
             / radius_triage_before_clustering
         )
-        which_to_discard = bernoulli.rvs(probabilities).astype("bool")  # type: ignore
+        which_to_discard = bernoulli.rvs(probabilities).astype("bool")
         inliers_first[idx_low_ptp[which_to_discard]] = False
         inliers_first = np.arange(len(X))[inliers_first]
     else:
@@ -1155,7 +1142,7 @@ def _density_peaks_clustering_uhd_implementation(
             reg_density = get_smoothed_density(
                 X[inliers_first],
                 inliers=inliers,
-                sigma=sigma_regional,
+                sigma=sigma_regional,  # type: ignore # ty: ignore[x]
                 sigma_low=sigma_regional_low,
                 min_bin_size=min_bin_size,
             )

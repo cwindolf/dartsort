@@ -8,8 +8,8 @@ import numpy as np
 
 class BasePlot:
     kind: str
-    width = 1
-    height = 1
+    width = 1.0
+    height = 1.0
 
     def draw(self, *args, **kwargs):
         raise NotImplementedError

@@ -1,17 +1,14 @@
 import contextlib
 import dataclasses
-import json
 import math
 import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
-import time
-from importlib.metadata import Distribution
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from time import perf_counter
 from typing import dataclass_transform
 
 from pydantic import ConfigDict
@@ -20,12 +17,6 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from .logging_util import DARTSORTVERBOSE, get_logger
 
 logger = get_logger(__name__)
-
-# check if we are installed in editable mode
-pkgname = sys.modules[__name__].__name__.split(".")[0]
-durl = Distribution.from_name(pkgname).read_text("direct_url.json")
-assert durl is not None
-EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
 
 
 # without this, pydantic allows unknown keys, so you can easily
@@ -51,28 +42,53 @@ def databag(*args, slots=True, kw_only=True, eq=False, repr=False, **kwargs):
 
 # random utility classes
 
+_timer_stack = []
+
 
 class timer:
     """
     with timer("hi"):
         bubblesort(np.arange(1e6)[::-1])
-    # prints: hi took <> s
-    with timer("zoom") as tic:
-        pass
-    assert np.isclose(tic.dt, 0)
+    # prints: hi took rot90(8) s
+    with timer("zoom", {}) as tic:
+        with timer("zip") as tac:
+            pass
+    assert np.isclose(tac.dt, 0)
+    tic.results_dict # => nested timings
     """
 
-    def __init__(self, name="timer", loglevel=DARTSORTVERBOSE):
+    def __init__(self, name="timer", results_dict=None, loglevel=DARTSORTVERBOSE):
         self.loglevel = loglevel
         self.name = name
+        self.results_dict = results_dict
+        self.parent = None
+
+    def start(self):
+        self.t0 = perf_counter()
+
+    def stop(self):
+        self.dt = perf_counter() - self.t0
+        logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
+        if self.parent is not None and self.results_dict is not None:
+            self.results_dict[f"{self.parent.name}: {self.name}"] = self.dt
+        elif self.results_dict is not None:
+            self.results_dict[self.name] = self.dt
 
     def __enter__(self):
-        self.start = time.time()
+        global _timer_stack
+        if len(_timer_stack):
+            self.parent = _timer_stack[-1]
+            if self.results_dict is None:
+                self.results_dict = self.parent.results_dict
+        _timer_stack.append(self)
+        self.start()
         return self
 
     def __exit__(self, *args):
-        self.dt = time.time() - self.start
-        logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
+        global _timer_stack
+        self.stop()
+        assert _timer_stack.pop() is self
+        self.parent = None
 
 
 class NoKeyboardInterrupt:
@@ -162,7 +178,9 @@ def str_or_none(s):
 # files and paths
 
 
-def resolve_path(p: str | Path | Traversable | None, strict=False) -> Path:
+def resolve_path(
+    p: str | Path | Traversable | None, strict=False, mkdir=False, parents=False
+) -> Path:
     if p is None:
         raise ValueError("Can't resolve path None.")
     if isinstance(p, Traversable):
@@ -171,6 +189,8 @@ def resolve_path(p: str | Path | Traversable | None, strict=False) -> Path:
     p = p.expanduser()
     p = p.absolute()
     p = p.resolve(strict=strict)
+    if mkdir:
+        p.mkdir(parents=parents, exist_ok=True)
     return p
 
 

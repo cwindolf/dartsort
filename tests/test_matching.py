@@ -1,6 +1,6 @@
-from itertools import product
 import shutil
 import tempfile
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -8,7 +8,6 @@ import pytest
 import spikeinterface.full as si
 import torch
 import torch.nn.functional as F
-from dredge import motion_util
 from test_util import dense_layout, no_overlap_recording_sorting
 
 import dartsort
@@ -20,10 +19,10 @@ from dartsort.templates import TemplateData, template_util
 from dartsort.util.internal_config import MatchingConfig
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
-from dartsort.util.waveform_util import upsample_multichan
 
 # need to keep this unused import to register debug template method
 from dartsort.util.testing_util import matching_debug_util
+from dartsort.util.waveform_util import upsample_multichan
 
 logger = get_logger(__name__)
 
@@ -32,7 +31,6 @@ nofeatcfg = dartsort.FeaturizationConfig(
     do_tpca_denoise=False,
     do_enforce_decrease=False,
     denoise_only=True,
-    n_residual_snips=0,
 )
 
 spike_length_samples = 121
@@ -42,7 +40,7 @@ RES_ATOL = 1e-10
 CONV_ATOL = 1e-4
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def refractory_sim(request, tmp_path_factory):
     """Globally refractory sims can be matched perfectly"""
     upsampling, scaling, nc = request.param
@@ -134,7 +132,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         cfg_kw["up_method"] = "keys4"
     else:
         assert False
-    matching_cfg = MatchingConfig(**cfg_kw)
+    matching_cfg = MatchingConfig(**cfg_kw, whitening=dartsort.WhiteningConfig())
     matcher = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
         template_data=template_data,
@@ -377,13 +375,8 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             np.testing.assert_allclose(wf, true_wf, atol=cc_atol, err_msg="ccwf")
 
 
-@pytest.mark.parametrize("up_offset", [0, 1, -1])
-@pytest.mark.parametrize("up_factor", [1, 2, 8])
-@pytest.mark.parametrize("scaling", [0.0, 0.01])
-@pytest.mark.parametrize("cd_iter", [0, 1])
-def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
-    comp_cfg = ensure_computation_config(None)
-    dev = comp_cfg.actual_device()
+@pytest.fixture(scope="module")
+def tiny_up_sim():
     recording_length_samples = 2000
     n_channels = 11
     geom = np.c_[np.zeros(n_channels), np.arange(n_channels)]
@@ -396,39 +389,65 @@ def test_tiny_up(tmp_path, up_factor, scaling, cd_iter, up_offset):
     templates = np.zeros((1, spike_length_samples, n_channels), dtype="float32")
     templates[0, :, 0] = trace0
     # templates[1, :, 1] = trace0
-    print("-- cupts")
-    cupts = template_util.compressed_upsampled_templates(
-        templates,
-        ptps=np.ptp(templates, 1).max(1),
-        max_upsample=up_factor,
-    )
 
-    # spike train
-    # fmt: off
-    start = 50
-    # tclu = []
-    # for i in range(up_factor):
-    #     tclu.extend((start + 200 * i, 0, 0, i))
-    tclu = [50, 0, 0, min(up_factor - 1, up_offset if up_offset >= 0 else up_factor + up_offset)]
-    # fmt: on
-    times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
-    trough_shifts = []
-    rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l, u, c in zip(times, labels, upsampling_indices, channels):
-        temp = cupts.compressed_upsampled_templates[
-            cupts.compressed_upsampling_map[l, u]
-        ]
-        trough_shifts.append(np.abs(temp[:, c]).argmax() - trough_offset_samples)
-        rec0[
-            t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
-        ] += temp
-    rec0 = si.NumpyRecording(rec0, 30_000)
-    rec0.set_dummy_probe_from_locations(geom)
-    trough_shifts = np.array(trough_shifts)
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
+    sim = {}
 
-    rec1 = rec0.save_to_folder(tmp_path / "rec")
-    for rec in [rec0, rec1]:
+    for up_factor, up_offset in product([1, 2, 8], [0, 1, -1]):
+        cupts = template_util.compressed_upsampled_templates(
+            templates,
+            ptps=np.ptp(templates, 1).max(1),
+            max_upsample=up_factor,
+        )
+
+        # spike train
+        # fmt: off
+        # start = 50
+        # tclu = []
+        # for i in range(up_factor):
+        #     tclu.extend((start + 200 * i, 0, 0, i))
+        tclu = [50, 0, 0, min(up_factor - 1, up_offset if up_offset >= 0 else up_factor + up_offset)]
+        # fmt: on
+        times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
+        trough_shifts = []
+        rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
+        for t, ll, u, c in zip(times, labels, upsampling_indices, channels):
+            temp = cupts.compressed_upsampled_templates[
+                cupts.compressed_upsampling_map[ll, u]
+            ]
+            trough_shifts.append(np.abs(temp[:, c]).argmax() - trough_offset_samples)
+            rec0[
+                t - trough_offset_samples : t
+                - trough_offset_samples
+                + spike_length_samples
+            ] += temp
+        rec0 = si.NumpyRecording(rec0, 30_000)
+        rec0.set_dummy_probe_from_locations(geom)
+        # rec1 = rec0.save_to_folder(tmp_path / "rec")
+
+        sim[(up_factor, up_offset)] = (
+            rec0,
+            templates,
+            no_motion,
+            times,
+            labels,
+            upsampling_indices,
+        )
+    return sim
+
+
+@pytest.mark.parametrize("up_offset", [0, 1, -1])
+@pytest.mark.parametrize("up_factor", [1, 2, 8])
+@pytest.mark.parametrize("scaling", [0.0, 0.01])
+@pytest.mark.parametrize("cd_iter", [0])
+def test_tiny_up(tiny_up_sim, tmp_path, up_factor, scaling, cd_iter, up_offset):
+    comp_cfg = ensure_computation_config(None)
+    dev = comp_cfg.actual_device()
+
+    rec0, templates, no_motion, *st = tiny_up_sim[(up_factor, up_offset)]
+    times, labels, upsampling_indices = st
+
+    for rec in [rec0]:
         template_cfg = dartsort.TemplateConfig(
             denoising_method="none", template_min_channel_amplitude=0.0
         )
@@ -576,10 +595,10 @@ def test_static(tmp_path, up_factor, cd_iter):
     # fmt: on
     times, channels, labels = np.array(tcl).reshape(-1, 3).T
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, l in zip(times, labels):
+    for t, ll in zip(times, labels):
         rec0[
             t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
-        ] += templates[l]
+        ] += templates[ll]
     rec0 = si.NumpyRecording(rec0, 30_000)
     rec0.set_dummy_probe_from_locations(geom)
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
@@ -767,8 +786,8 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
     # inject the spikes into a noise background
     rec0 = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, l in zip(times, labels):
-        rec0[t : t + 121] += templates[l]
+    for t, ll in zip(times, labels):
+        rec0[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec0) > 80) >= 50
     assert np.sum(np.abs(rec0) > 40) >= 100
 
@@ -776,13 +795,14 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
     rec0 = si.NumpyRecording(rec0, fs)
     rec0.set_dummy_probe_from_locations(geom)
 
-    featconf = dartsort.FeaturizationConfig(
-        do_nn_denoise=False, do_tpca_denoise=False, n_residual_snips=8
-    )
+    featconf = dartsort.FeaturizationConfig(do_nn_denoise=False, do_tpca_denoise=False)
+    sampconf = dartsort.FitSamplingConfig(n_residual_snips=8)
     tempconf = dartsort.TemplateConfig(
         denoising_method="none", registered_templates=False
     )
-    matchconf = dartsort.MatchingConfig(threshold=threshold)
+    matchconf = dartsort.MatchingConfig(
+        threshold=threshold, whitening=dartsort.WhiteningConfig()
+    )
     no_motion = dartsort.MotionInfo.from_motion_est(geom=geom)
 
     rec1 = rec0.save_to_folder(tmp_path / "rec")
@@ -795,6 +815,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
             motion=no_motion,
             template_cfg=tempconf,
             featurization_cfg=featconf,
+            sampling_cfg=sampconf,
             matching_cfg=matchconf,
         )
         assert st.scores is not None  # type: ignore[reportAttributeAccessIssue]
@@ -805,14 +826,14 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
 @pytest.mark.parametrize("sim_name", ["driftn_szmini", "drifty_szmini"])
 @pytest.mark.parametrize("threshold", ["check"])
-def test_with_simkit(simulations, sim_name, threshold):
+def test_with_simkit(tmp_path, simulations, sim_name, threshold):
     sim = simulations[sim_name]
     rec = sim["recording"]
     template_data = sim["templates"]
     motion = sim["motion"]
     gt_st = sim["sorting"]
 
-    with tempfile.TemporaryDirectory() as tdir:
+    with tempfile.TemporaryDirectory(dir=tmp_path, ignore_cleanup_errors=True) as tdir:
         if threshold == "check":
             threshold = np.sqrt(
                 0.5 * np.square(template_data.templates).sum((1, 2)).min()
@@ -824,7 +845,9 @@ def test_with_simkit(simulations, sim_name, threshold):
             motion=motion,
             template_data=template_data,
             featurization_cfg=dartsort.FeaturizationConfig(skip=True),
-            matching_cfg=dartsort.MatchingConfig(threshold=threshold),
+            matching_cfg=dartsort.MatchingConfig(
+                threshold=threshold, whitening=dartsort.WhiteningConfig()
+            ),
         )
         print(f"{threshold=} {st=}")
         assert len(st) > 0.9 * len(gt_st)

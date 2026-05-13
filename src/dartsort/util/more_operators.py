@@ -1,11 +1,12 @@
-from typing import Callable, Optional, Tuple, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional, Self, Tuple, Union
 
 import torch
+
 if TYPE_CHECKING:
     from jaxtyping import Float
 else:
     # picking something subscriptable here
-    Float = list  # type: ignore
+    Float = list
 from linear_operator.operators import to_dense
 from linear_operator.operators._linear_operator import LinearOperator
 from linear_operator.operators.block_linear_operator import BlockLinearOperator
@@ -61,7 +62,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         return capinv_V
 
     def _mul_constant(
-        self: Float[LinearOperator, "*batch M N"], other: Union[float, torch.Tensor]
+        self: Float[Self, "*batch M N"], other: Union[float, torch.Tensor]
     ) -> Float[LinearOperator, "*batch M N"]:
         # We have to over-ride this here for the case where the constant is negative
         if other > 0:
@@ -82,7 +83,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         return None, None, None
 
     def _solve(
-        self: Float[LinearOperator, "... N N"],
+        self: Float[Self, "... N N"],
         rhs: Float[torch.Tensor, "... N C"],
         preconditioner: Optional[
             Callable[[Float[torch.Tensor, "... N C"]], Float[torch.Tensor, "... N C"]]
@@ -139,7 +140,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         return logdet_term
 
     def __add__(
-        self: Float[LinearOperator, "... #M #N"],
+        self: Float[Self, "... #M #N"],
         other: Union[
             Float[Tensor, "... #M #N"], Float[LinearOperator, "... #M #N"], float
         ],
@@ -147,7 +148,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
         return self.__class__(self._root_op, self._other_op + other)
 
     def inv_quad_logdet(
-        self: Float[LinearOperator, "*batch N N"],
+        self: Float[Self, "*batch N N"],
         inv_quad_rhs: Optional[
             Union[Float[Tensor, "*batch N M"], Float[Tensor, "*batch N"]]
         ] = None,
@@ -194,7 +195,7 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
 
         if inv_quad_rhs is not None:
             self_inv_rhs = self._solve(inv_quad_rhs)
-            inv_quad_term = (inv_quad_rhs * self_inv_rhs).sum(dim=-2)
+            inv_quad_term = (inv_quad_rhs * self_inv_rhs).sum(dim=-2)  # type: ignore
             if reduce_inv_quad:
                 inv_quad_term = inv_quad_term.sum(dim=-1)
 
@@ -234,12 +235,12 @@ class LowRankRootSumLinearOperator(SumLinearOperator):
 
         solve = self._solve(right_tensor)
         if squeeze_solve:
-            solve = solve.squeeze(-1)
+            solve = solve.squeeze(-1)  # type: ignore
 
         if left_tensor is not None:
-            return left_tensor @ solve
+            return left_tensor @ solve  # type: ignore
         else:
-            return solve
+            return solve  # type: ignore
 
 
 class NonSquareBlockLinearOperator(BlockLinearOperator):
@@ -261,8 +262,8 @@ class NonSquareBlockLinearOperator(BlockLinearOperator):
         *batch_shape, num_rows, num_cols = other.shape
         batch_shape = list(batch_shape)
 
-        batch_shape.append(self.num_blocks)
-        other = other.view(*batch_shape, num_rows // self.num_blocks, num_cols)
+        batch_shape.append(self.num_blocks)  # type: ignore
+        other = other.view(*batch_shape, num_rows // self.num_blocks, num_cols)  # type: ignore
         return other
 
     def _remove_batch_dim(self, other):

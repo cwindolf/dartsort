@@ -55,6 +55,8 @@ def dredge_estimate_motion(
         max_disp_um=motion_cfg.max_disp_um,
         max_dt_s=motion_cfg.max_dt_s,
         mincorr=motion_cfg.correlation_threshold,
+        gaussian_smoothing_sigma_um=motion_cfg.smoothing_um,
+        gaussian_smoothing_sigma_s=motion_cfg.smoothing_s,
         device=device,
     )
     dredge_motion_est = speed_limit_filter(

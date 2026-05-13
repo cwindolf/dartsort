@@ -3,7 +3,7 @@ A collection of helper functions for dealing with which channels
 waveforms are extracted on, things like that.
 """
 
-from typing import overload, Literal
+from typing import Literal, overload
 
 import numpy as np
 import torch
@@ -11,7 +11,8 @@ import torch.nn.functional as F
 from scipy.interpolate import CubicSpline
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
-from tqdm.auto import trange
+
+from .logging_util import progrange
 
 # -- geometry utils
 
@@ -178,7 +179,7 @@ def _regularize_1d(geom, radius, eps, dim=1):
     else:
         assert n_neighbs.max() > 1
 
-    from scipy.cluster.hierarchy import linkage, fcluster
+    from scipy.cluster.hierarchy import fcluster, linkage
 
     Z = linkage(A.astype(np.float32))
     labels = fcluster(Z, 1.1, criterion="distance")
@@ -466,10 +467,16 @@ def get_channels_in_probe(waveforms, max_channels, channel_index):
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
     waveforms = waveforms.permute(0, 2, 1)
+    waveforms = waveforms.to(device=channel_index.device)
     in_probe_index = channel_index < channel_index.shape[0]
     channels_in_probe = in_probe_index[max_channels]
     waveforms_in_probe = waveforms[channels_in_probe]
     return channels_in_probe, waveforms_in_probe
+
+
+def assert_all_finite_in_probe(waveforms, max_channels, channel_index, message=""):
+    _, waveforms = get_channels_in_probe(waveforms, max_channels, channel_index)
+    assert waveforms.isfinite().all(), f"Blow up: {message}"
 
 
 def set_channels_in_probe(
@@ -479,8 +486,9 @@ def set_channels_in_probe(
     in_place=False,
 ):
     waveforms_full_dest = waveforms_full_dest.permute(0, 2, 1)
-    if not in_place:
-        waveforms_full_dest = waveforms_full_dest.clone()
+    waveforms_full_dest = torch.asarray(
+        waveforms_full_dest, copy=not in_place, device=waveforms_in_probe_src.device
+    )
     waveforms_full_dest[channels_in_probe] = waveforms_in_probe_src
     return waveforms_full_dest.permute(0, 2, 1)
 
@@ -685,7 +693,7 @@ def get_channel_subset(
     if chunk_length is not None:
         if out is None:
             out = npx.zeros_like(waveforms[..., :n_chan_sub])
-        xrange = trange if show_progress else range
+        xrange = progrange if show_progress else range
         for bs in xrange(0, len(out), chunk_length):
             sl = slice(bs, min(len(out), bs + chunk_length))
             get_channel_subset(

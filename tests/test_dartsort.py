@@ -1,9 +1,11 @@
 import dataclasses
-import pytest
 import subprocess
 import warnings
 
+import pytest
+
 import dartsort
+from dartsort.transform.single_channel_denoiser import default_pretrained_path
 
 
 @pytest.mark.parametrize("do_motion_estimation", [True])
@@ -20,7 +22,8 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
             ),
             residnorm_decrease_threshold=16.0,
         ),
-        featurization_cfg=dartsort.FeaturizationConfig(n_residual_snips=512),
+        peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
+        featurization_cfg=dartsort.FeaturizationConfig(),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=do_motion_estimation, rigid=True
         ),
@@ -51,7 +54,12 @@ def test_fakedata_nonn(tmp_path, sim_size, simulations, do_motion_estimation):
     assert (tmp_path / "matching1.h5").exists()
 
 
-usual_sdcfg = dartsort.FeaturizationConfig(denoise_only=True)
+scdn_sdcfg = dartsort.FeaturizationConfig(
+    denoise_only=True,
+    do_nn_denoise=True,
+    nn_denoiser_class_name="SingleChannelWaveformDenoiser",
+    nn_denoiser_pretrained_path=dartsort.config.default_pretrained_path,
+)
 decollider_sdcfg = dartsort.FeaturizationConfig(
     denoise_only=True,
     do_nn_denoise=True,
@@ -64,7 +72,7 @@ decollider_sdcfg = dartsort.FeaturizationConfig(
 )
 
 
-@pytest.mark.parametrize("sdcfg", [usual_sdcfg, decollider_sdcfg])
+@pytest.mark.parametrize("sdcfg", [decollider_sdcfg, scdn_sdcfg])
 @pytest.mark.parametrize("sim_size", ["mini"])
 def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
     sim_recording = simulations[f"driftn_sz{sim_size}"]["recording"]
@@ -79,9 +87,8 @@ def test_fakedata(tmp_path, sim_size, simulations, sdcfg):
             use_amplitude=False, n_main_channel_pcs=1
         ),
         refinement_cfg=dartsort.RefinementConfig(),
-        featurization_cfg=dartsort.FeaturizationConfig(
-            n_residual_snips=512, nn_localization=False
-        ),
+        peeler_sampling_cfg=dartsort.FitSamplingConfig(n_residual_snips=512),
+        featurization_cfg=dartsort.FeaturizationConfig(nn_localization=False),
         motion_estimation_cfg=dartsort.MotionEstimationConfig(
             do_motion_estimation=False
         ),
@@ -102,9 +109,7 @@ def test_cli_help():
     assert not res.returncode, res.stderr.decode()
 
 
-@pytest.mark.parametrize(
-    "type", ["subtract", "threshold", "match", "drifty_match"]
-)
+@pytest.mark.parametrize("type", ["subtract", "threshold", "match", "drifty_match"])
 def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
@@ -118,15 +123,18 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     if type == "threshold":
         cfg_add["voltage_threshold"] = 4.0
         cfg_add["deduplication_radius_um"] = 150.0
+    if type == "subtract":
+        cfg_add["nn_denoiser_class_name"] = "SingleChannelWaveformDenoiser"
+        cfg_add["nn_denoiser_pretrained_path"] = str(default_pretrained_path)
 
     cfg = dartsort.DeveloperConfig(
         dredge_only=True,
-        detection_type=type.removesuffix("_cumulant"),
+        detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
         **cfg_add,
     )
-    with warnings.catch_warnings() as ws:
+    with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="Can't extract this many non-overlapping snips."
         )

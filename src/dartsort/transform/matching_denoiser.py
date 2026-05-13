@@ -9,13 +9,28 @@ class DebugMatchingPursuitDenoiser(BaseWaveformDenoiser):
 
     default_name = "pursuit_basis"
 
-    def __init__(self, channel_index, geom=None, basis=None, name=None, name_prefix=""):
+    def __init__(
+        self,
+        channel_index,
+        geom=None,
+        basis=None,
+        name=None,
+        name_prefix="",
+        waveform_cfg=None,
+        sampling_frequency=30_000.0,
+    ):
         super().__init__(
-            channel_index=channel_index, name=name, name_prefix=name_prefix
+            channel_index=channel_index,
+            name=name,
+            name_prefix=name_prefix,
+            waveform_cfg=waveform_cfg,
+            sampling_frequency=sampling_frequency,
         )
         if basis is not None:
             assert basis.ndim == 2
             self.register_buffer("basis", basis)
+        if self.spike_length_samples is not None:
+            self.initialize_spike_length_dependent_params()
 
     def initialize_spike_length_dependent_params(self):
         if not hasattr(self, "basis"):

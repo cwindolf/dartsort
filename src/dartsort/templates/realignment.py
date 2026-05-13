@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from spikeinterface.core import BaseRecording
-from tqdm.auto import trange
 
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
@@ -17,7 +16,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progrange
 from ..util.motion import MotionInfo
 from ..util.spiketorch import ptp
 from .templates import TemplateData
@@ -457,7 +456,7 @@ def _pairwise_correlate_templates(templates, ii, jj, max_shift: int, batch_size=
     best_lag = templates.new_zeros(ii.shape)
     best_corr = templates.new_zeros(ii.shape)
 
-    for i0 in trange(0, npair, batch_size, desc="DREDge template alignment"):
+    for i0 in progrange(0, npair, batch_size, desc="DREDge template alignment"):
         i1 = min(npair, i0 + batch_size)
 
         iib = ii[i0:i1]

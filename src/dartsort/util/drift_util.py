@@ -27,9 +27,8 @@ by integer numbers of pitches. As many shifted copies are created
 as needed to capture all the drift.
 """
 
-from typing import Sequence
-
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 import torch

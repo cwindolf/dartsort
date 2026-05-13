@@ -1,8 +1,9 @@
 import warnings
 from logging import getLogger
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal, Sequence
 
+import matplotlib.font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 from dredge import motion_util
@@ -43,7 +44,8 @@ def visualize_sorting(
     make_mixture_summaries=None,
     make_versus=True,
     analysis=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
+    allow_qda=True,
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     amplitudes_dataset_name="denoised_ptp_amplitudes",
@@ -113,6 +115,7 @@ def visualize_sorting(
         gt_comparison_with_distances=gt_comparison_with_distances,
         n_units=n_units,
         single_unit_ids=single_unit_ids,
+        allow_qda=allow_qda,
     )
     sum_png, unit_sum_dir, comp_png, unit_comp_dir, vs_png, mix_dir = paths_or_nones
 
@@ -172,6 +175,15 @@ def visualize_sorting(
         fig.savefig(vs_png, dpi=dpi)
         plt.close(fig)
 
+    if unit_sum_dir is not None or mix_dir is not None:
+        if single_unit_ids == "gtrelevant":
+            assert gt_cmp is not None
+            single_unit_ids = gt_cmp.relevant_tested_units()
+        elif single_unit_ids == "existing":
+            single_unit_ids = []
+            for pngp in unit_sum_dir.glob("unit*.png"):
+                single_unit_ids.append(int(pngp.stem.removeprefix("unit")))
+
     if unit_sum_dir is not None:
         unit.make_all_summaries(
             analysis,
@@ -217,6 +229,7 @@ def visualize_all_sorting_steps(
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     gt_comparison_with_distances=True,
+    allow_qda=True,
     step_dir_name_format="step{step:02d}_{step_name}",
     step_name_formatter=None,
     step_name_filter: Callable | None = None,
@@ -230,7 +243,7 @@ def visualize_all_sorting_steps(
     exhaustive_gt=True,
     start_from_matching=False,
     n_units=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
     stop_after=None,
     dpi=200,
     overwrite=False,
@@ -238,15 +251,27 @@ def visualize_all_sorting_steps(
     reverse=False,
     computation_cfg=None,
     errors_to_warnings=True,
+    set_style=True,
 ):
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
 
+    if set_style:
+        set_plt_style()
+
     if motion is None:
         motion = try_load_motion_info(dartsort_dir, motion_pkl)
 
-    fnames = ["times_seconds", "geom", "channel_index"]
-    if make_scatterplots or make_sorting_summaries:
+    fnames = [
+        "times_seconds",
+        "geom",
+        "channel_index",
+        "template_inds",
+        "gmm_candidates",
+        "gmm_log_liks",
+        "gmm_responsibilities",
+    ]
+    if make_scatterplots or make_sorting_summaries or make_unit_summaries:
         fnames += [
             "point_source_localizations",
             amplitudes_dataset_name,
@@ -278,7 +303,7 @@ def visualize_all_sorting_steps(
                 continue
             assert step_sorting is not None
             if step_name_filter is not None and not step_name_filter(step_name):
-                print(f"Filter skipped {step_name}.")
+                prog.write(f"Filter skipped {step_name}.")
                 continue
             if start_from_matching:
                 h5p = step_sorting.parent_h5_path
@@ -286,7 +311,6 @@ def visualize_all_sorting_steps(
                     continue
                 if not Path(h5p).stem.startswith("match"):
                     continue
-            assert all(hasattr(step_sorting, fn) for fn in fnames)
             prog.write(f"Vis step  {j}: {step_name}.\n{step_sorting}")
             step_dir_name = step_dir_name_format.format(step=j, step_name=step_name)
             visualize_sorting(
@@ -305,6 +329,7 @@ def visualize_all_sorting_steps(
                 gt_analysis=gt_analysis,
                 other_analyses=other_analyses,
                 n_units=n_units,
+                allow_qda=allow_qda,
                 single_unit_ids=single_unit_ids,
                 exhaustive_gt=exhaustive_gt,
                 gt_comparison_with_distances=gt_comparison_with_distances,
@@ -381,12 +406,13 @@ def _plan_vis(
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
     exhaustive_gt=True,
+    allow_qda=True,
     gt_comparison_with_distances=True,
     overwrite=False,
     computation_cfg=None,
     seed=0,
     n_units=None,
-    single_unit_ids=None,
+    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -401,7 +427,12 @@ def _plan_vis(
     is_labeled = sorting.n_units > 1
 
     if is_labeled:
-        if single_unit_ids is not None:
+        if single_unit_ids == "gtrelevant":
+            check_ids = sorting.unit_ids
+        elif single_unit_ids == "existing":
+            assert overwrite
+            check_ids = []
+        elif single_unit_ids is not None:
             check_ids = single_unit_ids
         elif n_units:
             check_ids = sorting.unit_ids
@@ -439,6 +470,7 @@ def _plan_vis(
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
         need_comp = overwrite or not comparison_png.exists()
+        need_comp = need_comp or (single_unit_ids == "gtrelevant" and need_summaries)
         need_analysis = need_analysis or need_comp
         need_comparison = need_comparison or need_comp
         if not need_comp:
@@ -454,7 +486,7 @@ def _plan_vis(
             # TODO: unit_comparison.all_summaries_done
             assert gt_analysis is not None
             need_ucomps = not unit.all_summaries_done(
-                single_unit_ids or gt_analysis.sorting.unit_ids,
+                gt_analysis.sorting.unit_ids,
                 unit_comparison_dir,
                 sorting_analysis=gt_analysis,
                 namebyamp=True,
@@ -489,14 +521,17 @@ def _plan_vis(
             name=sorting_name,
             template_cfg=template_cfg,
             computation_cfg=computation_cfg,
+            allow_qda=allow_qda,
         )
 
     if make_mixture_summaries is None and hasattr(sorting, "gmm_candidates"):
         assert sorting.labels is not None
-        c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+        c0 = sorting.gmm_candidates[:, 0]
         lk = np.flatnonzero(sorting.labels >= 0)
         is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
         make_mixture_summaries = is_gmm
+        if is_gmm:
+            logger.info("Will make GMM plots.")
     elif make_mixture_summaries is None:
         make_mixture_summaries = False
 
@@ -560,3 +595,50 @@ def _plan_vis(
         vs_png,
         mix_dir,
     )
+
+
+SMALL_SIZE = 10
+MEDIUM_SIZE = 11
+BIGGER_SIZE = 14
+
+
+def set_plt_style(
+    small_size=SMALL_SIZE,
+    medium_size=MEDIUM_SIZE,
+    bigger_size=BIGGER_SIZE,
+    margin=0,
+    grid=False,
+    dpi=200,
+    figsize=(3, 3),
+    fonts=['Helvetica', 'Arial', 'Nimbus Sans'],
+):
+    from .colors import glasbey1024
+
+    plt.rc("figure", dpi=dpi)
+    plt.rc("figure", figsize=figsize)
+
+    plt.rc("font", size=small_size)
+    if fonts:
+        avail = matplotlib.font_manager.get_font_names()
+        for font in fonts:
+            if font in avail:
+                plt.rc("font", family=font)
+                break
+        else:
+            logger.info(f"Alas, no {fonts=}.")
+    plt.rc("axes", titlesize=medium_size)
+    plt.rc("axes", labelsize=small_size)
+    plt.rc("xtick", labelsize=small_size)
+    plt.rc("ytick", labelsize=small_size)
+    plt.rc("legend", fontsize=small_size)
+    plt.rc("figure", titlesize=bigger_size)
+    plt.rc("axes", xmargin=margin)
+    plt.rc("axes", ymargin=margin)
+    plt.rc("axes", grid=grid)
+
+    plt.rc("axes", prop_cycle=plt.cycler(color=glasbey1024))
+
+    plt.rc("figure.constrained_layout", use=True)
+
+    plt.rc("legend", fancybox=False)
+    plt.rc("legend", framealpha=1)

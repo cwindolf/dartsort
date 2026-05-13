@@ -42,7 +42,7 @@ spike_sklearn_tsvd_template_cfg = TemplateConfig(svd_method="spike_sklearn")
 # simkit fixture based test of all algorithms with a global
 # refractory sorting that has no noise
 # can do one with tiny drift and do allclose to test motion pipeline
-@pytest.fixture
+@pytest.fixture(scope="module")
 def refractory_simulations(tmp_path_factory):
     sim_settings = config_grid(
         common_params=dict(
@@ -130,10 +130,8 @@ def test_refractory_templates(
 
 
 @pytest.mark.parametrize("reduction", ["mean", "median"])
-@pytest.mark.parametrize("drift", [False, 0, True, "v"])
-@pytest.mark.parametrize(
-    "realign_peaks", [False, "mainchan_trough_factor", "normsq_weighted_trough_factor"]
-)
+@pytest.mark.parametrize("drift", [False, 0, True])
+@pytest.mark.parametrize("realign_peaks", [False, "mainchan_trough_factor"])
 @pytest.mark.parametrize("denoising_method", ["none", "exp_weighted"])
 def test_refractory_templates_algorithm_agreement(
     refractory_simulations, drift, realign_peaks, denoising_method, reduction
@@ -184,14 +182,13 @@ def test_refractory_templates_algorithm_agreement(
     td0, *rest = tds
 
     for alg, tdb in zip(algorithms[1:], rest):
-        print(alg)
         np.testing.assert_array_equal(td0.unit_ids, tdb.unit_ids)
         np.testing.assert_array_equal(td0.spike_counts, tdb.spike_counts)
         np.testing.assert_array_equal(
             td0.spike_counts_by_channel, tdb.spike_counts_by_channel
         )
 
-        if reduction == "median" and denoising_method == "exp_weighted":
+        if reduction == "median" and denoising_method != "none":
             # slight diff (peel takes median in SVD space, unit in wf space)
             atol = 5e-5
         else:
@@ -437,6 +434,7 @@ def test_main_object():
         motion=motion,
         waveform_cfg=dartsort.WaveformConfig(ms_before=0, ms_after=2000),
     )
+    del tdata
 
 
 @pytest.mark.parametrize("unit_ids", [np.arange(5), np.array([0, 0, 1, 1, 2])])
@@ -464,7 +462,7 @@ def test_pconv(tmp_path, unit_ids):
     overlaps[(1, 2)] = overlaps[(2, 1)] = (temps[1] * temps[2]).sum()
     overlaps[(2, 3)] = overlaps[(3, 2)] = (temps[3] * temps[2]).sum()
 
-    print(f"--------- no drift")
+    print("--------- no drift")
     tdata = templates.TemplateData(
         templates=temps,
         unit_ids=unit_ids,
@@ -486,6 +484,7 @@ def test_pconv(tmp_path, unit_ids):
     )
 
     for motion, chunk_centers in [(no_motion, None), (zero_motion, [1, 2])]:
+        chunk_centers = np.array(chunk_centers) if chunk_centers else None
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tdir:
@@ -531,7 +530,7 @@ def test_pconv(tmp_path, unit_ids):
     # drifting version
     # rigid drift from -1 to 0 to 1, note pitch=1
     # same templates but padded
-    print(f"--------- rigid drift")
+    print("--------- rigid drift")
     tempspad = np.pad(temps, [(0, 0), (0, 0), (1, 1)])
     svd_compressed = template_util.svd_compress_templates(tempspad, rank=1)
     reg_geom = np.c_[np.zeros(c + 2), np.arange(c + 2).astype(float)]

@@ -1,5 +1,16 @@
+import gc
+from typing import TYPE_CHECKING
+
+import torch
 from torch import Tensor
 from torch.nn import Module
+
+from .logging_util import get_logger
+
+if TYPE_CHECKING:
+    from .internal_config import ComputationConfig
+
+logger = get_logger(__name__)
 
 
 class BModule(Module):
@@ -33,17 +44,24 @@ class BModule(Module):
     def b(self) -> "BufGetter":
         return self.___bgetter
 
+    def get_optional_buffer(self, name: str) -> Tensor | None:
+        return getattr(self.b, name)
+
     def register_cpu_buffer(self, name: str, buf: Tensor | None):
         self.___cpu_buffers[name] = buf
 
     def register_buffer_or_none(
-        self, name: str, buf: Tensor | None, on_device: bool = True
+        self,
+        name: str,
+        buf: Tensor | None,
+        on_device: bool = True,
+        persistent=True,
     ):
         if buf is None:
             setattr(self, name, None)
             self.register_cpu_buffer(name, None)
         elif on_device:
-            self.register_buffer(name, buf)
+            self.register_buffer(name, buf, persistent=persistent)
         else:
             self.register_cpu_buffer(name, buf)
 
@@ -64,8 +82,18 @@ class BufGetter:
     __slots__ = "buffers", "cpu_buffers"
 
     def __init__(self, buffers, cpu_buffers):
-        self.buffers = buffers
-        self.cpu_buffers = cpu_buffers
+        super().__setattr__("buffers", buffers)
+        super().__setattr__("cpu_buffers", cpu_buffers)
+
+    def __setattr__(self, key, value):
+        # don't set my properties directly, but += etc are allowed and will
+        # modify the property in-place, so that ids are equal
+        if key in self.cpu_buffers:
+            assert value is self.cpu_buffers[key]
+        elif key in self.buffers:
+            assert value is self.buffers[key]
+        else:
+            raise AttributeError
 
     def __getattr__(self, key) -> Tensor:
         if key in self.cpu_buffers:
@@ -73,3 +101,16 @@ class BufGetter:
         elif key in self.buffers:
             return self.buffers[key]
         raise AttributeError(f"BufGetter didn't find {key=}.")
+
+
+def cleanup_and_log_gpu_usage(computation_cfg: "ComputationConfig", message=""):
+    dev = computation_cfg.actual_device()
+    gc.collect()
+
+    if dev.type != "cuda":
+        return
+
+    torch.cuda.empty_cache()
+
+    message = f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
+    logger.dartsortdebug(message)

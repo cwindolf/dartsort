@@ -1,14 +1,13 @@
 from typing import Sequence
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import seaborn as sns
+from matplotlib.lines import Line2D
 
 from ..evaluate.comparison import DARTsortGTVersus
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
-
 
 _cm = {
     "gt_ptp_amplitude": "viridis",
@@ -41,7 +40,9 @@ _legkw = dict(
     handlelength=1.0,
     columnspacing=1.0,
 )
-_box_kw = dict(showmeans=True, meanprops=dict(markeredgecolor="k", marker="+", markersize=15))
+_box_kw = dict(
+    showmeans=True, meanprops=dict(markeredgecolor="k", marker="+", markersize=15)
+)
 _scatter_kw = dict(linewidths=0, s=5)
 _reg_common = dict(ci=None, scatter_kws=_scatter_kw)
 _logistic = dict(logistic=True, **_reg_common)
@@ -63,8 +64,8 @@ default_metrics = tuple([k for k in _c.keys() if k != "n_units"])
 
 class VersusPlot(BasePlot):
     kind = "vs"
-    width = 1
-    height = 1
+    width = 1.0
+    height = 1.0
 
     # some plots only work for vs of two sorters
     # the main fn below will filter plots depending on if the vs has only two
@@ -96,11 +97,11 @@ class MetricColumn(VersusPlot):
         self.box = box
         self.box_x_cuts = box_x_cuts
 
-    def draw(self, panel, vs):
+    def draw(self, panel, vs: DARTsortGTVersus):
         axes = panel.subplots(nrows=self.nmetrics, sharex=True)
         df = vs.unit_versus_dataframe()
         if self.diff:
-            lines = [Line2D([0, 1], [0, 0], color='k')]
+            lines = [Line2D([0, 1], [0, 0], color="k")]
         else:
             spal = sns.color_palette(glasbey1024[: vs.n_vs])
             lines = [Line2D([0, 1], [0, 0], color=c) for c in spal]
@@ -119,7 +120,6 @@ class MetricColumn(VersusPlot):
         if self.box and self.box_x_cuts:
             bins = [0] + self.box_x_cuts + [int(np.ceil(df[x].max().item()))]
             df = df.copy(deep=False)
-            edge_strs = [f"{int(b)}" for b in bins]
             bin_strs = np.array([f"{a}-{b}" for a, b in zip(bins, bins[1:])])
             binix = np.searchsorted(bins, df[x].values, side="right") - 1
             assert binix.min() >= 0
@@ -175,18 +175,29 @@ class MetricColumn(VersusPlot):
                 if x is not None:
                     needcols.append(x)
                 sns.boxplot(
-                    df[needcols].dropna().reset_index(), x=x, y=met, legend=False, log_scale=logy, ax=ax, **_box_kw, **ckw
+                    df[needcols].dropna().reset_index(),
+                    x=x,
+                    y=met,
+                    legend=False,
+                    log_scale=logy,
+                    ax=ax,
+                    **_box_kw,
+                    **ckw,
                 )
+            
+            logx = self.logx and x is not None and sdf[x].values.size
+            logy = logy and sdf[met].values.size
+            symlogy = symlogy and sdf[met].values.size
 
-            if logy and self.logx and not self.box:
+            if logy and logx and not self.box:
                 ax.loglog()
             elif logy and not self.box:
                 ax.semilogy()
-            elif self.logx and not self.box:
+            elif logx and not self.box:
                 ax.semilogx()
             elif symlogy and not self.box:
                 ax.set_yscale("symlog")
-                if self.logx:
+                if logx:
                     ax.set_xscale("log")
             ax.set_ylabel(met, color=_c[met], fontsize="small")
             ax.grid(which="both")
@@ -236,7 +247,7 @@ class OrderedPerformance(VersusPlot):
         self.metrics = metrics
         self.height = hmul * self.nmetrics
 
-    def draw(self, panel, vs):
+    def draw(self, panel, vs: DARTsortGTVersus):
         axes = panel.subplots(nrows=self.nmetrics, sharex=True)
         df = vs.unit_versus_dataframe()
         x = np.arange(vs.n_gt_units)
@@ -246,7 +257,7 @@ class OrderedPerformance(VersusPlot):
                 y = df[df[vs.sorter_var] == sorter][met].values
                 y = y[np.isfinite(y)]
                 y = y[np.argsort(-_o[met] * y)]
-                ax.step(x[:len(y)], y, color=color, lw=1, label=sorter)
+                ax.step(x[: len(y)], y, color=color, lw=1, label=sorter)
             ax.grid(which="both")
             ax.set_ylabel(met, color=_c[met])
             if met == "min_temp_dist":
@@ -256,7 +267,7 @@ class OrderedPerformance(VersusPlot):
         axes.flat[0].set_title("sorted performance")
 
 
-def get_versus_plots(vs) -> list[VersusPlot]:
+def get_versus_plots(vs) -> Sequence[VersusPlot]:
     plots = [
         MetricColumn(),
         MetricColumn(x="gt_collidedness", metrics=["recall", "min_temp_dist"]),
@@ -275,7 +286,7 @@ def get_versus_plots(vs) -> list[VersusPlot]:
 
 def make_versus_summary(
     vs: DARTsortGTVersus,
-    plots: Sequence[VersusPlot] | None=None,
+    plots: Sequence[VersusPlot] | None = None,
     max_height=6,
     figsize=(22, 14),
     figure=None,
@@ -292,7 +303,7 @@ def make_versus_summary(
         vs=vs,
     )
     if suptitle is True:
-        vs_str = " vs. ".join(vs.other_names)
+        vs_str = " vs. ".join(vs.other_names)  # type: ignore
         figure.suptitle(f"{vs.gt_name} compare: {vs_str}")
     elif suptitle:
         figure.suptitle(suptitle)

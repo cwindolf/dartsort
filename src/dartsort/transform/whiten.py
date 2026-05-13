@@ -1,7 +1,9 @@
-import torch
+from typing import TYPE_CHECKING
 
 from .transform_base import BaseWaveformDenoiser
-from ..util.noise_util import SpatialWhitener
+
+if TYPE_CHECKING:
+    from ..util.noise_util import SpatialWhitener
 
 
 class WaveformWhitener(BaseWaveformDenoiser):
@@ -14,7 +16,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
         channel_index,
         name=None,
         name_prefix=None,
-        whitener: SpatialWhitener | None = None,
+        whitener: "SpatialWhitener | None" = None,
     ):
         super().__init__(
             name=name, name_prefix=name_prefix, geom=geom, channel_index=channel_index

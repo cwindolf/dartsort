@@ -358,6 +358,37 @@ def isi_hist(
     axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
 
+def centered_bins(x, dx=1.0):
+    if x is None or not x.size:
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
+    vm = np.abs(x).max()
+    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
+    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    assert bin_centers.size == bin_edges.size - 1
+    assert bin_centers.size % 2
+    assert vm < min(-bin_centers.min(), bin_centers.max())
+    return bin_edges, bin_centers
+
+
+def bimod_stats(h):
+    assert h.ndim == 1
+    assert h.size % 2
+    cix = h.shape[0] // 2
+    h0 = h[cix]
+    da = h[:cix].max()
+    db = h[cix + 1 :].max()
+    dd = min(da, db)
+    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
+        a = 0.0
+    elif np.isclose(dd, 0.0):
+        a = np.inf
+    else:
+        a = h0 / dd
+    b = h0 / max(da, db)
+    return a, b
+
+
 def correlogram(times_a, times_b: np.ndarray | None = None, max_lag=50):
     lags = np.arange(-max_lag, max_lag + 1)
     ccg = np.zeros(len(lags), dtype=int)
@@ -476,11 +507,11 @@ def visualize_denoiser(
     )
 
     for j in range(n_show):
-        for tr, c, l in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
-            axes[0, j].plot(tr[j], color=c, lw=1, label=l)
+        for tr, c, ll in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
+            axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
         if j == n_show - 1:
             axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
-        for i, (wf, l) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
+        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
             im = axes[i + 1, j].imshow(
                 wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
             )
@@ -488,7 +519,7 @@ def visualize_denoiser(
             if j == n_show - 1:
                 plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3)
             if j == 0:
-                axes[i + 1, j].set_ylabel(l)
+                axes[i + 1, j].set_ylabel(ll)
     if suptitle:
         fig.suptitle(suptitle)
     return fig

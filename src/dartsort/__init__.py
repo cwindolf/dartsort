@@ -2,11 +2,12 @@ import importlib.metadata
 
 from . import detect, util
 from .clustering import (
+    SimpleMatrixFeatures,
+    StableWaveformFeatures,
     cluster_util,
     clustering_strategies,
     density,
     get_clusterer,
-    get_clustering_features,
     kmeans,
     merge,
     refinement_strategies,
@@ -55,7 +56,7 @@ from .util.data_util import (
     check_recording,
     get_featurization_pipeline,
     get_tpca,
-    load_h5,
+    load,
     load_stored_tsvd,
 )
 from .util.drift_util import registered_geometry

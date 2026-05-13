@@ -103,18 +103,18 @@ class CompressedPairwiseConv(PconvBase):
     @classmethod
     def from_h5(cls, hdf5_filename, on_device=False):
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
-            pconv = torch.from_numpy(h5["pconv"][:])  # type: ignore
-            pconv_index = torch.from_numpy(h5["pconv_index"][:])  # type: ignore
+            pconv = torch.from_numpy(h5["pconv"][:])
+            pconv_index = torch.from_numpy(h5["pconv_index"][:])
             shifted_template_index_a = torch.from_numpy(
-                h5["shifted_template_index_a"][:]  # type: ignore
+                h5["shifted_template_index_a"][:]
             )
             upsampled_shifted_template_index_b = torch.from_numpy(
-                h5["upsampled_shifted_template_index_b"][:]  # type: ignore
+                h5["upsampled_shifted_template_index_b"][:]
             )
             if "shifts_a" in h5:
                 assert "shifts_b" in h5
-                shifts_a = torch.from_numpy(h5["shifts_a"][:])  # type: ignore
-                shifts_b = torch.from_numpy(h5["shifts_b"][:])  # type: ignore
+                shifts_a = torch.from_numpy(h5["shifts_a"][:])
+                shifts_b = torch.from_numpy(h5["shifts_b"][:])
             else:
                 shifts_a = shifts_b = None
         return cls(

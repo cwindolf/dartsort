@@ -27,9 +27,10 @@ dependencies = [
   "pandas",
   "probeinterface",
   "pydantic",
+  "pynapple",
   "scipy>=1.13",
   "scikit-learn",
-  "spikeinterface>=0.101.2",
+  "spikeinterface>=0.104.0",
   "sympy",
   "torch>=2.0",
   "tqdm",
@@ -37,10 +38,10 @@ dependencies = [
 
 [project.optional-dependencies]
 doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "versioningit", "poethepoet", "graphviz"]
-vis = ["matplotlib", "seaborn"]
-dev = ["pytest", "pytest-cov"]
+vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 gpu = ["cupy"]
-full = ["matplotlib", "seaborn", "pytest", "pytest-cov", "ipywidgets", "ipykernel", "black"]
+full = ["matplotlib", "seaborn", "pytest", "matplotlib-venn", "pytest-cov", "ipywidgets", "ipykernel", "black"]
+test = ["pytest", "pytest-cov"]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"
@@ -75,9 +76,17 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 
 [tool.ruff]
 line-length = 88
+extend-select = ["I"]
+ignore = ["F722"]
 
 [tool.jupytext]
 "formats" = "ipynb,py:percent"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.analysis]
+replace-imports-with-any = ["hdbscan"]
 
 [tool.ty.rules]
 "unsupported-base" = "ignore"

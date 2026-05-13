@@ -1,13 +1,6 @@
 import torch
 from scipy.sparse import coo_array
 
-try:
-    import cupy as cp
-    from cupyx.scipy.sparse import coo_matrix as cupy_coo_matrix
-except ImportError:
-    cp = None  # type: ignore
-    cupy_coo_matrix = lambda a, shape: NotImplemented  # type: ignore
-
 
 def coo_to_scipy(coo_tensor):
     data = coo_tensor.values().numpy(force=True)
@@ -16,7 +9,11 @@ def coo_to_scipy(coo_tensor):
 
 
 def coo_to_cupy(coo_tensor):
-    assert cp is not None
+    import cupy as cp  # type: ignore # ty: ignore[x]
+    from cupyx.scipy.sparse import (  # type: ignore # ty: ignore[x]
+        coo_matrix as cupy_coo_matrix,  # type: ignore # ty: ignore[x]
+    )
+
     data = cp.asarray(coo_tensor.values())
     iijj = cp.asarray(coo_tensor.indices())
     return cupy_coo_matrix((data, iijj), shape=coo_tensor.shape)

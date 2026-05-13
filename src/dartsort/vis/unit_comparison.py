@@ -1,16 +1,15 @@
-from typing import Any
 import warnings
 from logging import getLogger
+from typing import Any
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import FuncNorm
-from matplotlib.lines import Line2D
-from matplotlib.scale import FuncScale
 import numpy as np
 import seaborn as sns
+from matplotlib.colors import FuncNorm
+from matplotlib.lines import Line2D
 
 try:
-    from matplotlib_venn import venn2  # type: ignore
+    from matplotlib_venn import venn2
 except ImportError:
 
     def venn2(*args, **kwargs) -> Any:
@@ -22,7 +21,6 @@ from .colors import glasbey1024
 from .layout import BasePlot
 from .unit import make_all_summaries, make_unit_summary
 from .waveforms import geomplot
-
 
 logger = getLogger(__name__)
 
@@ -86,7 +84,7 @@ class UnitComparisonPlot(BasePlot):
             tested_unit_id = comparison.get_match(unit_id)
             a = comparison.agreement_scores[tested_unit_id]
             asorted = a.sort_values(ascending=False)
-            ids = asorted.index[:n].values if n else []
+            ids = asorted.index[:n].values if n else np.array([])
             ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
@@ -104,7 +102,7 @@ class UnitComparisonPlot(BasePlot):
         elif method == "greedy" and which == "gt":
             tested_unit_id = comparison.get_match(unit_id)
             g = comparison.greedy_iou[:, tested_unit_id]
-            ids = np.argsort(g)[::-1][: n - 1] if n else []
+            ids = np.argsort(g)[::-1][: n - 1] if n else np.array([])
             ixs = np.searchsorted(comparison.gt_analysis.unit_ids, ids)
             if (ids == unit_id).any():
                 ids = [unit_id] + list(ids[ids != unit_id])
@@ -402,7 +400,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 linestyle=(1, (1, 1)),
             )
             tk = f"{comparison.tested_analysis.name}#{tested_unit_id}"
-            handles[tk] = testedline  # type: ignore
+            handles[tk] = testedline
         if self.average:
             gt_template = comparison.gt_analysis.coarse_template_data.unit_templates(
                 unit_id
@@ -420,7 +418,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 color="k",
                 linestyle=(0, (1, 1)),
             )
-            handles["GT"] = gtline  # type: ignore
+            handles["GT"] = gtline
 
         ax.legend(
             handles=handles.values(),
@@ -460,7 +458,8 @@ class TemplateDistanceHistogram(UnitComparisonPlot):
         x = x[np.isfinite(x)]
         ax.hist(x, color="orange", bins=bins)
         ax.grid(which="both")
-        ax.semilogx()
+        if x.size:
+            ax.semilogx()
         ax.set_xlabel("tested template distance to GT")
         ax.set_ylabel("count")
         ax.axvline(d[unit_id][tested_unit_id], c="k", label="Hung. match dist.")
@@ -640,6 +639,11 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = conf[gt_neighb_ids][:, tested_neighb_ids]
             conf_rows = gt_neighb_ids
             conf_cols = tested_neighb_ids
+        elif self.confusion_kind == "greedyprec":
+            conf = comparison.greedy_prec
+            conf = conf[gt_neighb_ids][:, tested_neighb_ids]
+            conf_rows = gt_neighb_ids
+            conf_cols = tested_neighb_ids
         else:
             assert False
 
@@ -658,6 +662,10 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf_cols = np.searchsorted(
                 conf_col_labels, tested_neighb_ids, sorter=col_order
             )
+            keep = conf_cols < comparison.tested_analysis.sorting.n_units
+            tested_neighb_ids = tested_neighb_ids[keep]
+            conf_cols = conf_cols[keep]
+
             conf_cols = col_order[conf_cols]
             # sometimes a nearest template has no spikes. sad but true.
             conf_cols_found = tested_neighb_ids == conf_cols
@@ -676,9 +684,11 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             suffix = ""
 
         conf = np.nan_to_num(conf)
+        if not conf.size:
+            return
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
-        conf = np.abs(np.clip(conf, min=0.0))  # type: ignore[reportCallIssue]
+        conf = np.abs(np.clip(conf, 0.0, None))
 
         ax = panel.subplots()
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0, vmax=max(conf.max(), 0.01))
@@ -711,7 +721,7 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
 
         match_dt = comparison.matched_misalignment(unit_id)
         if match_dt is None:
-            ax.text(0, 0, f"ST shape mismatch (SI issue...?)")
+            ax.text(0, 0, "ST shape mismatch (SI issue...?)")
             ax.axis("off")
             return
 
@@ -803,7 +813,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ax.set_ylabel(f"{va.name} CCG v. {cat}", color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
-        ax.set_xlabel("lag (samples)")  # type: ignore
+        ax.set_xlabel("lag (samples)")
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)
@@ -859,7 +869,7 @@ class CollidednessBreakdown(UnitComparisonPlot):
             bins = np.linspace(mn, mx, self.n_bins + 1)
 
         labels = ["tp", "fn", "unsorted_fn"]
-        labels = [l for l, c in zip(labels, colls) if c.size]
+        labels = [ll for ll, c in zip(labels, colls) if c.size]
         colls = [c for c in colls if c.size]
         colors = [_class_colors[k] for k in labels]
         ax.hist(
@@ -868,8 +878,6 @@ class CollidednessBreakdown(UnitComparisonPlot):
         if self.log_x:
             ax.set_xscale("log")
         elif self.sqrt_x:
-            from matplotlib.scale import FuncScale
-
             ax.set_xscale("function", functions=(np.sqrt, np.square))
         ax.grid()
         ticks = [0, 10, 25, 50, 100, 200, 350, 600]
@@ -900,7 +908,9 @@ def _get_default_unit_comparison_plots():
         NearbyTemplatesDistanceMatrix(),
         # NearbyTemplatesConfusionMatrix(),
         NearbyTemplatesConfusionMatrix(confusion_kind="siagreement"),
-        NearbyTemplatesConfusionMatrix(confusion_kind="greedy"),
+        NearbyTemplatesConfusionMatrix(
+            confusion_kind="greedyprec", neighbor_method="greedy"
+        ),
         NearbyTemplatesConfusionMatrix(
             neighbor_method="siagreement", confusion_kind="siagreement"
         ),

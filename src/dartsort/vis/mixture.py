@@ -5,13 +5,13 @@ from typing import Iterable, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from KDEpy import FFTKDE
 from matplotlib.lines import Line2D
 from scipy.cluster.hierarchy import fcluster, linkage
-from KDEpy import FFTKDE
 from tqdm.auto import tqdm
 
 from ..clustering.cluster_util import maximal_leaf_groups, sparsify_labels
-from ..clustering.gmm.mixture import (
+from ..clustering.mixture import (
     NeighborhoodLUT,
     Scores,
     StreamingSpikeData,
@@ -28,9 +28,11 @@ from ..transform import TemporalPCA
 from ..util import spiketorch
 from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
 from ..util.internal_config import (
+    ClusteringFeaturesConfig,
     ComputationConfig,
     InterpolationParams,
     RefinementConfig,
+    default_clustering_features_cfg,
     default_refinement_cfg,
 )
 from ..util.interpolation_util import (
@@ -42,7 +44,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
 from ..util.py_util import databag
-from .analysis_plots import distance_matrix_dendro
+from .analysis_plots import bimod_stats, centered_bins, distance_matrix_dendro
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
 from .waveforms import geomplot
@@ -76,7 +78,7 @@ class MixtureVisData:
 
     @property
     def times_seconds(self):
-        return self.sorting.times_seconds  # type: ignore
+        return self.sorting.times_seconds
 
     def to_sorting(self) -> DARTsortSorting:
         return self.sorting.ephemeral_replace(labels=self.full_labels)
@@ -96,14 +98,14 @@ class MixtureVisData:
             inu_train.sort()
 
         neighb_ids = self.train_data.neighborhood_ids[inu_train].cpu()
-        chans = self.tmm.neighb_cov.obs_ix.cpu()[neighb_ids]
+        chans = self.tmm.neighb_cov.b.obs_ix.cpu()[neighb_ids]
         return inu_train, chans.numpy(force=True)
 
     def chans_in_radius(self, unit_id: int, radius: float):
         mean = self.tmm.b.means[unit_id].view(self.tmm.neighb_cov.feat_rank, -1)
         my_chan = mean.square().sum(0).argmax()
-        my_xy = self.tmm.neighb_cov.prgeom[my_chan]
-        dxy = self.tmm.neighb_cov.prgeom - my_xy
+        my_xy = self.tmm.neighb_cov.b.prgeom[my_chan]
+        dxy = self.tmm.neighb_cov.b.prgeom - my_xy
         inf_dist = dxy.abs_().amax(dim=1)
         (close,) = (inf_dist < radius).cpu().nonzero(as_tuple=True)
         return close
@@ -166,7 +168,7 @@ class MixtureVisData:
 
     def full_lut_scores(self, show_progress=2, n_candidates=None):
         lut0 = self.tmm.lut
-        lut1 = torch.ones_like(lut0.lut)
+        lut1 = torch.ones_like(lut0.b.lut)
         unit_ids, neighb_ids = lut1.nonzero(as_tuple=True)
         lut1[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0]).to(lut1)
         new_lut = NeighborhoodLUT(unit_ids=unit_ids, neighb_ids=neighb_ids, lut=lut1)
@@ -182,8 +184,8 @@ class MixtureVisData:
 
 
 class MixtureComponentPlot(BasePlot):
-    width = 1
-    height = 1
+    width = 1.0
+    height = 1.0
     kind = "mixture"
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
@@ -270,7 +272,7 @@ class ChansHeatmap(MixtureComponentPlot):
         cf0, cf1 = right.subfigures(nrows=2, hspace=0)
         cax0 = cf0.add_axes((0.01, 0.25, 0.2, 0.5))
         cax1 = cf1.add_axes((0.01, 0.25, 0.2, 0.5))
-        xy = mix_data.tmm.neighb_cov.prgeom.numpy(force=True)
+        xy = mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True)
         s = ax.scatter(*xy[support].T, c=ptp, lw=2, s=5)
         plt.colorbar(s, cax=cax1, aspect=20, label="ptp", pad=0.0)
         s = ax.scatter(*xy[uchans].T, c=counts, lw=0, cmap=self.cmap, s=5)
@@ -555,7 +557,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     hsa, hsb = bimod_stats(hist)
                     hstats[label] = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
                     try:
-                        kdest = FFTKDE(bw="ISJ").fit(dll)  # type: ignore
+                        kdest = FFTKDE(bw="ISJ").fit(dll)
                     except ValueError as e:
                         messages.append(f"{label} fail, n={len(dll)}: {str(e)[:10]}.")
                         continue
@@ -582,8 +584,8 @@ class NeighborQDAPlot(MixtureComponentPlot):
                 if made_one and self.log:
                     ax.semilogy()
 
-            hstatt = f"H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
-            kstatt = f"K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
+            hstatt = "H:" + " ".join(f"{k}:{v}" for k, v in hstats.items())
+            kstatt = "K:" + " ".join(f"{k}:{v}" for k, v in kstats.items())
             ax.set_title(f"{iout}\n{covt}\n{hstatt}\n{kstatt}", fontsize="small")
 
         for ax in axes.flat[len(neighbors) :]:
@@ -732,14 +734,14 @@ class MeanView(MixtureComponentPlot):
 
         ax = panel.subplots()
         ax.axis("off")
-        lines, pchans = geomplot(  # type: ignore
+        lines, pchans = geomplot(
             waveforms=waveforms,
             channels=wchans,
             color="k",
             alpha=self.alpha,
             ax=ax,
             max_abs_amp=maa,
-            geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+            geom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
             show_zero=self.show_zero,
             linewidth=0.5,
             return_chans=True,
@@ -750,7 +752,7 @@ class MeanView(MixtureComponentPlot):
             waveforms=mean_recon[:, :, pchans],
             channels=pchans[None],
             max_abs_amp=maa,
-            geom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+            geom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
             color=glasbey1024[unit_id % len(glasbey1024)],
             ax=ax,
             show_zero=False,
@@ -800,6 +802,7 @@ class CovarianceView(MixtureComponentPlot):
         feat_nan = feat_nan[:, :, chan_set.cpu()]
         feat_nan = feat_nan.view(feat_nan.shape[0], -1)
         # -- with interp
+        assert mix_data.tmm.erp is not None
         feat_interp = mix_data.tmm.erp.interp_to_chans(
             waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
@@ -816,6 +819,7 @@ class CovarianceView(MixtureComponentPlot):
         cov_interp = torch.cov(feat_interp.T)
 
         # noise covariance
+        assert mix_data.tmm.noise is not None
         cov_noise = mix_data.tmm.noise.marginal_covariance(channels=chan_set).to_dense()
         assert cov_noise.shape == cov_interp.shape
 
@@ -886,8 +890,8 @@ class CovarianceView(MixtureComponentPlot):
             imb = row_top[1].imshow(cov_emp - cov, **res_kw)
             ax_bottom.plot(ev[: self.neigs], color=c, label=name)
         if not self.cov_vert:
-            plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
-            plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
+            plt.colorbar(ima, ax=row_top[0], shrink=0.3)
+            plt.colorbar(imb, ax=row_top[1], shrink=0.3)
 
         if self.cov_vert:
             axes_top[0, 0].set_title("cov", fontsize="small")
@@ -995,11 +999,11 @@ class SplitView(MixtureComponentPlot):
         if have_kmeans:
             assert debug_info.split_data is not None
             chans_by_km = {}
-            for l in kmeans_labels.unique():
-                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == l]
-                chans_l = mix_data.tmm.neighb_cov.obs_ix[neighbs_l]
+            for ll in kmeans_labels.unique():
+                neighbs_l = debug_info.split_data.neighborhood_ids[kmeans_labels == ll]
+                chans_l = mix_data.tmm.neighb_cov.b.obs_ix[neighbs_l]
                 chans_l = chans_l[chans_l < mix_data.tmm.neighb_cov.n_channels]
-                chans_by_km[l.item()] = chans_l.numpy(force=True)
+                chans_by_km[ll.item()] = chans_l.numpy(force=True)
         else:
             chans_by_km = None
 
@@ -1060,7 +1064,7 @@ class SplitView(MixtureComponentPlot):
                 f"{_bold('imp')}: {debug_info.merge_res.improvement:.3f}\n"
             )
         else:
-            txt += f"no allowed partitions\n"
+            txt += "no allowed partitions\n"
         if debug_info.split_model is not None:
             sprops = debug_info.split_model.b.log_proportions.cpu()
             sprops = (
@@ -1334,6 +1338,7 @@ def fit_mixture_for_vis(
     *,
     sorting: DARTsortSorting,
     motion,
+    clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
     refinement_cfg: RefinementConfig = default_refinement_cfg,
     computation_cfg: ComputationConfig | None = None,
     em: bool = True,
@@ -1345,9 +1350,12 @@ def fit_mixture_for_vis(
     mix_data = instantiate_and_bootstrap_tmm(
         sorting=sorting,
         motion=motion,
+        clustering_features_cfg=clustering_features_cfg,
+        stable_features=None,
         refinement_cfg=refinement_cfg,
         computation_cfg=computation_cfg,
     )
+    assert mix_data.full_data is not None
     if em or split or merge or both:
         mix_data.tmm.em(mix_data.train_data)
     for _ in range(max(int(split), int(both))):
@@ -1421,7 +1429,7 @@ def fit_mixture_for_vis(
         full_inunits=sparsify_labels(full_labels),
         tpca=tpca,
         inf_diag_unit_distance_matrix=dists,
-        prgeom=mix_data.tmm.neighb_cov.prgeom.numpy(force=True),
+        prgeom=mix_data.tmm.neighb_cov.b.prgeom.numpy(force=True),
         distance_cache={},
     )
 
@@ -1481,7 +1489,7 @@ def make_mixture_summaries(
 
     save_folder.mkdir(exist_ok=True, parents=True)
     global_params = dict(**other_global_params)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
 
     initargs = (
         mix_data,
@@ -1620,6 +1628,8 @@ def vis_split_interpolation(
 ):
     if erp is None:
         erp = mix_data.tmm.erp
+    assert erp is not None
+    assert mix_data.tmm.noise is not None
 
     split_data = mix_data.train_data.dense_slice_by_unit(
         unit_id,
@@ -1655,8 +1665,8 @@ def vis_split_interpolation(
     vis_ix = []
     rg = np.random.default_rng(seed)
     ulabels = kmeans_labels.unique()
-    for l in ulabels:
-        (in_l,) = (kmeans_labels == l).nonzero(as_tuple=True)
+    for ll in ulabels:
+        (in_l,) = (kmeans_labels == ll).nonzero(as_tuple=True)
         in_l = in_l.numpy(force=True)
         if in_l.size > n_per_group:
             in_l = rg.choice(in_l, size=n_per_group, replace=False)
@@ -1754,9 +1764,9 @@ def vis_obs_interpolation(
         disp = mix_data.motion.disp_at_s(t_s, z)
 
     dev = mix_data.tmm.b.means.device
-    sgeom = pad_geom(mix_data.sorting.geom, device=dev)  # type: ignore
+    sgeom = pad_geom(mix_data.sorting.geom, device=dev)
     tgeom = torch.asarray(mix_data.prgeom).to(sgeom)
-    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)  # type: ignore
+    channel_index = torch.asarray(mix_data.sorting.channel_index, device=dev)
     erps = {}
     for k, ip in (erp_params or {}).items():
         erps[k] = StableFeaturesInterpolator(
@@ -1773,7 +1783,9 @@ def vis_obs_interpolation(
     origf = torch.asarray(origf).to(sgeom)
     chans = torch.asarray(mix_data.sorting.channels[fix]).to(channel_index)
     shifts = torch.asarray(-disp).to(sgeom)
-    tchans = mix_data.tmm.neighb_cov.obs_ix[mix_data.train_data.neighborhood_ids[trix]]
+    tchans = mix_data.tmm.neighb_cov.b.obs_ix[
+        mix_data.train_data.neighborhood_ids[trix]
+    ]
     for name, erp in (erps or {}).items():
         features[name] = erp.interp(
             features=origf,
@@ -1825,37 +1837,6 @@ def vis_obs_interpolation(
 
 def _bold(x):
     return f"$\\mathbf{{{x}}}$"
-
-
-def centered_bins(x, dx=1.0):
-    if x is None or not x.size:
-        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
-    vm = np.abs(x).max()
-    bin_edges_right = np.arange(dx / 2, vm + dx * 1.5, dx)
-    bin_edges = np.concatenate([-bin_edges_right[::-1], bin_edges_right])
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    assert bin_centers.size == bin_edges.size - 1
-    assert bin_centers.size % 2
-    assert vm < min(-bin_centers.min(), bin_centers.max())
-    return bin_edges, bin_centers
-
-
-def bimod_stats(h):
-    assert h.ndim == 1
-    assert h.size % 2
-    cix = h.shape[0] // 2
-    h0 = h[cix]
-    da = h[:cix].max()
-    db = h[cix + 1 :].max()
-    dd = min(da, db)
-    if np.isclose(dd, 0.0) and np.isclose(h0, 0.0):
-        a = 0.0
-    elif np.isclose(dd, 0.0):
-        a = np.inf
-    else:
-        a = h0 / dd
-    b = h0 / max(da, db)
-    return a, b
 
 
 def fstr(x):

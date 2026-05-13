@@ -1,33 +1,36 @@
 """High-level spike sorting toolbox functions."""
-import gc
 import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Sequence
 
-import torch
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording, Motion
+from torch import Tensor
 
-from .clustering import SimpleMatrixFeatures, get_clusterer, get_clustering_features
+from .clustering import SimpleMatrixFeatures, StableWaveformFeatures, get_clusterer
 from .config import DARTsortUserConfig, DeveloperConfig
 from .peel import (
     GrabAndFeaturize,
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    ThresholdAndFeaturize,
+    Threshold,
 )
 from .templates import TemplateData, estimate_template_library
+from .transform import WaveformPipeline
 from .util.data_util import DARTsortSorting, check_recording
 from .util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
     ComputationConfig,
     DARTsortInternalConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
     MatchingConfig,
     RefinementConfig,
     SubtractionConfig,
     ThresholdingConfig,
+    WaveformConfig,
     default_clustering_cfg,
     default_clustering_features_cfg,
     default_dartsort_cfg,
@@ -40,8 +43,10 @@ from .util.internal_config import (
     default_waveform_cfg,
     to_internal_config,
 )
+from .util.job_util import ensure_computation_config
 from .util.logging_util import get_logger
 from .util.main_util import (
+    _matching_step_cfgs,
     ds_all_to_workdir,
     ds_dump_config,
     ds_fast_forward,
@@ -50,12 +55,15 @@ from .util.main_util import (
     ds_save_features,
     ds_save_intermediate_labels,
     ds_save_motion,
+    ds_save_timing,
+    motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
-from .util.py_util import dartcopytree, resolve_path
+from .util.py_util import dartcopytree, resolve_path, timer
+from .util.torch_util import cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
 
@@ -117,7 +125,7 @@ def dartsort(
     ds_handle_link_from(cfg, output_dir)
 
     # preprocess
-    recording = preprocess(recording, cfg.preprocessing)
+    recording = preprocess(recording, cfg.preprocessing, cfg.preprocessing_dtype)
 
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
@@ -200,7 +208,10 @@ def _dartsort_impl(
     overwrite=False,
 ):
     """Internal helper function which implements dartsort's main logic."""
-    ret = {}
+    ret: dict[str, Any] = {"timing": {}}
+
+    total_timer = timer("total", ret["timing"])
+    total_timer.start()
 
     # are we storing files in the work dir or the output dir?
     store_dir = output_dir if work_dir is None else work_dir
@@ -225,21 +236,28 @@ def _dartsort_impl(
             output_directory=store_dir,
             recording=recording,
             sorting=sorting,
+            detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
             motion_cfg=cfg.motion_estimation_cfg,
             computation_cfg=cfg.computation_cfg,
+            sampling_cfg=cfg.peeler_sampling_cfg,
+            waveform_cfg=cfg.waveform_cfg,
             overwrite=overwrite,
         )
     ret["motion"] = motion
 
+    is_subsampling = cfg.subsampling_spikes is not None
+    is_subsampling = is_subsampling and cfg.subsampling_presence != 1.0
+
     if next_step == 0:
         # first step: initial detection and motion estimation
-        sorting = initial_detection(
-            output_dir=store_dir,
-            recording=recording,
-            cfg=cfg,
-            overwrite=overwrite,
-            motion=motion,
-        )
+        with timer("initial_detection", ret["timing"]):
+            sorting = initial_detection(
+                output_dir=store_dir,
+                recording=recording,
+                cfg=cfg,
+                overwrite=overwrite,
+                motion=motion,
+            )
         assert sorting is not None
         logger.info(f"Initial detection: {sorting}")
         is_final = cfg.detect_only or cfg.dredge_only or not cfg.matching_iterations
@@ -249,18 +267,22 @@ def _dartsort_impl(
             ret["sorting"] = sorting
             return ret
 
-        if motion is None:
-            logger.dartsortdebug("-- Estimate motion")
-            motion = get_motion_info(
-                output_directory=store_dir,
-                recording=recording,
-                sorting=sorting,
-                motion_cfg=cfg.motion_estimation_cfg,
-                computation_cfg=cfg.computation_cfg,
-                overwrite=overwrite,
-            )
-        ret["motion"] = motion
-        ds_save_motion(motion, output_dir, work_dir, overwrite)
+        with timer("motion", ret["timing"]):
+            if motion is None:
+                logger.dartsortdebug("-- Estimate motion")
+                motion = get_motion_info(
+                    output_directory=store_dir,
+                    recording=recording,
+                    sorting=sorting,
+                    detect_new_peaks=motion_needs_peaks(cfg, recording, sorting),
+                    motion_cfg=cfg.motion_estimation_cfg,
+                    computation_cfg=cfg.computation_cfg,
+                    sampling_cfg=cfg.peeler_sampling_cfg,
+                    waveform_cfg=cfg.waveform_cfg,
+                    overwrite=overwrite,
+                )
+            ret["motion"] = motion
+            ds_save_motion(motion, output_dir, work_dir, overwrite)
 
         if cfg.dredge_only:
             ret["sorting"] = sorting
@@ -272,16 +294,17 @@ def _dartsort_impl(
             cfg.initial_refinement_cfg,
             cfg.post_refinement_cfg,
         ]
-        sorting = cluster(
-            recording,
-            sorting,
-            motion=motion,
-            refinement_cfgs=r_cfgs,
-            clustering_cfg=cfg.clustering_cfg,
-            clustering_features_cfg=cfg.clustering_features_cfg,
-            _save_cfg=cfg,
-            _save_dir=output_dir,
-        )
+        with timer("cluster0", ret["timing"]):
+            sorting = cluster(
+                recording,
+                sorting,
+                motion=motion,
+                refinement_cfgs=r_cfgs,
+                clustering_cfg=cfg.clustering_cfg,
+                clustering_features_cfg=cfg.clustering_features_cfg,
+                _save_cfg=cfg,
+                _save_dir=output_dir,
+            )
         logger.info(f"First clustering: {sorting}")
         ds_save_intermediate_labels(
             step_name="refined0",
@@ -308,65 +331,54 @@ def _dartsort_impl(
         else:
             previous_detection_cfg = cfg.matching_cfg
 
-        # TODO
-        # prop = 1.0 if is_final else cfg.intermediate_matching_subsampling
+        _nspk = None if is_final else cfg.subsampling_spikes
+        _pres = 1.0 if is_final else cfg.subsampling_presence
+        step_clus_cfg, step_clfeat_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = (
+            _matching_step_cfgs(is_final, is_subsampling, cfg)
+        )
 
         logger.dartsortdebug(f"-- Matching {step}")
-        sorting = match(
-            output_dir=store_dir,
-            recording=recording,
-            sorting=sorting,
-            motion=motion,
-            template_cfg=cfg.template_cfg,
-            waveform_cfg=cfg.waveform_cfg,
-            featurization_cfg=cfg.featurization_cfg,
-            matching_cfg=cfg.matching_cfg,
-            overwrite=overwrite,
-            computation_cfg=cfg.computation_cfg,
-            hdf5_filename=f"matching{step}.h5",
-            model_subdir=f"matching{step}_models",
-            previous_detection_cfg=previous_detection_cfg,
-            prev_step_name=f"refined{step - 1}",
-            save_cfg=cfg,
-        )
+        with timer(f"matching{step}", ret["timing"]):
+            sorting = match(
+                output_dir=store_dir,
+                recording=recording,
+                sorting=sorting,
+                motion=motion,
+                sampling_cfg=samp_cfg,
+                template_cfg=cfg.template_cfg,
+                waveform_cfg=cfg.waveform_cfg,
+                featurization_cfg=step_feat_cfg,
+                matching_cfg=cfg.matching_cfg,
+                overwrite=overwrite,
+                computation_cfg=cfg.computation_cfg,
+                stop_after_n_spikes=_nspk,
+                ensure_coverage=_pres,
+                hdf5_filename=f"matching{step}.h5",
+                model_subdir=f"matching{step}_models",
+                previous_detection_cfg=previous_detection_cfg,
+                prev_step_name=f"refined{step - 1}",
+                save_cfg=cfg,
+            )
         logger.info(f"Matching step {step}: {sorting}")
         ds_save_features(cfg, sorting, output_dir, work_dir, is_final)
 
         if is_final and not cfg.final_refinement:
             break
 
-        if cfg.recluster_after_first_matching:
-            step_clustering_cfg = cfg.clustering_cfg
-            step_features_cfg = cfg.clustering_features_cfg
-        else:
-            step_clustering_cfg = step_features_cfg = None
-
-        if is_final and cfg.agglomerate_cfg is not None:
-            r_cfgs = [
-                cfg.pre_refinement_cfg,
-                cfg.refinement_cfg,
-                cfg.agglomerate_cfg,
-                cfg.post_refinement_cfg,
-            ]
-        else:
-            r_cfgs = [
-                cfg.pre_refinement_cfg,
-                cfg.refinement_cfg,
-                cfg.post_refinement_cfg,
-            ]
-
-        sorting = cluster(
-            recording=recording,
-            sorting=sorting,
-            motion=motion,
-            refinement_cfgs=r_cfgs,
-            clustering_cfg=step_clustering_cfg,
-            clustering_features_cfg=step_features_cfg,
-            _save_cfg=cfg,
-            _save_dir=output_dir,
-            _save_initial_name=f"recluster{step}",
-            _save_refined_name_fmt=f"refined{step}{{stepname}}",
-        )
+        with timer(f"cluster{step}", ret["timing"]):
+            if step_clus_cfg or step_ref_cfgs is not None and len(step_ref_cfgs):
+                sorting = cluster(
+                    recording=recording,
+                    sorting=sorting,
+                    motion=motion,
+                    refinement_cfgs=step_ref_cfgs,
+                    clustering_cfg=step_clus_cfg,
+                    clustering_features_cfg=step_clfeat_cfg,
+                    _save_cfg=cfg,
+                    _save_dir=output_dir,
+                    _save_initial_name=f"recluster{step}",
+                    _save_refined_name_fmt=f"refined{step}{{stepname}}",
+                )
         ds_save_intermediate_labels(
             step_name=f"refined{step}",
             step_sorting=sorting,
@@ -385,6 +397,10 @@ def _dartsort_impl(
 
     sorting.save(output_dir / "dartsort_sorting.npz")
     ret["sorting"] = sorting
+
+    total_timer.stop()
+    logger.dartsortdebug(f"Timing: {ret['timing']}")
+    ds_save_timing(ret["timing"], output_dir)
 
     return ret
 
@@ -407,6 +423,8 @@ def initial_detection(
             subtraction_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
         )
@@ -419,6 +437,8 @@ def initial_detection(
             thresholding_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -434,6 +454,8 @@ def initial_detection(
             matching_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             motion=motion,
+            stop_after_n_spikes=cfg.subsampling_spikes,
+            ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
             computation_cfg=cfg.computation_cfg,
@@ -445,19 +467,23 @@ def initial_detection(
 def subtract(
     output_dir: str | Path,
     recording: BaseRecording,
-    waveform_cfg=default_waveform_cfg,
-    featurization_cfg=default_featurization_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     subtraction_cfg=default_subtraction_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     computation_cfg: ComputationConfig | None = None,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
+    shuffle: bool = False,
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
 ) -> DARTsortSorting | None:
     output_dir = resolve_path(output_dir)
+    computation_cfg = ensure_computation_config(computation_cfg)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
         recording=recording,
@@ -478,7 +504,14 @@ def subtract(
         residual_filename=residual_filename,
         show_progress=show_progress,
         fit_only=subtraction_cfg.fit_only,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
+        shuffle=shuffle,
     )
+
+    del subtraction_peeler
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post subtract ({hdf5_filename}):")
+
     return detections
 
 
@@ -487,28 +520,32 @@ def match(
     recording: BaseRecording,
     sorting: DARTsortSorting | None = None,
     motion: MotionInfo | None = None,
-    waveform_cfg=default_waveform_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
     template_cfg=default_template_cfg,
-    featurization_cfg=default_featurization_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
     matching_cfg=default_matching_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     previous_detection_cfg: Any | None = None,
     prev_step_name: str | None = None,
     save_cfg: DARTsortInternalConfig | None = None,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     residual_filename: str | None = None,
+    skip_resid_snips=False,
     show_progress=True,
     hdf5_filename="matching0.h5",
     model_subdir="matching0_models",
     template_data: TemplateData | None = None,
-    template_npz_filename="template_data.npz",
+    template_npz="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
     whitener: SpatialWhitener | None = None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
     model_dir = output_dir / model_subdir
+    computation_cfg = ensure_computation_config(computation_cfg)
 
     if template_data is None and not matching_cfg.precomputed_templates_npz:
         assert sorting is not None
@@ -534,7 +571,7 @@ def match(
             featurization_cfg=featurization_cfg,
             tsvd=template_denoising_tsvd,
             whitener=whitener,
-            template_npz_path=model_dir / template_npz_filename,
+            template_npz_path=model_dir / template_npz,
         )
         if prev_step_name is not None:
             assert sorting is not None
@@ -544,6 +581,9 @@ def match(
                 output_dir=output_dir,
                 cfg=save_cfg,
             )
+        cleanup_and_log_gpu_usage(
+            computation_cfg, f"Post templates ({model_subdir}/{template_npz}):"
+        )
 
     matching_peeler = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
@@ -562,11 +602,18 @@ def match(
         model_subdir=model_subdir,
         featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=overwrite,
         residual_filename=residual_filename,
+        skip_resid_snips=skip_resid_snips,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
+
+    del matching_peeler
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post match ({hdf5_filename}):")
+
     return sorting
 
 
@@ -574,9 +621,9 @@ def grab(
     output_dir: str | Path,
     recording: BaseRecording,
     sorting: DARTsortSorting,
-    waveform_cfg=default_waveform_cfg,
-    featurization_cfg=default_featurization_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
     chunk_starts_samples=None,
     overwrite=False,
     show_progress=True,
@@ -609,11 +656,15 @@ def grab(
 def threshold(
     output_dir: str | Path,
     recording: BaseRecording,
-    waveform_cfg=default_waveform_cfg,
-    thresholding_cfg=default_thresholding_cfg,
-    featurization_cfg=default_featurization_cfg,
-    sampling_cfg=default_peeling_fit_sampling_cfg,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
+    thresholding_cfg: ThresholdingConfig = default_thresholding_cfg,
+    featurization_cfg: FeaturizationConfig = default_featurization_cfg,
+    featurization_pipeline: WaveformPipeline | None = None,
+    sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+    extract_channel_index: Tensor | None = None,
     chunk_starts_samples=None,
+    stop_after_n_spikes: int | None = None,
+    ensure_coverage: float | None = None,
     overwrite=False,
     show_progress=True,
     hdf5_filename="threshold.h5",
@@ -621,11 +672,14 @@ def threshold(
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
     output_dir = resolve_path(output_dir)
-    thresholder = ThresholdAndFeaturize.from_config(
+    computation_cfg = ensure_computation_config(computation_cfg)
+    thresholder = Threshold.from_config(
         recording=recording,
         waveform_cfg=waveform_cfg,
         thresholding_cfg=thresholding_cfg,
         featurization_cfg=featurization_cfg,
+        featurization_pipeline=featurization_pipeline,
+        extract_channel_index=extract_channel_index,
         sampling_cfg=sampling_cfg,
     )
     sorting = run_peeler(
@@ -635,10 +689,16 @@ def threshold(
         model_subdir=model_subdir,
         featurization_cfg=featurization_cfg,
         chunk_starts_samples=chunk_starts_samples,
+        stop_after_n_spikes=stop_after_n_spikes,
+        ensure_coverage=ensure_coverage,
         overwrite=overwrite,
         show_progress=show_progress,
         computation_cfg=computation_cfg,
     )
+
+    del thresholder
+    cleanup_and_log_gpu_usage(computation_cfg, f"Post threshold ({hdf5_filename}):")
+
     return sorting
 
 
@@ -650,7 +710,7 @@ def cluster(
     clustering_features_cfg: (
         ClusteringFeaturesConfig | None
     ) = default_clustering_features_cfg,
-    refinement_cfgs: list[RefinementConfig | None] | None = None,
+    refinement_cfgs: Sequence[RefinementConfig | None] | None = None,
     computation_cfg: ComputationConfig | None = None,
     features: SimpleMatrixFeatures | None = None,
     *,
@@ -659,12 +719,14 @@ def cluster(
     _save_refined_name_fmt="refined0{stepname}",
     _save_dir=None,
 ):
+    computation_cfg = ensure_computation_config(computation_cfg)
     if features is None:
-        features = get_clustering_features(
-            recording,
-            sorting,
+        assert clustering_features_cfg is not None
+        features = SimpleMatrixFeatures.from_config(
+            sorting=sorting,
             motion=motion,
             clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
         )
     assert features is not None
     clusterer = get_clusterer(
@@ -676,12 +738,26 @@ def cluster(
         initial_name=_save_initial_name,
         refine_labels_fmt=_save_refined_name_fmt,
     )
+    if clusterer.needs_stable_features():
+        assert clustering_features_cfg is not None
+        stable_features = StableWaveformFeatures.from_config(
+            sorting=sorting,
+            motion=motion,
+            clustering_features_cfg=clustering_features_cfg,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        stable_features = None
+
     result = clusterer.cluster(
-        recording=recording, sorting=sorting, features=features, motion=motion
+        recording=recording,
+        sorting=sorting,
+        features=features,
+        stable_features=stable_features,
+        motion=motion,
     )
 
     del features, clusterer
-    gc.collect()
-    torch.cuda.empty_cache()
+    cleanup_and_log_gpu_usage(computation_cfg, "Post cluster:")
 
     return result

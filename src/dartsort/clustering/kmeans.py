@@ -1,11 +1,10 @@
 import numpy as np
 import torch
-from torch import Tensor
 import torch.nn.functional as F
-from tqdm.auto import trange
+from torch import Tensor
 
 try:
-    import cupy  # type: ignore[reportMissingImports]
+    import cupy  # type: ignore # ty: ignore[x]
 
     del cupy
 
@@ -14,7 +13,7 @@ except ImportError:
     HAVE_CUPY = False
 
 
-from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..util.logging_util import DARTSORTDEBUG, get_logger, progrange
 from ..util.sparse_util import (
     coo_to_cupy,
     coo_to_scipy,
@@ -133,7 +132,7 @@ def kmeanspp(
                 assignments.masked_fill_(closer, j)
             torch.minimum(dists, newdists, out=dists)
         else:
-            j += 1  # type: ignore
+            j += 1
 
     centroid_ixs = centroid_ixs[:j]
     if not skip_assignment:
@@ -179,7 +178,7 @@ def truncated_kmeans(
     sigmasq = torch.tensor(torch.inf)
     nearest_distsq = centroid_ixs = labels = None
     if show_progress:
-        it = trange(n_initializations, desc="kmeans++")
+        it = progrange(n_initializations, desc="kmeans++")
     else:
         it = range(n_initializations)
     for _ in it:
@@ -205,7 +204,7 @@ def truncated_kmeans(
             f"truncated_kmeans: Max dist {nearest_distsq.max().sqrt().item()} for "
             f"{len(centroid_ixs)} centroids. phi={sigmasq.sqrt().item()}."
         )
-    del nearest_distsq, _d  # type: ignore
+    del nearest_distsq, _d
 
     # initialize parameters
     n_components = len(centroid_ixs)
@@ -229,7 +228,7 @@ def truncated_kmeans(
         log_likelihoods = None
 
     if show_progress:
-        it = trange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
+        it = progrange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
     else:
         it = range(n_iter)
 
@@ -440,7 +439,7 @@ def kmeans(
     drop_prop = X.new_full((), drop_prop)
     if weights is not None:
         weights = weights.to(device=X.device)
-    with torch.jit.optimized_execution(True):  # type: ignore
+    with torch.jit.optimized_execution(True):
         for j in range(n_kmeans_tries):
             aa, ee, cc, dists = kmeans_inner(
                 X,
@@ -469,18 +468,10 @@ def kmeans(
     )
 
 
-def subylogneglog_(x, z):
-    return x.sub_(z.log_().neg_().log_())
-
-
-subylogneglog_ = torch.func.vmap(subylogneglog_, chunk_size=1)
-
-
 @torch.jit.script
 def _one_gumbel_nolog(p: Tensor, gen: torch.Generator, buf: Tensor):
     z = buf.uniform_(generator=gen).log_()
     return torch.divide(p, z, out=z).argmin(dim=0)
-    # return p.log_().sub_(z.log_().neg_().log_()).argmax()
 
 
 @torch.jit.script

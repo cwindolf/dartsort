@@ -8,21 +8,27 @@ Relies on the DARTsortAnalysis object of utils/analysis.py to do most of
 the data work so that this file can focus on plotting (sort of MVC).
 """
 
-from dataclasses import replace
 from pathlib import Path
-
-from tqdm.auto import tqdm
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
+from KDEpy import FFTKDE
 from matplotlib.legend_handler import HandlerTuple
+from tqdm.auto import tqdm
 
-from ..util.internal_config import raw_template_cfg
-from ..util.job_util import get_global_computation_config
 from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
-from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool, cloudpickle
+from ..util.job_util import get_global_computation_config
+from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, get_pool
 from . import layout
-from .analysis_plots import isi_hist, correlogram, plot_correlogram, bar
+from .analysis_plots import (
+    bar,
+    bimod_stats,
+    centered_bins,
+    correlogram,
+    isi_hist,
+    plot_correlogram,
+)
 from .colors import glasbey1024
 from .waveforms import geomplot, geomplot_templates
 
@@ -55,7 +61,7 @@ class UnitTextInfo(UnitPlot):
         if h5_path:
             msg += f"feature source: {h5_path.name}\n"
 
-        nspikes = (sorting_analysis.sorting.labels == unit_id).sum()
+        nspikes = cast(np.ndarray, sorting_analysis.sorting.labels == unit_id).sum()
         msg += f"n spikes: {nspikes}\n"
 
         assert sorting_analysis.template_data is not None
@@ -145,7 +151,7 @@ class XZScatter(UnitPlot):
         if axis is None:
             axis = panel.subplots()
 
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         assert sorting_analysis.x is not None
         assert sorting_analysis.amplitudes is not None
         x = sorting_analysis.x[in_unit]
@@ -159,7 +165,7 @@ class XZScatter(UnitPlot):
         pad = self.probe_margin_um
         valid = x == np.clip(x, geomx.min() - pad, geomx.max() + pad)
         valid &= z == np.clip(z, geomz.min() - pad, geomz.max() + pad)
-        amps = sorting_analysis.amplitudes[in_unit]
+        amps = sorting_analysis.amplitudes[in_unit][valid]
         c = dict(c=np.minimum(amps, self.amplitude_color_cutoff))
         s = axis.scatter(
             x[valid],
@@ -243,7 +249,7 @@ class TimeFeatScatter(UnitPlot):
         axis = panel.subplots()
         assert sorting_analysis.times_seconds is not None
         assert sorting_analysis.amplitudes is not None
-        in_unit = sorting_analysis.in_unit(unit_id)
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None
@@ -382,7 +388,7 @@ class WaveformPlot(UnitPlot):
                 max_abs_amp=max_abs_amp,
                 trough_offset=trough_offset_samples,
                 lw=1,
-                **ckw,  # type: ignore
+                **ckw,
             )
             handles["waveforms"] = ls
 
@@ -594,7 +600,7 @@ class NeighborQDAMatrices(UnitPlot):
         for ax, (sc, ol), title in zip(
             axes, [(score, iou), (min_ratio, coverage)], ["qda/iou", "ratio/coverage"]
         ):
-            im = ax.imshow(
+            ax.imshow(
                 sc,
                 vmin=0,
                 cmap="plasma",
@@ -705,41 +711,53 @@ class NeighborCCGPlot(UnitPlot):
 
 class NeighborQDAPlot(UnitPlot):
     kind = "neighbors"
-    width = 3
-    height = 2
 
-    def __init__(self, n_neighbors=6, log=True):
+    def __init__(self, count=5, log=False, ncols=1, kind="kde", kde_bin=1.0):
         super().__init__()
-        self.n_neighbors = n_neighbors
+        self.count = count
         self.log = log
+        self.ncols = ncols
+        self.width = 1.5 * ncols
+        self.height = 1.5 * count
+        self.kind = kind
+        self.kde_bin = kde_bin
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
-        (
-            neighbor_ixs,
-            neighbor_ids,
-            neighbor_dists,
-            neighbor_coarse_templates,
-        ) = sorting_analysis.nearby_coarse_templates(
-            unit_id, n_neighbors=self.n_neighbors + 1
+        neighbor_ixs, neighbor_ids, _, _ = sorting_analysis.nearby_coarse_templates(
+            unit_id
         )
-        assert sorting_analysis.sorting.labels is not None
-        # assert neighbor_ids[0] == unit_id
+        if not np.equal(neighbor_ids, unit_id).any():
+            panel.subplots().axis("off")
+            return
+        assert neighbor_ids[0] == unit_id
         neighbor_ids = neighbor_ids[1:]
+        neighbor_ixs = neighbor_ixs[1:]
+        if not neighbor_ids.size:
+            panel.subplots().axis("off")
+            return
         colors = np.array(glasbey1024)[neighbor_ids % len(glasbey1024)]
 
+        candidates = sorting_analysis.sorting.gmm_candidates
+        log_liks = sorting_analysis.sorting.gmm_log_liks
+
         axes = panel.subplots(
-            nrows=2,
-            sharey="row",
-            sharex=False,
             squeeze=False,
-            ncols=len(neighbor_ids) // 2,
+            nrows=int(np.ceil(len(neighbor_ixs) / self.ncols)),
+            ncols=self.ncols,
+            gridspec_kw=dict(hspace=0.0, wspace=0.0),
         )
-        for ax, nid, color in zip(axes.flat, neighbor_ids, colors):
-            in_pair = np.flatnonzero(
-                np.isin(sorting_analysis.sorting.labels, [unit_id, nid])
-            )
-            cand = sorting_analysis.sorting.candidates[in_pair]  # type: ignore
-            ll = sorting_analysis.sorting.log_liks[in_pair]  # type: ignore
+        in_unit_id = sorting_analysis.in_unit(unit_id)
+        for ax, nix, nid, color in zip(axes.flat, neighbor_ixs, neighbor_ids, colors):
+            in_nid = sorting_analysis.in_unit(nid)
+            na = in_unit_id.size
+            nb = in_nid.size
+            if na + nb < 20:
+                ax.set_title(f"{nid}: {na=} {nb=}", fontsize="small")
+                continue
+
+            in_pair = np.concatenate([in_unit_id, in_nid])
+            cand = candidates[in_pair]
+            ll = log_liks[in_pair]
 
             my_mask = cand == unit_id
             nid_mask = cand == nid
@@ -747,30 +765,79 @@ class NeighborQDAPlot(UnitPlot):
             overlap = np.logical_and(nid_mask.any(1), my_mask.any(1))
             count = overlap.sum()
             iou = count / in_pair.shape[0]
-            ax.set_title(f"{nid}, SAiou: {iou.item():.2f}", fontsize="small")
+            cov = min(overlap[:na].sum() / na, overlap[na:].sum() / nb)
+            iout = f"{nid}: iou=" + f"{iou:.2f}".lstrip("0")
+            covt = f"{nid}: cov=" + f"{cov:.2f}".lstrip("0")
             if not count:
+                ax.set_title(f"{nid}: {iout}\n{covt}", fontsize="small")
                 continue
 
             _, my_ix = np.nonzero(my_mask[overlap])
             my_ll = np.take_along_axis(ll[overlap], my_ix[:, None], axis=1)[:, 0]
-
             _, their_ix = np.nonzero(nid_mask[overlap])
             their_ll = np.take_along_axis(ll[overlap], their_ix[:, None], axis=1)[:, 0]
+            dll = my_ll - their_ll
 
-            ax.hist(
-                my_ll - their_ll,
-                bins=32,
-                color=color,
-                histtype="step",
-                log=self.log,
-                density=True,
-            )
             ax.axvline(0, color="k", lw=0.8)
             ax.grid()
 
-        axes[0, 0].set_ylabel("density")
-        axes[1, 0].set_ylabel("density")
-        axes[1, axes.shape[1] // 2].set_xlabel("my ll - their ll")
+            if self.kind == "hist":
+                ax.hist(
+                    dll,
+                    bins=32,
+                    color=color,
+                    histtype="step",
+                    log=self.log,
+                    density=True,
+                )
+            elif self.kind == "kde":
+                bines, bincs = centered_bins(dll)
+                if not bincs.size:
+                    continue
+                hist, _ = np.histogram(dll, bins=bines)
+                hist = hist.astype(np.float64) / hist.sum()
+                ax.stairs(hist, edges=bines, color="k", zorder=10)
+                hsa, hsb = bimod_stats(hist)
+                hstat = f"a:{fstr(hsa)}, b:{fstr(hsb)}"
+                try:
+                    kdest = FFTKDE(bw="ISJ").fit(dll)
+                except ValueError as e:
+                    ax.set_title(f"{iout}\n{covt}\n{hstat}", fontsize="small")
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"KDE fail, n={len(dll)}\n{str(e)[:10]}.",
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="center",
+                    )
+                    continue
+                kde = cast(np.ndarray, kdest.evaluate(bincs))
+                kde /= kde.sum()
+                ksa, ksb = bimod_stats(kde)
+                kstat = f"a:{fstr(ksa)}, b:{fstr(ksb)}"
+                if not np.isfinite(kde).all():
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"KDE nan\nn={len(dll)}",
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="center",
+                    )
+                else:
+                    ax.step(y=kde, x=bincs, color=color, zorder=11)
+                    if self.log:
+                        ax.semilogy()
+
+            ax.set_title(f"{iout}\n{covt}\n{hstat}\n{kstat}", fontsize="small")
+
+        for ax in axes.flat[len(neighbor_ids) :]:
+            ax.axis("off")
+        for ax in axes[:, 0]:
+            ax.set_ylabel("density")
+        for ax in axes[-1]:
+            ax.set_xlabel("my ll - their ll")
 
 
 # -- main routines
@@ -782,18 +849,18 @@ def default_plots(sorting_analysis=None):
         ACG(),
         ISIHistogram(),
         XZScatter(),
-        PCAScatter(),
-        TimeZScatter(),
-        TimeRegZScatter(),
         TimeAmpScatter(),
         RawWaveformPlot(),
-        TPCAWaveformPlot(),
         NearbyCoarseTemplatesPlot(),
         CoarseTemplateDistancePlot(),
         NeighborCCGPlot(),
     ]
+    if sorting_analysis is not None and sorting_analysis.has_localizations():
+        p.extend([TimeZScatter(), TimeRegZScatter()])
+    if sorting_analysis is not None and sorting_analysis.has_pca():
+        p.extend([PCAScatter(), TPCAWaveformPlot()])
     if sorting_analysis is not None and sorting_analysis.qda is not None:
-        p.append(NeighborQDAMatrices())
+        p.extend([NeighborQDAMatrices(), NeighborQDAPlot()])
     return p
 
 
@@ -842,7 +909,7 @@ def make_unit_summary(
         figsize=figsize,
         figure=figure,
         unit_id=unit_id,
-        **{gizmo_name: sorting_analysis},  # type: ignore
+        **{gizmo_name: sorting_analysis},
     )
 
     return figure
@@ -909,10 +976,10 @@ def make_all_summaries(
     )
     if n_jobs is None:
         n_jobs = get_global_computation_config().n_jobs_cpu
+    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)
     if n_jobs:
-        initargs = (cloudpickle.dumps(initargs),)
-    n_jobs, Executor, context = get_pool(n_jobs, cls=CloudpicklePoolExecutor)  # type: ignore
-    with Executor(  # type: ignore
+        initargs = (cloudpickle.dumps(initargs),)  # type: ignore
+    with Executor(
         max_workers=n_jobs,
         mp_context=context,
         initializer=_summary_init,
@@ -926,7 +993,7 @@ def make_all_summaries(
                 smoothing=0,
                 total=len(unit_ids),
             )
-        for res in results:
+        for _ in results:
             pass
 
 
@@ -946,7 +1013,7 @@ def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
     if not namebyamp:
         return f"unit{unit_id:04d}.{ext}"
     if sorting_analysis is None:
-        raise ValueError(f"Need a sorting_analysis if namebyamp.")
+        raise ValueError("Need a sorting_analysis if namebyamp.")
     amp = float(sorting_analysis.unit_amplitudes(unit_id).item())
     amp = f"{amp:07.2f}"
     return f"amp{amp}_unit{unit_id:04d}.{ext}"
@@ -1005,7 +1072,7 @@ _summary_job_context = None
 def _summary_init(*args):
     global _summary_job_context
     if len(args) == 1:
-        args = cloudpickle.loads(args[0])
+        args = cloudpickle.loads(args[0])  # type: ignore
     _summary_job_context = SummaryJobContext(*args)
 
 
@@ -1052,3 +1119,7 @@ def _summary_job(unit_id: int):
     fig.savefig(tmp_out, dpi=_summary_job_context.dpi)
     tmp_out.rename(final_out)
     plt.close(fig)
+
+
+def fstr(x):
+    return f"{x:0.2f}".lstrip("0")

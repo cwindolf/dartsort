@@ -31,6 +31,7 @@ def scatter_spike_features(
     probe_margin_um=100,
     t_min=-np.inf,
     t_max=np.inf,
+    to_show=None,
     s=1,
     linewidth=0,
     limits="probe_margin",
@@ -103,12 +104,17 @@ def scatter_spike_features(
             if geom is None:
                 geom = h5["geom"][:]
 
-    to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
+    if to_show is None:
+        assert times_s is not None
+        to_show = np.flatnonzero(np.clip(times_s, t_min, t_max) == times_s)
+    assert to_show is not None
     if x is not None:
         to_show = to_show[np.isfinite(x[to_show])]
     if depths_um is not None:
         to_show = to_show[np.isfinite(depths_um[to_show])]
     if geom is not None:
+        assert depths_um is not None
+        assert x is not None
         to_show = to_show[
             (depths_um[to_show] > geom[:, 1].min() - probe_margin_um)
             & (depths_um[to_show] < geom[:, 1].max() + probe_margin_um)
@@ -117,12 +123,14 @@ def scatter_spike_features(
         ]
     if isinstance(limits, (list, tuple, np.ndarray)):
         assert len(limits) == 2
+        assert depths_um is not None
         to_show = to_show[depths_um[to_show] == depths_um[to_show].clip(*limits)]
     if len(to_show) > max_spikes_plot:
         np.random.default_rng(random_seed).shuffle(to_show)
         to_show = to_show[:max_spikes_plot]
         to_show.sort()
     if remove_outliers:
+        assert amplitudes is not None
         a = 50 * np.log(amplitudes + 5)
         inliers, kdtree = kdtree_inliers(np.c_[depths_um, x, a][to_show])
         to_show = to_show[inliers]
@@ -263,7 +271,7 @@ def scatter_time_vs_depth(
     ax=None,
     max_spikes_plot=500_000,
     amplitude_color_cutoff=15,
-    amplitude_cmap=plt.cm.viridis,
+    amplitude_cmap="viridis",
     limits="probe_margin",
     random_seed=0,
     s=1,
@@ -294,6 +302,8 @@ def scatter_time_vs_depth(
                 depths_um = depths_um[:, 2]
         if amplitudes is None:
             amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
+        if labels is None and sorting.labels is not None:
+            labels = sorting.labels
         if hdf5_filename is None:
             hdf5_filename = sorting.parent_h5_path
 
@@ -455,7 +465,7 @@ def scatter_amplitudes_vs_depth(
         if depths_um is None:
             depths_um = _try_getattr(sorting, localizations_dataset_name, None)
             if depths_um is not None:
-                depths_um = x[:, 2]
+                depths_um = depths_um[:, 2]
         if amplitudes is None:
             amplitudes = _try_getattr(sorting, amplitudes_dataset_name, None)
         if hdf5_filename is None:
@@ -531,6 +541,7 @@ def scatter_feature_vs_depth(
     pad_to_max=False,
     annotate_labels=False,
     label_colors=glasbey1024,
+    c=None,
     **scatter_kw,
 ):
     assert feature.shape == depths_um.shape
@@ -568,6 +579,7 @@ def scatter_feature_vs_depth(
         to_show = rg.choice(to_show, size=to_show.size, replace=False)
 
     if registered:
+        assert motion is not None
         assert times_s is not None
         depths_um = depths_um.copy()
         depths_um[to_show] = motion.correct_s(times_s[to_show], depths_um[to_show])
@@ -580,13 +592,17 @@ def scatter_feature_vs_depth(
         if sorting.labels is not None and sorting.labels.max() > 0:
             labels = sorting.labels
 
-    if labels is None:
+    if c is None and labels is None:
+        assert amplitudes is not None
         c = np.clip(amplitudes[to_show], 0, amplitude_color_cutoff)
         amplitude_cmap = plt.get_cmap(amplitude_cmap)
         c = amplitude_cmap(c / amplitude_color_cutoff)
         order = slice(None)
         show_ellipses = False
-    else:
+    elif c is not None:
+        c = plt.get_cmap(amplitude_cmap)(c[to_show])
+    elif labels is not None:
+        assert amplitudes is not None
         order = np.concatenate(
             (
                 np.flatnonzero(labels[to_show] < 0),
@@ -598,11 +614,13 @@ def scatter_feature_vs_depth(
         if show_triaged:
             triaged = labels[to_show] < 0
             tc = np.clip(amplitudes[to_show[triaged]], 0, amplitude_color_cutoff)
-            tc = plt.cm.binary(tc / amplitude_color_cutoff)
+            tc = plt.cm.binary(tc / amplitude_color_cutoff)  # type: ignore
             c[triaged, :3] = tc[..., :3]
         else:
             c = c[labels[to_show] >= 0]
             to_show = to_show[labels[to_show] >= 0]
+    else:
+        assert False
 
     feature = feature[to_show]
     depths_um = depths_um[to_show]
@@ -639,16 +657,14 @@ def scatter_feature_vs_depth(
         )
 
     if limits == "probe_margin" and geom is not None:
-        ax.set_ylim(
-            [
-                geom[:, 1].min() - probe_margin_um,
-                geom[:, 1].max() + probe_margin_um,
-            ]
-        )
+        xlo = geom[:, 1].min() - probe_margin_um
+        xhi = geom[:, 1].max() + probe_margin_um
+        ax.set_ylim([xlo, xhi])  # type: ignore
     elif limits is not None and limits != "probe_margin":
         ax.set_ylim(limits)
 
     if annotate_labels:
+        assert labels is not None
         add_labels(ax, labels[to_show], feature, depths_um, rev=annotate_labels < 0)
 
     if show_ellipses:
@@ -716,7 +732,6 @@ def add_ellipses(
             vx, vy = cov[0, 0], cov[1, 1]
             if min(vx, vy) <= 0:
                 bad = True
-            rho = np.minimum(1.0, cov[0, 1] / np.sqrt(vx * vy))
             rhoss = cov[0, 1]
         if not bad:
             apc2 = (vx + vy) / 2

@@ -15,13 +15,13 @@ from spikeinterface.generation.drift_tools import (
     InjectDriftingTemplatesRecording,
     move_dense_templates,
 )
-from tqdm.auto import tqdm
 
 from ..config import DeveloperConfig
 from ..evaluate.analysis import DARTsortAnalysis
 from ..templates import TemplateData
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, unshifted_raw_template_cfg
+from ..util.logging_util import progbar
 from ..util.motion import MotionInfo
 from ..util.py_util import resolve_path
 from . import analysis, comparison, simkit
@@ -163,7 +163,7 @@ def closest_clustering(
     gt_pos /= rescale
     peel_pos /= rescale
     peelix2gtix = greedy_match(gt_pos, peel_pos, dx=1.0 / frames_per_ms)
-    labels = peelix2gtix.copy()  # type: ignore
+    labels = peelix2gtix.copy()
     labels[labels >= 0] = gt_st.labels[labels[labels >= 0]]
 
     return peel_st.ephemeral_replace(labels=labels, gt_match_ix=peelix2gtix)
@@ -208,7 +208,7 @@ def greedy_match(
 
     thresholds = np.arange(0.0 + 1e-5, max_val + dx + 2e-5, dx)
     if show_progress:
-        thresholds = tqdm(thresholds, desc="Greedy match")
+        thresholds = progbar(thresholds, desc="Greedy match")
 
     for j, thresh in enumerate(thresholds):
         test_unmatched = np.flatnonzero(assignments < 0)
@@ -219,7 +219,7 @@ def greedy_match(
         d, i = test_kdtree.query(
             gt_coords[gt_ix],
             k=1,
-            distance_upper_bound=min(thresh, max_val),  # type: ignore
+            distance_upper_bound=min(thresh, max_val),
             workers=workers,
             p=p,
         )
@@ -391,7 +391,8 @@ def _same(x):
 def load_dartsort_step_sortings(
     sorting_dir,
     load_simple_features=False,
-    load_feature_names=("times_seconds", "geom", "channel_index"),
+    load_feature_names=("times_seconds", "geom", "channel_index", "template_inds"),
+    motion_h5_name="motionthreshold.h5",
     detection_h5_names=("subtraction.h5", "threshold.h5", "matching0.h5"),
     detection_h5_path: Path | str | None = None,
     step_format="refined{step}",
@@ -405,6 +406,7 @@ def load_dartsort_step_sortings(
     use, although its not a guarantee... h5 locking... need to figure it out.
     """
     mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
+    sorting_dir = resolve_path(sorting_dir, strict=True)
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
             detection_h5_path = cast(Path, sorting_dir / dh5n)
@@ -432,21 +434,44 @@ def load_dartsort_step_sortings(
 
     # let's check that there is at least something to do...
     labels_npys = sorting_dir.glob("*_labels.npy")
-    relevant_files = [sorting_dir / "dartsort_sorting.npz", *labels_npys, *h5s[1:]]
-    if not any(f.exists() for f in relevant_files):
-        h5s = []
-
+    dartsort_sorting_npz = sorting_dir / "dartsort_sorting.npz"
+    no_npys = not any(f.exists() for f in labels_npys)
     if name_formatter is None:
         name_formatter = _same
 
+    motion_h5 = sorting_dir / motion_h5_name
+    if motion_h5.exists():
+        yield (
+            f"00_{motion_h5.stem}",
+            DARTsortSorting.from_peeling_hdf5(
+                motion_h5,
+                load_simple_features=load_simple_features,
+                load_feature_names=load_feature_names,
+                allow_missing=True,
+            ),
+        )
+
     for step, h5 in enumerate(h5s):
         if not h5.exists():
+            continue
+        if no_npys and not h5.stem.startswith("matching"):
             continue
         st0 = DARTsortSorting.from_peeling_hdf5(
             h5,
             load_simple_features=load_simple_features,
             load_feature_names=load_feature_names,
+            allow_missing=True,
         )
+        if no_npys and st0.labels is not None:
+            if hasattr(st0, "template_inds"):
+                yield(
+                    name_formatter(f"{h5.stem}_template"),
+                    st0.ephemeral_replace(labels=st0.template_inds)
+                )
+            yield name_formatter(h5.stem), st0
+            continue
+        elif no_npys:
+            continue
 
         # initial clust or later step res?
         if h5 == h5s[0]:
@@ -469,7 +494,18 @@ def load_dartsort_step_sortings(
                     st0.ephemeral_replace(labels=np.load(npy)),
                 )
         else:
-            yield (name_formatter(h5.stem), st0)
+            assert st0.labels is not None
+            match_reas = hasattr(st0, "template_inds") and not np.array_equal(
+                st0.template_inds, st0.labels
+            )
+            if match_reas:
+                yield (
+                    name_formatter(h5.stem),
+                    st0.ephemeral_replace(labels=st0.template_inds),
+                )
+                yield (name_formatter(f"{h5.stem}_assign"), st0)
+            else:
+                yield (name_formatter(h5.stem), st0)
 
         # reclustering, if applicable
         reclustr = recluster_format.format(step=step)
@@ -497,6 +533,9 @@ def load_dartsort_step_sortings(
                 yield (name_formatter(stem), DARTsortSorting.load(npx))
             else:
                 assert False
+
+    if no_npys and dartsort_sorting_npz.exists():
+        yield "dartsort", DARTsortSorting.load(dartsort_sorting_npz)
 
 
 def load_dartsort_step_unit_info_dataframes(

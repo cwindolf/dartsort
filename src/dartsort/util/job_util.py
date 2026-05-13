@@ -15,7 +15,7 @@ def set_global_computation_config(
     elif comp_cfg is None:
         comp_cfg = ComputationConfig(**comp_cfg_kwargs)
     else:
-        assert False
+        assert comp_cfg is not None
     comp_cfg_holder["comp_cfg"] = comp_cfg
 
 

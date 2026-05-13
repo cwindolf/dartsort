@@ -15,7 +15,7 @@ import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
 
-from ..clustering.agglomerate import template_distances, qda, QDAResult
+from ..clustering.agglomerate import QDAResult, qda, template_distances
 from ..templates import TemplateData
 from ..util import job_util, logging_util
 from ..util.data_util import (
@@ -97,8 +97,10 @@ class DARTsortAnalysis:
         ),
         clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
         computation_cfg: ComputationConfig | None = None,
+        allow_qda: bool = True,
         vis_radius: float = 50.0,
         vis_neighborhood_p: float = np.inf,
+        featurization_pipeline_pt=None,
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -112,8 +114,12 @@ class DARTsortAnalysis:
             # no-drift motion
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
-        if has_hdf5 and vis_radius and (tpca := get_tpca(sorting)) is not None:
-            sklearn_tpca = tpca.to_sklearn()  # type: ignore
+        if has_hdf5:
+            tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+        else:
+            tpca = None
+        if has_hdf5 and vis_radius and tpca is not None:
+            sklearn_tpca = tpca.to_sklearn()
             tpca_temporal_slice = sklearn_tpca.temporal_slice
         else:
             sklearn_tpca = None
@@ -125,6 +131,9 @@ class DARTsortAnalysis:
         elif has_hdf5 and model_dir is not None:
             template_npz = model_dir / "template_data.npz"
             can_reload = sorting.has_persistent_labels()
+            if can_reload and sorting._has_dataset("template_inds"):
+                assert sorting.labels is not None
+                can_reload = np.array_equal(sorting.labels, sorting.template_inds)
             if can_reload and template_npz.exists():
                 logger.info(f"Reloading templates from {template_npz}...")
                 template_data = TemplateData.from_npz(template_npz)
@@ -160,9 +169,13 @@ class DARTsortAnalysis:
             trough_offset_samples = spike_length_samples = 0
             coarse_template_data = merge_distances = merge_lags = merge_r2 = None
 
-        if template_data is not None and hasattr(sorting, "gmm_candidates"):
+        if (
+            allow_qda
+            and template_data is not None
+            and hasattr(sorting, "gmm_candidates")
+        ):
             assert sorting.labels is not None
-            c0 = sorting.gmm_candidates[:, 0]  # type: ignore
+            c0 = sorting.gmm_candidates[:, 0]
             lk = np.flatnonzero(sorting.labels >= 0)
             is_gmm = np.array_equal(c0[lk], sorting.labels[lk])
             if is_gmm:
@@ -275,9 +288,13 @@ class DARTsortAnalysis:
             spike_counts=spike_counts,
         )
 
-    def in_unit(self, unit_id):
+    def in_unit(self, unit_id, at_most: int | None = None):
         assert self.sorting.labels is not None
-        return np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        m = np.flatnonzero(np.isin(self.sorting.labels, unit_id))
+        if bool(at_most) and (at_most < m.shape[0]):
+            m = np.random.default_rng(0).choice(m, size=at_most, replace=False)
+            m.sort()
+        return m
 
     def in_template(self, template_index):
         template_indices = getattr(self.sorting, "template_inds", None)
@@ -309,6 +326,12 @@ class DARTsortAnalysis:
             return getattr(self, fname)[which]
         else:
             return self.sorting.slice_feature_by_name(fname, mask=which)
+
+    def has_localizations(self):
+        return self.x is not None
+
+    def has_pca(self):
+        return self.sorting._has_dataset(self.tpca_features_dset)
 
     # cluster-dependent feature loading methods
 
@@ -526,7 +549,7 @@ class DARTsortAnalysis:
             covered_chans = get_stable_channels(
                 motion=self.motion,
                 channels=self.sorting.channels[which],
-                channel_index=self.sorting.channel_index,  # type: ignore
+                channel_index=self.sorting.channel_index,
                 n_pitches_shift=n_pitches_shift,
             )[0]
         else:
@@ -616,7 +639,7 @@ class DARTsortAnalysis:
             inu = self.in_unit(uid)
             if not inu.size > 1:
                 continue
-            t_ms = self.sorting.times_seconds[inu] * 1000  # type: ignore
+            t_ms = self.sorting.times_seconds[inu] * 1000
             isi = np.diff(t_ms)
             viol_rates[j] = (np.abs(isi) < dt_ms).mean()
         return viol_rates

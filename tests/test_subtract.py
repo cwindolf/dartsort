@@ -1,21 +1,25 @@
 import dataclasses
 import tempfile
+from pathlib import Path
 from typing import cast
-import pytest
 
 import h5py
 import numpy as np
+import pytest
 import spikeinterface.core as sc
 import torch
-from dartsort.util.internal_config import (
-    FeaturizationConfig,
-    SubtractionConfig,
-    ComputationConfig,
-)
+from test_util import dense_layout
+
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
 from dartsort.util import waveform_util
-from test_util import dense_layout
+from dartsort.util.internal_config import (
+    ComputationConfig,
+    FeaturizationConfig,
+    FitSamplingConfig,
+    SubtractionConfig,
+    default_pretrained_path
+)
 
 fixedlenkeys = (
     "subtract_channel_index",
@@ -24,6 +28,7 @@ fixedlenkeys = (
     "geom",
     "residual",
     "residual_times_seconds",
+    "chunk_starts_samples",
 )
 
 two_jobs_cfg_cpu = ComputationConfig(n_jobs_cpu=2, n_jobs_gpu=2, device="cpu")
@@ -33,9 +38,8 @@ two_jobs_cfg_spawn = ComputationConfig(
 )
 
 
-def test_fakedata_nonn(tmp_path):
-    print("test_fakedata_nonn")
-    # generate fake neuropixels data with artificial templates
+@pytest.fixture(scope="module")
+def fakedata():
     T_s = 3.5
     fs = 30000
     n_channels = 25
@@ -47,8 +51,8 @@ def test_fakedata_nonn(tmp_path):
     geom = np.c_[h["x"], h["y"]][:n_channels]
 
     # template main channel traces
-    t0 = np.exp(-(((np.arange(121) - 42) / 10) ** 2))
-    t1 = np.exp(-(((np.arange(121) - 42) / 30) ** 2))
+    t0 = np.exp(-(((np.arange(121) - 42) / 4) ** 2))
+    t1 = np.exp(-(((np.arange(121) - 42) / 8) ** 2))
     t2 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 10) ** 2))
     t3 = t0 - 0.5 * np.exp(-(((np.arange(121) - 46) / 30) ** 2))
 
@@ -79,34 +83,28 @@ def test_fakedata_nonn(tmp_path):
     templates[3] *= 50 / np.abs(templates[3]).max()
 
     # make fake spike trains
-    spikes_per_unit = 51
     refrac_t = 100
-    t_remaining = T_samples - spikes_per_unit * refrac_t - 2 * 121 - 1
-    mnp = np.ones(spikes_per_unit) / spikes_per_unit
-    assert t_remaining > spikes_per_unit
-    sts = []
-    labels = []
-    for i in range(len(templates)):
-        dt = refrac_t + rg.multinomial(t_remaining, mnp)
-        assert dt.shape == (spikes_per_unit,)
-        st = 121 + np.cumsum(dt)
-        assert st.max() < T_samples - 121
-        sts.append(st)
-        labels.append(np.full((spikes_per_unit,), i))
-    times = np.concatenate(sts)
-    labels = np.concatenate(labels)
-    gt_times = np.sort(times) + 42
+    times = np.arange(121, T_samples - 121, refrac_t)
+    labels = rg.integers(len(templates), size=times.shape)
 
     # inject the spikes into a noise background
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, l in zip(times, labels):
-        rec[t : t + 121] += templates[l]
+    for t, ll in zip(times, labels):
+        rec[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec) > 80) >= 100
     assert np.sum(np.abs(rec) > 40) >= 50
 
     # make into spikeinterface
     rec = sc.NumpyRecording(rec, fs)
     rec.set_dummy_probe_from_locations(geom)
+
+    return rec, geom, T_s, fs
+
+
+def test_fakedata_nonn(fakedata, tmp_path):
+    rec, geom, T_s, fs = fakedata
+    print("test_fakedata_nonn")
+    # generate fake neuropixels data with artificial templates
 
     subconf = SubtractionConfig(
         detection_threshold=20.0,
@@ -118,7 +116,9 @@ def test_fakedata_nonn(tmp_path):
         first_denoiser_spatial_jitter=0,
         first_denoiser_temporal_jitter=0,
     )
-    featconf = FeaturizationConfig(do_nn_denoise=False, n_residual_snips=8)
+    featconf = FeaturizationConfig(do_nn_denoise=False)
+    sampconf = FitSamplingConfig(n_residual_snips=8)
+    nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
     channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
     assert channel_index.shape[0] == len(geom)
     assert channel_index.max() == len(geom)
@@ -134,11 +134,13 @@ def test_fakedata_nonn(tmp_path):
             output_dir=tempdir,
             featurization_cfg=featconf,
             subtraction_cfg=subconf,
+            sampling_cfg=sampconf,
             overwrite=True,
         )
         assert st is not None
         out_h5 = st.parent_h5_path
         ns0 = len(st)
+        subtraction_full_spike_count = len(st)
         print(ns0)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
@@ -160,13 +162,14 @@ def test_fakedata_nonn(tmp_path):
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=featconf,
+            sampling_cfg=sampconf,
             subtraction_cfg=subconf,
             overwrite=False,
         )
         assert st is not None
         ns1 = len(st)
         out_h5 = st.parent_h5_path
-        assert ns0 == ns1
+        assert subtraction_full_spike_count == ns1
         print(ns1)
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
@@ -180,6 +183,9 @@ def test_fakedata_nonn(tmp_path):
                 featconf.tpca_rank,
                 channel_index.shape[1],
             )
+            assert h5["residual"].shape[0] == 8
+            assert h5["residual"].shape[1] == 121
+            assert h5["residual"].shape[2] == geom.shape[0]
 
         # test overwrite
         print("overwrite")
@@ -188,6 +194,7 @@ def test_fakedata_nonn(tmp_path):
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=featconf,
+            sampling_cfg=FitSamplingConfig(n_residual_snips=0),
             subtraction_cfg=subconf,
             overwrite=True,
         )
@@ -195,7 +202,7 @@ def test_fakedata_nonn(tmp_path):
         out_h5 = st.parent_h5_path
         ns2 = len(st)
         print(ns2)
-        assert ns0 == ns2
+        assert subtraction_full_spike_count == ns2
         with h5py.File(out_h5, locking=False) as h5:
             assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
             assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]´
@@ -210,7 +217,6 @@ def test_fakedata_nonn(tmp_path):
             )
 
     for ccfg in (two_jobs_cfg, two_jobs_cfg_spawn):
-        print(f"---- {ccfg=}")
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tempdir:
@@ -219,7 +225,8 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -228,11 +235,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns0 = len(st)
             print(ns0)
-            assert ns2 == ns0
+            assert subtraction_full_spike_count == ns0
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["collisioncleaned_tpca_features"].shape == (  # type: ignore[reportAttributeAccessIssue]
                     ns0,
@@ -248,7 +254,8 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=False,
                 computation_cfg=ccfg,
@@ -257,11 +264,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns1 = len(st)
             print(ns1)
-            assert ns0 == ns1
+            assert subtraction_full_spike_count == ns1
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
@@ -277,7 +283,8 @@ def test_fakedata_nonn(tmp_path):
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
-                featurization_cfg=featconf,
+                featurization_cfg=nolocfeatconf,
+                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -286,11 +293,10 @@ def test_fakedata_nonn(tmp_path):
             out_h5 = st.parent_h5_path
             ns2 = len(st)
             print(ns2)
-            assert ns0 == ns2
+            assert subtraction_full_spike_count == ns2
             with h5py.File(out_h5, locking=False) as h5:
                 assert h5["times_samples"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["channels"].shape == (ns0,)  # type: ignore[reportAttributeAccessIssue]
-                assert h5["point_source_localizations"].shape in [(ns0, 4), (ns0, 3)]  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["channel_index"][:], channel_index)  # type: ignore[reportAttributeAccessIssue]
                 assert np.array_equal(h5["geom"][()], geom)  # type: ignore[reportAttributeAccessIssue]
                 assert h5["last_chunk_start"][()] == int(np.floor(T_s) * fs)  # type: ignore[reportAttributeAccessIssue]
@@ -300,58 +306,85 @@ def test_fakedata_nonn(tmp_path):
                     channel_index.shape[1],
                 )
 
-    # simulate resuming a job that got cancelled in the middle
-    print("test resume1")
-    subconf = dataclasses.replace(
-        subconf,
-        subtraction_denoising_cfg=dataclasses.replace(
-            subconf.subtraction_denoising_cfg,
-            do_nn_denoise=True,
-            do_tpca_denoise=False,
+
+def test_resume(fakedata, tmp_path):
+    rec, geom, T_s, fs = fakedata
+
+    subconf = SubtractionConfig(
+        detection_threshold=20.0,
+        peak_sign="both",
+        subtraction_denoising_cfg=FeaturizationConfig(
+            do_nn_denoise=False,
+            denoise_only=True
         ),
+        first_denoiser_thinning=0.0,
+        first_denoiser_spatial_jitter=0,
+        first_denoiser_temporal_jitter=0,
     )
-    nolocfeatconf = dataclasses.replace(featconf, do_localization=False)
-    print(subconf)
-    print(nolocfeatconf)
-    with tempfile.TemporaryDirectory(
-        dir=tmp_path, ignore_cleanup_errors=True
-    ) as tempdir:
-        st0 = subtract(
-            recording=rec,
-            output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
-            subtraction_cfg=subconf,
-        )
-        assert st0 is not None
-        ns0 = len(st0)
-        print(ns0)
+    featconf = FeaturizationConfig(skip=True)
+    sampconf = FitSamplingConfig(n_residual_snips=0)
+    channel_index = waveform_util.make_channel_index(geom, featconf.extract_radius)
+    assert channel_index.shape[0] == len(geom)
+    assert channel_index.max() == len(geom)
+    assert channel_index.min() == 0
 
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
+        # run 30% of recording, which rounds to 2 chunks, so that
+        # the last chunk starts at int(fs)
+        print(f"--- {rec=}")
+        torch.manual_seed(0)
+        st_orig = subtract(
+            recording=rec,
+            output_dir=tempdir,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            sampling_cfg=sampconf,
+        )
+        assert st_orig is not None
+        subtraction_full_spike_count = len(st_orig)
+
+        # remove output, but retain models so that same basis etc are used
+        (Path(tempdir) / "subtraction.h5").unlink()
+
+        # run 30% of recording, which rounds to 2 chunks, so that
+        # the last chunk starts at int(fs)
+        print(f"--- {rec=}")
+        torch.manual_seed(0)
         sta = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
+            featurization_cfg=featconf,
             subtraction_cfg=subconf,
-            chunk_starts_samples=np.arange(2) * int(fs),
+            sampling_cfg=sampconf,
+            ensure_coverage=0.3,
+            stop_after_n_spikes=0,
         )
+        print("i stop", flush=True)
         assert sta is not None
         with h5py.File(sta.parent_h5_path, locking=False) as h5:
-            assert h5["last_chunk_start"][()] == int(1 * fs)   # type: ignore[reportAttributeAccessIssue]
+            assert h5["last_chunk_index"][()] == 1
+            assert h5["last_chunk_start"][()] >= 0
+        # run the rest
         stb = subtract(
             recording=rec,
             output_dir=tempdir,
-            featurization_cfg=nolocfeatconf,
+            sampling_cfg=sampconf,
+            featurization_cfg=featconf,
             subtraction_cfg=subconf,
+            shuffle=True,
         )
         assert stb is not None
-        print(f"{len(sta)=} {len(stb)=}")
-        print(f"{np.setdiff1d(st0.times_samples, stb.times_samples)=}")
-        assert len(sta) < ns0
-        assert len(stb) == ns0
-        np.testing.assert_array_equal(st0.times_samples, stb.times_samples)
-        np.testing.assert_array_equal(st0.channels, stb.channels)
+        with h5py.File(stb.parent_h5_path, locking=False) as h5:
+            assert h5["last_chunk_index"][()] == 3
+            assert h5["last_chunk_start"][()] >= 0
+        assert len(sta) < subtraction_full_spike_count
+        assert len(stb) == subtraction_full_spike_count
+        order = np.argsort(stb.times_samples, stable=True)
+        assert st_orig.times_samples.shape == stb.times_samples.shape
+        np.testing.assert_array_equal(st_orig.times_samples, stb.times_samples[order])
+        np.testing.assert_array_equal(st_orig.channels, stb.channels[order])
 
 
 @pytest.mark.parametrize("nn_localization", [True])
@@ -381,9 +414,7 @@ def test_small_nonn(tmp_path, nn_localization):
             do_nn_denoise=False, denoise_only=True
         ),
     )
-    featconf = FeaturizationConfig(
-        do_nn_denoise=False, n_residual_snips=8, nn_localization=nn_localization
-    )
+    featconf = FeaturizationConfig(do_nn_denoise=False, nn_localization=nn_localization)
 
     print("No parallel")
     with tempfile.TemporaryDirectory(
@@ -398,15 +429,16 @@ def test_small_nonn(tmp_path, nn_localization):
         )
         assert st is not None
         with h5py.File(st.parent_h5_path, locking=False) as h5:
-            l = None
+            ll = None
             for k in h5.keys():
-                if k in fixedlenkeys: continue
+                if k in fixedlenkeys:
+                    continue
                 ds = cast(h5py.Dataset, h5[k])
                 if ds.ndim < 1:
                     continue
-                if l is None:
-                    l = ds.shape[0]
-                assert l == ds.shape[0], f"{k} {l}, {ds}"
+                if ll is None:
+                    ll = ds.shape[0]
+                assert ll == ds.shape[0], f"{k} {ll}, {ds}"
 
     print("CPU parallel")
     with tempfile.TemporaryDirectory(
@@ -425,8 +457,8 @@ def test_small_nonn(tmp_path, nn_localization):
         with h5py.File(st.parent_h5_path, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1
 
     print("Yes parallel")
@@ -447,6 +479,6 @@ def test_small_nonn(tmp_path, nn_localization):
         with h5py.File(out_h5, locking=False) as h5:
             lens = []
             for k in h5.keys():
-                if k not in fixedlenkeys and h5[k].ndim >= 1:   # type: ignore[reportAttributeAccessIssue]
-                    lens.append(h5[k].shape[0])   # type: ignore[reportAttributeAccessIssue]
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
             assert np.unique(lens).size == 1

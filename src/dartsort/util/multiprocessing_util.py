@@ -1,17 +1,17 @@
-from concurrent.futures import CancelledError, ProcessPoolExecutor
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 import multiprocessing
 import os
-from multiprocessing import get_context
 import queue
+from concurrent.futures import CancelledError, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from multiprocessing import get_context
 
-from .job_util import ensure_computation_config
 from .internal_config import ComputationConfig
+from .job_util import ensure_computation_config
 
 have_cloudpickle = False
 cloudpickle = None
 try:
-    import cloudpickle  # type: ignore[reportMissingImports]
+    import cloudpickle  # type: ignore  # ty: ignore[x]
 
     have_cloudpickle = True
 except ImportError:
@@ -135,15 +135,29 @@ def pool_from_cfg(
     with_rank_queue=False,
     check_local=False,
     small: bool = False,
+    cpu: bool = False,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
     return get_pool(
-        computation_cfg.actual_n_jobs(small=small),
+        computation_cfg.actual_n_jobs(small=small, cpu=cpu),
         cls=computation_cfg.executor,
         with_rank_queue=with_rank_queue,
         check_local=check_local,
         multi_gpu=computation_cfg.is_multi_gpu(),
     )
+
+
+def handle_negative_jobs(n_jobs: int):
+    try:
+        n_cores = os.process_cpu_count()  # type: ignore
+    except AttributeError:
+        n_cores = multiprocessing.cpu_count()
+    if n_jobs < 0:
+        n_jobs = n_cores + (n_jobs + 1)
+    assert n_jobs >= 0
+    do_parallel = n_jobs >= 1
+    n_jobs = max(1, min(n_jobs, n_cores))
+    return do_parallel, n_jobs
 
 
 def get_pool(
@@ -157,14 +171,7 @@ def get_pool(
     check_local=False,
     multi_gpu=False,
 ):
-    try:
-        n_cores = os.process_cpu_count()  # type: ignore
-    except AttributeError:
-        n_cores = multiprocessing.cpu_count()
-    if n_jobs == -1:
-        n_jobs = n_cores - 1
-    do_parallel = n_jobs >= 1
-    n_jobs = max(1, min(n_jobs, n_cores))
+    do_parallel, n_jobs = handle_negative_jobs(n_jobs)
 
     if do_parallel and isinstance(cls, str):
         if cls == "threading_unless_multigpu":
