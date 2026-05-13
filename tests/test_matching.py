@@ -1,6 +1,6 @@
-from itertools import product
 import shutil
 import tempfile
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -19,10 +19,10 @@ from dartsort.templates import TemplateData, template_util
 from dartsort.util.internal_config import MatchingConfig
 from dartsort.util.job_util import ensure_computation_config
 from dartsort.util.logging_util import get_logger
-from dartsort.util.waveform_util import upsample_multichan
 
 # need to keep this unused import to register debug template method
 from dartsort.util.testing_util import matching_debug_util
+from dartsort.util.waveform_util import upsample_multichan
 
 logger = get_logger(__name__)
 

@@ -16,7 +16,6 @@ from scipy.stats import norm
 from sklearn.covariance import GraphicalLassoCV, graphical_lasso
 from sklearn.decomposition import PCA
 from torch import Tensor
-from tqdm.auto import tqdm, trange
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -29,7 +28,7 @@ from ..util.internal_config import (
     tps_interp_clampna_extrap_params,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..util.logging_util import DARTSORTDEBUG, get_logger, progbar, progrange
 from ..util.motion import MotionInfo
 from ..util.spiketorch import spawn_torch_rg
 from ..util.torch_util import BModule
@@ -253,7 +252,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         if chunk_t:
             out = torch.zeros((t + self.t, c))
             taper = torch.linspace(0.0, 1.0, steps=self.t)
-            for bs in trange(0, t, chunk_t):
+            for bs in progrange(0, t, chunk_t):
                 chunk = self.simulate(t=chunk_t + self.t, generator=generator)[0]
                 if bs > 0:
                     chunk[: self.t] *= taper[:, None]
@@ -370,7 +369,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         obj = None  # var for reusing buffers
         units = []
         scores = []
-        for j in trange(size, desc="False positives"):
+        for j in progrange(size, desc="False positives"):
             # note: simulating with padding so that the valid conv has length t.
             sample = self.simulate(t=t + nt - 1, generator=generator)[0].T
             assert sample.isfinite().all()
@@ -1064,7 +1063,6 @@ class EmbeddedNoise(BModule):
         zero_radius: float | None = None,
         rgeom=None,
     ):
-
         with h5py.File(hdf5_path, "r", locking=False) as h5:
             geom = cast(h5py.Dataset, h5["geom"])[:]
         if motion is None:
@@ -1170,13 +1168,14 @@ def generate_interpolated_residual_snippets(
 
     with h5py.File(hdf5_path, "r", locking=False) as h5:
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
-        snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:]
-        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:]
+        nr = h5["n_residuals"][()]
+        snippets = cast(h5py.Dataset, h5[residual_dataset_name])[:nr]
+        times_s_np = cast(h5py.Dataset, h5[residual_times_s_dataset_name])[:nr]
     channel_index = torch.from_numpy(channel_index)
     snippets = torch.from_numpy(snippets)
-    assert snippets.shape[0] == times_s_np.shape[0]
+    assert snippets.shape[0] == times_s_np.shape[0] == nr
 
-    # allow out of order residual sampling
+    # allow out-of-order residual sampling
     order = np.argsort(times_s_np)
     if not np.array_equal(order, np.arange(len(order))):
         times_s_np = times_s_np[order]
@@ -1249,7 +1248,9 @@ def generate_interpolated_residual_snippets(
         for i0 in range(0, len(snippets), batch_size):
             inds.append((i0, min(i0 + batch_size, len(snippets)), 0.0))
 
-    for i0, i1, tbc in tqdm(inds, desc="Interpolate resid") if show_progress else inds:
+    for i0, i1, tbc in (
+        progbar(inds, desc="Interpolate resid") if show_progress else inds
+    ):
         batch = snippets[i0:i1].to(device=device, non_blocking=True)
         if tpca is not None:
             batch = tpca.force_embed(batch)[:, :dim]
@@ -1271,7 +1272,7 @@ def interpolate_residual_snippets(
     show_progress=True,
 ):
     with h5py.File(hdf5_path, "r", locking=False) as h5:
-        n = h5[residual_dataset_name].shape[0]
+        nr = h5["n_residuals"][()]
     snips_out = None
     i0 = 0
     for snip in generate_interpolated_residual_snippets(
@@ -1288,7 +1289,7 @@ def interpolate_residual_snippets(
         show_progress=show_progress,
     ):
         if snips_out is None:
-            snips_out = snip.new_empty((n, *snip.shape[1:]))
+            snips_out = snip.new_empty((nr, *snip.shape[1:]))
         snips_out[i0 : i0 + snip.shape[0]] = snip.to(snips_out)
         i0 += snip.shape[0]
     return snips_out

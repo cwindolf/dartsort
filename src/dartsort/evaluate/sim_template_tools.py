@@ -1,9 +1,7 @@
-from tempfile import tempdir
 from typing import Literal, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from scipy.interpolate import griddata
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
@@ -15,9 +13,9 @@ from ..templates.template_util import svd_compress_templates
 from ..templates.templates import TemplateData
 from ..util.interpolation_util import (
     InterpolationParams,
-    tps_interp_params,
     interp_precompute,
     kernel_interpolate,
+    tps_interp_params,
 )
 from ..util.waveform_util import (
     make_channel_index,

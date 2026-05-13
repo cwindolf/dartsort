@@ -1,6 +1,7 @@
 import dataclasses
 from typing import cast
 
+import h5py
 import numpy as np
 import pandas as pd
 import torch
@@ -10,12 +11,12 @@ from torch.utils.data import (
     StackDataset,
     TensorDataset,
 )
-from tqdm.auto import trange
 
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progrange
 from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
+    AsyncSameChannelHDF5NoiseDataset,
     AsyncSameChannelRecordingNoiseDataset,
     BaseMultichannelDenoiser,
     NoneDataset,
@@ -27,6 +28,7 @@ logger = get_logger(__name__)
 
 class Decollider(BaseMultichannelDenoiser):
     default_name = "decollider"
+    needs_residual = True
 
     def __init__(
         self,
@@ -41,7 +43,7 @@ class Decollider(BaseMultichannelDenoiser):
         batch_size=256,
         learning_rate=3e-4,
         weight_decay=0.0,
-        n_epochs=75,
+        n_epochs=100,
         pad_depth_only=True,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
@@ -77,7 +79,7 @@ class Decollider(BaseMultichannelDenoiser):
         val_noise_random_seed=0,
         inf_net_hidden_dims=None,
         eyz_net_hidden_dims=None,
-        queue_chunks=32,
+        queue_chunks=50,
     ):
         assert exz_estimator in ("n2n", "2n2", "n3n", "3n3")
         assert inference_kind in ("raw", "exz", "exz_fromz", "amortized", "exy_fake")
@@ -167,13 +169,22 @@ class Decollider(BaseMultichannelDenoiser):
             self.den_net: torch.nn.Module = self.inf_net
         self.to(self.device)
 
-    def fit(self, recording, waveforms, *, computation_cfg, channels, **spike_data):
+    def fit(
+        self,
+        recording,
+        waveforms,
+        *,
+        computation_cfg,
+        channels,
+        hdf5_filename=None,
+        **spike_data,
+    ):
         weights = spike_data.get("weights")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
         train_data, val_data = self._construct_datasets_from_waveforms(
-            waveforms, channels, recording, weights
+            waveforms, channels, recording, weights, hdf5_filename=hdf5_filename
         )
         with torch.enable_grad():
             res = self._fit(train_data, val_data)
@@ -361,120 +372,24 @@ class Decollider(BaseMultichannelDenoiser):
         train_data: "DecolliderDataLoader",
         val_data: "DecolliderDataLoader | None",
     ):
-        optimizer = self.get_optimizer()
-        scheduler = self.get_scheduler(optimizer)
-
-        last_val_loss = None
-        train_records = []
-
-        with trange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
-            for epoch in pbar:
-                # deal with random indices...
-                train_data.refresh()
-
-                # Training phase
-                self.train()
-                train_losses = {}
-                for waveform_b, channels_b, noise_b, cnoise_b in train_data:
-                    waveform_b = waveform_b.to(self.device)
-                    channels_b = channels_b.to(self.device)
-                    waveform_b = reindex(
-                        channels_b,
-                        waveform_b,
-                        self.relative_index,
-                        pad_value=0.0,
-                    )
-
-                    optimizer.zero_grad()
-                    m = noise_b.to(waveform_b)
-                    ell = None if cnoise_b is None else cnoise_b.to(waveform_b)
-                    mask = self.get_masks(channels_b).to(waveform_b)
-                    fres = self.train_forward(waveform_b, m, ell, mask)
-                    loss_dict = self.loss(
-                        mask,
-                        waveform_b,
-                        m,
-                        fres,
-                        l1_alpha=self.l1_alpha,
-                        l4_alpha=self.l4_alpha,
-                        output_l1_alpha=self.output_l1_alpha,
-                    )
-                    loss = sum(loss_dict.values())
-                    loss.backward()
-                    optimizer.step()
-
-                    for k, v in loss_dict.items():
-                        train_losses[k] = v + train_losses.get(k, 0.0)
-                # // epoch loop
-                train_data.cleanup()
-                train_losses = {
-                    k: v.item() / len(train_data) for k, v in train_losses.items()
-                }
-                train_records.append({**train_losses})
-
-                # Validation phase (only if val_loader is not None)
-                val_losses = {}
-                val_loss = None
-                if val_data is not None:
-                    self.eval()
-                    val_losses = {}
-                    with torch.no_grad():
-                        for waveform_b, channels_b, noise_b, ell_b in val_data:
-                            waveform_b = waveform_b.to(self.device)
-                            channels_b = channels_b.to(self.device)
-                            noise_b = noise_b.to(self.device)
-                            ell_b = None if ell_b is None else ell_b.to(self.device)
-
-                            waveform_b, mask = self.to_nn_channels(
-                                waveform_b, channels_b
-                            )
-                            m = noise_b.to(waveform_b)
-                            fres = self.train_forward(waveform_b, m, ell_b, mask)
-                            loss_dict = self.loss(
-                                mask,
-                                waveform_b,
-                                m,
-                                fres,
-                                l1_alpha=self.l1_alpha,
-                                l4_alpha=self.l4_alpha,
-                                output_l1_alpha=self.output_l1_alpha,
-                            )
-                            for k, v in loss_dict.items():
-                                val_losses[k] = v + val_losses.get(k, 0.0)
-
-                    val_losses = {
-                        k: v.item() / len(val_data) for k, v in val_losses.items()
-                    }
-                    val_loss = sum(val_losses.values())
-                    train_records[-1]["val_loss"] = val_loss
-
-                    can_val = not (self.earlystop_eps is None or last_val_loss is None)
-                    if can_val and val_loss - last_val_loss > self.earlystop_eps:
-                        if epoch >= self.min_epochs:
-                            print(f"Early stopping after {epoch} epochs.")
-                            break
-                    last_val_loss = val_loss
-
-                if self.step_callback is not None:
-                    self.step_callback(self, epoch, val_loss)
-
-                # Print loss summary
-                loss_str = f"Train {loss:.4f} " + "|".join(
-                    f"{k}: {v:.3f}" for k, v in train_losses.items()
-                )
-                if val_data is not None:
-                    loss_str += f" Val {val_loss:.4f}" + "|".join(
-                        f"{k}: {v:.3f}" for k, v in val_losses.items()
-                    )
-                pbar.set_description(f"Epochs [{loss_str}]")
-
-                self.step_scheduler(scheduler, loss, val_loss)
+        try:
+            train_records = self._run_train_loop(train_data, val_data)
+        finally:
+            train_data.destroy()
+            if val_data is not None:
+                val_data.destroy()
 
         train_df = pd.DataFrame.from_records(train_records)
         return train_df
 
     def _construct_datasets_from_waveforms(
-        self, waveforms, channels, recording, weights=None
+        self,
+        waveforms,
+        channels,
+        recording,
+        weights=None,
+        hdf5_filename=None,
+        dataset_name="residual",
     ):
         rg = np.random.default_rng(self.random_seed)
 
@@ -488,21 +403,54 @@ class Decollider(BaseMultichannelDenoiser):
             train_indices = rg.choice(num_samples, size=train_size, replace=False)
             val_indices = np.setdiff1d(np.arange(num_samples), train_indices)
 
+        can_load_h5 = _check_has_dataset(hdf5_filename, dataset_name)
+
         spike_length_samples = waveforms.shape[1]
 
         # training dataset
         train_waveforms = waveforms[train_indices]
         train_channels = channels[train_indices]
         train_dataset = TensorDataset(train_waveforms, train_channels)
-        train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
-            recording,
-            train_channels.numpy(force=True),
-            self.b.model_channel_index.numpy(force=True),
-            spike_length_samples=spike_length_samples,
-            generator=spawn_torch_rg(rg),
-            queue_chunks=self.queue_chunks,
-        )
-        if self.cycle_loss_alpha:
+        if can_load_h5:
+            logger.dartsortdebug(
+                f"Load Decollider train noise data from {hdf5_filename}."
+            )
+            train_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
+                hdf5_filename=hdf5_filename,
+                channels=train_channels.numpy(force=True),
+                channel_index=self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                rg=np.random.default_rng(rg.spawn(1)[0]),
+                queue_chunks=self.queue_chunks,
+                dataset_name=dataset_name,
+                chunk_size=self.batch_size,
+            )
+        else:
+            logger.dartsortdebug("Load Decollider train noise data from recording.")
+            train_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
+                recording,
+                train_channels.numpy(force=True),
+                self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                generator=spawn_torch_rg(rg),
+                queue_chunks=self.queue_chunks,
+            )
+        if self.cycle_loss_alpha and can_load_h5:
+            logger.dartsortdebug(
+                f"Load Decollider cycle noise data from {hdf5_filename}."
+            )
+            train_cycle_noise_dataset = AsyncSameChannelHDF5NoiseDataset(
+                hdf5_filename=hdf5_filename,
+                channels=train_channels.numpy(force=True),
+                channel_index=self.b.model_channel_index.numpy(force=True),
+                spike_length_samples=spike_length_samples,
+                rg=np.random.default_rng(rg.spawn(1)[0]),
+                queue_chunks=self.queue_chunks,
+                dataset_name=dataset_name,
+                chunk_size=self.batch_size,
+            )
+        elif self.cycle_loss_alpha:
+            logger.dartsortdebug("Load Decollider cycle noise data from recording.")
             train_cycle_noise_dataset = AsyncSameChannelRecordingNoiseDataset(
                 recording,
                 train_channels.numpy(force=True),
@@ -584,14 +532,145 @@ class Decollider(BaseMultichannelDenoiser):
 
         return train_data, val_data
 
+    def _run_train_loop(self, train_data, val_data):
+        optimizer = self.get_optimizer()
+        scheduler = self.get_scheduler(optimizer)
+
+        last_val_loss = None
+        train_records = []
+
+        with progrange(self.n_epochs, desc="Epochs", unit="epoch") as pbar:
+            for epoch in pbar:
+                # deal with random indices...
+                train_data.refresh()
+
+                # Training phase
+                self.train()
+                train_losses = {}
+                for waveform_b, channels_b, noise_b, cnoise_b in train_data:
+                    waveform_b = waveform_b.to(device=self.device, non_blocking=True)
+                    channels_b = channels_b.to(device=self.device, non_blocking=True)
+                    waveform_b = reindex(
+                        channels_b,
+                        waveform_b,
+                        self.relative_index,
+                        pad_value=0.0,
+                    )
+
+                    optimizer.zero_grad()
+                    m = noise_b.to(
+                        dtype=waveform_b.dtype, device=self.device, non_blocking=True
+                    )
+                    if cnoise_b is not None:
+                        ell = cnoise_b.to(
+                            dtype=waveform_b.dtype,
+                            device=self.device,
+                            non_blocking=True,
+                        )
+                    else:
+                        ell = None
+                    mask = self.get_masks(channels_b).to(
+                        dtype=waveform_b.dtype, device=self.device, non_blocking=True
+                    )
+                    fres = self.train_forward(waveform_b, m, ell, mask)
+                    loss_dict = self.loss(
+                        mask,
+                        waveform_b,
+                        m,
+                        fres,
+                        l1_alpha=self.l1_alpha,
+                        l4_alpha=self.l4_alpha,
+                        output_l1_alpha=self.output_l1_alpha,
+                    )
+                    loss = sum(loss_dict.values())
+                    loss.backward()
+                    optimizer.step()
+
+                    for k, v in loss_dict.items():
+                        train_losses[k] = v + train_losses.get(k, 0.0)
+                # // epoch loop
+                train_data.cleanup()
+                train_losses = {
+                    k: v.item() / len(train_data) for k, v in train_losses.items()
+                }
+                train_records.append({**train_losses})
+
+                # Validation phase (only if val_loader is not None)
+                val_losses = {}
+                val_loss = None
+                if val_data is not None:
+                    self.eval()
+                    val_losses = {}
+                    with torch.no_grad():
+                        for waveform_b, channels_b, noise_b, ell_b in val_data:
+                            waveform_b = waveform_b.to(self.device)
+                            channels_b = channels_b.to(self.device)
+                            noise_b = noise_b.to(self.device)
+                            ell_b = None if ell_b is None else ell_b.to(self.device)
+
+                            waveform_b, mask = self.to_nn_channels(
+                                waveform_b, channels_b
+                            )
+                            m = noise_b.to(waveform_b)
+                            fres = self.train_forward(waveform_b, m, ell_b, mask)
+                            loss_dict = self.loss(
+                                mask,
+                                waveform_b,
+                                m,
+                                fres,
+                                l1_alpha=self.l1_alpha,
+                                l4_alpha=self.l4_alpha,
+                                output_l1_alpha=self.output_l1_alpha,
+                            )
+                            for k, v in loss_dict.items():
+                                val_losses[k] = v + val_losses.get(k, 0.0)
+
+                    val_losses = {
+                        k: v.item() / len(val_data) for k, v in val_losses.items()
+                    }
+                    val_loss = sum(val_losses.values())
+                    train_records[-1]["val_loss"] = val_loss
+
+                    can_val = not (self.earlystop_eps is None or last_val_loss is None)
+                    if can_val and val_loss - last_val_loss > self.earlystop_eps:
+                        if epoch >= self.min_epochs:
+                            logger.dartsortdebug(
+                                f"Early stopping after {epoch} epochs."
+                            )
+                            break
+                    last_val_loss = val_loss
+
+                if self.step_callback is not None:
+                    self.step_callback(self, epoch, val_loss)
+
+                # Print loss summary
+                loss_str = f"Train {loss:.4f} " + "|".join(
+                    f"{k}: {v:.3f}" for k, v in train_losses.items()
+                )
+                if val_data is not None:
+                    loss_str += f" Val {val_loss:.4f}" + "|".join(
+                        f"{k}: {v:.3f}" for k, v in val_losses.items()
+                    )
+                pbar.set_description(f"Epochs [{loss_str}]")
+
+                self.step_scheduler(scheduler, loss, val_loss)
+        return train_records
+
 
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class DecolliderDataLoader:
     loader: DataLoader
     sampler: AOTIndicesWeightedRandomBatchSampler | None
-    noise_dataset: AsyncSameChannelRecordingNoiseDataset | TensorDataset
+    noise_dataset: (
+        AsyncSameChannelRecordingNoiseDataset
+        | AsyncSameChannelHDF5NoiseDataset
+        | TensorDataset
+    )
     cycle_noise_dataset: (
-        AsyncSameChannelRecordingNoiseDataset | TensorDataset | NoneDataset
+        AsyncSameChannelRecordingNoiseDataset
+        | AsyncSameChannelHDF5NoiseDataset
+        | TensorDataset
+        | NoneDataset
     )
     spike_length_samples: int
 
@@ -628,3 +707,18 @@ class DecolliderDataLoader:
             self.cycle_noise_dataset, "cleanup"
         ):
             self.cycle_noise_dataset.cleanup()  # type: ignore
+
+    def destroy(self):
+        if hasattr(self.noise_dataset, "destroy"):
+            self.noise_dataset.destroy()  # type: ignore
+        if self.cycle_noise_dataset is not None and hasattr(
+            self.cycle_noise_dataset, "destroy"
+        ):
+            self.cycle_noise_dataset.destroy()  # type: ignore
+
+
+def _check_has_dataset(h5, dset):
+    if h5 is None:
+        return
+    with h5py.File(h5, "r", locking=False) as h5:
+        return dset in h5

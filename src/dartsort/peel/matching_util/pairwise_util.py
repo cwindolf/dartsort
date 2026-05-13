@@ -3,7 +3,7 @@ from __future__ import annotations  # allow forward type references
 from collections import namedtuple
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Iterator, Optional, Union, Sequence
+from typing import Iterator, Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -11,11 +11,11 @@ import torch
 import torch.nn.functional as F
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
-from tqdm.auto import tqdm
 
 from ...templates.template_util import CompressedUpsampledTemplates, LowRankTemplates
 from ...templates.templates import TemplateData
 from ...util import drift_util
+from ...util.logging_util import progbar
 from ...util.motion import MotionInfo
 from ...util.multiprocessing_util import get_pool
 
@@ -264,7 +264,7 @@ def iterate_compressed_pairwise_convolutions(
     ) as pool:
         it = pool.map(_conv_job, jobs)
         if show_progress:
-            it = tqdm(
+            it = progbar(
                 it,
                 smoothing=0.01,
                 desc="Pairwise convolution",

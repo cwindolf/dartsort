@@ -14,7 +14,6 @@ import torch
 from spikeinterface.core import BaseRecording
 from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
-from tqdm.auto import tqdm
 
 from ..transform import WaveformPipeline
 from ..util.data_util import (
@@ -30,7 +29,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.multiprocessing_util import handle_negative_jobs, pool_from_cfg
 from ..util.py_util import delay_keyboard_interrupt
 from ..util.torch_util import BModule, cleanup_and_log_gpu_usage
@@ -84,6 +83,13 @@ class BasePeeler(BModule):
         self.spike_length_samples: int = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        if fit_sampling_cfg.residual_snip_ms:
+            self.resid_length_samples = waveform_cfg.ms_to_samples(
+                fit_sampling_cfg.residual_snip_ms,
+                sampling_frequency=recording.sampling_frequency,
+            )
+        else:
+            self.resid_length_samples = self.spike_length_samples
         self.fit_sampling_cfg = fit_sampling_cfg
         self.random_seed = fit_sampling_cfg.seed
         self.fit_subsampling_random_state: np.random.Generator = np.random.default_rng(
@@ -313,13 +319,13 @@ class BasePeeler(BModule):
                 if show_progress:
                     s_chunk = chunk_length_samples / self.recording.sampling_frequency
                     dtag = computation_cfg.actual_device().type
-                    results = tqdm(
+                    results = progbar(
                         results,
                         total=n_chunks_orig,
                         initial=n_chunks_orig - len(chunks_to_do),
                         smoothing=0,
                         desc=f"{task_name}:{dtag} {s_chunk:.1f}s/it [spk/it=%%%]",
-                        mininterval=0.25,
+                        mininterval=1.0,
                     )
                 else:
                     dtag = s_chunk = None
@@ -334,6 +340,7 @@ class BasePeeler(BModule):
                     residual_to_h5=residual_to_h5,
                     known_spike_count=known_spike_count,
                     ignore_resuming=ignore_resuming,
+                    total_residual_snips=total_residual_snips,
                 ) as (output_h5, h5_spike_datasets, residual_file, n_spikes):
                     batch_count = 0
                     try:
@@ -491,7 +498,7 @@ class BasePeeler(BModule):
             chunk_end_samples = chunk_start_samples + self.chunk_length_samples
         chunk_end_samples = min(self.recording.get_num_samples(), chunk_end_samples)
         chunk, left_margin, right_margin = get_chunk_with_margin(
-            self.recording.segments[0],
+            self.recording._recording_segments[0],
             start_frame=chunk_start_samples,
             end_frame=chunk_end_samples,
             channel_indices=None,
@@ -551,7 +558,7 @@ class BasePeeler(BModule):
                 self.rg,
                 peel_result["residual"],
                 n_resid_snips,
-                self.spike_length_samples,
+                self.resid_length_samples,
             )
             resid_times_samples = chunk_start_samples + resid_times_samples
             chunk_result["residual_times_seconds"] = (
@@ -585,18 +592,25 @@ class BasePeeler(BModule):
             if residual_file is not None:
                 chunk_result["residual"].tofile(residual_file)
 
-            if "resid_snips" in chunk_result:
-                n_residuals = len(output_h5["residual"])
-                n_new_res = len(chunk_result["resid_snips"])
-                assert chunk_result["residual_times_seconds"].shape == (n_new_res,)
-                output_h5["residual"].resize(n_residuals + n_new_res, axis=0)
-                output_h5["residual"][n_residuals:] = chunk_result["resid_snips"]
-                output_h5["residual_times_seconds"].resize(
-                    n_residuals + n_new_res, axis=0
-                )
-                output_h5["residual_times_seconds"][n_residuals:] = chunk_result[
+            if "resid_snips" in chunk_result and output_h5["residual"].chunks is None:
+                nr0 = output_h5["n_residuals"][()]
+                nr1 = nr0 + len(chunk_result["resid_snips"])
+                output_h5["residual"][nr0:nr1] = chunk_result["resid_snips"]
+                output_h5["residual_times_seconds"][nr0:nr1] = chunk_result[
                     "residual_times_seconds"
                 ]
+                output_h5["n_residuals"][()] = nr1
+            elif "resid_snips" in chunk_result:
+                nr0 = output_h5["n_residuals"][()]
+                assert nr0 == len(output_h5["residual"])
+                nr1 = nr0 + len(chunk_result["resid_snips"])
+                output_h5["residual"].resize(nr1, axis=0)
+                output_h5["residual"][nr0:] = chunk_result["resid_snips"]
+                output_h5["residual_times_seconds"].resize(nr1, axis=0)
+                output_h5["residual_times_seconds"][nr0:] = chunk_result[
+                    "residual_times_seconds"
+                ]
+                output_h5["n_residuals"][()] = nr1
 
             if skip_features:
                 return 0
@@ -812,6 +826,7 @@ class BasePeeler(BModule):
         hdf5_filename: str | Path,
         chunk_length_samples=None,
         n_chunks: int | None = None,
+        stop_after_n_waveforms: int | None = None,
         residual_to_h5=False,
         total_residual_snips: int | None = None,
         skip_features=False,
@@ -853,7 +868,9 @@ class BasePeeler(BModule):
         else:
             coverage = None
 
-        if more:
+        if stop_after_n_waveforms is not None:
+            pass
+        elif more:
             stop_after_n_waveforms = self.fit_sampling_cfg.more_waveforms_fit
         else:
             stop_after_n_waveforms = self.fit_sampling_cfg.max_waveforms_fit
@@ -953,6 +970,7 @@ class BasePeeler(BModule):
         residual_to_h5=False,
         skip_features=False,
         known_spike_count: int | None = None,
+        total_residual_snips: int | None = None,
         ignore_resuming: bool = False,
     ):
         """Create, overwrite, or re-open output files"""
@@ -1007,6 +1025,43 @@ class BasePeeler(BModule):
             if name not in output_h5:
                 output_h5.create_dataset(name, data=value)
 
+        # don't used chunked storage for residuals if possible
+        need_resid = residual_to_h5 and "residual" not in output_h5
+        if need_resid and total_residual_snips is not None:
+            assert "residual_times_seconds" not in output_h5
+            n_chans = self.recording.get_num_channels()
+            output_h5.create_dataset("n_residuals", data=np.zeros((), dtype=np.int64))
+            output_h5.create_dataset(
+                "residual",
+                dtype=self.np_dtype,
+                shape=(total_residual_snips, self.resid_length_samples, n_chans),
+                fillvalue=np.nan,
+            )
+            output_h5.create_dataset(
+                "residual_times_seconds",
+                dtype=float,
+                shape=(total_residual_snips,),
+                fillvalue=np.nan,
+            )
+        elif need_resid:
+            assert "residual_times_seconds" not in output_h5
+            n_chans = self.recording.get_num_channels()
+            output_h5.create_dataset("n_residuals", data=np.zeros((), dtype=np.int64))
+            output_h5.create_dataset(
+                "residual",
+                dtype=self.np_dtype,
+                shape=(0, self.resid_length_samples, n_chans),
+                maxshape=(None, self.resid_length_samples, n_chans),
+                chunks=(chunk_size, self.resid_length_samples, n_chans),
+            )
+            output_h5.create_dataset(
+                "residual_times_seconds",
+                dtype=float,
+                shape=(0,),
+                maxshape=(None,),
+                chunks=(chunk_size,),
+            )
+
         # create per-spike datasets
         # use chunks to support growing the dataset as we find spikes
         if skip_features:
@@ -1032,25 +1087,6 @@ class BasePeeler(BModule):
                         shape=(known_spike_count, *ds.shape_per_spike),
                     )
                 h5_spike_datasets[ds.name] = dset
-
-        if residual_to_h5:
-            if "residual" not in output_h5:
-                n_chans = self.recording.get_num_channels()
-                output_h5.create_dataset(
-                    "residual",
-                    dtype=self.np_dtype,
-                    shape=(0, self.spike_length_samples, n_chans),
-                    maxshape=(None, self.spike_length_samples, n_chans),
-                    chunks=(chunk_size, self.spike_length_samples, n_chans),
-                )
-            if "residual_times_seconds" not in output_h5:
-                output_h5.create_dataset(
-                    "residual_times_seconds",
-                    dtype=float,
-                    shape=(0,),
-                    maxshape=(None,),
-                    chunks=(chunk_size,),
-                )
 
         # residual file ignore/open/overwrite logic
         save_residual = residual_filename is not None

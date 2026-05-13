@@ -1,17 +1,14 @@
 import contextlib
 import dataclasses
-import json
 import math
 import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
-import time
-from importlib.metadata import Distribution
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from time import perf_counter
 from typing import dataclass_transform
 
 from pydantic import ConfigDict
@@ -20,12 +17,6 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from .logging_util import DARTSORTVERBOSE, get_logger
 
 logger = get_logger(__name__)
-
-# check if we are installed in editable mode
-pkgname = sys.modules[__name__].__name__.split(".")[0]
-durl = Distribution.from_name(pkgname).read_text("direct_url.json")
-assert durl is not None
-EDITABLE = json.loads(durl).get("dir_info", {}).get("editable", False)
 
 
 # without this, pydantic allows unknown keys, so you can easily
@@ -73,10 +64,10 @@ class timer:
         self.parent = None
 
     def start(self):
-        self.t0 = time.time()
+        self.t0 = perf_counter()
 
     def stop(self):
-        self.dt = time.time() - self.t0
+        self.dt = perf_counter() - self.t0
         logger.log(self.loglevel, "%s took %ss", self.name, self.dt)
         if self.parent is not None and self.results_dict is not None:
             self.results_dict[f"{self.parent.name}: {self.name}"] = self.dt

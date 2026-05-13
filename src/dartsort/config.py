@@ -13,7 +13,7 @@ from .util.internal_config import (
     TemplateSVDMethod,
     WhiteningEstimator,
     WhiteningStrategy,
-    default_pretrained_path,
+    default_pretrained_path,  # noqa
 )
 from .util.py_util import cfg_dataclass, float_or_none, int_or_none, str_or_none
 
@@ -191,13 +191,13 @@ class DARTsortUserConfig:
     # -- subtraction neural net
     nn_denoiser_class_name: Literal["SingleChannelWaveformDenoiser", "Decollider"] = (
         argfield(
-            default="SingleChannelWaveformDenoiser",
+            default="Decollider",
             doc="Which neural net to use in initial detection? Set to Decollider (and set the pretrained "
             "path to None to train a  brand-new unsupervised denoiser.",
         )
     )
     nn_denoiser_pretrained_path: str | None = argfield(
-        default=default_pretrained_path,
+        default=None,
         arg_type=str_or_none,
         doc="Path to a pytorch saved model (.pt file as dumped by torch.save()). If this is None, the "
         "model will be fit.",

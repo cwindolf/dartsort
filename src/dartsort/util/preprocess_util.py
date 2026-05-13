@@ -67,6 +67,21 @@ def ibllikecmr(rec: BaseRecording, dtype: str) -> BaseRecording:
 preprocessing_strategies["ibllikecmr"] = ibllikecmr
 
 
+def standardize(rec: BaseRecording, dtype: str) -> BaseRecording:
+    rec = rec.astype(np.float32)
+    nl = si.get_noise_levels(
+        rec,
+        return_in_uV=False,
+        random_slices_kwargs=dict(seed=0, num_chunks_per_segment=100),
+    )
+    rec = si.scale(rec, gain=1.0 / nl)
+    rec = rec.astype(dtype)
+    return rec
+
+
+preprocessing_strategies["standardize"] = standardize
+
+
 def preprocess(
     rec: BaseRecording,
     strategy: PreprocessingStrategy = "none",

@@ -4,7 +4,6 @@ from threading import Thread
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from ..util import nn_util, spikeio
@@ -265,7 +264,7 @@ def get_noise(
         recording,
         times_samples[order],
         channel_index,
-        channels,
+        channels[order],
         trough_offset_samples=0,
         spike_length_samples=spike_length_samples,
         fill_value=0.0,
@@ -273,6 +272,42 @@ def get_noise(
 
     # back to random order
     noise_waveforms = noise_waveforms[inv_order]
+
+    return torch.from_numpy(noise_waveforms)
+
+
+def get_noise_h5(
+    dset,
+    channels,
+    channel_index,
+    *,
+    spike_length_samples=121,
+    rg: np.random.Generator,
+    count: int | None = None,
+):
+    if count is None:
+        count = dset.shape[0]
+
+    ii = rg.choice(count, size=len(channels), replace=False)
+    ii.sort()
+
+    if dset.shape[1] > spike_length_samples:
+        pad = dset.shape[1] - spike_length_samples
+        tt = rg.integers(pad)
+        noise_waveforms = dset[ii, tt : tt + spike_length_samples]
+    else:
+        noise_waveforms = dset[ii]
+
+
+    # channels...
+    cc = channel_index[channels]
+    valid = cc < channel_index.shape[0]
+    cc = np.where(valid, cc, 0)
+    targ_shp = (cc.shape[0], noise_waveforms.shape[1], cc.shape[1])
+    cc = np.broadcast_to(cc[:, None, :], targ_shp)
+    noise_waveforms = np.take_along_axis(noise_waveforms, indices=cc, axis=2)
+    # mask out
+    noise_waveforms *= valid[:, None, :].astype(noise_waveforms.dtype)
 
     return torch.from_numpy(noise_waveforms)
 
@@ -478,9 +513,24 @@ class AsyncBatchDataset(RefreshableDataset):
         self._cur_data_ix = None
         self._cur_chunk = None
         self._cur_chunk_ix = None
+        self.bye = False
 
     def __len__(self):
         return self.n_examples
+
+    def destroy(self):
+        self.bye = True
+        if self._thread is not None:
+            if hasattr(self._queue, "shutdown"):
+                self._queue.shutdown(True)  # type: ignore
+            while True:
+                try:
+                    self._queue.get()
+                except Exception:
+                    break
+            self._thread.join()
+            assert not self._thread.is_alive()
+        self._thread = None
 
     def cleanup(self):
         if self._thread is not None:
@@ -534,6 +584,8 @@ class AsyncBatchDataset(RefreshableDataset):
             noise = self.load_batch(index)
 
             self._queue.put(noise)
+            if self.bye:
+                break
 
     def load_batch(self, index):
         # subclasses must implement
@@ -568,6 +620,72 @@ class AsyncSameChannelNoiseDataset(AsyncBatchDataset):
         return len(self.channels)
 
 
+class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
+    def __init__(
+        self,
+        hdf5_filename,
+        channels,
+        channel_index,
+        rg,
+        spike_length_samples=121,
+        generator=None,
+        chunk_size=256,
+        queue_chunks=8,
+        dataset_name="residual",
+        count_name="n_residuals",
+        memmap=True,
+    ):
+        super().__init__(
+            channels=channels,
+            channel_index=channel_index,
+            spike_length_samples=spike_length_samples,
+            generator=generator,
+            chunk_size=chunk_size,
+            queue_chunks=queue_chunks,
+        )
+        if memmap:
+            # this only works with contiguous datasets
+            # hacky but h5 reading is so slow... and this is so fast...
+            with h5py.File(hdf5_filename, "r", locking=False) as h5:
+                self.count = h5[count_name][()]
+                # no links or funny business please. i can't check everything though!
+                assert h5.get(dataset_name, getclass=True) == h5py.Dataset
+                assert h5[dataset_name].chunks is None
+                assert h5[dataset_name].compression is None
+                dtype = h5[dataset_name].dtype
+                offset = h5[dataset_name].id.get_offset()
+                shape = h5[dataset_name].shape
+            self.dset = np.memmap(
+                hdf5_filename, dtype=dtype, mode="r", offset=offset, shape=shape
+            )
+            self.h5 = None
+        else:
+            self.h5 = h5py.File(
+                hdf5_filename, "r", locking=False, libver="latest", swmr=True
+            )
+            self.dset = self.h5[dataset_name]
+            self.count = self.h5[count_name][()]
+        self.rg = rg
+        assert self.dset.shape[1] >= spike_length_samples
+        assert self.dset.shape[2] == channel_index.shape[0]
+
+    def destroy(self):
+        super().destroy()
+        del self.dset
+        if self.h5 is not None:
+            self.h5.close()
+
+    def load_batch(self, index):
+        return get_noise_h5(
+            self.dset,
+            self.channels[index],
+            self.channel_index,
+            spike_length_samples=self.spike_length_samples,
+            rg=self.rg,
+            count=self.count,
+        )
+
+
 class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
     def __init__(
         self,
@@ -598,64 +716,3 @@ class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
             rg=None,
             generator=self.generator,
         )
-
-
-class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
-    def __init__(
-        self,
-        hdf5_path,
-        channels,
-        channel_index,
-        noise_dataset_name="noise",
-        spike_length_samples=121,
-        generator=None,
-        chunk_size=2048,
-        queue_chunks=8,
-    ):
-        super().__init__(
-            channels=channels,
-            channel_index=channel_index,
-            spike_length_samples=spike_length_samples,
-            generator=generator,
-            chunk_size=chunk_size,
-            queue_chunks=queue_chunks,
-        )
-
-        self.hdf5_path = hdf5_path
-        self._h5 = h5py.File(hdf5_path, "r", locking=False)
-        self._dataset: h5py.Dataset = self._h5[noise_dataset_name]
-        assert self._dataset.ndim == 3
-        assert self._dataset.shape[2] == len(channel_index)
-        self.noise_snip_len = self._dataset.shape[1]
-        self.nsnips = len(self._dataset)
-        self._tix_rel = torch.arange(spike_length_samples)
-        self._tix_max = self.noise_snip_len - spike_length_samples
-
-    def __del__(self):
-        del self._dataset
-        self._h5.close()
-
-    def load_batch(self, index):
-        nix = index.numel()
-        dixs = torch.randint(
-            low=0, high=self.nsnips, generator=self.generator, size=nix
-        )
-
-        data = self._dataset[dixs.numpy()]
-        data = torch.from_numpy(data)
-
-        chans = self.channels[index]
-        chan_inds = self.channel_index[chans]
-        data = F.pad(data, (0, 1), value=torch.nan)
-        data = data.take_along_dim(chan_inds[:, None, :], dim=2)
-
-        if self._tix_max:
-            tixs = torch.randint(
-                low=0, high=self._tix_max, generator=self.generator, size=nix
-            )
-            time_inds = tixs[:, None] + self._tix_rel
-            data = data.take_along_dim(time_inds[:, :, None], dim=1)
-        else:
-            assert data.shape[1] == self.spike_length_samples
-
-        return data

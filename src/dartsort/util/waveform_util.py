@@ -3,7 +3,7 @@ A collection of helper functions for dealing with which channels
 waveforms are extracted on, things like that.
 """
 
-from typing import overload, Literal
+from typing import Literal, overload
 
 import numpy as np
 import torch
@@ -11,7 +11,8 @@ import torch.nn.functional as F
 from scipy.interpolate import CubicSpline
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
-from tqdm.auto import trange
+
+from .logging_util import progrange
 
 # -- geometry utils
 
@@ -178,7 +179,7 @@ def _regularize_1d(geom, radius, eps, dim=1):
     else:
         assert n_neighbs.max() > 1
 
-    from scipy.cluster.hierarchy import linkage, fcluster
+    from scipy.cluster.hierarchy import fcluster, linkage
 
     Z = linkage(A.astype(np.float32))
     labels = fcluster(Z, 1.1, criterion="distance")
@@ -692,7 +693,7 @@ def get_channel_subset(
     if chunk_length is not None:
         if out is None:
             out = npx.zeros_like(waveforms[..., :n_chan_sub])
-        xrange = trange if show_progress else range
+        xrange = progrange if show_progress else range
         for bs in xrange(0, len(out), chunk_length):
             sl = slice(bs, min(len(out), bs + chunk_length))
             get_channel_subset(

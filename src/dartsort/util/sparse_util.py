@@ -9,9 +9,9 @@ def coo_to_scipy(coo_tensor):
 
 
 def coo_to_cupy(coo_tensor):
-    import cupy as cp  # type: ignore # ty: ignore[unisued-type-ignore-comment]
-    from cupyx.scipy.sparse import (
-        coo_matrix as cupy_coo_matrix,  # type: ignore # ty: ignore[unisued-type-ignore-comment]
+    import cupy as cp  # type: ignore # ty: ignore[x]
+    from cupyx.scipy.sparse import (  # type: ignore # ty: ignore[x]
+        coo_matrix as cupy_coo_matrix,  # type: ignore # ty: ignore[x]
     )
 
     data = cp.asarray(coo_tensor.values())

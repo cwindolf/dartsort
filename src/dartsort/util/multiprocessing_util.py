@@ -11,7 +11,7 @@ from .job_util import ensure_computation_config
 have_cloudpickle = False
 cloudpickle = None
 try:
-    import cloudpickle  # type: ignore
+    import cloudpickle  # type: ignore  # ty: ignore[x]
 
     have_cloudpickle = True
 except ImportError:

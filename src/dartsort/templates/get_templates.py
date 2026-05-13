@@ -12,7 +12,6 @@ import torch
 from scipy.spatial import KDTree
 from sklearn.decomposition import PCA, TruncatedSVD
 from spikeinterface.core import BaseRecording
-from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util import spikeio
@@ -25,7 +24,7 @@ from ..util.internal_config import (
     default_waveform_cfg,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.noise_util import SpatialWhitener
@@ -83,13 +82,6 @@ def get_templates_unitextract(
 
     fs = recording.sampling_frequency
     trough_offset_samples = waveform_cfg.trough_offset_samples(fs)
-    spike_length_samples = waveform_cfg.spike_length_samples(fs)
-
-    if template_cfg.denoising_method == "none":
-        low_rank_denoising = False
-    else:
-        assert template_cfg.use_svd
-        low_rank_denoising = True
 
     # load motion features if necessary
     geom = recording.get_channel_locations()
@@ -407,7 +399,8 @@ def get_all_shifted_raw_and_low_rank_templates(
         # launch the jobs and wrap in a progress bar
         results = pool.map(_template_job, unit_id_chunks)
         if show_progress:
-            pbar = tqdm(
+            results = progbar(
+                results,
                 smoothing=0.01,
                 desc=f"{prefix} templates",
                 total=unit_ids.size,
@@ -432,10 +425,8 @@ def get_all_shifted_raw_and_low_rank_templates(
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk  # type: ignore
             snrs_by_channel[ix_chunk] = snrs_chunk
             spike_counts_by_channel[ix_chunk] = chancounts_chunk
-            if show_progress:
-                pbar.update(len(units_chunk))
         if show_progress:
-            pbar.close()
+            results.close()
 
     raw_std_dev = None
     if with_raw_std_dev:

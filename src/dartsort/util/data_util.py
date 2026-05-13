@@ -13,11 +13,10 @@ from spikeinterface.core import (
     NumpySorting,
     get_random_data_chunks,
 )
-from tqdm.auto import tqdm
 
 from ..detect import detect_and_deduplicate
 from .internal_config import WaveformConfig, default_waveform_cfg
-from .logging_util import get_logger
+from .logging_util import get_logger, progbar
 
 if TYPE_CHECKING:
     from .motion import MotionInfo
@@ -187,7 +186,7 @@ class DARTsortSorting:
         l_reorder = self.labels[reorder]
         if w is not None:
             w = w[reorder]
-        for unit_id in tqdm(self.unit_ids, desc="TsGroup"):
+        for unit_id in progbar(self.unit_ids, desc="TsGroup"):
             inu = np.flatnonzero(l_reorder == unit_id)
             ut = t_s_reorder[inu]
             if w is None:
@@ -980,7 +979,8 @@ def get_labels(h5_path) -> np.ndarray:
 
 def get_residual_snips(h5_path) -> np.ndarray:
     with h5py.File(h5_path, "r", locking=False) as h5:
-        return h5["residual"][:]
+        nr = h5["n_residuals"][()]
+        return h5["residual"][:nr]
 
 
 def sorting_isis(sorting: DARTsortSorting):
@@ -1010,7 +1010,6 @@ def merged_responsibilities(
     responsibilities_key="gmm_responsibilities",
     candidates_key="gmm_candidates",
 ):
-    print("hi")
     labels = sorting.labels
     assert labels is not None, "0"
 
@@ -1387,7 +1386,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
 
     # evenly divide the recording into chunks
     assert recording.get_num_segments() == 1
-    start_time_s, end_time_s = recording.segments[0].sample_index_to_time(
+    start_time_s, end_time_s = recording._recording_segments[0].sample_index_to_time(
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
@@ -1459,7 +1458,7 @@ def yield_chunks(
             n_chunks = int(np.ceil(dataset.shape[0] / fallback_chunk_length))
         else:
             n_chunks = int(np.ceil(dataset.shape[0] / dataset.chunks[0]))
-        chunks = tqdm(chunks, total=n_chunks, desc=desc)
+        chunks = progbar(chunks, total=n_chunks, desc=desc)
 
     for sli in chunks:
         yield sli, dataset[sli]

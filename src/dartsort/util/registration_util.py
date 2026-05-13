@@ -40,7 +40,6 @@ def dredge_estimate_motion(
     a = a[valid]
 
     # run registration
-    print(motion_cfg.smoothing_um)
     dredge_motion_est, _ = dredge_register(
         amps=a,
         depths_um=z,

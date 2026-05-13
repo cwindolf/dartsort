@@ -1,7 +1,7 @@
 import dataclasses
 import tempfile
-from typing import cast
 from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -18,6 +18,7 @@ from dartsort.util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
     SubtractionConfig,
+    default_pretrained_path
 )
 
 fixedlenkeys = (
@@ -313,7 +314,8 @@ def test_resume(fakedata, tmp_path):
         detection_threshold=20.0,
         peak_sign="both",
         subtraction_denoising_cfg=FeaturizationConfig(
-            do_nn_denoise=False, denoise_only=True
+            do_nn_denoise=False,
+            denoise_only=True
         ),
         first_denoiser_thinning=0.0,
         first_denoiser_spatial_jitter=0,

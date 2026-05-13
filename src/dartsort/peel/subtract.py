@@ -1,5 +1,6 @@
 import gc
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +26,7 @@ from ..util.waveform_util import (
     relative_channel_subset_index,
 )
 from .peel_base import BasePeeler, PeelingBatchResult
-from .peel_lib import subtract_chunk
-from .threshold import Threshold
+from .peel_lib import subtract_chunk, threshold_to_fit
 
 
 class SubtractionPeeler(BasePeeler):
@@ -444,77 +444,39 @@ class SubtractionPeeler(BasePeeler):
         return True
 
     def _threshold_to_fit(self, tmp_dir, fit_pipeline, computation_cfg):
-        geom = self.recording.get_channel_locations()
-        waveform_node = Waveform(
-            self.sub_channel_index,
-            waveform_cfg=self.waveform_cfg,
-            sampling_frequency=self.recording.sampling_frequency,
+        threshold_cfg = ThresholdingConfig(
+            detection_threshold=self.p.detection_threshold,
+            peak_sign=self.p.peak_sign,
+            relative_peak_radius_um=self.p.relative_peak_radius_um,
+            relative_peak_radius_samples=self.p.relative_peak_radius_samples,
+            temporal_dedup_radius_samples=self.spike_length_samples,
+            time_jitter=self.p.first_denoiser_temporal_jitter,
+            thinning=self.first_denoiser_thinning,
+            cumulant_order=self.p.cumulant_order,
+            remove_exact_duplicates=self.p.remove_exact_duplicates,
+            convexity_threshold=self.p.convexity_threshold,
+            trough_priority=self.p.trough_priority,
+            convexity_radius=self.p.convexity_radius,
+            spatial_jitter_radius=self.p.first_denoiser_spatial_jitter,
         )
-        waveform_pipeline = WaveformPipeline([waveform_node])
-
-        if self.p.first_denoiser_spatial_dedup_radius:
-            dn_dedup_ci = make_channel_index(
-                geom, self.p.first_denoiser_spatial_dedup_radius, to_torch=True
-            )
-            dn_dedup_ci = dn_dedup_ci.to(self.b.sub_channel_index)
-        else:
-            dn_dedup_ci = self.dedup_channel_index
-        trainer = Threshold(
+        rms = (
+            self.p.first_denoiser_noise_snip_length_mul * self.waveform_cfg.length_ms()
+        )
+        sampling_cfg = replace(
+            self.fit_sampling_cfg,
+            residual_snip_ms=rms,
+            residual_sampling_target_density=self.p.first_denoiser_noise_density,
+        )
+        return threshold_to_fit(
+            pipeline=fit_pipeline,
             recording=self.recording,
-            channel_index=self.b.sub_channel_index,
-            featurization_pipeline=waveform_pipeline,
-            p=ThresholdingConfig(
-                detection_threshold=self.p.detection_threshold,
-                peak_sign=self.p.peak_sign,
-                relative_peak_radius_samples=self.p.relative_peak_radius_samples,
-                temporal_dedup_radius_samples=self.spike_length_samples,
-                time_jitter=self.p.first_denoiser_temporal_jitter,
-                thinning=self.first_denoiser_thinning,
-                cumulant_order=self.p.cumulant_order,
-                remove_exact_duplicates=self.p.remove_exact_duplicates,
-                convexity_threshold=self.p.convexity_threshold,
-                trough_priority=self.p.trough_priority,
-                convexity_radius=self.p.convexity_radius,
-                spatial_jitter_radius=self.p.first_denoiser_spatial_jitter,
-            ),
             waveform_cfg=self.waveform_cfg,
-            peak_channel_index=self.peak_channel_index,
-            dedup_channel_index=dn_dedup_ci,
+            channel_index=self.b.sub_channel_index,
+            spatial_dedup_radius=self.p.first_denoiser_spatial_dedup_radius,
+            threshold_cfg=threshold_cfg,
+            sampling_cfg=sampling_cfg,
+            max_waveforms_fit=self.p.first_denoiser_max_waveforms_fit,
+            n_residual_snips=self.p.first_denoiser_noise_snips,
+            computation_cfg=computation_cfg,
+            tmp_dir=tmp_dir,
         )
-
-        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
-            temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser0_fit.h5"
-            try:
-                trainer.peel(
-                    temp_hdf5_filename,
-                    shuffle=True,
-                    stop_after_n_waveforms=self.p.first_denoiser_max_waveforms_fit,
-                    task_name="Load examples for initial denoiser fitting",
-                    computation_cfg=computation_cfg,
-                )
-
-                # get fit weights
-                device = computation_cfg.actual_device()
-                waveforms, fixed_properties = subsample_waveforms(
-                    temp_hdf5_filename,
-                    fit_sampling=self.fit_sampling_cfg.fit_sampling,
-                    random_state=self.fit_subsampling_random_state,
-                    n_waveforms_fit=self.p.first_denoiser_max_waveforms_fit,
-                    fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
-                    voltages_dataset_name="voltages",
-                    waveforms_dataset_name="waveforms",
-                    subsample_by_weighting=True,
-                )
-
-                # fit the thing
-                fit_pipeline = fit_pipeline.to(device)
-                fit_pipeline.fit(
-                    recording=self.recording,
-                    waveforms=waveforms,
-                    computation_cfg=computation_cfg,
-                    **fixed_properties,
-                )
-                fit_pipeline.to("cpu")
-            finally:
-                if temp_hdf5_filename.exists():
-                    temp_hdf5_filename.unlink()

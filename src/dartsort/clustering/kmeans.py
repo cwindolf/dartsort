@@ -2,10 +2,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from tqdm.auto import trange
 
 try:
-    import cupy  # type: ignore # ty: ignore[unisued-type-ignore-comment]
+    import cupy  # type: ignore # ty: ignore[x]
 
     del cupy
 
@@ -14,7 +13,7 @@ except ImportError:
     HAVE_CUPY = False
 
 
-from ..util.logging_util import DARTSORTDEBUG, get_logger
+from ..util.logging_util import DARTSORTDEBUG, get_logger, progrange
 from ..util.sparse_util import (
     coo_to_cupy,
     coo_to_scipy,
@@ -179,7 +178,7 @@ def truncated_kmeans(
     sigmasq = torch.tensor(torch.inf)
     nearest_distsq = centroid_ixs = labels = None
     if show_progress:
-        it = trange(n_initializations, desc="kmeans++")
+        it = progrange(n_initializations, desc="kmeans++")
     else:
         it = range(n_initializations)
     for _ in it:
@@ -229,7 +228,7 @@ def truncated_kmeans(
         log_likelihoods = None
 
     if show_progress:
-        it = trange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
+        it = progrange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
     else:
         it = range(n_iter)
 

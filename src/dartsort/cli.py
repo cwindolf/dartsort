@@ -1,5 +1,6 @@
 import argparse
 import logging
+import sys
 
 import spikeinterface.core as sc
 
@@ -72,7 +73,9 @@ def dartsort_cli():
     if args.output_dir:
         output_dir = cli_util.ensurepath(args.output_dir, strict=False)
     elif config_toml is None:
-        print(f"No output directory given, exiting. See `{ap.prog} -h`.")
+        print(
+            f"No output directory given, exiting. See `{ap.prog} -h`.", file=sys.stderr
+        )
         return 1
     else:
         output_dir = config_toml.parent
@@ -86,7 +89,6 @@ def dartsort_cli():
     )
 
     # load the recording
-    # TODO: preprocessing management
     try:
         rec = sc.load(cli_util.ensurepath(args.recording))
         assert isinstance(rec, sc.BaseRecording)

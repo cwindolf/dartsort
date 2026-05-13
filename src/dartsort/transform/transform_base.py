@@ -123,28 +123,10 @@ class BaseWaveformModule(BModule):
             self._needs_fit = state["needs_fit"]
         self._init_bgetter()
 
-    def _other_pre_load_state(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
+    def _other_pre_load_state(self, state_dict, prefix):
         pass
 
-    def _pre_load_state(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
+    def _pre_load_state(self, state_dict, prefix, *args, **kwargs):
         # wish torch would strip the prefix for us?
         extra_state_keys = [k for k in state_dict.keys() if k.endswith("_extra_state")]
         assert len(extra_state_keys) <= 1
@@ -161,15 +143,7 @@ class BaseWaveformModule(BModule):
         if self.spike_length_samples is not None:
             self.initialize_spike_length_dependent_params()
 
-        self._other_pre_load_state(
-            state_dict,
-            prefix,
-            local_metadata,
-            strict,
-            missing_keys,
-            unexpected_keys,
-            error_msgs,
-        )
+        self._other_pre_load_state(state_dict, prefix)
 
     def initialize_spike_length_dependent_params(self):
         pass

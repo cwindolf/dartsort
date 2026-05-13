@@ -14,7 +14,7 @@ try:
     from importlib.resources import files
 except ImportError:
     try:
-        from importlib_resources import files
+        from importlib_resources import files  # type: ignore  # ty: ignore[x]
     except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
@@ -59,6 +59,9 @@ class WaveformConfig:
             return int((ms / 1000.0) * sampling_frequency)
         else:
             return int(ms * (sampling_frequency / 1000.0))
+
+    def length_ms(self):
+        return self.ms_before + self.ms_after
 
     def trough_offset_samples(self, sampling_frequency: float = 30_000.0):
         sampling_frequency = np.round(sampling_frequency)
@@ -145,6 +148,18 @@ class InterpolationParams:
             return self.kernel
         return self.extrap_kernel
 
+    def extrap_params(self):
+        return self.__class__(
+            method=self.actual_extrap_kernel,
+            kernel=self.actual_extrap_kernel,
+            kriging_poly_degree=self.kriging_poly_degree,
+            sigma=self.sigma,
+            rq_alpha=self.rq_alpha,
+            smoothing_lambda=self.smoothing_lambda,
+            neighborhood_radius=self.neighborhood_radius,
+            polyharmonic_order=self.polyharmonic_order,
+        )
+
     def extrap_diff(self):
         if self.actual_extrap_method != self.method:
             return True
@@ -197,6 +212,7 @@ class FitSamplingConfig:
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
     n_residual_snips: int = 4 * 4096
+    residual_snip_ms: float | None = None
     residual_sampling_target_density: float = 0.25
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
@@ -572,11 +588,10 @@ class FeaturizationConfig:
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
-    localization_noise_floor: bool = False
 
     # -- further info about denoising
-    nn_denoiser_class_name: str = "SingleChannelWaveformDenoiser"
-    nn_denoiser_pretrained_path: str | None = default_pretrained_path
+    nn_denoiser_class_name: str = "Decollider"
+    nn_denoiser_pretrained_path: str | None = None
     nn_denoiser_train_epochs: int = 100
     nn_denoiser_epoch_size: int = 200 * 256
     nn_denoiser_extra_kwargs: dict | None = argfield(None, cli=False)
@@ -647,6 +662,9 @@ class SubtractionConfig:
 
     # initial denoiser fitting parameters
     first_denoiser_max_waveforms_fit: int = 250_000
+    first_denoiser_noise_snips: int = 100 * 128
+    first_denoiser_noise_snip_length_mul: float = 2.5
+    first_denoiser_noise_density: float = 0.5
     first_denoiser_thinning: float = 0.0
     first_denoiser_temporal_jitter: int = 3
     first_denoiser_spatial_jitter: float = 35.0
@@ -667,7 +685,7 @@ class ThresholdingConfig:
     max_spikes_per_chunk: int | None = None
     peak_sign: Literal["pos", "neg", "both"] = "both"
     spatial_dedup_radius_um: float = 150.0
-    relative_peak_radius_um: float = 35.0
+    relative_peak_radius_um: float | None = 35.0
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True

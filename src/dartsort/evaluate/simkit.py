@@ -15,7 +15,6 @@ from spikeinterface.preprocessing.basepreprocessor import (
     BasePreprocessorSegment,
     BaseRecordingSegment,
 )
-from tqdm.auto import tqdm
 
 from ..templates import TemplateData
 from ..util.data_util import (
@@ -25,7 +24,7 @@ from ..util.data_util import (
     resolve_path,
 )
 from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger
+from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import ptp
@@ -244,16 +243,16 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         self._serializability["json"] = False
         self._serializability["pickle"] = False
 
-        assert len(recording.segments) == 1
+        assert len(recording._recording_segments) == 1
         self.add_recording_segment(
             InjectSpikesPreprocessorSegment(
-                recording.segments[0],
+                recording._recording_segments[0],
                 n_channels=self.get_num_channels(),
                 geom=recording.get_channel_locations(),
                 **simulation_kwargs,
             )
         )
-        self.segment = cast(InjectSpikesPreprocessorSegment, self.segments[0])
+        self.segment = cast(InjectSpikesPreprocessorSegment, self._recording_segments[0])
 
     def basic_sorting(self) -> DARTsortSorting:
         return self.segment.basic_sorting()
@@ -407,6 +406,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 # residual snippets
                 if n_residual_snips:
+                    nrs_dset = h5.create_dataset("n_residuals", data=np.zeros((), dtype=np.int64))
                     residual = h5.create_dataset(
                         "residual",
                         shape=(n_residual_snips, *self.segment.wf_shape),
@@ -426,7 +426,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
-                    results = tqdm(
+                    results = progbar(
                         results,
                         total=len(chunk_starts),
                         desc="Extract GT features",
@@ -459,6 +459,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert resid_ix is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
                     residual_times[resid_ix : resid_ix + nrs] = s["residual_times"]
+                    nrs_dset[()] = resid_ix + nrs
                     resid_ix += nrs
                 if residual is not None and resid_ix != n_residual_snips:
                     assert residual_times is not None
@@ -467,6 +468,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 if residual is not None:
                     assert residual_times is not None
                     assert residual.shape[0] == residual_times.shape[0] == resid_ix
+                    assert nrs_dset[()] == resid_ix
                 assert i1_prev == n
             assert n_injected == n
 

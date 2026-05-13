@@ -30,7 +30,7 @@ dependencies = [
   "pynapple",
   "scipy>=1.13",
   "scikit-learn",
-  "spikeinterface>=0.101.2",
+  "spikeinterface>=0.104.0",
   "sympy",
   "torch>=2.0",
   "tqdm",

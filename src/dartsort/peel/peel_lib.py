@@ -1,16 +1,30 @@
 import warnings
 from collections import namedtuple
-from typing import Literal, cast
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from spikeinterface.core import BaseRecording
+from torch import Tensor
 
 from ..detect import convexity_filter, detect_and_deduplicate
-from ..util.internal_config import PeakSign
+from ..util.internal_config import (
+    ComputationConfig,
+    FitSamplingConfig,
+    PeakSign,
+    ThresholdingConfig,
+    WaveformConfig,
+)
+from ..util.job_util import ensure_computation_config
 from ..util.spiketorch import grab_spikes, ptp, subtract_spikes_
-from ..util.waveform_util import get_relative_subset
+from ..util.waveform_util import get_relative_subset, make_channel_index
 from .peel_base import PeelingBatchResult
+
+if TYPE_CHECKING:
+    from ..transform.pipeline import WaveformPipeline
 
 
 def denoiser_time_shifts(
@@ -816,3 +830,98 @@ def shave_chunk(
         n_spikes=times_rel.numel(), times_rel=times_rel, **features
     )
     return residual[:, :-1], res
+
+
+def threshold_to_fit(
+    pipeline: "WaveformPipeline",
+    recording: BaseRecording,
+    waveform_cfg: WaveformConfig,
+    channel_index: Tensor,
+    spatial_dedup_radius: float | None,
+    threshold_cfg: ThresholdingConfig,
+    sampling_cfg: FitSamplingConfig,
+    max_waveforms_fit: int | None = None,
+    n_residual_snips: int | None = None,
+    computation_cfg: ComputationConfig | None = None,
+    tmp_dir=None,
+):
+    """Run a Thresholding peeling to fit a FeaturizationPipeline.
+
+    Used by subtraction to fit initial NN denoisers.
+    """
+    from ..transform import Waveform, WaveformPipeline
+    from ..util.data_util import subsample_waveforms
+    from .threshold import Threshold
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+
+    geom = recording.get_channel_locations()
+    waveform_node = Waveform(
+        channel_index=channel_index,
+        waveform_cfg=waveform_cfg,
+        sampling_frequency=recording.sampling_frequency,
+    )
+    waveform_pipeline = WaveformPipeline([waveform_node])
+
+    if spatial_dedup_radius:
+        dn_dedup_ci = make_channel_index(geom, spatial_dedup_radius, to_torch=True)
+        dn_dedup_ci = dn_dedup_ci.to(channel_index)
+    else:
+        dn_dedup_ci = channel_index
+    trainer = Threshold(
+        recording=recording,
+        channel_index=channel_index,
+        featurization_pipeline=waveform_pipeline,
+        p=threshold_cfg,
+        waveform_cfg=waveform_cfg,
+        dedup_channel_index=dn_dedup_ci,
+        fit_sampling_cfg=sampling_cfg,
+    )
+
+    if max_waveforms_fit is None:
+        max_waveforms_fit = sampling_cfg.max_waveforms_fit
+
+    if pipeline.needs_residual():
+        n_resid_snips = n_residual_snips or sampling_cfg.n_residual_snips
+    else:
+        n_resid_snips = None
+
+    with TemporaryDirectory(dir=tmp_dir) as temp_dir:
+        temp_hdf5_filename = Path(temp_dir) / "subtraction_denoiser0_fit.h5"
+        try:
+            trainer.run_subsampled_peeling(
+                temp_hdf5_filename,
+                stop_after_n_waveforms=max_waveforms_fit,
+                task_name="Load initial denoiser fit data",
+                total_residual_snips=n_resid_snips,
+                computation_cfg=computation_cfg,
+            )
+
+            # get fit weights
+            device = computation_cfg.actual_device()
+            waveforms, fixed_properties = subsample_waveforms(
+                temp_hdf5_filename,
+                fit_sampling=sampling_cfg.fit_sampling,
+                random_state=sampling_cfg.seed,
+                n_waveforms_fit=max_waveforms_fit,
+                fit_max_reweighting=sampling_cfg.fit_max_reweighting,
+                voltages_dataset_name="voltages",
+                waveforms_dataset_name="waveforms",
+                subsample_by_weighting=True,
+            )
+
+            # fit the thing
+            pipeline = pipeline.to(device)
+            pipeline.fit(
+                recording=recording,
+                waveforms=waveforms,
+                computation_cfg=computation_cfg,
+                hdf5_filename=temp_hdf5_filename,
+                **fixed_properties,  # type: ignore
+            )
+            pipeline.to("cpu")
+        finally:
+            if temp_hdf5_filename.exists():
+                temp_hdf5_filename.unlink()
+
+    return pipeline
