@@ -3,36 +3,51 @@
 [![Zenodo DOI](https://zenodo.org/badge/421108722.svg)](https://doi.org/10.5281/zenodo.16943074)
 [![pypi: dartsort](https://img.shields.io/pypi/v/dartsort?label=pypi:%20dartsort)](https://pypi.org/p/dartsort)
 
+
 # dartsort
 
-## :warning: Work in progress code repository
 
-We do not currently recommend DARTsort for production spike sorting purposes. We are in the process of implementing a robust and documented pipeline in [`src/dartsort`](src/dartsort), and we will update this page accordingly.
-
-A workflow described in our preprint (https://www.biorxiv.org/content/10.1101/2023.08.11.553023v1) is in [uhd_pipeline.py](scripts/uhd_pipeline.py), which is implemented using the legacy code in [`src/spike_psvae`](src/spike_psvae).
+*dartsort* is a modular spike sorter built around a statistical clustering model and a new approach to probe motion.
+It is also a toolkit of modules for building spike sorters or other analyses of electrophysiology data.
 
 
-## Suggested install steps
+## :warning: work in progress :warning:
 
-If you already have a Python environment set up, you can install `dartsort` with
+We do not currently recommend DARTsort for production spike sorting purposes.
+Please feel free to open an issue or a discussion if you run into problems.
 
-```bash
-# get all dependencies (includes visualization and GPU packages); remove [gpu] if you don't have one
-$ pip install dartsort[full,gpu]
+
+## Installation
+
+### Installing into an existing environment
+
+If you already have a Python environment with PyTorch working and you just want to get *dartsort* there, use
+
+```sh
+$ pip install dartsort
 ```
 
-If you don't already have Python and PyTorch 2 installed, we recommend doing this with the Miniforge distribution of `conda`. You can find info and installers for your platform [at Miniforge's GitHub repository](https://github.com/conda-forge/miniforge). After installing Miniforge, `conda` will be available on your computer for installing Python packages, as well as the newer and faster conda replacement tool `mamba`. We recommend using `mamba` instead of `conda` below, since the installation tends to be a lot faster with `mamba`. You can build a conda environment called `dartsort` with
+If you want to run the test suite or use `dartsort.vis`, you can install the optional dependencies with `pip install dartsort[full]`.
 
-```bash
-$ mamba env create -f environment.yml
-$ mamba activate dartsort
-```
+If you need a Python environment, expand the next section.
 
-after cloning this repository. Next, visit https://pytorch.org/get-started/locally/ and follow the `PyTorch` install instructions for your specific OS and hardware needs.
+<details>
+<summary><h3>Setting up a Python environment</h3></summary>
 
-Finish with the `pip` command above. Or, to work on the code, use:
+Otherwise, there are a few ways to get Python and PyTorch set up, including new tools like `uv`, but I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is still the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
 
-```bash
-(dartsort) $ pip install -e ./[full]
-(dartsort) $ pytest tests/*
-```
+You can use `conda-forge` to install Python, `dartsort`, and its dependencies as follows:
+
+ - Follow the `conda-forge` installation instructions for your platform at [https://conda-forge.org/download/](https://conda-forge.org/download/)
+ - Create an environment with
+   ```sh
+   $ mamba env create -f environment.yml
+   ```
+   This will create an environment called `dartsort`, but you can change the name by adding `-n othername`.
+ - Activate the environment:
+   ```sh
+   $ mamba activate dartsort
+   ```
+ - Install `dartsort` and the rest of its dependencies by running the pip command [above](#installing-into-an-existing-environment)
+
+</details>
