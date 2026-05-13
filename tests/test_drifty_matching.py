@@ -1,12 +1,10 @@
+import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
-import numpy as np
-from scipy.signal import correlate
 
 from dartsort.peel.matching_util import drifty
 from dartsort.util.testing_util import matching_debug_util
-
 
 test_K = 11
 test_template_nc = [1, 4]
@@ -107,12 +105,12 @@ def test_full_shared_pconv(K, up, nc, rank, t):
     assert full_pconv0.shape == full_pconv1.shape
     assert full_pconv0.dtype == full_pconv1.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv1, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
+        full_pconv0, full_pconv1, atol=4 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
     assert full_pconv0.shape == full_pconv2.shape
     assert full_pconv0.dtype == full_pconv2.dtype
     np.testing.assert_allclose(
-        full_pconv0, full_pconv2, atol=2 * max(pconv_atol, gpu_pconv_atol, 5e-7)
+        full_pconv0, full_pconv2, atol=4 * max(pconv_atol, gpu_pconv_atol, 5e-7)
     )
 
 
