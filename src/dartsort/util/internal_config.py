@@ -148,6 +148,18 @@ class InterpolationParams:
             return self.kernel
         return self.extrap_kernel
 
+    def extrap_params(self):
+        return self.__class__(
+            method=self.actual_extrap_kernel,
+            kernel=self.actual_extrap_kernel,
+            kriging_poly_degree=self.kriging_poly_degree,
+            sigma=self.sigma,
+            rq_alpha=self.rq_alpha,
+            smoothing_lambda=self.smoothing_lambda,
+            neighborhood_radius=self.neighborhood_radius,
+            polyharmonic_order=self.polyharmonic_order,
+        )
+
     def extrap_diff(self):
         if self.actual_extrap_method != self.method:
             return True

@@ -310,7 +310,7 @@ def kernel_interpolate(
             features=features,
             source_pos=source_pos,
             target_pos=target_pos,
-            params=params,
+            params=params.extrap_params(),
             precomputed_data=precomputed_data,
             neighborhoods=neighborhoods,
             solver_map=solver_map,
