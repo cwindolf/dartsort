@@ -71,8 +71,8 @@ dartsort_result = dartsort.dartsort(
     cfg=dartsort.DARTsortUserConfig(
         preprocessing="ibllike",
         work_in_tmpdir=True,
-        
-    )
+        copy_recording_to_tmpdir=True,
+    ),
 )
 ```
 
@@ -97,7 +97,7 @@ Before running *dartsort*, please be aware of the following important configurat
 
 ### Outputs and exporting
 
-The `dartsort_result = dartsort(...)` function returns a dictionary `dartsort_result` containing a `dartsort.DARTsortSorting` object under the key `sorting = dartsort_result["sorting"]`.
+The `dartsort_result = dartsort(...)` function returns a dictionary `dartsort_result` containing a `DARTsortSorting` object under the key `sorting = dartsort_result["sorting"]`.
 This object has all the spike train data attached (as arrays under property names `.times_samples` and `.times_seconds` for spike times in samples and seconds, `.labels` for unit labels, and many others; `print(sorting)` to see some more).
 
 If you already ran *dartsort* and want to load the output spike trains, use `dartsort.load(output_dir)` to get the `DARTsortSorting` object.
@@ -160,7 +160,7 @@ Please let us know if you run into any issues.
 If you feel that the issue is a software bug, feel free to open an issue or a discussion on GitHub.
 If it's more of a data-related or methodology thing, feel free to use the email on my GitHub [profile](https://github.com/cwindolf).
 
-## References
+
 
 [SpikeInterface]: https://spikeinterface.readthedocs.io
 [iblsorting]: https://figshare.com/articles/online_resource/Spike_sorting_pipeline_for_the_International_Brain_Laboratory/19705522
