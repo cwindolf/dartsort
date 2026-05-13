@@ -3,6 +3,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Callable, Literal, Sequence
 
+import matplotlib.font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 from dredge import motion_util
@@ -250,9 +251,13 @@ def visualize_all_sorting_steps(
     reverse=False,
     computation_cfg=None,
     errors_to_warnings=True,
+    set_style=True,
 ):
     dartsort_dir = Path(dartsort_dir)
     visualizations_dir = Path(visualizations_dir)
+
+    if set_style:
+        set_plt_style()
 
     if motion is None:
         motion = try_load_motion_info(dartsort_dir, motion_pkl)
@@ -298,7 +303,7 @@ def visualize_all_sorting_steps(
                 continue
             assert step_sorting is not None
             if step_name_filter is not None and not step_name_filter(step_name):
-                print(f"Filter skipped {step_name}.")
+                prog.write(f"Filter skipped {step_name}.")
                 continue
             if start_from_matching:
                 h5p = step_sorting.parent_h5_path
@@ -590,3 +595,50 @@ def _plan_vis(
         vs_png,
         mix_dir,
     )
+
+
+SMALL_SIZE = 10
+MEDIUM_SIZE = 11
+BIGGER_SIZE = 14
+
+
+def set_plt_style(
+    small_size=SMALL_SIZE,
+    medium_size=MEDIUM_SIZE,
+    bigger_size=BIGGER_SIZE,
+    margin=0,
+    grid=False,
+    dpi=200,
+    figsize=(3, 3),
+    fonts=['Helvetica', 'Arial', 'Nimbus Sans'],
+):
+    from .colors import glasbey1024
+
+    plt.rc("figure", dpi=dpi)
+    plt.rc("figure", figsize=figsize)
+
+    plt.rc("font", size=small_size)
+    if fonts:
+        avail = matplotlib.font_manager.get_font_names()
+        for font in fonts:
+            if font in avail:
+                plt.rc("font", family=font)
+                break
+        else:
+            logger.info(f"Alas, no {fonts=}.")
+    plt.rc("axes", titlesize=medium_size)
+    plt.rc("axes", labelsize=small_size)
+    plt.rc("xtick", labelsize=small_size)
+    plt.rc("ytick", labelsize=small_size)
+    plt.rc("legend", fontsize=small_size)
+    plt.rc("figure", titlesize=bigger_size)
+    plt.rc("axes", xmargin=margin)
+    plt.rc("axes", ymargin=margin)
+    plt.rc("axes", grid=grid)
+
+    plt.rc("axes", prop_cycle=plt.cycler(color=glasbey1024))
+
+    plt.rc("figure.constrained_layout", use=True)
+
+    plt.rc("legend", fancybox=False)
+    plt.rc("legend", framealpha=1)
