@@ -1,5 +1,5 @@
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import numpy as np
 from spikeinterface.core import BaseRecording, BaseRecordingSegment, read_binary_folder
@@ -10,7 +10,7 @@ from spikeinterface.preprocessing.basepreprocessor import (
 )
 
 from ..util.noise_util import StationaryFactorizedNoise
-from .simlib import default_temporal_kernel_npy, rbf_kernel_sqrt, generate_geom
+from .simlib import default_temporal_kernel_npy, generate_geom, rbf_kernel_sqrt
 
 
 def get_background_recording(

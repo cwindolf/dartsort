@@ -183,11 +183,6 @@ def get_templates(
         If True and output_hdf5_filename is supplied, waveforms extracted
         for template computation are retained in the output hdf5. Else,
         deleted to save disk space.
-    scratch_dir : str or Path
-        This is where a temporary directory will be made for intermediate
-        computations, if output_hdf5_filename is None. If it's left blank,
-        the tempfile default directory is used. If output_hdf5_file is not
-        None, that hdf5 file is used and this argument is ignored.
 
     Returns
     -------
