@@ -22,7 +22,7 @@ __all__ = ["glasbey1024", "gray"]
 
 
 try:
-    import colorcet as cc  # type: ignore
+    import colorcet as cc  # type: ignore  # ty: ignore[x]
     from matplotlib.colors import to_rgba
 
     glasbey_cool = 10 * list(map(to_rgba, cc.glasbey_cool))

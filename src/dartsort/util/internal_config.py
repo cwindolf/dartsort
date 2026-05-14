@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, float_or_none, resolve_path
+from .py_util import cfg_dataclass, resolve_path
 
 try:
     from importlib.resources import files
@@ -272,7 +272,7 @@ class ClusteringConfig:
     # density peaks parameters
     knn_k: int | None = None
     sigma_local: float = 5.0
-    sigma_regional: float | None = argfield(default=25.0, arg_type=float_or_none)
+    sigma_regional: float | None = 25.0
     n_neighbors_search: int = 50
     radius_search: float = 25.0
     noise_density: float = 0.0

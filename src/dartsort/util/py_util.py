@@ -1,6 +1,5 @@
 import contextlib
 import dataclasses
-import math
 import os
 import shutil
 import signal
@@ -120,59 +119,6 @@ if threading.current_thread() is threading.main_thread() and os.name == "posix":
     delay_keyboard_interrupt = NoKeyboardInterrupt()
 else:
     delay_keyboard_interrupt = contextlib.nullcontext()
-
-
-# helper functions used as `type`s in argparse
-
-
-def int_or_inf(s):
-    s = float(s)
-    if math.isfinite(s):
-        return int(s)
-    return s
-
-
-def int_or_float(s):
-    s = s.strip()
-    if not s.strip("0123456789"):
-        return int(s)
-    return float(s)
-
-
-def int_or_float_or_none(s):
-    s = s.strip()
-    if s.lower() in ("none", ""):
-        return None
-    if not s.strip("0123456789"):
-        return int(s)
-    return float(s)
-
-
-def float_or_none(s):
-    s = s.strip()
-    if s.lower() in ("none", ""):
-        return None
-    return float(s)
-
-
-def int_or_none(s):
-    s = s.strip()
-    if s.lower() in ("none", ""):
-        return None
-    return int(s)
-
-
-def float_or_str(s):
-    try:
-        return float(s)
-    except ValueError:
-        return s
-
-
-def str_or_none(s):
-    if s.lower() == "none":
-        return None
-    return s
 
 
 # files and paths

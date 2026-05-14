@@ -20,10 +20,12 @@ extensions = [
     "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    # "sphinx.ext.napoleon",
     "sphinx_automodapi.automodapi",
+    "sphinx_autodoc_typehints",
 ]
-autosummary_generate = True
-autodoc_typehints = 'description'
+autosummary_generate = False
+autodoc_typehints = 'none'
 
 templates_path = ["_templates"]
 exclude_patterns = []
@@ -34,7 +36,7 @@ myst_substitutions = {
 html_theme_options = {
     'sidebar_collapse': False
 }
-
+always_use_bars_union = True
 
 
 # -- Options for HTML output -------------------------------------------------

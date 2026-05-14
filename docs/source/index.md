@@ -10,8 +10,12 @@ Installation
 Contents
 --------
 
-```{toctree}
+```{autoclass} dartsort.config.DARTsortUserConfig
+:members:
+```
+
+<!--```{toctree}
 :maxdepth: 3
 
 api
-```
+```-->
