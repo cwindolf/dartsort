@@ -800,6 +800,7 @@ class ComputationConfig:
     n_jobs_small_gpu: int = 4
     executor: str = "threading_unless_multigpu"
     device: str | None = argfield(default=None, arg_type=str)
+    tmpdir_parent: str | None = None
 
     @classmethod
     def from_n_jobs(cls, n_jobs, n_jobs_small=8):
@@ -1218,6 +1219,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         n_jobs_gpu=cfg.n_jobs_gpu,
         device=cfg.device,
         executor=cfg.executor,
+        tmpdir_parent=cfg.tmpdir_parent,
     )
 
     # final aggregation

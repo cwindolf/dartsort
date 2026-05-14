@@ -1,7 +1,7 @@
 import gc
-import tempfile
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import torch
@@ -396,7 +396,9 @@ class SubtractionPeeler(BasePeeler):
         self.featurization_pipeline = WaveformPipeline([])
 
         # run mini subtraction
-        with tempfile.TemporaryDirectory(dir=tmp_dir) as temp_dir:
+        if tmp_dir is None:
+            tmp_dir = computation_cfg.tmpdir_parent
+        with TemporaryDirectory(dir=tmp_dir) as temp_dir:
             temp_hdf5_filename = Path(temp_dir) / f"subtraction_{which[:-1]}_fit.h5"
             try:
                 self.run_subsampled_peeling(
