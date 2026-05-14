@@ -38,10 +38,8 @@ dependencies = [
 
 [project.optional-dependencies]
 doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "versioningit", "poethepoet", "graphviz"]
-vis = ["matplotlib", "seaborn", "matplotlib-venn"]
-gpu = ["cupy"]
-full = ["matplotlib", "seaborn", "pytest", "matplotlib-venn", "pytest-cov", "ipywidgets", "ipykernel", "black"]
 test = ["pytest", "pytest-cov"]
+vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 
 [project.urls]
 "Homepage" = "https://github.com/cwindolf/dartsort"

@@ -88,7 +88,9 @@ class ReductionTemplateData(TemplateData):
                 n_jobs_small=computation_cfg.n_jobs_small,
             )
         with TemporaryDirectory(
-            prefix="dartsorttemplates", ignore_cleanup_errors=True
+            prefix="dartsorttemplates",
+            ignore_cleanup_errors=True,
+            dir=computation_cfg.tmpdir_parent,
         ) as tdir:
             tdir = resolve_path(tdir)
             h5p = tdir / "tmp.h5"

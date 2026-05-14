@@ -1,19 +1,24 @@
 ---
 name: dartsort
 channels:
-  - conda-forge
+    - conda-forge
 dependencies:
-  - python=3.12
-  - h5py
-  - matplotlib
-  - numpy>=1.26
-  - pytest
-  - scipy>=1.13
-  - scikit-learn
-  - tqdm
-  - pandas
-  - linear_operator
-  - numba
-  - pydantic
-  - opt-einsum
-  - kdepy
+    - python=3.14
+    - h5py
+    - ipykernel
+    - ipython
+    - ipywidgets
+    - kdepy
+    - linear_operator
+    - matplotlib
+    - numba
+    - numpy>=2.0
+    - opt-einsum
+    - pandas
+    - pip
+    - pydantic
+    - pytest
+    - pytorch>=2.0
+    - scipy>=1.13
+    - scikit-learn
+    - tqdm
