@@ -829,7 +829,7 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
 
-    d = torch.load(featurization_pipeline_pt)
+    d = torch.load(featurization_pipeline_pt, weights_only=True)
     kw = d["_extra_state"]["class_names_and_kwargs"]
     tpca_kw = [
         (ix, k, v)
