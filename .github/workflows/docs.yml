@@ -4,9 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-  pull_request:
-    branches:
-      - develop
 
 permissions:
   contents: read
@@ -36,6 +33,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: 3.x
+          cache: "pip" # caching pip dependencies
 
       - name: pip install stuff
         run: python3 -m pip install -e dartsort/[doc]

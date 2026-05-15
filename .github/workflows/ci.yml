@@ -26,7 +26,7 @@ jobs:
       - name: Fetch tags and describe
         run: pushd dartsort/ && git fetch --prune --unshallow --tags && git describe && popd
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
           cache: "pip" # caching pip dependencies

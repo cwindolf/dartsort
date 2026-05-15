@@ -1,4 +1,5 @@
 [![ci](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
+[![docs](https://github.com/dartsort/dartsort.github.io/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/dartsort/dartsort.github.io/actions/workflows/pages/pages-build-deployment)
 [![coveralls](https://coveralls.io/repos/github/cwindolf/dartsort/badge.svg?branch=main)](https://coveralls.io/github/cwindolf/dartsort)
 [![Zenodo DOI](https://zenodo.org/badge/421108722.svg)](https://doi.org/10.5281/zenodo.16943074)
 [![pypi: dartsort](https://img.shields.io/pypi/v/dartsort?label=pypi:%20dartsort)](https://pypi.org/p/dartsort)
