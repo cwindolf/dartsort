@@ -352,8 +352,8 @@ class DARTsortSorting:
     ) -> Self:
         """Load sorting from .hdf5 format saved by peelers
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         load_feature_names : optional list of str
             Load exactly these features, plus geom/channel index.
         load_simple_features : bool

@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 
 
 class Decollider(BaseMultichannelDenoiser):
+    """Unsupervised spike waveform denoising."""
     default_name = "decollider"
     needs_residual = True
 

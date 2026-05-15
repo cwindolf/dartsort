@@ -30,8 +30,8 @@ def batched_levenberg_marquardt(
     use to maintain other per-problem variables that are needed to evaluate
     your objective, gradient, or Hessian.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     x : tensor, shape (n, p) as described above
         The initial condition. This will not be written to.
     vgradfunc, vhess : functions

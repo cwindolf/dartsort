@@ -18,6 +18,7 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 
 
 class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
+    """YASS-style single-channel waveform denoising."""
     default_name = "single_chan_denoiser"
 
     def __init__(

@@ -38,7 +38,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "sphinxcontrib-napoleon", "sphinx-autodoc-typehints", "versioningit", "poethepoet", "graphviz"]
+zen = ["zensical", "mkdocstrings-python", "griffe-typingdoc"]
+doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "sphinxcontrib-napoleon", "sphinx-autodoc-typehints", "autodoc_pydantic", "versioningit", "poethepoet", "graphviz"]
 test = ["pytest", "pytest-cov"]
 vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 

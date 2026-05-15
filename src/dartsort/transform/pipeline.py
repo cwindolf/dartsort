@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 
 
 class WaveformPipeline(torch.nn.Module):
+    """Pipelines of featurization nodes."""
+
     def __init__(
         self,
         transformers: Sequence[BaseWaveformModule],
@@ -91,6 +93,7 @@ class WaveformPipeline(torch.nn.Module):
 
     @classmethod
     def from_state_dict_pt(cls, geom, state_dict_pt, motion=None):
+        """Load a pipeline from file."""
         state_dict = torch.load(state_dict_pt)
         extra_state = state_dict.get("_extra_state", {})
         channel_index = state_dict["channel_index"]
@@ -131,6 +134,7 @@ class WaveformPipeline(torch.nn.Module):
         waveform_cfg: WaveformConfig | None,
         sampling_frequency: float = 30_000.0,
     ):
+        """Construct a pipeline from a sequence of BaseWaveformModule class names and constructor arguments."""
         from .all_transformers import transformers_by_class_name
 
         channel_index = torch.as_tensor(channel_index)
@@ -176,6 +180,7 @@ class WaveformPipeline(torch.nn.Module):
         channel_index=None,
         sampling_frequency: float,
     ):
+        """Construct a pipeline based on configuration options."""
         if geom is None:
             from dartsort.util.waveform_util import make_channel_index
 
@@ -404,7 +409,9 @@ class WaveformPipeline(torch.nn.Module):
                 )
                 for ds in datasets
             }
-            for sli, chk in yield_chunks(wfs, desc_prefix="Transform to disk", show_progress=False):
+            for sli, chk in yield_chunks(
+                wfs, desc_prefix="Transform to disk", show_progress=False
+            ):
                 chk_fp = {k: v[sli].to(device=dev) for k, v in fixed_properties.items()}
                 other_fp = {
                     k: torch.asarray(ds[sli], device=dev)

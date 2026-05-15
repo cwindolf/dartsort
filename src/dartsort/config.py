@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import Field
 from typing_extensions import Doc
@@ -20,245 +20,188 @@ from .util.py_util import cfg_dataclass
 
 @cfg_dataclass
 class DARTsortUserConfig:
-    """User-facing configuration options"""
+    """User-facing configuration options
+
+    To change dartsort's behavior, set parameters here and pass the object
+    to the `dartsort()` function.
+    """
 
     # -- high level behavior
-    do_motion_estimation: Annotated[
-        bool,
-        Doc(
-            "Set this to false if your data is super stable or already motion-corrected."
-        ),
-    ] = True
-    preprocessing: Annotated[
-        PreprocessingStrategy,
-        Doc(
-            "If other than 'none', dartsort will apply a standard preprocessing "
-            "to the recording. Leave as 'none' if you'd prefer to control preprocessing. "
-            "If so, be aware that dartsort expects its input to be standardized on "
-            "each channel in addition to the usual highpass filtering, but that "
-            "whitening is handled internally. See util/preprocess_util.py if you're "
-            "curious about the details of the methods."
-        ),
-    ] = "none"
-    preprocessing_dtype: Annotated[
-        Literal["float16", "float32"],
-        Doc(
-            "If you have a lot of data and you're using a workflow where it is important "
-            "to save a preprocessed copy of the recording, float16 is a good option. Only "
-            "relevant if preprocessing != 'none'. If the recording isn't getting saved, "
-            "stick to float32."
-        ),
-    ] = "float32"
-    subsampling_spikes: Annotated[
-        int | None,
-        Doc(
-            "Detection steps before the final matching round will run until at least "
-            "this many spikes are found or the whole recording is covered, to make sure "
-            "that there is enough data for clustering. See also subsampling_fraction. "
-            "Set to None to disable subsampling."
-        ),
-    ] = 2_048_000
-    subsampling_presence: Annotated[
-        float,
-        Field(gt=0.0, le=1.0),
-        Doc(
-            "Early detection steps which have already found `subsampling_spikes` "
-            "spikes are only allowed to end early if they additionally cover this "
-            "fraction of the recording, to make sure there's good coverage of "
-            "conditions for template estimation."
-        ),
-    ] = 0.1
-    matching_iterations: Annotated[
-        int,
-        Doc(
-            "By default, 1 template matching step is carried out using templates "
-            "estimated from the initial detection round."
-        ),
-    ] = 1
+
+    do_motion_estimation: bool = True
+    """Set this to false if your data is super stable or already motion-corrected."""
+
+    preprocessing: PreprocessingStrategy = "none"
+    """If other than `'none'`, dartsort will apply some preprocessing to the
+    recording. Leave as `'none'` if you are passing in an already-preprocesed
+    recording. If so, be aware that dartsort expects its input to be standardized on
+    each channel in addition to the usual highpass filtering, but that
+    whitening is handled internally. See util/preprocess_util.py if you're
+    curious about the details of the methods.
+
+    Options: `'ibllikecmr', 'ibllike', 'standardize', 'none'`
+    """
+
+    preprocessing_dtype: Literal["float16", "float32"] = "float32"
+    """If you have a lot of data and you're using a workflow where it is important
+    to save a preprocessed copy of the recording, float16 is a good option. Only
+    relevant if `preprocessing != 'none'`. If the recording isn't getting saved,
+    stick to float32."""
+
+    subsampling_spikes: int | None = 2_048_000
+    """Detection steps before the final matching round will run until at least
+    this many spikes are found or the whole recording is covered, to make sure
+    that there is enough data for clustering. See also subsampling_fraction.
+    Set to None to disable subsampling."""
+
+    subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.1
+    """Early detection steps which have already found `subsampling_spikes`
+    spikes are only allowed to end early if they additionally cover this
+    fraction of the recording, to make sure there's good coverage of
+    conditions for template estimation."""
+
+    matching_iterations: int = 1
+    """By default, 1 template matching step is carried out using templates
+    estimated from the initial detection round."""
+
+    dredge_only: bool = False
+    """Whether to stop after initial localization and motion tracking."""
 
     # -- computer options
-    n_jobs_cpu: Annotated[
-        int,
-        Doc(
-            "Number of parallel workers to use when running on CPU. "
-            "0 means everything runs on the main thread; negative means "
-            "#cpu - (val+1) so that -1 is all cores, -2 is all less 1, etc."
-        ),
-    ] = 0
-    n_jobs_gpu: Annotated[
-        int, Doc("Number of parallel workers to use when running on GPU.")
-    ] = 0
-    n_jobs_small: Annotated[int, Doc("Max workers to use for small jobs.")] = -2
-    n_jobs_small_gpu: Annotated[
-        int, Doc("Max workers to use for small jobs running on GPU.")
-    ] = 4
-    device: Annotated[
-        str | None,
-        Doc(
-            "The name of the PyTorch device to use. For example, 'cpu' "
-            "or 'cuda' or 'cuda:1'. If unset, uses n_jobs_gpu of your CUDA "
-            "GPUs if you have multiple, or else just the one, or your CPU."
-        ),
-    ] = None
+    n_jobs_cpu: int = 0
+    """Number of parallel workers to use when running on CPU. 0 means
+    everything runs on the main thread; negative means `#cpu - (val+1)`
+    so that -1 is all cores, -2 is all less 1, etc."""
+
+    n_jobs_gpu: int = 0
+    """Number of parallel workers to use when running on GPU."""
+
+    n_jobs_small: int = -2
+    """Max workers to use for small jobs."""
+
+    n_jobs_small_gpu: int = 4
+    """Max workers to use for small jobs running on GPU."""
+
+    device: str | None = None
+    """The name of the PyTorch device to use. For example, 'cpu'
+    or 'cuda' or 'cuda:1'. If unset, uses n_jobs_gpu of your CUDA
+    GPUs if you have multiple, or else just the one, or your CPU."""
+
     executor: str = "threading_unless_multigpu"
+    """Choose: 'threading_unless_multigpu', 'ThreadPoolExecutor', 'ProcessPoolExecutor', or some others."""
+
     chunk_length_samples: int = 30_000
+    """Batch size for data processing."""
 
     # -- storage behavior
-    # TODO: document
     work_in_tmpdir: bool = False
+    """If True, dartsort will store all temporary data in a scratch directory in tmpdir_parent or TMPDIR."""
+
     copy_recording_to_tmpdir: bool = False
+    """Save a copy of the preprocessed recording to a tmpdir?"""
+
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
+    """'shutil' or 'rsync'"""
+
     workdir_follow_symlinks: bool = False
     tmpdir_parent: str | None = None
+    """Control where tmpdirs are created."""
     save_intermediates: bool = False
+    """Store all spike features from intermediate steps (for debugging)"""
+
     save_final_features: bool = True
+    """Store the spike features from the final step (instead of just basic spike train outputs)."""
 
     # -- waveform snippet length parameters
-    ms_before: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Length of time (ms) before trough (or peak) in waveform snippets. "
-            "Default value corresponds to 42 samples at 30kHz."
-        ),
-    ] = 1.4
-    ms_after: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Length of time (ms) after trough (or peak) in waveform snippets. "
-            "Default value corresponds to 79 samples at 30kHz."
-        ),
-    ] = 2.6 + 0.1 / 3
-    alignment_ms: Annotated[
-        float, Field(gt=0), Doc("Largest time shift allowed when re-aligning events.")
-    ] = 1.5
+    ms_before: Annotated[float, Field(gt=0)] = 1.4
+    """Length of time (ms) before trough (or peak) in waveform snippets.
+    Default value corresponds to 42 samples at 30kHz."""
+
+    ms_after: Annotated[float, Field(gt=0)] = 2.6 + 0.1 / 3
+    """Length of time (ms) after trough (or peak) in waveform snippets.
+    Default value corresponds to 79 samples at 30kHz."""
+
+    alignment_ms: Annotated[float, Field(gt=0)] = 1.5
+    """Largest time shift allowed when re-aligning events."""
 
     # -- thresholds
-    peak_sign: Annotated[
-        Literal["neg", "both", "pos"],
-        Doc(
-            "Allow only troughs or events of both signs when detecting threshold "
-            "crossings during initialization. Or positive only, if that's your thing."
-        ),
-    ] = "both"
-    voltage_threshold: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Threshold in standardized (SNR) voltage units for initial detection; "
-            "peaks or troughs larger than this value will be grabbed."
-        ),
-    ] = 3.0
-    matching_threshold: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Template matching threshold. If subtracting a template leads "
-            "to at least this great of a decrease in the norm of the residual, "
-            "that match will be used."
-        ),
-    ] = 8.0
-    initial_threshold: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Initial detection's neural net matching threshold. Same as "
-            "matching_threshold, except that a neural net is trying to guess "
-            "the true waveforms here, rather than using cluster templates."
-        ),
-    ] = 10.0
-    motion_voltage_threshold: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "If subsampling, a quick thresholding will be run at this voltage "
-            "threshold to grab spikes for motion estimation purposes."
-        ),
-    ] = 4.0
+    peak_sign: Literal["neg", "both", "pos"] = "both"
+    """Allow only troughs or events of both signs when detecting threshold
+    crossings during initialization. Or positive only, if that's your thing."""
+
+    voltage_threshold: Annotated[float, Field(gt=0)] = 3.0
+    """Threshold in standardized (SNR) voltage units for initial detection;
+    peaks or troughs larger than this value will be grabbed."""
+
+    matching_threshold: Annotated[float, Field(gt=0)] = 8.0
+    """Template matching threshold. If subtracting a template leads
+    to at least this great of a decrease in the norm of the residual,
+    that match will be used. This is in the same units as the corresponding
+    threshold in Kilosort and other sorters, and it represents reduction in
+    Euclidean norm of standardized data due to matching a new event."""
+
+    initial_threshold: Annotated[float, Field(gt=0)] = 10.0
+    """Initial detection's neural net matching threshold. Same as
+    matching_threshold, except that a neural net is trying to guess
+    the true waveforms here, rather than using cluster templates."""
+
+    motion_voltage_threshold: Annotated[float, Field(gt=0)] = 4.0
+    """If subsampling, a quick thresholding will be run at this voltage
+    threshold to grab spikes for motion estimation purposes."""
 
     # -- featurization length, radius, rank parameters
-    temporal_pca_rank: Annotated[
-        int,
-        Field(gt=0),
-        Doc("Rank of temporal PCAs used in denoising and featurization."),
-    ] = 8
-    feature_ms_before: Annotated[
-        float,
-        Field(gt=0),
-        Doc("As ms_before, but used only when computing PCA features in clustering."),
-    ] = 0.75
-    feature_ms_after: Annotated[
-        float,
-        Field(gt=0),
-        Doc("As ms_after, but used only when computing PCA features in clustering."),
-    ] = 1.25
-    subtraction_radius_um: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Radius of neighborhoods around spike events extracted "
-            "when denoising and subtracting NN-denoised events."
-        ),
-    ] = 200.0
-    deduplication_radius_um: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "During initial detection, if two spike events occur at the "
-            "same time within this radius, then the smaller of the two is "
-            "ignored. But also all of the secondary channels of the big one, "
-            "which is important."
-        ),
-    ] = 50.0
-    featurization_radius_um: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Radius around detection channel or template peak channel used "
-            "to extract spike features for clustering."
-        ),
-    ] = 100.0
-    fit_radius_um: Annotated[
-        float,
-        Field(gt=0),
-        Doc(
-            "Extraction radius when fitting features like PCA; "
-            "smaller than other radii to include less noise."
-        ),
-    ] = 75.0
-    localization_radius_um: Annotated[
-        float,
-        Field(gt=0),
-        Doc("Radius around main channel used when localizing spikes."),
-    ] = 100.0
+    temporal_pca_rank: Annotated[int, Field(gt=0)] = 8
+    """Rank of temporal PCAs used in denoising and featurization."""
+
+    feature_ms_before: Annotated[float, Field(gt=0)] = 0.75
+    """As ms_before, but used only when computing PCA features in clustering."""
+
+    feature_ms_after: Annotated[float, Field(gt=0)] = 1.25
+    """As ms_after, but used only when computing PCA features in clustering."""
+
+    subtraction_radius_um: Annotated[float, Field(gt=0)] = 200.0
+    """Radius of neighborhoods around spike events extracted
+    when denoising and subtracting NN-denoised events."""
+
+    deduplication_radius_um: Annotated[float, Field(gt=0)] = 50.0
+    """During initial detection, if two spike events occur at the
+    same time within this radius, then the smaller of the two is
+    ignored. But also all of the secondary channels of the big one,
+    which is important."""
+
+    featurization_radius_um: Annotated[float, Field(gt=0)] = 100.0
+    """Radius around detection channel or template peak channel used
+    to extract spike features for clustering."""
+
+    fit_radius_um: Annotated[float, Field(gt=0)] = 75.0
+    """Extraction radius when fitting features like PCA; smaller than other radii to include less noise."""
+
+    localization_radius_um: Annotated[float, Field(gt=0)] = 100.0
+    """Radius around main channel used when localizing spikes."""
 
     # -- subtraction neural net
-    nn_denoiser_class_name: Annotated[
-        Literal["SingleChannelWaveformDenoiser", "Decollider"],
-        Doc(
-            "Which neural net to use in initial detection? Set to Decollider (and set the pretrained "
-            "path to None to train a  brand-new unsupervised denoiser."
-        ),
-    ] = "Decollider"
-    nn_denoiser_pretrained_path: Annotated[
-        str | None,
-        Doc(
-            "Path to a pytorch saved model (.pt file as dumped by torch.save()). If this is None, the "
-            "model will be fit."
-        ),
-    ] = None
+    nn_denoiser_class_name: Literal["SingleChannelWaveformDenoiser", "Decollider"] = (
+        "Decollider"
+    )
+    """Which neural net to use in initial detection? Set to Decollider (and set the pretrained
+    path to None to train a  brand-new unsupervised denoiser."""
+
+    nn_denoiser_pretrained_path: str | None = None
+    """Path to a pytorch saved model (.pt file as dumped by torch.save()). If this is None, a new model will be fit."""
 
     # -- matching parameters
-    # TODO: document
     amplitude_scaling_stddev: Annotated[float, Field(ge=0)] = 0.01
+    """Standard deviation of amplitude scaling regularization prior in template matching."""
+
     amplitude_scaling_boundary: Annotated[float, Field(ge=0)] = 1.0 / 3.0
+    """Boundaries on the amount of scaling allowed."""
+
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
+    """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
     # -- motion estimation parameters
-    rigid: Annotated[
-        bool, Doc("Use rigid registration and ignore the window parameters.")
-    ] = False
+    rigid: bool = False
+    """Use rigid registration and ignore the window parameters."""
     probe_boundary_padding_um: float = 100.0
     spatial_bin_length_um: Annotated[float, Field(gt=0)] = 1.0
     temporal_bin_length_s: Annotated[float, Field(gt=0)] = 1.0
@@ -271,20 +214,11 @@ class DARTsortUserConfig:
     max_disp_um: Annotated[float, Field(gt=0)] | None = None
     correlation_threshold: Annotated[float, Field(gt=0, lt=1)] = 0.1
     min_amplitude: float | None = None
-    speed_limit_um_per_s: Annotated[
-        float,
-        Doc("Motion bins exceeding this speed will be replaced by interpolation."),
-    ] = 500.0
-    max_dist_from_median_um: Annotated[
-        float,
-        Doc(
-            "Motion bins farther than this from the local median will be replaced by interpolation."
-        ),
-    ] = 250.0
+    speed_limit_um_per_s: float = 500.0
+    """Motion bins exceeding this speed will be replaced by interpolation."""
+    max_dist_from_median_um: float = 250.0
+    """Motion bins farther than this from the local median will be replaced by interpolation."""
     median_neighborhood_bins: int = 51
-    dredge_only: Annotated[
-        bool, Doc("Whether to stop after initial localization and motion tracking.")
-    ] = False
 
 
 @cfg_dataclass

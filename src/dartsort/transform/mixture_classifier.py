@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
+    """Gaussian mixture clustering and classification as a featurization node."""
     is_multi = True
     needs_residual = True
     fits_from_disk = True

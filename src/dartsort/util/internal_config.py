@@ -917,8 +917,8 @@ class DARTsortInternalConfig:
 def to_internal_config(cfg) -> DARTsortInternalConfig:
     """Laundromat of configuration formats
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     cfg : str | Path | DARTsortUserConfig | DeveloperConfig
         If str or Path, it should point to a .toml file.
 

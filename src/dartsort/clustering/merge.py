@@ -43,9 +43,9 @@ def merge_templates(
     already, pass them into template_data and we can skip the template
     construction.
 
-    Arguments
-    ---------
-    max_shift_samples
+    Parameters
+    ----------
+    max_shift_samples : int
         Max offset during matching
     amplitude_scaling_*
         Optionally allow scaling during matching
