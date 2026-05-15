@@ -5,10 +5,9 @@ from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
 from collections.abc import Sequence
 from dataclasses import _MISSING_TYPE, MISSING, asdict, field, fields
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from annotated_types import Ge, Gt, Le, Lt
-from fastplotlib.graphics.image import Literal
 from typing_extensions import Doc
 
 
