@@ -38,8 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-zen = ["zensical", "mkdocstrings-python", "griffe-typingdoc"]
-doc = ["sphinx", "myst-parser", "sphinx-autobuild", "sphinx-automodapi", "sphinxcontrib-napoleon", "sphinx-autodoc-typehints", "autodoc_pydantic", "versioningit", "poethepoet", "graphviz"]
+doc = ["zensical", "mkdocstrings-python"]
 test = ["pytest", "pytest-cov"]
 vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 
@@ -52,9 +51,6 @@ vis = ["matplotlib", "seaborn", "matplotlib-venn"]
 
 [tool.versioningit]
 # use their defaults
-
-[tool.poe.tasks]
-"livedoc" = "sphinx-autobuild docs/source docs/_build/html"
 
 [project.scripts]
 "dartsort" = "dartsort.cli:dartsort_cli"
