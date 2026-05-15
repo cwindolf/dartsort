@@ -68,7 +68,7 @@ class BaseWaveformModule(BModule):
         except AttributeError:
             # ...? seems to happen in 2.4.1...
             self._hook = self._register_load_state_dict_pre_hook(
-                self.__class__._pre_load_state
+                self.__class__._pre_load_state, with_module=True
             )
 
     def __getstate__(self):

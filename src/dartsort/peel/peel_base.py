@@ -543,7 +543,7 @@ class BasePeeler(BModule):
         chunk_result = peel_result | features
         if to_cpu:
             chunk_result = {
-                k: v.cpu() if torch.is_tensor(v) else v for k, v in chunk_result.items()
+                k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in chunk_result.items()
             }
             if "residual" in peel_result:
                 if torch.is_tensor(peel_result["residual"]):
@@ -915,7 +915,7 @@ class BasePeeler(BModule):
         feats_pt = save_folder / "featurization_pipeline.pt"
         if feats_pt.exists():
             assert self.featurization_pipeline is not None
-            state_dict = torch.load(feats_pt)
+            state_dict = torch.load(feats_pt, weights_only=True)
             self.featurization_pipeline.load_state_dict(state_dict)
 
     def check_resuming(

@@ -18,7 +18,7 @@ dependencies:
     - pip
     - pydantic
     - pytest
-    - pytorch>=2.0
+    - pytorch>=2.6
     - scipy>=1.13
     - scikit-learn
     - tqdm

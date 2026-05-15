@@ -45,7 +45,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
             nf = f.needs_fit()
             try:
                 torch.save(f, pt)
-                ff = torch.load(pt)
+                ff = torch.load(pt, weights_only=True)
                 assert ff.needs_fit() == nf
             except pickle.UnpicklingError as e:
                 raise ValueError(f"Save/load failed for {f=}") from e
@@ -56,7 +56,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
             nf = f.needs_fit()
             try:
                 torch.save(f.state_dict(), pt)
-                f.load_state_dict(torch.load(pt))
+                f.load_state_dict(torch.load(pt), weights_only=True)
                 assert f.needs_fit() == nf
             except pickle.UnpicklingError as e:
                 raise ValueError(f"Save/load failed for {f=}") from e
@@ -66,7 +66,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
         nf = pipeline.needs_fit()
         orig_state_dict = pipeline.state_dict()
         torch.save(pipeline, pt)
-        pipeline2 = torch.load(pt)
+        pipeline2 = torch.load(pt, weights_only=True)
         _check_state_equal(
             orig_state_dict, pipeline2.state_dict(), class_names_and_kwargs
         )
@@ -74,7 +74,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
 
         # now with state dict
         torch.save(pipeline.state_dict(), pt)
-        pipeline.load_state_dict(torch.load(pt))
+        pipeline.load_state_dict(torch.load(pt), weights_only=True)
         assert pipeline.needs_fit() == nf
         _check_state_equal(
             orig_state_dict, pipeline.state_dict(), class_names_and_kwargs

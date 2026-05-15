@@ -26,11 +26,11 @@ def simulate_moppca(
     rg: int | np.random.Generator = 0,
     device=None,
 ):
-    from dartsort.transform import TemporalPCAFeaturizer
-    from dartsort.util.data_util import DARTsortSorting
-    from dartsort.util.noise_util import EmbeddedNoise
-    from dartsort.clustering import StableWaveformFeatures
-    from dartsort.util.interpolation_util import SpikeNeighborhoods
+    from ...clustering import StableWaveformFeatures
+    from ...transform import TemporalPCAFeaturizer
+    from ..data_util import DARTsortSorting
+    from ..interpolation_util import SpikeNeighborhoods
+    from ..noise_util import EmbeddedNoise
 
     N = Nper * K
 
@@ -249,7 +249,7 @@ def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
             assert mu.shape[0] == 1
             mu = mu[0]
             W = W[0]
-    if torch.is_tensor(mu):
+    if isinstance(mu, torch.Tensor):
         mu = mu.numpy(force=True)
         W = W.numpy(force=True)
 
@@ -261,7 +261,7 @@ def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
         umu = getattr(unit, "mean", np.zeros_like(mu))
     M = 0
     werr = None
-    if torch.is_tensor(uW):
+    if isinstance(uW, torch.Tensor):
         uW = uW.numpy(force=True)
         assert uW.shape == W.shape, f"{uW.shape=} {W.shape=}"
         rank, nc, M = W.shape
@@ -270,7 +270,7 @@ def compare_subspaces(mu, W, umu=None, uW=None, gmm=None, k=None):
         uWTW = uW.reshape(rank * nc, M)
         uWTW = uWTW @ uWTW.T
         werr = WTW - uWTW
-    if torch.is_tensor(umu):
+    if isinstance(umu, torch.Tensor):
         umu = umu.numpy(force=True)
         assert umu.shape == mu.shape, f"{umu.shape=} {mu.shape=}"
 
