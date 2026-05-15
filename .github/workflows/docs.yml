@@ -21,6 +21,9 @@ jobs:
         with:
           path: dartsort
 
+      - name: Fetch tags and describe
+        run: git fetch --prune --unshallow --tags && git describe
+
       - name: Checkout dartsort.github.io repo
         uses: actions/checkout@v6
         with:
