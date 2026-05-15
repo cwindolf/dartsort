@@ -91,7 +91,7 @@ class WaveformPipeline(torch.nn.Module):
 
     @classmethod
     def from_state_dict_pt(cls, geom, state_dict_pt, motion=None):
-        state_dict = torch.load(state_dict_pt)
+        state_dict = torch.load(state_dict_pt, weights_only=True)
         extra_state = state_dict.get("_extra_state", {})
         channel_index = state_dict["channel_index"]
         class_names_and_kwargs = extra_state.get("class_names_and_kwargs")

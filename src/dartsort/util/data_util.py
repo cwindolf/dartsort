@@ -452,7 +452,13 @@ class DARTsortSorting:
             try:
                 h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
-                h5p = h5p.relative_to(sorting_npz.parent)
+                try:
+                    h5p = h5p.relative_to(sorting_npz.parent)
+                except ValueError:
+                    # for old python versions
+                    from os.path import relpath
+
+                    h5p = relpath(h5p, start=sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
         data.update(self._ephemeral_features)
         data["ephemeral_feature_names"] = np.array(
@@ -1622,7 +1628,7 @@ def fit_reweighting(
 
     from ..clustering.density import get_smoothed_density
 
-    if torch.is_tensor(voltages):
+    if isinstance(voltages, torch.Tensor):
         v = voltages.numpy(force=True)
     else:
         v = voltages

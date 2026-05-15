@@ -51,7 +51,7 @@ def templates_at_time(
     if not motion.drifting and not return_padded:
         return registered_templates
     if not motion.drifting and return_padded:
-        assert torch.is_tensor(registered_templates)
+        assert isinstance(registered_templates, torch.Tensor)
         return F.pad(registered_templates, (0, 1), value=fill_value)
     assert motion.drifting
     assert registered_template_depths_um is not None
@@ -121,7 +121,7 @@ class LowRankTemplates:
         nhigh = int(high // pitch)
 
         spatial_components = self.spatial_components
-        if torch.is_tensor(spatial_components):
+        if isinstance(spatial_components, torch.Tensor):
             spatial_components = spatial_components.numpy(force=True)
         scores = np.full(len(self.spatial_components), -np.inf)
         best_spatial = spatial_components[:, :, : len(geom)] + 0.0

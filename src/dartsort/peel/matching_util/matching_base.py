@@ -323,6 +323,7 @@ class ChunkTemplateData:
             channels = self.main_channels[peaks.template_inds]
         else:
             assert False
+        assert isinstance(channels, Tensor)
 
         times = peaks.times
         assert times is not None

@@ -155,7 +155,7 @@ class SubtractionPeeler(BasePeeler):
         super().load_models(save_folder)
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         if sub_denoise_pt.exists():
-            state_dict = torch.load(sub_denoise_pt)
+            state_dict = torch.load(sub_denoise_pt, weights_only=True)
             self.subtraction_denoising_pipeline.load_state_dict(state_dict)
 
     @classmethod

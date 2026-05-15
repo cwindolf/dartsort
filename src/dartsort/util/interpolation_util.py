@@ -1048,7 +1048,7 @@ class NeighborhoodFiller(BModule):
         if waveforms.shape[0] <= self.batch_size and out is None:
             return self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
 
-        if torch.is_tensor(target_channels):
+        if isinstance(target_channels, torch.Tensor):
             assert target_channels.ndim == 1
             ntarg = target_channels.shape[0]
         else:

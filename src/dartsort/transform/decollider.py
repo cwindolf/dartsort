@@ -516,7 +516,7 @@ class Decollider(BaseMultichannelDenoiser):
             # val set does not need shuffling
             val_loader = DataLoader(
                 val_dataset,
-                num_workers=self.n_data_workers,  # type: ignore
+                num_workers=self.n_data_workers,  # type: ignore  # ty: ignore[x]
                 persistent_workers=bool(self.n_data_workers),
                 batch_size=self.batch_size,
             )
