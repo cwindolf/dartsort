@@ -22,7 +22,7 @@ jobs:
           path: dartsort
 
       - name: Fetch tags and describe
-        run: git fetch --prune --unshallow --tags && git describe
+        run: pushd dartsort && git fetch --prune --unshallow --tags && git describe && popd
 
       - name: Checkout dartsort.github.io repo
         uses: actions/checkout@v6
