@@ -1,3 +1,4 @@
+"""A peeler implementing mean or median reduction for estimating template waveforms."""
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory

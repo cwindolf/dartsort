@@ -1,4 +1,5 @@
 [![ci](https://github.com/cwindolf/dartsort/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cwindolf/dartsort/actions/)
+[![docs](https://github.com/dartsort/dartsort.github.io/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/dartsort/dartsort.github.io/actions/workflows/pages/pages-build-deployment)
 [![coveralls](https://coveralls.io/repos/github/cwindolf/dartsort/badge.svg?branch=main)](https://coveralls.io/github/cwindolf/dartsort)
 [![Zenodo DOI](https://zenodo.org/badge/421108722.svg)](https://doi.org/10.5281/zenodo.16943074)
 [![pypi: dartsort](https://img.shields.io/pypi/v/dartsort?label=pypi:%20dartsort)](https://pypi.org/p/dartsort)
@@ -29,31 +30,27 @@ $ pip install dartsort
 
 If you want to run the test suite or use `dartsort.vis`, you can install the optional dependencies with `pip install dartsort[test,vis]`.
 
-If you need a Python environment, expand the next section.
+## Setting up a Python environment
 
-<details>
+Otherwise, there are a few ways to get Python and PyTorch set up, including new tools like `uv`, but I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is still the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
 
-  <summary><h3>Setting up a Python environment</h3></summary>
-
-  Otherwise, there are a few ways to get Python and PyTorch set up, including new tools like `uv`, but I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is still the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
-
-  You can use `conda-forge` to install Python, `dartsort`, and its dependencies as follows:
-   - Follow the `conda-forge` installation instructions for your platform at [https://conda-forge.org/download/](https://conda-forge.org/download/)
-   - Create an environment with
-     ```sh
-     $ mamba env create -f environment.yml
-     ```
-     This will create an environment called `dartsort`, but you can change the name by adding `-n othername`.
-   - Activate the environment:
-     ```sh
-     $ mamba activate dartsort
-     ```
-   - Install `dartsort` and the rest of its dependencies by running the pip command [above](#installing-into-an-existing-environment)
-
-</details>
+You can use `conda-forge` to install Python, `dartsort`, and its dependencies as follows:
+  - Follow the `conda-forge` installation instructions for your platform at [https://conda-forge.org/download/](https://conda-forge.org/download/)
+  - Create an environment with
+    ```sh
+    $ mamba env create -f environment.yml
+    ```
+    This will create an environment called `dartsort`, but you can change the name by adding `-n othername`.
+  - Activate the environment:
+    ```sh
+    $ mamba activate dartsort
+    ```
+  - Install `dartsort` and the rest of its dependencies by running the pip command [above](#installing-into-an-existing-environment)
 
 
 ## Usage
+
+Main usage reference page: [main API documentation](main_api.md).
 
 ### As a Python function
 
@@ -79,10 +76,10 @@ dartsort_result = dartsort.dartsort(
 **Please** read the [important configuration details section](#important-configuration-details) below.
 Some of them, like preprocessing, are not set by default and need your input! (This could change.)
 
-Here, `recording` is a [SpikeInterface](SpikeInterface) recording object.
-SpikeInterface can read every electrophysiology data format that I've encountered and many I haven't; see
+Here, `recording` is a [SpikeInterface][SpikeInterface] recording object.
+SpikeInterface can read every electrophysiology data format that I've encountered and many I haven't. `output_dir` is the folder where *dartsort* will save its output.
 
-`output_dir` is the folder where *dartsort* will save its output.
+For more details on these arguments, see the [main API documentation](main_api.md).
 
 Once you've run *dartsort*, you might want to check out [the outputs and exporting](#outputs-and-exporting) section below.
 
@@ -91,7 +88,7 @@ Once you've run *dartsort*, you might want to check out [the outputs and exporti
 Before running *dartsort*, please be aware of the following important configuration options.
 
  - `preprocessing`: *dartsort* won't touch your data by default (`preprocessing="none"`), leaving you free to implement your own preprocessing in SpikeInterface or otherwise, and therefore *dartsort* will explode if you don't set this flag and leave your data in its original raw state (for instance, the raw `int16` data off the probe).
-    - For a cheap but sensible default, try `preprocessing="ibllikecmr"`, which applies a pipeline similar to that of [the IBL](iblsorting) but with global median common referencing instead of their spatial highpass filter. `preprocessing="ibllike"` will use their spatial highpass filter.
+    - For a cheap but sensible default, try `preprocessing="ibllikecmr"`, which applies a pipeline similar to that of [the IBL][iblsorting] but with global median common referencing instead of their spatial highpass filter. `preprocessing="ibllike"` will use their spatial highpass filter.
  - `do_motion_estimation=True` by default, and you may like to disable it if you know for a fact that there is (say) less than 5 microns of total drift in your recording, or if you have handled this in your own preprocessing (which is discouraged, since *dartsort* has its own approach.)
  - `work_in_tmpdir` and `copy_recording_to_tmpdir` can be helpful in some cases where slow network drives are involved.
 
@@ -160,8 +157,15 @@ Please let us know if you run into any issues.
 If you feel that the issue is a software bug, feel free to open an issue or a discussion on GitHub.
 If it's more of a data-related or methodology thing, feel free to use the email on my GitHub [profile](https://github.com/cwindolf).
 
+## References
+
+ - [SpikeInterface][SpikeInterface]
+ - DREDge [on PyPI][dredge-pypi] and the DREDge [paper][dredge-nm] ([PDF link][dredge-rdcb]).
 
 
 [SpikeInterface]: https://spikeinterface.readthedocs.io
 [iblsorting]: https://figshare.com/articles/online_resource/Spike_sorting_pipeline_for_the_International_Brain_Laboratory/19705522
 [Pynapple]: https://pynapple.org/
+[dredge-pypi]: https://pypi.org/p/dredge-ephys/
+[dredge-nm]: https://www.nature.com/articles/s41592-025-02614-5
+[dredge-rdcb]: https://rdcu.be/ecqZf

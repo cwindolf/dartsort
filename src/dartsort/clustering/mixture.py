@@ -292,9 +292,9 @@ class NeighborhoodCovariance(BModule):
     ):
         """Holds precomputed terms which depend only on the neighborhood
 
-        Arguments
-        ---------
-        feat_rank: int
+        Parameters
+        ----------
+        feat_rank : int
             most observed channels in any neighborhood
         max_nc_obs: int
             most missing channels (inside the cov zero radius)
@@ -6717,9 +6717,9 @@ def _stat_pass_batch_ppca(
     lut_ixs are the result of combining those with neighb_ixs and going
     to the LUT.
 
-    Arguments
-    ---------
-    responsibilities: (n, C or C + 1)
+    Parameters
+    ----------
+    responsibilities : (n, C or C + 1)
         Last index is the noise dimension, if present. If it's present,
         candidates must appear too. If candidates don't appear, it's not present.
     candidates: None or (n, C)
@@ -6831,9 +6831,9 @@ def _stat_pass_batch_rank0(
     lut_ixs are the result of combining those with neighb_ixs and going
     to the LUT.
 
-    Arguments
-    ---------
-    responsibilities: (n, C or C + 1)
+    Parameters
+    ----------
+    responsibilities : (n, C or C + 1)
         Last index is the noise dimension, if present. If it's present,
         candidates must appear too. If candidates don't appear, it's not present.
     candidates: None or (n, C)

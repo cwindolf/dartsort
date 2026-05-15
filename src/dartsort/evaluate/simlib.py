@@ -44,8 +44,8 @@ def refractory_poisson_spike_train(
 ):
     """Sample a refractory Poisson spike train
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     rate : float
         Spikes / second, well, except it'll be slower due to refractoriness.
     duration : float

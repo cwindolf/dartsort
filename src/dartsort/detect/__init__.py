@@ -1,2 +1,3 @@
+"""Helper functions for event detection"""
 from .detect import detect_and_deduplicate
 from .detect_filters import convexity_filter

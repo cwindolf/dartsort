@@ -1,11 +1,15 @@
 # TODO: arg_group to group arguments in the -h.
+import types
 import typing
 from argparse import ArgumentParser, BooleanOptionalAction, _StoreAction
+from collections.abc import Sequence
 from dataclasses import _MISSING_TYPE, MISSING, asdict, field, fields
 from pathlib import Path
 from typing import Any, Callable
 
 from annotated_types import Ge, Gt, Le, Lt
+from fastplotlib.graphics.image import Literal
+from typing_extensions import Doc
 
 
 def ensurepath(path: str | Path, strict=True):
@@ -78,6 +82,69 @@ def field_annot_str(field):
     return ", ".join(constrs)
 
 
+def union_arg_type(tp):
+    """Returns a from_string fn for types like `int | None` or `Literal["hi", "bye"] | None`."""
+    types_ = typing.get_args(tp)
+
+    # unpack any annotated internal types
+    tps = []
+    for tp in types_:
+        if typing.get_origin(tp) == typing.Annotated:
+            tp, _ = typing.get_args(tp)
+        tps.append(tp)
+
+    # let's just exclude some bad ideas here, because I don't
+    # really want to figure out how to disambiguate these cases
+    assert bool not in tps
+    if str in tps:
+        assert len(tps) == 2
+    if int in tps:
+        assert float not in tps
+    assert not any(typing.get_origin(tp) == typing.Union for tp in tps)
+    assert not any(typing.get_origin(tp) == types.UnionType for tp in tps)
+
+    def tp_from_str(s: str) -> tp:
+        s = s.strip()
+
+        # check for None then Literal first, then grab bag
+        for pos in tps:
+            if pos is None and s.lower() in ("none", ""):
+                return None
+        for pos in tps:
+            if typing.get_origin(pos) == typing.Literal:
+                for opt in typing.get_args(pos):
+                    if s == opt:
+                        return opt
+        for pos in tps:
+            if pos is int and not s.strip("0123456789"):
+                return int(s)
+            if pos is float:
+                return float(s)
+            if pos is str:
+                return s
+
+        raise ValueError(
+            f"Don't know how to handle type {tp} (input value was: {s}; full type list was {tps})"
+        )
+
+    return tp_from_str
+
+
+def sequence_arg_type(seq):
+    (internal_tp,) = typing.get_args(seq)
+    is_str = internal_tp is str
+    is_str_literal = (
+        typing.get_origin(internal_tp) == Literal
+        and type(typing.get_args(internal_tp)[0]) is str
+    )
+    assert is_str or is_str_literal
+
+    def from_str(s):
+        return tuple(ss.strip() for ss in s.split(","))
+
+    return from_str
+
+
 def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
     """Add a dataclass's fields as arguments to an ArgumentParser
 
@@ -87,46 +154,60 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
     if parser is None:
         parser = ArgumentParser()
 
-    for field in fields(cls):
-        if skipnames and field.name in skipnames:
+    for fld in fields(cls):
+        if skipnames and fld.name in skipnames:
             continue
-        if not field.metadata.get("cli", True):
+        if not fld.metadata.get("cli", True):
             continue
 
-        required = field.default is MISSING and field.default_factory is MISSING
-        doc = field.metadata.get("doc", "")
-        type_ = field.metadata.get("arg_type", field.type)
+        # handle Annotated fields
+        required = fld.default is MISSING and fld.default_factory is MISSING
+        doc = fld.metadata.get("doc", "")
+        type_ = fld.metadata.get("arg_type", fld.type)
         if type_ is MISSING:
-            raise ValueError(f"Need type or arg_type for {field}.")
+            raise ValueError(f"Need type or arg_type for {fld}.")
+        if typing.get_origin(type_) == typing.Annotated:
+            type_, *annots = typing.get_args(type_)
+            print(f"{annots=}")
+            for annot in annots:
+                if isinstance(annot, Doc):
+                    assert not doc
+                    doc = annot.documentation
+            annots = [ann for ann in annots if not isinstance(ann, Doc)]
+            if annots:
+                assert len(annots) == 1
+                typeannot = field_annot_str(annots[0])
+                if typeannot:
+                    doc += f" (%(type)s; {typeannot})"
+                else:
+                    doc += " (%(type)s)"
+        elif type_ is not bool:
+            doc += " (%(type)s)"
 
+        # handle the type itself
         choices = None
         if typing.get_origin(type_) == typing.Literal:
             choices = typing.get_args(type_)
             type_ = type(choices[0])
-        elif typing.get_origin(type_) == typing.Annotated:
-            type_, annot = typing.get_args(type_)
-            annot = field_annot_str(annot)
-            if annot:
-                doc += f" (%(type)s; {annot})"
-            else:
-                doc += " (%(type)s)"
-        elif type_ != bool:
-            doc += " (%(type)s)"
+        elif typing.get_origin(type_) in (types.UnionType, typing.Union):
+            type_ = union_arg_type(type_)
+        elif typing.get_origin(type_) == Sequence:
+            type_ = sequence_arg_type(type_)
 
-        name = f"--{prefix}{field.name.replace('_', '-')}"
-        metavar = field.name.upper()
-        default = field.default
+        name = f"--{prefix}{fld.name.replace('_', '-')}"
+        metavar = fld.name.upper()
+        default = fld.default
         if default is MISSING:
             default = None
 
         try:
-            if type_ == bool:
+            if type_ is bool:
                 parser.add_argument(
                     name,
                     action=FieldBooleanOptionalAction,
                     default=default,
                     help=doc,
-                    dest=field.name,
+                    dest=fld.name,
                 )
             else:
                 parser.add_argument(
@@ -138,10 +219,10 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
                     metavar=metavar,
                     default=default,
                     help=doc,
-                    dest=field.name,
+                    dest=fld.name,
                 )
         except Exception as e:
-            ee = ValueError(f"Exception raised while adding {field=} to CLI")
+            ee = ValueError(f"Exception raised while adding field '{fld}' to CLI")
             raise ee from e
 
     return parser
@@ -166,9 +247,9 @@ def update_dataclass_from_args(cls, obj, args):
     else:
         kv = asdict(obj)
 
-    for field in fields(cls):
-        if hasattr(args, manglefieldset(field.name)):
-            kv[field.name] = getattr(args, field.name)
+    for fld in fields(cls):
+        if hasattr(args, manglefieldset(fld.name)):
+            kv[fld.name] = getattr(args, fld.name)
 
     return cls(**kv)
 

@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 
 class BaseWaveformModule(BModule):
+    """Base class of all spike featurizers and denoisers."""
+
     is_denoiser = False
     is_featurizer = False
     default_name = ""
@@ -168,6 +170,8 @@ class BaseWaveformModule(BModule):
 
 
 class BaseWaveformDenoiser(BaseWaveformModule):
+    """Base class of spike denoisers."""
+
     is_denoiser = True
 
     def forward(self, waveforms, *, channels: torch.Tensor, **spike_data):
@@ -176,6 +180,8 @@ class BaseWaveformDenoiser(BaseWaveformModule):
 
 
 class BaseWaveformFeaturizer(BaseWaveformModule):
+    """Base class of spike featurizers."""
+
     is_featurizer = True
     is_multi = False
     saving = True

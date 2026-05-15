@@ -15,6 +15,8 @@ from ._multichan_denoiser_kit import (
 
 
 class SupervisedDenoiser(BaseMultichannelDenoiser):
+    """Supervised multi-channel neural network waveform denoising."""
+
     default_name = "superviseddenoiser"
 
     def initialize_spike_length_dependent_params(self):

@@ -1,3 +1,4 @@
+"""Grab and featurize events at known times."""
 from typing import Mapping
 
 import numpy as np

@@ -16,6 +16,10 @@ figs/*
 *.sublime-project
 .vscode/
 
+# sphinx
+docs/source/_autosummary/
+docs/source/api/
+
 ## Core latex/pdflatex auxiliary files:
 *.aux
 *.lof

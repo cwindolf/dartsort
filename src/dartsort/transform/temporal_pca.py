@@ -21,6 +21,7 @@ from .transform_base import (
 
 
 class BaseTemporalPCA(BaseWaveformModule):
+    """Base class for PCA featurizers."""
     default_name = "basis"
 
     def __init__(
@@ -404,6 +405,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
 
 class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
+    """Spike waveform denoising with PCA."""
     default_name = "temporal_pca"
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):
@@ -457,6 +459,7 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
 
 
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
+    """Spike featurization with PCA."""
     default_name = "tpca_features"
 
     def transform(
@@ -516,6 +519,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
 
 class TemporalPCA(BaseWaveformAutoencoder, TemporalPCAFeaturizer):
+    """Combined spike featurization and denoising with PCA."""
     default_name = "tpca_features"
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):

@@ -1,0 +1,68 @@
+name: Documentation
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dartsort repo
+        uses: actions/checkout@v6
+        with:
+          path: dartsort
+
+      - name: Fetch tags and describe
+        run: pushd dartsort && git fetch --prune --unshallow --tags && git describe && popd
+
+      - name: Checkout dartsort.github.io repo
+        uses: actions/checkout@v6
+        with:
+          repository: dartsort/dartsort.github.io
+          path: io
+          # this is a "fine-grained token"
+          token: ${{ secrets.DARTSORT_GITHUB_IO }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+          cache: "pip" # caching pip dependencies
+
+      - name: pip install stuff
+        run: python3 -m pip install -e dartsort/[doc]
+
+      - name: Zensical build
+        run: pushd dartsort/ && zensical build --clean && popd
+
+      - name: overwrite site
+        shell: bash
+        run: |
+          cp -r dartsort/site/* io/
+
+      # shouts out to some-natalie.dev/blog/multi-repo-actions/
+      - name: Push to io
+        shell: bash
+        env:
+          CI_COMMIT_MESSAGE: update dartsort.github.io
+          CI_COMMIT_AUTHOR: github-actions[bot]
+          CI_COMMIT_EMAIL: username@users.noreply.github.com
+        run: |
+          cd io/
+          git config --global user.name "${{ env.CI_COMMIT_AUTHOR }}"
+          git config --global user.email "${{ env.CI_COMMIT_EMAIL }}"
+
+          if [[ `git status --porcelain` ]]; then
+            git add .
+            git commit -m "${{ env.CI_COMMIT_MESSAGE }}"
+            git push
+          else
+            echo "no changes"
+            exit 0
+          fi

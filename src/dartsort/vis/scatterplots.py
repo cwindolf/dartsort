@@ -551,7 +551,7 @@ def scatter_feature_vs_depth(
 
     updating = scat is not None
     if updating:
-        max_spikes_plot = scat.get_offsets().shape[0]
+        max_spikes_plot = scat.get_offsets().shape[0]  # type: ignore  # ty: ignore[x]
         assert ax is not None
 
     if ax is None:
@@ -631,8 +631,8 @@ def scatter_feature_vs_depth(
         c = np.pad(c, [(0, n_pad), (0, 0)], constant_values=0)
 
     if updating:
-        scat.set_offsets(np.c_[feature, depths_um])
-        scat.set_facecolors(c)
+        scat.set_offsets(np.c_[feature, depths_um])  # type: ignore  # ty: ignore[x]
+        scat.set_facecolors(c)  # type: ignore  # ty: ignore[x]
     else:
         scat = ax.scatter(
             feature,

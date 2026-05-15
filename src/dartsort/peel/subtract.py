@@ -1,3 +1,4 @@
+"""Neural-net based substitute for template matching."""
 import gc
 from dataclasses import replace
 from pathlib import Path

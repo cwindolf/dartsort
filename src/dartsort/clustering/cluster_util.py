@@ -25,9 +25,9 @@ def recluster(
 ):
     """Distance-based hierarchical clustering of units
 
-    Arguments
-    ---------
-    sorting: DARTsortSorting,
+    Parameters
+    ----------
+    sorting : DARTsortSorting
     dists: np.ndarray
     unit_ids: np.ndarray | None, default None
     shifts: np.ndarray | None, default None

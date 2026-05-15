@@ -146,8 +146,8 @@ def get_templates(
     Low-level helper function which does the work of template computation for
     the template classes elsewhere in this folder
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     times, channels, labels : arrays of shape (n_spikes,)
         The trough (or peak) times, main channels, and unit labels
     geom : array of shape (n_channels, 2)

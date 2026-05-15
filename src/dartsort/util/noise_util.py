@@ -129,8 +129,8 @@ class FactorizedNoise(torch.nn.Module):
 
         This is an SVD reimplementation of a Yass fn which used covariance matrices.
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         snippets : torch.Tensor
             (n, t, c) array of noise snippets. If you don't want spikes in there,
             this function won't help you with that.
@@ -276,8 +276,8 @@ class StationaryFactorizedNoise(torch.nn.Module):
         is the eigh of circulant things. So we use an FFT based version of the
         SVD algorithm above.
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         snippets : torch.Tensor
             (n, t, c) array of noise snippets. If you don't want spikes in there,
             this function won't help you with that.
@@ -324,8 +324,8 @@ class StationaryFactorizedNoise(torch.nn.Module):
         this noise object's distribution. Then, detect peaks (with a refractory
         condition) to estimate the false positive count.
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         low_rank_templates : LowRankTemplates
         min_threshold : float
             The bare minimum deconv objective
@@ -820,8 +820,8 @@ class EmbeddedNoise(BModule):
     ):
         """Factory method to estimate noise model from TPCA snippets
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         snippets : torch.Tensor
             (n, rank, c) array of tpca-embedded noise snippets
             missing values are okay, indicate by NaN please
@@ -1321,8 +1321,8 @@ def fp_control_threshold(
     <max_fp_per_input_spike/2*max_fp_per_input_spike.
     We can then take the max over units to get a global threshold.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     fp_dataframe: pd.DataFrame
     fp_num_frames : int
         Above two as returned by .unit_false_positives()

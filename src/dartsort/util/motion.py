@@ -113,15 +113,26 @@ def get_motion_info(
 
 @databag
 class MotionInfo:
+    """Holds motion-related info and helper functions."""
+
     drifting: bool
+    """Was do_motion_estimation set, or are we ignoring motion?"""
     geom: np.ndarray
+    """The recording's `get_channel_locations()` array."""
     rgeom: np.ndarray
+    """The extended "registered geometry" array"""
     dredge_motion_est: MotionEstimate | None
+    """Motion estimate from DREDge, if using."""
     si_motion: Motion | None
+    """Motion estimate from SpikeInterface, if using."""
     geom_kdt: KDTree
+    """k-d tree for querying original geometry."""
     rgeom_kdt: KDTree
+    """k-d tree for querying registered geometry."""
     min_dist: float
+    """k-d tree query bound."""
     pitch: float
+    """Vertical probe geometry period."""
 
     @classmethod
     def from_motion_est(

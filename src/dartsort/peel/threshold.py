@@ -1,4 +1,4 @@
-
+"""Simple thresholding spike detection."""
 import numpy as np
 import torch
 from spikeinterface.core import BaseRecording

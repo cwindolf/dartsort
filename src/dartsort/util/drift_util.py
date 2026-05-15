@@ -346,8 +346,8 @@ def get_waveforms_on_static_channels(
     the same channel in each subsetted waveform is always at the same physical position,
     accounting for drift. Here, the drift is inputted by n_pitches_shift.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     waveforms : (n_spikes, t (optional), c) array
     geom : (n_channels_tot, probe_dim) array
         Original channel positions
