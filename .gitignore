@@ -18,6 +18,7 @@ figs/*
 
 # sphinx
 docs/source/_autosummary/
+docs/source/api/
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
