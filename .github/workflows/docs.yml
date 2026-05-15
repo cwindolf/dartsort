@@ -38,7 +38,7 @@ jobs:
           python-version: 3.x
 
       - name: pip install stuff
-        run: python3 -m pip install dartsort/[doc]
+        run: python3 -m pip install -e dartsort/[doc]
 
       - name: Zensical build
         run: pushd dartsort/ && zensical build --clean && popd
