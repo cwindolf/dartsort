@@ -1,29 +1,63 @@
 name: Documentation
 on:
-  push:
-    branches:
-      - master
-      - main
+  release:
+    types: [published]
+    workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
   id-token: write
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/configure-pages@v6
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - name: Checkout dartsort repo
+        uses: actions/checkout@v6
+        with:
+          path: dartsort
+
+      - name: Checkout dartsort.github.io repo
+        uses: actions/checkout@v6
+        with:
+          repository: dartsort/dartsort.github.io
+          path: io
+          # this is a "fine-grained token"
+          token: ${{ secrets.DARTSORT_GITHUB_IO }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
         with:
           python-version: 3.x
-      - run: pip install zensical
-      - run: zensical build --clean
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: site
-      - uses: actions/deploy-pages@v5
-        id: deployment
+
+      - name: pip install stuff
+        run: python3 -m pip install dartsort/[doc]
+
+      - name: Zensical build
+        run: pushd dartsort/ && zensical build --clean && popd
+
+      - name: overwrite site
+        shell: bash
+        run: |
+          cp -r dartsort/site/* io/
+
+      # shouts out to some-natalie.dev/blog/multi-repo-actions/
+      - name: Push to io
+        shell: bash
+        env:
+          CI_COMMIT_MESSAGE: update dartsort.github.io
+          CI_COMMIT_AUTHOR: github-actions[bot]
+          CI_COMMIT_EMAIL: username@users.noreply.github.com
+        run: |
+          cd io/
+          git config --global user.name "${{ env.CI_COMMIT_AUTHOR }}"
+          git config --global user.email "${{ env.CI_COMMIT_EMAIL }}"
+
+          if [[ `git status --porcelain` ]]; then
+            git add .
+            git commit -m "${{ env.CI_COMMIT_MESSAGE }}"
+            git push
+          else
+            echo "no changes"
+            exit 0
+          fi
