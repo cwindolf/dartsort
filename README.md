@@ -32,7 +32,7 @@ $ pip install dartsort
 
 If you want to run the test suite or use `dartsort.vis`, you can install the optional dependencies with `pip install dartsort[test,vis]`.
 
-## Setting up a Python environment
+### Setting up a Python environment
 
 If you need to set up Python or PyTorch, I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
 
