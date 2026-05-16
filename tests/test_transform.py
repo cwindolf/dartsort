@@ -74,7 +74,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
 
         # now with state dict
         torch.save(pipeline.state_dict(), pt)
-        pipeline.load_state_dict(torch.load(pt), weights_only=True)
+        pipeline.load_state_dict(torch.load(pt, weights_only=True))
         assert pipeline.needs_fit() == nf
         _check_state_equal(
             orig_state_dict, pipeline.state_dict(), class_names_and_kwargs
