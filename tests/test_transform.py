@@ -56,7 +56,7 @@ def _check_saveload(geom, channel_index, pipeline, class_names_and_kwargs):
             nf = f.needs_fit()
             try:
                 torch.save(f.state_dict(), pt)
-                f.load_state_dict(torch.load(pt), weights_only=True)
+                f.load_state_dict(torch.load(pt, weights_only=True))
                 assert f.needs_fit() == nf
             except pickle.UnpicklingError as e:
                 raise ValueError(f"Save/load failed for {f=}") from e
