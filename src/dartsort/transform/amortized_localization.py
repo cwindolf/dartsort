@@ -19,7 +19,9 @@ from .transform_base import BaseWaveformFeaturizer
 
 
 class AmortizedLocalization(BaseWaveformFeaturizer):
-    """Order of output columns: x, y, z_abs."""
+    """Localize spike waveform sources in space with a neural network.
+
+    Order of output columns: x, y, z_abs."""
 
     default_name = "point_source_localizations"
     shape = (3,)

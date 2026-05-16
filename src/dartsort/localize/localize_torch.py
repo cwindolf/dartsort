@@ -41,8 +41,8 @@ def localize_amplitude_vectors(
     amplitude vectors on a larger channel neighborhood than you would
     want to trust your localization model over.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     amplitude_vectors : tensor, shape (n_spikes, c)
     geom : tensor, shape (n_channels_tot, 2)
     main_channels : LongTensor, shape (n_spikes,)
@@ -224,8 +224,8 @@ def dipole_find_projection_distance(normalized_amp_vec, x, y, z, local_geom):
 def point_source_mse(loc, amplitude_vector, channel_mask, local_geom, logbarrier=True):
     """Objective in point source model
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     loc : tensor of shape (3,)
         Here, this is the x, y0, z positions, where y = softplus(y0)
     amplitude_vector : tensor of shape (n_chans,)

@@ -538,8 +538,8 @@ def ravel_multi_index(multi_index, dims):
 
     Only implements order="C"
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     multi_index : tuple of LongTensor
     dims : tuple of ints
         Shape of tensor to be indexed

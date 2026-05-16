@@ -68,4 +68,4 @@ if hasattr(torch.serialization, "add_safe_globals"):
         SingleChannelDenoiser,
         WaveformConfig,
     ]
-    torch.serialization.add_safe_globals(all_transformers + others)  # type: ignore
+    torch.serialization.add_safe_globals(all_transformers + others)  # type: ignore  # ty: ignore[x]

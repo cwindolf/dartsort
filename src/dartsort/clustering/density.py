@@ -711,8 +711,8 @@ def gmm_density_peaks(
 
     TODO: see parallelism todo in gmm_kmeans. This could be a lot faster.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     X : (N_spikes, n_features) array
         For instance, the features property of a SimpleMatrixFeatures
     channels: (N_spikes,) array

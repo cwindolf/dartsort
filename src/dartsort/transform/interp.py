@@ -8,6 +8,7 @@ logger = get_logger(__name__)
 
 
 class WaveformInterpolator(BaseWaveformDenoiser):
+    """Interpolate waveforms for motion correction."""
     default_name = "interpolated"
 
     def __init__(

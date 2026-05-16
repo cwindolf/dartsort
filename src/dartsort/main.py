@@ -1,7 +1,8 @@
+"""High-level spike sorting toolbox functions."""
 import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Sequence
+from typing import Any, Sequence, TypedDict
 
 from dredge.motion_util import MotionEstimate
 from spikeinterface.core import BaseRecording, Motion
@@ -67,6 +68,13 @@ from .util.torch_util import cleanup_and_log_gpu_usage
 logger = get_logger(__name__)
 
 
+class DARTsortReturn(TypedDict):
+    sorting: DARTsortSorting
+    """Output spike trains."""
+    motion: MotionInfo
+    """Esimated motion"""
+
+
 def dartsort(
     recording: BaseRecording,
     output_dir: str | Path,
@@ -78,39 +86,33 @@ def dartsort(
     dredge_motion_est: MotionEstimate | None = None,
     overwrite=False,
 ):
-    """dartsort
+    """This function runs a spike sorter called dartsort.
 
-    This function runs a spike sorter called dartsort.
-
-    Arguments
+    Parameters
     ---------
     recording : BaseRecording
-        A spikeinterface.BaseRecording object
-    output_dir: str | Path
+        A SpikeInterface `BaseRecording` object
+    output_dir : str or Path
         Folder where outputs are stored
-    cfg: DARTsortUserConfig | DARTsortInternalConfig | str | Path
-        Your settings. Either create a DARTsortUserConfig directly in code, or
+    cfg : DARTsortUserConfig or DARTsortInternalConfig or str or Path
+        Your settings. Either create a `DARTsortUserConfig` directly in code, or
         you can pass a string or Path pointing to a .toml file here.
-    si_motion: optional spikeinterface.core.Motion
-        This is meant to allow users to pass their own external motion estimate.
-    dredge_motion_est: optional dredge.MotionEstimate
-        This is meant to allow users to pass their own external motion estimate.
-    overwrite : bool, default=False
+    si_motion : spikeinterface.core.Motion, optional
+        Allows users to pass their own external motion estimate.
+    dredge_motion_est : dredge.MotionEstimate, optional
+        Allows users to pass their own external motion estimate.
+    overwrite : bool
         Ignore and overwrite stored results, if any. Otherwise, dartsort will
         try to resume from the last step that ran, or if it had finished then
         it will do nothing.
 
     Returns
     -------
-    Dictionary of sorting results, with the following keys:
-     - "sorting": DARTsortSorting
-        This has a sorting.to_numpy_sorting() method for those who want to
-        export back to spikeinterface. Which would be everyone? :)
-        Alternatively, you could visualize your results using the functions
-        in the `import dartsort.vis as dartvis` library.
-     - "motion": MotionInfo
+    results : DARTsortReturn
+        Dictionary of sorting results, with keys:
 
-    TODO: add the key "motion" with a spikeinterface Motion object.
+          - "sorting": `DARTsortSorting`
+          - "motion": MotionInfo
     """
     output_dir = resolve_path(output_dir)
     output_dir.mkdir(exist_ok=True)

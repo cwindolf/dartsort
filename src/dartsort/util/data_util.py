@@ -352,8 +352,8 @@ class DARTsortSorting:
     ) -> Self:
         """Load sorting from .hdf5 format saved by peelers
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         load_feature_names : optional list of str
             Load exactly these features, plus geom/channel index.
         load_simple_features : bool
@@ -452,7 +452,13 @@ class DARTsortSorting:
             try:
                 h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
-                h5p = h5p.relative_to(sorting_npz.parent)
+                try:
+                    h5p = h5p.relative_to(sorting_npz.parent)
+                except ValueError:
+                    # for old python versions
+                    from os.path import relpath
+
+                    h5p = relpath(h5p, start=sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
         data.update(self._ephemeral_features)
         data["ephemeral_feature_names"] = np.array(
@@ -823,7 +829,7 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
 
-    d = torch.load(featurization_pipeline_pt)
+    d = torch.load(featurization_pipeline_pt, weights_only=True)
     kw = d["_extra_state"]["class_names_and_kwargs"]
     tpca_kw = [
         (ix, k, v)
@@ -1622,7 +1628,7 @@ def fit_reweighting(
 
     from ..clustering.density import get_smoothed_density
 
-    if torch.is_tensor(voltages):
+    if isinstance(voltages, torch.Tensor):
         v = voltages.numpy(force=True)
     else:
         v = voltages

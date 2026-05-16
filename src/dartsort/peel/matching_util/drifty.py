@@ -94,8 +94,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         device: torch.device,
     ):
         """
-        Arguments
-        ---------
+        Parameters
+        ----------
         up_method:
             How to pick the upsampling index? If we have a coarse match at time t,
         """

@@ -18,6 +18,7 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 
 
 class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
+    """YASS-style single-channel waveform denoising."""
     default_name = "single_chan_denoiser"
 
     def __init__(
@@ -143,7 +144,7 @@ class FlexibleSingleChanDenoiser(nn.Module):
         return self.out(x)
 
     def load(self, pretrained_path):
-        checkpoint = torch.load(pretrained_path, map_location="cpu")
+        checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint)
         return self
 

@@ -1,4 +1,5 @@
 import torch
+
 from dartsort.util.spiketorch import ptp
 
 from ..util.internal_config import WaveformConfig, default_waveform_cfg
@@ -6,6 +7,8 @@ from .transform_base import BaseWaveformFeaturizer
 
 
 class AmplitudeFeatures(BaseWaveformFeaturizer):
+    """Extract spike amplitudes."""
+
     is_multi = True
 
     def __init__(

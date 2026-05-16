@@ -596,8 +596,8 @@ def config_grid(
     => nice nested grid with names
     ```
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     common_params: dict
         Arguments shared across all settings.
     name_prefix: str

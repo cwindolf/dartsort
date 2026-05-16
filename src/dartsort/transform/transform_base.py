@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 
 class BaseWaveformModule(BModule):
+    """Base class of all spike featurizers and denoisers."""
+
     is_denoiser = False
     is_featurizer = False
     default_name = ""
@@ -66,7 +68,7 @@ class BaseWaveformModule(BModule):
         except AttributeError:
             # ...? seems to happen in 2.4.1...
             self._hook = self._register_load_state_dict_pre_hook(
-                self.__class__._pre_load_state
+                self.__class__._pre_load_state, with_module=True
             )
 
     def __getstate__(self):
@@ -168,6 +170,8 @@ class BaseWaveformModule(BModule):
 
 
 class BaseWaveformDenoiser(BaseWaveformModule):
+    """Base class of spike denoisers."""
+
     is_denoiser = True
 
     def forward(self, waveforms, *, channels: torch.Tensor, **spike_data):
@@ -176,6 +180,8 @@ class BaseWaveformDenoiser(BaseWaveformModule):
 
 
 class BaseWaveformFeaturizer(BaseWaveformModule):
+    """Base class of spike featurizers."""
+
     is_featurizer = True
     is_multi = False
     saving = True

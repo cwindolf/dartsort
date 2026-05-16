@@ -1,5 +1,3 @@
-from typing import cast
-
 import torch
 
 from dartsort.localize.localize_torch import localize_amplitude_vectors
@@ -9,7 +7,9 @@ from .transform_base import BaseWaveformFeaturizer
 
 
 class Localization(BaseWaveformFeaturizer):
-    """Order of output columns: x, y, z_abs, alpha"""
+    """Optimization-based spike source localization.
+
+    Order of output columns: x, y, z_abs, alpha"""
 
     default_name = "point_source_localizations"
     shape = (4,)

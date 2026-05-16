@@ -29,8 +29,8 @@ def detect_and_deduplicate(
 
     TODO: reuse bufs and pre-pad.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     traces : time by channels tensor
     threshold : float
     dedup_channel_index : channels by n_neighbors tensor

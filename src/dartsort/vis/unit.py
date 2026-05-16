@@ -589,7 +589,6 @@ class NeighborQDAMatrices(UnitPlot):
         axes = panel.subplots(nrows=2)
 
         qda = sorting_analysis.qda
-        assert np.array_equal(neighbor_ixs, neighbor_ids)
         assert qda is not None
 
         score = qda.score[neighbor_ixs][:, neighbor_ixs]

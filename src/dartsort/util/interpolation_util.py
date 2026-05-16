@@ -41,8 +41,8 @@ def interpolate_by_chunk(
     quickly scan through the data, applying interpolation to all the
     features.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     mask : boolean np.ndarray
         Load and interpolate these entries. Shape should be
         (n_spikes_full,), and let's say it has n_spikes nonzero entries.
@@ -270,8 +270,8 @@ def kernel_interpolate(
 ):
     """Kernel interpolation of multi-channel features or waveforms
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     features : torch.Tensor
         n_spikes, feature_dim, n_source_channels
         These can be masked, indicated by nans here and in the same
@@ -714,8 +714,8 @@ def log_rbf(source_pos, target_pos=None, sigma=None):
     This handles missing values in source_pos or target_pos, indicated by
     nans, by replacing them with -inf so that they exp to 0.
 
-    Arguments
-    ---------
+    Parameters
+    ----------
     source_pos : torch.tensor
         n source locations
     target_pos : torch.tensor
@@ -845,8 +845,8 @@ class SpikeNeighborhoods(BModule):
         Sparsely keep track of which channels each spike lives on. Used to query
         which core sets are overlapped completely by unit channel neighborhoods.
 
-        Arguments
-        ---------
+        Parameters
+        ----------
         neighborhood_ids : torch.Tensor
             Size (n_spikes,), the neighborhood id for each spike
         neighborhoods : list[torch.Tensor]
@@ -1048,7 +1048,7 @@ class NeighborhoodFiller(BModule):
         if waveforms.shape[0] <= self.batch_size and out is None:
             return self._interp_to_chans(waveforms, neighborhood_ids, target_channels)
 
-        if torch.is_tensor(target_channels):
+        if isinstance(target_channels, torch.Tensor):
             assert target_channels.ndim == 1
             ntarg = target_channels.shape[0]
         else:

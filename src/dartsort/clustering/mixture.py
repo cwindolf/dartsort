@@ -56,6 +56,7 @@ from typing import (
 import numpy as np
 import torch
 import torch.nn.functional as F
+from packaging.version import Version
 from scipy.sparse.csgraph import connected_components
 from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
@@ -101,6 +102,13 @@ from ..util.torch_util import BModule
 from .cluster_util import linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
 from .kmeans import kmeans
+
+TORCH_IS_OLD = Version(torch.__version__) < Version("2.6.0")
+if TORCH_IS_OLD and torch.cuda.is_available():
+    warnings.warn(
+        f"Your PyTorch version ({torch.__version__}) is supported by dartsort, "
+        "but dartsort would be faster if you had >= 2.6.0."
+    )
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -284,9 +292,9 @@ class NeighborhoodCovariance(BModule):
     ):
         """Holds precomputed terms which depend only on the neighborhood
 
-        Arguments
-        ---------
-        feat_rank: int
+        Parameters
+        ----------
+        feat_rank : int
             most observed channels in any neighborhood
         max_nc_obs: int
             most missing channels (inside the cov zero radius)
@@ -6049,20 +6057,38 @@ def _count_candidates(candidates, batch_candidate_counts, batch_size):
     batch_candidate_counts.copy_(counts.cpu())
 
 
-@torch.jit.script
-def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
-    n_discard = resps.shape[1] - n_keep
-    assert n_discard + n_keep == resps.shape[1]
-    discard_mask = torch.logical_not(keep_mask)
-    discard_ix = discard_mask.nonzero_static(size=n_discard)[:, 0]
-    keep_ix = keep_mask.nonzero_static(size=n_keep)[:, 0]
-    assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
-    kept_resp = resps[:, keep_ix]
-    discard_resp = resps[:, discard_ix]
-    sim = discard_resp.T @ kept_resp
-    match = sim.argmax(1)
-    kept_resp[:, match] += discard_resp
-    return kept_resp
+if TORCH_IS_OLD:
+
+    @torch.jit.script
+    def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
+        n_discard = resps.shape[1] - n_keep
+        assert n_discard + n_keep == resps.shape[1]
+        discard_mask = torch.logical_not(keep_mask)
+        discard_ix = discard_mask.nonzero()[:, 0]
+        keep_ix = keep_mask.nonzero()[:, 0]
+        assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
+        kept_resp = resps[:, keep_ix]
+        discard_resp = resps[:, discard_ix]
+        sim = discard_resp.T @ kept_resp
+        match = sim.argmax(1)
+        kept_resp[:, match] += discard_resp
+        return kept_resp
+else:
+
+    @torch.jit.script
+    def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
+        n_discard = resps.shape[1] - n_keep
+        assert n_discard + n_keep == resps.shape[1]
+        discard_mask = torch.logical_not(keep_mask)
+        discard_ix = discard_mask.nonzero_static(size=n_discard)[:, 0]
+        keep_ix = keep_mask.nonzero_static(size=n_keep)[:, 0]
+        assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
+        kept_resp = resps[:, keep_ix]
+        discard_resp = resps[:, discard_ix]
+        sim = discard_resp.T @ kept_resp
+        match = sim.argmax(1)
+        kept_resp[:, match] += discard_resp
+        return kept_resp
 
 
 def concatenate_scores(scoress: list[Scores]) -> Scores:
@@ -6175,7 +6201,10 @@ def mean_responsibilities(
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
-        cii, cjj = (cand[i0:i1] >= 0).nonzero_static(size=nc).T
+        if TORCH_IS_OLD:
+            cii, cjj = (cand[i0:i1] >= 0).nonzero().T
+        else:
+            cii, cjj = (cand[i0:i1] >= 0).nonzero_static(size=nc).T
 
         c = cand[i0:i1][cii, cjj]
         r = resp[i0:i1][cii, cjj].double()
@@ -6268,10 +6297,10 @@ def _update_lut_mean_batch(
     )
 
     # constplogdet. add in the signal-rank-0-only terms.
-    lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore
+    lut_params.constplogdet[i0:i1] = neighb_cov.nobs[nn].mul_(LOG_2PI)  # type: ignore  # ty: ignore[x]
     lut_params.constplogdet[i0:i1] += neighb_cov.b.logdet[nn]
     if pnoid:
-        assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore
+        assert lut_params.constplogdet[i0:i1].isfinite().all()  # type: ignore  # ty: ignore[x]
 
 
 def _update_lut_ppca_batch(
@@ -6327,7 +6356,7 @@ def _update_lut_ppca_batch(
 
     # Tpad, logdet. Tpad was initialized with zeros.
     assert lut_params.Tpad is not None
-    lut_params.Tpad[i0:i1, :, :-1] = T  # type: ignore
+    lut_params.Tpad[i0:i1, :, :-1] = T  # type: ignore  # ty: ignore[x]
     cap_logdet = L.diagonal(dim1=-2, dim2=-1).log().sum(dim=1).mul_(2.0)
     lut_params.constplogdet[i0:i1] += cap_logdet
     if pnoid:
@@ -6336,13 +6365,13 @@ def _update_lut_ppca_batch(
     # precomputed products with T
     assert lut_params.TWoCooinvsqrt is not None
     assert lut_params.TWoCooinvmuo is not None
-    TWoCooinvsqrt = torch.bmm(T, WoCooinvsqrt, out=lut_params.TWoCooinvsqrt[i0:i1])  # type: ignore
+    TWoCooinvsqrt = torch.bmm(T, WoCooinvsqrt, out=lut_params.TWoCooinvsqrt[i0:i1])  # type: ignore  # ty: ignore[x]
     Linvmuo = lut_params.b.Linvmuo[i0:i1, :, None]
-    torch.bmm(TWoCooinvsqrt, Linvmuo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])  # type: ignore
+    torch.bmm(TWoCooinvsqrt, Linvmuo, out=lut_params.TWoCooinvmuo[i0:i1, :, None])  # type: ignore  # ty: ignore[x]
 
     # Woodbury root
     assert lut_params.wburyroot is not None
-    torch.bmm(WoCooinvsqrt.mT, Linv.mT, out=lut_params.wburyroot[i0:i1])  # type: ignore
+    torch.bmm(WoCooinvsqrt.mT, Linv.mT, out=lut_params.wburyroot[i0:i1])  # type: ignore  # ty: ignore[x]
 
 
 # -- em math impls
@@ -6462,7 +6491,7 @@ def _sparsify_candidates(
         assert cpos.any(dim=1).all()
     if pnoid and static_size is not None:
         assert cpos.sum() == static_size
-    if static_size is not None:
+    if static_size is not None and not TORCH_IS_OLD:
         spike_ixs, candidate_ixs = cpos.nonzero_static(size=static_size).T
     else:
         spike_ixs, candidate_ixs = cpos.nonzero(as_tuple=True)
@@ -6688,9 +6717,9 @@ def _stat_pass_batch_ppca(
     lut_ixs are the result of combining those with neighb_ixs and going
     to the LUT.
 
-    Arguments
-    ---------
-    responsibilities: (n, C or C + 1)
+    Parameters
+    ----------
+    responsibilities : (n, C or C + 1)
         Last index is the noise dimension, if present. If it's present,
         candidates must appear too. If candidates don't appear, it's not present.
     candidates: None or (n, C)
@@ -6802,9 +6831,9 @@ def _stat_pass_batch_rank0(
     lut_ixs are the result of combining those with neighb_ixs and going
     to the LUT.
 
-    Arguments
-    ---------
-    responsibilities: (n, C or C + 1)
+    Parameters
+    ----------
+    responsibilities : (n, C or C + 1)
         Last index is the noise dimension, if present. If it's present,
         candidates must appear too. If candidates don't appear, it's not present.
     candidates: None or (n, C)

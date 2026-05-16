@@ -1,3 +1,4 @@
+"""Estimating and processing template waveforms"""
 from .templib import quick_mean_templates, fit_tsvd
 from .templates import TemplateData
 from .template_util import (
