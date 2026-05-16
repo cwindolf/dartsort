@@ -2,7 +2,7 @@
 toc_depth: 2
 ---
 
-# Toolkit API
+# Toolkit documentation
 
 *dartsort* is also a toolkit for common spike sorting analyses, and the main spike sorter is built out of those tools.
 The most important tools are the ["Peelers"](#detecting-cleaning-and-featurizing-spikes-peeling), which detect spikes and featurize them.

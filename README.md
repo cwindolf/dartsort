@@ -11,7 +11,7 @@
 
 
 *dartsort* is a modular spike sorter built around a statistical clustering model and a new approach to probe motion.
-It is also a toolkit of modules for building spike sorters or other analyses of electrophysiology data.
+It is also a toolkit of modules for building spike sorters and other analyses of electrophysiology data.
 
 
 ## :warning: work in progress :warning:
@@ -24,7 +24,7 @@ Please feel free to open an issue or a discussion if you run into problems.
 
 ### Installing into an existing environment
 
-If you already have a Python environment with PyTorch working and you just want to get *dartsort* there, use
+If you already have a Python environment with PyTorch working and you just want to install *dartsort* there, use
 
 ```sh
 $ pip install dartsort
@@ -34,9 +34,10 @@ If you want to run the test suite or use `dartsort.vis`, you can install the opt
 
 ## Setting up a Python environment
 
-Otherwise, there are a few ways to get Python and PyTorch set up, including new tools like `uv`, but I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is still the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
+If you need to set up Python or PyTorch, I find that a [`conda-forge`](https://conda-forge.org/)-based distribution is the most reliable at installing the GPU dependencies which PyTorch needs (note: `conda-forge` is different from the non-free Anaconda).
 
 You can use `conda-forge` to install Python, `dartsort`, and its dependencies as follows:
+
   - Follow the `conda-forge` installation instructions for your platform at [https://conda-forge.org/download/](https://conda-forge.org/download/)
   - Create an environment with
     ```sh
@@ -52,11 +53,11 @@ You can use `conda-forge` to install Python, `dartsort`, and its dependencies as
 
 ## Usage
 
-Main usage reference page: [main API documentation](main_api.md).
+For more detailed documentation of the main function parameters and configuration options, see the [main API documentation](main_api.md).
 
 ### As a Python function
 
-*dartsort* can be run from inside Python with:
+*dartsort* can be run in Python with:
 
 ```python
 import dartsort
@@ -75,13 +76,13 @@ dartsort_result = dartsort.dartsort(
 )
 ```
 
-**Please** read the [important configuration details section](#important-configuration-details) below.
-Some of them, like preprocessing, are not set by default and need your input! (This could change.)
+**Please** read the [important configuration details section](#important-configuration-details) below for information on the parameters of the `DARTsortUserConfig`.
+Some of them, like `preprocessing`, are not set by default and need your input!
+(This will probably change.)
 
-Here, `recording` is a [SpikeInterface][SpikeInterface] recording object.
-SpikeInterface can read every electrophysiology data format that I've encountered and many I haven't. `output_dir` is the folder where *dartsort* will save its output.
-
-For more details on these arguments, see the [main API documentation](main_api.md).
+Here, `recording` is a [SpikeInterface][SpikeInterface] recording object (see their tutorial on [reading various recording formats](https://spikeinterface.readthedocs.io/en/stable/how_to/read_various_formats.html)).
+`output_dir` is the folder where *dartsort* will save its output.
+There are more details on these and the rest of the arguments in the [main API documentation](main_api.md).
 
 Once you've run *dartsort*, you might want to check out [the outputs and exporting](#outputs-and-exporting) section below.
 
@@ -89,19 +90,20 @@ Once you've run *dartsort*, you might want to check out [the outputs and exporti
 
 Before running *dartsort*, please be aware of the following important configuration options.
 
- - `preprocessing`: *dartsort* won't touch your data by default (`preprocessing="none"`), leaving you free to implement your own preprocessing in SpikeInterface or otherwise, and therefore *dartsort* will explode if you don't set this flag and leave your data in its original raw state (for instance, the raw `int16` data off the probe).
+ - `preprocessing`: *dartsort* won't touch your data by default (`preprocessing="none"`), leaving you free to implement your own preprocessing in SpikeInterface or otherwise. However, *dartsort* expects standardized input, and therefore it will explode if you don't set this flag and your data is in its original state (for instance, the raw `int16` data off the probe).
     - For a cheap but sensible default, try `preprocessing="ibllikecmr"`, which applies a pipeline similar to that of [the IBL][iblsorting] but with global median common referencing instead of their spatial highpass filter. `preprocessing="ibllike"` will use their spatial highpass filter.
- - `do_motion_estimation=True` by default, and you may like to disable it if you know for a fact that there is (say) less than 5 microns of total drift in your recording, or if you have handled this in your own preprocessing (which is discouraged, since *dartsort* has its own approach.)
+ - `do_motion_estimation=True` by default, but you may like to disable it if you know that there is (say) less than 5 microns of total drift in your recording, or if you have handled this in your own preprocessing.
  - `work_in_tmpdir` and `copy_recording_to_tmpdir` can be helpful in some cases where slow network drives are involved.
 
 ### Outputs and exporting
 
-The `dartsort_result = dartsort(...)` function returns a dictionary `dartsort_result` containing a `DARTsortSorting` object under the key `sorting = dartsort_result["sorting"]`.
+The `dartsort_result = dartsort(...)` function returns a dictionary `dartsort_result` containing a `DARTsortSorting` object: `sorting = dartsort_result["sorting"]`.
 This object has all the spike train data attached (as arrays under property names `.times_samples` and `.times_seconds` for spike times in samples and seconds, `.labels` for unit labels, and many others; `print(sorting)` to see some more).
 
 If you already ran *dartsort* and want to load the output spike trains, use `dartsort.load(output_dir)` to get the `DARTsortSorting` object.
 
 This object can also export itself to other formats:
+
  - For a SpikeInterface `NumpySorting` object, use `sorting.to_numpy_sorting()`
  - For a [Pynapple][Pynapple] `TsGroup`, use `sorting.to_tsgroup()`
  - To export to Phy, we currently suggest bridging through SpikeInterface. Start with `sorting.to_numpy_sorting()` and follow the instructions [in SpikeInterface's documentation](https://spikeinterface.readthedocs.io/en/stable/modules/exporters.html#exporting-to-phy) for first creating a `SortingAnalyzer` and then exporting that to Phy.

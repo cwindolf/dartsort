@@ -14,7 +14,7 @@
 site_name = "dartsort"
 nav = [
     {"dartsort" = "index.md"},
-    {"User API" = ["main_api.md", "toolkit_api.md"]}
+    {"User documentation" = ["main_api.md", "toolkit_api.md"]}
 ]
 
 # The site_description is included in the HTML head and should contain a
