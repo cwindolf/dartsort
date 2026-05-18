@@ -57,6 +57,7 @@ def get_motion_info(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
     show_progress: bool = True,
+    _saving_intermediates: bool = False,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
 
@@ -68,7 +69,17 @@ def get_motion_info(
     if (motion := try_load_motion_info(output_directory, filename)) is not None:
         return motion
 
-    if detect_new_peaks:
+    have_si = si_motion is not None
+    have_dredge = dredge_motion_est is not None
+    have_motion = have_si or have_dredge
+    assert not (have_si and have_dredge)
+    need_motion_estimate = motion_cfg.do_motion_estimation and not have_motion
+
+    # skip peak detection if possible
+    need_new_peaks = detect_new_peaks and (
+        need_motion_estimate or _saving_intermediates
+    )
+    if need_new_peaks:
         assert output_directory is not None
         assert sorting is not None
         assert sampling_cfg is not None
@@ -86,12 +97,9 @@ def get_motion_info(
         )
     else:
         motion_sorting = sorting
-    assert motion_sorting is not None
 
-    have_si = si_motion is not None
-    have_dredge = dredge_motion_est is not None
-    assert not (have_si and have_dredge)
-    if not (have_si or have_dredge):
+    if need_motion_estimate:
+        assert motion_sorting is not None
         dredge_motion_est = dredge_estimate_motion(
             recording=recording,
             sorting=motion_sorting,
@@ -100,6 +108,7 @@ def get_motion_info(
             localizations_dataset_name=localizations_dataset_name,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
+
     motion = MotionInfo.from_motion_est(
         geom=recording.get_channel_locations(),
         dredge_motion_est=dredge_motion_est,

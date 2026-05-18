@@ -220,9 +220,11 @@ def tmm_demix(
                     )
             else:
                 assert False
+
             stepname = f"tmm{outer_it}{inner_it}{step_type}"
-            is_final = outer_it == refinement_cfg.n_total_iters - 1
-            is_final = is_final and inner_it == len(refinement_cfg.mixture_steps) - 1
+            last_outer = outer_it == refinement_cfg.n_total_iters - 1
+            last_inner = inner_it == len(refinement_cfg.mixture_steps) - 1
+            is_final = last_outer and last_inner
             if saving and not is_final:
                 save_tmm_labels(tmm=tmm, stepname=stepname, **save_kw)  # type: ignore
 

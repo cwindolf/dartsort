@@ -197,8 +197,12 @@ def dartcopytree(icfg, src, dest):
         ) from e
 
 
-def _rsync(src, dest, archive=True, follow_symlinks=False):
-    archive_flags = ["-a"] if archive else []
+def _rsync(src, dest, archive=True, follow_symlinks=False, excludes=None, vp=False):
+    archive_flags = ["-a" + ("vP" if vp else "")] if archive else []
     link_flags = ["--no-links", "-L"] if follow_symlinks else []
-    res = subprocess.run(["rsync", *archive_flags, *link_flags, str(src), str(dest)])
+    exclude_flags = [f'--exclude={ex}' for ex in (excludes or [])]
+    cmd = ["rsync", *archive_flags, *link_flags, *exclude_flags, str(src), str(dest)]
+    if vp:
+        logger.info(" ".join(cmd))
+    res = subprocess.run(cmd)
     assert not res.returncode

@@ -1,8 +1,7 @@
 from collections.abc import Sequence
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal
 
 from pydantic import Field
-from typing_extensions import Doc
 
 from .util.internal_config import (
     InterpKernel,
