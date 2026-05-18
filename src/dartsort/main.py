@@ -86,21 +86,25 @@ def dartsort(
     dredge_motion_est: MotionEstimate | None = None,
     overwrite=False,
 ):
-    """This function runs a spike sorter called dartsort.
+    """This function runs a spike sorter called *dartsort*.
 
     Parameters
     ---------
     recording : BaseRecording
-        A SpikeInterface `BaseRecording` object
+        A SpikeInterface `BaseRecording`
     output_dir : str or Path
-        Folder where outputs are stored
+        Folder where outputs are stored. See the `work_in_tmpdir` and `tmpdir_parent`
+        configuration options to store intermediate data in a scratch folder and
+        then only save the final outputs here.
     cfg : DARTsortUserConfig or DARTsortInternalConfig or str or Path
         Your settings. Either create a `DARTsortUserConfig` directly in code, or
         you can pass a string or Path pointing to a .toml file here.
     si_motion : spikeinterface.core.Motion, optional
-        Allows users to pass their own external motion estimate.
+        Allows users to pass their own external motion estimate. If this is given,
+        the do_motion_estimation configuration flag is ignored and this object is
+        used.
     dredge_motion_est : dredge.MotionEstimate, optional
-        Allows users to pass their own external motion estimate.
+        As in `si_motion`.
     overwrite : bool
         Ignore and overwrite stored results, if any. Otherwise, dartsort will
         try to resume from the last step that ran, or if it had finished then
