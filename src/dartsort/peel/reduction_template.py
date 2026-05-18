@@ -1,4 +1,5 @@
 """A peeler implementing mean or median reduction for estimating template waveforms."""
+
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -58,6 +59,7 @@ class ReductionTemplateData(TemplateData):
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
+        computation_cfg = ensure_computation_config(computation_cfg)
         # subsample sorting
         sorting = subsample_by_count_and_valid_time(
             sorting,
@@ -75,17 +77,18 @@ class ReductionTemplateData(TemplateData):
             motion=motion,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
+            computation_cfg=computation_cfg,
             whitener=whitener,
             tsvd=tsvd,
         )
 
         # TODO: file not always needed
-        computation_cfg = ensure_computation_config(computation_cfg)
         if template_cfg.reduction == "mean":
             # TODO: reducer doesn't work in parallel when gathering means, go to single job
             computation_cfg = ComputationConfig(
                 device=computation_cfg.actual_device().type,
                 n_jobs_small=computation_cfg.n_jobs_small,
+                tmpdir_parent=computation_cfg.tmpdir_parent,
             )
         with TemporaryDirectory(
             prefix="dartsorttemplates",
@@ -190,6 +193,7 @@ class TemplateReduction(GrabAndFeaturize):
         sorting: DARTsortSorting,
         waveform_cfg: WaveformConfig,
         template_cfg: TemplateConfig,
+        computation_cfg: ComputationConfig,
         whitener: SpatialWhitener | None = None,
     ):
         # geom processing
@@ -228,6 +232,7 @@ class TemplateReduction(GrabAndFeaturize):
                 motion=motion,
                 template_cfg=template_cfg,
                 waveform_cfg=waveform_cfg,
+                computation_cfg=computation_cfg,
             )
             assert tsvd.components_.shape[0] == template_cfg.denoising_rank
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(

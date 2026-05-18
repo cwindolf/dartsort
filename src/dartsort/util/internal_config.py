@@ -1217,6 +1217,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     computation_cfg = ComputationConfig(
         n_jobs_cpu=cfg.n_jobs_cpu,
         n_jobs_gpu=cfg.n_jobs_gpu,
+        n_jobs_small=cfg.n_jobs_small,
+        n_jobs_small_gpu=cfg.n_jobs_small_gpu,
         device=cfg.device,
         executor=cfg.executor,
         tmpdir_parent=cfg.tmpdir_parent,

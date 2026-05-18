@@ -737,6 +737,8 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         labels_npy = f.parent / f"{labels_stem}.npy"
         if labels_npy.exists():
             st = st.ephemeral_replace(labels=np.load(labels_npy))
+        else:
+            logger.info(f"{labels_npy} did not exist.")
 
     return st
 
