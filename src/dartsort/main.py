@@ -68,7 +68,7 @@ from .util.torch_util import cleanup_and_log_gpu_usage
 logger = get_logger(__name__)
 
 
-class DARTsortReturn(TypedDict):
+class DARTsortResult(TypedDict):
     sorting: DARTsortSorting
     """Output spike trains."""
     motion: MotionInfo
@@ -112,7 +112,7 @@ def dartsort(
 
     Returns
     -------
-    results : DARTsortReturn
+    results : DARTsortResult
         Dictionary of sorting results, with keys:
 
           - "sorting": `DARTsortSorting`

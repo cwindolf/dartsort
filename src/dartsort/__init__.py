@@ -24,7 +24,7 @@ from .localize.localize_util import (
 from .main import (
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    DARTsortReturn,
+    DARTsortResult,
     check_recording,
     cluster,
     dartsort,
