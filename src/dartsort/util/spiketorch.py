@@ -1475,7 +1475,11 @@ def get_relative_index(source_channel_index, target_channel_index):
     """
     n_chans, n_source_chans = source_channel_index.shape
     n_chans_, n_target_chans = target_channel_index.shape
-    assert n_chans == n_chans_
+    if n_chans != n_chans_:
+        raise ValueError(
+            f"source/target shapes mismatch: {source_channel_index.shape=} "
+            f"{target_channel_index.shape=}."
+        )
     relative_index = torch.full_like(target_channel_index, n_source_chans)
     for c in range(n_chans):
         row = source_channel_index[c]
