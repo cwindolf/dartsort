@@ -734,16 +734,13 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         raise ValueError(f"Not sure how to load '{f}'.")
 
     if labels_stem:
-        print(f"{f=}")
         if f.is_dir():
             labels_npy = f / f"{labels_stem}.npy"
         else:
             labels_npy = f.parent / f"{labels_stem}.npy"
 
         if labels_npy.exists():
-            print(f"{labels_npy.name=} {np.load(labels_npy)[:5]=}")
             st = st.ephemeral_replace(labels=np.load(labels_npy))
-            print(f"{st.labels[:5]=}")
         else:
             logger.info(f"{labels_npy} did not exist.")
 

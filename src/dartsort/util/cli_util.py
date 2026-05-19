@@ -167,7 +167,6 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
             raise ValueError(f"Need type or arg_type for {fld}.")
         if typing.get_origin(type_) == typing.Annotated:
             type_, *annots = typing.get_args(type_)
-            print(f"{annots=}")
             for annot in annots:
                 if isinstance(annot, Doc):
                     assert not doc
