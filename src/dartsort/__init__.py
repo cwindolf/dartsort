@@ -78,7 +78,7 @@ from .util.logging_util import (
 from .util.motion import MotionInfo, get_motion_info, try_load_motion_info
 from .util.noise_util import EmbeddedNoise
 from .util.preprocess_util import preprocess
-from .util.py_util import databag, resolve_path
+from .util.py_util import databag, ensure_path
 from .util.waveform_util import full_channel_index, make_channel_index
 
 __version__ = importlib.metadata.version("dartsort")

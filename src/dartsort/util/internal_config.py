@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from .cli_util import argfield, dataclass_from_toml
-from .py_util import cfg_dataclass, resolve_path
+from .py_util import cfg_dataclass, ensure_path
 
 try:
     from importlib.resources import files
@@ -933,7 +933,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         cfg0 = cfg
 
         try:
-            cfg = resolve_path(cfg, strict=True)
+            cfg = ensure_path(cfg, strict=True)
         except OSError as e:
             raise ValueError(f"Configuration file {cfg0} does not exist.") from e
 

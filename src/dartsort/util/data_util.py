@@ -21,7 +21,7 @@ from .logging_util import get_logger, progbar
 if TYPE_CHECKING:
     from .motion import MotionInfo
 from .job_util import ensure_computation_config
-from .py_util import resolve_path
+from .py_util import ensure_path
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -63,7 +63,7 @@ class DARTsortSorting:
         """
         self.n_spikes = times_samples.shape[0]
         if parent_h5_path is not None:
-            parent_h5_path = resolve_path(parent_h5_path)
+            parent_h5_path = ensure_path(parent_h5_path)
         self.parent_h5_path = parent_h5_path
         self.sampling_frequency = float(sampling_frequency)
 
@@ -362,7 +362,7 @@ class DARTsortSorting:
             or multi-channel PCA features.
         load_all_features : bool
         """
-        h5_path = resolve_path(h5_path, strict=True)
+        h5_path = ensure_path(h5_path, strict=True)
         if load_feature_names is None:
             _lfn = []
         else:
@@ -435,7 +435,7 @@ class DARTsortSorting:
         This is done by saving to .npz, with a pointer (like a relative symlink)
         to the .h5 file if it exists.
         """
-        sorting_npz = resolve_path(sorting_npz)
+        sorting_npz = ensure_path(sorting_npz)
         logger.dartsortdebug(f"Saving {self} to {sorting_npz}.")
         data = dict(
             times_samples=self.times_samples,
@@ -448,7 +448,7 @@ class DARTsortSorting:
         have_hdf5 = self.parent_h5_path is not None
         if have_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
-            h5p = resolve_path(self.parent_h5_path, strict=True)
+            h5p = ensure_path(self.parent_h5_path, strict=True)
             try:
                 h5p = h5p.relative_to(sorting_npz.parent, walk_up=True)  # type: ignore
             except TypeError:
@@ -478,7 +478,7 @@ class DARTsortSorting:
         load_persistent_feature_names=None,
     ) -> Self:
         """Load from npz (usually dartsort_sorting.npz)."""
-        sorting_npz = resolve_path(sorting_npz, strict=True)
+        sorting_npz = ensure_path(sorting_npz, strict=True)
         with np.load(sorting_npz) as data:
             times_samples = data["times_samples"]
             channels = data["channels"]
@@ -499,7 +499,7 @@ class DARTsortSorting:
             parent_h5_path = parent_h5_path.item()
             assert isinstance(parent_h5_path, str)
             parent_h5_path = sorting_npz.parent / Path(parent_h5_path)
-            parent_h5_path = resolve_path(parent_h5_path, strict=True)
+            parent_h5_path = ensure_path(parent_h5_path, strict=True)
             if additional_persistent_features:
                 loaded_persistent_features = set(
                     loaded_persistent_features + additional_persistent_features
@@ -722,7 +722,7 @@ class DARTsortSorting:
 
 def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
     """Load a spike train from h5, npz, or folder."""
-    f = resolve_path(f, strict=True)
+    f = ensure_path(f, strict=True)
 
     if f.name.endswith(".h5"):
         st = DARTsortSorting.from_peeling_hdf5(h5_path=f)
@@ -734,9 +734,16 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         raise ValueError(f"Not sure how to load '{f}'.")
 
     if labels_stem:
-        labels_npy = f.parent / f"{labels_stem}.npy"
+        print(f"{f=}")
+        if f.is_dir():
+            labels_npy = f / f"{labels_stem}.npy"
+        else:
+            labels_npy = f.parent / f"{labels_stem}.npy"
+
         if labels_npy.exists():
+            print(f"{labels_npy.name=} {np.load(labels_npy)[:5]=}")
             st = st.ephemeral_replace(labels=np.load(labels_npy))
+            print(f"{st.labels[:5]=}")
         else:
             logger.info(f"{labels_npy} did not exist.")
 
@@ -746,7 +753,7 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
 def try_get_model_dir(sorting: DARTsortSorting) -> Path | None:
     if sorting.parent_h5_path is None:
         return None
-    h5_path = resolve_path(sorting.parent_h5_path)
+    h5_path = ensure_path(sorting.parent_h5_path)
     model_dir = h5_path.parent / f"{h5_path.stem}_models"
     if model_dir.exists():
         assert model_dir.is_dir()
@@ -787,7 +794,7 @@ def _get_featurization_loading_meta(sorting):
         if sorting.parent_h5_path is None:
             raise ValueError("Can't load featurization pipeline.")
 
-        h5_path = resolve_path(sorting.parent_h5_path)
+        h5_path = ensure_path(sorting.parent_h5_path)
         base_dir = h5_path.parent
         stem = h5_path.stem
 
@@ -965,8 +972,8 @@ def sorting_from_spikeinterface(
 
 
 def filter_link_h5(in_h5_path: str | Path, out_h5_path: str | Path, keep_filter):
-    in_h5_path = resolve_path(in_h5_path, strict=True)
-    out_h5_path = resolve_path(out_h5_path)
+    in_h5_path = ensure_path(in_h5_path, strict=True)
+    out_h5_path = ensure_path(out_h5_path)
     assert not out_h5_path.exists()
 
     with h5py.File(in_h5_path, "r", locking=False) as h5in:
@@ -1537,7 +1544,7 @@ def subsample_waveforms(
 
     need_open = h5 is None
     if need_open and hdf5_filename is not None:
-        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        hdf5_filename = ensure_path(hdf5_filename, strict=True)
         h5 = h5py.File(hdf5_filename)
     elif need_open:
         raise ValueError("Need h5 or hdf5_filename.")

@@ -157,7 +157,7 @@ def test_denoiser_alignment(align_sim, align_templates):
         for rtd in (False, True)
     ]
     with tempfile.TemporaryDirectory() as tdir:
-        tdir = dartsort.resolve_path(tdir)
+        tdir = dartsort.ensure_path(tdir)
         st0, st1 = sts = [
             dartsort.DARTsortSorting.from_peeling_hdf5(
                 p.peel(tdir / "hi.h5", overwrite=True)

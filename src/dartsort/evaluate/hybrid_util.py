@@ -23,7 +23,7 @@ from ..util.data_util import DARTsortSorting
 from ..util.internal_config import ComputationConfig, unshifted_raw_template_cfg
 from ..util.logging_util import progbar
 from ..util.motion import MotionInfo
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from . import analysis, comparison, simkit
 
 logger = getLogger(__name__)
@@ -406,7 +406,7 @@ def load_dartsort_step_sortings(
     use, although its not a guarantee... h5 locking... need to figure it out.
     """
     mtime_dt = mtime_gap_minutes * 60 if mtime_gap_minutes else 0
-    sorting_dir = resolve_path(sorting_dir, strict=True)
+    sorting_dir = ensure_path(sorting_dir, strict=True)
     if detection_h5_path is None:
         for dh5n in detection_h5_names:
             detection_h5_path = cast(Path, sorting_dir / dh5n)
@@ -416,12 +416,12 @@ def load_dartsort_step_sortings(
                 age = time.time() - detection_h5_path.stat().st_mtime
                 if age < mtime_dt:
                     continue
-            h5s = [resolve_path(detection_h5_path)]
+            h5s = [ensure_path(detection_h5_path)]
             break
         else:
             h5s = []
     else:
-        h5s = [resolve_path(detection_h5_path)]
+        h5s = [ensure_path(detection_h5_path)]
 
     for j in range(1, 100):
         mh5 = sorting_dir / f"matching{j}.h5"
@@ -430,7 +430,7 @@ def load_dartsort_step_sortings(
         if mtime_dt:
             if time.time() - mh5.stat().st_mtime < mtime_dt:
                 break
-        h5s.append(resolve_path(mh5))
+        h5s.append(ensure_path(mh5))
 
     # let's check that there is at least something to do...
     labels_npys = sorting_dir.glob("*_labels.npy")

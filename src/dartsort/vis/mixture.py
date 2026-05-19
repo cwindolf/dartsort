@@ -26,7 +26,7 @@ from ..clustering.mixture import (
 )
 from ..transform import TemporalPCA
 from ..util import spiketorch
-from ..util.data_util import DARTsortSorting, get_tpca, resolve_path
+from ..util.data_util import DARTsortSorting, get_tpca, ensure_path
 from ..util.internal_config import (
     ClusteringFeaturesConfig,
     ComputationConfig,
@@ -1301,7 +1301,7 @@ def fit_mixture_and_visualize_all_components(
     **other_global_params,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
-    save_folder = resolve_path(save_folder)
+    save_folder = ensure_path(save_folder)
     if unit_ids is None:
         unit_ids = sorting.unit_ids
     if n_units is not None and n_units < len(unit_ids):
@@ -1478,7 +1478,7 @@ def make_mixture_summaries(
     seed=0,
     **other_global_params,
 ):
-    save_folder = resolve_path(save_folder)
+    save_folder = ensure_path(save_folder)
     if unit_ids is None:
         unit_ids = mix_data.tmm.unit_ids.numpy(force=True).tolist()
     if n_units is not None and n_units < len(unit_ids):

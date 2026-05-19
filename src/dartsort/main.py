@@ -62,7 +62,7 @@ from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import SpatialWhitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
-from .util.py_util import dartcopytree, resolve_path, timer
+from .util.py_util import dartcopytree, ensure_path, timer
 from .util.torch_util import cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -118,7 +118,7 @@ def dartsort(
           - "sorting": `DARTsortSorting`
           - "motion": MotionInfo
     """
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     output_dir.mkdir(exist_ok=True)
 
     # convert cfg to internal format and store it for posterity
@@ -135,7 +135,7 @@ def dartsort(
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             # copy files and possibly recording to temporary directory
-            work_dir = resolve_path(work_dir)
+            work_dir = ensure_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
             recording, work_dir = ds_all_to_workdir(
                 internal_cfg=cfg,
@@ -397,7 +397,7 @@ def _dartsort_impl(
 
     # finally handle scratch directory and delete intermediate files if requested
     if work_dir is not None:
-        orig_h5_path = resolve_path(sorting.parent_h5_path, strict=True)
+        orig_h5_path = ensure_path(sorting.parent_h5_path, strict=True)
         final_h5_path = output_dir / orig_h5_path.name
         assert final_h5_path.exists()
         sorting.parent_h5_path = final_h5_path
@@ -490,7 +490,7 @@ def subtract(
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
 ) -> DARTsortSorting | None:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
@@ -551,7 +551,7 @@ def match(
     template_denoising_tsvd=None,
     whitener: SpatialWhitener | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -639,7 +639,7 @@ def grab(
     model_subdir="grab_models",
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     grabber = GrabAndFeaturize.from_config(
         sorting=sorting,
         recording=recording,
@@ -679,7 +679,7 @@ def threshold(
     model_subdir="threshold_models",
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
     thresholder = Threshold.from_config(
         recording=recording,

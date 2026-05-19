@@ -32,7 +32,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
 
@@ -95,7 +95,7 @@ class ReductionTemplateData(TemplateData):
             ignore_cleanup_errors=True,
             dir=computation_cfg.tmpdir_parent,
         ) as tdir:
-            tdir = resolve_path(tdir)
+            tdir = ensure_path(tdir)
             h5p = tdir / "tmp.h5"
             p.load_or_fit_and_save_models(tdir / "models")
             if template_cfg.denoising_method == "none" and not template_cfg.use_svd:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 
 try:
     from importlib.resources import files
@@ -11,7 +11,7 @@ except ImportError:
         raise ValueError("Need python>=3.10 or pip install importlib_resources.")
 
 data_dir = files("dartsort.pretrained")
-glasbey1024_npz = resolve_path(data_dir.joinpath("glasbey1024.npz"))
+glasbey1024_npz = ensure_path(data_dir.joinpath("glasbey1024.npz"))
 
 with np.load(glasbey1024_npz) as npz:
     glasbey1024 = npz["glasbey1024"]
