@@ -316,7 +316,7 @@ def make_filled_channel_index(
     return channel_index
 
 
-def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=False):
+def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=True):
     """Channel index for multi-channel models
 
     In this channel index, the layout of channels around the max channel is
