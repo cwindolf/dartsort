@@ -4052,6 +4052,10 @@ def get_truncated_datasets(
             device=device,
             rgeom=prgeom[:-1],
         )
+
+    gc.collect()
+    torch.cuda.empty_cache()
+
     assert isinstance(noise, EmbeddedNoise)
     noise.to(device=device)
     assert noise.rank == feature_rank
@@ -4153,6 +4157,9 @@ def get_truncated_datasets(
         erp = NeighborhoodImputer(noise=noise, neighborhoods=full_neighbs)
     else:
         assert False
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     return neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs
 
@@ -5199,7 +5206,7 @@ def try_kmeans(
     feature_rank: int,
     n_iter: int = 100,
     with_proportions: bool = True,
-    drop_prop: float = 0.025,
+    drop_prop: float = 0.0,
     kmeanspp_initial="random",
     n_kmeans_tries: int = 25,
     n_kmeanspp_tries: int = 25,
@@ -5253,10 +5260,7 @@ def evaluate_group_demolitions(
     train_scores: Scores,
     eval_scores: Scores,
 ) -> GroupDemolition:
-    # grab relevant sections of train and eval scores
     group_ = group.to(train_scores.candidates)
-    in_group_train = torch.isin(train_scores.candidates, group_).any(dim=1)
-    (in_group_train,) = in_group_train.nonzero(as_tuple=True)
 
     # select which units in the group are candidates for demolition
     if mean_train_resp is None:
@@ -6061,36 +6065,30 @@ def _count_candidates(candidates, batch_candidate_counts, batch_size):
 
 if TORCH_IS_OLD:
 
-    @torch.jit.script
-    def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
-        n_discard = resps.shape[1] - n_keep
-        assert n_discard + n_keep == resps.shape[1]
-        discard_mask = torch.logical_not(keep_mask)
-        discard_ix = discard_mask.nonzero()[:, 0]
-        keep_ix = keep_mask.nonzero()[:, 0]
-        assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
-        kept_resp = resps[:, keep_ix]
-        discard_resp = resps[:, discard_ix]
-        sim = discard_resp.T @ kept_resp
-        match = sim.argmax(1)
-        kept_resp[:, match] += discard_resp
-        return kept_resp
+    def _nonzero_static(x: Tensor, size: int):
+        nz = x.nonzero()
+        assert nz.numel() == size
+        return nz
 else:
 
-    @torch.jit.script
-    def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
-        n_discard = resps.shape[1] - n_keep
-        assert n_discard + n_keep == resps.shape[1]
-        discard_mask = torch.logical_not(keep_mask)
-        discard_ix = discard_mask.nonzero_static(size=n_discard)[:, 0]
-        keep_ix = keep_mask.nonzero_static(size=n_keep)[:, 0]
-        assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
-        kept_resp = resps[:, keep_ix]
-        discard_resp = resps[:, discard_ix]
-        sim = discard_resp.T @ kept_resp
-        match = sim.argmax(1)
-        kept_resp[:, match] += discard_resp
-        return kept_resp
+    def _nonzero_static(x: Tensor, size: int):
+        return x.nonzero_static(size=size)
+
+
+@torch.jit.script
+def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
+    n_discard = resps.shape[1] - n_keep
+    assert n_discard + n_keep == resps.shape[1]
+    discard_mask = torch.logical_not(keep_mask)
+    discard_ix = _nonzero_static(discard_mask, size=n_discard)[:, 0]
+    keep_ix = _nonzero_static(keep_mask, size=n_keep)[:, 0]
+    assert keep_ix.numel() + discard_ix.numel() == resps.shape[1]
+    kept_resp = resps[:, keep_ix]
+    discard_resp = resps[:, discard_ix]
+    sim = discard_resp.T @ kept_resp
+    match = sim.argmax(1)
+    kept_resp[:, match] += discard_resp
+    return kept_resp
 
 
 def concatenate_scores(scoress: list[Scores]) -> Scores:
@@ -6203,10 +6201,7 @@ def mean_responsibilities(
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
-        if TORCH_IS_OLD:
-            cii, cjj = (cand[i0:i1] >= 0).nonzero().T
-        else:
-            cii, cjj = (cand[i0:i1] >= 0).nonzero_static(size=nc).T
+        cii, cjj = _nonzero_static(cand[i0:i1] >= 0, size=nc).T
 
         c = cand[i0:i1][cii, cjj]
         r = resp[i0:i1][cii, cjj].double()
@@ -6493,8 +6488,8 @@ def _sparsify_candidates(
         assert cpos.any(dim=1).all()
     if pnoid and static_size is not None:
         assert cpos.sum() == static_size
-    if static_size is not None and not TORCH_IS_OLD:
-        spike_ixs, candidate_ixs = cpos.nonzero_static(size=static_size).T
+    if static_size is not None:
+        spike_ixs, candidate_ixs = _nonzero_static(cpos, size=static_size).T
     else:
         spike_ixs, candidate_ixs = cpos.nonzero(as_tuple=True)
     neighb_ixs = neighborhood_ids[spike_ixs]
