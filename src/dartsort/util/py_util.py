@@ -1,7 +1,6 @@
 import contextlib
 import dataclasses
 import os
-from os.path import normpath
 import shutil
 import signal
 import subprocess

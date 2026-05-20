@@ -17,16 +17,18 @@ from ..clustering.mixture import (
     StreamingSpikeData,
     TruncatedMixtureModel,
     TruncatedSpikeData,
+    evaluate_group_demolitions,
     instantiate_and_bootstrap_tmm,
     labels_from_scores,
     labels_from_scores_,
+    mean_responsibilities,
     run_merge,
     run_split,
     try_kmeans,
 )
 from ..transform import TemporalPCA
 from ..util import spiketorch
-from ..util.data_util import DARTsortSorting, get_tpca, ensure_path
+from ..util.data_util import DARTsortSorting, ensure_path, get_tpca
 from ..util.internal_config import (
     ClusteringFeaturesConfig,
     ComputationConfig,
@@ -64,6 +66,8 @@ class MixtureVisData:
     full_scores: Scores
     eval_scores: Scores
     eval_labels: torch.Tensor
+    mean_train_resp: torch.Tensor
+    mean_eval_resp: torch.Tensor
     train_times: np.ndarray
     train_labels: np.ndarray
     train_ixs: np.ndarray
@@ -467,6 +471,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
         _, neighbors = mix_data.friends(unit_id, count=self.count)
         neighbors = neighbors[neighbors != unit_id][::-1]
         colors = np.array(glasbey1024)[neighbors % len(glasbey1024)]
+        empty = np.array([], dtype=int)
 
         axes = panel.subplots(
             squeeze=False,
@@ -486,8 +491,8 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     in_nid = mix_data.full_inunits[nid]
                 elif split == "eval":
                     ssco = mix_data.eval_scores
-                    in_nid = mix_data.eval_inunits[nid]
-                    in_unit_id = mix_data.eval_inunits[unit_id]
+                    in_nid = mix_data.eval_inunits.get(nid, empty)
+                    in_unit_id = mix_data.eval_inunits.get(unit_id, empty)
                 else:
                     assert False
 
@@ -596,46 +601,60 @@ class NeighborQDAPlot(MixtureComponentPlot):
             ax.set_xlabel("my ll - their ll")
 
 
+class DemolishView(MixtureComponentPlot):
+    kind = "block"
+    width = 2
+    height = 0.5
+
+    def compute(self, mix_data: MixtureVisData, unit_id: int):
+        _, group, _ = _get_my_merge_group(mix_data, unit_id)
+        group_res = evaluate_group_demolitions(
+            mm=mix_data.tmm,
+            group=group,
+            mean_train_resp=mix_data.mean_train_resp,
+            mean_eval_resp=mix_data.mean_eval_resp,
+            train_scores=mix_data.train_scores,
+            eval_scores=mix_data.eval_scores,
+            cur_crit=None,
+        )
+        return group_res
+
+    def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
+        print(f"{unit_id=}")
+        demo_res = self.compute(mix_data, unit_id)
+
+        ax = panel.subplots()
+        ax.axis("off")
+
+        us = ",".join([str(uu.item()) for uu in demo_res.unit_ids.cpu()])
+        ims = f"imp={demo_res.improvement}"
+        if demo_res.demolished is None:
+            ds = "no"
+        else:
+            ds = ",".join([str(uu.item())[:1] for uu in demo_res.demolished.cpu()])
+        msg = f"units: {us}\n{ims}\ndemo: {ds}"
+        print(f"{msg=}")
+
+        ax.text(
+            0.5,
+            0.5,
+            msg,
+            ha="center",
+            va="center",
+            fontsize="small",
+            transform=ax.transAxes,
+        )
+
+
 class MergeView(MixtureComponentPlot):
     kind = "block"
     width = 2
     height = 2.5
 
-    def __init__(self):
-        pass
-
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        # -- get actual group used during merge
-        # start by getting local distance matrix D for neighbors within merge distance
-        d0 = mix_data.inf_diag_unit_distance_matrix[unit_id]
-        (neighbors,) = (d0 < mix_data.tmm.p.merge_max_distance).nonzero(as_tuple=True)
-        me = neighbors.new_full((1,), unit_id)
-        neighbors = torch.cat([neighbors, me]).sort().values
-        D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
-        D.nan_to_num_(posinf=1000.0)
-
-        # find my complete linkage cluster within D
-        D = D.fill_diagonal_(0.0).numpy(force=True)
-        if D.shape[0] > 1:
-            pd = D[np.triu_indices(D.shape[0], k=1)]
-            Z = linkage(pd, method="complete")
-            groups = maximal_leaf_groups(
-                Z,
-                distances=D,
-                max_distance=mix_data.tmm.p.merge_max_distance,
-                max_group_size=mix_data.tmm.p.max_group_size,
-            )
-            groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
-            assert len(groups) == 1
-            group_ix = list(groups[0])
-            group = neighbors[group_ix]
-        else:
-            group_ix = np.arange(neighbors.shape[0])
-            group = neighbors
-        del neighbors
+        _, group, D = _get_my_merge_group(mix_data, unit_id)
 
         # get pair mask
-        D = D[group_ix][:, group_ix]
         pair_mask = torch.asarray(D < mix_data.tmm.p.merge_max_distance)
 
         # run it
@@ -1273,6 +1292,7 @@ def default_mixture_plots():
         NeighborMeans(),
         NeighborDistances(),
         MergeView(),
+        DemolishView(),
         MeanView(),
         CovarianceView(),
         SplitView(),
@@ -1371,6 +1391,9 @@ def fit_mixture_for_vis(
         full_proposal_view=True,
     )
     train_labels = labels_from_scores_(train_scores)
+    mean_train_resp = mean_responsibilities(
+        scores=train_scores, n_units=mix_data.tmm.n_units
+    )
     full_scores = mix_data.tmm.soft_assign(
         data=mix_data.full_data,
         needs_bootstrap=False,
@@ -1380,6 +1403,7 @@ def fit_mixture_for_vis(
     if mix_data.val_data is None:
         eval_scores = train_scores
         eval_labels = train_labels
+        mean_eval_resp = mean_train_resp
     else:
         eval_scores = mix_data.tmm.soft_assign(
             data=mix_data.val_data,
@@ -1387,6 +1411,9 @@ def fit_mixture_for_vis(
             full_proposal_view=True,
         )
         eval_labels = labels_from_scores_(eval_scores)
+        mean_eval_resp = mean_responsibilities(
+            scores=eval_scores, n_units=mix_data.tmm.n_units
+        )
 
     dists = mix_data.tmm.unit_distance_matrix().cpu().clone()
     dists.diagonal().fill_(torch.inf)
@@ -1419,6 +1446,8 @@ def fit_mixture_for_vis(
         train_scores=train_scores,
         full_scores=full_scores,
         eval_scores=eval_scores,
+        mean_train_resp=mean_train_resp,
+        mean_eval_resp=mean_eval_resp,
         train_times=times_s[mix_data.train_ixs],
         train_ixs=train_ixs,
         val_ixs=val_ixs,
@@ -1611,6 +1640,40 @@ def _summary_job(unit_id):
         if tmp_out is not None and tmp_out.exists():
             tmp_out.unlink()
 
+# -- lib
+
+
+def _get_my_merge_group(mix_data: MixtureVisData, unit_id: int):
+    # -- get actual group used during merge
+    # start by getting local distance matrix D for neighbors within merge distance
+    d0 = mix_data.inf_diag_unit_distance_matrix[unit_id]
+    (neighbors,) = (d0 < mix_data.tmm.p.merge_max_distance).nonzero(as_tuple=True)
+    me = neighbors.new_full((1,), unit_id)
+    neighbors = torch.cat([neighbors, me]).sort().values
+    D = mix_data.inf_diag_unit_distance_matrix[neighbors][:, neighbors].clone()
+    D.nan_to_num_(posinf=1000.0)
+
+    # find my complete linkage cluster within D
+    D = D.fill_diagonal_(0.0).numpy(force=True)
+    if D.shape[0] > 1:
+        pd = D[np.triu_indices(D.shape[0], k=1)]
+        Z = linkage(pd, method="complete")
+        groups = maximal_leaf_groups(
+            Z,
+            distances=D,
+            max_distance=mix_data.tmm.p.merge_max_distance,
+            max_group_size=mix_data.tmm.p.max_group_size,
+        )
+        groups = [g for g in groups if unit_id in neighbors[list(g)].tolist()]
+        assert len(groups) == 1
+        group_ix = list(groups[0])
+        group = neighbors[group_ix]
+    else:
+        group_ix = np.arange(neighbors.shape[0])
+        group = neighbors
+    del neighbors
+    D = D[group_ix][:, group_ix]
+    return group_ix, group, D
 
 # -- one-offs
 

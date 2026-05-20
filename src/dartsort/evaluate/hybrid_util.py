@@ -464,9 +464,9 @@ def load_dartsort_step_sortings(
         )
         if no_npys and st0.labels is not None:
             if hasattr(st0, "template_inds"):
-                yield(
+                yield (
                     name_formatter(f"{h5.stem}_template"),
-                    st0.ephemeral_replace(labels=st0.template_inds)
+                    st0.ephemeral_replace(labels=st0.template_inds),
                 )
             yield name_formatter(h5.stem), st0
             continue

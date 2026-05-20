@@ -854,6 +854,15 @@ def convolve_lowrank(
     return out
 
 
+def enforce_posdef(a, eps=0.0):
+    if eps:
+        a.diagonal(dim1=-2, dim2=-1).add_(eps)
+    vals, vecs = torch.linalg.eigh(a)
+    good = vals > 0
+    a = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+    return a
+
+
 def nancov(
     x,
     weights=None,
@@ -888,14 +897,11 @@ def nancov(
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
+    cov = torch.asarray(cov)
 
     if force_posdef:
         try:
-            if eps:
-                np.fill_diagonal(cov, np.diagonal(cov) + eps)
-            vals, vecs = torch.linalg.eigh(cov)
-            good = vals > 0
-            cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+            cov = enforce_posdef(cov, eps=eps)
         except Exception as e:
             if not cov.isfinite().all():
                 raise e

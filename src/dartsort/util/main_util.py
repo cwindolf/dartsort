@@ -164,7 +164,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if cfg.link_from is None:
         return
 
-    link_from = ensure_path(cfg.link_from, strict=True)
+    link_from = ensure_path(cfg.link_from, strict=True, resolve=True)
     assert link_from.is_dir()
 
     link_patterns = []
@@ -177,7 +177,12 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
         link_patterns.extend(
-            ["subtraction.h5", "motion.pkl", "motionthreshold.h5", "subtraction_models"]
+            [
+                "subtraction.h5",
+                "motion.pkl",
+                "motionthreshold.h5",
+                "subtraction_models/featurization_pipeline.pt",
+            ]
         )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
