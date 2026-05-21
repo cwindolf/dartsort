@@ -5,7 +5,6 @@ from logging import (
     INFO,
     NOTSET,
     addLevelName,
-    basicConfig,
     getLevelNamesMapping,
     getLogger,
     getLoggerClass,
@@ -52,21 +51,25 @@ class DARTsortLogger(getLoggerClass()):
 setLoggerClass(DARTsortLogger)
 
 
-logger = getLogger(__name__)
-assert isinstance(logger, DARTsortLogger)
+# shouts out to sinclairtarget.com
+package_logger = getLogger(__package__)
+assert isinstance(package_logger, DARTsortLogger)
 
 
 # set to environment-defined log level if present
-if "LOG_LEVEL" in os.environ:
-    level = os.environ["LOG_LEVEL"]
-    try:
-        basicConfig(level=level)
-    except ValueError:
+if (level := os.getenv("LOGLEVEL")) is not None:
+    pass
+elif (level := os.getenv("LOG_LEVEL")) is not None:
+    pass
+
+if level:
+    level = level.strip()
+    if not level.strip("0123456789"):
         ilevel = int(level)
-        basicConfig(level=ilevel)
     else:
-        ilevel = getLevelNamesMapping()[level]
-    logger.log(ilevel, f"Log level set to {level} ({ilevel}).")
+        ilevel = getLevelNamesMapping()[level.upper()]
+    package_logger.setLevel(ilevel)
+    package_logger.log(ilevel, f"Log level set to {level} ({ilevel}).")
 
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
@@ -80,8 +83,8 @@ def warn_with_traceback(message, category, filename, lineno, file=None, line=Non
 
 
 # override warnings to show tracebacks when debugging
-if logger.isEnabledFor(DARTSORTVERBOSE):
-    logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
+if package_logger.isEnabledFor(DARTSORTVERBOSE):
+    package_logger.dartsortdebug("Setting warnings.showwarning to print tracebacks.")
     warnings.showwarning = warn_with_traceback  # type: ignore
 
 
@@ -91,9 +94,9 @@ def get_logger(*args, **kwargs) -> DARTsortLogger:
     return logger
 
 
-logger.dartsortdebug(
-    f"Logger is enabled for: DARTSORTDEBUG={logger.isEnabledFor(DARTSORTDEBUG)}, "
-    f"DARTSORTVERBOSE={logger.isEnabledFor(DARTSORTVERBOSE)}."
+package_logger.dartsortdebug(
+    f"Logger is enabled for: DARTSORTDEBUG={package_logger.isEnabledFor(DARTSORTDEBUG)}, "
+    f"DARTSORTVERBOSE={package_logger.isEnabledFor(DARTSORTVERBOSE)}."
 )
 
 
@@ -101,7 +104,7 @@ class logress:
     def __init__(
         self,
         iterable,
-        logger=logger,
+        logger=package_logger,
         miniters=100,
         mininterval=60.0,
         desc=None,
@@ -121,6 +124,7 @@ class logress:
         self.mininterval = mininterval
         self.logger = logger
         self.unit = unit
+        self.closed = False
         try:
             self.total = len(iterable)
             self.miniters = min(
@@ -136,7 +140,7 @@ class logress:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        self.close()
 
     def __iter__(self):
         it = self.iterable
@@ -186,7 +190,10 @@ class logress:
         self.logger.log(self.level, s)
 
     def close(self):
+        if self.closed:
+            return
         self._print(check=False)
+        self.closed = True
 
     def _print(self, t=None, check=True):
         if t is None:

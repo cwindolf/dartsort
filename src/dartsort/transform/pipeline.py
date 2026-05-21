@@ -13,7 +13,7 @@ from ..util.internal_config import (
     WaveformConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from ..util.waveform_util import assert_all_finite_in_probe
 from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
@@ -297,7 +297,7 @@ class WaveformPipeline(torch.nn.Module):
         del waveforms
 
         if hdf5_filename is not None:
-            hdf5_filename = resolve_path(hdf5_filename, strict=True)
+            hdf5_filename = ensure_path(hdf5_filename, strict=True)
 
         if self.safe:
             assert torch.is_tensor(features["waveforms"])
@@ -377,7 +377,7 @@ class WaveformPipeline(torch.nn.Module):
         if up_to_index == 0:
             return
 
-        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        hdf5_filename = ensure_path(hdf5_filename, strict=True)
         dev = self.device
 
         # use sorting as a way to load all 1d features, which transformers

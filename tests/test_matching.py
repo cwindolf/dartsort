@@ -46,7 +46,7 @@ def refractory_sim(request, tmp_path_factory):
     upsampling, scaling, nc = request.param
 
     p = tmp_path_factory.mktemp(f"refsim_{upsampling}_{scaling}_{nc}")
-    p = dartsort.resolve_path(p)
+    p = dartsort.ensure_path(p)
     sim = simkit.generate_simulation(
         p / "sim",
         p / "noise",

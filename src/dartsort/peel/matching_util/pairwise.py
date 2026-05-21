@@ -10,7 +10,7 @@ from ...templates.template_util import CompressedUpsampledTemplates, LowRankTemp
 from ...templates.templates import TemplateData
 from ...util import job_util
 from ...util.motion import MotionInfo
-from ...util.py_util import resolve_path
+from ...util.py_util import ensure_path
 from .matching_base import PconvBase
 from .pairwise_util import compressed_convolve_to_h5
 
@@ -149,7 +149,7 @@ class CompressedPairwiseConv(PconvBase):
         if computation_cfg is None:
             computation_cfg = job_util.get_global_computation_config()
 
-        hdf5_filename = resolve_path(hdf5_filename)
+        hdf5_filename = ensure_path(hdf5_filename)
         hdf5_filename.parent.mkdir(exist_ok=True)
 
         # TODO: rewrite.

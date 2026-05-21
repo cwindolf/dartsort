@@ -22,7 +22,6 @@ from ..util.sparse_util import (
     sparse_centroid_distsq,
 )
 from ..util.spiketorch import spawn_torch_rg
-from .density import guess_mode
 
 logger = get_logger(__name__)
 
@@ -58,6 +57,8 @@ def kmeanspp(
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
     elif kmeanspp_initial == "mode":
+        from .density import guess_mode
+
         Xm = X
         if Xm.shape[1] > mode_dim:
             q = min(mode_dim + 10, *Xm.shape)

@@ -976,10 +976,11 @@ class EmbeddedNoise(BModule):
                 x_spatial = torch.from_numpy(xx).to(x_spatial)
                 valid = slice(None)
                 init_kw["cov_kind"] = cov_kind.removesuffix("noise")
-
-            cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True)
+                cov = torch.cov(x_spatial.T.double())
+                cov = spiketorch.enforce_posdef(cov, eps=eps)
+            else:
+                cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True, eps=eps)
             assert torch.is_tensor(cov)
-            cov.diagonal().add_(eps)
             if shrinkage:
                 cov = F.softshrink(cov, shrinkage)
 

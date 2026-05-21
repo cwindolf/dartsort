@@ -854,6 +854,15 @@ def convolve_lowrank(
     return out
 
 
+def enforce_posdef(a, eps=0.0):
+    if eps:
+        a.diagonal(dim1=-2, dim2=-1).add_(eps)
+    vals, vecs = torch.linalg.eigh(a)
+    good = vals > 0
+    a = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+    return a
+
+
 def nancov(
     x,
     weights=None,
@@ -888,14 +897,11 @@ def nancov(
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
+    cov = torch.asarray(cov)
 
     if force_posdef:
         try:
-            if eps:
-                np.fill_diagonal(cov, np.diagonal(cov) + eps)
-            vals, vecs = torch.linalg.eigh(cov)
-            good = vals > 0
-            cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+            cov = enforce_posdef(cov, eps=eps)
         except Exception as e:
             if not cov.isfinite().all():
                 raise e
@@ -1475,7 +1481,11 @@ def get_relative_index(source_channel_index, target_channel_index):
     """
     n_chans, n_source_chans = source_channel_index.shape
     n_chans_, n_target_chans = target_channel_index.shape
-    assert n_chans == n_chans_
+    if n_chans != n_chans_:
+        raise ValueError(
+            f"source/target shapes mismatch: {source_channel_index.shape=} "
+            f"{target_channel_index.shape=}."
+        )
     relative_index = torch.full_like(target_channel_index, n_source_chans)
     for c in range(n_chans):
         row = source_channel_index[c]

@@ -1,7 +1,7 @@
 import pytest
 from dartsort.evaluate import simkit, config_grid
 from dartsort.util.logging_util import get_logger
-from dartsort import resolve_path
+from dartsort import ensure_path
 
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ def mini_simulations(pytestconfig, tmp_path_factory):
     for sim_name, kw in sim_settings.items():
         cache_key = f"dartsort/{sim_name}"
         if (p := pytestconfig.cache.get(cache_key, None)) is not None:
-            p = resolve_path(p)
+            p = ensure_path(p)
             if p.exists():
                 try:
                     sims[sim_name] = simkit.load_simulation(p / "sim")
@@ -47,7 +47,7 @@ def mini_simulations(pytestconfig, tmp_path_factory):
                     pass
 
         p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
-        p = resolve_path(p)
+        p = ensure_path(p)
         pytestconfig.cache.set(cache_key, str(p))
         sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
 
@@ -73,7 +73,7 @@ def simulations(pytestconfig, tmp_path_factory, mini_simulations):
         for sim_name, kw in sim_settings.items():
             cache_key = f"dartsort/{sim_name}"
             if (p := pytestconfig.cache.get(cache_key, None)) is not None:
-                p = resolve_path(p)
+                p = ensure_path(p)
                 if p.exists():
                     try:
                         sims[sim_name] = simkit.load_simulation(p / "sim")
@@ -81,9 +81,9 @@ def simulations(pytestconfig, tmp_path_factory, mini_simulations):
                         continue
                     except FileNotFoundError:
                         pass
-    
+
             p = tmp_path_factory.mktemp(f"simdata_{sim_name}")
-            p = resolve_path(p)
+            p = ensure_path(p)
             pytestconfig.cache.set(cache_key, str(p))
             sims[sim_name] = simkit.generate_simulation(p / "sim", p / "noise", **kw)
 

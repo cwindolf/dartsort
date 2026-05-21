@@ -3,6 +3,9 @@ import spikeinterface.full as si
 from spikeinterface.core import BaseRecording
 
 from .internal_config import PreprocessingStrategy
+from .logging_util import get_logger
+
+logger = get_logger(__name__)
 
 preprocessing_strategies = {}
 
@@ -87,4 +90,5 @@ def preprocess(
     strategy: PreprocessingStrategy = "none",
     dtype: str = "float32",
 ) -> BaseRecording:
+    logger.info("applying preprocessing: %s", strategy)
     return preprocessing_strategies[strategy](rec, dtype)
