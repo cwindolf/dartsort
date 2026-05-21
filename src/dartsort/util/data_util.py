@@ -1642,7 +1642,7 @@ def fit_reweighting(
 
     if log_voltages:
         sign = np.sign(v)
-        v = sign * np.log(np.abs(v))
+        v = sign * np.log(np.abs(v) + 1e-5)
     v = np.nan_to_num(v)
     sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
