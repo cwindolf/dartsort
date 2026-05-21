@@ -57,8 +57,13 @@ assert isinstance(package_logger, DARTsortLogger)
 
 
 # set to environment-defined log level if present
-if "LOG_LEVEL" in os.environ:
-    level = os.environ["LOG_LEVEL"].strip()
+if (level := os.getenv("LOGLEVEL")) is not None:
+    pass
+elif (level := os.getenv("LOG_LEVEL")) is not None:
+    pass
+
+if level:
+    level = level.strip()
     if not level.strip("0123456789"):
         ilevel = int(level)
     else:
