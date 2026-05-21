@@ -22,6 +22,7 @@ def scatter_spike_features(
     figure=None,
     axes=None,
     width_ratios=(1, 1, 3),
+    figsize=(15, 10),
     semilog_amplitudes=True,
     show_geom=True,
     geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
@@ -57,8 +58,10 @@ def scatter_spike_features(
     if axes is not None:
         assert axes.size == 3
         figure = axes.flat[0].figure
-    if figure is None:
+    if figure is None and len(plt.get_fignums()):
         figure = plt.gcf()
+    elif figure is None:
+        figure = plt.figure(figsize=figsize)
     if extra_features is None:
         extra_features = {}
     else:
