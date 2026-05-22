@@ -151,6 +151,15 @@ def handle_negative_jobs(n_jobs: int):
     try:
         n_cores = os.process_cpu_count()  # type: ignore
     except AttributeError:
+        try:
+            my_cores = os.sched_getaffinity(0)
+            if my_cores:
+                n_cores = len(my_cores)
+            else:
+                n_cores = None
+        except Exception:
+            n_cores = None
+    if n_cores is None:
         n_cores = multiprocessing.cpu_count()
     if n_jobs < 0:
         n_jobs = n_cores + (n_jobs + 1)
