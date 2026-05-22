@@ -1319,10 +1319,13 @@ class BatchedSpikeData:
             self.candidates.fill_(-1)
 
     def bootstrap_candidates(
-        self, distances: Tensor, un_adj_lut: NeighborhoodLUT | None = None
+        self,
+        distances: Tensor,
+        un_adj_lut: NeighborhoodLUT | None = None,
+        allow_uncovered: bool = False,
     ) -> NeighborhoodLUT:
         self.update_adjacency(n_units=distances.shape[0], un_adj_lut=un_adj_lut)
-        self._fill_missing(distances.shape[0])
+        self._fill_missing(distances.shape[0], allow_uncovered=allow_uncovered)
 
         # fill in candidates[:, 1:n_candidates] at random obeying un_adj
         # choosing not to use distances here, since they get used in search sets
@@ -1861,7 +1864,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         # have to do a full bootstrap, bc it's hard to figure out what to do with
         # spikes whose candidates contain the units that were split. this way, the
         # lut invariants are maintained, and at least the top labels are the same.
-        return self.bootstrap_candidates(distances)
+        return self.bootstrap_candidates(distances, allow_uncovered=True)
 
     def full_proposal_view(self, un_adj_lut: NeighborhoodLUT):
         return FullProposalDataView.from_truncated_spike_data(self, un_adj_lut)
