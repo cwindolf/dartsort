@@ -143,6 +143,10 @@ def kmeanspp(
     else:
         phi = dists.mul_(weights).mean() / weights.mean()
 
+    dmin = dists.amin().item()
+    assert dmin >= -1e-6
+    dists.relu_()
+
     return centroid_ixs, assignments, dists, phi
 
 
