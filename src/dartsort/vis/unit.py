@@ -847,6 +847,7 @@ def default_plots(sorting_analysis=None):
         UnitTextInfo(),
         ACG(),
         ISIHistogram(),
+        ISIHistogram(bin_ms=0.25, max_ms=50.0),
         XZScatter(),
         TimeAmpScatter(),
         RawWaveformPlot(),

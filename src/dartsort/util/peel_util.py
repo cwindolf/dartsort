@@ -11,7 +11,7 @@ from ..peel.peel_base import BasePeeler
 from .data_util import DARTsortSorting
 from .internal_config import ComputationConfig, FeaturizationConfig
 from .job_util import ensure_computation_config
-from .py_util import resolve_path, timer
+from .py_util import ensure_path, timer
 
 
 def run_peeler(
@@ -33,7 +33,7 @@ def run_peeler(
     shuffle: bool = False,
     localization_dataset_name="point_source_localizations",
 ):
-    output_directory = resolve_path(output_directory)
+    output_directory = ensure_path(output_directory)
     output_directory.mkdir(exist_ok=True)
     model_dir = output_directory / model_subdir
     output_hdf5_filename = output_directory / hdf5_filename

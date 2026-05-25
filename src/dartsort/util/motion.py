@@ -25,7 +25,7 @@ from .internal_config import (
 )
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
-from .py_util import databag, resolve_path
+from .py_util import databag, ensure_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
 
 logger = get_logger(__name__)
@@ -365,7 +365,7 @@ class MotionInfo:
     def try_load(
         cls, output_directory: Path | str, filename="motion.pkl"
     ) -> Self | None:
-        fn = resolve_path(output_directory) / filename
+        fn = ensure_path(output_directory) / filename
         if not fn.exists():
             return None
         with open(fn, "rb") as jar:
@@ -378,7 +378,7 @@ class MotionInfo:
         filename="motion.pkl",
         overwrite: bool = False,
     ):
-        fn = resolve_path(output_directory) / filename
+        fn = ensure_path(output_directory) / filename
         if not overwrite and fn.exists():
             return
         v = dict(

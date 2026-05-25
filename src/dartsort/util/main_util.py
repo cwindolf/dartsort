@@ -18,7 +18,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo, try_load_motion_info
-from ..util.py_util import dartcopy2, dartcopytree, resolve_path
+from ..util.py_util import dartcopy2, dartcopytree, ensure_path
 
 logger = get_logger(__name__)
 
@@ -34,11 +34,11 @@ def ds_save_intermediate_sorting(
         return
     if output_dir is None:
         return
-    output_dir = resolve_path(output_dir, strict=True)
+    output_dir = ensure_path(output_dir, strict=True)
     if work_dir is None:
         store_dir = output_dir
     else:
-        store_dir = resolve_path(work_dir, strict=True)
+        store_dir = ensure_path(work_dir, strict=True)
 
     step_npz = store_dir / f"{step_name}.npz"
     logger.info(f"Saving {step_name} labels to {step_npz}")
@@ -63,11 +63,11 @@ def ds_save_intermediate_labels(
         return
     if output_dir is None:
         return
-    output_dir = resolve_path(output_dir, strict=True)
+    output_dir = ensure_path(output_dir, strict=True)
     if work_dir is None:
         store_dir = output_dir
     else:
-        store_dir = resolve_path(work_dir, strict=True)
+        store_dir = ensure_path(work_dir, strict=True)
 
     step_labels_npy = store_dir / f"{step_name}_labels.npy"
     logger.info(f"Saving {step_name} labels to {step_labels_npy}")
@@ -164,7 +164,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if cfg.link_from is None:
         return
 
-    link_from = resolve_path(cfg.link_from, strict=True)
+    link_from = ensure_path(cfg.link_from, strict=True, resolve=True)
     assert link_from.is_dir()
 
     link_patterns = []
@@ -177,7 +177,12 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
         link_patterns.extend(
-            ["subtraction.h5", "motion.pkl", "motionthreshold.h5", "subtraction_models"]
+            [
+                "subtraction.h5",
+                "motion.pkl",
+                "motionthreshold.h5",
+                "subtraction_models/featurization_pipeline.pt",
+            ]
         )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
@@ -214,7 +219,7 @@ def ds_save_features(
 
     # find h5 and models and copy
     assert sorting.parent_h5_path is not None
-    h5_path = resolve_path(sorting.parent_h5_path)
+    h5_path = ensure_path(sorting.parent_h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
 
@@ -245,7 +250,7 @@ def ds_handle_delete_intermediate_features(
 
     # find all non-final h5s, models and delete them
     assert final_sorting.parent_h5_path is not None
-    final_h5 = resolve_path(final_sorting.parent_h5_path)
+    final_h5 = ensure_path(final_sorting.parent_h5_path)
     assert final_h5.exists()
     assert final_h5.parent == output_dir
 

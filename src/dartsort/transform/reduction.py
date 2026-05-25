@@ -139,7 +139,7 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         dev = computation_cfg.actual_device()
 
         n_jobs, Executor, context, *_ = pool_from_cfg(
-            computation_cfg, check_local=True, small=True
+            computation_cfg, check_local=True, small=True, cpu=dev.type == 'cpu'
         )
         with Executor(
             max_workers=n_jobs,

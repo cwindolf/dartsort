@@ -26,7 +26,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.noise_util import SpatialWhitener
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
 from .templib import fit_tsvd, pca_from_templates, quick_mean_templates
@@ -59,7 +59,7 @@ def estimate_template_library(
 ) -> tuple[DARTsortSorting, TemplateData]:
     """Postprocess spike train and estimate a TemplateData."""
     if template_npz_path is not None:
-        template_npz_path = resolve_path(template_npz_path)
+        template_npz_path = ensure_path(template_npz_path)
         if template_npz_path.exists():
             return sorting, TemplateData.from_npz(template_npz_path)
 
