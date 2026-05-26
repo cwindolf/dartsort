@@ -3744,7 +3744,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert n_new_units == sum(m.shape[0] for m in new_means)
         assert n_new_units == sum(lp.numel() for lp in new_log_props)
         if self.signal_rank:
-            assert n_new_units == sum(b.shape[0] for b in new_bases)
+            assert all(b is not None for b in new_bases)
+            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore
 
         # resize params to allow space for the new guys
         Korig = self.n_units

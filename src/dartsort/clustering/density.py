@@ -4,7 +4,6 @@ from typing import Literal, cast
 import numba
 import numpy as np
 import torch
-import torch.nn.functional as F
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree

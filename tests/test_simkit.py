@@ -7,9 +7,9 @@ import torch
 
 from dartsort.evaluate import simkit, simlib
 from dartsort.util.internal_config import (
+    ComputationConfig,
     FeaturizationConfig,
     MotionEstimationConfig,
-    ComputationConfig,
 )
 from dartsort.util.motion import get_motion_info
 from dartsort.util.noise_util import StationaryFactorizedNoise
@@ -131,7 +131,7 @@ def test_reproducible_and_residual(
             sampling_frequency=10_000.0,
             duration_seconds=8.1,
             templates_kind=templates_kind.removesuffix("grid"),
-            **kw,
+            **kw,  # type: ignore
         )
         sims.append(sim)
     sim0, sim1 = sims

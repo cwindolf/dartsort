@@ -132,7 +132,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
-        **cfg_add,
+        **cfg_add,  # type: ignore
     )
     with warnings.catch_warnings():
         warnings.filterwarnings(
