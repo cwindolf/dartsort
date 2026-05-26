@@ -31,8 +31,6 @@ It is configured by the [matching_cfg](#dartsort.MatchingConfig) argument.
     options:
       show_if_no_docstring: true
 
-::: dartsort.estimate_template_library
-
 ### Neural-net based collision-cleaned spike detection
 
 ::: dartsort.subtract
