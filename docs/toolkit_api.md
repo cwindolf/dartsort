@@ -17,7 +17,13 @@ In *dartsort* those kind of workflows are called "peelers" (inspired by the iter
 All of the peelers accept a featurization pipeline or a [`FeaturizationConfig`](#dartsort.FeaturizationConfig) object which handles the spike featurization; these are discussed [in the next section](#featurization-pipelines).
 
 *dartsort* includes high-level functions for running various kinds of peelers and corresponding configuration objects.
-These are:
+These are in sections below.
+
+### Template matching
+
+[`match()`](#dartsort.match) runs template matching from known templates if its `template_data` parameter is set, or else estimating templates from `sorting` using [`estimate_template_library()`](#dartsort.estimate_template_library).
+
+It is configured by the [matching_cfg](#dartsort.MatchingConfig) argument.
 
 ::: dartsort.match
 
@@ -25,17 +31,29 @@ These are:
     options:
       show_if_no_docstring: true
 
+::: dartsort.estimate_template_library
+
+### Neural-net based collision-cleaned spike detection
+
 ::: dartsort.subtract
 
 ::: dartsort.SubtractionConfig
     options:
       show_if_no_docstring: true
 
+### Thresholding spike detection
+
 ::: dartsort.threshold
 
 ::: dartsort.ThresholdingConfig
     options:
       show_if_no_docstring: true
+
+
+### Spike extraction and featurization at known event times
+
+::: dartsort.grab
+
 
 ## Featurization pipelines
 
