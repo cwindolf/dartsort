@@ -282,7 +282,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             match_results["times_samples"] += chunk_start_samples - left_margin  # type: ignore
         if match_results["n_spikes"] > self.p.max_spikes_per_second:
             raise ValueError(
-                f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}."
+                f"Too many spikes {match_results['n_spikes']} > {self.p.max_spikes_per_second}."
             )
 
         return match_results
@@ -534,7 +534,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             p_lo = nm.cdf(self.amp_scale_min)
             Z = p_up - p_lo
 
-            scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
+            # renormalize
+            scale_const = norm_const - 2.0 * np.log(Z)
 
             if isinstance(self.p.threshold, float):
                 tb = np.sqrt(max(0.0, self.p.threshold**2 - scale_const))

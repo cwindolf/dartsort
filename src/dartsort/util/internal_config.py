@@ -150,7 +150,7 @@ class InterpolationParams:
 
     def extrap_params(self):
         return self.__class__(
-            method=self.actual_extrap_kernel,
+            method=self.actual_extrap_method,
             kernel=self.actual_extrap_kernel,
             kriging_poly_degree=self.kriging_poly_degree,
             sigma=self.sigma,
@@ -573,7 +573,6 @@ class FeaturizationConfig:
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
     compute_input_tpca_projs_regardless: bool = False
-    save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
     save_collidedness: bool = False

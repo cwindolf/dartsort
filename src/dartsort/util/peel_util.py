@@ -50,6 +50,15 @@ def run_peeler(
     is_subsampling = stop_after_n_spikes is not None
     is_subsampling = is_subsampling and ensure_coverage != 1.0
 
+    n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
+    if is_subsampling and ensure_coverage is not None:
+        n_resid_now = n_resid_snips
+    elif is_subsampling:
+        # can't know how many snips to extract per chunk...
+        n_resid_now = 0
+    else:
+        n_resid_now = n_resid_snips
+
     if peeler_is_done(
         peeler,
         output_hdf5_filename,
@@ -60,6 +69,7 @@ def run_peeler(
         stop_after_n_spikes=stop_after_n_spikes,
         ensure_coverage=ensure_coverage,
         shuffle=is_subsampling or shuffle,
+        n_residual_snips=n_resid_snips,
     ):
         return DARTsortSorting.from_peeling_hdf5(output_hdf5_filename)
 
@@ -75,14 +85,6 @@ def run_peeler(
             return
 
     # run main
-    n_resid_snips = 0 if skip_resid_snips else peeler.fit_sampling_cfg.n_residual_snips
-    if is_subsampling and ensure_coverage is not None:
-        n_resid_now = n_resid_snips
-    elif is_subsampling:
-        # can't know how many snips to extract per chunk...
-        n_resid_now = 0
-    else:
-        n_resid_now = n_resid_snips
     if peeler.featurization_pipeline is not None:
         workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
         _, workers = handle_negative_jobs(workers)

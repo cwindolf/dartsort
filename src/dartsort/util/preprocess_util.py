@@ -21,7 +21,7 @@ preprocessing_strategies["none"] = none
 def ibllike(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
-    if "inter_sample_shift" in rec._properties:
+    if "inter_sample_shift" in rec.get_property_keys():
         rec = si.phase_shift(rec)
     if rec.has_scaleable_traces():
         bcids = si.detect_bad_channels(rec, seed=0)
@@ -47,7 +47,7 @@ preprocessing_strategies["ibllike"] = ibllike
 def ibllikecmr(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
-    if "inter_sample_shift" in rec._properties:
+    if "inter_sample_shift" in rec.get_property_keys():
         rec = si.phase_shift(rec)
     if rec.has_scaleable_traces():
         bcids = si.detect_bad_channels(rec, seed=0)

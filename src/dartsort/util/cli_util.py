@@ -229,8 +229,8 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
 def dataclass_from_toml(clss, toml_path):
     import tomllib  # TODO: can hold off on py3.11 for now
 
-    with open(toml_path, "rb") as toml:
-        for j, cls in enumerate(clss):
+    for j, cls in enumerate(clss):
+        with open(toml_path, "rb") as toml:
             try:
                 return cls(**tomllib.load(toml))
             except TypeError:

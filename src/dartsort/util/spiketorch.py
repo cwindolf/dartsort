@@ -443,7 +443,7 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
         nmj = (xj.square_().mul_(w)).mean(dim=(1, 2)).sqrt_()
 
         dist = dist.div_(nmi).div_(nmj)
-        pdist[i0 + valid] = dist
+        pdist[i0 + valid] = dist.sqrt_()
     pdist = pdist.numpy(force=True)
     return squareform(pdist)
 
@@ -891,7 +891,7 @@ def nancov(
     else:
         xtx = x.T @ x
         if nan_free:
-            nobs = np.array(len(x), dtype=x.dtype)
+            nobs = x.new_tensor(len(x))
         else:
             nobs = mask.T @ mask
     denom = nobs - correction

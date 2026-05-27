@@ -1,4 +1,5 @@
 """Neural-net based substitute for template matching."""
+
 import gc
 from dataclasses import replace
 from pathlib import Path
@@ -422,25 +423,37 @@ class SubtractionPeeler(BasePeeler):
                     device="cpu" if which == "denoisers" else device,
                 )
                 # these are on CPU for now.
-                assert fit_feats is not None
-                fit_denoise = WaveformPipeline(
-                    fit_feats,
-                    waveform_cfg=self.waveform_cfg,
-                    sampling_frequency=self.recording.sampling_frequency,
-                )
-                fit_denoise = fit_denoise.to(device)
-                fit_denoise.fit(
-                    recording=self.recording,
-                    waveforms=waveforms,
-                    computation_cfg=computation_cfg,
-                    hdf5_filename=temp_hdf5_filename,
-                    waveforms_dataset_name="subtract_fit_waveforms",
-                    **fixed_properties,
-                )
-                fit_denoise = fit_denoise.to("cpu")
+                if which == "denoisers":
+                    assert fit_feats is not None
+                    fit_denoise = WaveformPipeline(
+                        fit_feats,
+                        waveform_cfg=self.waveform_cfg,
+                        sampling_frequency=self.recording.sampling_frequency,
+                    )
+                    fit_denoise = fit_denoise.to(device)
+                    fit_denoise.fit(
+                        recording=self.recording,
+                        waveforms=waveforms,
+                        computation_cfg=computation_cfg,
+                        hdf5_filename=temp_hdf5_filename,
+                        waveforms_dataset_name="subtract_fit_waveforms",
+                        **fixed_properties,
+                    )
+                    fit_denoise.to("cpu")
+                else:
+                    assert fit_feats is None
+                    orig_denoise.fit(
+                        recording=self.recording,
+                        waveforms=waveforms,
+                        computation_cfg=computation_cfg,
+                        hdf5_filename=temp_hdf5_filename,
+                        waveforms_dataset_name="subtract_fit_waveforms",
+                        **fixed_properties,
+                    )
+                    orig_denoise = orig_denoise.to("cpu")
+            finally:
                 self.subtraction_denoising_pipeline = orig_denoise
                 self.featurization_pipeline = orig_featurization_pipeline
-            finally:
                 self.to("cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()

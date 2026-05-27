@@ -1,5 +1,6 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Sequence
 
@@ -136,6 +137,9 @@ class WaveformPipeline(torch.nn.Module):
     ):
         """Construct a pipeline from a sequence of BaseWaveformModule class names and constructor arguments."""
         from .all_transformers import transformers_by_class_name
+
+        # need to modify this dict, so don't mess with the original
+        class_names_and_kwargs = deepcopy(class_names_and_kwargs)
 
         channel_index = torch.as_tensor(channel_index)
         geom = torch.as_tensor(geom)

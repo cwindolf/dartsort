@@ -4634,6 +4634,8 @@ def initialize_params_from_dense_data(
             prior_pseudocount=prior_pseudocount,
         )
         res.append((schans, m, w))
+    if res is not None:
+        assert isinstance(res, tuple)
     return res, full_coverage
 
 
@@ -4837,8 +4839,8 @@ def allowed_partitions(
     group_ids = torch.zeros_like(unit_ids)
 
     group_partitions = []
-    subset_to_id = {}
-    id_to_subset = {}
+    subset_to_id: dict[tuple[int], int] = {}
+    id_to_subset: dict[int, list[int]] = {}
     subset_id = 0
     for n_groups in range(1 + skip_single, n_units + 1 - skip_full):
         for partition in multiset_partitions(n_units, m=n_groups):
@@ -4855,7 +4857,7 @@ def allowed_partitions(
                     subset_ids.append(subset_id)
                     subset_group_ids.append(j)
                     subset_to_id[tp] = subset_id
-                    id_to_subset[subset_id] = p
+                    id_to_subset[subset_id] = p.tolist()
                     subset_id += 1
                     uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) > 1:
@@ -5290,6 +5292,7 @@ def evaluate_group_demolitions(
     best_demo = GroupDemolition(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
     )
+    best_imp = 0.0
     for demo_mask in submasks(can_demolish):
         crit = _evaluate_single_demolition(
             orig_log_props=mm.b.log_proportions,
@@ -5301,10 +5304,11 @@ def evaluate_group_demolitions(
             eval_scores=eval_scores,
         )
         imp = crit - cur_crit
-        if imp > 0:
+        if imp > best_imp:
             best_demo = GroupDemolition(
                 unit_ids=group, improvement=imp, demolished=demo_mask
             )
+            best_imp = imp
 
     return best_demo
 
@@ -6202,6 +6206,7 @@ def mean_responsibilities(
     rsum_batch = resp_mean.clone()
     for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
         i1 = min(resp.shape[0], i0 + batch_size)
+        nbatch = i1 - i0
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
@@ -6213,8 +6218,8 @@ def mean_responsibilities(
         if includes_noise:
             rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
-        rmean_batch = rsum_batch.div_(i1 - i0)
-        resp_mean += rmean_batch.sub_(resp_mean).div_(i1 / batch_size)
+        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
 
     # check that things didn't explode
     assert resp_mean.isfinite().all(), "Responsibility mean not finite"
