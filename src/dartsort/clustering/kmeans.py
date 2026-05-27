@@ -71,7 +71,7 @@ def kmeanspp(
         assert False
 
     if Xnormsq is None:
-        Xnormsq = torch.square(X).sum(1)
+        Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
 
     dists_ = X.new_zeros(len(X))[:, None]
     dists = _sqeuc(X, Xnormsq[:, None], Y=X[centroid_ixs[0]][None], out=dists_)[:, 0]
@@ -124,8 +124,12 @@ def kmeanspp(
 
             # newdists = torch.subtract(X, X[centroid_ixs[j]], out=diff_buffer).square_()
             # newdists = torch.sum(newdists, dim=1, out=p)
-            newdists = _sqeuc(
-                X, Xnormsq[:, None], X[centroid_ixs[j]][None], out=p[:, None]
+            newdists = _sqeuc_ysqknown(
+                X,
+                Xnormsq[:, None],
+                X[centroid_ixs[j]][None],
+                Xnormsq[centroid_ixs[j]][None],
+                out=p[:, None],
             )[:, 0]
             if not skip_assignment:
                 closer = newdists < dists
@@ -143,8 +147,6 @@ def kmeanspp(
     else:
         phi = dists.mul_(weights).mean() / weights.mean()
 
-    dmin = dists.amin().item()
-    assert dmin >= -1e-6
     dists.relu_()
 
     return centroid_ixs, assignments, dists, phi
@@ -383,7 +385,7 @@ def kmeans_inner(
     centroids = X[centroid_ixs]
 
     if X_normsq is None:
-        X_normsq = torch.linalg.norm(X, dim=1).square_()
+        X_normsq = torch.linalg.vector_norm(X, dim=1).square_()
     assert X_normsq is not None
     X_normsq = X_normsq[:, None]
     dists_out = X.new_empty((X.shape[0], centroids.shape[0]))

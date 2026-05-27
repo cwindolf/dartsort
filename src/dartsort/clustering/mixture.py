@@ -4515,7 +4515,7 @@ def initialize_parameters_by_unit(
             kweight = scores.responsibilities[kdata.indices, 0]
         else:
             kweight = None
-        ((kc, km, ks),), _ = initialize_params_from_dense_data(
+        params, _ = initialize_params_from_dense_data(
             kdata,
             erp=erp,
             rank=signal_rank,
@@ -4526,6 +4526,10 @@ def initialize_parameters_by_unit(
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
         )
+        assert len(params) == 1
+        params = params[0]
+        assert params is not None
+        kc, km, ks = params
         if means is not None:
             means[k, :, kc] = km
         if bases is not None:
@@ -4584,7 +4588,7 @@ def initialize_params_from_dense_data(
     min_channel_count: int = 1,
     weights: Tensor | None = None,
     single_weight: Tensor | None = None,
-) -> tuple[list[tuple[Tensor, Tensor, Tensor | None]], Tensor | None]:
+) -> tuple[list[tuple[Tensor, Tensor, Tensor] | None], Tensor | None]:
     """Weighted mean and basis, possibly by multiple weight vectors at once.
 
     The chosen channel neighborhood is the union of my spikes' neighborhoods. If there
@@ -4634,8 +4638,6 @@ def initialize_params_from_dense_data(
             prior_pseudocount=prior_pseudocount,
         )
         res.append((schans, m, w))
-    if res is not None:
-        assert isinstance(res, tuple)
     return res, full_coverage
 
 
