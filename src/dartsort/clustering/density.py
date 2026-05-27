@@ -1,5 +1,5 @@
 from threading import local
-from typing import Literal, cast
+from typing import cast
 
 import numba
 import numpy as np
@@ -261,385 +261,130 @@ def remove_border_points(
     return new_labels
 
 
-def guess_mode(
-    X,
-    sigma: float | Literal["rule_of_thumb"] = "rule_of_thumb",
-    outlier_neighbor_count=10,
-    outlier_sigma=3.0,
-    kdtree=None,
-    workers=1,
-):
-    """Use a KDE to guess the highest density point."""
-    n = len(X)
-    sigma0 = np.sqrt(X.var(axis=0).sum())
-    inliers, kdtree = kdtree_inliers(
-        X,
-        kdtree=kdtree,
-        n_neighbors=outlier_neighbor_count,
-        distance_upper_bound=outlier_sigma * sigma0,
-        workers=workers,
-    )
+def sort_density(
+    X: np.ndarray | torch.Tensor,
+    sigma0: float,
+    sigma1: float,
+    max_sigma: float = 3.0,
+    device: torch.device = torch.device("cpu"),
+    batch_size: int = 512,
+    show_progress: bool = False,
+) -> np.ndarray:
+    """Compute a ratio of Gaussian KDEs by ordering along the first dimension
 
-    if sigma == "rule_of_thumb":
-        sigma_dens = (
-            1.06
-            * np.linalg.norm(np.std(X[inliers], axis=0))
-            * np.power(inliers.sum(), -0.2)
-        )
+    This is only useful if the first dimension is much larger than the rest.
+    Otherwise, hopefully n is not too big ;).
+
+    Parameters
+    ----------
+    X : np.ndarray | torch.Tensor
+        Data whose density ratio we want.
+    sigma0 : float
+        The smaller sigma
+    sigma1 : float
+        The larger sigma
+    max_sigma : float, optional
+        The maximum sigma value to use. Default is 3.0.
+    device : torch.device, optional
+    batch_size : int, optional
+    show_progress : bool, optional
+
+    Returns
+    -------
+    np.ndarray
+        The density ratio for each point in X.
+    """
+    X = torch.asarray(X, device=device)
+    order = torch.argsort(X[:, 0])
+    X = X[order]
+    X0 = X[:, 0].contiguous()
+    Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
+    n, dim = X.shape
+
+    radius = max_sigma * max(sigma0, sigma1)
+    radius_sq = X.new_tensor(radius * radius)
+    dens = X.new_zeros(n)
+
+    k0 = X.new_tensor(-0.5 * sigma0**-2)
+    k1 = X.new_tensor(-0.5 * sigma1**-2)
+
+    n0 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma0 * sigma0))
+    n1 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma1 * sigma1))
+
+    if show_progress:
+        iter = progrange(0, n, batch_size)
     else:
-        sigma_dens = sigma
+        iter = range(0, n, batch_size)
 
-    density = get_smoothed_density(X, inliers=inliers, sigma=sigma_dens)
-    assert isinstance(density, np.ndarray)
-    assert density.shape == (n,)
+    i0 = i1 = 0
+    dist_buf = X.new_zeros((batch_size * batch_size,))
+    dist_buf2 = X.new_zeros((batch_size * batch_size,))
+    dist_buf3 = X.new_zeros((batch_size * batch_size,))
+    dens0_buf = X.new_zeros((batch_size,))
+    dens1_buf = X.new_zeros((batch_size,))
+    for q0 in iter:
+        q1 = min(n, q0 + batch_size)
+        nq = q1 - q0
 
-    return np.argmax(density)
+        Q = X[q0:q1]
+        x0 = Q[0, 0] - radius
+        x1 = Q[-1, 0] + radius
 
-
-class KmeansppBallTree:
-    def __init__(
-        self,
-        X: np.ndarray | torch.Tensor,
-        max_roots=128,
-        max_layer_size=38400,
-        target_leafsize=128,
-        target_branching=16,
-        batch_size=2048,
-        sort_0: bool = True,
-        device: torch.device | None = torch.device("cpu"),
-    ):
-        super().__init__()
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        self.target_leafsize = target_leafsize
-        self.target_branching = target_branching
-        self.max_layer_size = max_layer_size
-        self.batch_size = batch_size
-
-        # -- lists of tensors. for each layer, the tensor is the same length
-        # leaves are datapoints; higher layers are kmeanspp centroids
-        self.layers = []
-        # each datapoint or centroid's sqeucnorm
-        self.layer_normsqs = []
-        # for non-leaf layers, the centroid's index in the layer below
-        self.layer_descendant_inds = [None]
-        # each leaf or centroid's parent (closest centroid)
-        self.layer_parent_inds = []
-        # all inds of descendents for each centroid
-        self.layer_children = [None]
-        self.layer_nchildren = [None]
-        # this centroid's max leaf descendant dist
-        self.layer_radii = [None]
-
-        self.add_leaf_layer(X, device, sort_0)
-
-        while self.layers[-1].shape[0] > max_roots:
-            self.add_layer()
-
-        nlayers = len(self.layers)
-        layerlens = [len(ll) for ll in self.layers]
-        logger.info(f"tree: {nlayers=} {layerlens=}")
-
-    def add_leaf_layer(self, X, device, sort_0):
-        X = torch.asarray(X, device=device)
-        if sort_0:
-            self.leaf_order = torch.argsort(X[:, 0])
-            X = X[self.leaf_order]
+        if i0 == q0:
+            assert q0 == 0
         else:
-            self.leaf_order = None
-        assert X.ndim == 2
-        Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
+            assert q0 > i0
+            i0 = i0 + torch.searchsorted(X0[i0:q0], x0, side="right") - 1
+            i0.clamp_(min=0)
+            i0 = int(i0.item())
 
-        self.layers.append(X)
-        self.layer_normsqs.append(Xnormsq)
-
-    def add_layer(self):
-        from .kmeans import kmeanspp
-
-        X = self.layers[-1]
-        Xnormsq = self.layer_normsqs[-1]
-
-        n = len(X)
-        logn = int(np.ceil(np.log2(n)))
-
-        if len(self.layers) == 1:
-            # descendents are leaves
-            branching = max(self.target_leafsize, logn)
+        if q1 == n:
+            i1 = n
         else:
-            # ancestor branching
-            branching = max(self.target_branching, logn)
-        ny = min(self.max_layer_size, n, n // branching)
+            i1 = q1 + torch.searchsorted(X0[q1:], x1, side="right")
+            i1.clamp_(max=n)
+            i1 = int(i1.item())
 
-        Y_Xixs, lx2y, dsqxy, _ = kmeanspp(X, n_components=ny, Xnormsq=Xnormsq)
-        assert Y_Xixs.shape[0] == ny
-        assert lx2y.shape[0] == dsqxy.shape[0] == n
+        dens0 = dens0_buf[: q1 - q0].zero_()
+        dens1 = dens1_buf[: q1 - q0].zero_()
+        for j0 in range(i0, i1, batch_size):
+            j1 = min(j0 + batch_size, i1)
+            nj = j1 - j0
+            nbuf = nq * nj
 
-        # reorder descendents by label in first layer
-        if len(self.layers) == 1:
-            lx2y, order = lx2y.sort(stable=True)
-            reorder = torch.argsort(order)
-            if self.leaf_order is not None:
-                self.leaf_order = self.leaf_order[order]
-            else:
-                self.leaf_order = order
-            Y_Xixs = reorder[Y_Xixs]
-            X = X[order]
-            Xnormsq = Xnormsq[order]
-            dsqxy = dsqxy[order]
-            self.layers[-1] = X
-            self.layer_normsqs[-1] = Xnormsq
+            dist = _sqeuc_cdist_known_norm(
+                X=Q,
+                Xnormsq=Xnormsq[q0:q1],
+                Y=X[j0:j1],
+                Ynormsq=Xnormsq[j0:j1],
+                out=dist_buf[:nbuf].view(nq, nj),
+            )
+            dist.masked_fill_(dist > radius_sq, torch.inf)
+            gauss0 = torch.addcmul(
+                n0, k0, dist, out=dist_buf2[:nbuf].view(nq, nj)
+            ).exp_()
+            gauss1 = torch.addcmul(
+                n1, k1, dist, out=dist_buf3[:nbuf].view(nq, nj)
+            ).exp_()
+            dens0 += gauss0.sum(dim=1)
+            dens1 += gauss1.sum(dim=1)
+        dens[q0:q1] = dens0.div_(dens1)
 
-        # sparsify labels: "indptr" style in first layer, coo later
-        if len(self.layers) == 1:
-            diff = lx2y.diff().cpu()
-            assert (diff >= 0).all()
-            indptr = diff.nonzero()[:, 0].add_(1)
-            _0 = indptr.new_zeros((1,))
-            indptr = torch.concatenate([_0, indptr, _0 + n])
-            assert len(indptr) == ny + 1
-            children = [slice(i0, i1) for i0, i1 in zip(indptr[:-1], indptr[1:])]
-            nchildren = [c.stop - c.start for c in children]
-        else:
-            children = [(lx2y == ll).nonzero()[:, 0] for ll in range(ny)]
-            nchildren = [c.shape[0] for c in children]
-
-        # get centroid radii
-        radii = dsqxy.new_zeros(ny)
-        if len(self.layers) == 1:
-            child_radii = dsqxy.sqrt_()
-        else:
-            child_radii = dsqxy.sqrt_().add_(self.layer_radii[-1])
-        assert child_radii is not None
-        for i, ixs in enumerate(children):
-            if isinstance(ixs, Tensor):
-                assert ixs.numel() > 0
-            else:
-                assert ixs.stop > ixs.start
-            radii[i] = child_radii[ixs].amax()
-        assert radii.isfinite().all()
-
-        # store new layer
-        self.layers.append(X[Y_Xixs])
-        self.layer_normsqs.append(Xnormsq[Y_Xixs])
-        self.layer_descendant_inds.append(Y_Xixs)
-        self.layer_parent_inds.append(lx2y)
-        self.layer_children.append(children)
-        self.layer_radii.append(radii)
-        self.layer_nchildren.append(lx2y.new_tensor(nchildren))
-
-    def candidate_root_neighbors(self, radius: float, include_diag=True):
-        """
-        Two root nodes are neighbors if they could have a pair of
-        leaf descendents within radius.
-
-        That can be figured out using their radii: let xi be in the descendent
-        set of root ri, xj for rj. Then
-          d(xi, xj) >= d(ri, rj) - rootradi - rootradj
-
-        Then if
-          d(ri, rj) >= radius + rootradi + rootradj
-        it follows that
-          d(xi, xj) >= max_sigma
-        """
-        nr = self.layers[-1].shape[0]
-        triu = torch.triu_indices(nr, nr, offset=1, device=self.layers[-1].device)
-        ii, jj = triu
-        root_dists_triu = _sqeuc_pdist_known_norm(
-            X=self.layers[-1], Xnormsq=self.layer_normsqs[-1], ii=ii, jj=jj
-        )
-        root_radii = self.layer_radii[-1]
-        if root_radii is None:
-            # everyone is a leaf, no radius
-            lb = radius**2
-        else:
-            rad_ii = root_radii[ii]
-            rad_jj = root_radii[jj]
-            lb = (rad_ii + radius).add_(rad_jj).square_()
-
-        cand = root_dists_triu <= lb
-        pairs = triu.T[cand]
-        dist = root_dists_triu[cand]
-
-        if include_diag:
-            idc = torch.arange(nr, device=cand.device)
-            idc = torch.stack([idc, idc], dim=1)
-            pairs = torch.concatenate([pairs, idc])
-
-            # lex sorting with unique
-            pairs, inv = pairs.unique(dim=0, return_inverse=True)
-            inv = torch.argsort(inv)
-
-            # reorder distances with diagonal terms
-            _0 = root_dists_triu.new_zeros(nr)
-            dist = torch.concatenate([dist, _0])
-            dist = dist[inv]
-
-        return pairs, dist
-
-    def candidate_node_neighbor_inds(self, child_layer: int, radius: float):
-        if child_layer == len(self.layers) - 1:
-            yield self.candidate_root_neighbors(radius, include_diag=True)
-            return
-
-        parent_iter = self.candidate_node_neighbor_inds(child_layer + 1, radius)
-
-        pairs_batch = []
-        dist_batch = []
-        npairs = 0
-        in_parent = self.layer_children[child_layer + 1]
-        layer_radii = self.layer_radii[child_layer]
-        assert in_parent is not None
-
-        for iijj, dist in parent_iter:
-            dev = iijj.device
-            for ci, cj in iijj:
-                # get batch of triu pairs in current layer
-                in_ci = in_parent[ci]
-                in_cj = in_parent[cj]
-
-                if isinstance(in_ci, slice):
-                    in_ci = torch.arange(in_ci.start, in_ci.stop, device=dev)
-                    in_cj = torch.arange(in_cj.start, in_cj.stop, device=dev)
-
-                # print
-                assert (in_ci.diff() > 0).all()
-                assert (in_cj.diff() > 0).all()
-                if ci == cj:
-                    ii, jj = torch.triu_indices(len(in_ci), len(in_ci), device=dev)
-                    in_ci, in_cj = in_ci[ii], in_cj[jj]
-                else:
-                    in_ci, in_cj = torch.cartesian_prod(in_ci, in_cj).T
-
-                # their pdist
-                d_ci_cj = _sqeuc_pdist_known_norm(
-                    X=self.layers[child_layer],
-                    Xnormsq=self.layer_normsqs[child_layer],
-                    ii=in_ci,
-                    jj=in_cj,
-                )
-
-                # ones who COULD have leaf descendents within radius
-                if layer_radii is None:
-                    lb = radius**2
-                else:
-                    rad_ci = layer_radii[in_ci]
-                    rad_cj = layer_radii[in_cj]
-                    lb = (rad_ci + radius).add_(rad_cj).square_()
-
-                (cand,) = (d_ci_cj <= lb).nonzero(as_tuple=True)
-                if not cand.numel():
-                    continue
-
-                new_pairs = torch.column_stack([in_ci[cand], in_cj[cand]])
-                new_npairs = new_pairs.shape[0]
-                new_sqdist = d_ci_cj[cand]
-
-                if npairs and (npairs + new_npairs >= self.batch_size):
-                    yield torch.concatenate(pairs_batch), torch.concatenate(dist_batch)
-                    pairs_batch = []
-                    dist_batch = []
-                    npairs = 0
-
-                if new_npairs >= self.batch_size:
-                    assert not npairs
-                    assert len(pairs_batch) == 0
-                    yield new_pairs, new_sqdist
-                else:
-                    pairs_batch.append(new_pairs)
-                    dist_batch.append(new_sqdist)
-                    npairs += new_npairs
-
-            if npairs:
-                yield torch.concatenate(pairs_batch), torch.concatenate(dist_batch)
-                pairs_batch = []
-                dist_batch = []
-                npairs = 0
-
-    def candidate_leaf_neighbor_inds(self, radius: float):
-        yield from self.candidate_node_neighbor_inds(0, radius)
-
-    def sparse_distance_matrix(self, radius: float):
-        coos = []
-        sqdists = []
-        for iijj, sqdist in self.candidate_leaf_neighbor_inds(radius):
-            coos.append(iijj)
-            sqdists.append(sqdist)
-        coos = torch.concatenate(coos).T
-        if self.leaf_order is not None:
-            coos = self.leaf_order[coos]
-        coo = torch.sparse_coo_tensor(
-            indices=coos,
-            values=torch.concatenate(sqdists),
-            size=(self.layers[0].shape[0], self.layers[0].shape[0]),
-        )
-        return coo + coo.T
-
-    def gaussian_kdes(
-        self,
-        *sigmas: float,
-        max_sigma: float = 3.0,
-        show_progress: bool = False,
-        normalized=True,
-    ):
-        # truncate dists larger than...
-        radius = max_sigma * max(sigmas)
-
-        iter = self.candidate_leaf_neighbor_inds(radius)
-        if show_progress:
-            iter = progbar(iter, desc="kmppKDE")
-
-        X = self.layers[0]
-        n, d = X.shape
-        dens = [X.new_zeros(n) for _ in sigmas]
-        gk = [-0.5 * sig**-2 for sig in sigmas]
-        gk = [X.new_tensor(_k, device=X.device) for _k in gk]
-        gn = [-(d / 2.0) * np.log(2.0 * np.pi * sig * sig) for sig in sigmas]
-        gn = [X.new_tensor(_k, device=X.device) for _k in gn]
-        for iijj, sqdist in iter:
-            ii, jj = iijj.T
-            diag = ii == jj
-            for d, sgk, sgn in zip(dens, gk, gn):
-                gauss = torch.addcmul(sgn, sgk, sqdist).exp_()
-                d.scatter_add_(dim=0, index=ii, src=gauss)
-                d.scatter_add_(dim=0, index=jj, src=gauss.masked_fill(diag, 0.0))
-
-        if normalized:
-            dens = [d.div_(n) for d in dens]
-
-        # handle order pls
-        if self.leaf_order is not None:
-            deorder = torch.argsort(self.leaf_order)
-            dens = [d[deorder] for d in dens]
-
-        return dens
+    dens = dens[torch.argsort(order)]
+    return dens.numpy(force=True)
 
 
 @torch.jit.script
-def _sqeuc_pdist_known_norm(
+def _sqeuc_cdist_known_norm(
     X: Tensor,
     Xnormsq: Tensor,
-    ii: Tensor,
-    jj: Tensor,
-    batch_size: int = 1024,
+    Y: Tensor,
+    Ynormsq: Tensor,
+    out: Tensor,
 ):
-    ntriu = ii.shape[0]
-    out = X.new_zeros((ntriu,))
-    Xl = X[:, None, :]
-    Xr = X[:, :, None]
-    for i0 in range(0, ntriu, batch_size):
-        i1 = min(i0 + batch_size, ntriu)
-
-        bii = ii[i0:i1]
-        bjj = jj[i0:i1]
-
-        Xlii = Xl[bii]
-        Xrjj = Xr[bjj]
-
-        normsq_sum = torch.add(Xnormsq[bii], Xnormsq[bjj], out=out[i0:i1])
-        normsq_sum[:, None, None].baddbmm_(Xlii, Xrjj, alpha=-2.0)
-    out.relu_()
-    return out
+    out = torch.addmm(Xnormsq[:, None], X, Y.t(), out=out, alpha=-2.0)
+    out.add_(Ynormsq)
+    return out.relu_()
 
 
 def kdt_density(
@@ -758,8 +503,6 @@ def density_peaks(
     kdtree=None,
     density=None,
     knn_k=None,
-    use_knn=False,
-    use_histograms=False,
     sigma_local=5.0,
     sigma_regional=None,
     outlier_neighbor_count: int | None = 10,
@@ -773,6 +516,7 @@ def density_peaks(
     border_search_neighbors=3,
     inlier_dims=slice(0, 2),
     leafsize=24,
+    density_strategy="sort",
     workers=-1,
     device: torch.device = torch.device("cpu"),
 ):
@@ -802,7 +546,8 @@ def density_peaks(
         kdtree = KDTree(X)
 
     if density is None:
-        if sigma_regional and not use_histograms:
+        if density_strategy == "kdt":
+            assert sigma_regional is not None
             density = kdt_density(
                 kdtree,
                 X,
@@ -810,16 +555,20 @@ def density_peaks(
                 sigma_regional=sigma_regional,
                 n_threads=workers,
             )
-        elif use_knn:
-            density = knn_density(
-                kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
+        elif density_strategy == "sort":
+            assert sigma_regional is not None
+            density = sort_density(
+                X,
+                sigma0=sigma_local,
+                sigma1=sigma_regional,
+                device=device,
             )
-        elif use_histograms:
+        elif density_strategy == "hist":
             sigmas = [sigma_local]
             if sigma_regional is not None:
                 sigmas.append(sigma_regional)
             density = get_smoothed_density_ratio(X, inliers=inliers, sigmas=sigmas)
-        else:
+        elif density_strategy == "knn":
             density = knn_density(
                 kdtree,
                 X,
@@ -828,6 +577,8 @@ def density_peaks(
                 workers=workers,
                 sigma=sigma_local,
             )
+        else:
+            raise ValueError(f"Unknown density strategy: {density_strategy}")
 
     nhdn = nearest_higher_density_neighbor(
         kdtree,
@@ -858,12 +609,7 @@ def density_peaks(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
 
-    return dict(
-        density=density,
-        nhdn=nhdn,
-        labels=labels,
-        kdtree=kdtree,
-    )
+    return dict(density=density, nhdn=nhdn, labels=labels, kdtree=kdtree)
 
 
 def nearest_neighbor_assign(

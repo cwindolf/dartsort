@@ -56,17 +56,6 @@ def kmeanspp(
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
-    elif kmeanspp_initial == "mode":
-        from .density import guess_mode
-
-        Xm = X
-        if Xm.shape[1] > mode_dim:
-            q = min(mode_dim + 10, *Xm.shape)
-            u, s, v = torch.pca_lowrank(Xm, q=q, niter=7)
-            Xm = u[:, :mode_dim].mul_(s[:mode_dim])
-        cixs = guess_mode(Xm.numpy(force=True))
-        cixs = torch.asarray(cixs, dtype=centroid_ixs.dtype, device=centroid_ixs.device)
-        centroid_ixs.copy_(cixs)
     else:
         assert False
 
@@ -120,15 +109,16 @@ def kmeanspp(
                 if invalid.all():
                     break
                 p.masked_fill_(invalid, 0.0)
-            centroid_ixs[j] = torch.multinomial(p, 1, generator=gen)
+            ci = torch.multinomial(p, 1, generator=gen)
+            centroid_ixs[j] = ci
 
             # newdists = torch.subtract(X, X[centroid_ixs[j]], out=diff_buffer).square_()
             # newdists = torch.sum(newdists, dim=1, out=p)
             newdists = _sqeuc_ysqknown(
                 X,
                 Xnormsq[:, None],
-                X[centroid_ixs[j]][None],
-                Xnormsq[centroid_ixs[j]][None],
+                X[ci][None],
+                Xnormsq[ci][None],
                 out=p[:, None],
             )[:, 0]
             if not skip_assignment:

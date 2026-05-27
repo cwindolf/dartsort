@@ -267,7 +267,7 @@ class ClusteringConfig:
 
     # global parameters
     random_seed: int = 0
-    min_cluster_size: int = 25
+    min_cluster_size: int = 5
 
     # density peaks parameters
     knn_k: int | None = None

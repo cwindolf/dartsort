@@ -313,7 +313,7 @@ class DeveloperConfig(DARTsortUserConfig):
     signal_rank: Annotated[int, Field(ge=0)] = 3
     gmm_max_spikes: Annotated[int, Field(gt=0)] = 2_048_000
     kmeansk: int = 4
-    min_cluster_size: int = 25
+    min_cluster_size: int = 5
 
     # gausian mixture low level
     n_refinement_iters: int = 1

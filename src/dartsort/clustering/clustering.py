@@ -352,9 +352,27 @@ class DensityPeaksClusterer(Clusterer):
         recording: BaseRecording | None,
         motion: MotionInfo,
     ) -> np.ndarray:
+        labels, _ = self._cluster_extra(
+            features=features,
+            stable_features=stable_features,
+            sorting=sorting,
+            recording=recording,
+            motion=motion,
+        )
+        return labels
+
+    def _cluster_extra(
+        self,
+        features: SimpleMatrixFeatures,
+        stable_features: StableWaveformFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording | None,
+        motion: MotionInfo,
+    ) -> tuple[np.ndarray, dict]:
         subsampling, ixs = self.handle_sampling(features)
         X = features.features
         X_fit = X[ixs]
+        assert self.computation_cfg is not None
 
         if not self.uhdversion:
             res = density.density_peaks(
@@ -369,6 +387,7 @@ class DensityPeaksClusterer(Clusterer):
                 outlier_radius=self.outlier_radius,
                 outlier_neighbor_count=self.outlier_neighbor_count,
                 workers=self.workers,
+                device=self.computation_cfg.actual_device(),
             )
         else:
             res = density.density_peaks_fancy(
@@ -409,7 +428,7 @@ class DensityPeaksClusterer(Clusterer):
             labels, min_size=self.remove_clusters_smaller_than, in_place=True
         )
 
-        return labels
+        return labels, dict(dpc_res=res, kdtree=kdtree, ixs=ixs)
 
 
 clustering_strategies["dpc"] = DensityPeaksClusterer
