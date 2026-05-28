@@ -632,20 +632,34 @@ class LUTParams(BModule):
         self.b.wburyroot.fill_(0.0)
 
     def check(self):
-        assert self.b.muo.isfinite().all()
-        assert self.b.Linvmuo.isfinite().all()
-        assert self.b.CmoCooinvmuo.isfinite().all()
-        assert self.b.constplogdet.isfinite().all()
+        muo_f = self.b.muo.isfinite().all()
+        Linvmuo_f = self.b.Linvmuo.isfinite().all()
+        CmoCooinvmuo_f = self.b.CmoCooinvmuo.isfinite().all()
+        constplogdet_f = self.b.constplogdet.isfinite().all()
+        rank0_good = all([muo_f, Linvmuo_f, CmoCooinvmuo_f, constplogdet_f])
         if not self.signal_rank:
+            if not rank0_good:
+                raise BadNumbersError(
+                    f"LUTParams blew up: {muo_f=} {Linvmuo_f=} "
+                    f"{CmoCooinvmuo_f=} {constplogdet_f=}"
+                )
             return
+
         assert self.b.TWoCooinvsqrt is not None
         assert self.b.TWoCooinvmuo is not None
         assert self.b.Tpad is not None
         assert self.b.wburyroot is not None
-        assert self.b.TWoCooinvsqrt.isfinite().all()
-        assert self.b.TWoCooinvmuo.isfinite().all()
-        assert self.b.Tpad.isfinite().all()
-        assert self.b.wburyroot.isfinite().all()
+        TWoCooinvsqrt_f = self.b.TWoCooinvsqrt.isfinite().all()
+        TWoCooinvmuo_f = self.b.TWoCooinvmuo.isfinite().all()
+        Tpad_f = self.b.Tpad.isfinite().all()
+        wburyroot_f = self.b.wburyroot.isfinite().all()
+        basis_good = all([TWoCooinvsqrt_f, TWoCooinvmuo_f, Tpad_f, wburyroot_f])
+        if not (rank0_good and basis_good):
+            raise BadNumbersError(
+                f"LUTParams blew up: {rank0_good=} {basis_good=}.\n"
+                f"{muo_f=} {Linvmuo_f=} {CmoCooinvmuo_f=} {constplogdet_f=}.\n"
+                f"{TWoCooinvsqrt_f=} {TWoCooinvmuo_f=} {Tpad_f=} {wburyroot_f=}."
+            )
 
 
 # -- messenger classes
@@ -686,6 +700,23 @@ class SufficientStatistics:
     R: Tensor
     Ulut: Tensor | None
     elbo: Tensor
+
+    def diagnostic(self) -> str:
+        noise_N = self.noise_N.item() if self.noise_N is not None else None
+        Ns = f"{self.N.amin().item()}, {self.N.amax().item()}"
+        Nluts = f"{self.Nlut.amin().item()}, {self.Nlut.amax().item()}"
+        Rna = self.R.isnan().any(dim=(1, 2)).sum().item()
+        Rinf = self.R.isinf().any(dim=(1, 2)).sum().item()
+        msg = (
+            f"SufficientStatistics:\n"
+            f" - count: {self.count}\n"
+            f" - ELBO: {self.elbo.item()}\n"
+            f" - noise count: {noise_N}\n"
+            f" - unit count min/max: {Ns}\n"
+            f" - LUT count min/max: {Nluts}\n"
+            f" - R na/inf count: {Rna}, {Rinf}"
+        )
+        return msg
 
     @classmethod
     def zeros(
@@ -821,6 +852,10 @@ class TMMParams:
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
         )
+
+
+class BadNumbersError(ValueError):
+    pass
 
 
 @databag
@@ -2399,7 +2434,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 step_data, show_progress=show_progress > 2, allow_blanks=allow_blanks
             )
             elb = eres.stats.elbo.cpu().item()
-            assert math.isfinite(elb)
+            if not math.isfinite(elb):
+                self._bad_numbers_error(elb, eres.stats)
             elbos.append(elb)
             if show_progress:
                 iters.set_description(f"EM(elbo={elb:.3f})")  # type: ignore
@@ -3347,8 +3383,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.update_lut(lut)
         assert self.lut_params is not None
         self._check_logprop()
-        if pnoid:
-            self.lut_params.check()
+        self.lut_params.check()
 
         # merge generates a lot of weird small buffers
         gc.collect()
@@ -3424,12 +3459,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # apply demolition to mixture model and train data
         # update log proportions and LUT
-        return self.destroy_units(
+        res = self.destroy_units(
             unit_ids=self.unit_ids[demolished],
             train_data=train_data,
             train_scores=train_scores,
             allow_uncovered=allow_uncovered,
         )
+        assert self.lut_params is not None
+        self.lut_params.check()
+        return res
 
     def get_params_at(self, indices: Tensor | list[int]):
         m = self.b.means[indices]
@@ -3801,8 +3839,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         self.update_lut(lut)
         assert self.lut_params is not None
-        if pnoid:
-            self.lut_params.check()
+        self.lut_params.check()
 
         return SplitResult(
             n_new_units=n_new_units,
@@ -3818,6 +3855,39 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert self.noise_log_prop.isfinite()
         _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
         _assert_propclose(_lp, torch.zeros_like(_lp))
+
+    def _bad_numbers_error(
+        self, elb: float | None, stats: SufficientStatistics | None = None
+    ):
+        """Build an exception to help with numerical problems."""
+        msg = "TMM blew up."
+        if elb is not None:
+            msg += f" (elbo: {elb})"
+        msg += "\n"
+
+        # about me
+        my_msg = ""
+        mean_f = self.b.means.isfinite().all(dim=1)
+        if not mean_f.all():
+            my_msg += f" - {mean_f.logical_not().sum()} bad means.\n"
+        prop_f = self.b.log_proportions.isfinite()
+        if not prop_f.all():
+            my_msg += f" - {prop_f.logical_not().sum()} bad props.\n"
+        if not self.b.noise_log_prop.isfinite():
+            my_msg += f" - noise prop {self.b.noise_log_prop.item()}.\n"
+        if self.signal_rank:
+            basis_f = self.b.bases.isfinite().all(dim=(1, 2))
+            if not basis_f.all():
+                my_msg += f" - {basis_f.logical_not().sum()} bad bases.\n"
+        if not my_msg:
+            my_msg = " - Model parameters are fine.\n"
+        msg += my_msg
+
+        # about stats
+        if stats is not None:
+            msg += stats.diagnostic()
+
+        raise BadNumbersError(msg)
 
 
 class TMMView(BaseMixtureModel):
