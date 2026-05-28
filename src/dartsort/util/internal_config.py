@@ -875,9 +875,9 @@ class DARTsortInternalConfig:
     clustering_cfg: ClusteringConfig = default_clustering_cfg
     clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
-    pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    pre_refinement_cfg: RefinementConfig | None = None
     refinement_cfg: RefinementConfig = default_refinement_cfg
-    post_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    post_refinement_cfg: RefinementConfig | None = None
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
