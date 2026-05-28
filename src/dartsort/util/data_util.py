@@ -515,7 +515,7 @@ class DARTsortSorting:
             return self.ephemeral_replace(
                 times_samples=times_samples, channels=channels, **ephemeral_features
             )
-        assert not loaded_persistent_features
+        assert not len(loaded_persistent_features)
 
         return cls(
             times_samples=times_samples,

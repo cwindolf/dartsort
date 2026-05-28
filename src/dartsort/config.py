@@ -258,7 +258,7 @@ class DeveloperConfig(DARTsortUserConfig):
     template_reduction: Literal["mean", "median"] = "median"
     template_denoising_method: Literal["none", "exp_weighted", "svd"] = "svd"
     min_template_snr: float = 0.0
-    min_template_count: int = 20
+    min_template_count: int = 10
     template_interp_kind: Literal["tps", "clampna"] = "tps"
     matching_interp_kind: Literal["tps", "clampna"] = "tps"
     matching_svd_rank: int = 5

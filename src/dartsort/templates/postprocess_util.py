@@ -70,6 +70,14 @@ def estimate_template_library(
     if motion is None:
         motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
+    # avoid blanks down the line
+    if min_template_count:
+        from ..clustering.cluster_util import decrumb
+
+        sorting = sorting.ephemeral_replace(
+            labels=decrumb(sorting.labels, min_size=min_template_count)
+        )
+
     # realign sorting and estimate template snr
     sorting, templates0 = realign(
         recording=recording,

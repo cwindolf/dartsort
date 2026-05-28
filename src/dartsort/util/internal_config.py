@@ -737,7 +737,7 @@ class MatchingConfig:
     min_template_ptp: float = 1.0
     always_keep_ptp: float = 10.0
     min_template_snr: float = 0.0
-    min_template_count: int = 20
+    min_template_count: int = 10
     max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
