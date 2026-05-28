@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 from scipy.spatial import KDTree
-from scipy.spatial.distance import cdist
 from sklearn.datasets import make_blobs
 from sklearn.neighbors import KernelDensity
 

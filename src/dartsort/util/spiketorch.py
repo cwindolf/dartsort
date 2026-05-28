@@ -162,6 +162,19 @@ def minmax(x: np.ndarray) -> np.ndarray:
     return x / np.max(x)
 
 
+@torch.jit.script
+def sqeuc_cdist_known_norm(
+    X: Tensor,
+    Xnormsq: Tensor,
+    Y: Tensor,
+    Ynormsq: Tensor,
+    out: Tensor,
+):
+    out = torch.addmm(Xnormsq[:, None], X, Y.t(), out=out, alpha=-2.0)
+    out.add_(Ynormsq)
+    return out.relu_()
+
+
 def svd_lowrank_helper(
     x: Tensor,
     rank: int,

@@ -7,10 +7,10 @@ import torch
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
-from torch import Tensor
 
 from ..util.logging_util import get_logger, progbar, progrange
 from ..util.multiprocessing_util import get_pool
+from ..util.spiketorch import sqeuc_cdist_known_norm
 from .cluster_util import decrumb
 
 logger = get_logger(__name__)
@@ -352,7 +352,7 @@ def sort_density(
             nj = j1 - j0
             nbuf = nq * nj
 
-            dist = _sqeuc_cdist_known_norm(
+            dist = sqeuc_cdist_known_norm(
                 X=Q,
                 Xnormsq=Xnormsq[q0:q1],
                 Y=X[j0:j1],
@@ -372,19 +372,6 @@ def sort_density(
 
     dens = dens[torch.argsort(order)]
     return dens.numpy(force=True)
-
-
-@torch.jit.script
-def _sqeuc_cdist_known_norm(
-    X: Tensor,
-    Xnormsq: Tensor,
-    Y: Tensor,
-    Ynormsq: Tensor,
-    out: Tensor,
-):
-    out = torch.addmm(Xnormsq[:, None], X, Y.t(), out=out, alpha=-2.0)
-    out.add_(Ynormsq)
-    return out.relu_()
 
 
 def kdt_density(
