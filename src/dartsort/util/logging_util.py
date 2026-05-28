@@ -124,7 +124,7 @@ class logress:
         smoothing=0.0,
         unit="it",
         level=INFO,
-        initial=0,
+        initial: int = 0,
         miniters_fraction=0.2,
     ):
         del smoothing
@@ -194,7 +194,7 @@ class logress:
         if refresh:
             self._print()
 
-    def update(self, n):
+    def update(self, n: int):
         self.n = n
         self._print()
 

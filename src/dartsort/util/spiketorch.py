@@ -25,7 +25,7 @@ _0 = torch.tensor(0.0)
 def spawn_torch_rg(
     seed: int | np.random.Generator | torch.Generator = 0,
     device: str | torch.device | None = "cpu",
-):
+) -> torch.Generator:
     if device is None:
         device = "cpu"
     device = torch.device(device)

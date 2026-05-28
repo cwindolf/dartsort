@@ -40,14 +40,13 @@ TODO items:
 import gc
 import math
 import warnings
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Iterable,
     Literal,
     NamedTuple,
-    Optional,
     Self,
     cast,
     get_args,
@@ -877,7 +876,7 @@ class SuccessfulSplitCaseResult:
     bases: Tensor | None
 
 
-SplitCaseResult = Optional[SuccessfulSplitCaseResult]
+SplitCaseResult = SuccessfulSplitCaseResult | None
 
 
 @databag
@@ -944,7 +943,7 @@ class SuccessfulGroupMergeResult:
 
 
 # none means "accept the full model"
-GroupMergeResult = Optional[SuccessfulGroupMergeResult]
+GroupMergeResult = SuccessfulGroupMergeResult | None
 
 
 @databag
@@ -6637,6 +6636,7 @@ def _calc_loglik_ppca(
     term_b = term_b.square_().sum(dim=1)
 
     ll = term_a.sub_(term_b)
+    ll = ll.nan_to_num_(nan=torch.inf)
 
     ll += constplogdet[lut_ixs]
     ll *= -0.5
