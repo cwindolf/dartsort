@@ -276,7 +276,7 @@ class ClusteringConfig:
     n_neighbors_search: int = 50
     radius_search: float = 25.0
     noise_density: float = 0.0
-    outlier_radius: float = 25.0
+    outlier_radius: float | None = 25.0
     outlier_neighbor_count: int = 10
 
     # gmm density peaks additional parameters
@@ -1276,7 +1276,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
-        post_refinement_cfg=pre_refinement_cfg,
+        post_refinement_cfg=pre_refinement_cfg if cfg.post_refinement_merge else None,
         agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
