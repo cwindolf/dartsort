@@ -27,7 +27,10 @@ DOUBLECHECK = DEBUG + 6
 addLevelName(DOUBLECHECK, "DOUBLECHECK")
 
 
-class DARTsortLogger(getLoggerClass()):
+klass = getLoggerClass()
+
+
+class DARTsortLogger(klass):
     def __init__(self, name, level=NOTSET):
         super().__init__(name, level)
 
@@ -48,12 +51,25 @@ class DARTsortLogger(getLoggerClass()):
             self._log(DARTSORTDEBUG, msg(), args, stacklevel=2, **kwargs)
 
 
-setLoggerClass(DARTsortLogger)
-
-
 # shouts out to sinclairtarget.com
+# set/unset global logger class so only dartsort's loggers
+# are DARTsortLoggers
+setLoggerClass(DARTsortLogger)
 package_logger = getLogger(__package__)
 assert isinstance(package_logger, DARTsortLogger)
+setLoggerClass(klass)
+
+
+def set_log_level(level: int | str):
+    """Set the dartsort package root logger's log level."""
+    if isinstance(level, str):
+        level = level.strip()
+        if not level.strip("0123456789"):
+            ilevel = int(level)
+        else:
+            ilevel = getLevelNamesMapping()[level.upper()]
+    package_logger.setLevel(ilevel)
+    package_logger.log(ilevel, f"Log level set to {level}.")
 
 
 # set to environment-defined log level if present
@@ -63,13 +79,7 @@ elif (level := os.getenv("LOG_LEVEL")) is not None:
     pass
 
 if level:
-    level = level.strip()
-    if not level.strip("0123456789"):
-        ilevel = int(level)
-    else:
-        ilevel = getLevelNamesMapping()[level.upper()]
-    package_logger.setLevel(ilevel)
-    package_logger.log(ilevel, f"Log level set to {level} ({ilevel}).")
+    set_log_level(level)
 
 
 def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
