@@ -465,8 +465,8 @@ class RefinementConfig:
     # model params
     neighb_overlap: float = 0.75
     explore_neighb_steps: int = 0
-    min_count: int = 25
-    split_min_count: int = 8
+    min_count: int = 5
+    split_min_count: int = 5
     channels_count_min: int = 1
     signal_rank: int = 3
     initialize_at_rank_0: bool = False

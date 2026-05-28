@@ -422,6 +422,7 @@ class DensityPeaksClusterer(Clusterer):
                 ixs, res["labels"], rest, other_labels
             )
         else:
+            kdtree = None
             labels = res["labels"]
 
         labels = cluster_util.decrumb(

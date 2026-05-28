@@ -229,7 +229,7 @@ def distance_matrix_dendro(
         so = 5 if show_dendrogram else 0
         for (j, i), val in np.ndenumerate(show_values_from[order][:, order]):
             if value_color is None:
-                lc = invert(image_cmap(val / vmax))
+                lc = invert(image_cmap(val / vmax))  # type: ignore
             else:
                 lc = value_color
             ax_im.text(
@@ -507,7 +507,9 @@ def visualize_denoiser(
     )
 
     for j in range(n_show):
-        for tr, c, ll in zip([xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]):
+        for tr, c, ll in zip(
+            [xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]
+        ):
             axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
         if j == n_show - 1:
             axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
