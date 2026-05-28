@@ -3123,10 +3123,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if logger.isEnabledFor(DARTSORTVERBOSE):
             _l, _c = train_labels.unique(return_counts=True)
             imp = None if merge_res is None else merge_res.improvement
-            logger.dartsortverbose(
-                f"Split {group_str}: {n_split} parts with improvement {imp}, "
-                f"assigned to {_l.tolist()} with counts {_c.tolist()}."
-            )
+            if imp and imp > 0 and n_split != 1:
+                logger.dartsortverbose(
+                    f"Split {group_str}: {n_split} parts with improvement {imp}, "
+                    f"assigned to {_l.tolist()} with counts {_c.tolist()}."
+                )
         if pnoid:
             _lp = sub_proportions.sum()
             assert sub_proportions.shape == (n_split,)
