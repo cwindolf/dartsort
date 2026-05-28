@@ -8,7 +8,7 @@ from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
 
-from ..util.logging_util import get_logger, progbar, progrange
+from ..util.logging_util import DARTSORTVERBOSE, get_logger, progbar, progrange
 from ..util.multiprocessing_util import get_pool
 from ..util.spiketorch import sqeuc_cdist_known_norm
 from .cluster_util import decrumb
@@ -267,7 +267,8 @@ def sort_density(
     sigma1: float,
     max_sigma: float = 3.0,
     device: torch.device = torch.device("cpu"),
-    batch_size: int = 512,
+    batch_size: int = 2048,
+    col_batch_size: int = 1024,
     show_progress: bool = False,
 ) -> np.ndarray:
     """Compute a ratio of Gaussian KDEs by ordering along the first dimension
@@ -312,14 +313,14 @@ def sort_density(
     n1 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma1 * sigma1))
 
     if show_progress:
-        iter = progrange(0, n, batch_size)
+        iter = progrange(0, n, batch_size, desc=f'SortDens:{device.type}')
     else:
         iter = range(0, n, batch_size)
 
     i0 = i1 = 0
-    dist_buf = X.new_zeros((batch_size * batch_size,))
-    dist_buf2 = X.new_zeros((batch_size * batch_size,))
-    dist_buf3 = X.new_zeros((batch_size * batch_size,))
+    dist_buf = X.new_zeros((batch_size * col_batch_size,))
+    dist_buf2 = X.new_zeros((batch_size * col_batch_size,))
+    dist_buf3 = X.new_zeros((batch_size * col_batch_size,))
     dens0_buf = X.new_zeros((batch_size,))
     dens1_buf = X.new_zeros((batch_size,))
     for q0 in iter:
@@ -347,8 +348,8 @@ def sort_density(
 
         dens0 = dens0_buf[: q1 - q0].zero_()
         dens1 = dens1_buf[: q1 - q0].zero_()
-        for j0 in range(i0, i1, batch_size):
-            j1 = min(j0 + batch_size, i1)
+        for j0 in range(i0, i1, col_batch_size):
+            j1 = min(j0 + col_batch_size, i1)
             nj = j1 - j0
             nbuf = nq * nj
 
@@ -519,6 +520,7 @@ def density_peaks(
     radius_search = radius_search * np.sqrt(X.shape[1])
     dim_arange = np.arange(X.shape[1])
     inlier_dim_ixs = dim_arange[inlier_dims]
+
     if outlier_radius is not None:
         outlier_radius = outlier_radius * np.sqrt(inlier_dim_ixs.size)
     inliers, kdtree = kdtree_inliers(
@@ -549,6 +551,7 @@ def density_peaks(
                 sigma0=sigma_local,
                 sigma1=sigma_regional,
                 device=device,
+                show_progress=logger.isEnabledFor(DARTSORTVERBOSE),
             )
         elif density_strategy == "hist":
             sigmas = [sigma_local]
@@ -559,7 +562,7 @@ def density_peaks(
             density = knn_density(
                 kdtree,
                 X,
-                k=n_neighbors_search,
+                k=knn_k,
                 distance_upper_bound=radius_search,
                 workers=workers,
                 sigma=sigma_local,
