@@ -99,8 +99,10 @@ if package_logger.isEnabledFor(DARTSORTVERBOSE):
 
 
 def get_logger(*args, **kwargs) -> DARTsortLogger:
+    setLoggerClass(DARTsortLogger)
     logger = getLogger(*args, **kwargs)
     assert isinstance(logger, DARTsortLogger)
+    setLoggerClass(klass)
     return logger
 
 
@@ -143,7 +145,7 @@ class logress:
         except TypeError:
             self.total = total
 
-        self.n = initial
+        self.last_n = self.n = initial
         self.start = perf_counter()
 
     def __enter__(self):
