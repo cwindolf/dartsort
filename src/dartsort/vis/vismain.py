@@ -449,6 +449,9 @@ def _plan_vis(
     need_summaries = False
     need_venn_cmps = []
 
+    if sorting_name is None:
+        sorting_name = output_directory.stem
+
     # can't compare or analyze units if there aren't any
     is_labeled = sorting.n_units > 1
 
@@ -538,7 +541,7 @@ def _plan_vis(
         vs_png = None
 
     if can_gt and other_analyses is not None and make_venns:
-        ovns = [f"venn_{oa.name}" for oa in other_analyses]
+        ovns = [f"venn_{oa.name}___vs___{sorting_name}" for oa in other_analyses]
         venn_dirs = [output_directory / ovn for ovn in ovns]
         for oa, vdir in zip(other_analyses, venn_dirs):
             need_venn_cmp = overwrite or not unit.all_summaries_done(
@@ -556,8 +559,6 @@ def _plan_vis(
         venn_dirs = []
 
     if need_analysis and sorting_analysis is None:
-        if sorting_name is None:
-            sorting_name = output_directory.stem
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
