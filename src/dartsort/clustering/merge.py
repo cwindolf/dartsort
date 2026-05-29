@@ -178,9 +178,8 @@ def calculate_merge_distances(
     units = template_data.unit_ids
     dists = sup_dists
     shifts = sup_shifts
-    template_snrs = (
-        np.ptp(template_data.templates, 1).max(1) / template_data.spike_counts
-    )
+    template_snrs = np.ptp(template_data.templates, 1).max(1)
+    template_snrs *= np.sqrt(template_data.spike_counts)
 
     dists = sym_function(dists, dists.T)
     np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
@@ -264,18 +263,12 @@ def cross_match_distance_matrix(
     b_inds = np.searchsorted(units[b_mask], ids_b, side="right") - 1
     b_kept = units[b_mask][b_inds] == ids_b
     dists = dists[a_inds[a_kept][:, None], b_inds[b_kept][None, :]]
+    shifts = shifts[a_inds[a_kept][:, None], b_inds[b_kept][None, :]]
 
     snrs_a = template_snrs[a_mask][a_inds[a_kept]]
     snrs_b = template_snrs[b_mask][b_inds[b_kept]]
 
-    return (
-        dists,
-        shifts,
-        snrs_a,
-        snrs_b,
-        a_kept,
-        b_kept,
-    )
+    return dists, shifts, snrs_a, snrs_b, a_kept, b_kept
 
 
 def get_deconv_resid_decrease_iter(
@@ -377,7 +370,9 @@ def combine_templates(template_data_a, template_data_b):
     ids_a = template_data_a.unit_ids
     ids_b = template_data_b.unit_ids + ids_a.max() + 1
     unit_ids = np.concatenate((ids_a, ids_b))
-    templates = np.concatenate((template_data_a.templates, template_data_b.templates), axis=0)
+    templates = np.concatenate(
+        (template_data_a.templates, template_data_b.templates), axis=0
+    )
     spike_counts = np.concatenate(
         (template_data_a.spike_counts, template_data_b.spike_counts)
     )

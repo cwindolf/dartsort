@@ -150,7 +150,7 @@ class InterpolationParams:
 
     def extrap_params(self):
         return self.__class__(
-            method=self.actual_extrap_kernel,
+            method=self.actual_extrap_method,
             kernel=self.actual_extrap_kernel,
             kriging_poly_degree=self.kriging_poly_degree,
             sigma=self.sigma,
@@ -267,7 +267,7 @@ class ClusteringConfig:
 
     # global parameters
     random_seed: int = 0
-    min_cluster_size: int = 25
+    min_cluster_size: int = 5
 
     # density peaks parameters
     knn_k: int | None = None
@@ -276,7 +276,7 @@ class ClusteringConfig:
     n_neighbors_search: int = 50
     radius_search: float = 25.0
     noise_density: float = 0.0
-    outlier_radius: float = 25.0
+    outlier_radius: float | None = 25.0
     outlier_neighbor_count: int = 10
 
     # gmm density peaks additional parameters
@@ -465,8 +465,8 @@ class RefinementConfig:
     # model params
     neighb_overlap: float = 0.75
     explore_neighb_steps: int = 0
-    min_count: int = 25
-    split_min_count: int = 8
+    min_count: int = 5
+    split_min_count: int = 5
     channels_count_min: int = 1
     signal_rank: int = 3
     initialize_at_rank_0: bool = False
@@ -573,7 +573,6 @@ class FeaturizationConfig:
     save_input_waveforms: bool = False
     save_input_tpca_projs: bool = True
     compute_input_tpca_projs_regardless: bool = False
-    save_input_tpca_projs: bool = True
     save_output_waveforms: bool = False
     save_output_tpca_projs: bool = False
     save_collidedness: bool = False
@@ -738,7 +737,7 @@ class MatchingConfig:
     min_template_ptp: float = 1.0
     always_keep_ptp: float = 10.0
     min_template_snr: float = 0.0
-    min_template_count: int = 20
+    min_template_count: int = 10
     max_cc_flag_rate: float = 0.4
     cc_flag_entropy_cutoff: float = 2.0
     depth_order: bool = True
@@ -876,9 +875,9 @@ class DARTsortInternalConfig:
     clustering_cfg: ClusteringConfig = default_clustering_cfg
     clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
-    pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    pre_refinement_cfg: RefinementConfig | None = None
     refinement_cfg: RefinementConfig = default_refinement_cfg
-    post_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
+    post_refinement_cfg: RefinementConfig | None = None
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
@@ -1277,7 +1276,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
-        post_refinement_cfg=pre_refinement_cfg,
+        post_refinement_cfg=pre_refinement_cfg if cfg.post_refinement_merge else None,
         agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,

@@ -1640,6 +1640,7 @@ def _summary_job(unit_id):
         if tmp_out is not None and tmp_out.exists():
             tmp_out.unlink()
 
+
 # -- lib
 
 
@@ -1674,6 +1675,7 @@ def _get_my_merge_group(mix_data: MixtureVisData, unit_id: int):
     del neighbors
     D = D[group_ix][:, group_ix]
     return group_ix, group, D
+
 
 # -- one-offs
 

@@ -21,7 +21,7 @@ from ..util.sparse_util import (
     logsumexp_coo,
     sparse_centroid_distsq,
 )
-from ..util.spiketorch import spawn_torch_rg
+from ..util.spiketorch import spawn_torch_rg, sqeuc_cdist_known_norm
 
 logger = get_logger(__name__)
 
@@ -56,22 +56,11 @@ def kmeanspp(
     elif kmeanspp_initial == "mean":
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
-    elif kmeanspp_initial == "mode":
-        from .density import guess_mode
-
-        Xm = X
-        if Xm.shape[1] > mode_dim:
-            q = min(mode_dim + 10, *Xm.shape)
-            u, s, v = torch.pca_lowrank(Xm, q=q, niter=7)
-            Xm = u[:, :mode_dim].mul_(s[:mode_dim])
-        cixs = guess_mode(Xm.numpy(force=True))
-        cixs = torch.asarray(cixs, dtype=centroid_ixs.dtype, device=centroid_ixs.device)
-        centroid_ixs.copy_(cixs)
     else:
         assert False
 
     if Xnormsq is None:
-        Xnormsq = torch.square(X).sum(1)
+        Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
 
     dists_ = X.new_zeros(len(X))[:, None]
     dists = _sqeuc(X, Xnormsq[:, None], Y=X[centroid_ixs[0]][None], out=dists_)[:, 0]
@@ -120,12 +109,15 @@ def kmeanspp(
                 if invalid.all():
                     break
                 p.masked_fill_(invalid, 0.0)
-            centroid_ixs[j] = torch.multinomial(p, 1, generator=gen)
+            ci = torch.multinomial(p, 1, generator=gen)
+            centroid_ixs[j] = ci
 
-            # newdists = torch.subtract(X, X[centroid_ixs[j]], out=diff_buffer).square_()
-            # newdists = torch.sum(newdists, dim=1, out=p)
-            newdists = _sqeuc(
-                X, Xnormsq[:, None], X[centroid_ixs[j]][None], out=p[:, None]
+            newdists = sqeuc_cdist_known_norm(
+                X,
+                Xnormsq,
+                X[ci],
+                Xnormsq[ci],
+                out=p[:, None],
             )[:, 0]
             if not skip_assignment:
                 closer = newdists < dists
@@ -142,6 +134,8 @@ def kmeanspp(
         phi = dists.mean()
     else:
         phi = dists.mul_(weights).mean() / weights.mean()
+
+    dists.relu_()
 
     return centroid_ixs, assignments, dists, phi
 
@@ -379,7 +373,7 @@ def kmeans_inner(
     centroids = X[centroid_ixs]
 
     if X_normsq is None:
-        X_normsq = torch.linalg.norm(X, dim=1).square_()
+        X_normsq = torch.linalg.vector_norm(X, dim=1).square_()
     assert X_normsq is not None
     X_normsq = X_normsq[:, None]
     dists_out = X.new_empty((X.shape[0], centroids.shape[0]))
@@ -484,15 +478,6 @@ def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
 
 
 @torch.jit.script
-def _sqeuc_ysqknown(
-    X: Tensor, Xnormsq: Tensor, Y: Tensor, Ynormsq: Tensor, out: Tensor
-):
-    torch.addmm(Xnormsq, X, Y.transpose(0, 1), alpha=-2.0, out=out)
-    out.add_(Ynormsq)
-    return out
-
-
-@torch.jit.script
 def _kmeanspp_simple_loop(
     *,
     X: Tensor,
@@ -506,7 +491,6 @@ def _kmeanspp_simple_loop(
 ):
     buf = torch.empty_like(p)
     buf_ = buf[:, None]
-    Xnormsq = Xnormsq[:, None]
     closer = X.new_zeros(X.shape[:1], dtype=torch.bool)
     cent = torch.zeros_like(X[:1])
     cnormsq = torch.zeros_like(Xnormsq[:1])
@@ -522,7 +506,7 @@ def _kmeanspp_simple_loop(
 
         torch.index_select(X, dim=0, index=cj, out=cent)
         torch.index_select(Xnormsq, dim=0, index=cj, out=cnormsq)
-        newdists = _sqeuc_ysqknown(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
+        newdists = sqeuc_cdist_known_norm(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
 
         torch.lt(newdists, dists, out=closer)
         assignments.masked_fill_(closer, j)
@@ -542,7 +526,6 @@ def _kmeanspp_noassign_loop(
 ):
     buf = torch.empty_like(p)
     buf_ = buf[:, None]
-    Xnormsq = Xnormsq[:, None]
     cent = torch.zeros_like(X[:1])
     cnormsq = torch.zeros_like(Xnormsq[:1])
     for j in range(1, centroid_ixs.shape[0]):
@@ -557,7 +540,7 @@ def _kmeanspp_noassign_loop(
 
         torch.index_select(X, dim=0, index=cj, out=cent)
         torch.index_select(Xnormsq, dim=0, index=cj, out=cnormsq)
-        newdists = _sqeuc_ysqknown(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
+        newdists = sqeuc_cdist_known_norm(X, Xnormsq, cent, cnormsq, out=buf_).view(-1)
 
         torch.minimum(dists, newdists, out=dists)
 

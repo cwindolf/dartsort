@@ -357,12 +357,11 @@ def _matching_step_cfgs(
         is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
     if not cfg.final_refinement:
-        clus_cfg = None
-        gmm_clus_cfg = None
+        gmm_clus_cfg = clus_cfg = None
         ref_cfgs = []
     elif gmm_as_classifier:
-        clus_cfg = None
         gmm_clus_cfg = clus_cfg
+        clus_cfg = None
         ref_cfgs = [cfg.agglomerate_cfg]
     else:
         gmm_clus_cfg = None

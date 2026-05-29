@@ -4,6 +4,7 @@ import numpy as np
 from matplotlib.patches import Ellipse
 from scipy.spatial import KDTree
 
+from ..clustering.clustering_features import SimpleMatrixFeatures
 from ..clustering.density import kdtree_inliers
 from .colors import glasbey1024
 
@@ -258,6 +259,73 @@ def scatter_spike_features(
         axes[-1].set_xlabel("time (s)")
 
     return figure, axes, (s_x, s_a, *extra_scatters, s_t)
+
+
+def scatter_simple_features(
+    feat: SimpleMatrixFeatures,
+    labels: np.ndarray | None = None,
+    max_spikes_plot=2_048_000,
+    amplitude_color_cutoff=15.0,
+    amplitude_cmap="viridis",
+    s=1,
+    linewidth=0,
+    limits=None,
+    label_axes=True,
+    random_seed=0,
+    figscale=5,
+    figaspect=0.33,
+    show_triaged=True,
+    to_show=None,
+    **scatter_kw,
+):
+    z = feat.z if feat.z_reg is None else feat.z_reg
+    if z is None:
+        z = feat.features[:, 0]
+    assert np.array_equal(z, feat.features[:, 0])
+
+    if limits is not None and not isinstance(limits, str) and len(limits) == 2:
+        if to_show is None:
+            to_show = np.flatnonzero(z == z.clip(*limits))
+        else:
+            assert to_show.dtype.kind == "i"
+            zts = z[to_show]
+            to_show = to_show[zts == zts.clip(*limits)]
+
+    features = feat.features[:, 1:]
+    nfeat = features.shape[1]
+
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=nfeat,
+        figsize=(nfeat * figaspect * figscale, figscale),
+        layout="constrained",
+        gridspec_kw=dict(hspace=0.05, wspace=0.05),
+    )
+
+    extra_scatters = []
+    for j, feature in enumerate(features.T):
+        _, scatter = scatter_feature_vs_depth(
+            feature,
+            depths_um=z,
+            amplitudes=feat.amplitudes,
+            labels=labels,
+            ax=axes.flat[j],
+            to_show=to_show,
+            max_spikes_plot=max_spikes_plot,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            amplitude_cmap=amplitude_cmap,
+            s=s,
+            linewidth=linewidth,
+            limits=limits,
+            random_seed=random_seed,
+            show_triaged=show_triaged,
+            **scatter_kw,
+        )
+        extra_scatters.append(scatter)
+        if label_axes:
+            axes.flat[j].set_xlabel(f"f{j}")
+
+    return fig, axes
 
 
 def scatter_time_vs_depth(

@@ -90,7 +90,9 @@ def realign(
         templates.templates[:, templates.trough_offset_samples], mcs[:, None], axis=1
     )
     sgn = np.sign(sgn).reshape(mcs.shape)
-    aligned_sorting.add_ephemeral_feature("alignment_signs", sgn[sorting.labels])
+    sgn_ = np.full((templates.unit_ids.max() + 1,), np.nan, dtype=sgn.dtype)
+    sgn_[templates.unit_ids] = sgn
+    aligned_sorting.add_ephemeral_feature("alignment_signs", sgn_[sorting.labels])
     return aligned_sorting, templates
 
 

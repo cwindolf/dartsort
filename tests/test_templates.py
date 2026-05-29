@@ -21,15 +21,14 @@ from dartsort.templates import (
     templates,
 )
 from dartsort.util.data_util import DARTsortSorting
-from dartsort.util.motion import MotionInfo
 from dartsort.util.internal_config import (
+    InterpolationParams,
     TemplateConfig,
     TemplateRealignmentConfig,
-    InterpolationParams,
     WaveformConfig,
     raw_template_cfg,
 )
-
+from dartsort.util.motion import MotionInfo
 
 nearest_erp = InterpolationParams(method="nearest", extrap_method="clampna").normalize()
 thin_erp_20 = InterpolationParams(
@@ -194,6 +193,8 @@ def test_refractory_templates_algorithm_agreement(
         else:
             atol = 1e-5
         np.testing.assert_allclose(td0.templates, tdb.templates, atol=atol)
+        assert td0.raw_std_dev is not None
+        assert tdb.raw_std_dev is not None
         np.testing.assert_allclose(td0.raw_std_dev, tdb.raw_std_dev, atol=5e-2)
 
 

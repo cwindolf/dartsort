@@ -515,7 +515,7 @@ class DARTsortSorting:
             return self.ephemeral_replace(
                 times_samples=times_samples, channels=channels, **ephemeral_features
             )
-        assert not loaded_persistent_features
+        assert not len(loaded_persistent_features)
 
         return cls(
             times_samples=times_samples,
@@ -1027,7 +1027,8 @@ def merged_responsibilities(
 
     candidates = cast(np.ndarray, getattr(sorting, candidates_key))
     responsibilities = cast(np.ndarray, getattr(sorting, responsibilities_key))
-    assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
+    if responsibilities.shape[1] > 1:
+        assert (responsibilities[:, 0] >= responsibilities[:, 1:-1].max(1)).all(), "1"
 
     notnoise = responsibilities[:, 0] >= responsibilities[:, -1]
     clabels = np.where(notnoise, candidates[:, 0], -1)
@@ -1140,30 +1141,6 @@ def candidates_to_labels(clabels, labels, Klabel, Kcand):
     ctol = np.full((Kcand + 1,), fill_value=Klabel)
     ctol[lc[:, 1]] = lc[:, 0]
     return lc, ctol
-
-
-def keep_only_most_recent_spikes(
-    sorting,
-    n_min_spikes=250,
-    latest_time_sample=90_000_000,
-):
-    """
-    This function selects the n_min_spikes before latest_time (or most recent after latest_time)
-    """
-    new_labels = np.full(sorting.labels.shape, -1)
-    units = np.unique(sorting.labels)
-    units = units[units > -1]
-    for k in units:
-        idx_k = np.flatnonzero(sorting.labels == k)
-        before_time = sorting.times_samples[idx_k] < latest_time_sample
-        if before_time.sum() <= n_min_spikes:
-            idx_k = idx_k[:n_min_spikes]
-            new_labels[idx_k] = k
-        else:
-            idx_k = idx_k[before_time][-n_min_spikes:]
-            new_labels[idx_k] = k
-    new_sorting = sorting.ephemeral_replace(labels=new_labels)
-    return new_sorting
 
 
 def check_recording(

@@ -19,7 +19,7 @@ For details on parameters you should think about before running the sorter, see 
 
 The return value from the `dartsort()` function is a `DARTsortResult` object, which is a dictionary containing spike trains and motion information:
 
-::: dartsort.DARTsortReturn
+::: dartsort.DARTsortResult
     options:
       show_bases: false
 

@@ -40,14 +40,13 @@ TODO items:
 import gc
 import math
 import warnings
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Iterable,
     Literal,
     NamedTuple,
-    Optional,
     Self,
     cast,
     get_args,
@@ -632,20 +631,34 @@ class LUTParams(BModule):
         self.b.wburyroot.fill_(0.0)
 
     def check(self):
-        assert self.b.muo.isfinite().all()
-        assert self.b.Linvmuo.isfinite().all()
-        assert self.b.CmoCooinvmuo.isfinite().all()
-        assert self.b.constplogdet.isfinite().all()
+        muo_f = self.b.muo.isfinite().all()
+        Linvmuo_f = self.b.Linvmuo.isfinite().all()
+        CmoCooinvmuo_f = self.b.CmoCooinvmuo.isfinite().all()
+        constplogdet_f = self.b.constplogdet.isfinite().all()
+        rank0_good = all([muo_f, Linvmuo_f, CmoCooinvmuo_f, constplogdet_f])
         if not self.signal_rank:
+            if not rank0_good:
+                raise BadNumbersError(
+                    f"LUTParams blew up: {muo_f=} {Linvmuo_f=} "
+                    f"{CmoCooinvmuo_f=} {constplogdet_f=}"
+                )
             return
+
         assert self.b.TWoCooinvsqrt is not None
         assert self.b.TWoCooinvmuo is not None
         assert self.b.Tpad is not None
         assert self.b.wburyroot is not None
-        assert self.b.TWoCooinvsqrt.isfinite().all()
-        assert self.b.TWoCooinvmuo.isfinite().all()
-        assert self.b.Tpad.isfinite().all()
-        assert self.b.wburyroot.isfinite().all()
+        TWoCooinvsqrt_f = self.b.TWoCooinvsqrt.isfinite().all()
+        TWoCooinvmuo_f = self.b.TWoCooinvmuo.isfinite().all()
+        Tpad_f = self.b.Tpad.isfinite().all()
+        wburyroot_f = self.b.wburyroot.isfinite().all()
+        basis_good = all([TWoCooinvsqrt_f, TWoCooinvmuo_f, Tpad_f, wburyroot_f])
+        if not (rank0_good and basis_good):
+            raise BadNumbersError(
+                f"LUTParams blew up: {rank0_good=} {basis_good=}.\n"
+                f"{muo_f=} {Linvmuo_f=} {CmoCooinvmuo_f=} {constplogdet_f=}.\n"
+                f"{TWoCooinvsqrt_f=} {TWoCooinvmuo_f=} {Tpad_f=} {wburyroot_f=}."
+            )
 
 
 # -- messenger classes
@@ -686,6 +699,23 @@ class SufficientStatistics:
     R: Tensor
     Ulut: Tensor | None
     elbo: Tensor
+
+    def diagnostic(self) -> str:
+        noise_N = self.noise_N.item() if self.noise_N is not None else None
+        Ns = f"{self.N.amin().item()}, {self.N.amax().item()}"
+        Nluts = f"{self.Nlut.amin().item()}, {self.Nlut.amax().item()}"
+        Rna = self.R.isnan().any(dim=(1, 2)).sum().item()
+        Rinf = self.R.isinf().any(dim=(1, 2)).sum().item()
+        msg = (
+            f"SufficientStatistics:\n"
+            f" - count: {self.count}\n"
+            f" - ELBO: {self.elbo.item()}\n"
+            f" - noise count: {noise_N}\n"
+            f" - unit count min/max: {Ns}\n"
+            f" - LUT count min/max: {Nluts}\n"
+            f" - R na/inf count: {Rna}, {Rinf}"
+        )
+        return msg
 
     @classmethod
     def zeros(
@@ -823,6 +853,10 @@ class TMMParams:
         )
 
 
+class BadNumbersError(ValueError):
+    pass
+
+
 @databag
 class TruncatedEStepResult:
     candidates: Tensor
@@ -842,7 +876,7 @@ class SuccessfulSplitCaseResult:
     bases: Tensor | None
 
 
-SplitCaseResult = Optional[SuccessfulSplitCaseResult]
+SplitCaseResult = SuccessfulSplitCaseResult | None
 
 
 @databag
@@ -909,7 +943,7 @@ class SuccessfulGroupMergeResult:
 
 
 # none means "accept the full model"
-GroupMergeResult = Optional[SuccessfulGroupMergeResult]
+GroupMergeResult = SuccessfulGroupMergeResult | None
 
 
 @databag
@@ -2399,7 +2433,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 step_data, show_progress=show_progress > 2, allow_blanks=allow_blanks
             )
             elb = eres.stats.elbo.cpu().item()
-            assert math.isfinite(elb)
+            if not math.isfinite(elb):
+                self._bad_numbers_error(elb, eres.stats)
             elbos.append(elb)
             if show_progress:
                 iters.set_description(f"EM(elbo={elb:.3f})")  # type: ignore
@@ -3088,10 +3123,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if logger.isEnabledFor(DARTSORTVERBOSE):
             _l, _c = train_labels.unique(return_counts=True)
             imp = None if merge_res is None else merge_res.improvement
-            logger.dartsortverbose(
-                f"Split {group_str}: {n_split} parts with improvement {imp}, "
-                f"assigned to {_l.tolist()} with counts {_c.tolist()}."
-            )
+            if imp and imp > 0 and n_split != 1:
+                logger.dartsortverbose(
+                    f"Split {group_str}: {n_split} parts with improvement {imp}, "
+                    f"assigned to {_l.tolist()} with counts {_c.tolist()}."
+                )
         if pnoid:
             _lp = sub_proportions.sum()
             assert sub_proportions.shape == (n_split,)
@@ -3347,8 +3383,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.update_lut(lut)
         assert self.lut_params is not None
         self._check_logprop()
-        if pnoid:
-            self.lut_params.check()
+        self.lut_params.check()
 
         # merge generates a lot of weird small buffers
         gc.collect()
@@ -3424,12 +3459,15 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # apply demolition to mixture model and train data
         # update log proportions and LUT
-        return self.destroy_units(
+        res = self.destroy_units(
             unit_ids=self.unit_ids[demolished],
             train_data=train_data,
             train_scores=train_scores,
             allow_uncovered=allow_uncovered,
         )
+        assert self.lut_params is not None
+        self.lut_params.check()
+        return res
 
     def get_params_at(self, indices: Tensor | list[int]):
         m = self.b.means[indices]
@@ -3744,7 +3782,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert n_new_units == sum(m.shape[0] for m in new_means)
         assert n_new_units == sum(lp.numel() for lp in new_log_props)
         if self.signal_rank:
-            assert n_new_units == sum(b.shape[0] for b in new_bases)
+            assert all(b is not None for b in new_bases)
+            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore
 
         # resize params to allow space for the new guys
         Korig = self.n_units
@@ -3800,8 +3839,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         self.update_lut(lut)
         assert self.lut_params is not None
-        if pnoid:
-            self.lut_params.check()
+        self.lut_params.check()
 
         return SplitResult(
             n_new_units=n_new_units,
@@ -3817,6 +3855,39 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert self.noise_log_prop.isfinite()
         _lp = torch.logaddexp(self.noise_log_prop, self.non_noise_log_proportion())
         _assert_propclose(_lp, torch.zeros_like(_lp))
+
+    def _bad_numbers_error(
+        self, elb: float | None, stats: SufficientStatistics | None = None
+    ):
+        """Build an exception to help with numerical problems."""
+        msg = "TMM blew up."
+        if elb is not None:
+            msg += f" (elbo: {elb})"
+        msg += "\n"
+
+        # about me
+        my_msg = ""
+        mean_f = self.b.means.isfinite().all(dim=1)
+        if not mean_f.all():
+            my_msg += f" - {mean_f.logical_not().sum()} bad means.\n"
+        prop_f = self.b.log_proportions.isfinite()
+        if not prop_f.all():
+            my_msg += f" - {prop_f.logical_not().sum()} bad props.\n"
+        if not self.b.noise_log_prop.isfinite():
+            my_msg += f" - noise prop {self.b.noise_log_prop.item()}.\n"
+        if self.signal_rank:
+            basis_f = self.b.bases.isfinite().all(dim=(1, 2))
+            if not basis_f.all():
+                my_msg += f" - {basis_f.logical_not().sum()} bad bases.\n"
+        if not my_msg:
+            my_msg = " - Model parameters are fine.\n"
+        msg += my_msg
+
+        # about stats
+        if stats is not None:
+            msg += stats.diagnostic()
+
+        raise BadNumbersError(msg)
 
 
 class TMMView(BaseMixtureModel):
@@ -4514,7 +4585,7 @@ def initialize_parameters_by_unit(
             kweight = scores.responsibilities[kdata.indices, 0]
         else:
             kweight = None
-        ((kc, km, ks),), _ = initialize_params_from_dense_data(
+        params, _ = initialize_params_from_dense_data(
             kdata,
             erp=erp,
             rank=signal_rank,
@@ -4525,6 +4596,10 @@ def initialize_parameters_by_unit(
             mean=rank0_model.b.means[k] if rank0_model is not None else None,
             single_weight=kweight,
         )
+        assert len(params) == 1
+        params = params[0]
+        assert params is not None
+        kc, km, ks = params
         if means is not None:
             means[k, :, kc] = km
         if bases is not None:
@@ -4583,7 +4658,7 @@ def initialize_params_from_dense_data(
     min_channel_count: int = 1,
     weights: Tensor | None = None,
     single_weight: Tensor | None = None,
-) -> tuple[list[tuple[Tensor, Tensor, Tensor | None]], Tensor | None]:
+) -> tuple[list[tuple[Tensor, Tensor, Tensor] | None], Tensor | None]:
     """Weighted mean and basis, possibly by multiple weight vectors at once.
 
     The chosen channel neighborhood is the union of my spikes' neighborhoods. If there
@@ -4836,8 +4911,8 @@ def allowed_partitions(
     group_ids = torch.zeros_like(unit_ids)
 
     group_partitions = []
-    subset_to_id = {}
-    id_to_subset = {}
+    subset_to_id: dict[tuple[int], int] = {}
+    id_to_subset: dict[int, list[int]] = {}
     subset_id = 0
     for n_groups in range(1 + skip_single, n_units + 1 - skip_full):
         for partition in multiset_partitions(n_units, m=n_groups):
@@ -4854,7 +4929,7 @@ def allowed_partitions(
                     subset_ids.append(subset_id)
                     subset_group_ids.append(j)
                     subset_to_id[tp] = subset_id
-                    id_to_subset[subset_id] = p
+                    id_to_subset[subset_id] = p.tolist()
                     subset_id += 1
                     uids_combined.extend(unit_ids[p].tolist())
                 elif len(tp) > 1:
@@ -5289,6 +5364,7 @@ def evaluate_group_demolitions(
     best_demo = GroupDemolition(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
     )
+    best_imp = 0.0
     for demo_mask in submasks(can_demolish):
         crit = _evaluate_single_demolition(
             orig_log_props=mm.b.log_proportions,
@@ -5300,10 +5376,11 @@ def evaluate_group_demolitions(
             eval_scores=eval_scores,
         )
         imp = crit - cur_crit
-        if imp > 0:
+        if imp > best_imp:
             best_demo = GroupDemolition(
                 unit_ids=group, improvement=imp, demolished=demo_mask
             )
+            best_imp = imp
 
     return best_demo
 
@@ -6201,6 +6278,7 @@ def mean_responsibilities(
     rsum_batch = resp_mean.clone()
     for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
         i1 = min(resp.shape[0], i0 + batch_size)
+        nbatch = i1 - i0
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
@@ -6212,8 +6290,8 @@ def mean_responsibilities(
         if includes_noise:
             rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
-        rmean_batch = rsum_batch.div_(i1 - i0)
-        resp_mean += rmean_batch.sub_(resp_mean).div_(i1 / batch_size)
+        rmean_batch = rsum_batch.mul_(1.0 / nbatch)
+        resp_mean += rmean_batch.sub_(resp_mean).mul_(nbatch / i1)
 
     # check that things didn't explode
     assert resp_mean.isfinite().all(), "Responsibility mean not finite"
@@ -6559,6 +6637,7 @@ def _calc_loglik_ppca(
     term_b = term_b.square_().sum(dim=1)
 
     ll = term_a.sub_(term_b)
+    ll = ll.nan_to_num_(nan=torch.inf)
 
     ll += constplogdet[lut_ixs]
     ll *= -0.5

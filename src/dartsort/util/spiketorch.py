@@ -25,7 +25,7 @@ _0 = torch.tensor(0.0)
 def spawn_torch_rg(
     seed: int | np.random.Generator | torch.Generator = 0,
     device: str | torch.device | None = "cpu",
-):
+) -> torch.Generator:
     if device is None:
         device = "cpu"
     device = torch.device(device)
@@ -160,6 +160,19 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
 def minmax(x: np.ndarray) -> np.ndarray:
     x = x - np.min(x)
     return x / np.max(x)
+
+
+@torch.jit.script
+def sqeuc_cdist_known_norm(
+    X: Tensor,
+    Xnormsq: Tensor,
+    Y: Tensor,
+    Ynormsq: Tensor,
+    out: Tensor,
+):
+    out = torch.addmm(Xnormsq[:, None], X, Y.t(), out=out, alpha=-2.0)
+    out.add_(Ynormsq)
+    return out.relu_()
 
 
 def svd_lowrank_helper(
@@ -443,7 +456,7 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
         nmj = (xj.square_().mul_(w)).mean(dim=(1, 2)).sqrt_()
 
         dist = dist.div_(nmi).div_(nmj)
-        pdist[i0 + valid] = dist
+        pdist[i0 + valid] = dist.sqrt_()
     pdist = pdist.numpy(force=True)
     return squareform(pdist)
 
@@ -891,7 +904,7 @@ def nancov(
     else:
         xtx = x.T @ x
         if nan_free:
-            nobs = np.array(len(x), dtype=x.dtype)
+            nobs = x.new_tensor(len(x))
         else:
             nobs = mask.T @ mask
     denom = nobs - correction

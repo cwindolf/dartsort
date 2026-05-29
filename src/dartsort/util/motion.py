@@ -124,6 +124,9 @@ def get_motion_info(
 class MotionInfo:
     """Holds motion-related info and helper functions."""
 
+    # TODO normalize this class to always use si_motion and use si's
+    # logic for ser/de
+
     drifting: bool
     """Was do_motion_estimation set, or are we ignoring motion?"""
     geom: np.ndarray

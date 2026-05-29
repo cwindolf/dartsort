@@ -198,7 +198,6 @@ def make_channel_index(
     to_torch: Literal[True],
     p: int | float = 2,
     pad_val: int | None = None,
-    fill_holes: bool = False,
 ) -> torch.LongTensor: ...
 
 
@@ -210,7 +209,6 @@ def make_channel_index(
     to_torch: Literal[False],
     p: int | float = 2,
     pad_val: int | None = None,
-    fill_holes: bool = False,
 ) -> np.ndarray: ...
 
 
@@ -222,7 +220,6 @@ def make_channel_index(
     to_torch: bool = False,
     p: int | float = 2,
     pad_val: int | None = None,
-    fill_holes: bool = False,
 ) -> np.ndarray | torch.Tensor: ...
 
 
@@ -233,7 +230,6 @@ def make_channel_index(
     to_torch: bool = False,
     p: int | float = 2,
     pad_val: int | None = None,
-    fill_holes: bool = False,
 ) -> np.ndarray | torch.Tensor:
     """
     Compute an array whose whose ith row contains the neighbors for the ith channel
@@ -243,11 +239,6 @@ def make_channel_index(
         return single_channel_index(C, to_torch=to_torch)
     if pad_val is None:
         pad_val = C
-
-    if fill_holes:
-        return make_filled_channel_index(
-            geom, radius, p=p, pad_val=pad_val, to_torch=to_torch
-        )
 
     # get neighbors matrix
     if torch.is_tensor(geom):
@@ -283,37 +274,6 @@ def get_channel_index_rel_inds(channel_index: torch.Tensor):
     jj, index_inds = (channel_index == chans_arange[:, None]).nonzero(as_tuple=True)
     assert torch.equal(jj, chans_arange)
     return index_inds
-
-
-def make_filled_channel_index(
-    geom, radius, p: int | float = 2, pad_val=None, to_torch=False
-):
-    C = geom.shape[0]
-    if not radius:
-        return single_channel_index(C, to_torch=to_torch)
-    if pad_val is None:
-        pad_val = C
-
-    filled_geom, is_original = fill_geom_holes(geom)
-    filled_kdt = KDTree(filled_geom)
-    _, original_inds = filled_kdt.query(geom)
-    assert np.array_equal(filled_geom[original_inds], geom)
-    neighbors = cdist(geom, filled_geom, metric="minkowski", p=p) <= radius
-    n_neighbors = np.max(np.sum(neighbors, 0))
-    channel_index = np.full((C, n_neighbors), pad_val, dtype=np.int64)
-
-    # fill every row in the matrix (one per channel)
-    for c in range(C):
-        # indices of c's neighbors
-        filled_ch_idx = np.flatnonzero(neighbors[c])
-        ch_idx = np.searchsorted(original_inds, filled_ch_idx)
-        ch_idx[np.logical_not(is_original[filled_ch_idx])] = pad_val
-        channel_index[c] = ch_idx
-
-    if to_torch:
-        channel_index = torch.LongTensor(channel_index)
-
-    return channel_index
 
 
 def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=True):

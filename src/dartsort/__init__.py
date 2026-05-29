@@ -74,6 +74,7 @@ from .util.logging_util import (
     DARTSORTVERBOSE,
     DARTsortLogger,
     get_logger,
+    set_log_level,
 )
 from .util.motion import MotionInfo, get_motion_info, try_load_motion_info
 from .util.noise_util import EmbeddedNoise

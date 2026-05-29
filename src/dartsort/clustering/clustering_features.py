@@ -7,7 +7,11 @@ from torch import Tensor
 
 from ..util.data_util import DARTsortSorting
 from ..util.drift_util import get_stable_channels
-from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
+from ..util.internal_config import (
+    ClusteringFeaturesConfig,
+    ComputationConfig,
+    default_clustering_features_cfg,
+)
 from ..util.interpolation_util import (
     SpikeNeighborhoods,
     StableFeaturesInterpolator,
@@ -63,8 +67,8 @@ class SimpleMatrixFeatures:
         *,
         sorting: DARTsortSorting,
         motion: MotionInfo,
-        clustering_features_cfg: ClusteringFeaturesConfig,
-        computation_cfg: ComputationConfig | None,
+        clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
+        computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         t_s = sorting.times_seconds

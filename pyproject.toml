@@ -81,6 +81,11 @@ ignore = ["F722"]
 [tool.ty.src]
 include = ["src", "tests"]
 
+[tool.basedpyright]
+include = ["src", "tests"]
+enableTypeIgnoreComments = true
+typeCheckingMode = "standard"
+
 [tool.ty.analysis]
 replace-imports-with-any = ["hdbscan"]
 
