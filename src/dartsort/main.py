@@ -420,7 +420,27 @@ def initial_detection(
     motion: MotionInfo | None = None,
     overwrite=False,
     show_progress=True,
-):
+) -> DARTsortSorting:
+    """Initial spike detection
+
+    Runs the detection method specified by cfg.detection_type
+
+    Used by dartsort; users probably want to just run subtract(), match(),
+    or threshold() directly.
+
+    Parameters
+    ----------
+    output_dir : str | Path
+    recording : BaseRecording
+    cfg : DARTsortInternalConfig
+    motion : MotionInfo | None, optional
+    overwrite : bool, optional
+    show_progress : bool, optional
+
+    Returns
+    -------
+    DARTsortSorting
+    """
     if cfg.detection_type == "subtract":
         assert isinstance(cfg.initial_detection_cfg, SubtractionConfig)
         return subtract(
@@ -489,7 +509,7 @@ def subtract(
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
-) -> DARTsortSorting | None:
+) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
     check_recording(recording)

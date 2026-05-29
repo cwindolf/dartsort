@@ -28,7 +28,10 @@ PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
 
 @cfg_dataclass
 class WaveformConfig:
-    """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+    """Waveform snippet length parameters
+    
+    Defaults yield 42 sample trough offset and 121 total at 30kHz.
+    """
 
     ms_before: float = 1.4
     ms_after: float = 2.6 + 0.1 / 3
@@ -125,6 +128,7 @@ _kmethods = {"zero", "nearest", "nan", "clampna"}
 
 @cfg_dataclass
 class InterpolationParams:
+    """Spatial waveform or feature interpolation parameters"""
     method: InterpMethod = "kriging"
     kernel: InterpKernel = "thinplate"
     extrap_method: InterpMethod | None = None
@@ -208,6 +212,7 @@ default_fit_max_reweighting = 4.0
 
 @cfg_dataclass
 class FitSamplingConfig:
+    """Data sampling parameters for model fitting"""
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
@@ -229,6 +234,7 @@ default_clustering_fit_sampling_cfg = FitSamplingConfig(
 
 @cfg_dataclass
 class ClusteringFeaturesConfig:
+    """Parameters to control which features are used for initial clustering"""
     # simple matrix feature controls
     use_x: bool = True
     use_z: bool = True
@@ -262,6 +268,7 @@ class ClusteringFeaturesConfig:
 
 @cfg_dataclass
 class ClusteringConfig:
+    """Initial clustering parameters"""
     cluster_strategy: str = "dpc"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -310,6 +317,7 @@ WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 
 @cfg_dataclass
 class WhiteningConfig:
+    """Whitening parameters"""
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
@@ -323,6 +331,7 @@ TemplateSVDMethod = Literal[
 
 @cfg_dataclass
 class TemplateConfig:
+    """Template waveform estimation parameters"""
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "median"
@@ -399,6 +408,7 @@ RealignStrategy = Literal[
 
 @cfg_dataclass
 class TemplateRealignmentConfig:
+    """Template waveform alignment parameters"""
     realign_peaks: bool = True
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
@@ -409,6 +419,7 @@ class TemplateRealignmentConfig:
 
 @cfg_dataclass
 class TemplateMergeConfig:
+    """Parameters describing how to judge whether to merge groups of templates"""
     distance_kind: Literal[
         "scaled_normeuc", "deconv", "max", "weighted_scaled_normeuc"
     ] = "weighted_scaled_normeuc"
@@ -446,6 +457,7 @@ ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 
 @cfg_dataclass
 class RefinementConfig:
+    """Parameters for clustering refinement"""
     refinement_strategy: str = "tmm"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -623,6 +635,7 @@ PeakSign = Literal["pos", "neg", "both"]
 
 @cfg_dataclass
 class SubtractionConfig:
+    """Parameters for neural-net based spike detection"""
     # peeling common
     chunk_length_samples: int = 30_000
     fit_only: bool = False
@@ -676,6 +689,7 @@ class SubtractionConfig:
 
 @cfg_dataclass
 class ThresholdingConfig:
+    """Parameters for threshold-crossing spike detection"""
     # peeling common
     chunk_length_samples: int = 30_000
 
@@ -701,6 +715,7 @@ class ThresholdingConfig:
 
 @cfg_dataclass
 class MatchingConfig:
+    """Template matching pursuit parameters"""
     # peeling common
     chunk_length_samples: int = 30_000
     max_spikes_per_second: int = 16384
@@ -793,6 +808,7 @@ class MotionEstimationConfig:
 
 @cfg_dataclass
 class ComputationConfig:
+    """Multiprocessing or threading parameters"""
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
     n_jobs_small: int = -2

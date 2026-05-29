@@ -676,7 +676,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = cfull[conf_rows][:, conf_cols]
 
         if self.confusion_kind in ("siconfusion", "greedy"):
-            union = union[conf_rows][:, conf_cols]  # type: ignore[reportPossiblyUnbound]
+            union = union[conf_rows][:, conf_cols]  # type: ignore
             union[union == 0] = 1
             conf = conf / union
             suffix = " iou"
@@ -813,7 +813,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ax.set_ylabel(f"{va.name} CCG v. {cat}", color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
-        ax.set_xlabel("lag (samples)")
+        ax.set_xlabel("lag (samples)")  # type: ignore
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)

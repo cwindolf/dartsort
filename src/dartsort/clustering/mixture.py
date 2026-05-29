@@ -2515,6 +2515,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 assert self.b.noise_log_prop.isfinite().all()
         else:
             assert stats.noise_N is None
+            lp = None
 
         # rank 0 case: mean only
         if self.signal_rank == 0:
@@ -2537,6 +2538,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         if pnoid:
             assert soln.isfinite().all()
         if not skip_proportions:
+            assert lp is not None
             assert lp.isfinite().all()
 
     def fixed_weight_em(

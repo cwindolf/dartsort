@@ -779,6 +779,7 @@ class NeighborQDAPlot(UnitPlot):
 
             ax.axvline(0, color="k", lw=0.8)
             ax.grid()
+            hstat = kstat = ""
 
             if self.kind == "hist":
                 ax.hist(

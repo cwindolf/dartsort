@@ -99,6 +99,7 @@ def kmeanspp(
         )
         j = n_components
     else:
+        j = 0
         for j in range(1, n_components):
             if weights is not None:
                 torch.mul(dists, weights, out=p)
@@ -176,6 +177,7 @@ def truncated_kmeans(
         it = progrange(n_initializations, desc="kmeans++")
     else:
         it = range(n_initializations)
+    _d = None
     for _ in it:
         _c, _l, _d, _p = kmeanspp(
             X,

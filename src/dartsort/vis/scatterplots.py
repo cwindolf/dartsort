@@ -97,11 +97,14 @@ def scatter_spike_features(
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
             if times_s is None:
                 times_s = h5["times_seconds"][:]
+            localizations = None
             if x is None or depths_um is None:
                 localizations = _try_load(h5, localizations_dataset_name)
             if x is None:
+                assert localizations is not None
                 x = localizations[:, 0]
             if depths_um is None:
+                assert localizations is not None
                 depths_um = localizations[:, 2]
             if amplitudes is None:
                 amplitudes = _try_load(h5, amplitudes_dataset_name)
@@ -784,6 +787,7 @@ def add_ellipses(
         color = glasbey1024[uid % len(glasbey1024)]
         in_unit = np.flatnonzero(labels[to_show] == uid)
         bad = in_unit.size <= 2
+        valid = slice(None)
         if not bad:
             # nans
             f = feature[in_unit]
@@ -792,29 +796,29 @@ def add_ellipses(
             bad = valid.size <= 2
         if not bad:
             # remove outliers to stabilize [co]variance
-            kdt = KDTree(np.c_[f[valid], d[valid]])
-            dd, ii = kdt.query(np.c_[f[valid], d[valid]], distance_upper_bound=10.0)
-            valid = valid[ii < kdt.n]
+            kdt = KDTree(np.c_[f[valid], d[valid]])  # type: ignore
+            dd, ii = kdt.query(np.c_[f[valid], d[valid]], distance_upper_bound=10.0)  # type: ignore
+            valid = valid[ii < kdt.n]  # type: ignore
             bad = valid.size <= 2
         if not bad:
-            fm = f[valid].mean()
-            dm = d[valid].mean()
-            cov = np.cov(f[valid], d[valid])
+            fm = f[valid].mean()  # type: ignore
+            dm = d[valid].mean()  # type: ignore
+            cov = np.cov(f[valid], d[valid])  # type: ignore
             vx, vy = cov[0, 0], cov[1, 1]
             if min(vx, vy) <= 0:
                 bad = True
             rhoss = cov[0, 1]
         if not bad:
-            apc2 = (vx + vy) / 2
-            amc2sq = ((vx - vy) ** 2) / 4
-            lambda1 = apc2 + np.sqrt(amc2sq + rhoss**2)
-            lambda2 = apc2 - np.sqrt(amc2sq + rhoss**2)
-            if rhoss == 0:
-                theta = (np.pi / 2) * (vx < vy)
+            apc2 = (vx + vy) / 2  # type: ignore
+            amc2sq = ((vx - vy) ** 2) / 4  # type: ignore
+            lambda1 = apc2 + np.sqrt(amc2sq + rhoss**2)  # type: ignore
+            lambda2 = apc2 - np.sqrt(amc2sq + rhoss**2)  # type: ignore
+            if rhoss == 0:  # type: ignore
+                theta = (np.pi / 2) * (vx < vy)  # type: ignore
             else:
-                theta = np.arctan2(lambda1 - vx, rhoss)
+                theta = np.arctan2(lambda1 - vx, rhoss)  # type: ignore
             theta = 180 * theta / np.pi
-            center = fm, dm
+            center = fm, dm  # type: ignore
         else:
             center = 0, 0
             color = (0, 0, 0, 0)

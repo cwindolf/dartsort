@@ -102,6 +102,7 @@ class MetricColumn(VersusPlot):
         df = vs.unit_versus_dataframe()
         if self.diff:
             lines = [Line2D([0, 1], [0, 0], color="k")]
+            spal = None
         else:
             spal = sns.color_palette(glasbey1024[: vs.n_vs])
             lines = [Line2D([0, 1], [0, 0], color=c) for c in spal]
@@ -114,6 +115,10 @@ class MetricColumn(VersusPlot):
             assert np.array_equal(df_b.gt_unit_id, df_b.gt_unit_id)
             df = df_a.copy()
             for met in self.metrics:
+                if met in df and met not in df_b:
+                    df = df.drop(met)
+                if met not in df or met not in df_b:
+                    continue
                 df[met] -= df_b[met]
 
         x = self.x
@@ -134,11 +139,36 @@ class MetricColumn(VersusPlot):
             logy = met == "min_temp_dist" and not self.diff
             symlogy = met == "min_temp_dist" and self.diff
 
+            if x not in df:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"no {x=}",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.axis("off")
+                continue
+            if met not in df:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"no {met=}",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.axis("off")
+                continue
+
             if self.diff:
                 ax.axhline(0, lw=0.8, color="k")
                 ckw = dict(color=_c[met])
             else:
-                ckw = dict(hue=vs.sorter_var, hue_order=vs.other_names, palette=spal)
+                ckw = dict(hue=vs.sorter_var, hue_order=vs.other_names)
+                if spal is not None:
+                    ckw["palette"] = spal
 
             if not self.box:
                 regkw = _lowess if self.diff else _regkind[met]
@@ -184,10 +214,10 @@ class MetricColumn(VersusPlot):
                     **_box_kw,
                     **ckw,
                 )
-            
-            logx = self.logx and x is not None and sdf[x].values.size
-            logy = logy and sdf[met].values.size
-            symlogy = symlogy and sdf[met].values.size
+
+            logx = self.logx and x is not None and df[x].values.size
+            logy = logy and df[met].values.size
+            symlogy = symlogy and df[met].values.size
 
             if logy and logx and not self.box:
                 ax.loglog()
@@ -223,7 +253,7 @@ class MetricColumn(VersusPlot):
                     loc=("upper" if _o[met] < 0 else "lower") + " right",
                     **_legkw,
                 )
-        ax.set_xlabel(self.x)
+        ax.set_xlabel(self.x)  # type: ignore
 
         if self.diff and self.box and self.box_x_cuts is None:
             axes.flat[0].set_title("perf diff boxplots")
@@ -254,6 +284,8 @@ class OrderedPerformance(VersusPlot):
 
         for ax, met in zip(axes.flat, self.metrics):
             for sorter, color in zip(vs.other_names, glasbey1024):
+                if met not in df:
+                    continue
                 y = df[df[vs.sorter_var] == sorter][met].values
                 y = y[np.isfinite(y)]
                 y = y[np.argsort(-_o[met] * y)]
@@ -262,16 +294,31 @@ class OrderedPerformance(VersusPlot):
             ax.set_ylabel(met, color=_c[met])
             if met == "min_temp_dist":
                 ax.semilogy()
-        ax.set_xlabel("ordered GT units")
+        ax.set_xlabel("ordered GT units")  # type: ignore
         axes.flat[-1].legend(loc="upper left", fancybox=False, **_legkw)
         axes.flat[0].set_title("sorted performance")
 
 
 def get_versus_plots(vs) -> Sequence[VersusPlot]:
+    vs_df = vs.unit_versus_dataframe()
+    have_coll = "gt_collidedness" in vs_df
+    have_matched_col = "gt_matched_collidedness" in vs_df
+
+    col_plots = []
+    if have_coll:
+        col_plots.append(
+            MetricColumn(x="gt_collidedness", metrics=["recall", "min_temp_dist"])
+        )
+    if have_matched_col:
+        col_plots.append(
+            MetricColumn(
+                x="gt_matched_collidedness", metrics=["recall", "min_temp_dist"]
+            )
+        )
+
     plots = [
         MetricColumn(),
-        MetricColumn(x="gt_collidedness", metrics=["recall", "min_temp_dist"]),
-        MetricColumn(x="gt_matched_collidedness", metrics=["recall", "min_temp_dist"]),
+        *col_plots,
         MetricColumn(x="gt_dt_rms", metrics=["recall", "min_temp_dist"]),
         MetricColumn(diff=True),
         MetricColumn(box=True),

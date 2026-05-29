@@ -537,6 +537,7 @@ class Decollider(BaseMultichannelDenoiser):
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
 
+        loss = 0.0
         last_val_loss = None
         train_records = []
 

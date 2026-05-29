@@ -357,6 +357,8 @@ class Rescaling(nn.Module):
     def forward(self, input):
         if self.waveform_only:
             input, masks = input
+        else:
+            masks = None
         dim = tuple(range(1, input.ndim))
         if self.scale_kind == "max":
             scales = input.abs().amax(dim=dim, keepdim=True)
