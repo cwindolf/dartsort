@@ -674,7 +674,7 @@ class SubtractionConfig:
 
     # initial denoiser fitting parameters
     first_denoiser_max_waveforms_fit: int = 250_000
-    first_denoiser_noise_snips: int = 100 * 128
+    first_denoiser_noise_snips: int = 100 * 256
     first_denoiser_noise_snip_length_mul: float = 2.5
     first_denoiser_noise_density: float = 0.5
     first_denoiser_thinning: float = 0.0
@@ -747,6 +747,7 @@ class MatchingConfig:
     whiten_features: bool = False
     margin_factor: int = 2
     max_fp_per_input_spike: float = 2.5
+    scale_adjusts_threshold: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -1007,6 +1008,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             save_output_waveforms=cfg.save_subtracted_waveforms,
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
+            nn_denoiser_extra_kwargs=cfg.nn_denoiser_extra_kwargs,
         )
         initial_detection_cfg = SubtractionConfig(
             peak_sign=cfg.peak_sign,
@@ -1018,6 +1020,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
         )

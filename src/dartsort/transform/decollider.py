@@ -41,8 +41,8 @@ class Decollider(BaseMultichannelDenoiser):
         norm_kind="none",
         name=None,
         name_prefix="",
-        batch_size=256,
-        learning_rate=3e-4,
+        batch_size=512,
+        learning_rate=1e-3,
         weight_decay=0.0,
         n_epochs=100,
         pad_depth_only=True,
@@ -57,12 +57,16 @@ class Decollider(BaseMultichannelDenoiser):
         lr_schedule_kwargs=None,
         inference_batch_size=1024,
         optimizer="Adam",
-        optimizer_kwargs=None,
+        optimizer_kwargs=dict(eps=1e-6),
         nonlinearity="PReLU",
         scaling="max",
         signal_gates=True,
         step_callback=None,
         epoch_size=200 * 256,
+        clip_value=None,
+        clip_norm=None,
+        warmup_epochs=0,
+        warmup_lr=3e-4,
         # my args. todo: port over common ones.
         inference_z_samples=10,
         detach_amortizer=True,
@@ -116,6 +120,8 @@ class Decollider(BaseMultichannelDenoiser):
             signal_gates=signal_gates,
             step_callback=step_callback,
             epoch_size=epoch_size,
+            warmup_epochs=warmup_epochs,
+            warmup_lr=warmup_lr,
         )
         self.queue_chunks = queue_chunks
 
@@ -135,6 +141,8 @@ class Decollider(BaseMultichannelDenoiser):
         self.cycle_loss_alpha = cycle_loss_alpha
         self.separate_cycle_net = separate_cycle_net
         self.detach_cycle_loss = detach_cycle_loss
+        self.clip_value = clip_value
+        self.clip_norm = clip_norm
 
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
@@ -586,6 +594,11 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                     loss = sum(loss_dict.values())
                     loss.backward()
+
+                    if self.clip_value is not None:
+                        torch.nn.utils.clip_grad_value_(self.parameters(), self.clip_value)
+                    if self.clip_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.parameters(), self.clip_norm)
                     optimizer.step()
 
                     for k, v in loss_dict.items():

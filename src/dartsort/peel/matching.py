@@ -77,7 +77,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fixed_property_keys=fixed_prop_keys,
             dtype=dtype,
         )
-        self.p = p
+        self.p: MatchingConfig = p
         self.matching_templates = matching_templates
         self.matching_templates_builder = matching_templates_builder
         self.thresholdsq: float | None = None  # set in precompute
@@ -522,7 +522,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         from scipy.stats import norm
 
         # TODO: remove?
-        if self.is_scaling and self.p.amplitude_scaling_variance < torch.inf:
+        if self.is_scaling and self.p.scale_adjusts_threshold and self.p.amplitude_scaling_variance < torch.inf:
             # adjust threshold by the scaling prior's constant term
             # nb, everything is x2 so halves are gone.
             scstd = np.sqrt(self.p.amplitude_scaling_variance)
