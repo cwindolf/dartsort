@@ -119,7 +119,7 @@ def visualize_sorting(
         single_unit_ids=single_unit_ids,
         allow_qda=allow_qda,
     )
-    sum_png, unit_sum_dir, comp_png, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
+    sum_png, unit_sum_dir, comp_png, comp_csv, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
         paths_or_nones
     )
 
@@ -136,6 +136,10 @@ def visualize_sorting(
             raise
 
     try:
+        if comp_csv is not None and gt_analysis is not None:
+            if overwrite or not comp_csv.exists():
+                assert gt_cmp is not None
+                gt_cmp.unit_info_dataframe().to_csv(comp_csv)
         if comp_png is not None and gt_analysis is not None:
             if overwrite or not comp_png.exists():
                 assert gt_cmp is not None
@@ -498,14 +502,15 @@ def _plan_vis(
     can_gt = gt_analysis is not None and is_labeled
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
-        need_comp = overwrite or not comparison_png.exists()
+        comparison_csv = output_directory / "gt_comparison.csv"
+        need_comp = overwrite or not comparison_png.exists() or not comparison_csv.exists()
         need_comp = need_comp or (single_unit_ids == "gtrelevant" and need_summaries)
         need_analysis = need_analysis or need_comp
         need_comparison = need_comparison or need_comp
         if not need_comp:
-            comparison_png = None
+            comparison_csv = comparison_png = None
     else:
-        comparison_png = None
+        comparison_csv = comparison_png = None
 
     if can_gt and make_unit_comparisons:
         unit_comparison_dir = output_directory / "gt_unit_comparisons"
@@ -655,6 +660,7 @@ def _plan_vis(
         sorting_summary_png,
         unit_summary_dir,
         comparison_png,
+        comparison_csv,
         unit_comparison_dir,
         vs_png,
         mix_dir,

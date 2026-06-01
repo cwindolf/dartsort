@@ -1,11 +1,11 @@
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from matplotlib.colors import FuncNorm
-import warnings
 
 from .layout import BasePlot, flow_layout
-
 
 table_cmap = ["managua", "cividis"]
 for table_cmap in table_cmap:
@@ -59,6 +59,7 @@ class TrimmedAgreementMatrix(ComparisonPlot):
         else:
             assert self.ordered
             agreement.values[:, : agreement.shape[0]]
+        assert np.isfinite(agreement.values).all()
         ax = panel.subplots()
         im = ax.imshow(agreement.T, vmin=0, vmax=1, cmap=self.cmap)
         plt.colorbar(im, ax=ax, shrink=0.3)
@@ -83,11 +84,15 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         col_order = agreement.columns
         col_order = col_order[col_order < comparison.template_distances.shape[1]]
         dist = comparison.template_distances[row_order, :][:, col_order]
+        dist = dist.astype(np.float64)
+        print(f"{dist.shape=}")
+        print(f"{dist.min()=}")
+        print(f"{dist.max()=}")
 
         ax = panel.subplots()
         log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
         im = ax.imshow(dist.T, norm=log1p_norm, cmap=self.cmap)
-        plt.colorbar(im, ax=ax, shrink=0.3)
+        plt.colorbar(im, ax=ax, shrink=0.5)
         ax.set_title("Hung. match temp dists")
         ax.set_xlabel(f"{comparison.gt_name} unit")
         ax.set_ylabel(f"{comparison.tested_name} unit")
@@ -129,6 +134,17 @@ class MetricRegPlot(ComparisonPlot):
             finite_y = np.isfinite(df[self.y].values)
             finite_x = np.isfinite(df[self.x].values)
             df_show = df[np.logical_and(finite_y, finite_x)]
+            if not len(df_show):
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"blank {self.x}-{self.y}",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
+                ax.axis("off")
+                return
 
             if qcolor:
                 ax.scatter(
@@ -150,8 +166,18 @@ class MetricRegPlot(ComparisonPlot):
                 line_kws=dict(color="k"),
                 **({} if qcolor else dict(color=self.color)),
             )
-        log_x = self.log_x and len(df_show)
-        log_y = self.log_y and len(df_show)
+        can_logx = (
+            len(df_show)
+            and np.isfinite(df_show[self.x].values).all()
+            and (df_show[self.x].values >= 0).all()
+        )
+        log_x = self.log_x and can_logx
+        can_logy = (
+            len(df_show)
+            and np.isfinite(df_show[self.y].values).all()
+            and (df_show[self.y].values >= 0).all()
+        )
+        log_y = self.log_y and can_logy
         if log_x and log_y:
             ax.loglog()
         elif log_x:
@@ -237,6 +263,8 @@ class TemplateDistanceMatrix(ComparisonPlot):
             comparison.tested_analysis.sorting.unit_ids, col_order
         )
         dist = comparison.template_distances[row_order, :][:, col_order_ix]
+        dist = np.maximum(dist, 0.0, dtype=np.float64)
+        assert np.isfinite(dist.all())
 
         ax = panel.subplots()
         log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
@@ -258,17 +286,20 @@ class TemplateDistancesHistogram(ComparisonPlot):
     def draw(self, panel, comparison):
         ax = panel.subplots()
         d = np.nan_to_num(comparison.template_distances, nan=np.inf)
+        d = np.maximum(d, 0.0, dtype=np.float64)
         vm = min(d.min(0).max(), d.min(1).max())
         min_gt_dist_for_tested_units = d.min(axis=self.axis)
         finite = np.isfinite(min_gt_dist_for_tested_units)
+        ninf = np.logical_not(finite).sum()
         x = min_gt_dist_for_tested_units[finite]
-        bins = np.logspace(np.log10(d.min()), np.log10(vm), 96)
+        vmin = x.min() if np.isfinite(x).any() else 0.1
+        vmax = vm if np.isfinite(vm).any() else 1.0
+        bins = np.logspace(np.log10(vmin), np.log10(vmax), 96)
         ax.hist(x, bins=bins, color="orange", log=True)
-        if x.shape[0]:
+        if x.shape[0] > 1 and (x >= 0).all():
             ax.semilogx()
         ax.grid(which="both")
         ax.set_ylabel("count")
-        ninf = np.logical_not(finite).sum()
         if self.axis == 0:
             ax.set_xlabel("dist to GT (min over GT of tested-GT dists)")
             ax.set_title(

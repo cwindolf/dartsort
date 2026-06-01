@@ -767,8 +767,8 @@ class NeighborQDAPlot(UnitPlot):
             cov = min(overlap[:na].sum() / na, overlap[na:].sum() / nb)
             iout = f"{nid}: iou=" + f"{iou:.2f}".lstrip("0")
             covt = f"{nid}: cov=" + f"{cov:.2f}".lstrip("0")
-            if not count:
-                ax.set_title(f"{nid}: {iout}\n{covt}", fontsize="small")
+            if count < 16:
+                ax.set_title(f"{nid}: {iout}\n{covt}\nolap count {count}", fontsize="small")
                 continue
 
             _, my_ix = np.nonzero(my_mask[overlap])
@@ -882,6 +882,7 @@ def no_pca_unit_plots(sorting_analysis=None):
     )
 
 
+@np.errstate(over='raise')
 def make_unit_summary(
     sorting_analysis: DARTsortAnalysis,
     unit_id,

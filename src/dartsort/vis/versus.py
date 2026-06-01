@@ -331,6 +331,7 @@ def get_versus_plots(vs) -> Sequence[VersusPlot]:
     return plots
 
 
+@np.errstate(over='raise')
 def make_versus_summary(
     vs: DARTsortGTVersus,
     plots: Sequence[VersusPlot] | None = None,
