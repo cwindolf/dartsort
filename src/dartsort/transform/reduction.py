@@ -139,49 +139,48 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
         dev = computation_cfg.actual_device()
 
         n_jobs, Executor, context, *_ = pool_from_cfg(
-            computation_cfg, check_local=True, small=True, cpu=dev.type == 'cpu'
+            computation_cfg, check_local=True, small=True, cpu=dev.type == "cpu"
         )
-        with Executor(
-            max_workers=n_jobs,
-            mp_context=context,
-            initializer=_reduction_init,
-            initargs=(hdf5_path, self.name[0], labels, dev, self.with_raw_std_dev),
-        ) as pool:
-            results = pool.map(_reduction_job, range(self.n_units))
-            if show_progress:
-                results = progbar(
-                    results, total=self.n_units, desc=f"Medians:{dev.type}:{n_jobs}"
+        try:
+            with Executor(
+                max_workers=n_jobs,
+                mp_context=context,
+                initializer=_reduction_init,
+                initargs=(hdf5_path, self.name[0], labels, dev, self.with_raw_std_dev),
+            ) as pool:
+                results = pool.map(_reduction_job, range(self.n_units))
+                if show_progress:
+                    results = progbar(
+                        results, total=self.n_units, desc=f"Medians:{dev.type}:{n_jobs}"
+                    )
+
+                count = np.full(
+                    (self.n_units, self.output_channels), dtype=np.int32, fill_value=-1
                 )
+                mean_shape = (self.n_units, self.feature_dim, self.output_channels)
+                mean = np.full(mean_shape, dtype=np.float32, fill_value=np.nan)
+                if self.with_raw_std_dev:
+                    std = mean.copy()
+                else:
+                    std = None
 
-            count = np.full(
-                (self.n_units, self.output_channels), dtype=np.int32, fill_value=-1
-            )
-            wf_shape = (self.feature_dim, self.output_channels)
-            mean = np.full(
-                (self.n_units, *wf_shape), dtype=np.float32, fill_value=np.nan
-            )
-            if self.with_raw_std_dev:
-                std = mean.copy()
-            else:
-                std = None
+                for r in results:
+                    if r is None:
+                        continue
+                    count[r.j] = r.count
+                    mean[r.j] = r.mean
+                    if std is not None:
+                        assert r.std is not None
+                        std[r.j] = r.std
 
-            for r in results:
-                if r is None:
-                    continue
-                count[r.j] = r.count
-                mean[r.j] = r.mean
-                if std is not None:
-                    assert r.std is not None
-                    std[r.j] = r.std
-
-        global _reduction_stuff
-        del _reduction_stuff.ctx
-        _reduction_stuff.ctx = None
-        assert (count >= 0).all()
-        assert count.max() > 0
-        mean = np.nan_to_num(mean, copy=False)
-
-        return count, mean, std
+            assert (count >= 0).all()
+            assert count.max() > 0
+            mean = np.nan_to_num(mean, copy=False)
+            return count, mean, std
+        finally:
+            global _reduction_stuff
+            del _reduction_stuff.ctx
+            _reduction_stuff.ctx = None
 
     def _initialize(self, wf_shape: tuple[int, int]):
         if not self.online:
@@ -204,7 +203,7 @@ _reduction_stuff.ctx = None
 @databag
 class _ReductionStuff:
     h5: h5py.File
-    dataset: h5py.Dataset
+    dataset: np.ndarray
     labels: torch.Tensor
     dev: torch.device
     do_std: bool
@@ -226,13 +225,26 @@ def _reduction_init(
     do_std: bool,
 ):
     global _reduction_stuff
-    h5 = h5py.File(hdf5_path, "r", locking=False, swmr=True, libver="latest")
+
     labels = torch.asarray(labels, dtype=torch.int32, device=dev)
-    if "indices" in h5:
+
+    # load labels of spikes that entered reduction
+    with h5py.File(hdf5_path, "r", locking=False, libver="latest") as h5:
         labels = labels[h5["indices"][:]]
+        assert h5.get(dataset_name, getclass=True) == h5py.Dataset
+        assert h5[dataset_name].chunks is None
+        assert h5[dataset_name].compression is None
+        dtype = h5[dataset_name].dtype
+        shape = h5[dataset_name].shape
+        offset = h5[dataset_name].id.get_offset()
+        assert shape[:1] == labels.shape
+
+    # make a memmap of the waveforms dataset
+    dataset = np.memmap(hdf5_path, dtype=dtype, mode="r", offset=offset, shape=shape)
+
     _reduction_stuff.ctx = _ReductionStuff(
         h5=h5,
-        dataset=cast(h5py.Dataset, h5[dataset_name]),
+        dataset=dataset,
         labels=labels,
         dev=dev,
         do_std=do_std,

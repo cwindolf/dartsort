@@ -113,11 +113,7 @@ class ReductionTemplateData(TemplateData):
 
             # extract outputs and handle denoising method
             count, raw_mean, raw_std, svd_mean = p.reduction_results(
-                h5p,
-                computation_cfg=replace(
-                    computation_cfg, executor="ProcessPoolExecutor"
-                ),
-                show_progress=show_progress,
+                h5p, computation_cfg=computation_cfg, show_progress=show_progress
             )
 
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
