@@ -3,19 +3,19 @@ import pytest
 from sklearn.metrics import rand_score
 
 from dartsort.clustering import (
+    SimpleMatrixFeatures,
+    StableWaveformFeatures,
     clustering_strategies,
     get_clusterer,
     refinement_strategies,
-    SimpleMatrixFeatures,
-    StableWaveformFeatures,
 )
-from dartsort.templates.postprocess_util import reorder_by_depth
 from dartsort.main import cluster
+from dartsort.templates.postprocess_util import reorder_by_depth
 from dartsort.util.internal_config import (
     ClusteringConfig,
     ClusteringFeaturesConfig,
-    RefinementConfig,
     FitSamplingConfig,
+    RefinementConfig,
 )
 from dartsort.util.logging_util import get_logger
 from dartsort.util.spiketorch import ptp
