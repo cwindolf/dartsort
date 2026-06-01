@@ -177,7 +177,10 @@ def agglomerate(
         threshold=0.5,
         link=template_merge_cfg.linkage,
     )
-    agg_sorting = reorder_by_depth(agg_sorting, motion=motion)
+    agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
+    new_ids = reorder[new_ids]
+
+    # TODO agglomerate GMM likelihoods here
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
