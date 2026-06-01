@@ -175,7 +175,7 @@ def pc_merge(
     )
     sf = means.square_().sum(dim=1).sqrt_() * counts.sqrt()
     sf = sf.numpy(force=True)
-    sorting = reorder_by_depth(
+    sorting, new_ids = reorder_by_depth(
         sorting, motion=motion, spatial_footprints=sf, geom=motion.rgeom
     )
     return PCMergeResult(sorting=sorting)
