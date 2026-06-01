@@ -524,7 +524,22 @@ def get_main_channel_pcs(
     return features
 
 
-def decrumb(labels, min_size=5, in_place=False, flatten=True):
+def decrumb(labels: np.ndarray, min_size: int=5, in_place=False, flatten=True):
+    """Remove small units
+
+    Parameters
+    ----------
+    labels : np.ndarray
+    min_size : int
+    in_place : bool
+    flatten : bool
+        Flatten the output label space to be contiguous.
+
+    Returns
+    -------
+    labels
+        The (flattened) decrumbed labels.
+    """
     kept = np.flatnonzero(labels >= 0)
     labels_kept = labels[kept]
     labels = labels if in_place else labels.copy()

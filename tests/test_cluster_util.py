@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from dartsort.clustering.cluster_util import recluster, reorder_by_depth
+from dartsort.clustering.cluster_util import decrumb, recluster, reorder_by_depth
 from dartsort.util.data_util import DARTsortSorting
 
 
@@ -63,3 +63,21 @@ def test_recluster():
     assert new_ids[0] != new_ids[2]
     assert new_ids[0] != new_ids[4]
     assert new_ids[2] != new_ids[4]
+
+
+@pytest.mark.parametrize("n_units", [0, 1, 8])
+def test_decrumb(n_units):
+    min_size = 5
+    # even-indexed units get 10 spikes (big enough); odd-indexed get 2 (crumbs)
+    counts = np.where(np.arange(n_units) % 2 == 0, 10, 2)
+    labels = np.repeat(np.arange(n_units), counts)
+
+    new_labels = decrumb(labels, min_size=min_size)
+
+    # big units are relabeled 0, 1, 2, ... in original order
+    for new_id, old_id in enumerate(range(0, n_units, 2)):
+        assert np.all(new_labels[labels == old_id] == new_id)
+
+    # small units are set to -1
+    for old_id in range(1, n_units, 2):
+        assert np.all(new_labels[labels == old_id] == -1)
