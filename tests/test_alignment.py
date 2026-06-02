@@ -507,7 +507,7 @@ def test_matching_alignment_upsampled(match_test_sims, up_factor, matchtype, tem
 def test_trim_templates_to_shift(n, max_shift, t_len):
     rg = np.random.default_rng(0)
     c, out_len = 3, t_len - 2 * max_shift
-    templates = rg.normal((n, t_len, c)).astype(np.float32)
+    templates = rg.normal(size=(n, t_len, c)).astype(np.float32)
 
     assert trim_templates_to_shift(templates) is templates
     np.testing.assert_array_equal(trim_templates_to_shift(templates), templates)

@@ -29,7 +29,7 @@ PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
 @cfg_dataclass
 class WaveformConfig:
     """Waveform snippet length parameters
-    
+
     Defaults yield 42 sample trough offset and 121 total at 30kHz.
     """
 
@@ -673,7 +673,7 @@ class SubtractionConfig:
     )
 
     # initial denoiser fitting parameters
-    first_denoiser_max_waveforms_fit: int = 250_000
+    first_denoiser_max_waveforms_fit: int = 512_000
     first_denoiser_noise_snips: int = 100 * 256
     first_denoiser_noise_snip_length_mul: float = 2.5
     first_denoiser_noise_density: float = 0.5
