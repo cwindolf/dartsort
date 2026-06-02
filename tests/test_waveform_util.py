@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dartsort.util import waveform_util
 from test_util import dense_layout
 
 from dartsort.util import waveform_util
