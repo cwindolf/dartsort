@@ -367,6 +367,27 @@ class WaveformPlot(UnitPlot):
             )
             max_abs_amp = self.max_abs_template_scale * np.nanmax(np.abs(templates))
 
+        if templates is not None and waves is not None and templates.shape[0] == 1:
+            assert waves.channel_index.shape[0] == templates.shape[2]
+            x = waves.waveforms.reshape(len(waves.waveforms), -1)
+            y = np.pad(templates[0], [(0, 0), (0, 1)], constant_values=np.nan)
+            y = np.broadcast_to(y, (x.shape[0], *y.shape))
+            if waves.channels is not None:
+                c = waves.channels[:, None, :]
+            else:
+                c = waves.channel_index[waves.main_channel][None, None, :]
+            c = np.broadcast_to(c, waves.waveforms.shape)
+            y = np.take_along_axis(y, axis=2, indices=c)
+            y = y.reshape(len(waves.waveforms), -1)
+            assert np.array_equal(np.isnan(x), np.isnan(y))
+            x = np.nan_to_num(x)
+            y = np.nan_to_num(y)
+            xy = np.einsum("nj,nj->n", x, y)
+            r = xy / (np.linalg.norm(y, axis=1) ** 2)
+            rmsg = f" score: {r.mean():0.3f}"
+        else:
+            rmsg = ""
+
         handles = {}
         if waves is not None:
             if np.isfinite(waves.waveforms[:, 0, :]).any():
@@ -394,8 +415,11 @@ class WaveformPlot(UnitPlot):
 
         if show_template:
             assert templates is not None
-            mc = sorting_analysis.unit_max_channel(unit_id)
-            channels = sorting_analysis.vis_channel_index[mc]
+            if waves is not None and waves.channels is not None:
+                channels = np.unique(waves.channels)
+            else:
+                mc = sorting_analysis.unit_max_channel(unit_id)
+                channels = sorting_analysis.vis_channel_index[mc]
             channels = channels[channels < len(sorting_analysis.vis_channel_index)]
             cc = np.broadcast_to(channels, (len(templates), *channels.shape))
             ls = geomplot(
@@ -414,9 +438,9 @@ class WaveformPlot(UnitPlot):
 
         shift_str = "shifted " * sorting_analysis.shifting
         if self.title is None:
-            axis.set_title(shift_str + self.wfs_kind)
+            axis.set_title(shift_str + self.wfs_kind + rmsg)
         else:
-            axis.set_title(self.title)
+            axis.set_title(self.title + rmsg)
         axis.set_xticks([])
         axis.set_yticks([])
 
@@ -768,7 +792,9 @@ class NeighborQDAPlot(UnitPlot):
             iout = f"{nid}: iou=" + f"{iou:.2f}".lstrip("0")
             covt = f"{nid}: cov=" + f"{cov:.2f}".lstrip("0")
             if count < 16:
-                ax.set_title(f"{nid}: {iout}\n{covt}\nolap count {count}", fontsize="small")
+                ax.set_title(
+                    f"{nid}: {iout}\n{covt}\nolap count {count}", fontsize="small"
+                )
                 continue
 
             _, my_ix = np.nonzero(my_mask[overlap])
@@ -882,7 +908,7 @@ def no_pca_unit_plots(sorting_analysis=None):
     )
 
 
-@np.errstate(over='raise')
+@np.errstate(over="raise")
 def make_unit_summary(
     sorting_analysis: DARTsortAnalysis,
     unit_id,

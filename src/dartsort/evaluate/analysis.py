@@ -362,6 +362,7 @@ class DARTsortAnalysis:
         main_channel=None,
         random_seed=0,
         dtype=np.float32,
+        to_main_channel=False,
     ) -> "WaveformsBag | None":
         """Load raw waveforms for visualization"""
         if which is not None:
@@ -404,13 +405,18 @@ class DARTsortAnalysis:
         )
         waveforms = waveforms.astype(dtype)
 
-        waveforms, main_channel = self.unit_select_channels(
-            unit_id=unit_id,
-            which=which,
-            waveforms=waveforms,
-            read_chans=read_chans,
-            main_channel=main_channel,
-        )
+        if to_main_channel:
+            waveforms, main_channel = self.unit_select_channels(
+                unit_id=unit_id,
+                which=which,
+                waveforms=waveforms,
+                read_chans=read_chans,
+                main_channel=main_channel,
+            )
+            channels = None
+        else:
+            channels = read_channel_index[read_chans]
+            main_channel = self.unit_max_channel(unit_id)
         return WaveformsBag(
             which=which,
             waveforms=waveforms,
@@ -418,7 +424,7 @@ class DARTsortAnalysis:
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=None,
-            channels=None,
+            channels=channels,
         )
 
     def tpca_features(self, which: np.ndarray):
