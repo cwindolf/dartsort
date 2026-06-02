@@ -74,7 +74,7 @@ def test_truncated_sort_ratio(blobs, blobs5k, big):
 
 @pytest.mark.parametrize("density_strategy", ["sort", "kdt"])
 def test_density_peaks(blobs5k, density_strategy):
-    X, y, *_ = blobs5k
+    X, y = make_blobs(random_state=0, n_samples=1000, cluster_std=0.5)
     result = density_peaks(
         X,
         sigma_local=0.5,
@@ -85,4 +85,4 @@ def test_density_peaks(blobs5k, density_strategy):
     labels = result["labels"]
     n_found = len(np.unique(labels[labels >= 0]))
     assert n_found == len(np.unique(y))
-    assert adjusted_rand_score(y, labels) >= 0.75  # tough data, no worries
+    assert adjusted_rand_score(y, labels) >= 0.95
