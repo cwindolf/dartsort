@@ -1236,7 +1236,7 @@ class BatchedSpikeData:
         if self.candidates is None:
             return
         assert self.rg is not None
-        same_adj = _fill_blank_labels(
+        same_adj, n_new = _fill_blank_labels(
             labels=self.candidates[:, 0],
             un_adj=self.un_adj,
             explore_adj=self.explore_adj,
@@ -1246,6 +1246,10 @@ class BatchedSpikeData:
             allow_uncovered=allow_uncovered,
         )
         assert same_adj is not None
+        if allow_uncovered:
+            assert n_new == 0
+        else:
+            n_units = n_units + n_new
         if not same_adj:
             logger.dartsortverbose(
                 "_fill_blank_labels used explore adjacency in bootstrap_candidates."
@@ -1334,7 +1338,7 @@ class BatchedSpikeData:
         self.update_adjacency(n_units=None)
         assert self.candidates is not None
         assert self.rg is not None
-        res = _fill_blank_labels(
+        res, n_new = _fill_blank_labels(
             labels=self.candidates[:, 0],
             un_adj=self.un_adj,
             explore_adj=self.explore_adj,
@@ -1347,6 +1351,7 @@ class BatchedSpikeData:
             max_steps=max_steps if max_steps is not None else self.coverage_steps,
         )
         assert res is None
+        return n_new
 
     def erase_candidates(self):
         if self.candidates is not None:
@@ -1672,6 +1677,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         assert self.candidates is not None
         self.candidates[:, 0] = labels
+        if pnoid:
+            _k = labels.amax() + 1 + int((labels < 0).any())
+            assert labels.unique().shape == (_k,)
         return self
 
     def update(
@@ -1846,6 +1854,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert n_units_new <= n_units_orig
 
         if distances is not None:
+            assert distances.shape[0] == distances.shape[1]
             assert distances.shape[0] == n_units_new
             assert distances.shape[0] <= n_units_orig
             assert remapping.mapping.max() + 1 == distances.shape[0]
@@ -1870,12 +1879,24 @@ class TruncatedSpikeData(BatchedSpikeData):
             out=self.candidates[:, : self.n_candidates],
         )
         self.candidates[:, self.n_candidates :] = -1
+        if pnoid and distances is not None:
+            assert self.candidates.amax() < distances.shape[0], 1
         self.update_adjacency(n_units_new)
-        self.ensure_coverage(
+        n_new = self.ensure_coverage(
             allow_new_units=not allow_uncovered,
             allow_uncovered=allow_uncovered,
             max_steps=0 if allow_uncovered else None,
         )
+        if allow_uncovered:
+            assert n_new == 0
+        elif distances is not None:
+            d = distances.new_full(
+                (n_units_new + n_new, n_units_new + n_new), torch.inf
+            )
+            d[:n_units_new, :n_units_new] = distances
+            d[n_units_new:, n_units_new:].fill_diagonal_(0.0)
+        if pnoid and distances is not None:
+            assert self.candidates.amax() < distances.shape[0], 2
         if distances is not None:
             _, lut = self.update(new_top_candidates=None, distances=distances)
         else:
@@ -4266,21 +4287,49 @@ def get_full_neighborhood_data(
 
     rg = np.random.default_rng(rg)
 
-    # indices that train/val splits will live inside (full split is not restricted)
-    n_fit = refinement_cfg.sampling_cfg.more_waveforms_fit
-    if fit_indices is None and len(sorting) > n_fit:
-        fit_indices = rg.choice(len(sorting), size=n_fit, replace=False)
-        fit_indices.sort()
-    elif fit_indices is None:
-        fit_indices = np.arange(len(sorting))
-    assert fit_indices is not None
-    n_fit = fit_indices.shape[0]
+    # how many waveforms will be used for fitting?
+    n_fit = min(len(sorting), refinement_cfg.sampling_cfg.more_waveforms_fit)
+    val_prop = refinement_cfg.val_proportion
+    train_prop = 1.0 - val_prop
+    fit_prop_of_total = n_fit / len(sorting)
 
-    # data splits: -1 full, 0 train, 2 val
+    # data splits: -1 full, 0 train, 1 val
     split_mask = np.full(len(sorting), -1, dtype=np.int8)
-    split_mask[fit_indices] = 0
-    n_val = int(np.ceil(refinement_cfg.val_proportion * n_fit))
-    split_mask[fit_indices[np.sort(rg.choice(n_fit, size=n_val, replace=False))]] = 1
+    # these are stratified by unit in order to ensure that all units are represented
+    # in at least the train set rather than risking a miss with totally random sampling
+    assert sorting.labels is not None
+    unit_ids, counts = np.unique(sorting.labels, return_counts=True)
+    _pos = unit_ids >= 0
+    counts = counts[_pos]
+    unit_ids = unit_ids[_pos]
+    fit_counts = np.minimum(
+        counts, np.ceil(counts * fit_prop_of_total).astype(np.int64)
+    )
+    assert fit_counts.dtype.kind == "i"
+    train_counts = np.maximum(train_prop * fit_counts, 1).astype(np.int64)
+    for uid, train_count, fit_count in zip(unit_ids, train_counts, fit_counts):
+        in_unit = np.flatnonzero(sorting.labels == uid)
+        if in_unit.size > fit_count:
+            fit_ixs = rg.choice(in_unit, size=fit_count)
+            fit_ixs.sort()
+        elif in_unit.size == fit_count:
+            fit_ixs = in_unit
+        else:
+            assert False
+        if fit_ixs.size > train_count:
+            train_ixs = rg.choice(fit_ixs, size=train_count)
+            train_ixs.sort()
+        elif fit_ixs.size == train_count:
+            train_ixs = fit_ixs
+        else:
+            assert False
+
+        # backfill with val set
+        split_mask[fit_ixs] = 1
+        # cover with train
+        split_mask[train_ixs] = 0
+
+    # sparsify index sets
     train_indices = torch.asarray(np.flatnonzero(split_mask == 0))
     val_indices = torch.asarray(np.flatnonzero(split_mask == 1))
 
@@ -5946,9 +5995,9 @@ def _fill_blank_labels(
     (blank,) = (labels < 0).nonzero(as_tuple=True)
     Nblank = blank.numel()
     if not Nblank and ensure_coverage_only:
-        return None
+        return None, 0
     elif not Nblank:
-        return True
+        return True, 0
 
     # need full coverage of neighborhoods here. would prefer only to branch out with
     # explore as needed, so make those probs tiny.
@@ -5986,8 +6035,9 @@ def _fill_blank_labels(
             neighb_component_ids = neighb_component_ids - neighb_component_ids.amin()
             n_spikes = 0
             if pnoid:
-                Kold = labels.max() + 1 + int((labels < 0).any())
-                assert labels.unique().shape == (Kold,)
+                Kold = labels.max().item() + 1 + int(Nblank > 0)
+                _lshp = labels.unique().shape
+                assert _lshp == (Kold,), f"{Kold=} {_lshp=}"
             for j, nid in enumerate(uncovered_neighbs):
                 (in_nid,) = (neighborhood_ids == nid).nonzero(as_tuple=True)
                 n_spikes += in_nid.numel()
@@ -6000,7 +6050,7 @@ def _fill_blank_labels(
             logger.dartsortverbose(
                 f"_fill_blank_labels made {n_new_units} new units for {n_spikes} spikes."
             )
-            return None
+            return None, n_new_units
 
         if uncovered:
             # raise if still_uncovered, warn or log otherwise
@@ -6013,7 +6063,7 @@ def _fill_blank_labels(
             )
 
     if ensure_coverage_only:
-        return None
+        return None, n_new_units
 
     for i0 in range(0, Nblank, batch_size):
         i1 = min(Nblank, i0 + batch_size)
@@ -6023,7 +6073,7 @@ def _fill_blank_labels(
         draws = torch.multinomial(p, 1, replacement=True, generator=gen)
         labels[ii] = draws.view(ii.shape[0])
 
-    return keep_same_adj
+    return keep_same_adj, n_new_units
 
 
 def _bootstrap_top(
