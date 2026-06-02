@@ -297,8 +297,8 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 500_000
-    pre_refinement_merge: bool = False
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1024 * 1000
+    pre_refinement_merge: bool = True
     post_refinement_merge: bool = False
     pre_refinement_merge_metric: str = "normeuc"
     pre_refinement_merge_threshold: float = 0.1
