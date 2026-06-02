@@ -754,10 +754,13 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         else:
             labels_npy = f.parent / f"{labels_stem}.npy"
 
-        if labels_npy.exists():
-            st = st.ephemeral_replace(labels=np.load(labels_npy))
-        else:
-            logger.info(f"{labels_npy} did not exist.")
+        if not labels_npy.exists():
+            raise ValueError(f"{labels_npy} does not exist.")
+        labels = np.load(labels_npy)
+        if not labels.shape == st.channels.shape:
+            raise ValueError(f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}.")
+
+        st = st.ephemeral_replace(labels=labels)
 
     return st
 

@@ -258,9 +258,9 @@ def full_probe_precompute(
 
 
 def kernel_interpolate(
-    features,
-    source_pos,
-    target_pos,
+    features: torch.Tensor,
+    source_pos: torch.Tensor,
+    target_pos: torch.Tensor,
     params: InterpolationParams = tps_interp_params,
     precomputed_data=None,
     neighborhoods=None,

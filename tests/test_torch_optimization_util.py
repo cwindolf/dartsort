@@ -1,8 +1,9 @@
 import numpy as np
 import torch
-from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
 from torch import vmap
 from torch.func import grad_and_value, hessian
+
+from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
 
 
 def test_lm_basic():
