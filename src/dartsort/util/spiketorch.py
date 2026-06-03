@@ -15,6 +15,7 @@ from torch import Tensor
 from torch.fft import irfft, rfft
 
 from .logging_util import progrange
+from .torch_util import torch_compile
 
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
@@ -103,7 +104,7 @@ def ptp(waveforms, dim=1, keepdims=False):
     return v.numpy()
 
 
-@torch.jit.script
+@torch_compile
 def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
     logQ = Q.log().nan_to_num_(nan=None, neginf=0.0)
     logP = log_liks.nan_to_num(nan=None, neginf=0.0)
@@ -112,7 +113,7 @@ def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
     return oelbo
 
 
-@torch.jit.script
+@torch_compile
 def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     logP = log_liks.nan_to_num(neginf=0.0)
@@ -122,7 +123,7 @@ def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) ->
     return oelbo
 
 
-@torch.jit.script
+@torch_compile
 def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     H = logQ.mul_(Q).sum(dim=dim)
@@ -131,7 +132,7 @@ def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     return H.neg_()
 
 
-@torch.jit.script
+@torch_compile
 def ecl(
     resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
 ) -> Tensor:
@@ -162,7 +163,7 @@ def minmax(x: np.ndarray) -> np.ndarray:
     return x / np.max(x)
 
 
-@torch.jit.script
+@torch_compile
 def sqeuc_cdist_known_norm(
     X: Tensor,
     Xnormsq: Tensor,
@@ -233,7 +234,7 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
     return pconv
 
 
-@torch.jit.script
+@torch_compile
 def full_shared_pconv(
     tconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
 ) -> Tensor:
@@ -256,7 +257,7 @@ def full_shared_pconv(
     return out
 
 
-@torch.jit.script
+@torch_compile
 def best_shared_pconv(
     tconv: Tensor, spatial_sing: Tensor, batch_size: int = 1024
 ) -> tuple[Tensor, Tensor]:
@@ -310,7 +311,7 @@ def best_shared_pconv(
     return conv_out, lag_out
 
 
-@torch.jit.script
+@torch_compile
 def weighted_best_lagged_scaled_normeuc_dist(
     tconv: Tensor,
     spatial_sing: Tensor,
@@ -509,7 +510,7 @@ def scaled_normeuc_from_dots(
     return dist
 
 
-@torch.jit.script
+@torch_compile
 def scaled_normeuc_distance(
     means: Tensor,
     scale_std: float = 0.01,
@@ -742,7 +743,7 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
     )
 
 
-@torch.jit.script
+@torch_compile
 def argrelmax(
     *,
     x: Tensor,
@@ -767,7 +768,7 @@ def argrelmax(
     return ix
 
 
-@torch.jit.script
+@torch_compile
 def argrelmax_dedup(
     peak_radius: int = 1,
     *,
@@ -1046,7 +1047,7 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
     return squareform(pdist)
 
 
-@torch.jit.script
+@torch_compile
 def normeuc_distance(means: Tensor):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)

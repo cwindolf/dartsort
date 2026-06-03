@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from .data_util import yield_masked_chunks
 from .internal_config import InterpolationParams, tps_interp_params
 from .motion import MotionInfo
-from .torch_util import BModule
+from .torch_util import BModule, torch_compile
 from .waveform_util import make_channel_index
 
 if TYPE_CHECKING:
@@ -579,7 +579,7 @@ def kriging_neighborhood_solve(
     return out
 
 
-@torch.jit.script
+@torch_compile
 def _kneighb_loop(
     features_padded_flat: torch.Tensor,
     neighborhoods_padded: torch.Tensor,

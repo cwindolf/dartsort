@@ -29,7 +29,7 @@ from ..util.internal_config import (
 from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
-from ..util.torch_util import cleanup_and_log_gpu_usage
+from ..util.torch_util import cleanup_and_log_gpu_usage, torch_compile
 from .transform_base import BaseWaveformFeaturizer
 
 if TYPE_CHECKING:
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
     """Gaussian mixture clustering and classification as a featurization node."""
+
     is_multi = True
     needs_residual = True
     fits_from_disk = True
@@ -430,7 +431,7 @@ def neighborhood_mapping_at_time(
     return index, nid_map
 
 
-@torch.jit.script
+@torch_compile
 def _outer_all_equal(x: torch.Tensor, y: torch.Tensor):
     dim = x.shape[1]
     x = x[:, None, :]

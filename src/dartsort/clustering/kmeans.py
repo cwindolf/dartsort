@@ -22,6 +22,7 @@ from ..util.sparse_util import (
     sparse_centroid_distsq,
 )
 from ..util.spiketorch import spawn_torch_rg, sqeuc_cdist_known_norm
+from ..util.torch_util import torch_compile
 
 logger = get_logger(__name__)
 
@@ -465,13 +466,13 @@ def kmeans(
     )
 
 
-@torch.jit.script
+@torch_compile
 def _one_gumbel_nolog(p: Tensor, gen: torch.Generator, buf: Tensor):
     z = buf.uniform_(generator=gen).log_()
     return torch.divide(p, z, out=z).argmin(dim=0)
 
 
-@torch.jit.script
+@torch_compile
 def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
     torch.addmm(Xnormsq, X, Y.transpose(0, 1), alpha=-2.0, out=out)
     Ynormsq = (Y**2).sum(dim=1)
@@ -479,7 +480,7 @@ def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
     return out
 
 
-@torch.jit.script
+@torch_compile
 def _kmeanspp_simple_loop(
     *,
     X: Tensor,
@@ -515,7 +516,7 @@ def _kmeanspp_simple_loop(
         torch.minimum(dists, newdists, out=dists)
 
 
-@torch.jit.script
+@torch_compile
 def _kmeanspp_noassign_loop(
     *,
     X: Tensor,
@@ -547,7 +548,7 @@ def _kmeanspp_noassign_loop(
         torch.minimum(dists, newdists, out=dists)
 
 
-@torch.jit.script
+@torch_compile
 def _kmeans_main_loop(
     n_iter: int,
     e: Tensor,
