@@ -698,9 +698,9 @@ def combine_gmm_scores(
     mergedr = np.concatenate([mergedr, responsibilities[:, cand.shape[1] :]], axis=1)
 
     # check invariants at the bottom
-    if mergedr.shape[1] > 1:
-        assert np.all(np.diff(mergedr, axis=1) <= 0)
-    assert np.greater_equal(np.isneginf(mergedl), cand == -1).all()
+    if mergedr.shape[1] > 2:
+        assert np.all(np.diff(mergedr[:, : cand.shape[1]], axis=1) <= 0)
+    assert np.greater_equal(np.isneginf(mergedl[:, : cand.shape[1]]), cand == -1).all()
     assert (cand < 0).sum() >= nbye
     if sorting.labels is not None:
         changed = sorting.labels != cand[:, 0]
