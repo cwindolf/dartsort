@@ -42,46 +42,6 @@ def fit_unimodal_right(x, f, weights=None, cut=0, hard=False):
     return out
 
 
-def fit_truncnorm_right(x, f, weights=None, cut=0, hard=False, n_iter=10):
-    """Like above, but fits truncated normal to xs > cut with MoM."""
-    from scipy.stats import norm
-
-    if weights is None:
-        weights = np.ones_like(f)
-
-    # figure out where cut lands and what f(cut) should be
-    cuti_left = np.searchsorted(x, cut)
-    if cuti_left >= len(x) - 2:
-        # everything is to the left... return uniform
-        return np.full_like(f, 1 / len(f))
-    cuti_right = np.searchsorted(x, cut, side="right") - 1
-    if cuti_right <= 1:
-        # everything is to the right... fit normal!
-        mean = np.average(x, weights=weights)
-        var = np.average((x - mean) ** 2, weights=weights)
-        return norm.pdf(x, loc=mean, scale=np.sqrt(var))
-    # else, in the middle somewhere...
-    assert cuti_left in (cuti_right, cuti_right + 1)
-
-    xcut = x[cuti_right:]
-    mean = np.average(xcut, weights=weights[cuti_right:])
-    var = np.average((xcut - mean) ** 2, weights=weights[cuti_right:])
-    mu = mean
-    sigma = std = np.sqrt(var)
-    for i in range(n_iter):
-        alpha = (cut - mu) / sigma
-        phi_alpha = norm.cdf(alpha)
-        Z = 1.0 - phi_alpha
-        # we have: mean ~ mu + sigma*phi(alpha)/Z
-        # and      var ~ sigma^2(1+alpha phi(alpha) /Z - (phi(alpha)/Z)^2)
-        # implies mu = mean - sigma*phi(alpha)/Z
-        #         sigma^2 = var/(1+alpha phi(alpha) /Z - (phi(alpha)/Z)^2)
-        sigma = np.sqrt(var / (1 + alpha * phi_alpha / Z - (phi_alpha / Z) ** 2))
-        mu = mean - sigma * phi_alpha / Z
-
-    return norm.pdf(x, loc=mu, scale=sigma)
-
-
 def fit_bimodal_at(x, f, weights=None, cut=0):
     from isosplit import up_down_isotonic_regression  # type: ignore
 
@@ -157,6 +117,8 @@ def smoothed_dipscore_at(
 
     if score_kind == "ks":
         empirical = np.cumsum(densities * spacings)
+    else:
+        empirical = None
 
     if null in ("isotonic", "gcm"):
         orders = (slice(None),)
@@ -174,8 +136,6 @@ def smoothed_dipscore_at(
                 dens = fit_unimodal_right(sign * s, d, cut=sign * cut, hard=hard)
             elif null == "isotonic":
                 dens = up_down_isotonic_regression(d)
-            elif null == "truncnorm":
-                dens = fit_truncnorm_right(sign * s, d, cut=sign * cut, hard=hard)
             else:
                 assert False
 
@@ -185,6 +145,7 @@ def smoothed_dipscore_at(
 
             dens_err = (np.abs(dens - densities) * spacings).sum()
             if score_kind == "ks":
+                assert empirical is not None
                 my_score = np.abs(empirical - np.cumsum(dens * spacings)).max()
             elif score_kind == "tv":
                 my_score = 0.5 * dens_err

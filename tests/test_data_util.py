@@ -9,8 +9,9 @@ from typing import cast
 import h5py
 import numpy as np
 import pytest
-from dartsort.util.data_util import DARTsortSorting, check_recording
 from spikeinterface import NumpyRecording
+
+from dartsort.util.data_util import DARTsortSorting, check_recording
 
 times_samples = np.arange(0, 1000, 10)
 

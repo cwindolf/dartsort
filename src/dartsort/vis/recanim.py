@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from matplotlib.animation import FuncAnimation
-from matplotlib.backend_bases import ResizeEvent
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle, RegularPolygon
 from tqdm.auto import trange
@@ -312,6 +311,8 @@ class RecordingAnimation:
 
         if self.zlim_start is None:
             zlim_start = zmin, zmax
+        else:
+            zlim_start = self.zlim_start
 
         zmin0, zmax0 = zlim_start
         assert self.zlim_target is not None

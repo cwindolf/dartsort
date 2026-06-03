@@ -68,6 +68,10 @@ def set_log_level(level: int | str):
             ilevel = int(level)
         else:
             ilevel = getLevelNamesMapping()[level.upper()]
+    elif isinstance(level, int):
+        ilevel = level
+    else:
+        assert False
     package_logger.setLevel(ilevel)
     package_logger.log(ilevel, f"Log level set to {level}.")
 

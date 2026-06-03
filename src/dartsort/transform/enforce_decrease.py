@@ -1,8 +1,9 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dartsort.util import spiketorch
 from scipy.spatial.distance import cdist
+
+from dartsort.util import spiketorch
 
 from .transform_base import BaseWaveformDenoiser
 

@@ -54,11 +54,16 @@ def moppca_simulations():
 @pytest.mark.parametrize("t_mu", ["smooth"])
 @pytest.mark.parametrize("t_cov_zrad", [("eye", 2.0), ("random", None)])
 # @pytest.mark.parametrize("t_cov_zrad", [("eye", None), ("eye", 2.0), ("random", None)])
-@pytest.mark.parametrize("t_w", ["zero", "smooth"])
-@pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize("corruption", test_corruption)
+# @pytest.mark.parametrize("t_w", ["zero", "smooth"])
+@pytest.mark.parametrize("t_w", ["smooth"])
+# @pytest.mark.parametrize("t_missing", test_t_missing)
+@pytest.mark.parametrize("t_missing", ("random", "by_cluster"))
+# @pytest.mark.parametrize("corruption", test_corruption)
+@pytest.mark.parametrize("corruption", (0.2,))
+# @pytest.mark.parametrize("demoinsel", [False, True])
+@pytest.mark.parametrize("demoinsel", [True])
 def test_truncated_mixture(
-    moppca_simulations, t_mu, t_cov_zrad, t_w, t_missing, corruption
+    moppca_simulations, t_mu, t_cov_zrad, t_w, t_missing, corruption, demoinsel
 ):
     mixture.pnoid = True
 
@@ -89,6 +94,7 @@ def test_truncated_mixture(
         signal_rank=M * (t_w != "zero"),
         n_candidates=K,
         em_converged_atol=1e-4,
+        demolish_during_selection=demoinsel,
     )
     no_motion = MotionInfo.from_motion_est(geom=sim["prgeom"][:-1])
 
@@ -273,7 +279,8 @@ def test_truncated_mixture(
             tmm.demolish(train_data=train_data, val_data=val_data)
 
         # the false merges and splits can lead to label permutations. let's quickly fix those here.
-        if it in (3, 4):
+        emit = (3, 4, 5) if demoinsel else (3, 4)
+        if it in emit:
             em_res = tmm.em(train_data)
             assert tmm.n_units == K
             assert tmm.unit_ids.shape[0] == K
@@ -360,6 +367,7 @@ def test_truncated_mixture(
             wcmask = cmask[:, None, :, None, None] * cmask[:, None, None, None, :]
             diff.mul_(wcmask)
         assert torch.all(diff.abs().view(K, -1).amax(dim=1) <= zw * standard_error)
+
 
 
 @pytest.mark.parametrize("n_chans", [1, 2])

@@ -110,17 +110,28 @@ class DARTsortSorting:
             d["labels"] = self.labels
         return d
 
-    def to_numpy_sorting(self) -> NumpySorting:
+    def to_numpy_sorting(
+        self, drop_doubles=True, return_kept_indices: bool = False
+    ) -> NumpySorting:
         """Clean up and produce a spikeinterface NumpySorting object."""
+        if drop_doubles:
+            self = self.drop_doubles()
         assert self.labels is not None
         st = self.drop_missing()
         assert st.labels is not None
         order = np.argsort(st.times_samples, kind="stable")
-        return NumpySorting.from_samples_and_labels(
+        labels = st.labels[order]
+        numpy_sorting = NumpySorting.from_samples_and_labels(
             samples_list=st.times_samples[order],
-            labels_list=st.labels[order],
+            labels_list=labels,
             sampling_frequency=st.sampling_frequency,
         )
+        if return_kept_indices:
+            # kept_indices[i] is the original index of numpy_sorting's ith spike
+            kept_indices = st.mask_indices[order]
+            assert np.array_equal(self.labels[kept_indices], labels)
+            return numpy_sorting, kept_indices  # type: ignore
+        return numpy_sorting
 
     def to_pandas(self, include_1d_features=True, extract_location_if_possible=True):
         """Export to pandas DataFrame with some per-spike features."""
@@ -582,7 +593,7 @@ class DARTsortSorting:
         assert self.labels is not None
         return self.mask(self.labels >= 0)
 
-    def drop_doubles(self):
+    def drop_doubles(self, return_kept_indices: bool = False):
         """Remove spikes detected at the exact same time assigned to the same unit."""
         assert self.labels is not None
         viol_ixs = []
@@ -598,9 +609,13 @@ class DARTsortSorting:
             logger.dartsortdebug(f"Dropping {viol_ixs.size} duplicates.")
             labels = self.labels.copy()
             labels[viol_ixs] = -1
-            return self.ephemeral_replace(labels=labels)
+            st = self.ephemeral_replace(labels=labels)
         else:
-            return self
+            st = self
+        if not return_kept_indices:
+            return st
+        kept_indices = np.setdiff1d(np.arange(len(self)), viol_ixs)
+        return st, kept_indices
 
     def flatten(self) -> Self:
         """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
@@ -739,10 +754,13 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         else:
             labels_npy = f.parent / f"{labels_stem}.npy"
 
-        if labels_npy.exists():
-            st = st.ephemeral_replace(labels=np.load(labels_npy))
-        else:
-            logger.info(f"{labels_npy} did not exist.")
+        if not labels_npy.exists():
+            raise ValueError(f"{labels_npy} does not exist.")
+        labels = np.load(labels_npy)
+        if not labels.shape == st.channels.shape:
+            raise ValueError(f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}.")
+
+        st = st.ephemeral_replace(labels=labels)
 
     return st
 

@@ -123,6 +123,13 @@ class DARTsortUserConfig:
     alignment_ms: Annotated[float, Field(gt=0)] = 1.5
     """Largest time shift allowed when re-aligning events."""
 
+    deduplication_ms:  Annotated[float, Field(gt=0)] = 0.5
+    """As a final postprocessing step, only the higher-scoring of any spikes within
+    this time radius of each other are kept.
+
+    If this is negative, it does nothing. If it's 0, exact duplicates are dropped.
+    """
+
     # -- thresholds
     peak_sign: Literal["neg", "both", "pos"] = "both"
     """Allow only troughs or events of both signs when detecting threshold
@@ -239,7 +246,9 @@ class DeveloperConfig(DARTsortUserConfig):
     n_residual_snips: int = 4 * 4096
 
     # initial detection
-    nn_denoiser_max_waveforms_fit: int = 250_000
+    nn_denoiser_max_waveforms_fit: int = 512_000
+    nn_denoiser_noise_waveforms: int = 100 * 256
+    nn_denoiser_extra_kwargs: dict | None = None
     do_tpca_denoise: bool = True
     first_denoiser_thinning: float = 0.0
     first_denoiser_spatial_dedup_radius: float = 100.0
@@ -295,8 +304,8 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
     motion_aware_clustering: bool = True
-    clustering_max_spikes: Annotated[int, Field(gt=0)] = 500_000
-    pre_refinement_merge: bool = False
+    clustering_max_spikes: Annotated[int, Field(gt=0)] = 1024 * 1000
+    pre_refinement_merge: bool = True
     post_refinement_merge: bool = False
     pre_refinement_merge_metric: str = "normeuc"
     pre_refinement_merge_threshold: float = 0.1

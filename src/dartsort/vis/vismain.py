@@ -43,6 +43,7 @@ def visualize_sorting(
     make_unit_comparisons=True,
     make_mixture_summaries=None,
     make_versus=True,
+    make_venns=True,
     analysis=None,
     single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
     allow_qda=True,
@@ -92,7 +93,7 @@ def visualize_sorting(
 
     # figure out if we need a sorting analysis object and hide some
     # logic for figuring out which steps need running
-    analysis, gt_cmp, gt_vs, mix, *paths_or_nones = _plan_vis(
+    analysis, gt_cmp, gt_vs, mix, venn_cmps, *paths_or_nones = _plan_vis(
         output_directory,
         recording,
         sorting,
@@ -103,6 +104,7 @@ def visualize_sorting(
         make_gt_overviews=make_gt_overviews,
         make_unit_comparisons=make_unit_comparisons,
         make_versus=make_versus,
+        make_venns=make_venns,
         make_mixture_summaries=make_mixture_summaries,
         sorting_analysis=analysis,
         gt_analysis=gt_analysis,
@@ -117,7 +119,9 @@ def visualize_sorting(
         single_unit_ids=single_unit_ids,
         allow_qda=allow_qda,
     )
-    sum_png, unit_sum_dir, comp_png, unit_comp_dir, vs_png, mix_dir = paths_or_nones
+    sum_png, unit_sum_dir, comp_png, comp_csv, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
+        paths_or_nones
+    )
 
     try:
         if sum_png is not None:
@@ -132,6 +136,10 @@ def visualize_sorting(
             raise
 
     try:
+        if comp_csv is not None and gt_analysis is not None:
+            if overwrite or not comp_csv.exists():
+                assert gt_cmp is not None
+                gt_cmp.unit_info_dataframe().to_csv(comp_csv)
         if comp_png is not None and gt_analysis is not None:
             if overwrite or not comp_png.exists():
                 assert gt_cmp is not None
@@ -211,6 +219,23 @@ def visualize_sorting(
             unit_ids=single_unit_ids,
         )
 
+    for vdir, vcmp in zip(venn_dirs, venn_cmps):
+        if vdir is None:
+            continue
+        assert vcmp is not None
+        unit_comparison.make_all_unit_comparisons(
+            vcmp,
+            vdir,
+            channel_show_radius_um=channel_show_radius_um,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            amplitudes_dataset_name=amplitudes_dataset_name,
+            pca_radius_um=pca_radius_um,
+            dpi=dpi,
+            show_progress=True,
+            overwrite=overwrite,
+            n_jobs=computation_cfg.n_jobs_cpu,
+        )
+
 
 def visualize_all_sorting_steps(
     recording,
@@ -225,6 +250,7 @@ def visualize_all_sorting_steps(
     make_unit_comparisons=True,
     make_mixture_summaries=None,
     make_versus=True,
+    make_venns=True,
     step_sortings=None,
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
@@ -325,6 +351,7 @@ def visualize_all_sorting_steps(
                 make_gt_overviews=make_gt_overviews,
                 make_unit_comparisons=make_unit_comparisons,
                 make_versus=make_versus,
+                make_venns=make_venns,
                 make_mixture_summaries=make_mixture_summaries,
                 gt_analysis=gt_analysis,
                 other_analyses=other_analyses,
@@ -399,6 +426,7 @@ def _plan_vis(
     make_gt_overviews=False,
     make_unit_comparisons=False,
     make_versus=False,
+    make_venns=False,
     make_mixture_summaries=None,
     sorting_analysis=None,
     other_analyses=None,
@@ -422,6 +450,11 @@ def _plan_vis(
     need_comparison = False
     need_vs = False
     need_mix = False
+    need_summaries = False
+    need_venn_cmps = []
+
+    if sorting_name is None:
+        sorting_name = output_directory.stem
 
     # can't compare or analyze units if there aren't any
     is_labeled = sorting.n_units > 1
@@ -469,14 +502,15 @@ def _plan_vis(
     can_gt = gt_analysis is not None and is_labeled
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
-        need_comp = overwrite or not comparison_png.exists()
+        comparison_csv = output_directory / "gt_comparison.csv"
+        need_comp = overwrite or not comparison_png.exists() or not comparison_csv.exists()
         need_comp = need_comp or (single_unit_ids == "gtrelevant" and need_summaries)
         need_analysis = need_analysis or need_comp
         need_comparison = need_comparison or need_comp
         if not need_comp:
-            comparison_png = None
+            comparison_csv = comparison_png = None
     else:
-        comparison_png = None
+        comparison_csv = comparison_png = None
 
     if can_gt and make_unit_comparisons:
         unit_comparison_dir = output_directory / "gt_unit_comparisons"
@@ -511,9 +545,25 @@ def _plan_vis(
     else:
         vs_png = None
 
+    if can_gt and other_analyses is not None and make_venns:
+        ovns = [f"venn_{oa.name}___vs___{sorting_name}" for oa in other_analyses]
+        venn_dirs = [output_directory / ovn for ovn in ovns]
+        for oa, vdir in zip(other_analyses, venn_dirs):
+            need_venn_cmp = overwrite or not unit.all_summaries_done(
+                oa.sorting.unit_ids,
+                vdir,
+                sorting_analysis=oa,
+                namebyamp=True,
+            )
+            need_venn_cmps.append(need_venn_cmp)
+        venn_dirs = [
+            vdir if _n else None for vdir, _n in zip(venn_dirs, need_venn_cmps)
+        ]
+        need_analysis = need_analysis or any(need_venn_cmps)
+    else:
+        venn_dirs = []
+
     if need_analysis and sorting_analysis is None:
-        if sorting_name is None:
-            sorting_name = output_directory.stem
         sorting_analysis = DARTsortAnalysis.from_sorting(
             recording=recording,
             sorting=sorting,
@@ -576,6 +626,24 @@ def _plan_vis(
     else:
         gt_vs = None
 
+    if other_analyses is not None and any(need_venn_cmps):
+        assert sorting_analysis is not None
+        venn_cmps = []
+        for oa, _n in zip(other_analyses, need_venn_cmps):
+            if not _n:
+                venn_cmps.append(None)
+                continue
+            venn_cmps.append(
+                DARTsortGroundTruthComparison(
+                    gt_analysis=oa,
+                    tested_analysis=sorting_analysis,
+                    exhaustive_gt=exhaustive_gt,
+                    compute_distances=gt_comparison_with_distances,
+                )
+            )
+    else:
+        venn_cmps = []
+
     if need_mix:
         mix = mixture.fit_mixture_for_vis(
             sorting=sorting, motion=motion, refinement_cfg=mix_refinement_cfg
@@ -588,12 +656,15 @@ def _plan_vis(
         gt_comparison,
         gt_vs,
         mix,
+        venn_cmps,
         sorting_summary_png,
         unit_summary_dir,
         comparison_png,
+        comparison_csv,
         unit_comparison_dir,
         vs_png,
         mix_dir,
+        venn_dirs,
     )
 
 
@@ -610,7 +681,7 @@ def set_plt_style(
     grid=False,
     dpi=200,
     figsize=(3, 3),
-    fonts=['Helvetica', 'Arial', 'Nimbus Sans'],
+    fonts=["Helvetica", "Arial", "Nimbus Sans"],
 ):
     from .colors import glasbey1024
 

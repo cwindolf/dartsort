@@ -426,7 +426,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                         dtype=f_dt,
                     )
                 else:
-                    residual = residual_times = None
+                    nrs_dset = residual = residual_times = None
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
@@ -459,6 +459,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert nrs == cast(np.ndarray, s["residual"]).shape[0]
                     assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
                     assert residual is not None
+                    assert nrs_dset is not None
                     assert residual_times is not None
                     assert resid_ix is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
@@ -471,6 +472,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     residual_times.resize((resid_ix, *residual_times.shape[1:]))
                 if residual is not None:
                     assert residual_times is not None
+                    assert nrs_dset is not None
                     assert residual.shape[0] == residual_times.shape[0] == resid_ix
                     assert nrs_dset[()] == resid_ix
                 assert i1_prev == n

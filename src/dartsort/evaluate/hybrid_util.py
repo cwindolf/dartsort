@@ -275,7 +275,7 @@ def greedy_match_counts(
     )
     counts = np.zeros(
         (gt_sorting.unit_ids.max() + 1, tested_sorting.unit_ids.max() + 1),
-        dtype=np.int32,
+        dtype=np.int64,
     )
     test_matched_spike = np.flatnonzero(
         np.logical_and(test2gt_spike >= 0, tested_sorting.labels >= 0)

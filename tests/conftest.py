@@ -1,8 +1,8 @@
 import pytest
-from dartsort.evaluate import simkit, config_grid
-from dartsort.util.logging_util import get_logger
-from dartsort import ensure_path
 
+from dartsort import ensure_path
+from dartsort.evaluate import config_grid, simkit
+from dartsort.util.logging_util import get_logger
 
 logger = get_logger(__name__)
 

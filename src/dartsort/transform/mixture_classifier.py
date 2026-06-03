@@ -243,7 +243,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         assert sys.getrefcount(mix_data) <= 2, sys.getrefcount(mix_data)
         del mix_data
         cleanup_and_log_gpu_usage(
-            computation_cfg=computation_cfg, message="{self.__class__.__name__}: Free"
+            computation_cfg=computation_cfg, message=f"{self.__class__.__name__}: Free"
         )
         self.precompute()
 

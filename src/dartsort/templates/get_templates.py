@@ -347,12 +347,12 @@ def get_all_shifted_raw_and_low_rank_templates(
         (n_units, spike_length_samples, n_template_channels),
         dtype=dtype,
     )
+    raw_square_templates = low_rank_templates = None
     if with_raw_std_dev:
         raw_square_templates = np.zeros(
             (n_units, spike_length_samples, n_template_channels),
             dtype=dtype,
         )
-    low_rank_templates = None
     if not raw:
         low_rank_templates = np.zeros(
             (n_units, spike_length_samples, n_template_channels),
@@ -415,6 +415,7 @@ def get_all_shifted_raw_and_low_rank_templates(
             ix_chunk = np.isin(unit_ids, units_chunk)
             raw_templates[ix_chunk] = raw_temps_chunk
             if with_raw_std_dev:
+                assert raw_square_templates is not None
                 raw_square_templates[ix_chunk] = raw_square_temps_chunk
             if not raw:
                 low_rank_templates[ix_chunk] = low_rank_temps_chunk  # type: ignore

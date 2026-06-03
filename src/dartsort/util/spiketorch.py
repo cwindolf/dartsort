@@ -894,18 +894,22 @@ def nancov(
     if not nan_free:
         mask = x.isfinite().to(x)
         x = x.nan_to_num()
+    else:
+        mask = None
 
     if weights is not None:
         xtx = (x.T * weights) @ x
         if nan_free:
             nobs = weights.sum(0)
         else:
+            assert mask is not None
             nobs = (mask.T * weights) @ mask
     else:
         xtx = x.T @ x
         if nan_free:
             nobs = x.new_tensor(len(x))
         else:
+            assert mask is not None
             nobs = mask.T @ mask
     denom = nobs - correction
     denom[denom <= 0] = 1

@@ -41,6 +41,7 @@ import pytest
 import torch
 
 import dartsort
+from dartsort.templates.realignment import trim_templates_to_shift
 from dartsort.util.spiketorch import taper
 
 # constants
@@ -499,3 +500,50 @@ def test_matching_alignment_upsampled(match_test_sims, up_factor, matchtype, tem
     np.testing.assert_array_equal(gt_st.times_samples, st.times_samples)
     mcs = np.abs(gt_td.templates).sum(axis=1).argmax(axis=1)
     np.testing.assert_array_equal(st.channels, mcs[gt_st.labels])
+
+
+@pytest.mark.parametrize("n", [1, 4])
+@pytest.mark.parametrize("max_shift,t_len", [(1, 10), (2, 8), (3, 9), (4, 9)])
+def test_trim_templates_to_shift(n, max_shift, t_len):
+    rg = np.random.default_rng(0)
+    c, out_len = 3, t_len - 2 * max_shift
+    templates = rg.normal(size=(n, t_len, c)).astype(np.float32)
+
+    assert trim_templates_to_shift(templates) is templates
+    np.testing.assert_array_equal(trim_templates_to_shift(templates), templates)
+    assert trim_templates_to_shift(templates, max_shift=max_shift) is templates
+    np.testing.assert_array_equal(
+        trim_templates_to_shift(templates, max_shift=max_shift), templates
+    )
+    np.testing.assert_array_equal(
+        trim_templates_to_shift(
+            templates, max_shift=0, template_shifts=np.zeros(n, int)
+        ),
+        templates,
+    )
+
+    # same shift
+    for dt in (-max_shift, 0, max_shift):
+        dts = np.full(n, dt, dtype=int)
+        out = trim_templates_to_shift(
+            templates, max_shift=max_shift, template_shifts=dts
+        )
+        assert out.shape == (n, out_len, c)
+        assert out.dtype == templates.dtype
+        np.testing.assert_array_equal(
+            out, templates[:, max_shift + dt : max_shift + dt + out_len]
+        )
+
+    # mixed shift with unit_ids
+    dts = np.resize([-max_shift, 0, max_shift], n)
+    padded = np.zeros(2 * n, int)
+    padded[::2] = dts
+    uid = np.arange(n) * 2
+    out = trim_templates_to_shift(
+        templates, max_shift=max_shift, template_shifts=padded, unit_ids=uid
+    )
+    assert out.shape == (n, out_len, c)
+    for i, dt in enumerate(dts):
+        np.testing.assert_array_equal(
+            out[i], templates[i, max_shift + dt : max_shift + dt + out_len]
+        )

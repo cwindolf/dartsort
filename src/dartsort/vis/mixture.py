@@ -909,8 +909,8 @@ class CovarianceView(MixtureComponentPlot):
             imb = row_top[1].imshow(cov_emp - cov, **res_kw)
             ax_bottom.plot(ev[: self.neigs], color=c, label=name)
         if not self.cov_vert:
-            plt.colorbar(ima, ax=row_top[0], shrink=0.3)
-            plt.colorbar(imb, ax=row_top[1], shrink=0.3)
+            plt.colorbar(ima, ax=row_top[0], shrink=0.3)  # type: ignore
+            plt.colorbar(imb, ax=row_top[1], shrink=0.3)  # type: ignore
 
         if self.cov_vert:
             axes_top[0, 0].set_title("cov", fontsize="small")

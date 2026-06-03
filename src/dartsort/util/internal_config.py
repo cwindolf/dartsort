@@ -28,7 +28,10 @@ PreprocessingStrategy = Literal["none", "ibllike", "ibllikecmr"] | str
 
 @cfg_dataclass
 class WaveformConfig:
-    """Defaults yield 42 sample trough offset and 121 total at 30kHz."""
+    """Waveform snippet length parameters
+
+    Defaults yield 42 sample trough offset and 121 total at 30kHz.
+    """
 
     ms_before: float = 1.4
     ms_after: float = 2.6 + 0.1 / 3
@@ -125,6 +128,7 @@ _kmethods = {"zero", "nearest", "nan", "clampna"}
 
 @cfg_dataclass
 class InterpolationParams:
+    """Spatial waveform or feature interpolation parameters"""
     method: InterpMethod = "kriging"
     kernel: InterpKernel = "thinplate"
     extrap_method: InterpMethod | None = None
@@ -208,6 +212,7 @@ default_fit_max_reweighting = 4.0
 
 @cfg_dataclass
 class FitSamplingConfig:
+    """Data sampling parameters for model fitting"""
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
@@ -223,12 +228,13 @@ class FitSamplingConfig:
 
 default_peeling_fit_sampling_cfg = FitSamplingConfig()
 default_clustering_fit_sampling_cfg = FitSamplingConfig(
-    max_waveforms_fit=500_000, n_waveforms_fit=500_000
+    max_waveforms_fit=1024 * 1000, n_waveforms_fit=1024 * 1000
 )
 
 
 @cfg_dataclass
 class ClusteringFeaturesConfig:
+    """Parameters to control which features are used for initial clustering"""
     # simple matrix feature controls
     use_x: bool = True
     use_z: bool = True
@@ -262,6 +268,7 @@ class ClusteringFeaturesConfig:
 
 @cfg_dataclass
 class ClusteringConfig:
+    """Initial clustering parameters"""
     cluster_strategy: str = "dpc"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -310,6 +317,7 @@ WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 
 @cfg_dataclass
 class WhiteningConfig:
+    """Whitening parameters"""
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
@@ -323,6 +331,7 @@ TemplateSVDMethod = Literal[
 
 @cfg_dataclass
 class TemplateConfig:
+    """Template waveform estimation parameters"""
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "median"
@@ -355,6 +364,7 @@ class TemplateConfig:
     )
     template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
+    try_reload_svd: bool = True
     svd_alignment_iterations: int = 0
     svd_alignment_ms: float = 0.75
 
@@ -399,6 +409,7 @@ RealignStrategy = Literal[
 
 @cfg_dataclass
 class TemplateRealignmentConfig:
+    """Template waveform alignment parameters"""
     realign_peaks: bool = True
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
@@ -409,6 +420,7 @@ class TemplateRealignmentConfig:
 
 @cfg_dataclass
 class TemplateMergeConfig:
+    """Parameters describing how to judge whether to merge groups of templates"""
     distance_kind: Literal[
         "scaled_normeuc", "deconv", "max", "weighted_scaled_normeuc"
     ] = "weighted_scaled_normeuc"
@@ -419,7 +431,7 @@ class TemplateMergeConfig:
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 1.0 / 3.0
-    svd_compression_rank: int = 10
+    svd_compression_rank: int = 5
     max_shift_ms: float = 1.5
     weighted_dist_min_iou: float = 0.75
     weighted_dist_radius: float = 100.0
@@ -446,6 +458,7 @@ ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 
 @cfg_dataclass
 class RefinementConfig:
+    """Parameters for clustering refinement"""
     refinement_strategy: str = "tmm"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -536,6 +549,9 @@ class RefinementConfig:
     impute_kind: Literal["interp", "impute"] = "impute"
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
+    # deduplication control
+    dedup_ms: float = 0.0
+
 
 @cfg_dataclass
 class FeaturizationConfig:
@@ -623,6 +639,7 @@ PeakSign = Literal["pos", "neg", "both"]
 
 @cfg_dataclass
 class SubtractionConfig:
+    """Parameters for neural-net based spike detection"""
     # peeling common
     chunk_length_samples: int = 30_000
     fit_only: bool = False
@@ -660,8 +677,8 @@ class SubtractionConfig:
     )
 
     # initial denoiser fitting parameters
-    first_denoiser_max_waveforms_fit: int = 250_000
-    first_denoiser_noise_snips: int = 100 * 128
+    first_denoiser_max_waveforms_fit: int = 512_000
+    first_denoiser_noise_snips: int = 100 * 256
     first_denoiser_noise_snip_length_mul: float = 2.5
     first_denoiser_noise_density: float = 0.5
     first_denoiser_thinning: float = 0.0
@@ -676,6 +693,7 @@ class SubtractionConfig:
 
 @cfg_dataclass
 class ThresholdingConfig:
+    """Parameters for threshold-crossing spike detection"""
     # peeling common
     chunk_length_samples: int = 30_000
 
@@ -701,6 +719,7 @@ class ThresholdingConfig:
 
 @cfg_dataclass
 class MatchingConfig:
+    """Template matching pursuit parameters"""
     # peeling common
     chunk_length_samples: int = 30_000
     max_spikes_per_second: int = 16384
@@ -732,6 +751,7 @@ class MatchingConfig:
     whiten_features: bool = False
     margin_factor: int = 2
     max_fp_per_input_spike: float = 2.5
+    scale_adjusts_threshold: bool = False
 
     # template postprocessing parameters
     min_template_ptp: float = 1.0
@@ -793,6 +813,7 @@ class MotionEstimationConfig:
 
 @cfg_dataclass
 class ComputationConfig:
+    """Multiprocessing or threading parameters"""
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
     n_jobs_small: int = -2
@@ -858,6 +879,7 @@ default_agglomerate_cfg = RefinementConfig(
     template_merge_cfg=TemplateMergeConfig(
         merge_distance_threshold=0.6, linkage="single"
     ),
+    dedup_ms=0.5,
 )
 
 
@@ -875,7 +897,7 @@ class DARTsortInternalConfig:
     clustering_cfg: ClusteringConfig = default_clustering_cfg
     clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
-    pre_refinement_cfg: RefinementConfig | None = None
+    pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
     post_refinement_cfg: RefinementConfig | None = None
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
@@ -991,6 +1013,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             save_output_waveforms=cfg.save_subtracted_waveforms,
             nn_denoiser_class_name=cfg.nn_denoiser_class_name,
             nn_denoiser_pretrained_path=cfg.nn_denoiser_pretrained_path,
+            nn_denoiser_extra_kwargs=cfg.nn_denoiser_extra_kwargs,
         )
         initial_detection_cfg = SubtractionConfig(
             peak_sign=cfg.peak_sign,
@@ -1002,6 +1025,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             chunk_length_samples=cfg.chunk_length_samples,
             first_denoiser_thinning=cfg.first_denoiser_thinning,
             first_denoiser_max_waveforms_fit=cfg.nn_denoiser_max_waveforms_fit,
+            first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
         )
@@ -1244,6 +1268,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_threshold=0.0,
+            dedup_ms=cfg.deduplication_ms,
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
@@ -1263,6 +1288,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
+            dedup_ms=cfg.deduplication_ms,
         )
     else:
         assert False

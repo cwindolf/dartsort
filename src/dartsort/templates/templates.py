@@ -131,8 +131,17 @@ class TemplateData:
                 del data[f"__prop_{k}"]
             if not properties:
                 properties = None
+            if "tsvd_components" in data:
+                components_ = data.pop("tsvd_components")
+                whiten = data.pop("tsvd_whiten")
+                tsvd = PCA(components_.shape[0], whiten=whiten)
+                tsvd.components_ = components_
+                tsvd.mean_ = data.pop("tsvd_mean")
+                tsvd.explained_variance_ = data.pop("tsvd_explained_variance")
+            else:
+                tsvd = None
 
-            return cls(**data, properties=properties)
+            return cls(**data, tsvd=tsvd, properties=properties)
 
     def to_npz(self, npz_path):
         to_save = dict(
@@ -155,6 +164,15 @@ class TemplateData:
             to_save["featurization_basis"] = self.featurization_basis
         if not npz_path.parent.exists():
             npz_path.parent.mkdir()
+        if self.tsvd is not None:
+            whiten = isinstance(self.tsvd, PCA) and self.tsvd.whiten
+            to_save["tsvd_whiten"] = whiten
+            to_save["tsvd_components"] = self.tsvd.components_
+            to_save["tsvd_explained_variance"] = self.tsvd.explained_variance_
+            if isinstance(self.tsvd, PCA):
+                to_save["tsvd_mean"] = self.tsvd.mean_
+            else:
+                to_save["tsvd_mean"] = np.zeros_like(self.tsvd.components_[0])
         if self.properties is not None:
             for k, p in self.properties.items():
                 to_save[f"__prop_{k}"] = p
@@ -261,6 +279,9 @@ class TemplateData:
         else:
             whitener = None
 
+        if tsvd is None and template_cfg.try_reload_svd and sorting is not None:
+            tsvd = _try_reload_svd(sorting, rank=template_cfg.denoising_rank)
+
         if sorting is None:
             raise ValueError(
                 "TemplateData.from_config needs a sorting when its .npz file "
@@ -303,3 +324,29 @@ class TemplateData:
         computation_cfg: ComputationConfig | None = None,
     ) -> "TemplateData":
         raise NotImplementedError
+
+
+def _try_reload_svd(
+    sorting: DARTsortSorting, npz_name="template_data.npz", rank: int = 5
+) -> PCA | None:
+    from ..util.data_util import try_get_model_dir
+
+    mdir = try_get_model_dir(sorting)
+    if not mdir or not mdir.exists():
+        return None
+    tnpz = mdir / npz_name
+    if not tnpz.exists():
+        return None
+    td = TemplateData.from_npz(tnpz)
+    tsvd = td.tsvd
+    if tsvd is not None:
+        rank_ = tsvd.components_.shape[0]
+        if rank_ != rank:
+            logger.dartsortdebug(
+                f"TSVD from {tnpz} had wrong rank {rank_}, wanted {rank}."
+            )
+            return None
+        logger.dartsortdebug(f"Reloading TSVD from {tnpz}")
+    else:
+        logger.dartsortdebug(f"No TSVD to reload in {tnpz}")
+    return tsvd

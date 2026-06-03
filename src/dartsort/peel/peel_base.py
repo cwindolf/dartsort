@@ -208,6 +208,7 @@ class BasePeeler(BModule):
         # this is -1 if we haven't started yet
         if ignore_resuming:
             done = False
+            last_chunk_index = -1
             next_chunk_index = 0
             resids_so_far = 0
         elif output_hdf5_filename is not None:

@@ -41,6 +41,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         res_type="none",
         lr_schedule="CosineAnnealingLR",
         lr_schedule_kwargs=None,
+        warmup_epochs=0,
+        warmup_lr=3e-4,
         inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
@@ -68,6 +70,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.with_conv_fullheight = with_conv_fullheight
         self.lr_schedule = lr_schedule
         self.lr_schedule_kwargs = lr_schedule_kwargs
+        self.warmup_epochs = warmup_epochs
+        self.warmup_lr = warmup_lr
         self.weight_decay = weight_decay
         self.optimizer = optimizer
         self.optimizer_kwargs = optimizer_kwargs
@@ -153,7 +157,17 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
 
         sched_kw = self.lr_schedule_kwargs or dict(T_max=self.n_epochs)
         assert issubclass(lr_schedule, torch.optim.lr_scheduler.LRScheduler)
-        return lr_schedule(optimizer, **sched_kw)
+        sched = lr_schedule(optimizer, **sched_kw)
+
+        if self.warmup_epochs:
+            warm_sched = torch.optim.lr_scheduler.ConstantLR(
+                optimizer, self.warmup_lr, total_iters=self.warmup_epochs
+            )
+            sched = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, [warm_sched, sched], milestones=[self.warmup_epochs]
+            )
+
+        return sched
 
     def step_scheduler(self, scheduler, loss, val_loss):
         if scheduler is None:
@@ -297,7 +311,6 @@ def get_noise_h5(
         noise_waveforms = dset[ii, tt : tt + spike_length_samples]
     else:
         noise_waveforms = dset[ii]
-
 
     # channels...
     cc = channel_index[channels]
