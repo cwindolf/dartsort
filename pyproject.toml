@@ -32,7 +32,7 @@ dependencies = [
   "scikit-learn",
   "spikeinterface>=0.104.0",
   "sympy",
-  "torch>=2.0",
+  "torch>=2.2",
   "tqdm",
   "typing-extensions",
 ]
