@@ -383,8 +383,12 @@ class WaveformPlot(UnitPlot):
             x = np.nan_to_num(x)
             y = np.nan_to_num(y)
             xy = np.einsum("nj,nj->n", x, y)
-            r = xy / (np.linalg.norm(y, axis=1) ** 2)
-            rmsg = f" score: {r.mean():0.3f}"
+            yn = np.linalg.norm(y, axis=1)
+            ynsq = yn**2
+            s = xy / ynsq
+            m = np.sqrt((xy**2) / ynsq)
+            div = np.linalg.norm(x - y * s[:, None]) / yn
+            rmsg = f" sc: {s.mean().item():0.3f} mq: {m.mean().item():0.3f} div: {div.mean().item():0.3f}"
         else:
             rmsg = ""
 
