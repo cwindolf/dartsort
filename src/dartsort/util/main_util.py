@@ -128,7 +128,7 @@ def ds_all_to_workdir(
 
 
 def ds_save_motion(
-    motion: MotionInfo,
+    motion: "MotionInfo",
     output_dir: Path,
     work_dir: Path | None = None,
     overwrite: bool = False,
@@ -281,7 +281,7 @@ def ds_handle_delete_intermediate_features(
 
 def ds_fast_forward(
     store_dir: Path, cfg: DARTsortInternalConfig
-) -> tuple[int, DARTsortSorting | None, MotionInfo | None]:
+) -> "tuple[int, DARTsortSorting | None, MotionInfo | None]":
     """Fast-forward to the where sorting left off
 
     # TODO: error if there is a saved cfg which differs? Maybe just optionally?
