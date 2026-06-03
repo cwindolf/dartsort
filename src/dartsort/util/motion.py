@@ -25,7 +25,6 @@ from .internal_config import (
 )
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
-from .main_util import ds_save_features
 from .py_util import databag, ensure_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
 
@@ -68,6 +67,8 @@ def get_motion_info(
     motion based on the spike locations in the sorting object, using parameters
     from motion_cfg.
     """
+    from .main_util import ds_save_features
+
     if (motion := try_load_motion_info(output_directory, filename)) is not None:
         return motion
 

@@ -2,7 +2,7 @@ import json
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 from spikeinterface.core import BaseRecording
@@ -17,8 +17,10 @@ from ..util.internal_config import (
     RefinementConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.motion import MotionInfo, try_load_motion_info
 from ..util.py_util import dartcopy2, dartcopytree, ensure_path
+
+if TYPE_CHECKING:
+    from ..util.motion import MotionInfo
 
 logger = get_logger(__name__)
 
@@ -289,6 +291,8 @@ def ds_fast_forward(
     next_step: int
     cur_sorting: DARTsortSorting
     """
+    from .motion import try_load_motion_info
+
     # this cur_h5 variable points to the peeling result we'll try to load
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"
     cur_step = 0
