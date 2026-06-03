@@ -835,7 +835,7 @@ def _dedup_unit_loop(
             continue
 
         i1 = i0 + 1
-        while dt[i1] <= radius:
+        while i1 < n - 1 and dt[i1] <= radius:
             i1 += 1
 
         # now, i0:i1 + 1 is a slice of violators
@@ -850,7 +850,7 @@ def _dedup_unit_loop(
 
             # figure out isi after bridging the gap, handle edges
             bridge_isi = 0.0
-            if ii < n:
+            if ii < n - 1:
                 bridge_isi += dt[ii]
             else:
                 bridge_isi = np.inf
@@ -860,7 +860,7 @@ def _dedup_unit_loop(
                 bridge_isi = np.inf
 
             # update dt with bridge isi
-            if ii < n:
+            if ii < n - 1:
                 dt[ii] = bridge_isi
             if ii > 0:
                 dt[ii - 1] = bridge_isi
