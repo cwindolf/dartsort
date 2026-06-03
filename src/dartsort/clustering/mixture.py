@@ -6204,6 +6204,8 @@ if TORCH_IS_OLD:
 else:
 
     def _nonzero_static(x: Tensor, size: int):
+        if pnoid:
+            assert x.nonzero().numel() == size
         return x.nonzero_static(size=size)
 
 
