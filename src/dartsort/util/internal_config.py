@@ -364,6 +364,7 @@ class TemplateConfig:
     )
     template_min_channel_amplitude: float = 1.0
     svd_method: TemplateSVDMethod = "raw_template"
+    try_reload_svd: bool = True
     svd_alignment_iterations: int = 0
     svd_alignment_ms: float = 0.75
 
@@ -430,7 +431,7 @@ class TemplateMergeConfig:
     temporal_upsampling_factor: int = 4
     amplitude_scaling_variance: float = 0.01**2
     amplitude_scaling_boundary: float = 1.0 / 3.0
-    svd_compression_rank: int = 10
+    svd_compression_rank: int = 5
     max_shift_ms: float = 1.5
     weighted_dist_min_iou: float = 0.75
     weighted_dist_radius: float = 100.0
@@ -547,6 +548,9 @@ class RefinementConfig:
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+
+    # deduplication control
+    dedup_ms: float = 0.0
 
 
 @cfg_dataclass
@@ -875,6 +879,7 @@ default_agglomerate_cfg = RefinementConfig(
     template_merge_cfg=TemplateMergeConfig(
         merge_distance_threshold=0.6, linkage="single"
     ),
+    dedup_ms=0.5,
 )
 
 
@@ -1263,6 +1268,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_threshold=0.0,
+            dedup_ms=cfg.deduplication_ms,
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
@@ -1282,6 +1288,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             refinement_strategy="agglomerate",
             template_merge_cfg=agg_tmcfg,
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
+            dedup_ms=cfg.deduplication_ms,
         )
     else:
         assert False

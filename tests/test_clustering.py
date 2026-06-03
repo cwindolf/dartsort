@@ -69,7 +69,7 @@ eval_refinement_kwargs = [
     dict(refinement_strategy="tmm", demolish_during_selection=False),
 ]
 eval_post_refinement_kwargs = [
-    dict(refinement_strategy="agglomerate"),
+    dict(refinement_strategy="agglomerate", dedup_ms=0.5),
 ]
 
 eval_clustering_kwargs = [clukw | ck for ck in eval_clustering_kwargs]

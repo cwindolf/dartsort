@@ -177,10 +177,13 @@ def agglomerate(
         threshold=0.5,
         link=template_merge_cfg.linkage,
     )
+
+    agg_sorting = combine_gmm_scores(agg_sorting, new_ids=new_ids)
+
+    agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
+
     agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
     new_ids = reorder[new_ids]
-
-    # TODO agglomerate GMM likelihoods here
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
@@ -628,3 +631,234 @@ def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
     fr = np.sqrt(fr.values)
 
     return np.corrcoef(fr, rowvar=False)
+
+
+def combine_gmm_scores(
+    sorting: DARTsortSorting, new_ids: np.ndarray, old_prefix="gmm", new_prefix="merged"
+) -> DARTsortSorting:
+    """If new_ids merges units, return a sorting with merged likelihoods."""
+    candidates = getattr(sorting, f"{old_prefix}_candidates", None)
+    responsibilities = getattr(sorting, f"{old_prefix}_responsibilities", None)
+    logliks = getattr(sorting, f"{old_prefix}_log_liks", None)
+
+    havec = candidates is not None
+    haver = responsibilities is not None
+    havel = logliks is not None
+    assert all([havec, haver, havel]) or not any([havec, havel, haver])
+    if not havec:
+        return sorting
+    assert candidates is not None
+    assert responsibilities is not None
+    assert logliks is not None
+
+    # check that new_ids is a merge
+    assert (new_ids >= 0).all()
+    unique_new_ids, new_id_counts = np.unique(new_ids, return_counts=True)
+    assert unique_new_ids.shape[0] == unique_new_ids.max() + 1 <= new_ids.shape[0]
+    if unique_new_ids.shape == new_ids.shape:
+        return sorting.ephemeral_replace(
+            **{
+                f"{new_prefix}_candidates": candidates,
+                f"{new_prefix}_responsibilities": responsibilities,
+                f"{new_prefix}_logliks": logliks,
+            }
+        )
+
+    # check invariants at the top
+    if responsibilities.shape[1] > 2:
+        assert np.all(np.diff(responsibilities[:, :-1], axis=1) <= 0)
+    assert np.greater_equal(np.isneginf(logliks[:, :-1]), candidates == -1).all()
+    if sorting.labels is not None:
+        assert np.all(
+            np.logical_or(
+                sorting.labels < 0, sorting.labels == new_ids[candidates[:, 0]]
+            )
+        )
+
+    # two steps: first merge, then sort
+    # merge candidates
+    new_ids_ = np.pad(new_ids, [(0, 1)], constant_values=-1)
+    orig_bye = candidates < 0
+    nbye = orig_bye.sum()
+    cand = np.where(orig_bye, new_ids.shape[0], candidates)
+    cand = new_ids_[cand]
+    assert (cand < 0).sum() >= nbye
+
+    # deduplicate
+    mergedr = responsibilities[:, : cand.shape[1]].copy()
+    mergedl = logliks[:, : cand.shape[1]].copy()
+    _combine_loop(cand, new_id_counts, mergedr, mergedl)
+
+    # now re-sort
+    order = np.argsort(-mergedr, axis=1, kind="stable")
+    cand = np.take_along_axis(cand, axis=1, indices=order)
+    mergedr = np.take_along_axis(mergedr, axis=1, indices=order)
+    mergedl = np.take_along_axis(mergedl, axis=1, indices=order)
+
+    # check invariants at the bottom
+    if mergedr.shape[1] > 1:
+        assert np.all(np.diff(mergedr, axis=1) <= 0)
+    assert np.greater_equal(np.isneginf(mergedl), cand == -1).all()
+    assert (cand < 0).sum() >= nbye, f"{np.sum(cand<0)=} {np.sum(candidates < 0)=}"
+    if sorting.labels is not None:
+        assert np.all(np.logical_or(sorting.labels < 0, sorting.labels == cand[:, 0]))
+    return sorting.ephemeral_replace(
+        **{
+            f"{new_prefix}_candidates": cand,
+            f"{new_prefix}_responsibilities": mergedr,
+            f"{new_prefix}_logliks": mergedl,
+        }
+    )
+
+
+@numba.njit(parallel=True)
+def _combine_loop(
+    cand: np.ndarray,
+    new_id_counts: np.ndarray,
+    mergedr: np.ndarray,
+    mergedl: np.ndarray,
+):
+    for s in numba.prange(cand.shape[0]):  # ty: ignore
+        rcand = cand[s]
+        for j in range(cand.shape[1] - 1):
+            ncandj = rcand[j]
+            if ncandj < 0 or new_id_counts[ncandj] <= 1:
+                continue
+
+            eq_ncandj = rcand[j + 1 :] == ncandj
+            if eq_ncandj.sum() <= 1:
+                continue
+
+            rsum = mergedr[s, j]
+            lsum = mergedl[s, j]
+            for i, k in enumerate(range(j + 1, cand.shape[1])):
+                if not eq_ncandj[i]:
+                    continue
+                cand[s, k] = -1
+
+                if mergedl[s, k] == -np.inf:
+                    continue
+                rsum += mergedr[s, k]
+                lsum = np.logaddexp(lsum, mergedl[s, k])
+
+                mergedr[s, k] = 0.0
+                mergedl[s, k] = -np.inf
+
+            mergedr[s, j] = rsum
+            mergedl[s, j] = lsum
+
+
+def deduplicate_spikes(
+    sorting: DARTsortSorting,
+    radius_ms: float = -1.0,
+    score_by=("merged_logliks", "gmm_logliks", "scores"),
+) -> DARTsortSorting:
+    """The lower-scoring of any spikes within radius_samples of each other is relabeled to -1.
+
+    scores are grabbed from the first entry of score_by which is a valid property of the sorting.
+    If it's mu
+    """
+    if radius_ms < 0 or sorting.labels is None:
+        return sorting
+
+    radius_samples = WaveformConfig.ms_to_samples(
+        ms=radius_ms,
+        sampling_frequency=sorting.sampling_frequency,
+    )
+    assert radius_samples >= 0
+
+    new_labels = sorting.labels.copy()
+    scores = None
+    for sck in score_by:
+        scores = getattr(sorting, sck, None)
+        if scores is not None:
+            logger.dartsortdebug(f"deduplicate by score {sck}")
+            break
+    if scores is None:
+        raise ValueError(f"sorting had none of {score_by}.")
+    if scores.ndim == 2:
+        scores = scores[:, 0]
+    assert scores.ndim == 1
+    assert scores.shape == new_labels.shape
+
+    # handle unsorted times
+    tsort = np.argsort(sorting.times_samples)
+    new_labels = new_labels[tsort]
+    times_samples = sorting.times_samples[tsort]
+    scores = scores[tsort]
+
+    unit_ids = np.unique(new_labels)
+    unit_ids = unit_ids[unit_ids >= 0]
+    ndrop = 0
+    for unit_id in unit_ids:
+        in_unit = np.flatnonzero(new_labels == unit_id)
+        t = times_samples[in_unit]
+        dt = np.diff(t)
+        if dt.min() > radius_samples:
+            continue
+        discard = _dedup_unit(t, dt, scores[in_unit], radius_samples)
+        ndrop += discard.sum()
+        new_labels[in_unit[discard]] = -1
+
+    logger.dartsortdebug(f"drop {ndrop}/{len(sorting)} isi violator spikes")
+    new_labels = new_labels[np.argsort(tsort)]
+
+    return sorting.ephemeral_replace(labels=new_labels)
+
+
+def _dedup_unit(
+    t: np.ndarray, dt: np.ndarray, scores: np.ndarray, radius: int
+) -> np.ndarray:
+    """Deduplicate a single unit's spike train."""
+    discard = np.zeros(t.shape, dtype=bool)
+    _dedup_unit_loop(dt, scores, radius, discard)
+    return discard
+
+
+@numba.njit
+def _dedup_unit_loop(
+    dt: np.ndarray, scores: np.ndarray, radius: int, discard: np.ndarray
+):
+    n = scores.shape[0]
+    i0 = 0
+    while i0 < n - 1:
+        if dt[i0] > radius:
+            i0 += 1
+            continue
+
+        i1 = i0 + 1
+        while dt[i1] <= radius:
+            i1 += 1
+
+        # now, i0:i1 + 1 is a slice of violators
+        # discard until all valid
+        score_slice = scores[i0 : i1 + 1]
+        dt_slice = dt[i0:i1]
+        order = np.argsort(score_slice)
+        for oo in order:
+            # discard spike i0 + oo
+            ii = i0 + oo
+            discard[ii] = True
+
+            # figure out isi after bridging the gap, handle edges
+            bridge_isi = 0.0
+            if ii < n:
+                bridge_isi += dt[ii]
+            else:
+                bridge_isi = np.inf
+            if ii > 0:
+                bridge_isi += dt[ii - 1]
+            else:
+                bridge_isi = np.inf
+
+            # update dt with bridge isi
+            if ii < n:
+                dt[ii] = bridge_isi
+            if ii > 0:
+                dt[ii - 1] = bridge_isi
+
+            # check if done
+            if dt_slice.min() > radius:
+                break
+
+        i0 = i1
