@@ -1136,8 +1136,9 @@ def merged_responsibilities(
 
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
-    responsibilities_key="gmm_responsibilities",
-    candidates_key="gmm_candidates",
+    responsibilities_key="merged_responsibilities",
+    candidates_key="merged_candidates",
+    needs_merge: bool = False,
 ) -> DARTsortSorting:
     """Convert a hard-assigned sorting to a soft-assigned one
 
@@ -1150,19 +1151,27 @@ def explode_soft_assignment_sorting(
 
     t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
 
-    mgr = merged_responsibilities(
-        sorting,
-        responsibilities_key=responsibilities_key,
-        candidates_key=candidates_key,
-    )
-    mergedr = mgr["merged_responsibilities"]
-    c = mgr["merged_candidates"]
-    Klabel = mgr["K"]
+    if needs_merge:
+        mgr = merged_responsibilities(
+            sorting,
+            responsibilities_key=responsibilities_key,
+            candidates_key=candidates_key,
+        )
+        mergedr = mgr["merged_responsibilities"]
+        c = mgr["merged_candidates"]
+        Klabel = mgr["K"]
+    else:
+        mergedr = getattr(sorting, responsibilities_key)
+        c = getattr(sorting, candidates_key)
+        mergedr = mergedr[:, : c.shape[1]]
+        Klabel = c.max() + 1
 
     h = entropy(torch.asarray(mergedr), reduce_mean=False).numpy()
 
     # okay, having deduplicated, we are now ready to explode
-    nz = np.logical_and(c < Klabel, mergedr > 0)
+    nz = mergedr > 0
+    nz = np.logical_and(nz, c < Klabel, out=nz)
+    nz = np.logical_and(nz, c >= 0, out=nz)
     spike_ix, candidate_ix = np.nonzero(nz)
 
     reorder = np.argsort(sorting.times_samples[spike_ix], kind="stable")
