@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
-from .logging_util import get_logger
+from .logging_util import DARTSORTVERBOSE, get_logger
 
 if TYPE_CHECKING:
     from .internal_config import ComputationConfig
@@ -112,8 +112,11 @@ def cleanup_and_log_gpu_usage(computation_cfg: "ComputationConfig", message=""):
 
     torch.cuda.empty_cache()
 
-    message = f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
-    logger.dartsortdebug(message)
+    if logger.isEnabledFor(DARTSORTVERBOSE):
+        message = (
+            f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
+        )
+        logger.dartsortverbose(message)
 
 
 _logged_compile_thing = False
