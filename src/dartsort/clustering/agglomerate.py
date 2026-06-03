@@ -685,8 +685,8 @@ def combine_gmm_scores(
     assert (cand < 0).sum() >= nbye
 
     # deduplicate
-    mergedr = responsibilities.copy()
-    mergedl = logliks.copy()
+    mergedr = responsibilities[:, : cand.shape[1]].copy()
+    mergedl = logliks[:, : cand.shape[1]].copy()
     _combine_loop(cand, new_id_counts, mergedr, mergedl)
 
     # now re-sort
@@ -694,6 +694,8 @@ def combine_gmm_scores(
     cand = np.take_along_axis(cand, axis=1, indices=order)
     mergedr = np.take_along_axis(mergedr, axis=1, indices=order)
     mergedl = np.take_along_axis(mergedl, axis=1, indices=order)
+    mergedl = np.concatenate([mergedl, logliks[:, cand.shape[1] :]], axis=1)
+    mergedr = np.concatenate([mergedr, responsibilities[:, cand.shape[1] :]], axis=1)
 
     # check invariants at the bottom
     if mergedr.shape[1] > 1:
