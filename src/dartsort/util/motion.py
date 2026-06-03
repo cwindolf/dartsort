@@ -57,7 +57,7 @@ def get_motion_info(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
     show_progress: bool = True,
-    _saving_intermediates: bool = False,
+    _save_cfg=None,
     _save_dir: Path | None = None,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
@@ -100,11 +100,10 @@ def get_motion_info(
             show_progress=show_progress,
         )
         ds_save_features(
-            cfg=None,
+            cfg=_save_cfg,
             sorting=motion_sorting,
             work_dir=output_directory,
             output_dir=_save_dir,
-            ensure_saving=_saving_intermediates,
         )
     else:
         motion_sorting = sorting
