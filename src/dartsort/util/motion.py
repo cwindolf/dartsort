@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 from .drift_util import get_pitch, registered_geometry
 from .internal_config import (
     ComputationConfig,
+    DARTsortInternalConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     MotionEstimationConfig,
@@ -57,7 +58,7 @@ def get_motion_info(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
     show_progress: bool = True,
-    _save_cfg=None,
+    _save_cfg: DARTsortInternalConfig | None = None,
     _save_dir: Path | None = None,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
@@ -79,6 +80,9 @@ def get_motion_info(
     need_motion_estimate = motion_cfg.do_motion_estimation and not have_motion
 
     # skip peak detection if possible
+    _saving_intermediates = (
+        _save_cfg is not None and _save_cfg.save_intermediate_features
+    )
     need_new_peaks = detect_new_peaks and (
         need_motion_estimate or _saving_intermediates
     )
