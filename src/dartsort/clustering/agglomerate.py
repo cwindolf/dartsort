@@ -685,12 +685,12 @@ def combine_gmm_scores(
     assert (cand < 0).sum() >= nbye
 
     # deduplicate
-    mergedr = responsibilities[:, : cand.shape[1]].copy()
-    mergedl = logliks[:, : cand.shape[1]].copy()
+    mergedr = responsibilities.copy()
+    mergedl = logliks.copy()
     _combine_loop(cand, new_id_counts, mergedr, mergedl)
 
     # now re-sort
-    order = np.argsort(-mergedr, axis=1, kind="stable")
+    order = np.argsort(-mergedl, axis=1, kind="stable")
     cand = np.take_along_axis(cand, axis=1, indices=order)
     mergedr = np.take_along_axis(mergedr, axis=1, indices=order)
     mergedl = np.take_along_axis(mergedl, axis=1, indices=order)
@@ -699,15 +699,21 @@ def combine_gmm_scores(
     if mergedr.shape[1] > 1:
         assert np.all(np.diff(mergedr, axis=1) <= 0)
     assert np.greater_equal(np.isneginf(mergedl), cand == -1).all()
-    assert (cand < 0).sum() >= nbye, f"{np.sum(cand<0)=} {np.sum(candidates < 0)=}"
+    assert (cand < 0).sum() >= nbye
     if sorting.labels is not None:
-        assert np.all(np.logical_or(sorting.labels < 0, sorting.labels == cand[:, 0]))
+        changed = sorting.labels != cand[:, 0]
+        changed = changed[sorting.labels >= 0]
+        logger.dartsortdebug(
+            f"Mixture component aggregation changes {100 * changed.mean():0.2f}"
+            f"% of spike labels ({changed.sum().item()} spikes)."
+        )
     return sorting.ephemeral_replace(
+        labels=np.where(mergedl[:, 0] >= mergedl[:, -1], cand[:, 0], -1),
         **{
             f"{new_prefix}_candidates": cand,
             f"{new_prefix}_responsibilities": mergedr,
             f"{new_prefix}_logliks": mergedl,
-        }
+        },
     )
 
 
