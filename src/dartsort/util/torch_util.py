@@ -133,18 +133,27 @@ def torch_compile(fn, dynamic=True, fullgraph=True):
     script works, because I like the strictness but also this is used for little
     utility functions where the input shapes change all the time.
     """
-    global _logged_compile_thing
-    if not torch.cuda.is_available():
-        return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
-    major, _ = torch.cuda.get_device_capability()
-    if major >= 7:
-        return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
-    else:
-        if not _logged_compile_thing:
-            logger.dartsortdebug(
-                "Falling back on torch.jit.script since GPU's capability version "
-                f"is {major}. You might see a deprecation warning from torch "
-                "depending on your Python version."
-            )
-            _logged_compile_thing = True
-        return torch.jit.script(fn)
+    # clearly I don't understand what compile does.
+    return torch.jit.script(fn)
+
+    # global _logged_compile_thing
+    # if not torch.cuda.is_available():
+    #     return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    # major, _ = torch.cuda.get_device_capability()
+    # if major >= 7:
+    #     return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    # else:
+    #     if not _logged_compile_thing:
+    #         logger.dartsortdebug(
+    #             "Falling back on torch.jit.script since GPU's capability version "
+    #             f"is {major}. You might see a deprecation warning from torch "
+    #             "depending on your Python version."
+    #         )
+    #         _logged_compile_thing = True
+    #     return torch.jit.script(fn)
+
+
+def torch_compiler(dynamic=True, fullgraph=True):
+    def dec(fn):
+        return torch_compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    return dec

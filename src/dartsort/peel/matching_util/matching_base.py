@@ -12,7 +12,7 @@ from ...util.logging_util import DARTSORTVERBOSE, get_logger
 from ...util.motion import MotionInfo
 from ...util.py_util import databag
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
-from ...util.torch_util import BModule, torch_compile
+from ...util.torch_util import BModule, torch_compiler
 
 logger = get_logger(__name__)
 _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -534,7 +534,7 @@ def subtract_precomputed_pconv(
         )
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _subtract_precomputed_pconv_unscaled(
     conv: Tensor,
     pconv: Tensor,
@@ -557,7 +557,7 @@ def _subtract_precomputed_pconv_unscaled(
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _subtract_precomputed_pconv_scaled(
     conv: Tensor,
     pconv: Tensor,
@@ -583,7 +583,7 @@ def _subtract_precomputed_pconv_scaled(
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
-@torch_compile
+@torch_compiler()
 def _free_coarse_objective(
     conv: Tensor,
     normsq: Tensor,
@@ -597,7 +597,7 @@ def _free_coarse_objective(
     return obj
 
 
-@torch_compile
+@torch_compiler()
 def _scaled_coarse_objective(
     conv: Tensor,
     normsq: Tensor,

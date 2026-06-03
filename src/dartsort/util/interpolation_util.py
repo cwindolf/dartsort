@@ -586,13 +586,13 @@ def _kneighb_loop(
     neighb_solved: torch.Tensor,
 ):
     out = features_padded_flat.new_empty(
-        (features_padded_flat.shape[0], neighborhoods_padded.shape[0])
+        (neighborhoods_padded.shape[0], features_padded_flat.shape[0])
     )
     for j in range(neighborhoods_padded.shape[0]):
         neighb = neighborhoods_padded[j]
         fj = features_padded_flat[:, neighb]
-        torch.mv(fj, neighb_solved[j], out=out[:, j])
-    return out
+        torch.mv(fj, neighb_solved[j], out=out[j])
+    return out.t().contiguous()
 
 
 def kriging_poly_expand(
