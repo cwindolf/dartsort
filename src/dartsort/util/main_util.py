@@ -209,7 +209,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
 def ds_save_features(
     cfg: DARTsortInternalConfig | None,
     sorting: DARTsortSorting,
-    output_dir: Path,
+    output_dir: Path | None,
     work_dir: Path | None = None,
     is_final=False,
     ensure_saving: bool | None = None,
@@ -224,6 +224,8 @@ def ds_save_features(
             return
     elif not ensure_saving:
         return
+
+    assert output_dir is not None
 
     # find h5 and models and copy
     assert sorting.parent_h5_path is not None

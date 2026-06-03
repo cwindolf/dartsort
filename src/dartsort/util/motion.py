@@ -99,7 +99,6 @@ def get_motion_info(
             overwrite=overwrite,
             show_progress=show_progress,
         )
-        assert _save_dir is not None
         ds_save_features(
             cfg=None,
             sorting=motion_sorting,
