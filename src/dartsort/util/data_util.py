@@ -436,7 +436,13 @@ class DARTsortSorting:
             parent_h5_path=h5_path,
         )
 
-    def save(self, sorting_npz: str | Path):
+    def save(
+        self,
+        sorting_npz: str | Path,
+        save_h5_path: bool = True,
+        pack_simple_features: bool = False,
+        pack_extra_features: Sequence[str] | None = None,
+    ):
         """Save to npz (usually dartsort_sorting.npz)
 
         Support persisting myself in non-h5-supportable cases
@@ -445,6 +451,18 @@ class DARTsortSorting:
          - When I have new labels.
         This is done by saving to .npz, with a pointer (like a relative symlink)
         to the .h5 file if it exists.
+
+        Parameters
+        ----------
+        sorting_npz: str or Path
+            Path to save to
+        save_h5_path: bool
+            Whether to save the pointer to the hdf5 file.
+        pack_simple_features: bool, optional
+            If true, "simple features" (ie, 1d ones) will be stored
+            in the npz.
+        pack_extra_features: Sequence[str], optional
+            Additional features to save directly in the npz.
         """
         sorting_npz = ensure_path(sorting_npz)
         logger.dartsortdebug(f"Saving {self} to {sorting_npz}.")
@@ -455,9 +473,10 @@ class DARTsortSorting:
         )
         if self.labels is not None:
             data["labels"] = self.labels
-
-        have_hdf5 = self.parent_h5_path is not None
-        if have_hdf5:
+        if hasattr(self, "geom"):
+            data["geom"] = getattr(self, "geom")
+        do_hdf5 = save_h5_path and self.parent_h5_path is not None
+        if do_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
             h5p = ensure_path(self.parent_h5_path, strict=True)
             try:
@@ -471,10 +490,23 @@ class DARTsortSorting:
 
                     h5p = relpath(h5p, start=sorting_npz.parent)
             data["parent_h5_path"] = np.array(str(h5p))
+
         data.update(self._ephemeral_features)
-        data["ephemeral_feature_names"] = np.array(
-            list(self._ephemeral_features.keys())
-        )
+        eph_keys = list(self._ephemeral_features.keys())
+        for k in pack_extra_features or []:
+            data[k] = getattr(self, k)
+            eph_keys.append(k)
+        if pack_simple_features:
+            # ephemeral already stored so just need to check persistent
+            for k in self._persistent_features:
+                if k in data:
+                    continue
+                v = getattr(self, k)
+                if 1 <= v.ndim <= 2 and v.shape[0] == self.times_samples.shape[0]:
+                    data[k] = v
+                    eph_keys.append(k)
+
+        data["ephemeral_feature_names"] = np.array(eph_keys)
         data["loaded_persistent_features"] = np.array(
             list(self._persistent_features.keys())
         )
@@ -495,6 +527,8 @@ class DARTsortSorting:
             channels = data["channels"]
             labels = data.get("labels", None)
             sampling_frequency = data["sampling_frequency"]
+            geom = data.get("geom", None)
+
             if isinstance(sampling_frequency, np.ndarray):
                 sampling_frequency = sampling_frequency.item()
             parent_h5_path = data.get("parent_h5_path", None)
@@ -504,7 +538,12 @@ class DARTsortSorting:
                 ephemeral_features = {k: data[k] for k in load_ephemeral_feature_names}
             else:
                 ephemeral_features = {}
-            loaded_persistent_features = data.get("loaded_persistent_features", [])
+            if geom is not None:
+                ephemeral_features["geom"] = geom
+            if parent_h5_path is not None:
+                loaded_persistent_features = data.get("loaded_persistent_features", [])
+            else:
+                loaded_persistent_features = []
 
         if parent_h5_path is not None:
             parent_h5_path = parent_h5_path.item()
@@ -758,7 +797,9 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
             raise ValueError(f"{labels_npy} does not exist.")
         labels = np.load(labels_npy)
         if not labels.shape == st.channels.shape:
-            raise ValueError(f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}.")
+            raise ValueError(
+                f"{labels_npy} shape {labels.shape} does not match channels shape {st.channels.shape}."
+            )
 
         st = st.ephemeral_replace(labels=labels)
 
