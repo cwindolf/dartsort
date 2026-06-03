@@ -25,6 +25,7 @@ from .internal_config import (
 )
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
+from .main_util import ds_save_features
 from .py_util import databag, ensure_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
 
@@ -58,6 +59,7 @@ def get_motion_info(
     overwrite: bool = False,
     show_progress: bool = True,
     _saving_intermediates: bool = False,
+    _save_dir: Path | None = None,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
 
@@ -84,6 +86,7 @@ def get_motion_info(
         assert sorting is not None
         assert sampling_cfg is not None
         assert waveform_cfg is not None
+        output_directory = ensure_path(output_directory)
         motion_sorting = detect_for_motion(
             output_directory=output_directory,
             recording=recording,
@@ -94,6 +97,14 @@ def get_motion_info(
             waveform_cfg=waveform_cfg,
             overwrite=overwrite,
             show_progress=show_progress,
+        )
+        assert _save_dir is not None
+        ds_save_features(
+            cfg=None,
+            sorting=motion_sorting,
+            work_dir=output_directory,
+            output_dir=_save_dir,
+            ensure_saving=_saving_intermediates,
         )
     else:
         motion_sorting = sorting

@@ -205,16 +205,22 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
 
 
 def ds_save_features(
-    cfg: DARTsortInternalConfig,
+    cfg: DARTsortInternalConfig | None,
     sorting: DARTsortSorting,
     output_dir: Path,
     work_dir: Path | None = None,
     is_final=False,
+    ensure_saving: bool | None = None,
 ):
     if work_dir is None:
         # nothing to copy
         return
-    if not (cfg.save_intermediate_features or is_final):
+
+    if ensure_saving is None:
+        assert cfg is not None
+        if not (cfg.save_intermediate_features or is_final):
+            return
+    elif not ensure_saving:
         return
 
     # find h5 and models and copy
@@ -230,8 +236,10 @@ def ds_save_features(
     if models_path.exists():
         targ_models = output_dir / models_path.name
         pconv_h5 = targ_models / "pconv.h5"
-        if cfg.matching_cfg.delete_pconv and pconv_h5.exists():
+        if cfg is not None and cfg.matching_cfg.delete_pconv and pconv_h5.exists():
             pconv_h5.unlink()
+        elif cfg is None:
+            assert not pconv_h5.exists()  # don't know what to do with it, pass cfg
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
         dartcopytree(cfg, models_path, targ_models)
 

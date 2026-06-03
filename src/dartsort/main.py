@@ -247,6 +247,8 @@ def _dartsort_impl(
             sampling_cfg=cfg.peeler_sampling_cfg,
             waveform_cfg=cfg.waveform_cfg,
             overwrite=overwrite,
+            _saving_intermediates=cfg.save_intermediate_features,
+            _save_dir=output_dir,
         )
     ret["motion"] = motion
 
