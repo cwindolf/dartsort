@@ -2,7 +2,7 @@ import json
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 from spikeinterface.core import BaseRecording
@@ -17,8 +17,10 @@ from ..util.internal_config import (
     RefinementConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.motion import MotionInfo, try_load_motion_info
 from ..util.py_util import dartcopy2, dartcopytree, ensure_path
+
+if TYPE_CHECKING:
+    from ..util.motion import MotionInfo
 
 logger = get_logger(__name__)
 
@@ -205,16 +207,22 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
 
 
 def ds_save_features(
-    cfg: DARTsortInternalConfig,
+    cfg: DARTsortInternalConfig | None,
     sorting: DARTsortSorting,
     output_dir: Path,
     work_dir: Path | None = None,
     is_final=False,
+    ensure_saving: bool | None = None,
 ):
     if work_dir is None:
         # nothing to copy
         return
-    if not (cfg.save_intermediate_features or is_final):
+
+    if ensure_saving is None:
+        assert cfg is not None
+        if not (cfg.save_intermediate_features or is_final):
+            return
+    elif not ensure_saving:
         return
 
     # find h5 and models and copy
@@ -230,8 +238,10 @@ def ds_save_features(
     if models_path.exists():
         targ_models = output_dir / models_path.name
         pconv_h5 = targ_models / "pconv.h5"
-        if cfg.matching_cfg.delete_pconv and pconv_h5.exists():
+        if cfg is not None and cfg.matching_cfg.delete_pconv and pconv_h5.exists():
             pconv_h5.unlink()
+        elif cfg is None:
+            assert not pconv_h5.exists()  # don't know what to do with it, pass cfg
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
         dartcopytree(cfg, models_path, targ_models)
 
@@ -281,6 +291,8 @@ def ds_fast_forward(
     next_step: int
     cur_sorting: DARTsortSorting
     """
+    from .motion import try_load_motion_info
+
     # this cur_h5 variable points to the peeling result we'll try to load
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"
     cur_step = 0

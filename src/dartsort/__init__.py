@@ -11,6 +11,7 @@ from .clustering import (
     kmeans,
     merge,
     refinement_strategies,
+    deduplicate_spikes,
 )
 from .config import *
 from .evaluate import config_grid, hybrid_util, simkit, simlib

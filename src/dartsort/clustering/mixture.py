@@ -6199,7 +6199,7 @@ if TORCH_IS_OLD:
 
     def _nonzero_static(x: Tensor, size: int):
         nz = x.nonzero()
-        assert nz.numel() == size
+        assert nz.shape[0] == size
         return nz
 else:
 
