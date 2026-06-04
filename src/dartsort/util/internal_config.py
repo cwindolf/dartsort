@@ -629,6 +629,10 @@ class FeaturizationConfig:
     gmm_refinement_cfg: RefinementConfig | None = None
     gmm_clustering_features_cfg: ClusteringFeaturesConfig | None = None
 
+    # helper for fitting whiteners
+    fit_disabled_whitener: bool = False
+    whiten_cfg: WhiteningConfig | None = None
+
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
     output_waveforms_name: str = "denoised"

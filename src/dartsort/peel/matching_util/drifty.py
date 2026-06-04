@@ -236,7 +236,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
             whitener = None
         else:
             assert template_data.whitener is not None
-            whitener = SpatialWhitener.from_numpy(template_data.whitener)
+            assert template_data.covariance is not None
+            whitener = SpatialWhitener.from_numpy(
+                template_data.whitener, template_data.covariance
+            )
 
         if not wh_none and not matching_cfg.whiten_features:
             assert matching_cfg.whitening.strategy == "prewhiten_postapply"
