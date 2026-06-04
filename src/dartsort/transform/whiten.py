@@ -5,7 +5,12 @@ import torch
 from spikeinterface.core import BaseRecording
 
 from ..util.data_util import DARTsortSorting
-from ..util.internal_config import ComputationConfig, WhiteningConfig
+from ..util.internal_config import (
+    ComputationConfig,
+    WaveformConfig,
+    WhiteningConfig,
+    default_waveform_cfg,
+)
 from .transform_base import BaseWaveformDenoiser
 
 if TYPE_CHECKING:
@@ -24,22 +29,20 @@ class WaveformWhitener(BaseWaveformDenoiser):
         channel_index,
         name=None,
         name_prefix=None,
+        waveform_cfg: WaveformConfig | None = default_waveform_cfg,
         whitener: "SpatialWhitener | None" = None,
         disabled: bool = True,
         whiten_cfg: WhiteningConfig = WhiteningConfig(),
+        sampling_frequency: float = 30_000.0,
     ):
         super().__init__(
             name=name, name_prefix=name_prefix, geom=geom, channel_index=channel_index
-        )
-        assert channel_index.shape[1] == geom.shape[0], (
-            "Meant to be used with full-probe data."
         )
         self.whitener = whitener
         self.disabled = disabled
         self.whiten_cfg = whiten_cfg
         self.motion = None
 
-    @property
     def needs_fit(self):
         return self.whitener is None
 
@@ -53,6 +56,13 @@ class WaveformWhitener(BaseWaveformDenoiser):
     def attach_motion(self, motion):
         self.motion = motion
 
+    def _other_pre_load_state(self, state_dict, prefix):
+        if self.whitener is not None:
+            return
+        from ..util.noise_util import SpatialWhitener
+
+        self.whitener = SpatialWhitener.blank(len(self.b.geom), self.b.geom.device)
+
     def fit(
         self,
         recording: BaseRecording,
@@ -63,6 +73,14 @@ class WaveformWhitener(BaseWaveformDenoiser):
         pipeline: "WaveformPipeline | None" = None,
         **spike_data: torch.Tensor,
     ):
+        super().fit(
+            recording,
+            waveforms,
+            hdf5_filename=hdf5_filename,
+            computation_cfg=computation_cfg,
+            pipeline=pipeline,
+            **spike_data,
+        )
         del recording, spike_data, waveforms, pipeline
         from ..util.noise_util import SpatialWhitener
 

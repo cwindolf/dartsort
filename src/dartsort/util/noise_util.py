@@ -1559,6 +1559,11 @@ class SpatialWhitener(BModule):
         self.register_buffer("covariance", covariance)
 
     @classmethod
+    def blank(cls, n_channels: int, device: torch.device):
+        w = torch.zeros((n_channels, n_channels), device=device)
+        return cls(w, torch.zeros_like(w))
+
+    @classmethod
     def from_numpy(cls, whitener: np.ndarray, covariance: np.ndarray):
         logger.dartsortverbose("Load whitener from numpy.")
         return cls(
@@ -1625,6 +1630,7 @@ class SpatialWhitener(BModule):
         return x
 
     def local_whiteners(self, channel_index: Tensor, eps=1e-6):
+        channel_index = torch.asarray(channel_index)
         nc, cloc = channel_index.shape
         assert nc == self.b.covariance.shape[0]
         w = self.b.covariance.new_zeros((nc, cloc, cloc))

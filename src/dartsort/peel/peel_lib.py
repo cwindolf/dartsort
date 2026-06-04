@@ -89,8 +89,14 @@ def check_residual_decrease(
     if local_whiteners is not None:
         assert channels is not None
         W = local_whiteners[channels].mT
+        if overwrite_orig_waveforms:
+            orig_wfs = orig_wfs.nan_to_num_()
+        else:
+            orig_wfs = orig_wfs.nan_to_num()
+        buf = orig_wfs
         orig_wfs = orig_wfs.bmm(W)
-        dn_wfs = dn_wfs.bmm(W)
+        dn_wfs = dn_wfs.nan_to_num()
+        dn_wfs = torch.bmm(dn_wfs, W, out=buf)
 
     if decrease_objective == "deconv":
         if overwrite_orig_waveforms:
