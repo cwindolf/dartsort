@@ -155,6 +155,9 @@ def agglomerate(
         axis=0,
     )
     qda_mask = np.logical_or(qda_mask_uni, qda_mask_bi)
+    assert np.all(qda_mask <= mask)
+    if fcorr_mask is not None:
+        assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
     force_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
@@ -162,10 +165,6 @@ def agglomerate(
     )
     qda_mask = np.logical_or(qda_mask, force_mask)
     np.fill_diagonal(qda_mask, True)
-    if fcorr_mask is None:
-        assert np.all(qda_mask <= mask)
-    else:
-        assert np.all((qda_mask & fcorr_mask) <= mask)
     qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(

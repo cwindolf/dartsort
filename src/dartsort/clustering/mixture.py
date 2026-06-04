@@ -97,7 +97,7 @@ from ..util.spiketorch import (
     sign,
     spawn_torch_rg,
 )
-from ..util.torch_util import BModule, torch_compile
+from ..util.torch_util import BModule, torch_compiler
 from .cluster_util import linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
 from .kmeans import kmeans
@@ -5707,7 +5707,7 @@ def _whiten_and_noise_score_batch(
     )
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _whiten_and_noise_score_batch_k(
     x: Tensor, neighb_ids: Tensor, Linv: Tensor, lik_const: Tensor
 ):
@@ -6206,7 +6206,7 @@ else:
         return x.nonzero_static(size=size)
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Tensor:
     n_discard = resps.shape[1] - n_keep
     assert n_discard + n_keep == resps.shape[1]
@@ -6648,7 +6648,7 @@ def _sparsify_candidates(
 #             = | A (x'-z') |^2.
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _calc_loglik_rank0(
     *,
     whitenedx: Tensor,
@@ -6668,7 +6668,7 @@ def _calc_loglik_rank0(
     return ll
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _calc_loglik_ppca(
     *,
     whitenedx: Tensor,
@@ -6776,7 +6776,7 @@ def _stat_pass_batch(
     return stats
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _count_batch(
     *,
     responsibilities: Tensor,
@@ -6811,7 +6811,7 @@ def _count_batch(
     return noise_N, N, Nlut, Qnflat, Qnflatlut
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _stat_pass_batch_ppca(
     *,
     xt: Tensor,
@@ -6930,7 +6930,7 @@ def _stat_pass_batch_ppca(
     return noise_N, N, Nlut, Ulut, R, elb
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _stat_pass_batch_rank0(
     *,
     xt: Tensor,

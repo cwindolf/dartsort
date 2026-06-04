@@ -15,7 +15,7 @@ from torch import Tensor
 from torch.fft import irfft, rfft
 
 from .logging_util import progrange
-from .torch_util import torch_compile
+from .torch_util import torch_compile, torch_compiler
 
 logger = getLogger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
@@ -311,7 +311,7 @@ def best_shared_pconv(
     return conv_out, lag_out
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def weighted_best_lagged_scaled_normeuc_dist(
     tconv: Tensor,
     spatial_sing: Tensor,
@@ -743,8 +743,19 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
     )
 
 
-@torch_compile
 def argrelmax(
+    *,
+    x: Tensor,
+    radius: int,
+    threshold: float,
+    arange: Tensor,
+):
+    msk = _argrelmax_mask(x=x, radius=radius, threshold=threshold, arange=arange)
+    return msk.nonzero()[:, 0]
+    
+
+@torch_compile
+def _argrelmax_mask(
     *,
     x: Tensor,
     radius: int,
@@ -764,11 +775,9 @@ def argrelmax(
     # exclude edge
     x1[0].zero_()
     x1[-1].zero_()
-    ix = torch.nonzero(x1)[:, 0]
-    return ix
+    return x1
 
 
-@torch_compile
 def argrelmax_dedup(
     peak_radius: int = 1,
     *,
@@ -801,6 +810,27 @@ def argrelmax_dedup(
     peak time by +/- 1 (temporal upsampling stuff). Make your chunk margin 1 sample
     bigger if you care about that.
     """
+    msk = _argrelmax_dedup_mask(
+        peak_radius,
+        x=x,
+        dedup_radius=dedup_radius,
+        threshold=threshold,
+        arange=arange,
+        padding=padding,
+    )
+    return msk.nonzero()[:, 0]
+    
+
+@torch_compile
+def _argrelmax_dedup_mask(
+    peak_radius: int = 1,
+    *,
+    x: Tensor,
+    dedup_radius: int,
+    threshold: float,
+    arange: Tensor,
+    padding: int,
+):
     nt = x.shape[0]
     xv = x.clone()
     x = x[None, None]
@@ -819,7 +849,7 @@ def argrelmax_dedup(
     remove2 = torch.logical_or(x1 < x2, inds2 != arange)
     x2.masked_fill_(remove2, 0.0)
     x2 = x2[0, 0]
-    return x2.nonzero()[:, 0]
+    return x2
 
 
 _cdtypes = {torch.float32: torch.complex64, torch.float64: torch.complex128}

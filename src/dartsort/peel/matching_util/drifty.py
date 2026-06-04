@@ -58,7 +58,7 @@ from ...util.motion import MotionInfo
 from ...util.noise_util import SpatialWhitener
 from ...util.py_util import databag
 from ...util.spiketorch import full_shared_pconv, shared_temporal_pconv
-from ...util.torch_util import torch_compile
+from ...util.torch_util import torch_compiler
 from ...util.waveform_util import upsample_singlechan_torch
 from .matching_base import (
     ChunkTemplateData,
@@ -651,7 +651,7 @@ def get_interp_upsampling_data(
 # -- convolution
 
 
-@torch_compile
+@torch_compiler()
 def convolve_lowrank_shared(
     traces: Tensor,
     spatial_singular: Tensor,
@@ -681,7 +681,7 @@ def convolve_lowrank_shared(
 # -- fine matching
 
 
-@torch_compile
+@torch_compiler(fullgraph=False)
 def _upsampling_fine_match(
     *,
     conv: Tensor,
@@ -734,7 +734,6 @@ def _upsampling_fine_match(
 # --
 
 
-@torch_compile
 def _subtract_templates_loop(
     traces: Tensor,
     up_inds: Tensor | None,
