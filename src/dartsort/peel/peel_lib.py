@@ -80,9 +80,17 @@ def check_residual_decrease(
     threshold=10.0,
     save_residnorm_decrease=False,
     overwrite_orig_waveforms: bool = False,
+    local_whiteners: Tensor | None = None,
+    channels: Tensor | None = None,
 ):
     if not threshold:
         return None, {}
+
+    if local_whiteners is not None:
+        assert channels is not None
+        W = local_whiteners[channels].mT
+        orig_wfs = orig_wfs.bmm(W)
+        dn_wfs = dn_wfs.bmm(W)
 
     if decrease_objective == "deconv":
         if overwrite_orig_waveforms:
@@ -154,6 +162,7 @@ def subtract_chunk(
     dedup_rel_inds=None,
     residnorm_decrease_threshold=16.0,
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
+    local_whiteners: Tensor | None = None,
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
@@ -353,6 +362,8 @@ def subtract_chunk(
             decrease_objective=decrease_objective,
             threshold=residnorm_decrease_threshold,
             save_residnorm_decrease=save_residnorm_decrease,
+            local_whiteners=local_whiteners,
+            channels=channels,
         )
         features.update(new_feats)
         if resid_keep is not None:

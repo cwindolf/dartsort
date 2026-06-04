@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from spikeinterface.core import BaseRecording
 
-from ..transform import Voltage, Waveform, WaveformPipeline
+from ..transform import Voltage, Waveform, WaveformPipeline, WaveformWhitener
 from ..util import job_util
 from ..util.data_util import SpikeDataset, subsample_waveforms
 from ..util.internal_config import (
@@ -125,6 +125,9 @@ class SubtractionPeeler(BasePeeler):
         can_thin = recording.get_total_duration() > fit_sampling_cfg.n_seconds_fit / _p
         self.first_denoiser_thinning = p.first_denoiser_thinning if can_thin else 0.0
 
+        # this may be overwritten after featurization fit
+        self.register_buffer_or_none("local_whiteners", None)
+
     def out_datasets(self):
         datasets = super().out_datasets()
 
@@ -147,6 +150,23 @@ class SubtractionPeeler(BasePeeler):
 
     def peeling_needs_precompute(self):
         return self.subtraction_denoising_pipeline.needs_precompute()
+
+    def post_fit(self):
+        if not self.p.whiten:
+            return
+        assert self.featurization_pipeline is not None
+        assert not self.featurization_pipeline.needs_fit()
+        whitener = [
+            f
+            for f in self.featurization_pipeline.transformers
+            if isinstance(f, WaveformWhitener)
+        ]
+        assert len(whitener) == 1
+        whitener = whitener[0].whitener
+        assert whitener is not None
+        local_whiteners = whitener.local_whiteners(self.b.subtract_channel_index)
+        self.del_none_buffer("local_whiteners")
+        self.register_buffer("local_whiteners", local_whiteners)
 
     def save_models(self, save_folder):
         super().save_models(save_folder)
@@ -178,6 +198,15 @@ class SubtractionPeeler(BasePeeler):
         sub_channel_index = make_channel_index(
             geom, subtraction_cfg.subtract_radius_um, to_torch=True
         )
+
+        # handle whitener fitting
+        if subtraction_cfg.whiten:
+            assert subtraction_cfg.whiten_cfg is not None
+            featurization_cfg = replace(
+                featurization_cfg,
+                fit_disabled_whitener=True,
+                whiten_cfg=subtraction_cfg.whiten_cfg,
+            )
 
         # construct denoising and featurization pipelines
         subtraction_denoising_pipeline = WaveformPipeline.from_config(
@@ -261,6 +290,7 @@ class SubtractionPeeler(BasePeeler):
             denoiser_realignment_shift=self.p.denoiser_realignment_shift,
             denoiser_realignment_channel=self.p.denoiser_realignment_channel,
             compute_collidedness=self.save_collidedness,
+            local_whiteners=self.b.local_whiteners,
         )
 
         # add in chunk_start_samples

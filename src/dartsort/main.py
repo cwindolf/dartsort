@@ -118,8 +118,7 @@ def dartsort(
           - "sorting": `DARTsortSorting`
           - "motion": MotionInfo
     """
-    output_dir = ensure_path(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    output_dir = ensure_path(output_dir, mkdir=True)
 
     # convert cfg to internal format and store it for posterity
     cfg = to_internal_config(cfg)

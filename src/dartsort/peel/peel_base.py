@@ -154,6 +154,7 @@ class BasePeeler(BModule):
             cleanup_and_log_gpu_usage(computation_cfg, "peel: Usage after model fits:")
         assert not self.needs_precompute()
         assert not self.needs_fit()
+        self.post_fit()
 
     def peel(
         self,
@@ -430,6 +431,9 @@ class BasePeeler(BModule):
 
     def peeling_needs_precompute(self) -> bool:
         return False
+
+    def post_fit(self):
+        pass
 
     def precompute_peeling_data(
         self, save_folder, overwrite=False, computation_cfg=None
