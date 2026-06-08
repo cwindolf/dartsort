@@ -254,7 +254,7 @@ class DeveloperConfig(DARTsortUserConfig):
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
     whiten_in_subtraction: bool = True
-    threshold_before_whitening: float = 9.0
+    threshold_before_whitening: float = 10.0
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (

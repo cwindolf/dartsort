@@ -680,8 +680,8 @@ class SubtractionConfig:
     convexity_radius: int = 7
     max_iter: int = 100
     whiten: bool = True
-    threshold_before_whitening: float = 9.0
-    whiten_cfg: WhiteningConfig | None = WhiteningConfig()
+    threshold_before_whitening: float = 10.0
+    whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -1217,13 +1217,13 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         detection_threshold=cfg.motion_voltage_threshold,
         chunk_length_samples=cfg.chunk_length_samples,
         peak_sign=cfg.peak_sign,
-        shave_score=cfg.initial_threshold,
+        shave_score=cfg.threshold_before_whitening,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **motion_kw,
         tpca_rank=cfg.temporal_pca_rank,
         threshold_cfg=motion_threshold_cfg,
-        spike_denoising_score=cfg.initial_threshold,
+        spike_denoising_score=cfg.threshold_before_whitening,
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
