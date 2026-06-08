@@ -1224,7 +1224,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         **motion_kw,
         tpca_rank=cfg.temporal_pca_rank,
         threshold_cfg=motion_threshold_cfg,
-        spike_denoising_score=cfg.initial_threshold,
+        spike_denoising_score=cfg.threshold_before_whitening,
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
