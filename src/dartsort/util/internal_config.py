@@ -671,7 +671,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0
-    residnorm_decrease_threshold: float = 10.0
+    residnorm_decrease_threshold: float = 9.0
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv"
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
@@ -679,8 +679,9 @@ class SubtractionConfig:
     convexity_threshold: float | None = None
     convexity_radius: int = 7
     max_iter: int = 100
-    whiten: bool = False
-    whiten_cfg: WhiteningConfig | None = None
+    whiten: bool = True
+    threshold_before_whitening: float = 9.0
+    whiten_cfg: WhiteningConfig | None = WhiteningConfig()
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction

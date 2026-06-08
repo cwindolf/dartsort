@@ -126,7 +126,6 @@ class DARTsortUserConfig:
     deduplication_ms:  Annotated[float, Field(gt=0)] = 0.5
     """As a final postprocessing step, only the higher-scoring of any spikes within
     this time radius of each other are kept.
-
     If this is negative, it does nothing. If it's 0, exact duplicates are dropped.
     """
 
@@ -146,7 +145,7 @@ class DARTsortUserConfig:
     threshold in Kilosort and other sorters, and it represents reduction in
     Euclidean norm of standardized data due to matching a new event."""
 
-    initial_threshold: Annotated[float, Field(gt=0)] = 10.0
+    initial_threshold: Annotated[float, Field(gt=0)] = 9.0
     """Initial detection's neural net matching threshold. Same as
     matching_threshold, except that a neural net is trying to guess
     the true waveforms here, rather than using cluster templates."""
@@ -254,7 +253,8 @@ class DeveloperConfig(DARTsortUserConfig):
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
-    whiten_in_subtraction: bool = False
+    whiten_in_subtraction: bool = True
+    threshold_before_whitening: float = 9.0
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (

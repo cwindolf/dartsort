@@ -641,7 +641,9 @@ class DARTsortAnalysis:
         assert td is not None
         assert self.merge_distances is not None
 
-        unit_ix = np.searchsorted(td.unit_ids, unit_id)
+        unit_ix = np.flatnonzero(td.unit_ids == unit_id)
+        assert unit_ix.shape[0] == 1
+        unit_ix = unit_ix[0]
         unit_dists = self.merge_distances[unit_ix]
         distance_order = np.argsort(unit_dists)
         distance_order = np.concatenate(

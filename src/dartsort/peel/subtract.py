@@ -72,6 +72,10 @@ class SubtractionPeeler(BasePeeler):
         self.save_residnorm_decrease = save_residnorm_decrease
         self.save_collidedness = save_collidedness
         self.dedup_batch_size = self.nearest_batch_length()
+        if self.p.whiten:
+            self.threshold = self.p.threshold_before_whitening
+        else:
+            self.threshold = self.p.residnorm_decrease_threshold
 
         geom = recording.get_channel_locations()
         sub_channel_index = make_channel_index(
@@ -167,6 +171,7 @@ class SubtractionPeeler(BasePeeler):
         local_whiteners = whitener.local_whiteners(self.b.sub_channel_index)
         self.del_none_buffer("local_whiteners")
         self.register_buffer("local_whiteners", local_whiteners)
+        self.threshold = self.p.residnorm_decrease_threshold
 
     def save_models(self, save_folder):
         super().save_models(save_folder)
@@ -252,12 +257,12 @@ class SubtractionPeeler(BasePeeler):
     ):
         del return_waveforms  # always done here
 
-        extract_index = None if self.extract_subtract_same else self.channel_index
+        extract_index = None if self.extract_subtract_same else self.b.channel_index
         traces = traces.to(self.dtype)
 
         subtraction_result = subtract_chunk(
             traces,
-            self.sub_channel_index,
+            self.b.sub_channel_index,
             self.subtraction_denoising_pipeline,
             extract_index=extract_index,
             extract_mask=self.extract_subtract_mask,
@@ -274,7 +279,7 @@ class SubtractionPeeler(BasePeeler):
             dedup_temporal_radius=self.p.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.p.remove_exact_duplicates,
             pos_dedup_temporal_radius=self.p.positive_temporal_dedup_radius_samples,
-            residnorm_decrease_threshold=self.p.residnorm_decrease_threshold,
+            residnorm_decrease_threshold=self.threshold,
             decrease_objective=self.p.decrease_objective,
             trough_priority=self.p.trough_priority,
             growth_tolerance=self.p.growth_tolerance,
@@ -284,8 +289,8 @@ class SubtractionPeeler(BasePeeler):
             save_iteration=self.save_iteration,
             save_residnorm_decrease=self.save_residnorm_decrease,
             max_iter=self.p.max_iter,
-            subtract_rel_inds=self.subtract_index_rel_inds,
-            dedup_rel_inds=self.dedup_rel_inds,
+            subtract_rel_inds=self.b.subtract_index_rel_inds,
+            dedup_rel_inds=self.b.dedup_rel_inds,
             realign_to_denoiser=self.p.realign_to_denoiser,
             denoiser_realignment_shift=self.p.denoiser_realignment_shift,
             denoiser_realignment_channel=self.p.denoiser_realignment_channel,
