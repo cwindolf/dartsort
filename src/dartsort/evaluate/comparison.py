@@ -264,6 +264,19 @@ class DARTsortGroundTruthComparison:
 
         return neighb_ixs, neighb_ids, neighb_dists, neighb_coarse_templates
 
+    def full_tested_labels(self):
+        labels = np.full(len(self.tested_analysis.sorting), "NA", dtype="<U8")
+        assert self.tested_analysis.sorting.labels is not None
+        labels_si = self.tested_analysis.sorting.labels[self.tested_si_inds]
+        for unit_id in progbar(self.tested_analysis.unit_ids):
+            in_unit_si = np.flatnonzero(labels_si == unit_id)
+            in_unit = self.tested_si_inds[in_unit_si]
+            (labels2,) = self.comparison.get_labels2(unit_id)
+            assert labels2.dtype == labels.dtype
+            assert labels2.shape == in_unit_si.shape
+            labels[in_unit] = labels2
+        return labels
+
     def _calculate_template_distances(self):
         """Compute the merge distance matrix"""
         if hasattr(self, "_template_distances"):
