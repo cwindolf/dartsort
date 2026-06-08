@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import scipy.cluster.hierarchy
 import seaborn as sns
 import torch
@@ -10,7 +11,11 @@ from spikeinterface.core import BaseRecording
 
 from ..clustering.cluster_util import leafsets
 from ..util import spikeio
-from ..util.data_util import DARTsortSorting, try_get_denoising_pipeline
+from ..util.data_util import (
+    DARTsortSorting,
+    get_featurization_pipeline,
+    try_get_denoising_pipeline,
+)
 from .colors import glasbey1024
 
 
@@ -525,3 +530,133 @@ def visualize_denoiser(
     if suptitle:
         fig.suptitle(suptitle)
     return fig
+
+
+def plot_denoiser_scores(
+    recording: BaseRecording,
+    vis_sorting: DARTsortSorting,
+    load_denoiser_from_sorting: DARTsortSorting | None = None,
+    count_per_unit: int = 128,
+    figscale: float = 2.0,
+    decrease_objective="deconv",
+    seed: int = 0,
+    vmax=50.0,
+    dv=0.5,
+):
+    from ..peel.peel_lib import check_residual_decrease
+    from ..transform import WaveformWhitener
+
+    # load denoiser
+    if load_denoiser_from_sorting is None:
+        load_denoiser_from_sorting = vis_sorting
+    dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
+    assert dn is not None
+    assert channel_index is not None
+    assert geom is not None
+
+    # try load whitener
+    fp = get_featurization_pipeline(load_denoiser_from_sorting)
+    whitener = [f for f in fp.transformers if isinstance(f, WaveformWhitener)]
+    assert len(whitener) <= 1
+    if len(whitener) == 0:
+        local_whiteners = None
+    else:
+        whitener = whitener[0].whitener
+        local_whiteners = whitener.local_whiteners(channel_index)
+
+    # choose and load examples
+    rg = np.random.default_rng(seed)
+    times_samples = []
+    channels = []
+    labels = []
+    scores_unwhitened = []
+    scores_whitened = None if local_whiteners is None else []
+    assert vis_sorting.labels is not None
+    for unit_id in np.unique(vis_sorting.unit_ids):
+        if unit_id < 0:
+            continue
+
+        in_unit = np.flatnonzero(vis_sorting.labels == unit_id)
+        if in_unit.size <= count_per_unit:
+            choices = in_unit
+        else:
+            choices = rg.choice(in_unit, size=count_per_unit, replace=False)
+            choices.sort()
+
+        tt = vis_sorting.times_samples[choices]
+        cc = vis_sorting.channels[choices]
+        x = spikeio.read_waveforms_channel_index(
+            recording,
+            times_samples=tt,
+            main_channels=cc,
+            channel_index=channel_index.numpy(force=True),
+        )
+        x = torch.asarray(x, dtype=torch.float)
+        y, _ = dn(x, channels=torch.asarray(cc))
+
+        _, sc_res_a = check_residual_decrease(
+            x,
+            y,
+            decrease_objective=decrease_objective,
+            threshold=-1.0,
+            save_residnorm_decrease=True,
+        )
+
+        times_samples.append(tt)
+        channels.append(cc)
+        labels.append(vis_sorting.labels[choices])
+        scores_unwhitened.append(sc_res_a["residnorm_decreases"])
+
+        if local_whiteners is None:
+            continue
+        assert scores_whitened is not None
+
+        _, sc_res_b = check_residual_decrease(
+            x,
+            y,
+            decrease_objective=decrease_objective,
+            threshold=-1.0,
+            save_residnorm_decrease=True,
+            local_whiteners=local_whiteners,
+            channels=torch.asarray(cc),
+        )
+        scores_whitened.append(sc_res_b["residnorm_decreases"])
+
+    data = dict(
+        time_samples=np.concatenate(times_samples),
+        channel=np.concatenate(channels),
+        label=np.concatenate(labels),
+        score_unwhitened=np.sqrt(np.maximum(0.0, np.concatenate(scores_unwhitened))),
+    )
+    if scores_whitened is not None:
+        data["score_whitened"] = np.sqrt(np.maximum(0.0, np.concatenate(scores_whitened)))
+    df = pd.DataFrame(data)
+
+    bins = np.arange(0.0, vmax, step=dv)
+    ncols = 1 + int(scores_whitened is not None)
+    fig, axes = plt.subplots(
+        nrows=1, ncols=ncols, squeeze=False, figsize=(2.0 * figscale * ncols, figscale)
+    )
+
+    for unit_id, sub_df in df.groupby("label"):
+        unit_id = int(unit_id)  # type: ignore
+        axes[0, 0].hist(
+            sub_df.score_unwhitened,
+            bins=bins,
+            histtype="step",
+            color=glasbey1024[unit_id % len(glasbey1024)],
+        )
+        if scores_whitened is None:
+            continue
+        axes[0, 1].hist(
+            sub_df.score_whitened,
+            bins=bins,
+            histtype="step",
+            color=glasbey1024[unit_id % len(glasbey1024)],
+        )
+
+    for ax, name in zip(axes.flat, ["original", "whitened"]):
+        ax.grid()
+        ax.set_xlabel(f"{name} score")
+
+    return fig, axes, df

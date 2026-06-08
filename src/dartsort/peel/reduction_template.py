@@ -155,9 +155,9 @@ class ReductionTemplateData(TemplateData):
             templates *= msk
 
         if whitener is None:
-            whitener_np = None
+            whitener_np = covariance_np = None
         else:
-            whitener_np = whitener.to_numpy()
+            whitener_np, covariance_np = whitener.to_numpy()
 
         return TemplateData(
             unit_ids=unit_ids,
@@ -169,6 +169,7 @@ class ReductionTemplateData(TemplateData):
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            covariance=covariance_np,
             sampling_frequency=recording.sampling_frequency,
             whiten_strategy=template_cfg.whitening.strategy,
         )

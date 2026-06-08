@@ -18,7 +18,6 @@ from dartsort.util.internal_config import (
     FeaturizationConfig,
     FitSamplingConfig,
     SubtractionConfig,
-    default_pretrained_path
 )
 
 fixedlenkeys = (
@@ -127,7 +126,6 @@ def test_fakedata_nonn(fakedata, tmp_path):
     with tempfile.TemporaryDirectory(
         dir=tmp_path, ignore_cleanup_errors=True
     ) as tempdir:
-        print("first one")
         torch.manual_seed(0)
         st = subtract(
             recording=rec,
@@ -194,7 +192,7 @@ def test_fakedata_nonn(fakedata, tmp_path):
             recording=rec,
             output_dir=tempdir,
             featurization_cfg=featconf,
-            sampling_cfg=FitSamplingConfig(n_residual_snips=0),
+            sampling_cfg=sampconf,
             subtraction_cfg=subconf,
             overwrite=True,
         )
@@ -216,17 +214,17 @@ def test_fakedata_nonn(fakedata, tmp_path):
                 channel_index.shape[1],
             )
 
-    for ccfg in (two_jobs_cfg, two_jobs_cfg_spawn):
+    for cname, ccfg in (("", two_jobs_cfg), ("spawn", two_jobs_cfg_spawn)):
         with tempfile.TemporaryDirectory(
             dir=tmp_path, ignore_cleanup_errors=True
         ) as tempdir:
-            print("parallel first one")
+            print("parallel first one", cname)
             torch.manual_seed(0)
             st = subtract(
                 recording=rec,
                 output_dir=tempdir,
                 featurization_cfg=nolocfeatconf,
-                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
+                sampling_cfg=sampconf,
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -284,7 +282,7 @@ def test_fakedata_nonn(fakedata, tmp_path):
                 recording=rec,
                 output_dir=tempdir,
                 featurization_cfg=nolocfeatconf,
-                sampling_cfg=FitSamplingConfig(n_residual_snips=0),
+                sampling_cfg=sampconf,
                 subtraction_cfg=subconf,
                 overwrite=True,
                 computation_cfg=ccfg,
@@ -314,12 +312,12 @@ def test_resume(fakedata, tmp_path):
         detection_threshold=20.0,
         peak_sign="both",
         subtraction_denoising_cfg=FeaturizationConfig(
-            do_nn_denoise=False,
-            denoise_only=True
+            do_nn_denoise=False, denoise_only=True
         ),
         first_denoiser_thinning=0.0,
         first_denoiser_spatial_jitter=0,
         first_denoiser_temporal_jitter=0,
+        whiten=False,
     )
     featconf = FeaturizationConfig(skip=True)
     sampconf = FitSamplingConfig(n_residual_snips=0)
@@ -413,6 +411,7 @@ def test_small_nonn(tmp_path, nn_localization):
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
+        whiten=False,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, nn_localization=nn_localization)
 
