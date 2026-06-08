@@ -243,7 +243,7 @@ class BasePeeler(BModule):
             resids_remaining = total_residual_snips - resids_so_far
             chunks_remaining = len(chunks_to_do)
             chunks_done = n_chunks_orig - chunks_remaining
-            chunks_cover = int(np.floor(ensure_coverage * n_chunks_orig))
+            chunks_cover = int(np.ceil(ensure_coverage * n_chunks_orig))
             chunks_cover_remaining = chunks_cover - chunks_done
             if chunks_cover_remaining == 0:
                 assert resids_remaining == 0

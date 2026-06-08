@@ -168,7 +168,7 @@ class SubtractionPeeler(BasePeeler):
         assert len(whitener) == 1
         whitener = whitener[0].whitener
         assert whitener is not None
-        local_whiteners = whitener.local_whiteners(self.b.sub_channel_index)
+        local_whiteners = whitener.local_whiteners(self.sub_channel_index)  # type: ignore
         self.del_none_buffer("local_whiteners")
         self.register_buffer("local_whiteners", local_whiteners)
         self.threshold = self.p.residnorm_decrease_threshold

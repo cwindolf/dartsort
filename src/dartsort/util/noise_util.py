@@ -1497,6 +1497,7 @@ def residual_covariance(
         N += n
         w = n / N
         cov += scov.sub_(cov).mul_(w)
+    assert N > 0
     assert cov is not None
 
     return cov
@@ -1514,7 +1515,6 @@ def fullzca_whitener(
 def localzca_whitener(
     cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
 ) -> np.ndarray:
-    """"""
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
         chans = chans[chans < len(channel_index)]
