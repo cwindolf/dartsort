@@ -1027,7 +1027,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         radius=cfg.subtraction_radius_um,
         interp_params=temp_interp_params,
     )
-    if cfg.dredge_only:
+    # TODO: dredge_only is a bad name for this.
+    if cfg.dredge_only and not cfg.whiten_in_subtraction:
         n_residual_snips = 0
     else:
         n_residual_snips = cfg.n_residual_snips
@@ -1223,7 +1224,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         **motion_kw,
         tpca_rank=cfg.temporal_pca_rank,
         threshold_cfg=motion_threshold_cfg,
-        spike_denoising_score=cfg.threshold_before_whitening,
+        spike_denoising_score=cfg.initial_threshold,
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,

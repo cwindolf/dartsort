@@ -1458,7 +1458,7 @@ def residual_covariance(
     residual_dataset_name="residual",
     seed: int = 0,
     batch_size=256,
-):
+) -> Tensor:
     assert sorting.parent_h5_path is not None
 
     if do_interpolation:
@@ -1497,6 +1497,7 @@ def residual_covariance(
         N += n
         w = n / N
         cov += scov.sub_(cov).mul_(w)
+    assert cov is not None
 
     return cov
 
