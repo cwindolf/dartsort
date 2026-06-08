@@ -214,7 +214,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
     assert gt_shift is not None
     gt_shift = gt_shift[gt_in_chunk]
     if "scalings" in res:
-        match_scale = res["scalings"].numpy(force=True)
+        match_scale = res["scalings"].numpy(force=True)  # type: ignore
     else:
         match_scale = np.ones(gt_n_spikes, dtype=np.float32)
 
@@ -288,7 +288,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         )
 
         if "up_inds" in res:
-            match_up = res["up_inds"].numpy(force=True)
+            match_up = res["up_inds"].numpy(force=True)  # type: ignore
             np.testing.assert_array_equal(gt_up, match_up, err_msg="sorting: up_inds 1")
         else:
             np.testing.assert_array_equal(
@@ -300,7 +300,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         )
 
         if "time_shifts" in res:
-            match_shift = res["time_shifts"].numpy(force=True)
+            match_shift = res["time_shifts"].numpy(force=True)  # type: ignore
             np.testing.assert_array_equal(match_shift, gt_shift)
         else:
             assert (gt_shift == 0).all()
@@ -546,7 +546,7 @@ def test_tiny_up(tiny_up_sim, tmp_path, up_factor, scaling, cd_iter, up_offset):
         # )
         assert np.array_equal(res["labels"].numpy(force=True), labels)
         if "up_inds" in res:
-            assert np.array_equal(res["up_inds"].numpy(force=True), upsampling_indices)
+            assert np.array_equal(res["up_inds"].numpy(force=True), upsampling_indices)  # type: ignore
         else:
             assert up_factor == 1
         resid_rms = torch.square(res["residual"]).mean().numpy(force=True)

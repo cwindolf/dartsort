@@ -1067,6 +1067,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
+            temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
+            positive_temporal_dedup_radius_samples=cfg.positive_temporal_dedup_radius_samples,
             whiten=cfg.whiten_in_subtraction,
             whiten_cfg=whiten_cfg,
         )
@@ -1076,6 +1078,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius_um=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
+            temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
         )
     elif cfg.detection_type == "match":
         assert cfg.precomputed_templates_npz is not None

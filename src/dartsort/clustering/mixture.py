@@ -55,7 +55,6 @@ from typing import (
 import numpy as np
 import torch
 import torch.nn.functional as F
-from packaging.version import Version
 from scipy.sparse.csgraph import connected_components
 from sympy.utilities.iterables import multiset_partitions, subsets
 from torch import Tensor
@@ -88,6 +87,7 @@ from ..util.motion import MotionInfo
 from ..util.noise_util import EmbeddedNoise
 from ..util.py_util import databag
 from ..util.spiketorch import (
+    _nonzero_static,
     cosine_distance,
     ecl,
     entropy,
@@ -101,13 +101,6 @@ from ..util.torch_util import BModule, torch_compiler
 from .cluster_util import linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
 from .kmeans import kmeans
-
-TORCH_IS_OLD = Version(torch.__version__) < Version("2.6.0")
-if TORCH_IS_OLD and torch.cuda.is_available():
-    warnings.warn(
-        f"Your PyTorch version ({torch.__version__}) is supported by dartsort, "
-        "but dartsort would be faster if you had >= 2.6.0."
-    )
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -6192,18 +6185,6 @@ def _count_candidates(candidates, batch_candidate_counts, batch_size):
     for b, i0 in enumerate(range(0, candidates.shape[0], batch_size)):
         counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
     batch_candidate_counts.copy_(counts.cpu())
-
-
-if TORCH_IS_OLD:
-
-    def _nonzero_static(x: Tensor, size: int):
-        nz = x.nonzero()
-        assert nz.shape[0] == size
-        return nz
-else:
-
-    def _nonzero_static(x: Tensor, size: int):
-        return x.nonzero_static(size=size)
 
 
 @torch_compiler(fullgraph=False)
