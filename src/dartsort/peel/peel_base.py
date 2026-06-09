@@ -529,7 +529,6 @@ class BasePeeler(BModule):
         if chunk_end_samples is None:
             chunk_end_samples = chunk_start_samples + self.chunk_length_samples
             chunk_end_samples = min(Ts, chunk_end_samples)
-        print(f"{chunk_end_samples=} {Ts=}")
         assert chunk_end_samples <= Ts
         chunk, left_margin, right_margin = get_chunk_with_margin(
             self.recording._recording_segments[0],
