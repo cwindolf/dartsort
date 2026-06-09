@@ -279,7 +279,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         unsorted_missed_color=None,
         count=50,
         single_channel=False,
-        order="tprandom",
+        order="tpfpfn",
         show_sorted_matches=True,
         show_unsorted_matches=False,
         average=False,
@@ -328,6 +328,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
 
         waveforms = []
         colors = []
+        channels = []
         maa = 1.0
         for kind, color in self.colors.items():
             if w[kind] is None or not w[kind].size or not np.isfinite(w[kind]).any():
@@ -337,11 +338,15 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 maxs = np.nanmax(np.abs(w[kind]), axis=(1, 2))
             maxs = np.nan_to_num(maxs, nan=1.0)
             maa = max(maa, np.percentile(maxs, 90))
+            ch = w[f"channels_{kind}"]
             if self.average:
                 avg = w[kind].mean(0, keepdims=True)
+                assert np.all(ch == ch[0]), "Chans mismatch in avg"
                 waveforms.append(avg)
+                channels.append(ch[:1])
             else:
                 waveforms.append(w[kind])
+                channels.append(ch)
             colors.append(np.broadcast_to([color], waveforms[-1].shape[:1]))
 
         if not len(waveforms):
@@ -350,25 +355,26 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         if self.order == "tprandom" and not self.average and len(waveforms) > 1:
             wlast = np.concatenate(waveforms[1:])
             clast = np.concatenate(colors[1:])
+            chanlast = np.concatenate(channels[1:])
             n = len(wlast)
             shuf = np.random.default_rng(0).permutation(n)
             waveforms = [waveforms[0], wlast[shuf]]
             colors = [colors[0], clast[shuf]]
+            channels = [channels[0], chanlast[shuf]]
 
         waveforms = np.concatenate(waveforms)
         colors = np.concatenate(colors)
-        max_channels = np.broadcast_to([w["max_chan"]], colors.shape)
+        channels = np.concatenate(channels)
+        chans = comparison.gt_analysis.vis_channel_index[w["max_chan"]]
+        chans = chans[chans < comparison.gt_analysis.vis_channel_index.shape[0]]
 
         ax = panel.subplots()
         max_abs_amp = maa
-        chans = w["channel_index"][w["max_chan"]]
-        chans = chans[chans < len(w["geom"])]
         geomplot(
             waveforms,
-            max_channels=max_channels,
-            channel_index=w["channel_index"],
             geom=w["geom"],
             ax=ax,
+            channels=channels,
             show_zero=False,
             max_abs_amp=max_abs_amp,
             annotate_z=True,

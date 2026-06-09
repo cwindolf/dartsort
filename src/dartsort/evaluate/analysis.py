@@ -413,10 +413,14 @@ class DARTsortAnalysis:
                 read_chans=read_chans,
                 main_channel=main_channel,
             )
-            channels = None
+            channels = self.vis_channel_index[main_channel]
+            channels = np.broadcast_to(
+                channels[None], (waveforms.shape[0], waveforms.shape[2])
+            )
         else:
             channels = read_channel_index[read_chans]
-            main_channel = self.unit_max_channel(unit_id)
+            if main_channel is None:
+                main_channel = self.unit_max_channel(unit_id)
         return WaveformsBag(
             which=which,
             waveforms=waveforms,
@@ -558,7 +562,10 @@ class DARTsortAnalysis:
     def unit_max_channel(self, unit_id) -> int:
         assert self.coarse_template_data is not None
         temp = self.coarse_template_data.unit_templates(unit_id)
-        assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
+        assert temp.ndim == 3, f"{self.name}: {unit_id=} {temp.shape=}"
+        assert temp.shape[0] == np.atleast_1d(unit_id).size, (
+            f"{self.name}: {unit_id=} {temp.shape=}"
+        )
 
         which = self.in_unit(unit_id)
         if self.motion.drifting and hasattr(self.sorting, "channel_index"):

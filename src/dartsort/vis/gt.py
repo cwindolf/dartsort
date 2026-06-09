@@ -85,9 +85,6 @@ class TrimmedTemplateDistanceMatrix(ComparisonPlot):
         col_order = col_order[col_order < comparison.template_distances.shape[1]]
         dist = comparison.template_distances[row_order, :][:, col_order]
         dist = dist.astype(np.float64)
-        print(f"{dist.shape=}")
-        print(f"{dist.min()=}")
-        print(f"{dist.max()=}")
 
         ax = panel.subplots()
         log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
