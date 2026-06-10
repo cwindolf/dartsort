@@ -121,9 +121,12 @@ class DARTsortAnalysis:
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
         if has_hdf5:
-            tpca = get_tpca(
-                sorting, featurization_pipeline_pt=featurization_pipeline_pt
-            )
+            try:
+                tpca = get_tpca(
+                    sorting, featurization_pipeline_pt=featurization_pipeline_pt
+                )
+            except ValueError:
+                tpca = None
         else:
             tpca = None
         if has_hdf5 and vis_radius and tpca is not None:

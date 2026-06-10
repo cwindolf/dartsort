@@ -911,6 +911,8 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
         if k in ("TemporalPCA", "TemporalPCAFeaturizer")
         and v["name_prefix"] == name_prefix
     ]
+    if len(tpca_kw) == 0:
+        raise ValueError(f"No TPCA found in {featurization_pipeline_pt}.")
     assert len(tpca_kw) == 1
     ix, clsname, kw = tpca_kw[0]
     tpca = transformers_by_class_name[clsname](
