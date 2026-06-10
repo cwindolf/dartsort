@@ -162,6 +162,8 @@ def visualize_step_results(
     chunk_vis_style: Literal["im", "trace"] = "im",
     gt_sorting: DARTsortSorting | None = None,
     vis_only_last_step: bool = False,
+    vline_at=None,
+    objline_at=None,
 ):
     import matplotlib.pyplot as plt
 
@@ -205,6 +207,7 @@ def visualize_step_results(
     if vis_only_last_step:
         iterator = list(iterator)
 
+    resid = None
     for it, resid, pre_conv, conv, times_samples, labels, channels in iterator:
         v = np.flatnonzero(times_samples == times_samples.clip(vis_start, vis_end - 1))
         times_samples = times_samples[v] - vis_start
@@ -274,6 +277,7 @@ def visualize_step_results(
             lw=1,
         )
 
+        vmax = max(np.nanmax(pre_conv[:, obj_sl]), np.nanmax(conv[:, obj_sl]))
         for j, c in enumerate(pre_conv):
             axes[-2].plot(
                 obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
@@ -288,15 +292,30 @@ def visualize_step_results(
         axes[-1].set_ylabel("post-step " + ("obj" if obj_mode else "conv"))
         for ax in axes[-2:]:
             ax.grid()
-        if obj_mode:
-            vmin = max(-100, pre_conv[:, obj_sl].min(), conv[:, obj_sl].min())
-            for ax in axes[-2:]:
-                ax.set_ylim([vmin, pre_conv[:, obj_sl].max() * 1.05])
+        vmin = max(-100, pre_conv[:, obj_sl].min(), conv[:, obj_sl].min())
+        for ax in axes[-2:]:
+            ax.set_ylim([vmin, vmax * 1.05])
 
         panel.suptitle(f"iteration {it}", fontsize=12)
 
+        if vline_at is not None:
+            for ax in axes[:3]:
+                ax.axvline(vline_at, color='w', ls='--', lw=0.8)
+            for ax in axes[-2:]:
+                ax.axvline(vline_at, color='k', ls='--', lw=0.8)
+        if objline_at is not None:
+            for ax in axes[-2:]:
+                ax.axhline(objline_at, color='k', ls='--', lw=0.8)
+
         plt.show()
         plt.close(panel)
+
+    return dict(
+        resid=resid,
+        times=t_full[:n],
+        channels=c_full[:n],
+        labels=l_full[:n],
+    )
 
 
 # -- reference implementation for upsampled matching
