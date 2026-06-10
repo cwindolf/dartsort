@@ -799,6 +799,8 @@ def deduplicate_spikes(
     ndrop = 0
     for unit_id in unit_ids:
         in_unit = np.flatnonzero(new_labels == unit_id)
+        if in_unit.size <= 1:
+            continue
         t = times_samples[in_unit]
         dt = np.diff(t)
         if dt.min() > radius_samples:
