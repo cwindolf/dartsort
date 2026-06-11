@@ -3,6 +3,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from dartsort.util.py_util import databag
+
 try:
     import cupy  # type: ignore # ty: ignore[x]
 
@@ -33,7 +35,6 @@ def kmeanspp(
     n_components=10,
     random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
-    mode_dim=2,
     skip_assignment=False,
     min_distance=None,
     Xnormsq: Tensor | None = None,
@@ -412,6 +413,14 @@ def kmeans_inner(
     return assignments, e, centroids, dists
 
 
+@databag
+class KMeansResult:
+    labels: Tensor | None
+    responsibilities: Tensor | None
+    centroids: Tensor | None
+    dists: Tensor | None
+
+
 def kmeans(
     X: Tensor,
     n_kmeans_tries=5,
@@ -421,11 +430,11 @@ def kmeans(
     random_state: np.random.Generator | torch.Generator | int = 0,
     kmeanspp_initial="random",
     with_proportions=False,
-    drop_prop=0.025,
-    drop_sum=5.0,
+    drop_prop=0.0,
+    drop_sum=0.0,
     weights: Tensor | None = None,
     test_convergence_every=10,
-):
+) -> KMeansResult:
     best_phi = np.inf
     if isinstance(random_state, int):
         random_state = np.random.default_rng(random_state)
@@ -461,7 +470,7 @@ def kmeans(
                 assignments = aa.clone()
                 e = ee
                 centroids = cc
-    return dict(
+    return KMeansResult(
         labels=assignments, responsibilities=e, centroids=centroids, dists=dists
     )
 
@@ -614,3 +623,138 @@ def _kmeans_main_loop(
                 break
     dists = _sqeuc(X, Xnormsq, centroids, dists)
     return e, centroids, dists, proportions
+
+
+def batched_kmeans(
+    X: Tensor,
+    n_components: int,
+    seed: torch.Generator | np.random.Generator | int = 0,
+    n_iter: int = 100,
+    kmeanspp_seeds_per_try: int = 5,
+    n_tries: int = 10,
+    test_convergence_every=10,
+    atol=1e-5,
+    with_labels=True,
+    with_proportions=True,
+) -> KMeansResult:
+    """
+    Compared to above:
+     - with_proportions = True
+     - drop_prop = 0
+     - no weights allowed for now
+     - kmeanspp always random initial
+     - n_iter > 0
+    """
+    k = n_components
+    del n_components
+    assert n_iter > 0
+    assert n_tries > 0
+    assert k > 1
+    assert kmeanspp_seeds_per_try >= 1
+
+    dev = X.device
+    gen = spawn_torch_rg(seed, device=dev)
+    Xnormsq = torch.linalg.norm(X, dim=1).square_()
+    n, dim = X.shape
+    k = min(n, k)
+    assert n >= k > 1
+    ntries_k = n_tries * k
+    n_kmeanspps = n_tries * kmeanspp_seeds_per_try
+
+    # -- kmeanspp stage: initialization
+    centroid_ixs = torch.full((k, n_kmeanspps), n, dtype=torch.long, device=dev)
+    centroid_ixs[0] = torch.randint(n, size=(n_kmeanspps,), device=dev, generator=gen)
+    dists = X.new_empty((n_kmeanspps, n))
+    Y = X[centroid_ixs[0]]
+    Ynormsq = Xnormsq[centroid_ixs[0]]
+    dists = sqeuc_cdist_known_norm(Y, Ynormsq, X, Xnormsq, dists)
+
+    # -- kmeanspp stage: loop
+    # buf for random sampling with Gumbel trick and new distance storage
+    _buf = torch.empty_like(dists)
+    for j in range(1, k):
+        # sample new centroid indices wppt dists (which is squared)
+        _buf.uniform_(generator=gen)
+        _buf.log_().neg_().log_().neg_().add_(dists.log())
+        # torch.divide(dists, _buf, out=_buf)
+        # cix_j = torch.argmin(_buf, dim=1, out=centroid_ixs[j])
+        print(f"{dists.shape=} {_buf.shape=}")
+        cix_j = torch.argmax(_buf, dim=1, out=centroid_ixs[j])
+
+        # grab jth centroid data
+        torch.index_select(X, dim=0, index=cix_j, out=Y)
+        torch.index_select(Xnormsq, dim=0, index=cix_j, out=Ynormsq)
+
+        # update distances
+        newdists = sqeuc_cdist_known_norm(Y, Ynormsq, X, Xnormsq, _buf)
+        torch.minimum(dists, newdists, out=dists)
+
+    # -- kmeanspp finish: pick best by phi
+    if kmeanspp_seeds_per_try > 1:
+        phi = dists.mean(1).view(n_tries, kmeanspp_seeds_per_try)
+        best_kmpp = phi.argmin(1, keepdim=True)
+        centroid_ixs = centroid_ixs.view(k, n_tries, kmeanspp_seeds_per_try)
+        centroid_ixs = centroid_ixs.take_along_dim(dim=2, indices=best_kmpp[None, :, :])
+        assert centroid_ixs.shape == (k, n_tries, 1)
+        centroid_ixs = centroid_ixs[:, :, 0]
+    assert centroid_ixs.shape == (k, n_tries)
+    centroid_ixs = centroid_ixs.T.contiguous()
+
+    # -- kmeans stage: initialization
+    Y = X[centroid_ixs].view(ntries_k, dim)
+    Ynormsq = Xnormsq[centroid_ixs].view(ntries_k)
+    dists = dists.resize_(n, ntries_k)
+    e = X.new_empty((n, n_tries, k))
+    N = X.new_ones((n_tries, k))
+    Ntot = X.new_full((), float(n))
+    log_props = X.new_zeros((n_tries, k))
+    phi = phi_ = e.new_full((n_tries,), torch.nan)
+
+    # -- kmeans stage: loop
+    check = False
+    for j in range(n_iter):
+        jmod = j % test_convergence_every
+        check = (j in (0, n_iter - 1)) or (jmod in (0, test_convergence_every - 1))
+
+        # e step
+        dists = sqeuc_cdist_known_norm(X, Xnormsq, Y, Ynormsq, dists.view(n, ntries_k))
+        dists = dists.view(n, n_tries, k)
+        e = torch.add(log_props, dists, alpha=-100.0, out=e)
+        e = F.softmax(e, dim=2)
+        if check:
+            phi_ = dists.mul_(e).mean(0).sum(1)
+            assert phi_.shape == phi.shape
+
+        # m step
+        N = torch.sum(e, dim=0, out=N)
+        if with_proportions:
+            torch.div(N, Ntot, out=log_props).log_()
+        w = e.div_(N)
+        Y = torch.mm(w.view(n, ntries_k).t(), X, out=Y)
+        Ynormsq = torch.linalg.vector_norm(Y, dim=1, out=Ynormsq)
+        Ynormsq.square_()
+
+        # check convergence
+        if check:
+            done = torch.allclose(phi, phi_, atol=atol) or phi_.max() < atol
+            phi = phi_
+            if done:
+                break
+    assert check  # => phi is up to date
+
+    # -- kmeans finish: pick best kmeans by phi, update responsibilities
+    best = phi.argmin()
+    Y = Y.view(n_tries, k, dim)[best]
+    Ynormsq = Ynormsq.view(n_tries, k)[best]
+    log_props = log_props[best]
+    dists = dists.resize_(n, k)
+    e = e.resize_(n, k)
+    dists = sqeuc_cdist_known_norm(X, Xnormsq, Y, Ynormsq, dists)
+    e = torch.add(log_props, dists, alpha=-0.5, out=e)
+    e = F.softmax(e, dim=1)
+    if with_labels:
+        labels = e.argmax(dim=1)
+    else:
+        labels = None
+
+    return KMeansResult(centroids=Y, responsibilities=e, labels=labels, dists=dists)

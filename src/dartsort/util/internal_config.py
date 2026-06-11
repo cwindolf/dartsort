@@ -515,7 +515,7 @@ class RefinementConfig:
     mixture_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
-    kmeans_tries: int = 5
+    kmeans_tries: int = 10
     kmeanspp_tries: int = 5
     full_proposal_every: int = 10
     main_min_iters: int = 20

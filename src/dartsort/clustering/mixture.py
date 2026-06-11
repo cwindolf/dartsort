@@ -100,7 +100,7 @@ from ..util.spiketorch import (
 from ..util.torch_util import BModule, torch_compiler
 from .cluster_util import linkage, maximal_leaf_groups
 from .clustering_features import StableWaveformFeatures
-from .kmeans import kmeans
+from .kmeans import batched_kmeans, kmeans
 
 if TYPE_CHECKING:
     from ..transform.temporal_pca import BaseTemporalPCA
@@ -5347,19 +5347,35 @@ def try_kmeans(
     x_ret = x if debug else None
 
     # kmeans
-    kres = kmeans(
-        x,
-        n_components=k,
-        random_state=gen,
-        n_iter=n_iter,
-        with_proportions=with_proportions,
-        drop_prop=drop_prop,
-        kmeanspp_initial=kmeanspp_initial,
-        n_kmeans_tries=n_kmeans_tries,
-        n_kmeanspp_tries=n_kmeanspp_tries,
-        weights=weights.to(x) if weights is not None else None,
+    _can_batch = (
+        weights is None
+        and with_proportions
+        and not drop_prop
+        and kmeanspp_initial == "random"
     )
-    resps = kres["responsibilities"]
+    if _can_batch:
+        kres = batched_kmeans(
+            x,
+            k,
+            seed=gen,
+            n_iter=n_iter,
+            kmeanspp_seeds_per_try=n_kmeanspp_tries,
+            n_tries=n_kmeans_tries,
+        )
+    else:
+        kres = kmeans(
+            x,
+            n_components=k,
+            random_state=gen,
+            n_iter=n_iter,
+            with_proportions=with_proportions,
+            drop_prop=drop_prop,
+            kmeanspp_initial=kmeanspp_initial,
+            n_kmeans_tries=n_kmeans_tries,
+            n_kmeanspp_tries=n_kmeanspp_tries,
+            weights=weights.to(x) if weights is not None else None,
+        )
+    resps = kres.responsibilities
     if resps is None:
         return None, x_ret, channels
     assert resps.shape[1] <= k
