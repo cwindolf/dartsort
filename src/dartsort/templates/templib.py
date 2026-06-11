@@ -63,6 +63,7 @@ def fit_tsvd(
             min_channel_amplitude=template_cfg.template_min_channel_amplitude,
             random_seed=random_seed,
             computation_cfg=computation_cfg,
+            min_explained_variance=template_cfg.svd_min_explained_variance,
         )
         return pca
 
@@ -128,6 +129,7 @@ def pca_from_templates(
     rank: int,
     min_channel_amplitude: float = 1.0,
     random_seed: int = 0,
+    min_explained_variance: float = 5e-3,
     computation_cfg: ComputationConfig | None = None,
 ) -> PCA:
     from .template_util import shared_basis_compress_templates
@@ -137,8 +139,11 @@ def pca_from_templates(
         rank=rank,
         computation_cfg=computation_cfg,
         min_channel_amplitude=min_channel_amplitude,
+        min_explained_variance=min_explained_variance,
     )
     basis = tdc.temporal_components
+    assert 0 < tdc.temporal_components.shape[0] <= rank
+    rank = tdc.temporal_components.shape[0]
     pca = PCA(
         n_components=rank,
         random_state=random_seed,

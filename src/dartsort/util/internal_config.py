@@ -373,6 +373,7 @@ class TemplateConfig:
     try_reload_svd: bool = True
     svd_alignment_iterations: int = 0
     svd_alignment_ms: float = 0.75
+    svd_min_explained_variance: float = 5e-3
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
