@@ -678,7 +678,6 @@ def batched_kmeans(
         _buf.log_().neg_().log_().neg_().add_(dists.log())
         # torch.divide(dists, _buf, out=_buf)
         # cix_j = torch.argmin(_buf, dim=1, out=centroid_ixs[j])
-        print(f"{dists.shape=} {_buf.shape=}")
         cix_j = torch.argmax(_buf, dim=1, out=centroid_ixs[j])
 
         # grab jth centroid data
