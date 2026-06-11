@@ -279,7 +279,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         # process spike times and create return result
         if match_results["n_spikes"]:
-            match_results["times_samples"] += chunk_start_samples - left_margin  # type: ignore
+            match_results["times_samples"] += chunk_start_samples - left_margin
         if match_results["n_spikes"] > self.p.max_spikes_per_second:
             raise ValueError(
                 f"Too many spikes {match_results['n_spikes']} > {self.p.max_spikes_per_second}."
@@ -522,7 +522,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         from scipy.stats import norm
 
         # TODO: remove?
-        if self.is_scaling and self.p.scale_adjusts_threshold and self.p.amplitude_scaling_variance < torch.inf:
+        if (
+            self.is_scaling
+            and self.p.scale_adjusts_threshold
+            and self.p.amplitude_scaling_variance < torch.inf
+        ):
             # adjust threshold by the scaling prior's constant term
             # nb, everything is x2 so halves are gone.
             scstd = np.sqrt(self.p.amplitude_scaling_variance)

@@ -150,7 +150,7 @@ ChunkSubtractionResult = namedtuple(
 def subtract_chunk(
     traces: Tensor,
     channel_index: Tensor,
-    denoising_pipeline: WaveformPipeline,
+    denoising_pipeline: "WaveformPipeline",
     extract_index: Tensor | None = None,
     extract_mask: Tensor | None = None,
     trough_offset_samples=42,
