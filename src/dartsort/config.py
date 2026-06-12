@@ -352,6 +352,7 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_df: float = 4.0
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
+    tpca_from_templates: bool = True
 
     # agglomeration
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"

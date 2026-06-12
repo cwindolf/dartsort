@@ -226,6 +226,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
             rank=matching_cfg.template_svd_compression_rank,
             computation_cfg=computation_cfg,
+            min_explained_variance=matching_cfg.template_svd_compression_min_explained_variance,
         )
         temporal_comps = torch.asarray(shared_basis_temps.temporal_components)
         spatial_sing = torch.asarray(shared_basis_temps.spatial_singular)

@@ -116,6 +116,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         threshold=threshold,
         cd_iter=cd_iter,
         channel_selection_radius=channel_selection_radius,
+        template_svd_compression_min_explained_variance=0.0,
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"

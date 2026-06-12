@@ -749,6 +749,7 @@ class MatchingConfig:
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 5
+    template_svd_compression_min_explained_variance: float = 5e-3
     up_factor: int = 4
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -1009,6 +1010,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         save_collidedness=save_collidedness,
+        tpca_from_templates=cfg.tpca_from_templates,
     )
     if cfg.template_interp_kind == "tps":
         temp_interp_params = tps_interp_clampna_extrap_params
