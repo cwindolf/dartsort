@@ -131,6 +131,7 @@ class SubtractionPeeler(BasePeeler):
 
         # this may be overwritten after featurization fit
         self.register_buffer_or_none("local_whiteners", None)
+        self.register_buffer_or_none("whitening_kernel", None)
 
     def out_datasets(self):
         datasets = super().out_datasets()
@@ -171,6 +172,12 @@ class SubtractionPeeler(BasePeeler):
         local_whiteners = whitener.local_whiteners(self.sub_channel_index)  # type: ignore
         self.del_none_buffer("local_whiteners")
         self.register_buffer("local_whiteners", local_whiteners)
+        if whitener.temporal:
+            self.del_none_buffer("whitening_kernel")
+            self.register_buffer(
+                "whitening_kernel",
+                self.whitener.b.temporal_kernel.clone(),  # type: ignore
+            )
         self.threshold = self.p.residnorm_decrease_threshold
 
     def save_models(self, save_folder):
@@ -296,6 +303,7 @@ class SubtractionPeeler(BasePeeler):
             denoiser_realignment_channel=self.p.denoiser_realignment_channel,
             compute_collidedness=self.save_collidedness,
             local_whiteners=self.b.local_whiteners,
+            whitening_kernel=self.b.whitening_kernel,
         )
 
         # add in chunk_start_samples

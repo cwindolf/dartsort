@@ -82,6 +82,7 @@ def check_residual_decrease(
     save_residnorm_decrease=False,
     overwrite_orig_waveforms: bool = False,
     local_whiteners: Tensor | None = None,
+    whitening_kernel: Tensor | None = None,
     channels: Tensor | None = None,
 ) -> tuple[Tensor | None, dict[str, Tensor]]:
     if not threshold:
@@ -90,15 +91,28 @@ def check_residual_decrease(
 
     if local_whiteners is not None:
         assert channels is not None
-        W = local_whiteners[channels].mT
+        W = local_whiteners[channels]
+
+        # remove nans
         if overwrite_orig_waveforms:
             orig_wfs = orig_wfs.nan_to_num_()
         else:
             orig_wfs = orig_wfs.nan_to_num()
-        buf = orig_wfs
-        orig_wfs = orig_wfs.bmm(W)
         dn_wfs = dn_wfs.nan_to_num()
-        dn_wfs = torch.bmm(dn_wfs, W, out=buf)
+
+        # spatial mul -- putting temporal dim last here
+        buf = orig_wfs
+        orig_wfs = W.bmm(orig_wfs.mT)
+        dn_wfs = torch.bmm(W, dn_wfs.mT, out=buf)
+
+        # temporal conv if needed
+        if whitening_kernel is not None:
+            *shp, t = orig_wfs.shape
+            k = whitening_kernel[None, None]
+            orig_wfs = F.conv1d(orig_wfs.view(-1, 1, t), k, padding="same")
+            dn_wfs = F.conv1d(dn_wfs.view(-1, 1, t), k, padding="same")
+            orig_wfs = orig_wfs.view(*shp, t)
+            dn_wfs = dn_wfs.view(*shp, t)
 
     if decrease_objective == "deconv":
         if overwrite_orig_waveforms:
@@ -171,6 +185,7 @@ def subtract_chunk(
     residnorm_decrease_threshold=16.0,
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
     local_whiteners: Tensor | None = None,
+    whitening_kernel: Tensor | None = None,
     relative_peak_radius=5,
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
@@ -371,6 +386,7 @@ def subtract_chunk(
             threshold=residnorm_decrease_threshold,
             save_residnorm_decrease=save_residnorm_decrease,
             local_whiteners=local_whiteners,
+            whitening_kernel=whitening_kernel,
             channels=channels,
         )
         features.update(new_feats)

@@ -1602,7 +1602,13 @@ class Whitener(BModule):
         super().__init__()
         self.register_buffer("whitener", whitener)
         self.register_buffer("covariance", covariance)
+        self.temporal = temporal_kernel is not None
         self.register_buffer_or_none("temporal_kernel", temporal_kernel)
+        if temporal_kernel is not None:
+            tk_twice = self._convolve(temporal_kernel)
+        else:
+            tk_twice = None
+        self.register_buffer_or_none("temporal_kernel_twice", tk_twice)
 
     @classmethod
     def blank(cls, n_channels: int, device: torch.device, temporal_length: int | None):
@@ -1685,16 +1691,40 @@ class Whitener(BModule):
 
         return cls(whitener=whitener, covariance=cov, temporal_kernel=temporal_kernel)
 
+    def _convolve(self, x: Tensor, twice=False):
+        if not self.temporal:
+            return x
+        *shp, t = x.shape
+        x = x.reshape(-1, 1, t)
+        if twice:
+            k = self.b.temporal_kernel_twice
+        else:
+            k = self.b.temporal_kernel
+        res = F.conv1d(
+            input=x,
+            weight=k[None, None],
+            padding="same",
+            groups=x.shape[1],
+        )
+        assert res.shape[-1] == t
+        res = res.reshape(*shp, t)
+        return res
+
     def whiten_traces_spatial_major(
         self, x: Tensor, out: Tensor | None = None
     ) -> Tensor:
-        return torch.mm(self.b.whitener, x.T, out=out)
+        assert x.ndim == 2
+        out = torch.mm(self.b.whitener, x.T, out=out)
+        out = self._convolve(out)
+        return out
 
     def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener.T, out=out)
         x = x.reshape(*shp, c)
+        if self.temporal:
+            x = self._convolve(x.mT).mT
         return x
 
     def transpose_whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
@@ -1702,6 +1732,8 @@ class Whitener(BModule):
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener, out=out)
         x = x.reshape(*shp, c)
+        if self.temporal:
+            x = self._convolve(x.mT).mT
         return x
 
     def prec_mul(self, x: Tensor) -> Tensor:
@@ -1709,6 +1741,8 @@ class Whitener(BModule):
         x = x.reshape(-1, c)
         x = x @ (self.b.whitener.T @ self.b.whitener)
         x = x.reshape(*shp, c)
+        if self.temporal:
+            x = self._convolve(x.mT, twice=True).mT
         return x
 
     def local_whiteners(self, channel_index: Tensor, eps=1e-6):
