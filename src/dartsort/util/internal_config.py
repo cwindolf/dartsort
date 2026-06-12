@@ -327,6 +327,7 @@ class WhiteningConfig:
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
+    temporal_length: int | None = None
 
 
 TemplateSVDMethod = Literal[
@@ -1030,6 +1031,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         estimator=cfg.whiten_estimator,
         radius=cfg.subtraction_radius_um,
         interp_params=temp_interp_params,
+        temporal_length=cfg.whiten_temporal_length,
     )
     # TODO: dredge_only is a bad name for this.
     if cfg.dredge_only and not cfg.whiten_in_subtraction:

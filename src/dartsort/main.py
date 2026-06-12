@@ -59,7 +59,7 @@ from .util.main_util import (
     motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
-from .util.noise_util import SpatialWhitener
+from .util.noise_util import Whitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
 from .util.py_util import dartcopytree, ensure_path, timer
@@ -571,7 +571,7 @@ def match(
     template_npz="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
-    whitener: SpatialWhitener | None = None,
+    whitener: Whitener | None = None,
 ) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir

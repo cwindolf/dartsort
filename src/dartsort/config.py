@@ -282,6 +282,7 @@ class DeveloperConfig(DARTsortUserConfig):
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "prewhiten_postapply"
     whiten_estimator: WhiteningEstimator = "localzca"
+    whiten_temporal_length: int | None = None
     whiten_features: bool = False
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0

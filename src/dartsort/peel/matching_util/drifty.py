@@ -55,7 +55,7 @@ from ...util.interpolation_util import (
 from ...util.job_util import ensure_computation_config
 from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
-from ...util.noise_util import SpatialWhitener
+from ...util.noise_util import Whitener
 from ...util.py_util import databag
 from ...util.spiketorch import full_shared_pconv, shared_temporal_pconv
 from ...util.torch_util import torch_compiler
@@ -84,7 +84,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
         trough_offset_samples: int,
         unit_ids: Tensor | None = None,
         whiten_strategy: WhiteningStrategy = "none",
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         whiten_features: bool = True,
         up_factor: int = 1,
         up_method: Literal["interpolation", "keys3", "keys4", "direct"] = "keys4",
@@ -238,8 +238,12 @@ class DriftyMatchingTemplates(MatchingTemplates):
         else:
             assert template_data.whitener is not None
             assert template_data.covariance is not None
-            whitener = SpatialWhitener.from_numpy(
-                template_data.whitener, template_data.covariance
+            if template_data.temporal_kernel is not None:
+                tk = template_data.temporal_kernel
+            else:
+                tk = None
+            whitener = Whitener.from_numpy(
+                template_data.whitener, template_data.covariance, tk
             )
 
         if not wh_none and not matching_cfg.whiten_features:
@@ -268,6 +272,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
         return self.erp.interp_at_time(t_s=t_s, waveforms=x)
 
     def spatial_at_time(self, t_s: float) -> tuple[Tensor, ...]:
+        """Get spatial components and norms at current chunk
+
+        This handles the spatial whitening strategy logic.
+        """
         if self.whiten_strategy == "postwhiten":
             spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
             normsq_spatial_sing = spatial_sing
@@ -277,11 +285,17 @@ class DriftyMatchingTemplates(MatchingTemplates):
             conv_spatial_sing = normsq_spatial_sing = spatial_sing
         elif self.whiten_strategy == "prewhiten_postapply":
             assert self.whitener is not None
+
+            # features / cc waveforms just use interpolated plain template
             spatial_sing = self.interp_at_time(t_s, self.b.spatial_sing)
+
+            # for convolution, whitening is applied
             if self.interpolating:
                 conv_spatial_sing = self.whitener.whiten(spatial_sing)
             else:
                 conv_spatial_sing = self.b.conv_spatial_sing
+
+            # this is usually false
             if self.whiten_features:
                 spatial_sing = conv_spatial_sing
             normsq_spatial_sing = conv_spatial_sing
@@ -367,7 +381,7 @@ class DriftyChunkTemplateData(ChunkTemplateData):
     spatial_sing: Tensor
     padded_spatial_sing: Tensor
     pconv: Tensor
-    spatial_whitener: SpatialWhitener | None
+    spatial_whitener: Whitener | None
 
     time_ix: Tensor
     chan_ix: Tensor

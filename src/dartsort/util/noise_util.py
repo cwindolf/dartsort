@@ -1503,6 +1503,48 @@ def residual_covariance(
     return cov
 
 
+def residual_welch_whitener(
+    sorting: DARTsortSorting,
+    device: torch.device | None = None,
+    residual_dataset_name="residual",
+    batch_size=1024,
+    temporal_length: int = 11,
+    spatial_whitener: torch.Tensor | None = None,
+):
+    assert sorting.parent_h5_path is not None
+    snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
+
+    if spatial_whitener is not None:
+        W = torch.asarray(spatial_whitener, device=device)
+    else:
+        W = None
+
+    # Welch's method to estimate residual PSD
+    snip_psds = []
+    block_len = temporal_length
+    for snip in snipgen:
+        block_len = next_fast_len(snip.shape[1])
+        snip = torch.asarray(snip).to(device=device, non_blocking=True)
+        if W is not None:
+            snip = torch.einsum("ntc,cd->ntd", snip, W)
+        snip = snip.permute(0, 2, 1).view(-1, snip.shape[1]).contiguous()
+        periodogram = torch.fft.rfft(snip, n=block_len, norm="ortho")
+        dens = (periodogram * periodogram.conj()).mean(dim=0)
+        snip_psds.append(dens)
+    snip_psds = torch.stack(snip_psds, dim=0)
+    spectral_density = snip_psds.mean(0).sqrt_()
+
+    # estimate 0-phase FIR whitener
+    wkernel = torch.fft.fftshift(torch.fft.irfft(1.0 / spectral_density, n=block_len))
+
+    # trim to requested length
+    assert temporal_length <= wkernel.shape[0]
+    i0 = wkernel.shape[0] // 2 - temporal_length // 2
+    i1 = i0 + temporal_length
+    wkernel = wkernel[i0:i1].copy()
+    return wkernel
+
+
 def fullzca_whitener(
     cov: np.ndarray, channel_index: np.ndarray | None = None, eps=1e-6
 ) -> np.ndarray:
@@ -1553,26 +1595,48 @@ whitening_estimators = {
 }
 
 
-class SpatialWhitener(BModule):
-    def __init__(self, whitener: Tensor, covariance: Tensor):
+class Whitener(BModule):
+    def __init__(
+        self, whitener: Tensor, covariance: Tensor, temporal_kernel: Tensor | None
+    ):
         super().__init__()
         self.register_buffer("whitener", whitener)
         self.register_buffer("covariance", covariance)
+        self.register_buffer_or_none("temporal_kernel", temporal_kernel)
 
     @classmethod
-    def blank(cls, n_channels: int, device: torch.device):
+    def blank(cls, n_channels: int, device: torch.device, temporal_length: int | None):
         w = torch.zeros((n_channels, n_channels), device=device)
-        return cls(w, torch.zeros_like(w))
+        if temporal_length:
+            k = torch.zeros((temporal_length,), device=device)
+        else:
+            k = None
+        return cls(w, torch.zeros_like(w), k)
 
     @classmethod
-    def from_numpy(cls, whitener: np.ndarray, covariance: np.ndarray):
+    def from_numpy(
+        cls,
+        whitener: np.ndarray,
+        covariance: np.ndarray,
+        temporal_kernel: np.ndarray | None,
+    ):
         logger.dartsortverbose("Load whitener from numpy.")
+        tk = None if temporal_kernel is None else torch.asarray(temporal_kernel)
         return cls(
-            whitener=torch.asarray(whitener), covariance=torch.asarray(covariance)
+            whitener=torch.asarray(whitener),
+            covariance=torch.asarray(covariance),
+            temporal_kernel=tk,
         )
 
-    def to_numpy(self) -> tuple[np.ndarray, np.ndarray]:
-        return self.b.whitener.numpy(force=True), self.b.covariance.numpy(force=True)
+    def to_numpy(self) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        tk = self.b.temporal_kernel
+        if tk is not None:
+            tk = tk.numpy(force=True)
+        return (
+            self.b.whitener.numpy(force=True),
+            self.b.covariance.numpy(force=True),
+            tk,
+        )
 
     @classmethod
     def from_config(
@@ -1584,7 +1648,12 @@ class SpatialWhitener(BModule):
         computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         logger.dartsortdebug(
-            "Estimating %s-%s whitener.", whiten_cfg.strategy, whiten_cfg.estimator
+            "Estimating %s-%s whitener%s.",
+            whiten_cfg.strategy,
+            whiten_cfg.estimator,
+            ""
+            if not whiten_cfg.temporal_length
+            else f"temporal length: {whiten_cfg.temporal_length}",
         )
         device = ensure_computation_config(computation_cfg).actual_device()
         cov = residual_covariance(
@@ -1602,7 +1671,19 @@ class SpatialWhitener(BModule):
             cov_np, channel_index=neighbs
         )
         whitener = torch.asarray(whitener).to(cov)
-        return cls(whitener=whitener, covariance=cov)
+
+        if whiten_cfg.temporal_length:
+            assert whiten_cfg.strategy != "postwhiten"
+            temporal_kernel = residual_welch_whitener(
+                sorting=sorting,
+                device=device,
+                temporal_length=whiten_cfg.temporal_length,
+                spatial_whitener=whitener,
+            )
+        else:
+            temporal_kernel = None
+
+        return cls(whitener=whitener, covariance=cov, temporal_kernel=temporal_kernel)
 
     def whiten_traces_spatial_major(
         self, x: Tensor, out: Tensor | None = None

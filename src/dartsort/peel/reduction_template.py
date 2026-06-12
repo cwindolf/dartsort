@@ -30,7 +30,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.noise_util import SpatialWhitener
+from ..util.noise_util import Whitener
 from ..util.py_util import ensure_path
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
@@ -54,7 +54,7 @@ class ReductionTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion: MotionInfo,
         tsvd=None,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
@@ -155,9 +155,9 @@ class ReductionTemplateData(TemplateData):
             templates *= msk
 
         if whitener is None:
-            whitener_np = covariance_np = None
+            whitener_np = covariance_np = tk_np = None
         else:
-            whitener_np, covariance_np = whitener.to_numpy()
+            whitener_np, covariance_np, tk_np = whitener.to_numpy()
 
         return TemplateData(
             unit_ids=unit_ids,
@@ -170,6 +170,7 @@ class ReductionTemplateData(TemplateData):
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
             covariance=covariance_np,
+            temporal_kernel=tk_np,
             sampling_frequency=recording.sampling_frequency,
             whiten_strategy=template_cfg.whitening.strategy,
         )
@@ -190,7 +191,7 @@ class TemplateReduction(GrabAndFeaturize):
         waveform_cfg: WaveformConfig,
         template_cfg: TemplateConfig,
         computation_cfg: ComputationConfig,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
     ):
         # geom processing
         rgeom = torch.asarray(motion.rgeom)

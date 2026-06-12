@@ -14,7 +14,7 @@ from ..util.internal_config import (
 from .transform_base import BaseWaveformDenoiser
 
 if TYPE_CHECKING:
-    from ..util.noise_util import SpatialWhitener
+    from ..util.noise_util import Whitener
     from .pipeline import WaveformPipeline
 
 
@@ -30,7 +30,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
         name=None,
         name_prefix=None,
         waveform_cfg: WaveformConfig | None = default_waveform_cfg,
-        whitener: "SpatialWhitener | None" = None,
+        whitener: "Whitener | None" = None,
         disabled: bool = True,
         whiten_cfg: WhiteningConfig = WhiteningConfig(),
         sampling_frequency: float = 30_000.0,
@@ -59,9 +59,11 @@ class WaveformWhitener(BaseWaveformDenoiser):
     def _other_pre_load_state(self, state_dict, prefix):
         if self.whitener is not None:
             return
-        from ..util.noise_util import SpatialWhitener
+        from ..util.noise_util import Whitener
 
-        self.whitener = SpatialWhitener.blank(len(self.b.geom), self.b.geom.device)
+        self.whitener = Whitener.blank(
+            len(self.b.geom), self.b.geom.device, self.whiten_cfg.temporal_length
+        )
 
     def fit(
         self,
@@ -82,7 +84,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
             **spike_data,
         )
         del recording, spike_data, waveforms, pipeline
-        from ..util.noise_util import SpatialWhitener
+        from ..util.noise_util import Whitener
 
         assert hdf5_filename is not None
 
@@ -92,7 +94,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
         sorting = DARTsortSorting.from_peeling_hdf5(
             hdf5_filename, load_simple_features=False
         )
-        self.whitener = SpatialWhitener.from_config(
+        self.whitener = Whitener.from_config(
             sorting=sorting,
             motion=self.motion,
             whiten_cfg=self.whiten_cfg,

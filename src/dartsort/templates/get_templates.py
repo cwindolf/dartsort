@@ -27,7 +27,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progbar
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import get_pool
-from ..util.noise_util import SpatialWhitener
+from ..util.noise_util import Whitener
 from ..util.spiketorch import fast_nanmedian, nanmean, ptp
 from .templib import denoising_weights, fit_tsvd
 
@@ -49,7 +49,7 @@ class UnitExtractTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion: MotionInfo,
         tsvd=None,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
