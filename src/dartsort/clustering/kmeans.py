@@ -636,6 +636,7 @@ def batched_kmeans(
     atol=1e-5,
     with_labels=True,
     with_proportions=True,
+    beta: float = 1.0,
 ) -> KMeansResult:
     """
     Compared to above:
@@ -718,7 +719,7 @@ def batched_kmeans(
         # e step
         dists = sqeuc_cdist_known_norm(X, Xnormsq, Y, Ynormsq, dists.view(n, ntries_k))
         dists = dists.view(n, n_tries, k)
-        e = torch.add(log_props, dists, alpha=-0.5, out=e)
+        e = torch.add(log_props, dists, alpha=-0.5 * beta, out=e)
         e = F.softmax(e, dim=2)
         if check:
             phi_ = dists.mul_(e).mean(0).sum(1)
@@ -749,7 +750,7 @@ def batched_kmeans(
     dists = dists.resize_(n, k)
     e = e.resize_(n, k)
     dists = sqeuc_cdist_known_norm(X, Xnormsq, Y, Ynormsq, dists)
-    e = torch.add(log_props, dists, alpha=-0.5, out=e)
+    e = torch.add(log_props, dists, alpha=-0.5 * beta, out=e)
     e = F.softmax(e, dim=1)
     if with_labels:
         labels = e.argmax(dim=1)

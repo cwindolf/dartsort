@@ -517,6 +517,7 @@ class RefinementConfig:
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
     kmeans_tries: int = 10
+    kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
     full_proposal_every: int = 10
     main_min_iters: int = 20

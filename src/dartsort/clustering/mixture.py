@@ -807,6 +807,7 @@ class TMMParams:
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
     kmeans_tries: int
+    kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
     scale_dist_args: tuple[float, float, float]
@@ -824,6 +825,7 @@ class TMMParams:
             split_min_count=refinement_cfg.split_min_count,
             split_k=refinement_cfg.kmeansk,
             kmeans_tries=refinement_cfg.kmeans_tries,
+            kmeans_beta=refinement_cfg.kmeans_beta,
             kmeanspp_tries=refinement_cfg.kmeanspp_tries,
             min_channel_count=refinement_cfg.channels_count_min,
             em_iters=refinement_cfg.n_em_iters,
@@ -2947,6 +2949,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             min_count=self.p.split_min_count,
             min_channel_count=self.p.min_channel_count,
             n_kmeans_tries=self.p.kmeans_tries,
+            kmeans_beta=self.p.kmeans_beta,
             n_kmeanspp_tries=self.p.kmeanspp_tries,
             bail_at=int(single),
             weights=split_data.duties,
@@ -5330,6 +5333,7 @@ def try_kmeans(
     drop_prop: float = 0.0,
     kmeanspp_initial="random",
     n_kmeans_tries: int = 25,
+    kmeans_beta: float = 1.0,
     n_kmeanspp_tries: int = 25,
     weights: Tensor | None = None,
     debug: bool = False,
@@ -5361,8 +5365,10 @@ def try_kmeans(
             n_iter=n_iter,
             kmeanspp_seeds_per_try=n_kmeanspp_tries,
             n_tries=n_kmeans_tries,
+            beta=kmeans_beta,
         )
     else:
+        assert kmeans_beta == 1.0
         kres = kmeans(
             x,
             n_components=k,
