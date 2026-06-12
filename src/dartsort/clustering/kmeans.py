@@ -674,11 +674,11 @@ def batched_kmeans(
     _buf = torch.empty_like(dists)
     for j in range(1, k):
         # sample new centroid indices wppt dists (which is squared)
-        _buf.uniform_(generator=gen)
-        _buf.log_().neg_().log_().neg_().add_(dists.log())
-        # torch.divide(dists, _buf, out=_buf)
-        # cix_j = torch.argmin(_buf, dim=1, out=centroid_ixs[j])
-        cix_j = torch.argmax(_buf, dim=1, out=centroid_ixs[j])
+        # gumbel max: argmax [log(d) + -log(-log(u))]
+        #  = argmax d / (-log u) = argmin d / (log u)
+        u = _buf.uniform_(generator=gen).log_()
+        u = torch.div(dists, u, out=u)
+        cix_j = torch.argmin(u, dim=1, out=centroid_ixs[j])
 
         # grab jth centroid data
         torch.index_select(X, dim=0, index=cix_j, out=Y)
@@ -718,7 +718,7 @@ def batched_kmeans(
         # e step
         dists = sqeuc_cdist_known_norm(X, Xnormsq, Y, Ynormsq, dists.view(n, ntries_k))
         dists = dists.view(n, n_tries, k)
-        e = torch.add(log_props, dists, alpha=-100.0, out=e)
+        e = torch.add(log_props, dists, alpha=-0.5, out=e)
         e = F.softmax(e, dim=2)
         if check:
             phi_ = dists.mul_(e).mean(0).sum(1)
