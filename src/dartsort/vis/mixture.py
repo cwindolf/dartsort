@@ -620,7 +620,6 @@ class DemolishView(MixtureComponentPlot):
         return group_res
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
-        print(f"{unit_id=}")
         demo_res = self.compute(mix_data, unit_id)
 
         ax = panel.subplots()
@@ -633,7 +632,6 @@ class DemolishView(MixtureComponentPlot):
         else:
             ds = ",".join([str(uu.item())[:1] for uu in demo_res.demolished.cpu()])
         msg = f"units: {us}\n{ims}\ndemo: {ds}"
-        print(f"{msg=}")
 
         ax.text(
             0.5,

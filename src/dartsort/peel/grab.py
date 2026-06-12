@@ -1,4 +1,5 @@
 """Grab and featurize events at known times."""
+
 from typing import Mapping
 
 import numpy as np
@@ -6,7 +7,6 @@ import torch
 from spikeinterface import BaseRecording
 
 from ..transform import WaveformPipeline
-from ..util import spiketorch
 from ..util.data_util import DARTsortSorting
 from ..util.internal_config import (
     FeaturizationConfig,
@@ -14,6 +14,7 @@ from ..util.internal_config import (
     WaveformConfig,
     default_waveform_cfg,
 )
+from ..util.spiketorch import _nonzero_static, grab_spikes
 from ..util.waveform_util import make_channel_index
 from .peel_base import (
     BasePeeler,
@@ -39,6 +40,7 @@ class GrabAndFeaturize(BasePeeler):
         chunk_length_samples=30_000,
         fit_sampling_cfg: FitSamplingConfig = FitSamplingConfig(n_residual_snips=0),
         waveform_cfg: WaveformConfig = default_waveform_cfg,
+        batch_size: int = 2048,
         dtype=torch.float,
     ):
         fixed_properties = fixed_properties or {}
@@ -49,6 +51,7 @@ class GrabAndFeaturize(BasePeeler):
         spike_length_samples = waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        self.batch_size = batch_size
         assert not fit_sampling_cfg.n_residual_snips
         super().__init__(
             recording=recording,
@@ -94,17 +97,44 @@ class GrabAndFeaturize(BasePeeler):
             )
         t_clip = self.b.times_samples.clip(chunk_start_samples, chunk_end_samples - 1)
         in_chunk = self.b.times_samples == t_clip
-        if not in_chunk.any():
+        n_in_chunk = int(in_chunk.sum().item())
+        if not n_in_chunk:
             return peeling_empty_result
 
-        res = super().process_chunk(
-            chunk_start_samples,
-            n_resid_snips=n_resid_snips,
-            chunk_end_samples=chunk_end_samples,
-            return_residual=return_residual,
-            skip_features=skip_features,
-            to_cpu=to_cpu,
+        in_chunk = _nonzero_static(in_chunk, size=n_in_chunk)
+        assert in_chunk.shape == (n_in_chunk, 1)
+        in_chunk = in_chunk[:, 0]
+        return_waveforms = not skip_features and bool(self.featurization_pipeline)
+
+        chunk, chunk_end_samples_, left_margin, right_margin = self.get_chunk(
+            chunk_start_samples, chunk_end_samples
         )
+        assert chunk_end_samples == chunk_end_samples_
+
+        batch_results = []
+        for i0 in range(0, n_in_chunk, self.batch_size):
+            i1 = min(n_in_chunk, i0 + self.batch_size)
+            batch_in_chunk = in_chunk[i0:i1]
+            batch_peel_result = self.peel_chunk(
+                traces=chunk,
+                chunk_start_samples=chunk_start_samples,
+                left_margin=left_margin,
+                right_margin=right_margin,
+                return_residual=return_residual,
+                in_chunk=batch_in_chunk,
+            )
+            assert batch_peel_result["n_spikes"] == i1 - i0
+            batch_res = self.featurize_chunk_result(
+                peel_result=batch_peel_result,
+                to_cpu=to_cpu,
+                return_waveforms=return_waveforms,
+                chunk_start_samples=chunk_start_samples,
+                chunk_end_samples=chunk_end_samples,
+                device=chunk.device,
+                n_resid_snips=n_resid_snips,
+            )
+            batch_results.append(batch_res)
+        res = _cat_results(batch_results)
         return res
 
     @classmethod
@@ -150,21 +180,23 @@ class GrabAndFeaturize(BasePeeler):
 
     def peel_chunk(
         self,
-        traces,
+        traces: torch.Tensor,
         *,
         chunk_start_samples=0,
         left_margin=0,
         right_margin=0,
         return_residual=False,
         return_waveforms=True,
+        in_chunk: torch.Tensor | None = None,
     ) -> PeelingBatchResult:
         assert not return_residual
 
-        max_t = chunk_start_samples + self.chunk_length_samples - 1
-        in_chunk = self.b.times_samples == self.b.times_samples.clip(
-            chunk_start_samples, max_t
-        )
-        (in_chunk,) = in_chunk.nonzero(as_tuple=True)
+        if in_chunk is None:
+            max_t = chunk_start_samples + self.chunk_length_samples - 1
+            in_chunk = self.b.times_samples == self.b.times_samples.clip(
+                chunk_start_samples, max_t
+            )
+            (in_chunk,) = in_chunk.nonzero(as_tuple=True)
 
         if not in_chunk.numel():
             return peeling_empty_result
@@ -184,7 +216,7 @@ class GrabAndFeaturize(BasePeeler):
             channels=channels,
         )
         if return_waveforms:
-            res["collisioncleaned_waveforms"] = spiketorch.grab_spikes(
+            res["collisioncleaned_waveforms"] = grab_spikes(
                 traces,
                 times_rel,
                 channels,
@@ -198,3 +230,44 @@ class GrabAndFeaturize(BasePeeler):
         for k in self.fixed_property_keys:
             res[k] = getattr(self.b, k)[in_chunk].to(device=dev)
         return res
+
+
+def _cat_results(results):
+    # not ideal, should work on typing these things better, but no time now.
+    assert len(results) > 0
+    if len(results) == 1:
+        return results[0]
+    rdict: dict[str, int | float | list[torch.Tensor] | list[np.ndarray]] = {
+        "n_spikes": 0
+    }
+    for res in results:
+        for k, v in res.items():
+            if k == "n_spikes":
+                rdict[k] += v
+            elif k == "chunk_center_s":
+                rdict[k] = v
+            elif isinstance(v, (int, float)):
+                if k not in rdict:
+                    rdict[k] = v
+                else:
+                    assert rdict[k] == v
+            elif isinstance(v, (torch.Tensor, np.ndarray)):
+                if k not in rdict:
+                    rdict[k] = []
+                rdict[k].append(v)  # type: ignore
+            else:
+                assert False
+    res = {}
+    for k, v in rdict.items():
+        if k in ("n_spikes", "chunk_center_s"):
+            res[k] = v
+        elif isinstance(v, list):
+            if isinstance(v[0], torch.Tensor):
+                res[k] = torch.concatenate(v)  # type: ignore
+            elif isinstance(v[0], np.ndarray):
+                res[k] = np.concatenate(v)
+            else:
+                assert False
+        else:
+            res[k] = v
+    return res

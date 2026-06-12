@@ -275,6 +275,7 @@ def shared_basis_compress_templates(
     rank=5,
     computation_cfg=None,
     precomputed_basis: np.ndarray | None = None,
+    min_explained_variance: float = 5e-3,
     with_r2: bool = False,
 ) -> SharedBasisTemplates:
     computation_cfg = ensure_computation_config(computation_cfg)
@@ -292,7 +293,7 @@ def shared_basis_compress_templates(
     rank = min(rank, t)
     if precomputed_basis is None:
         temporal_comps = get_shared_temporal_basis(
-            templates, rank, dev, min_channel_amplitude
+            templates, rank, dev, min_channel_amplitude, min_explained_variance
         )
         assert temporal_comps.shape[1] == t
         assert temporal_comps.ndim == 2
@@ -341,6 +342,7 @@ def get_shared_temporal_basis(
     rank: int,
     device: torch.device,
     min_channel_amplitude: float,
+    min_explained_variance: float,
     eps=1e-6,
 ) -> np.ndarray:
     n, t, c = templates.shape
@@ -370,9 +372,11 @@ def get_shared_temporal_basis(
     cov += m * m.T
     if nvis < t:
         logger.warning(f"Had {nvis=} smaller than {t=} in shared basis compression.")
-        cov.diagonal().add_(1e-5)
+        cov.diagonal().add_(eps)
     vals, U = torch.linalg.eigh(cov)
-    big_enough = vals > eps
+    min_explained_variance = max(eps, min_explained_variance)
+    exvar = vals / vals.sum()
+    big_enough = exvar > min_explained_variance
     nbig = big_enough.sum()
     if nbig < rank:
         logger.dartsortdebug(f"Shared basis only needed rank {nbig}.")

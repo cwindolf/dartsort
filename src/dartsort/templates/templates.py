@@ -51,6 +51,7 @@ class TemplateData:
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
     whitener: np.ndarray | None = None
+    covariance: np.ndarray | None = None
     whiten_strategy: WhiteningStrategy = "none"
     featurization_basis: np.ndarray | None = None
 
@@ -160,6 +161,8 @@ class TemplateData:
             to_save["raw_std_dev"] = self.raw_std_dev
         if self.whitener is not None:
             to_save["whitener"] = self.whitener
+            if self.covariance is not None:
+                to_save["covariance"] = self.covariance
         if self.featurization_basis is not None:
             to_save["featurization_basis"] = self.featurization_basis
         if not npz_path.parent.exists():

@@ -665,7 +665,8 @@ def combine_gmm_scores(
 
     # check invariants at the top
     if responsibilities.shape[1] > 2:
-        assert np.all(np.diff(responsibilities[:, :-1], axis=1) <= 0)
+        _maxdiff = np.diff(responsibilities[:, :-1], axis=1).max()
+        assert _maxdiff <= 1e-5, _maxdiff
     assert np.greater_equal(np.isneginf(logliks[:, :-1]), candidates == -1).all()
     if sorting.labels is not None:
         assert np.all(
@@ -698,7 +699,8 @@ def combine_gmm_scores(
 
     # check invariants at the bottom
     if mergedr.shape[1] > 2:
-        assert np.all(np.diff(mergedr[:, : cand.shape[1]], axis=1) <= 0)
+        _maxdiff = np.diff(mergedr[:, : cand.shape[1]], axis=1).max()
+        assert _maxdiff <= 1e-5, _maxdiff
     assert np.greater_equal(np.isneginf(mergedl[:, : cand.shape[1]]), cand == -1).all()
     assert (cand < 0).sum() >= nbye
     if sorting.labels is not None:
@@ -799,6 +801,8 @@ def deduplicate_spikes(
     ndrop = 0
     for unit_id in unit_ids:
         in_unit = np.flatnonzero(new_labels == unit_id)
+        if in_unit.size <= 1:
+            continue
         t = times_samples[in_unit]
         dt = np.diff(t)
         if dt.min() > radius_samples:

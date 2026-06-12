@@ -264,6 +264,19 @@ class DARTsortGroundTruthComparison:
 
         return neighb_ixs, neighb_ids, neighb_dists, neighb_coarse_templates
 
+    def full_tested_labels(self):
+        labels = np.full(len(self.tested_analysis.sorting), "NA", dtype="<U8")
+        assert self.tested_analysis.sorting.labels is not None
+        labels_si = self.tested_analysis.sorting.labels[self.tested_si_inds]
+        for unit_id in progbar(self.tested_analysis.unit_ids):
+            in_unit_si = np.flatnonzero(labels_si == unit_id)
+            in_unit = self.tested_si_inds[in_unit_si]
+            (labels2,) = self.comparison.get_labels2(unit_id)
+            assert labels2.dtype == labels.dtype
+            assert labels2.shape == in_unit_si.shape
+            labels[in_unit] = labels2
+        return labels
+
     def _calculate_template_distances(self):
         """Compute the merge distance matrix"""
         if hasattr(self, "_template_distances"):
@@ -503,6 +516,7 @@ class DARTsortGroundTruthComparison:
         # load TP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         tp_waves = self.gt_analysis.unit_raw_waveforms(
+            unit_id=gt_unit,
             which=ind_groups["matched_gt_indices"],
             **waveform_kw,  # type: ignore
         )
@@ -511,42 +525,54 @@ class DARTsortGroundTruthComparison:
             w["tp"] = None
             w["geom"] = self.gt_analysis.registered_geom
             w["channel_index"] = self.gt_analysis.vis_channel_index
+            w["channels_tp"] = None
         else:
             w["which_tp"] = tp_waves.which
             w["tp"] = tp_waves.waveforms
             w["geom"] = tp_waves.geom
             w["channel_index"] = tp_waves.channel_index
+            w["channels_tp"] = tp_waves.channels
 
         # load FN waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
         fn_waves = self.gt_analysis.unit_raw_waveforms(
+            unit_id=gt_unit,
             which=ind_groups["only_gt_indices"],
             **waveform_kw,  # type: ignore
         )
         if fn_waves is None:
             w["which_fn"] = None
             w["fn"] = None
+            w["channels_fn"] = None
         else:
             w["which_fn"] = fn_waves.which
             w["fn"] = fn_waves.waveforms
+            w["channels_fn"] = fn_waves.channels
 
         # load FP waveforms
         # which, waveforms, max_chan, show_geom, show_channel_index
-        fp_waves = self.tested_analysis.unit_raw_waveforms(
-            which=ind_groups["only_tested_indices"],
-            **waveform_kw,  # type: ignore
-        )
+        if tested_unit is not None and tested_unit >= 0:
+            fp_waves = self.tested_analysis.unit_raw_waveforms(
+                unit_id=tested_unit,
+                which=ind_groups["only_tested_indices"],
+                **waveform_kw,  # type: ignore
+                to_main_channel=True,
+            )
+        else:
+            fp_waves = None
         if fp_waves is None:
             w["which_fp"] = None
             w["fp"] = None
         else:
             w["which_fp"] = fp_waves.which
             w["fp"] = fp_waves.waveforms
+            w["channels_fp"] = fp_waves.channels
 
         if self.unsorted_detection is None:
             w["unsorted_tp"] = w["unsorted_fn"] = None
         else:
             utp_waves = self.gt_analysis.unit_raw_waveforms(
+                unit_id=gt_unit,
                 which=ind_groups["unsorted_tp_indices"],
                 **waveform_kw,  # type: ignore
             )
@@ -556,7 +582,9 @@ class DARTsortGroundTruthComparison:
             else:
                 w["which_unsorted_tp"] = utp_waves.which
                 w["unsorted_tp"] = utp_waves.waveforms
+                w["channels_unsorted_tp"] = utp_waves.channels
             ufn_waves = self.gt_analysis.unit_raw_waveforms(
+                unit_id=gt_unit,
                 which=ind_groups["unsorted_fn_indices"],
                 **waveform_kw,  # type: ignore
             )
@@ -566,6 +594,7 @@ class DARTsortGroundTruthComparison:
             else:
                 w["which_unsorted_fn"] = ufn_waves.which
                 w["unsorted_fn"] = ufn_waves.waveforms
+                w["channels_unsorted_fn"] = ufn_waves.channels
 
         return w
 

@@ -87,6 +87,10 @@ class DARTsortSorting:
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
                 check_shape = not self._no_check_needed(k)
+                if k in self._persistent_features:
+                    assert np.array_equal(v, self._persistent_features[k])
+                    assert hasattr(self, k)
+                    continue
                 self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
     @property
@@ -206,6 +210,11 @@ class DARTsortSorting:
                 uw = w[inu]
                 trains[unit_id] = Tsd(t=ut, d=uw)
         return TsGroup(trains, metadata=metadata)
+
+    def permute_labels(self, seed=0):
+        assert self.labels is not None
+        rg = np.random.default_rng(seed)
+        return self.ephemeral_replace(labels=rg.permutation(self.labels))
 
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
@@ -902,6 +911,8 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
         if k in ("TemporalPCA", "TemporalPCAFeaturizer")
         and v["name_prefix"] == name_prefix
     ]
+    if len(tpca_kw) == 0:
+        raise ValueError(f"No TPCA found in {featurization_pipeline_pt}.")
     assert len(tpca_kw) == 1
     ix, clsname, kw = tpca_kw[0]
     tpca = transformers_by_class_name[clsname](

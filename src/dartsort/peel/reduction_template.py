@@ -155,9 +155,9 @@ class ReductionTemplateData(TemplateData):
             templates *= msk
 
         if whitener is None:
-            whitener_np = None
+            whitener_np = covariance_np = None
         else:
-            whitener_np = whitener.to_numpy()
+            whitener_np, covariance_np = whitener.to_numpy()
 
         return TemplateData(
             unit_ids=unit_ids,
@@ -169,6 +169,7 @@ class ReductionTemplateData(TemplateData):
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            covariance=covariance_np,
             sampling_frequency=recording.sampling_frequency,
             whiten_strategy=template_cfg.whitening.strategy,
         )
@@ -205,12 +206,14 @@ class TemplateReduction(GrabAndFeaturize):
         pad_spike_len = padded_waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        rank = template_cfg.denoising_rank
         if template_cfg.use_svd and tsvd is not None:
             if isinstance(tsvd, FullProbeTemporalPCAEmbedder):
                 if do_align:
                     raise ValueError("Haven't handled svd alignment in this case.")
             else:
-                assert tsvd.components_.shape[0] == template_cfg.denoising_rank
+                assert tsvd.components_.shape[0] <= rank
+                rank = tsvd.components_.shape[0]
                 tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
                     channel_index=channel_index,
                     pca=tsvd,
@@ -229,7 +232,8 @@ class TemplateReduction(GrabAndFeaturize):
                 waveform_cfg=waveform_cfg,
                 computation_cfg=computation_cfg,
             )
-            assert tsvd.components_.shape[0] == template_cfg.denoising_rank
+            assert tsvd.components_.shape[0] <= rank
+            rank = tsvd.components_.shape[0]
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
                 channel_index=channel_index,
                 pca=tsvd,
@@ -242,7 +246,7 @@ class TemplateReduction(GrabAndFeaturize):
         elif template_cfg.use_svd:
             tsvd = FullProbeTemporalPCAEmbedder(
                 channel_index=channel_index,
-                rank=template_cfg.denoising_rank,
+                rank=rank,
                 geom=geom,
                 fit_radius=template_cfg.denoising_fit_radius,
                 max_waveforms=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
@@ -320,7 +324,7 @@ class TemplateReduction(GrabAndFeaturize):
                 name_prefix="svd",
                 with_raw_std_dev=False,
                 n_units=sorting.n_units,
-                feature_dim=template_cfg.denoising_rank,
+                feature_dim=rank,
                 output_channels=len(rgeom),
                 reduction=template_cfg.reduction,
             )

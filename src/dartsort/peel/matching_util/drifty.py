@@ -226,6 +226,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
             min_channel_amplitude=matching_cfg.template_min_channel_amplitude,
             rank=matching_cfg.template_svd_compression_rank,
             computation_cfg=computation_cfg,
+            min_explained_variance=matching_cfg.template_svd_compression_min_explained_variance,
         )
         temporal_comps = torch.asarray(shared_basis_temps.temporal_components)
         spatial_sing = torch.asarray(shared_basis_temps.spatial_singular)
@@ -236,7 +237,10 @@ class DriftyMatchingTemplates(MatchingTemplates):
             whitener = None
         else:
             assert template_data.whitener is not None
-            whitener = SpatialWhitener.from_numpy(template_data.whitener)
+            assert template_data.covariance is not None
+            whitener = SpatialWhitener.from_numpy(
+                template_data.whitener, template_data.covariance
+            )
 
         if not wh_none and not matching_cfg.whiten_features:
             assert matching_cfg.whitening.strategy == "prewhiten_postapply"

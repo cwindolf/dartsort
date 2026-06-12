@@ -979,7 +979,9 @@ class EmbeddedNoise(BModule):
                 cov = torch.cov(x_spatial.T.double())
                 cov = spiketorch.enforce_posdef(cov, eps=eps)
             else:
-                cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True, eps=eps)
+                cov = spiketorch.nancov(
+                    x_spatial[:, valid].double(), force_posdef=True, eps=eps
+                )
             assert torch.is_tensor(cov)
             if shrinkage:
                 cov = F.softshrink(cov, shrinkage)
@@ -1449,26 +1451,18 @@ def fp_control_threshold_from_h5(
 def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
-    motion: MotionInfo,
+    motion: MotionInfo | None,
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     device: torch.device | None = None,
-    rgeom=None,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     seed: int = 0,
     batch_size=256,
-):
+) -> Tensor:
     assert sorting.parent_h5_path is not None
 
     if do_interpolation:
-        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-            geom = cast(h5py.Dataset, h5["geom"])[:].astype(np.float32)
-        if rgeom is None:
-            if motion is None:
-                rgeom = geom
-            else:
-                rgeom = motion.rgeom
-            rgeom = rgeom.astype(np.float32)
+        assert motion is not None
         snipgen = generate_interpolated_residual_snippets(
             motion=motion,
             hdf5_path=sorting.parent_h5_path,
@@ -1503,6 +1497,8 @@ def residual_covariance(
         N += n
         w = n / N
         cov += scov.sub_(cov).mul_(w)
+    assert N > 0
+    assert cov is not None
 
     return cov
 
@@ -1519,7 +1515,6 @@ def fullzca_whitener(
 def localzca_whitener(
     cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
 ) -> np.ndarray:
-    """"""
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
         chans = chans[chans < len(channel_index)]
@@ -1559,24 +1554,32 @@ whitening_estimators = {
 
 
 class SpatialWhitener(BModule):
-    def __init__(self, whitener: Tensor):
+    def __init__(self, whitener: Tensor, covariance: Tensor):
         super().__init__()
         self.register_buffer("whitener", whitener)
+        self.register_buffer("covariance", covariance)
 
     @classmethod
-    def from_numpy(cls, whitener: np.ndarray):
-        logger.dartsortverbose("Load whitener from numpy.")
-        return cls(whitener=torch.asarray(whitener))
+    def blank(cls, n_channels: int, device: torch.device):
+        w = torch.zeros((n_channels, n_channels), device=device)
+        return cls(w, torch.zeros_like(w))
 
-    def to_numpy(self) -> np.ndarray:
-        return self.b.whitener.numpy(force=True)
+    @classmethod
+    def from_numpy(cls, whitener: np.ndarray, covariance: np.ndarray):
+        logger.dartsortverbose("Load whitener from numpy.")
+        return cls(
+            whitener=torch.asarray(whitener), covariance=torch.asarray(covariance)
+        )
+
+    def to_numpy(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.b.whitener.numpy(force=True), self.b.covariance.numpy(force=True)
 
     @classmethod
     def from_config(
         cls,
         *,
         sorting: DARTsortSorting,
-        motion: MotionInfo,
+        motion: MotionInfo | None,
         whiten_cfg: WhiteningConfig,
         computation_cfg: ComputationConfig | None = None,
     ) -> Self:
@@ -1599,7 +1602,7 @@ class SpatialWhitener(BModule):
             cov_np, channel_index=neighbs
         )
         whitener = torch.asarray(whitener).to(cov)
-        return cls(whitener=whitener)
+        return cls(whitener=whitener, covariance=cov)
 
     def whiten_traces_spatial_major(
         self, x: Tensor, out: Tensor | None = None
@@ -1626,3 +1629,16 @@ class SpatialWhitener(BModule):
         x = x @ (self.b.whitener.T @ self.b.whitener)
         x = x.reshape(*shp, c)
         return x
+
+    def local_whiteners(self, channel_index: Tensor, eps=1e-6):
+        channel_index = torch.asarray(channel_index)
+        nc, cloc = channel_index.shape
+        assert nc == self.b.covariance.shape[0]
+        w = self.b.covariance.new_zeros((nc, cloc, cloc))
+        for j, chans in enumerate(channel_index):
+            mask = (chans < nc).nonzero()[:, 0]
+            chans = chans[mask]
+            cj = self.b.covariance[chans][:, chans]
+            wj = fullzca_whitener(cj.numpy(force=True).astype(np.float64), eps=eps)
+            w[j, mask[:, None], mask[None, :]] = torch.asarray(wj).to(w)
+        return w

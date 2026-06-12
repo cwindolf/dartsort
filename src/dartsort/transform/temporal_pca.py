@@ -364,6 +364,9 @@ class BaseTemporalPCA(BaseWaveformModule):
             self.register_buffer("whitener", torch.zeros(self.rank))
         else:
             assert self.b.mean.shape == (nt,)
+            if self.b.components.shape[0] < self.rank:
+                self.rank = self.b.components.shape[0]
+                self.shape = (self.rank, self.b.channel_index.shape[1])
             assert self.b.components.shape == (self.rank, nt)
         self.to(self.b.channel_index.device)
 
@@ -399,8 +402,12 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             dt = self.temporal_slice.stop - self.temporal_slice.start
             assert basis.shape[1] == dt
+        self.rank = min(self.rank, basis.shape[0])
+        self.shape = (self.rank, self.b.channel_index.shape[1])
         self.b.mean.zero_()
-        self.b.components.copy_(torch.asarray(basis[: self.rank]))
+        comps = torch.asarray(basis[: self.rank])
+        self.b.components.resize_(comps.shape)
+        self.b.components.copy_(comps)
         self._needs_fit = False
 
 
