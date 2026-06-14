@@ -174,23 +174,20 @@ class SubtractionPeeler(BasePeeler):
         self.register_buffer("local_whiteners", local_whiteners)
         if whitener.temporal:
             self.del_none_buffer("whitening_kernel")
-            self.register_buffer(
-                "whitening_kernel",
-                self.whitener.b.temporal_kernel.clone(),  # type: ignore
-            )
+            self.register_buffer("whitening_kernel", whitener.b.temporal_kernel.clone())
         self.threshold = self.p.residnorm_decrease_threshold
 
-    def save_models(self, save_folder):
-        super().save_models(save_folder)
+    def save_models(self, save_folder: str | Path):
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         torch.save(self.subtraction_denoising_pipeline.state_dict(), sub_denoise_pt)
+        super().save_models(save_folder)
 
-    def load_models(self, save_folder):
-        super().load_models(save_folder)
+    def load_models(self, save_folder: str | Path):
         sub_denoise_pt = Path(save_folder) / "subtraction_denoising_pipeline.pt"
         if sub_denoise_pt.exists():
             state_dict = torch.load(sub_denoise_pt, weights_only=True)
             self.subtraction_denoising_pipeline.load_state_dict(state_dict)
+        super().load_models(save_folder)
 
     @classmethod
     def from_config(
@@ -355,6 +352,7 @@ class SubtractionPeeler(BasePeeler):
 
         gc.collect()
         torch.cuda.empty_cache()
+        self.save_models(save_folder=save_folder)
 
     def _fit_subtraction_transformers(
         self, save_folder, tmp_dir=None, computation_cfg=None, which="denoisers"

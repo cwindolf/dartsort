@@ -331,6 +331,8 @@ class DriftyMatchingTemplates(MatchingTemplates):
         )
         return DriftyChunkTemplateData(
             spike_length_samples=self.spike_length_samples,
+            filter_length_samples=self.b.conv_temporal_comps.shape[1],
+            resid_offset=resid_offset,
             unit_ids=self.b.unit_ids,
             main_channels=main_channels,
             obj_normsq=normsq,
