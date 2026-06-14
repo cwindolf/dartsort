@@ -101,9 +101,8 @@ def check_residual_decrease(
         dn_wfs = dn_wfs.nan_to_num()
 
         # spatial mul -- putting temporal dim last here
-        buf = orig_wfs
         orig_wfs = W.bmm(orig_wfs.mT)
-        dn_wfs = torch.bmm(W, dn_wfs.mT, out=buf)
+        dn_wfs = W.bmm(dn_wfs.mT)
 
         # temporal conv if needed
         if whitening_kernel is not None:

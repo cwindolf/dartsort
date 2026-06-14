@@ -164,6 +164,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         inv_lambda=matcher.inv_lambda,
         scale_min=matcher.amp_scale_min,
         scale_max=matcher.amp_scale_max,
+        resid_offset=0,
     )
 
     conv = res["conv"].numpy(force=True)

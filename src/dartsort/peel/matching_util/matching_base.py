@@ -83,6 +83,7 @@ class MatchingTemplates(BModule):
         inv_lambda: float,
         scale_min: float,
         scale_max: float,
+        resid_offset: int,
     ) -> "ChunkTemplateData":
         raise NotImplementedError
 
@@ -129,6 +130,9 @@ class MatchingTemplatesBuilder:
 class ChunkTemplateData:
     # -- subclasses must assign the following properties that the matcher uses.
     spike_length_samples: int
+    filter_length_samples: int
+    resid_offset: int
+
     # for the full templates
     unit_ids: Tensor
     main_channels: Tensor
@@ -260,7 +264,7 @@ class ChunkTemplateData:
         assert nt > 2 * padding
         times = argrelmax_dedup(
             x=objective_max,
-            dedup_radius=self.spike_length_samples,
+            dedup_radius=self.filter_length_samples,
             threshold=thresholdsq,
             arange=obj_arange[:nt],
             padding=padding,
@@ -329,12 +333,13 @@ class ChunkTemplateData:
         assert times is not None
 
         # get noise
+        # TODO check the offset is correct
         waveforms = grab_spikes(
             residual_padded,
             times,
             channels,
             sel_ci,
-            trough_offset=0,
+            trough_offset=self.resid_offset,
             spike_length_samples=self.spike_length_samples,
             buffer=0,
             already_padded=True,

@@ -1511,6 +1511,7 @@ def residual_welch_whitener(
     temporal_length: int = 11,
     spatial_whitener: torch.Tensor | None = None,
 ):
+    """Estimate a 0-phase whitening convolution kernel with Welch's method"""
     assert sorting.parent_h5_path is not None
     snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
 
@@ -1527,7 +1528,7 @@ def residual_welch_whitener(
         snip = torch.asarray(snip).to(device=device, non_blocking=True)
         if W is not None:
             snip = torch.einsum("ntc,cd->ntd", snip, W)
-        snip = snip.permute(0, 2, 1).view(-1, snip.shape[1]).contiguous()
+        snip = snip.permute(0, 2, 1).reshape(-1, snip.shape[1])
         periodogram = torch.fft.rfft(snip, n=block_len, norm="ortho")
         dens = (periodogram * periodogram.conj()).mean(dim=0)
         snip_psds.append(dens)
@@ -1535,13 +1536,14 @@ def residual_welch_whitener(
     spectral_density = snip_psds.mean(0).sqrt_()
 
     # estimate 0-phase FIR whitener
-    wkernel = torch.fft.fftshift(torch.fft.irfft(1.0 / spectral_density, n=block_len))
+    wkernel = torch.fft.irfft(1.0 / spectral_density, n=block_len)
+    wkernel = torch.fft.fftshift(wkernel)
 
     # trim to requested length
     assert temporal_length <= wkernel.shape[0]
     i0 = wkernel.shape[0] // 2 - temporal_length // 2
     i1 = i0 + temporal_length
-    wkernel = wkernel[i0:i1].copy()
+    wkernel = wkernel[i0:i1].clone()
     return wkernel
 
 
@@ -1605,8 +1607,10 @@ class Whitener(BModule):
         self.temporal = temporal_kernel is not None
         self.register_buffer_or_none("temporal_kernel", temporal_kernel)
         if temporal_kernel is not None:
+            self.temporal_length = temporal_kernel.shape[0]
             tk_twice = self._convolve(temporal_kernel)
         else:
+            self.temporal_length = 0
             tk_twice = None
         self.register_buffer_or_none("temporal_kernel_twice", tk_twice)
 
@@ -1626,8 +1630,13 @@ class Whitener(BModule):
         covariance: np.ndarray,
         temporal_kernel: np.ndarray | None,
     ):
-        logger.dartsortverbose("Load whitener from numpy.")
-        tk = None if temporal_kernel is None else torch.asarray(temporal_kernel)
+        if temporal_kernel is None:
+            tk = None
+            tmsg = ""
+        else:
+            tmsg = f" with temporal length {temporal_kernel.shape[0]}"
+            tk = torch.asarray(temporal_kernel)
+        logger.dartsortverbose("Load whitener%s from numpy.", tmsg)
         return cls(
             whitener=torch.asarray(whitener),
             covariance=torch.asarray(covariance),
@@ -1686,12 +1695,13 @@ class Whitener(BModule):
                 temporal_length=whiten_cfg.temporal_length,
                 spatial_whitener=whitener,
             )
+            assert temporal_kernel.shape == (whiten_cfg.temporal_length,)
         else:
             temporal_kernel = None
 
         return cls(whitener=whitener, covariance=cov, temporal_kernel=temporal_kernel)
 
-    def _convolve(self, x: Tensor, twice=False):
+    def _convolve(self, x: Tensor, twice=False, padding="same"):
         if not self.temporal:
             return x
         *shp, t = x.shape
@@ -1700,39 +1710,51 @@ class Whitener(BModule):
             k = self.b.temporal_kernel_twice
         else:
             k = self.b.temporal_kernel
+        if padding == "full":
+            padding = k.shape[0] - 1
+        k = k.to(device=x.device)
         res = F.conv1d(
             input=x,
             weight=k[None, None],
-            padding="same",
+            padding=padding,
             groups=x.shape[1],
         )
-        assert res.shape[-1] == t
-        res = res.reshape(*shp, t)
+        if padding == "same":
+            assert res.shape[-1] == t
+            ot = t
+        else:
+            assert isinstance(padding, int)
+            ot = t + padding
+        res = res.reshape(*shp, ot)
         return res
 
     def whiten_traces_spatial_major(
-        self, x: Tensor, out: Tensor | None = None
+        self, x: Tensor, out: Tensor | None = None, padding="same"
     ) -> Tensor:
         assert x.ndim == 2
         out = torch.mm(self.b.whitener, x.T, out=out)
-        out = self._convolve(out)
+        out = self._convolve(out, padding=padding)
         return out
 
-    def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+    def whiten(
+        self, x: Tensor, out: Tensor | None = None, spatial_only: bool = False
+    ) -> Tensor:
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener.T, out=out)
         x = x.reshape(*shp, c)
-        if self.temporal:
+        if self.temporal and not spatial_only:
             x = self._convolve(x.mT).mT
         return x
 
-    def transpose_whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+    def transpose_whiten(
+        self, x: Tensor, out: Tensor | None = None, spatial_only: bool = False
+    ) -> Tensor:
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener, out=out)
         x = x.reshape(*shp, c)
-        if self.temporal:
+        if self.temporal and not spatial_only:
             x = self._convolve(x.mT).mT
         return x
 

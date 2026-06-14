@@ -86,20 +86,22 @@ def yield_step_results(
     device = matcher.b.channel_index.device
     chunk = torch.asarray(chunk, device=device)
     assert matcher.matching_templates is not None
+    assert not matcher.whiten_features
     chunk_data = matcher.matching_templates.data_at_time(
         t_s,
         scaling=matcher.is_scaling,
         inv_lambda=matcher.inv_lambda,
         scale_min=matcher.amp_scale_min,
         scale_max=matcher.amp_scale_max,
+        resid_offset=0,#matcher.whiten_pad,
     )
-
     cur_residual = chunk.clone()
 
     for it in (
         progrange(max_iter, desc="Match steps") if show_progress else range(max_iter)
     ):
-        pre_conv = chunk_data.convolve(cur_residual.T, padding=matcher.obj_pad_len)
+        cur_traces_wh = chunk_data.whiten_traces(cur_residual)
+        pre_conv = chunk_data.convolve(cur_traces_wh, padding=matcher.obj_pad_len)
         if obj_mode:
             pre_conv = chunk_data.obj_from_conv(
                 conv=pre_conv,
@@ -162,6 +164,7 @@ def visualize_step_results(
     chunk_vis_style: Literal["im", "trace"] = "im",
     gt_sorting: DARTsortSorting | None = None,
     vis_only_last_step: bool = False,
+    vline_new_peaks=True,
     vline_at=None,
     objline_at=None,
 ):
@@ -256,6 +259,11 @@ def visualize_step_results(
             )
             ax.set_ylabel(name)
 
+        if vline_new_peaks:
+            for ax in axes.flat:
+                for ts, ll in zip(times_samples, labels):
+                    ax.axvline(ts, c=glasbey1024[ll % len(glasbey1024)], lw=0.5, ls=":")
+
         if gt_t is not None:
             axes[-3].scatter(gt_t, gt_chan, c=gt_c, s=4 * s, lw=0, marker="o")
 
@@ -276,6 +284,7 @@ def visualize_step_results(
             ec="w",
             lw=1,
         )
+        axes[-3].set_ylim([0, chunk.shape[1]])
 
         vmax = max(np.nanmax(pre_conv[:, obj_sl]), np.nanmax(conv[:, obj_sl]))
         for j, c in enumerate(pre_conv):
@@ -300,12 +309,12 @@ def visualize_step_results(
 
         if vline_at is not None:
             for ax in axes[:3]:
-                ax.axvline(vline_at, color='w', ls='--', lw=0.8)
+                ax.axvline(vline_at, color="w", ls="--", lw=0.8)
             for ax in axes[-2:]:
-                ax.axvline(vline_at, color='k', ls='--', lw=0.8)
+                ax.axvline(vline_at, color="k", ls="--", lw=0.8)
         if objline_at is not None:
             for ax in axes[-2:]:
-                ax.axhline(objline_at, color='k', ls='--', lw=0.8)
+                ax.axhline(objline_at, color="k", ls="--", lw=0.8)
 
         plt.show()
         plt.close(panel)
@@ -381,9 +390,13 @@ class DebugMatchingTemplates(MatchingTemplates):
         inv_lambda: float,
         scale_min: float,
         scale_max: float,
+        resid_offset: int = 0,
     ) -> ChunkTemplateData:
+        assert not resid_offset
         return DebugChunkTemplateData(
             spike_length_samples=self.b.templates_up.shape[2],
+            filter_length_samples=self.b.templates_up.shape[2],
+            resid_offset=resid_offset,
             unit_ids=torch.arange(
                 self.b.templates_up.shape[0], device=self.b.pconv.device
             ),
@@ -408,6 +421,8 @@ class DebugMatchingTemplates(MatchingTemplates):
 @databag
 class DebugChunkTemplateData(ChunkTemplateData):
     spike_length_samples: int
+    filter_length_samples: int
+    resid_offset: int
     unit_ids: Tensor
     main_channels: Tensor
     obj_normsq: Tensor
