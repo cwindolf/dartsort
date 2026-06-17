@@ -758,3 +758,150 @@ def batched_kmeans(
         labels = None
 
     return KMeansResult(centroids=Y, responsibilities=e, labels=labels, dists=dists)
+
+
+def truncated_kmeans_from_labels(
+    X: Tensor | np.ndarray,
+    labels: Tensor | np.ndarray,
+    device=None,
+    atol=1e-3,
+    max_sigma=5.0,
+    dirichlet_alpha=1.0,
+    n_iter=100,
+    show_progress: bool = True,
+    batch_size: int = 4096,
+    centroid_dist_batch_size: int = 128,
+    min_log_prop=-25.0,
+    trunc_guess=20,
+    initial_undershoot=2.0,
+) -> KMeansResult:
+    X = torch.asarray(X, device=device)
+    labels = torch.asarray(labels, device=device)
+    n, dim = X.shape
+    assert labels.shape == (n,)
+    is_gpu = X.device.type == "cuda"
+
+    # flatten and count labels
+    ulabels, labels = labels.unique(return_inverse=True)
+    k = ulabels.shape[0]
+    del ulabels
+
+    # initialize parameters
+    e = F.one_hot(labels, k).to(X)
+    log_props = e.mean(0).log_()
+    N = e.sum(dim=0)
+    w = e.div_(N)
+    Y = torch.mm(w.view(n, k).t(), X)
+    Ynormsq = torch.linalg.vector_norm(Y, dim=1).square_()
+
+    # initialize sigma
+    sigmasq = X.new_zeros(())
+    bY = X.new_empty((batch_size, dim))
+    for i0 in range(0, n, batch_size):
+        i1 = min(n, i0 + batch_size)
+        bY = torch.index_select(Y, 0, labels[i0:i1], out=bY[: i1 - i0])
+        bsigsq = bY.sub_(X[i0:i1]).square_().mean()
+        sigmasq += (bsigsq - sigmasq) * ((i1 - i0) / i1)
+    del bY
+    assert sigmasq > 0
+    sigma = initial_undershoot * sigmasq.sqrt_()
+    assert sigma.isfinite().item()
+    prev_sigma = sigma.clone()
+
+    # storage
+    dYY = X.new_zeros((k, k))
+    dYYmask = X.new_zeros((k, k), dtype=torch.bool)
+    new_Y = torch.empty_like(Y)
+    distsq_buf = torch.zeros_like(X[: min(trunc_guess, k) * batch_size])
+    distsq_buf = (distsq_buf, torch.zeros_like(distsq_buf))
+
+    if show_progress:
+        it = progrange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
+    else:
+        it = range(n_iter)
+
+    done = False
+    for j in it:
+        done = done or j == n_iter - 1
+        max_distance_sq = max_sigma * sigmasq * dim
+
+        new_Y.fill_(0.0)
+        N.fill_(0.0)
+        new_sigmasq = 0.0
+        weight = 0.0
+
+        # update centroid dists
+        for i0 in range(0, k, centroid_dist_batch_size):
+            i1 = min(k, i0 + centroid_dist_batch_size)
+            sqeuc_cdist_known_norm(Y[i0:i1], Ynormsq[i0:i1], Y, Ynormsq, out=dYY[i0:i1])
+        torch.lt(dYY, max_distance_sq, out=dYYmask)
+
+        for i0 in range(0, n, batch_size):
+            i1 = min(n, i0 + batch_size)
+            distsq_coo, distsq_buf = sparse_centroid_distsq(
+                X[i0:i1],
+                Y,
+                labels=labels[i0:i1],
+                centroid_mask=dYYmask,
+                dbufs=distsq_buf,
+            )
+            assert distsq_coo.shape == (i1 - i0, k)
+            distsq_values = distsq_coo.values().clone()
+            liks = distsq_to_lik_coo(distsq_coo, sigmasq, log_props, in_place=True)
+            del distsq_coo
+
+            resps = torch.sparse.softmax(liks, dim=1)
+            # update labels... torch sparse has no argmax(), so need scipy
+            # or cupy. scipy is a big slowdown here, so cupy if possible.
+            if is_gpu and HAVE_CUPY:
+                resps_cupy = coo_to_cupy(resps).tocsc()
+                batch_labels = resps_cupy.argmax(axis=1)
+            else:
+                resps_scipy = coo_to_scipy(resps)
+                batch_labels = resps_scipy.argmax(axis=1, explicit=True)
+            labels[i0:i1] = torch.as_tensor(batch_labels).to(labels).squeeze()
+
+            # get sigmasq
+            w = resps.values().clone()
+            batch_w = w.sum()
+            w /= batch_w
+            batch_sigmasq = torch.sum(distsq_values.mul_(w)) / dim
+
+            # get N and centroids
+            batch_N = resps.sum(dim=0).to_dense()
+            resps.values().div_(batch_N[resps.indices()[1]])
+            batch_centroids = resps.T @ X[i0:i1]
+
+            # update counts
+            N += batch_N
+            weight += batch_w
+
+            # update Welford running means
+            n1_n01 = batch_N.div_(N.clip(min=1e-5))[:, None]
+            w1_w01 = batch_w / weight
+            new_Y += batch_centroids.sub_(new_Y).mul_(n1_n01)
+            new_sigmasq += batch_sigmasq.sub_(new_sigmasq).mul_(w1_w01)
+
+        # update state
+        logN = N.log_() + dirichlet_alpha
+        log_props = F.log_softmax(logN, dim=0).to(X)
+        log_props = log_props.clamp_(min=min_log_prop)
+        Y, new_Y = new_Y, Y
+        Ynormsq = torch.linalg.vector_norm(Y, dim=1).square_()
+        sigmasq = new_sigmasq
+
+        # check convergence
+        sigma = torch.sqrt(sigmasq).numpy(force=True).item()  # type: ignore
+        if abs(sigma - prev_sigma) < atol:
+            break
+
+        prev_sigma = sigma
+        if show_progress:
+            it.set_description(f"kmeans σ={sigma:0.4f}")  # type: ignore
+
+    return KMeansResult(
+        labels=labels,
+        responsibilities=None,
+        centroids=Y,
+        dists=None,
+    )

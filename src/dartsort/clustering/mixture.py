@@ -178,8 +178,14 @@ def tmm_demix(
     allow_blanks = False
     for outer_it in range(refinement_cfg.n_total_iters):
         for inner_it, step_type in enumerate(refinement_cfg.mixture_steps):
-            if step_type == "split":
-                run_split(tmm, train_data, val_data, prog_level)
+            if step_type.endswith("split"):
+                run_split(
+                    tmm,
+                    train_data,
+                    val_data,
+                    prog_level,
+                    single=step_type.startswith("single"),
+                )
                 tmm.em(
                     train_data,
                     show_progress=prog_level,
@@ -788,6 +794,7 @@ class TMMParams:
     split_max_distance: float
     merge_max_distance: float
     split_k: int
+    single_split_k: int
     distance_kind: ComponentDistanceMetric
     em_iters: int
     min_em_iters: int
@@ -824,6 +831,7 @@ class TMMParams:
             min_count=refinement_cfg.min_count,
             split_min_count=refinement_cfg.split_min_count,
             split_k=refinement_cfg.kmeansk,
+            single_split_k=refinement_cfg.single_split_k,
             kmeans_tries=refinement_cfg.kmeans_tries,
             kmeans_beta=refinement_cfg.kmeans_beta,
             kmeanspp_tries=refinement_cfg.kmeanspp_tries,
@@ -1808,7 +1816,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         gen: torch.Generator,
         labels: Tensor | None,
         min_count: int = 0,
-    ):
+    ) -> DenseSpikeData | None:
         assert self.candidates is not None
         assert unit_ids is not None
         unit_ids = torch.as_tensor(unit_ids, device=self.candidates.device)
@@ -2928,7 +2936,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         group_size = group.numel()
         single = group_size == 1
-        k = min(self.p.max_group_size, self.p.split_k)
+        if single:
+            k = self.p.single_split_k
+        else:
+            k = self.p.split_k
 
         # get dense train set slice in group
         split_data = train_data.dense_slice_by_unit(
@@ -3180,11 +3191,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_scores: Scores,
         eval_scores: Scores,
         show_progress: bool = True,
+        friend_distance: float | None = None,
         _stop_after: int | None = None,
         _dry_run: bool = False,
     ) -> SplitResult:
+        if friend_distance is None:
+            friend_distance = self.p.split_friend_distance
         split_groups = self.group_units_by_distance(
-            distance=self.p.split_friend_distance,
+            distance=friend_distance,
             max_group_size=max(1, self.p.split_k - 1),
         )
         if _stop_after:
@@ -4465,6 +4479,7 @@ def run_split(
     train_data: TruncatedSpikeData,
     val_data: TruncatedSpikeData | None,
     prog_level: int,
+    single: bool = False,
     _stop_after: int | None = None,
     _dry_run: bool = False,
 ):
@@ -4489,6 +4504,7 @@ def run_split(
         eval_scores=eval_scores,
         train_scores=train_scores,
         show_progress=prog_level > 0,
+        friend_distance=0.0 if single else None,
         _stop_after=_stop_after,
         _dry_run=_dry_run,
     )

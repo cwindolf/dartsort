@@ -487,12 +487,12 @@ class NeighborQDAPlot(MixtureComponentPlot):
             for split, linestyle in zip(["full", "eval"], "-:"):
                 if split == "full":
                     ssco = mix_data.full_scores
-                    in_unit_id = mix_data.full_inunits[unit_id]
-                    in_nid = mix_data.full_inunits[nid]
+                    in_unit_id = mix_data.full_inunits[int(unit_id)]
+                    in_nid = mix_data.full_inunits[int(nid)]
                 elif split == "eval":
                     ssco = mix_data.eval_scores
-                    in_nid = mix_data.eval_inunits.get(nid, empty)
-                    in_unit_id = mix_data.eval_inunits.get(unit_id, empty)
+                    in_nid = mix_data.eval_inunits.get(int(nid), empty)
+                    in_unit_id = mix_data.eval_inunits.get(int(unit_id), empty)
                 else:
                     assert False
 

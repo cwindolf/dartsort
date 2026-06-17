@@ -289,6 +289,7 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float | None = 25.0
     outlier_neighbor_count: int = 10
+    dpc_kmeans_cleanup: bool = False
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 10
@@ -462,7 +463,7 @@ class TemplateMergeConfig:
         )
 
 
-MixtureStep = Literal["split", "merge", "demolish"]
+MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 
 
@@ -517,6 +518,7 @@ class RefinementConfig:
     mixture_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
+    single_split_k: int = 3
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
