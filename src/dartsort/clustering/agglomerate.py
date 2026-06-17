@@ -733,7 +733,7 @@ def _combine_loop(
                 continue
 
             eq_ncandj = rcand[j + 1 :] == ncandj
-            if eq_ncandj.sum() <= 1:
+            if eq_ncandj.sum() < 1:
                 continue
 
             rsum = mergedr[s, j]
