@@ -47,7 +47,7 @@ class DARTsortUserConfig:
     relevant if `preprocessing != 'none'`. If the recording isn't getting saved,
     stick to float32."""
 
-    subsampling_spikes: int | None = 2_048_000
+    subsampling_spikes_per_channel: int | None = 5000
     """Detection steps before the final matching round will run until at least
     this many spikes are found or the whole recording is covered, to make sure
     that there is enough data for clustering. See also subsampling_fraction.
@@ -242,7 +242,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
     fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
-    n_residual_snips: int = 4 * 4096
+    n_residual_snips: int = 2 * 4096
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 512_000

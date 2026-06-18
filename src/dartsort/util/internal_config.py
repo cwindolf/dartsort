@@ -961,13 +961,16 @@ class DARTsortInternalConfig:
     save_everything_on_error: bool = False
 
 
-def to_internal_config(cfg) -> DARTsortInternalConfig:
+def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     """Laundromat of configuration formats
 
     Parameters
     ----------
     cfg : str | Path | DARTsortUserConfig | DeveloperConfig
         If str or Path, it should point to a .toml file.
+    n_channels : int
+        The number of channels in the input recording, used to adjust
+        parameters which are specified as counts per channel.
 
     Returns
     -------
@@ -1327,6 +1330,11 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         assert False
 
+    if cfg.subsampling_spikes_per_channel is not None:
+        subsampling_spikes = cfg.subsampling_spikes_per_channel * n_channels
+    else:
+        subsampling_spikes = None
+
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
@@ -1360,7 +1368,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
-        subsampling_spikes=cfg.subsampling_spikes,
+        subsampling_spikes=subsampling_spikes,
         subsampling_presence=cfg.subsampling_presence,
         always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
     )

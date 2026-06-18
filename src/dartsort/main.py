@@ -121,7 +121,7 @@ def dartsort(
     output_dir = ensure_path(output_dir, mkdir=True)
 
     # convert cfg to internal format and store it for posterity
-    cfg = to_internal_config(cfg)
+    cfg = to_internal_config(cfg, recording.get_num_channels())
     ds_dump_config(cfg, output_dir)
 
     # in benchmarking, it can be useful to resume from initial detection
