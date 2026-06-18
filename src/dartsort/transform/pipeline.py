@@ -638,7 +638,7 @@ def _add_localization_and_ampvec(fc):
             )
         )
 
-    if fc.do_enforce_decrease == "loc_only" and fc.do_localization:
+    if (fc.do_enforce_decrease == "loc_only") and (fc.do_localization and do_feats):
         more.append(("EnforceDecrease", {}))
 
     if do_feats and fc.do_localization and fc.nn_localization:

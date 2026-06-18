@@ -384,8 +384,6 @@ def _handle_merge(
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return sorting, template_data
 
-    from ..clustering.merge import merge_templates
-
     if template_cfg.denoising_method == "svd":
         # use new shared basis stuff
         from ..clustering.agglomerate import agglomerate
@@ -406,6 +404,8 @@ def _handle_merge(
         del agg
     else:
         # TODO: remove old impl?
+        from ..clustering.merge import merge_templates
+
         merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
         merge_res = merge_templates(
             sorting=sorting,
