@@ -22,6 +22,7 @@ from .transform_base import (
 
 class BaseTemporalPCA(BaseWaveformModule):
     """Base class for PCA featurizers."""
+
     default_name = "basis"
 
     def __init__(
@@ -93,14 +94,13 @@ class BaseTemporalPCA(BaseWaveformModule):
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
+        del spike_data
         rg = np.random.default_rng(self.random_state)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
             weights = weights / weights.sum()
-            choices = rg.choice(
-                len(weights), p=weights, size=self.max_waveforms
-            )
+            choices = rg.choice(len(weights), p=weights, size=self.max_waveforms)
             choices.sort()
             choices = torch.from_numpy(choices)
             waveforms = waveforms[choices]
@@ -248,24 +248,39 @@ class BaseTemporalPCA(BaseWaveformModule):
         if ndim == 2:
             features = features.unsqueeze(0)
         n, r, c = features.shape
-        waveforms = features.permute(0, 2, 1).reshape(n * c, r)
-        waveforms = self._inverse_transform_in_probe(waveforms)
-        waveforms = waveforms.reshape(n, c, -1).permute(0, 2, 1)
+        if self.whiten:
+            W = self.b.components / self.b.whitener
+        else:
+            W = self.b.components
+        Wt = W.t()
+        assert Wt.shape[1] == r
+        out = features.new_empty((n, Wt.shape[0], c))
+        bs = self.batch_size
+        for i0 in range(0, n, bs):
+            i1 = i0 + bs
+            torch.matmul(Wt, features[i0:i1], out=out[i0:i1])
         if ndim == 2:
-            waveforms = waveforms[0]
-        return waveforms
+            out = out[0]
+        return out
 
     def force_embed(self, waveforms):
         ndim = waveforms.ndim
         if ndim == 2:
             waveforms = waveforms.unsqueeze(0)
         n, t, c = waveforms.shape
-        waveforms = waveforms.mT.reshape(n * c, t)
-        waveforms = self._transform_in_probe(waveforms)
-        waveforms = waveforms.view(n, c, self.rank).mT
+        if self.whiten:
+            W = self.b.components / self.b.whitener
+        else:
+            W = self.b.components
+        assert W.shape[1] == t
+        out = waveforms.new_empty((n, W.shape[0], c))
+        bs = self.batch_size
+        for i0 in range(0, n, bs):
+            i1 = i0 + bs
+            torch.matmul(W, waveforms[i0:i1], out=out[i0:i1])
         if ndim == 2:
-            waveforms = waveforms[0]
-        return waveforms
+            out = out[0]
+        return out
 
     def force_project(self, waveforms):
         ndim = waveforms.ndim
@@ -413,6 +428,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
 class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
     """Spike waveform denoising with PCA."""
+
     default_name = "temporal_pca"
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):
@@ -467,6 +483,7 @@ class FullProbeTemporalPCAEmbedder(BaseWaveformDenoiser, BaseTemporalPCA):
 
 class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
     """Spike featurization with PCA."""
+
     default_name = "tpca_features"
 
     def transform(
@@ -527,6 +544,7 @@ class TemporalPCAFeaturizer(BaseWaveformFeaturizer, BaseTemporalPCA):
 
 class TemporalPCA(BaseWaveformAutoencoder, TemporalPCAFeaturizer):
     """Combined spike featurization and denoising with PCA."""
+
     default_name = "tpca_features"
 
     def forward(self, waveforms, *, channels, time_shifts=None, **unused):

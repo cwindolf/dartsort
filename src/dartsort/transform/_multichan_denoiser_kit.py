@@ -32,6 +32,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         n_epochs=75,
         pad_depth_only=True,
         channelwise_dropout_p=0.0,
+        svd_projection_rank: int | None = None,
         with_conv_fullheight=False,
         val_split_p=0.0,
         min_epochs=10,
@@ -85,6 +86,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.res_type = res_type
         self.inference_batch_size = inference_batch_size
         self.epoch_size = epoch_size
+        self.svd_projection_rank = svd_projection_rank
 
         model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index, depth_only=pad_depth_only
@@ -127,7 +129,11 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         )
         # we don't know these dimensions til we see a spike
         assert self.spike_length_samples is not None
-        self.wf_dim = self.spike_length_samples * self.b.model_channel_index.shape[1]
+        if self.svd_projection_rank:
+            dim0 = self.svd_projection_rank
+        else:
+            dim0 = self.spike_length_samples
+        self.wf_dim = dim0 * self.b.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
     def get_optimizer(self):
@@ -196,8 +202,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             hidden_dims = self.hidden_dims
         if output_layer is None:
             output_layer = "gated_linear" if self.signal_gates else "linear"
+        if self.svd_projection_rank:
+            dim0 = self.svd_projection_rank
+        else:
+            dim0 = self.spike_length_samples
         return nn_util.get_waveform_mlp(
-            self.spike_length_samples,
+            dim0,
             self.b.model_channel_index.shape[1],
             hidden_dims,
             self.output_dim,
