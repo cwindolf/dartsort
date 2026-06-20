@@ -813,6 +813,7 @@ class TMMParams:
     robust_strategy: RobustnessStrategy
     demolition_min_resp_ratio: float
     demolish_during_selection: bool
+    refit_in_demolition: bool
     kmeans_tries: int
     kmeans_beta: float
     kmeanspp_tries: int
@@ -850,6 +851,7 @@ class TMMParams:
             robust_strategy=refinement_cfg.robust_strategy,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
             demolish_during_selection=refinement_cfg.demolish_during_selection,
+            refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
@@ -2349,6 +2351,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         total_log_proportion: float,
         noise_log_prop: Tensor | float = -torch.inf,
         p: TMMParams,
+        min_channel_count: int | None = None,
     ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor]:
         """Fit units with fixed label posterior
 
@@ -2361,14 +2364,16 @@ class TruncatedMixtureModel(BaseMixtureModel):
             data=data,
             rank=signal_rank,
             erp=erp,
-            min_channel_count=p.min_channel_count,
+            min_channel_count=p.min_channel_count
+            if min_channel_count is None
+            else min_channel_count,
             noise=noise,
             weights=responsibilities,
             latent_prior_std=p.latent_prior_std,
             prior_pseudocount=p.prior_pseudocount,
         )
         assert chan_coverage is not None
-        valid = torch.tensor([r is not None for r in initialization])
+        valid = torch.tensor([r is not None for r in initialization], dtype=torch.bool)
         initialization = [r for r in initialization if r is not None]
         responsibilities = responsibilities[:, valid]
         K = responsibilities.shape[1]
@@ -2677,13 +2682,14 @@ class TruncatedMixtureModel(BaseMixtureModel):
         *,
         skip_noise: bool = False,
         allow_blanks: bool = False,
+        skip_responsibility: bool = True,
     ) -> Scores:
         scores = []
         for batch in data.to_batches(self.unit_ids, self.lut):
             batch_scores = self.score_batch(
                 batch=batch,
                 n_candidates=batch.candidates.shape[1],
-                skip_responsibility=True,
+                skip_responsibility=skip_responsibility,
                 skip_noise=skip_noise,
                 allow_blanks=allow_blanks,
             )
@@ -3470,6 +3476,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 train_scores=train_scores,
                 eval_scores=val_scores,
                 cur_crit=cur_crit,
+                train_data=train_data,
+                eval_data=val_data,
             )
             if _stop_after and j > _stop_after:
                 # for profiling
@@ -5110,7 +5118,7 @@ def _fit_subset_models(
 def _score_subset_models(
     mm: BaseMixtureModel,
     subset_models: BaseMixtureModel,
-    train_full_scores: Scores,
+    train_full_scores: Scores | None,
     cur_scores: Scores,
     train_data: DenseSpikeData,
     eval_data: DenseSpikeData | None,
@@ -5149,6 +5157,7 @@ def _score_subset_models(
         crit_subset_scores = subset_models.score(eval_data, skip_noise=True)
     else:
         assert eval_data is None
+        assert train_full_scores is not None
         crit_subset_scores = train_subset_scores
         crit_full_scores = train_full_scores
 
@@ -5411,8 +5420,11 @@ def try_kmeans(
 
 
 def evaluate_group_demolitions(
+    *,
     mm: TruncatedMixtureModel,
     group: Tensor,
+    train_data: TruncatedSpikeData,
+    eval_data: TruncatedSpikeData,
     mean_train_resp: Tensor | None,
     mean_eval_resp: Tensor | None,
     cur_crit: float | None,
@@ -5427,7 +5439,7 @@ def evaluate_group_demolitions(
     if mean_eval_resp is None:
         mean_eval_resp = mean_responsibilities(scores=eval_scores, n_units=mm.n_units)
     ratio = mean_train_resp[group] / mean_eval_resp[group]
-    can_demolish = ratio > mm.p.demolition_min_resp_ratio
+    can_demolish = ratio > 0  # mm.p.demolition_min_resp_ratio
 
     if not can_demolish.any():
         return GroupDemolition(unit_ids=group, improvement=0.0, demolished=None)
@@ -5446,16 +5458,46 @@ def evaluate_group_demolitions(
         unit_ids=group, improvement=0.0, demolished=torch.zeros_like(can_demolish)
     )
     best_imp = 0.0
-    for demo_mask in submasks(can_demolish):
-        crit = _evaluate_single_demolition(
-            orig_log_props=mm.b.log_proportions,
-            noise_log_prop=mm.b.noise_log_prop,
-            cl_alpha=alpha,
-            group=group_,
-            demolish_mask=demo_mask,
-            train_scores=train_scores,
-            eval_scores=eval_scores,
+
+    if mm.p.refit_in_demolition:
+        group = group.to(device=train_scores.candidates.device)
+        (train_ixs,) = (
+            torch.isin(train_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
         )
+        group_train_data = train_data.dense_slice(train_ixs)
+        assert group_train_data is not None
+        group_train_scores = train_scores.slice(group_train_data.indices)
+
+        (eval_ixs,) = (
+            torch.isin(eval_scores.candidates, group).any(dim=1).nonzero(as_tuple=True)
+        )
+        group_eval_data = eval_data.dense_slice(eval_ixs)
+        assert group_eval_data is not None
+        group_eval_scores = eval_scores.slice(group_eval_data.indices)
+        nongroup_eval_scores = remove_units_from_scores(group_eval_scores, group)
+
+    for demo_mask in submasks(can_demolish, skip_full=True):
+        if mm.p.refit_in_demolition:
+            crit = _evaluate_single_refit_demolition(
+                group=group,
+                demolish_mask=demo_mask,
+                group_train_scores=group_train_scores,  # ty: ignore[possibly-unresolved-reference]
+                nongroup_eval_scores=nongroup_eval_scores,  # ty: ignore[possibly-unresolved-reference]
+                group_eval_scores=group_eval_scores,  # ty: ignore[possibly-unresolved-reference]
+                group_eval_data=group_eval_data,  # ty: ignore[possibly-unresolved-reference]
+                group_train_data=group_train_data,  # ty: ignore[possibly-unresolved-reference]
+                mm=mm,
+            )
+        else:
+            crit = _evaluate_single_demolition(
+                orig_log_props=mm.b.log_proportions,
+                noise_log_prop=mm.b.noise_log_prop,
+                cl_alpha=alpha,
+                group=group_,
+                demolish_mask=demo_mask,
+                train_scores=train_scores,
+                eval_scores=eval_scores,
+            )
         imp = crit - cur_crit
         if imp > best_imp:
             best_demo = GroupDemolition(
@@ -5507,12 +5549,82 @@ def _evaluate_single_demolition(
     )
 
 
-def submasks(mask: Tensor, skip_empty=True):
+def _evaluate_single_refit_demolition(
+    group: Tensor,
+    demolish_mask: Tensor,
+    group_train_scores: Scores,
+    nongroup_eval_scores: Scores,
+    group_eval_scores: Scores,
+    group_eval_data: DenseSpikeData,
+    group_train_data: DenseSpikeData,
+    mm: TruncatedMixtureModel,
+) -> float:
+    assert demolish_mask.shape == group.shape
+
+    # determine mean responsibility after demolition on train set
+    demolish_mask = demolish_mask.cpu()
+    chopping_block = group[demolish_mask]
+    nchop = chopping_block.numel()
+    if not nchop:
+        return ecl(
+            resps=group_eval_scores.responsibilities,
+            log_liks=group_eval_scores.log_liks,
+            cl_alpha=mm.p.cl_alpha,
+        )
+    group_remain = group[demolish_mask.logical_not()]
+    n_remain = group.numel() - nchop
+    train_scores_adj = remove_units_from_scores(group_train_scores, chopping_block)
+    assert mm.erp is not None
+    assert mm.noise is not None
+
+    # responsibilities for re-fitting rest of group
+    resp0 = train_scores_adj.responsibilities
+    assert resp0 is not None
+    cand0 = train_scores_adj.candidates
+    chopped_responsibilities = mm.b.log_proportions.new_zeros(
+        (resp0.shape[0], n_remain)
+    )
+    for j, cand in enumerate(group_remain):
+        cii, cjj = (cand0 == cand).nonzero(as_tuple=True)
+        chopped_responsibilities[cii, j] = resp0[cii, cjj]
+    chopped_responsibilities.clamp_(min=1e-8)
+
+    # re-fit model to train_scores_adj
+    chopped_model, s0valid, _, s0discard, s0mask, _ = (
+        TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+            data=group_train_data,
+            responsibilities=chopped_responsibilities,
+            signal_rank=mm.signal_rank,
+            erp=mm.erp,
+            noise=mm.noise,
+            neighb_cov=mm.neighb_cov,
+            total_log_proportion=mm.non_noise_log_proportion(),
+            p=mm.p,
+            min_channel_count=0,
+        )
+    )
+
+    # re-score eval data and combine with bystander units
+    chopped_score = chopped_model.score(data=group_eval_data, skip_responsibility=False)
+    assert chopped_score.responsibilities is not None
+    final_score = concatenate_scores([chopped_score, nongroup_eval_scores], dim=1)
+    assert final_score.responsibilities is not None
+
+    return ecl(
+        resps=final_score.responsibilities,
+        log_liks=final_score.log_liks,
+        cl_alpha=mm.p.cl_alpha,
+    )
+
+
+def submasks(mask: Tensor, skip_empty=True, skip_full=False):
     mask_ = mask.cpu()
     (on,) = mask_.nonzero(as_tuple=True)
     on = on.tolist()
     for subset in subsets(on):
         if skip_empty and not len(subset):
+            continue
+        if skip_full and len(subset) == len(mask):
             continue
         m = torch.zeros_like(mask)
         m[list(subset)] = True
@@ -6241,22 +6353,22 @@ def _combine_similar_resps(resps: Tensor, keep_mask: Tensor, n_keep: int) -> Ten
     return kept_resp
 
 
-def concatenate_scores(scoress: list[Scores]) -> Scores:
+def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
     assert len(scoress) > 0
     if len(scoress) == 1:
         return scoress[0]
-    log_liks = torch.concatenate([s.log_liks for s in scoress], dim=0)
-    candidates = torch.concatenate([s.candidates for s in scoress], dim=0)
+    log_liks = torch.concatenate([s.log_liks for s in scoress], dim=dim)
+    candidates = torch.concatenate([s.candidates for s in scoress], dim=dim)
     if scoress[0].responsibilities is None:
         responsibilities = None
     else:
         responsibilities = torch.concatenate(
-            [cast(Tensor, s.responsibilities) for s in scoress], dim=0
+            [cast(Tensor, s.responsibilities) for s in scoress], dim=dim
         )
     if scoress[0].duties is None:
         duties = None
     else:
-        duties = torch.concatenate([cast(Tensor, s.duties) for s in scoress], dim=0)
+        duties = scoress[0].duties
     return Scores(
         log_liks=log_liks,
         responsibilities=responsibilities,
