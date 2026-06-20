@@ -86,15 +86,31 @@ class ACG(UnitPlot):
     kind = "histogram"
     height = 0.75
 
-    def __init__(self, max_lag=50):
+    def __init__(self, max_lag=50, bin=1, unit="samples"):
         super().__init__()
         self.max_lag = max_lag
+        self.bin = bin
+        self.unit = unit
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
         which = sorting_analysis.in_unit(unit_id)
-        times_samples = sorting_analysis.sorting.times_samples[which]
-        plot_correlogram(axis, times_samples, max_lag=self.max_lag)
+        t = sorting_analysis.sorting.times_samples[which]
+        samples_per_ms = sorting_analysis.sorting.sampling_frequency / 1000
+        if self.unit == "samples":
+            max_lag_samples = self.max_lag
+        elif self.unit == "ms":
+            max_lag_samples = int(np.ceil(self.max_lag * samples_per_ms))
+        else:
+            assert False
+        plot_correlogram(
+            axis,
+            t,
+            max_lag=max_lag_samples,
+            bin=self.bin,
+            samples_per_ms=samples_per_ms,
+            to_ms=self.unit == "ms",
+        )
         axis.set_ylabel("acg")
 
 
@@ -664,17 +680,20 @@ class NeighborQDAMatrices(UnitPlot):
 class NeighborCCGPlot(UnitPlot):
     kind = "medium"
 
-    def __init__(self, n_neighbors=3, max_lag=50, with_merged_acg=False):
+    def __init__(
+        self, n_neighbors=3, max_lag=50, bin=1, unit="samples"
+    ):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
-        self.with_merged_acg = with_merged_acg
         if self.with_merged_acg:
             self.height = 1.0
             self.width = 3.0
         else:
             self.height = 1.75
             self.width = 2
+        self.unit = unit
+        self.bin = bin
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         (
@@ -716,24 +735,27 @@ class NeighborCCGPlot(UnitPlot):
                 squeeze=False,
             )
             axes = axes.T
-        for j in range(len(neighb_sts)):
-            clags, ccg = correlogram(my_st, neighb_sts[j], max_lag=self.max_lag)
-            bar(axes[0, j], clags, ccg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-            axes[0, j].set_title(f"unit {neighbor_ids[j]}")
 
-            if not self.with_merged_acg:
-                continue
-
-            merged_st = np.concatenate((my_st, neighb_sts[j]))
-            merged_st.sort()
-            alags, acg = correlogram(merged_st, max_lag=self.max_lag)
-            bar(axes[1, j], alags, acg, fill=True, fc=colors[j])  # , ec="k", lw=1)
-        if self.with_merged_acg:
-            axes[0, 0].set_ylabel("ccg")
-            axes[1, 0].set_ylabel("merged acg")
-            axes[-1, len(neighb_sts) // 2].set_xlabel("lag (samples)")
+        samples_per_ms = sorting_analysis.sorting.sampling_frequency / 1000
+        if self.unit == "samples":
+            max_lag_samples = self.max_lag
+        elif self.unit == "ms":
+            max_lag_samples = int(np.ceil(self.max_lag * samples_per_ms))
         else:
-            axes[-1, -1].set_xlabel("ccg")
+            assert False
+
+        for j in range(len(neighb_sts)):
+            plot_correlogram(
+                axes[0, j],
+                my_st,
+                neighb_sts[j],
+                max_lag=max_lag_samples,
+                bin=self.bin,
+                samples_per_ms=samples_per_ms,
+                to_ms=self.unit == "ms",
+                fc=colors[j],
+            )
+            axes[0, j].set_title(f"ccg vs. unit {neighbor_ids[j]}")
 
 
 class NeighborQDAPlot(UnitPlot):
@@ -877,6 +899,7 @@ def default_plots(sorting_analysis=None):
     p = [
         UnitTextInfo(),
         ACG(),
+        ACG(max_lag=50.0, bin=0.5, unit="ms"),
         ISIHistogram(),
         ISIHistogram(bin_ms=0.25, max_ms=50.0),
         XZScatter(),
@@ -885,6 +908,7 @@ def default_plots(sorting_analysis=None):
         NearbyCoarseTemplatesPlot(),
         CoarseTemplateDistancePlot(),
         NeighborCCGPlot(),
+        NeighborCCGPlot(max_lag=50.0, bin=0.5, unit="ms"),
     ]
     if sorting_analysis is not None and sorting_analysis.has_localizations():
         p.extend([TimeZScatter(), TimeRegZScatter()])

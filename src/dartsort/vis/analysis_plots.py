@@ -437,11 +437,36 @@ def stackbar(ax, x, y, colors, labels, fill=True):
 
 
 def plot_correlogram(
-    axis, times_a, times_b=None, max_lag=50, color="k", fill=True, **stairs_kwargs
+    axis,
+    times_a,
+    times_b=None,
+    max_lag=50,
+    samples_per_ms: float = 30.0,
+    color="k",
+    fill=True,
+    bin=1,
+    to_ms=False,
+    **stairs_kwargs,
 ):
     lags, ccg = correlogram(times_a, times_b=times_b, max_lag=max_lag)
-    axis.set_xlabel("lag (samples)")
-    return bar(axis, lags, ccg, fill=fill, color=color, **stairs_kwargs)
+    assert lags.shape == ccg.shape == (2 * max_lag + 1,)
+    if not to_ms:
+        axis.set_xlabel("lag (samples)")
+        return bar(axis, lags, ccg, fill=fill, color=color, **stairs_kwargs)
+
+    max_lag_ms = max_lag / samples_per_ms
+    ms_lags = np.arange(-max_lag_ms, max_lag_ms + bin / 2, bin)
+    ms_ccg = np.zeros_like(ms_lags)
+    ctr = ms_lags.shape[0] // 2
+    assert ms_lags.shape == (2 * ctr + 1,)
+    for j in range(max_lag):
+        binix = (j / samples_per_ms) // bin
+        ms_ccg[ctr + binix] += ccg[max_lag + j]
+        if j:
+            ms_ccg[ctr - binix] += ccg[max_lag - j]
+
+    axis.set_xlabel("lag (ms)")
+    return bar(axis, ms_lags, ms_ccg, fill=fill, color=color, **stairs_kwargs)
 
 
 def visualize_denoiser(
@@ -629,7 +654,9 @@ def plot_denoiser_scores(
         score_unwhitened=np.sqrt(np.maximum(0.0, np.concatenate(scores_unwhitened))),
     )
     if scores_whitened is not None:
-        data["score_whitened"] = np.sqrt(np.maximum(0.0, np.concatenate(scores_whitened)))
+        data["score_whitened"] = np.sqrt(
+            np.maximum(0.0, np.concatenate(scores_whitened))
+        )
     df = pd.DataFrame(data)
 
     bins = np.arange(0.0, vmax, step=dv)
