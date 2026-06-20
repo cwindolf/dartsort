@@ -615,6 +615,8 @@ class DemolishView(MixtureComponentPlot):
             mean_eval_resp=mix_data.mean_eval_resp,
             train_scores=mix_data.train_scores,
             eval_scores=mix_data.eval_scores,
+            train_data=mix_data.train_data,
+            eval_data=mix_data.val_data,  # type: ignore
             cur_crit=None,
         )
         return group_res
