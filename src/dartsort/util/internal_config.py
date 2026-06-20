@@ -529,8 +529,9 @@ class RefinementConfig:
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
-    demolition_min_resp_ratio: float = 1.1
+    demolition_min_resp_ratio: float = 0.9
     demolish_during_selection: bool = False
+    refit_in_demolition: bool = False
     em_after_demolish: bool = False
     whiten_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
@@ -550,6 +551,8 @@ class RefinementConfig:
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
     qda_force_merge_for_temp_dist_below: float = 0.3
+    spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_max_distance: float = 0.5
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -565,6 +568,7 @@ class RefinementConfig:
 
     # deduplication control
     dedup_ms: float = 0.0
+    censor_ms: float = 0.3
 
 
 @cfg_dataclass
@@ -898,7 +902,7 @@ default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
-default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish"))
+default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish", "demolish"))
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
@@ -1306,6 +1310,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             template_merge_cfg=agg_tmcfg,
             qda_threshold=0.0,
             dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
@@ -1326,6 +1331,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             template_merge_cfg=agg_tmcfg,
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
             dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
         )
     else:
         assert False

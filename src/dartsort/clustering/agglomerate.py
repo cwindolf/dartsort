@@ -56,7 +56,7 @@ class Agglomeration:
 def agglomerate(
     *,
     sorting: DARTsortSorting,
-    recording: BaseRecording | None,
+    recording: BaseRecording,
     template_merge_cfg: TemplateMergeConfig | None,
     refinement_cfg: RefinementConfig | None,
     motion: MotionInfo,
@@ -104,7 +104,7 @@ def agglomerate(
         )
 
     # tdist tells us the possible merges
-    mask = linkage_mask(
+    distance_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
         threshold=template_merge_cfg.merge_distance_threshold,
@@ -117,9 +117,9 @@ def agglomerate(
             dt=refinement_cfg.glom_firing_corr_dt,
             method=refinement_cfg.glom_firing_corr_method,
         )
-        _oldsum = mask[np.triu_indices_from(mask)].sum()
+        _oldsum = distance_mask[np.triu_indices_from(distance_mask)].sum()
         fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
-        mask = np.logical_and(mask, fcorr_mask)
+        mask = np.logical_and(distance_mask, fcorr_mask)
         np.fill_diagonal(mask, True)
         _newsum = mask[np.triu_indices_from(mask)].sum()
         logger.dartsortdebug(
@@ -127,6 +127,7 @@ def agglomerate(
         )
     else:
         fcorr = fcorr_mask = None
+        mask = distance_mask
 
     # restrict mask by overlap criteria
     qda_res = qda(
@@ -158,19 +159,37 @@ def agglomerate(
     assert np.all(qda_mask <= mask)
     if fcorr_mask is not None:
         assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
+
+    if refinement_cfg.spikeinterface_merge_preset is not None:
+        si_mask = spikeinterface_merge_mask(
+            recording=recording,
+            sorting=sorting,
+            preset=refinement_cfg.spikeinterface_merge_preset,
+            censor_ms=refinement_cfg.censor_ms,
+            template_data=tdist.template_data,
+            pair_mask=tdist.distances < refinement_cfg.spikeinterface_merge_max_distance,
+        )
+    else:
+        si_mask = None
+
+    # force merges for very close neighbors
     force_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
         threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
     )
-    qda_mask = np.logical_or(qda_mask, force_mask)
-    np.fill_diagonal(qda_mask, True)
-    qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
+
+    # extract final mask
+    final_mask = np.logical_or(qda_mask, force_mask)
+    if si_mask is not None:
+        final_mask = np.logical_or(final_mask, si_mask)
+    np.fill_diagonal(final_mask, True)
+    final_mask_as_distance = np.logical_not(final_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
         sorting=sorting,
         unit_ids=tdist.template_data.unit_ids,
-        dists=qda_as_dist,
+        dists=final_mask_as_distance,
         shifts=tdist.shifts,
         unit_snrs=tdist.template_data.snrs_by_channel().max(1),
         threshold=0.5,
@@ -350,6 +369,100 @@ def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
     assert sorting.labels is not None
     labels = sorting.labels
     return labels, scores
+
+
+def spikeinterface_merge_mask(
+    *,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    preset: str | None,
+    censor_ms: float = 0.0,
+    template_data: TemplateData,
+    pair_mask: np.ndarray,
+    min_count: int = 100,
+):
+    from spikeinterface.curation.auto_merge import compute_merge_unit_groups
+    from spikeinterface.postprocessing import ComputeTemplateSimilarity
+
+    # censor first
+    if censor_ms:
+        sorting = deduplicate_spikes(sorting, censor_ms)
+
+    # analyzer
+    analyzer = sorting.to_sorting_analyzer(
+        recording=recording, template_data=template_data
+    )
+
+    # register the mask as the template similarity extension
+    tsim_ext = ComputeTemplateSimilarity(analyzer)
+    tsim_ext.data = {"similarity": pair_mask.astype(np.float32)}
+    tsim_ext.params = {"method": "dartsort"}
+    tsim_ext.run_info = {"run_completed": True}
+    analyzer.extensions["template_similarity"] = tsim_ext
+
+    # handle custom presets
+    if preset == "dartsort_slay_xc":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "cross_contamination",
+            "slay_score",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    elif preset == "dartsort_slay_ccg":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "correlogram",
+            "slay_score",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    elif preset == "dartsort_slay_xc_ccg":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "correlogram",
+            "cross_contamination",
+            "slay_score",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    else:
+        assert preset is not None
+        steps = None
+
+    # make parameters aware of censorship and other params
+    my_step_params = {
+        "num_spikes": {"min_spikes": min_count},
+        "remove_contaminated": {"censored_period_ms": censor_ms},
+        "template_similarity": {"similarity_method": "dartsort"},
+        "correlogram": {"censor_correlograms_ms": censor_ms},
+        "cross_contamination": {"censored_period_ms": censor_ms},
+        "quality_score": {"censored_period_ms": censor_ms},
+    }
+    groups = compute_merge_unit_groups(
+        preset=preset,
+        steps=steps,
+        sorting_analyzer=analyzer,
+        steps_params=my_step_params,
+        force_copy=False,
+    )
+    mask = np.zeros_like(pair_mask)
+    for g in groups:
+        g = np.array(g)
+        mask[g[:, None], g[None, :]] = True
+    return mask
 
 
 @databag

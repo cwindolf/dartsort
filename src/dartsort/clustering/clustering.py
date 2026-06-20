@@ -855,6 +855,7 @@ class AgglomerateRefinement(Refinement):
         recording: BaseRecording | None,
         motion: MotionInfo,
     ):
+        assert recording is not None
         return agglomerate.agglomerate(
             recording=recording,
             sorting=sorting,

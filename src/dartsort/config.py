@@ -231,7 +231,7 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: Sequence[MixtureStep] = ("split", "demolish")
+    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "demolish")
     later_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     cluster_strategy: str = "dpc"
@@ -258,6 +258,7 @@ class DeveloperConfig(DARTsortUserConfig):
     temporal_dedup_radius_samples: int = 11
     positive_temporal_dedup_radius_samples: int = 41
     spatial_dedup_radius_um: float | None = 50.0
+    spikeinterface_merge_preset: str | None = None
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
