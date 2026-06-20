@@ -161,13 +161,23 @@ def agglomerate(
         assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
 
     if refinement_cfg.spikeinterface_merge_preset is not None:
+        pair_mask = tdist.distances < refinement_cfg.spikeinterface_merge_max_distance
+        if refinement_cfg.spikeinterface_merge_min_coentropy is not None:
+            cmask, _ = coentropy_merge_mask(
+                sorting=sorting,
+                min_coentropy=refinement_cfg.spikeinterface_merge_min_coentropy,
+                coverage_threshold=refinement_cfg.spikeinterface_merge_coent_coverage,
+                iou_threshold=refinement_cfg.spikeinterface_merge_coent_iou,
+            )
+            pair_mask = np.logical_and(cmask, pair_mask)
+
         si_mask = spikeinterface_merge_mask(
             recording=recording,
             sorting=sorting,
             preset=refinement_cfg.spikeinterface_merge_preset,
             censor_ms=refinement_cfg.censor_ms,
             template_data=tdist.template_data,
-            pair_mask=tdist.distances < refinement_cfg.spikeinterface_merge_max_distance,
+            pair_mask=pair_mask,
         )
     else:
         si_mask = None
@@ -986,3 +996,140 @@ def _dedup_unit_loop(
                 break
 
         i0 = i1
+
+
+@databag
+class CoentropyResult:
+    coentropy: np.ndarray
+    """KxK; reduction of entropy per cooccurrence due to merging pair"""
+
+    cooccurrence: np.ndarray
+    """KxK; number of times these units score the same spike"""
+
+    rival_count: np.ndarray
+    """KxK; number of times one unit scores a spike where the other is top"""
+
+    occurrence: np.ndarray
+    """K; number of times the unit appears in the candidates at all"""
+
+
+def coentropy_merge_mask(
+    sorting: DARTsortSorting,
+    min_coentropy: float,
+    coverage_threshold: float,
+    iou_threshold: float,
+    gmm_prefix=("merged", "gmm"),
+) -> tuple[np.ndarray, CoentropyResult]:
+    """
+    Parameters
+    ----------
+    sorting : DARTsortSorting
+    min_coentropy : float
+        Must be met by pair for mask=True
+    min_coverage : float
+        Pairs such that at least one unit in each pair has
+        rival_count/count > mincov are allowed
+    iou_threshold: float
+        Pairs with rival iou > iouthresh are allowed
+    """
+    c = coentropy(sorting, gmm_prefix=gmm_prefix)
+    assert c is not None
+
+    # rival count diagonal is just unit top count (not exactly label count,
+    # since it doesn't account for noise assignments)
+    counts = np.diagonal(c.rival_count)
+
+    cov = c.rival_count / counts
+    cov = np.minimum(cov, cov.T)
+
+    union = counts[:, None] + counts[None, :]
+    union -= c.rival_count
+    iou = c.rival_count / union
+
+    mask = np.logical_and.reduce(
+        [cov >= coverage_threshold, iou >= iou_threshold, c.coentropy >= min_coentropy]
+    )
+    np.fill_diagonal(mask, True)
+    return mask, c
+
+
+def coentropy(
+    sorting: DARTsortSorting,
+    gmm_prefix=("merged", "gmm"),
+) -> CoentropyResult | None:
+    """Calculate entropy reduction due to merging pairs."""
+    for k in gmm_prefix:
+        cands = getattr(sorting, f"{k}_candidates", None)
+        resps = getattr(sorting, f"{k}_responsibilities", None)
+        if cands is not None:
+            assert resps is not None
+            break
+    else:
+        return None
+
+    k = sorting.n_units
+    resps = resps[:, : cands.shape[1]].astype(np.float64)
+    coentropy = np.zeros((k, k))
+    cooccurrence = np.zeros((k, k), dtype=np.int64)
+    rival_count = np.zeros((k, k), dtype=np.int64)
+    occurrence = np.zeros((k,), dtype=np.int64)
+    _calc_coentropy(coentropy, cooccurrence, rival_count, occurrence, cands, resps)
+    rival_count += rival_count.T
+    np.fill_diagonal(rival_count, np.diagonal(rival_count) // 2)
+    coentropy += coentropy.T
+    cooccurrence += cooccurrence.T
+
+    return CoentropyResult(
+        coentropy=coentropy,
+        cooccurrence=cooccurrence,
+        rival_count=rival_count,
+        occurrence=occurrence,
+    )
+
+
+@numba.njit(parallel=True)
+def _calc_coentropy(coentropy, cooccurrence, rival_count, occurrence, cands, resps):
+    for i in numba.prange(cands.shape[0]):  # ty: ignore
+        u = cands[i]
+        q = resps[i]
+        log_q = np.log(q)
+        np.nan_to_num(log_q, copy=False, neginf=0.0)
+        nh = -q * log_q
+
+        ui0 = u[0]
+
+        for j in range(0, cands.shape[1]):
+            uj = u[j]
+            if uj < 0:
+                break
+
+            qj = q[j]
+            nhj = nh[j]
+
+            occurrence[uj] += 1
+            rival_count[ui0, uj] += 1
+
+            for k in range(j + 1, cands.shape[1]):
+                uk = u[k]
+                if uk < 0:
+                    break
+
+                ii = min(uk, uj)
+                jj = max(uk, uj)
+
+                cij = cooccurrence[ii, jj] + 1
+                cooccurrence[ii, jj] = cij
+
+                # change in entropy due to merging uj, uk:
+                # subtract their current contribution, add the new contribution
+                qk = q[k]
+                nhk = nh[k]
+                qjk = qk + qj
+                dh = nhj + nhk
+                if qjk > 0:
+                    log_qjk = np.log(qjk)
+                    dh += qjk * log_qjk
+
+                # Welford mean of -dh
+                cur_coent = coentropy[ii, jj]
+                coentropy[ii, jj] = cur_coent + (-dh - cur_coent) / cij

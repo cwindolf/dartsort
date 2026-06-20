@@ -553,6 +553,9 @@ class RefinementConfig:
     qda_force_merge_for_temp_dist_below: float = 0.3
     spikeinterface_merge_preset: str | None = None
     spikeinterface_merge_max_distance: float = 0.5
+    spikeinterface_merge_min_coentropy: float | None = 0.1
+    spikeinterface_merge_coent_coverage: float = 0.9
+    spikeinterface_merge_coent_iou: float = 0.6
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
