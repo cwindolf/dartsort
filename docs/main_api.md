@@ -4,7 +4,8 @@ toc_depth: 3
 
 # Main API: `dartsort()` and the `DARTsortUserConfig`
 
-This page shows the main functions and objects that you'd run into when spike sorting with *dartsort*. 
+This page shows the main functions and objects that you'd run into when spike sorting with *dartsort*.
+If you're just getting started, the [usage section on the front page](/#usage) might be good to read first. 
 
 For details on parameters you should think about before running the sorter, see the [important configuration details note](/#important-configuration-details).
 
@@ -16,9 +17,9 @@ For details on parameters you should think about before running the sorter, see 
       show_signature: true
       separate_signature: true
 
-The return value from the `dartsort()` function is a DARTsortReturn object, which is a dictionary containing spike trains and motion information:
+The return value from the `dartsort()` function is a `DARTsortResult` object, which is a dictionary containing spike trains and motion information:
 
-::: dartsort.DARTsortReturn
+::: dartsort.DARTsortResult
     options:
       show_bases: false
 

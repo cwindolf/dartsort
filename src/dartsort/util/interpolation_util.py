@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from .data_util import yield_masked_chunks
 from .internal_config import InterpolationParams, tps_interp_params
 from .motion import MotionInfo
-from .torch_util import BModule
+from .torch_util import BModule, torch_compile
 from .waveform_util import make_channel_index
 
 if TYPE_CHECKING:
@@ -258,9 +258,9 @@ def full_probe_precompute(
 
 
 def kernel_interpolate(
-    features,
-    source_pos,
-    target_pos,
+    features: torch.Tensor,
+    source_pos: torch.Tensor,
+    target_pos: torch.Tensor,
     params: InterpolationParams = tps_interp_params,
     precomputed_data=None,
     neighborhoods=None,
@@ -579,20 +579,20 @@ def kriging_neighborhood_solve(
     return out
 
 
-@torch.jit.script
+@torch_compile
 def _kneighb_loop(
     features_padded_flat: torch.Tensor,
     neighborhoods_padded: torch.Tensor,
     neighb_solved: torch.Tensor,
 ):
     out = features_padded_flat.new_empty(
-        (features_padded_flat.shape[0], neighborhoods_padded.shape[0])
+        (neighborhoods_padded.shape[0], features_padded_flat.shape[0])
     )
     for j in range(neighborhoods_padded.shape[0]):
         neighb = neighborhoods_padded[j]
         fj = features_padded_flat[:, neighb]
-        torch.mv(fj, neighb_solved[j], out=out[:, j])
-    return out
+        torch.mv(fj, neighb_solved[j], out=out[j])
+    return out.t().contiguous()
 
 
 def kriging_poly_expand(

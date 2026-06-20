@@ -2,7 +2,7 @@ import json
 import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 from spikeinterface.core import BaseRecording
@@ -17,8 +17,10 @@ from ..util.internal_config import (
     RefinementConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.motion import MotionInfo, try_load_motion_info
-from ..util.py_util import dartcopy2, dartcopytree, resolve_path
+from ..util.py_util import dartcopy2, dartcopytree, ensure_path
+
+if TYPE_CHECKING:
+    from ..util.motion import MotionInfo
 
 logger = get_logger(__name__)
 
@@ -34,11 +36,11 @@ def ds_save_intermediate_sorting(
         return
     if output_dir is None:
         return
-    output_dir = resolve_path(output_dir, strict=True)
+    output_dir = ensure_path(output_dir, strict=True)
     if work_dir is None:
         store_dir = output_dir
     else:
-        store_dir = resolve_path(work_dir, strict=True)
+        store_dir = ensure_path(work_dir, strict=True)
 
     step_npz = store_dir / f"{step_name}.npz"
     logger.info(f"Saving {step_name} labels to {step_npz}")
@@ -63,11 +65,11 @@ def ds_save_intermediate_labels(
         return
     if output_dir is None:
         return
-    output_dir = resolve_path(output_dir, strict=True)
+    output_dir = ensure_path(output_dir, strict=True)
     if work_dir is None:
         store_dir = output_dir
     else:
-        store_dir = resolve_path(work_dir, strict=True)
+        store_dir = ensure_path(work_dir, strict=True)
 
     step_labels_npy = store_dir / f"{step_name}_labels.npy"
     logger.info(f"Saving {step_name} labels to {step_labels_npy}")
@@ -126,7 +128,7 @@ def ds_all_to_workdir(
 
 
 def ds_save_motion(
-    motion: MotionInfo,
+    motion: "MotionInfo",
     output_dir: Path,
     work_dir: Path | None = None,
     overwrite: bool = False,
@@ -164,7 +166,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     if cfg.link_from is None:
         return
 
-    link_from = resolve_path(cfg.link_from, strict=True)
+    link_from = ensure_path(cfg.link_from, strict=True, resolve=True)
     assert link_from.is_dir()
 
     link_patterns = []
@@ -177,7 +179,12 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
         link_patterns.extend(
-            ["subtraction.h5", "motion.pkl", "motionthreshold.h5", "subtraction_models"]
+            [
+                "subtraction.h5",
+                "motion.pkl",
+                "motionthreshold.h5",
+                "subtraction_models/featurization_pipeline.pt",
+            ]
         )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
@@ -200,21 +207,29 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
 
 
 def ds_save_features(
-    cfg: DARTsortInternalConfig,
+    cfg: DARTsortInternalConfig | None,
     sorting: DARTsortSorting,
-    output_dir: Path,
+    output_dir: Path | None,
     work_dir: Path | None = None,
     is_final=False,
+    ensure_saving: bool | None = None,
 ):
     if work_dir is None:
         # nothing to copy
         return
-    if not (cfg.save_intermediate_features or is_final):
+
+    if ensure_saving is None:
+        assert cfg is not None
+        if not (cfg.save_intermediate_features or is_final):
+            return
+    elif not ensure_saving:
         return
+
+    assert output_dir is not None
 
     # find h5 and models and copy
     assert sorting.parent_h5_path is not None
-    h5_path = resolve_path(sorting.parent_h5_path)
+    h5_path = ensure_path(sorting.parent_h5_path)
     assert h5_path.exists()
     models_path = h5_path.parent / f"{h5_path.stem}_models"
 
@@ -225,8 +240,10 @@ def ds_save_features(
     if models_path.exists():
         targ_models = output_dir / models_path.name
         pconv_h5 = targ_models / "pconv.h5"
-        if cfg.matching_cfg.delete_pconv and pconv_h5.exists():
+        if cfg is not None and cfg.matching_cfg.delete_pconv and pconv_h5.exists():
             pconv_h5.unlink()
+        elif cfg is None:
+            assert not pconv_h5.exists()  # don't know what to do with it, pass cfg
         logger.dartsortdebug(f"Copy intermediate {models_path=} -> {targ_models=}.")
         dartcopytree(cfg, models_path, targ_models)
 
@@ -245,7 +262,7 @@ def ds_handle_delete_intermediate_features(
 
     # find all non-final h5s, models and delete them
     assert final_sorting.parent_h5_path is not None
-    final_h5 = resolve_path(final_sorting.parent_h5_path)
+    final_h5 = ensure_path(final_sorting.parent_h5_path)
     assert final_h5.exists()
     assert final_h5.parent == output_dir
 
@@ -266,7 +283,7 @@ def ds_handle_delete_intermediate_features(
 
 def ds_fast_forward(
     store_dir: Path, cfg: DARTsortInternalConfig
-) -> tuple[int, DARTsortSorting | None, MotionInfo | None]:
+) -> "tuple[int, DARTsortSorting | None, MotionInfo | None]":
     """Fast-forward to the where sorting left off
 
     # TODO: error if there is a saved cfg which differs? Maybe just optionally?
@@ -276,6 +293,8 @@ def ds_fast_forward(
     next_step: int
     cur_sorting: DARTsortSorting
     """
+    from .motion import try_load_motion_info
+
     # this cur_h5 variable points to the peeling result we'll try to load
     cur_h5 = sub_h5 = store_dir / "subtraction.h5"
     cur_step = 0
@@ -352,12 +371,11 @@ def _matching_step_cfgs(
         is_final and is_subsampling and cfg.refinement_cfg.refinement_strategy == "tmm"
     )
     if not cfg.final_refinement:
-        clus_cfg = None
-        gmm_clus_cfg = None
+        gmm_clus_cfg = clus_cfg = None
         ref_cfgs = []
     elif gmm_as_classifier:
-        clus_cfg = None
         gmm_clus_cfg = clus_cfg
+        clus_cfg = None
         ref_cfgs = [cfg.agglomerate_cfg]
     else:
         gmm_clus_cfg = None

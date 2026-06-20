@@ -511,7 +511,7 @@ def get_waveforms_on_static_channels(
         ix = torch.asarray(shifted_channels[:, None, :])
         ix = ix.broadcast_to(waveforms.shape)
         assert static_waveforms is not None
-        static_waveforms.scatter_(dim=3, index=ix, src=waveforms)
+        static_waveforms.scatter_(dim=2, index=ix, src=waveforms)
         if not return_padded:
             static_waveforms = static_waveforms[:, :, :n_static_channels]
         if two_d:

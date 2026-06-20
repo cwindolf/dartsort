@@ -25,8 +25,8 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.noise_util import SpatialWhitener
-from ..util.py_util import resolve_path
+from ..util.noise_util import Whitener
+from ..util.py_util import ensure_path
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
 from .templib import fit_tsvd, pca_from_templates, quick_mean_templates
@@ -49,7 +49,7 @@ def estimate_template_library(
     realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
-    whitener: SpatialWhitener | None = None,
+    whitener: Whitener | None = None,
     computation_cfg: ComputationConfig | None = None,
     fit_featurization_tsvd: bool = False,
     featurization_cfg: FeaturizationConfig | None = None,
@@ -59,7 +59,7 @@ def estimate_template_library(
 ) -> tuple[DARTsortSorting, TemplateData]:
     """Postprocess spike train and estimate a TemplateData."""
     if template_npz_path is not None:
-        template_npz_path = resolve_path(template_npz_path)
+        template_npz_path = ensure_path(template_npz_path)
         if template_npz_path.exists():
             return sorting, TemplateData.from_npz(template_npz_path)
 
@@ -69,6 +69,14 @@ def estimate_template_library(
 
     if motion is None:
         motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
+
+    # avoid blanks down the line
+    if min_template_count:
+        from ..clustering.cluster_util import decrumb
+
+        sorting = sorting.ephemeral_replace(
+            labels=decrumb(sorting.labels, min_size=min_template_count)
+        )
 
     # realign sorting and estimate template snr
     sorting, templates0 = realign(
@@ -376,8 +384,6 @@ def _handle_merge(
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return sorting, template_data
 
-    from ..clustering.merge import merge_templates
-
     if template_cfg.denoising_method == "svd":
         # use new shared basis stuff
         from ..clustering.agglomerate import agglomerate
@@ -398,6 +404,8 @@ def _handle_merge(
         del agg
     else:
         # TODO: remove old impl?
+        from ..clustering.merge import merge_templates
+
         merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
         merge_res = merge_templates(
             sorting=sorting,

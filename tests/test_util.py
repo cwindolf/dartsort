@@ -1,5 +1,6 @@
 import numpy as np
 import spikeinterface.core as sc
+
 from dartsort.util.data_util import DARTsortSorting
 
 

@@ -7,7 +7,11 @@ from torch import Tensor
 
 from ..util.data_util import DARTsortSorting
 from ..util.drift_util import get_stable_channels
-from ..util.internal_config import ClusteringFeaturesConfig, ComputationConfig
+from ..util.internal_config import (
+    ClusteringFeaturesConfig,
+    ComputationConfig,
+    default_clustering_features_cfg,
+)
 from ..util.interpolation_util import (
     SpikeNeighborhoods,
     StableFeaturesInterpolator,
@@ -20,15 +24,6 @@ from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import databag
 from ..util.waveform_util import single_channel_index
 from . import cluster_util
-
-default_clustering_features_cfg = ClusteringFeaturesConfig()
-minimal_features_cfg = ClusteringFeaturesConfig(
-    n_main_channel_pcs=0,
-    use_amplitude=False,
-    use_signed_amplitude=False,
-    use_x=False,
-    use_z=False,
-)
 
 logger = get_logger(__name__)
 
@@ -63,8 +58,8 @@ class SimpleMatrixFeatures:
         *,
         sorting: DARTsortSorting,
         motion: MotionInfo,
-        clustering_features_cfg: ClusteringFeaturesConfig,
-        computation_cfg: ComputationConfig | None,
+        clustering_features_cfg: ClusteringFeaturesConfig = default_clustering_features_cfg,
+        computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         computation_cfg = ensure_computation_config(computation_cfg)
         t_s = sorting.times_seconds
@@ -73,8 +68,14 @@ class SimpleMatrixFeatures:
         )
         if xyza is not None:
             x = xyza[:, 0]
+            if not _allfinite(x):
+                raise ValueError(_numbers_error_str("x", x))
             z = xyza[:, 2]
+            if not _allfinite(z):
+                raise ValueError(_numbers_error_str("z", z))
             z_reg = motion.correct_s(t_s, z)
+            if not _allfinite(z_reg):
+                raise ValueError(_numbers_error_str("z_reg", z_reg))
         else:
             x = z = z_reg = None
 
@@ -95,10 +96,14 @@ class SimpleMatrixFeatures:
         amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
         if clustering_features_cfg.use_amplitude:
             assert amp is not None
+            if not _allfinite(amp):
+                raise ValueError(_numbers_error_str("amp", amp))
             ampft = amp.copy()
             if clustering_features_cfg.log_transform_amplitude:
                 ampft = np.log(clustering_features_cfg.amp_log_c + ampft)
                 ampft *= clustering_features_cfg.amp_scale
+            if not _allfinite(ampft):
+                raise ValueError(_numbers_error_str("ampft", ampft))
             features.append(ampft[:, None])
 
         v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
@@ -119,6 +124,8 @@ class SimpleMatrixFeatures:
                 rank=clustering_features_cfg.n_main_channel_pcs,
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
+            if not _allfinite(pcs):
+                raise ValueError(_numbers_error_str("No motion pcs", pcs))
         elif do_pcs and clustering_features_cfg.motion_aware:
             shifts, n_pitches_shift = motion.pitch_shifts(
                 sorting=sorting,
@@ -137,6 +144,8 @@ class SimpleMatrixFeatures:
             mask = np.broadcast_to(mask, len(schan))
             if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
                 pcs = getattr(sorting, clustering_features_cfg.pca_dataset_name)
+                if not _allfinite(pcs):
+                    raise ValueError(_numbers_error_str("sorting pcs", pcs))
                 erp, pcs = interpolate_by_chunk(
                     mask=mask,
                     dataset=pcs,
@@ -149,6 +158,8 @@ class SimpleMatrixFeatures:
                     params=clustering_features_cfg.interp_params,
                 )
                 pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
+                if not _allfinite(pcs):
+                    raise ValueError(_numbers_error_str("sorting interp pcs", pcs))
             else:
                 assert sorting.parent_h5_path is not None
                 with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
@@ -164,20 +175,25 @@ class SimpleMatrixFeatures:
                         params=clustering_features_cfg.interp_params,
                     )
                     pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
+                if not _allfinite(pcs):
+                    raise ValueError(_numbers_error_str("h5 interp pcs", pcs))
 
         if do_pcs:
             assert pcs is not None
-            if clustering_features_cfg.pc_transform == "log":
+            pctf = clustering_features_cfg.pc_transform
+            if pctf == "log":
                 pcs = signed_log1p(
                     pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
                 )
-            elif clustering_features_cfg.pc_transform == "sqrt":
+            elif pctf == "sqrt":
                 pcs = signed_sqrt_transform(
                     pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
                 )
             else:
-                assert clustering_features_cfg.pc_transform in ("none", None)
+                assert pctf in ("none", None)
             pcs *= clustering_features_cfg.pc_scale
+            if not _allfinite(pcs):
+                raise ValueError(_numbers_error_str(f"{pctf} pcs", pcs))
             if torch.is_tensor(pcs):
                 pcs = pcs.numpy(force=True)
             features.append(pcs)
@@ -306,3 +322,16 @@ def signed_sqrt_transform(x, pre_scale=1.0):
     xx.sub_(1.0)
     xx.mul_(torch.sign(x))
     return xx
+
+
+def _allfinite(x):
+    if isinstance(x, torch.Tensor):
+        return x.isfinite().all()
+    else:
+        return np.isfinite(x).all()
+
+
+def _numbers_error_str(name: str, x: np.ndarray):
+    if isinstance(x, torch.Tensor):
+        x = x.numpy(force=True)
+    return f"{name}: {np.isposinf(x).sum()} +inf, {np.isneginf(x).sum()} -inf, {np.isnan(x).sum()} nan."

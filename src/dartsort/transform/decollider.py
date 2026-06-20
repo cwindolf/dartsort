@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 
 class Decollider(BaseMultichannelDenoiser):
     """Unsupervised spike waveform denoising."""
+
     default_name = "decollider"
     needs_residual = True
 
@@ -41,13 +42,14 @@ class Decollider(BaseMultichannelDenoiser):
         norm_kind="none",
         name=None,
         name_prefix="",
-        batch_size=256,
-        learning_rate=3e-4,
+        batch_size=512,
+        learning_rate=1e-3,
         weight_decay=0.0,
         n_epochs=100,
         pad_depth_only=True,
         channelwise_dropout_p=0.0,
         with_conv_fullheight=False,
+        svd_projection_rank: int | None = None,
         val_split_p=0.0,
         min_epochs=10,
         earlystop_eps=None,
@@ -57,12 +59,16 @@ class Decollider(BaseMultichannelDenoiser):
         lr_schedule_kwargs=None,
         inference_batch_size=1024,
         optimizer="Adam",
-        optimizer_kwargs=None,
+        optimizer_kwargs=dict(eps=1e-6),
         nonlinearity="PReLU",
         scaling="max",
         signal_gates=True,
         step_callback=None,
         epoch_size=200 * 256,
+        clip_value=None,
+        clip_norm=None,
+        warmup_epochs=0,
+        warmup_lr=3e-4,
         # my args. todo: port over common ones.
         inference_z_samples=10,
         detach_amortizer=True,
@@ -101,6 +107,7 @@ class Decollider(BaseMultichannelDenoiser):
             pad_depth_only=pad_depth_only,
             channelwise_dropout_p=channelwise_dropout_p,
             with_conv_fullheight=with_conv_fullheight,
+            svd_projection_rank=svd_projection_rank,
             val_split_p=val_split_p,
             min_epochs=min_epochs,
             earlystop_eps=earlystop_eps,
@@ -116,6 +123,8 @@ class Decollider(BaseMultichannelDenoiser):
             signal_gates=signal_gates,
             step_callback=step_callback,
             epoch_size=epoch_size,
+            warmup_epochs=warmup_epochs,
+            warmup_lr=warmup_lr,
         )
         self.queue_chunks = queue_chunks
 
@@ -135,6 +144,10 @@ class Decollider(BaseMultichannelDenoiser):
         self.cycle_loss_alpha = cycle_loss_alpha
         self.separate_cycle_net = separate_cycle_net
         self.detach_cycle_loss = detach_cycle_loss
+        self.clip_value = clip_value
+        self.clip_norm = clip_norm
+        if self.svd_projection_rank:
+            self.submodule_names = ["tpca"]
 
         if separate_cycle_net:
             assert cycle_loss_alpha > 0
@@ -168,6 +181,19 @@ class Decollider(BaseMultichannelDenoiser):
             )
         else:
             self.den_net: torch.nn.Module = self.inf_net
+        if self.svd_projection_rank:
+            from .temporal_pca import BaseTemporalPCA
+
+            self.tpca = BaseTemporalPCA(
+                self.b.channel_index,
+                geom=self.b.geom,
+                waveform_cfg=self.waveform_cfg,
+                rank=self.svd_projection_rank,
+            )
+            self.tpca.spike_length_samples = self.spike_length_samples
+            self.tpca.initialize_spike_length_dependent_params()
+        else:
+            self.tpca = None
         self.to(self.device)
 
     def fit(
@@ -184,17 +210,27 @@ class Decollider(BaseMultichannelDenoiser):
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
+        if self.tpca is not None and self.tpca.needs_fit():
+            self.tpca.fit(
+                recording=recording,
+                waveforms=waveforms,
+                computation_cfg=computation_cfg,
+                channels=channels,
+            )
         train_data, val_data = self._construct_datasets_from_waveforms(
             waveforms, channels, recording, weights, hdf5_filename=hdf5_filename
         )
         with torch.enable_grad():
+            if self.tpca is not None:
+                self.tpca.eval()
             res = self._fit(train_data, val_data)
         self._needs_fit = False
         return res
 
     def forward_unbatched(self, waveforms, channels):
         """Called only at inference time."""
-        # TODO: batch all of this.
+        if self.tpca is not None:
+            waveforms = self.tpca.force_embed(waveforms)
         waveforms, masks = self.to_nn_channels(waveforms, channels)
         net_input = waveforms, masks.unsqueeze(1)
 
@@ -257,6 +293,9 @@ class Decollider(BaseMultichannelDenoiser):
             assert False
 
         pred = self.to_orig_channels(pred, channels)
+
+        if self.tpca is not None:
+            pred = self.tpca.force_reconstruct(pred)
 
         return pred
 
@@ -537,6 +576,7 @@ class Decollider(BaseMultichannelDenoiser):
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
 
+        loss = 0.0
         last_val_loss = None
         train_records = []
 
@@ -550,15 +590,6 @@ class Decollider(BaseMultichannelDenoiser):
                 train_losses = {}
                 for waveform_b, channels_b, noise_b, cnoise_b in train_data:
                     waveform_b = waveform_b.to(device=self.device, non_blocking=True)
-                    channels_b = channels_b.to(device=self.device, non_blocking=True)
-                    waveform_b = reindex(
-                        channels_b,
-                        waveform_b,
-                        self.relative_index,
-                        pad_value=0.0,
-                    )
-
-                    optimizer.zero_grad()
                     m = noise_b.to(
                         dtype=waveform_b.dtype, device=self.device, non_blocking=True
                     )
@@ -570,6 +601,24 @@ class Decollider(BaseMultichannelDenoiser):
                         )
                     else:
                         ell = None
+
+                    if self.tpca is not None:
+                        with torch.no_grad():
+                            waveform_b = self.tpca.force_embed(waveform_b)
+                            m = self.tpca.force_embed(m)
+                            if ell is not None:
+                                ell = self.tpca.force_embed(ell)
+
+                    channels_b = channels_b.to(device=self.device, non_blocking=True)
+                    waveform_b = reindex(
+                        channels_b,
+                        waveform_b,
+                        self.relative_index,
+                        pad_value=0.0,
+                    )
+
+                    optimizer.zero_grad()
+
                     mask = self.get_masks(channels_b).to(
                         dtype=waveform_b.dtype, device=self.device, non_blocking=True
                     )
@@ -585,6 +634,15 @@ class Decollider(BaseMultichannelDenoiser):
                     )
                     loss = sum(loss_dict.values())
                     loss.backward()
+
+                    if self.clip_value is not None:
+                        torch.nn.utils.clip_grad_value_(
+                            self.parameters(), self.clip_value
+                        )
+                    if self.clip_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.parameters(), self.clip_norm
+                        )
                     optimizer.step()
 
                     for k, v in loss_dict.items():
@@ -608,6 +666,12 @@ class Decollider(BaseMultichannelDenoiser):
                             channels_b = channels_b.to(self.device)
                             noise_b = noise_b.to(self.device)
                             ell_b = None if ell_b is None else ell_b.to(self.device)
+                            if self.tpca is not None:
+                                with torch.no_grad():
+                                    waveform_b = self.tpca.force_embed(waveform_b)
+                                    noise_b = self.tpca.force_embed(noise_b)
+                                    if ell_b is not None:
+                                        ell_b = self.tpca.force_embed(ell_b)
 
                             waveform_b, mask = self.to_nn_channels(
                                 waveform_b, channels_b

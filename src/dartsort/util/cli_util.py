@@ -167,7 +167,6 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
             raise ValueError(f"Need type or arg_type for {fld}.")
         if typing.get_origin(type_) == typing.Annotated:
             type_, *annots = typing.get_args(type_)
-            print(f"{annots=}")
             for annot in annots:
                 if isinstance(annot, Doc):
                     assert not doc
@@ -230,8 +229,8 @@ def dataclass_to_argparse(cls, parser=None, prefix="", skipnames=None):
 def dataclass_from_toml(clss, toml_path):
     import tomllib  # TODO: can hold off on py3.11 for now
 
-    with open(toml_path, "rb") as toml:
-        for j, cls in enumerate(clss):
+    for j, cls in enumerate(clss):
+        with open(toml_path, "rb") as toml:
             try:
                 return cls(**tomllib.load(toml))
             except TypeError:

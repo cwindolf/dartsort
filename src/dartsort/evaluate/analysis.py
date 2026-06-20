@@ -101,6 +101,12 @@ class DARTsortAnalysis:
         vis_radius: float = 50.0,
         vis_neighborhood_p: float = np.inf,
         featurization_pipeline_pt=None,
+        try_backup_localization=(
+            "point_source_localizations",
+            "localizations",
+            "positions",
+        ),
+        try_backup_amplitudes=("amplitudes", "ptp_amplitudes"),
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -115,7 +121,12 @@ class DARTsortAnalysis:
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
 
         if has_hdf5:
-            tpca = get_tpca(sorting, featurization_pipeline_pt=featurization_pipeline_pt)
+            try:
+                tpca = get_tpca(
+                    sorting, featurization_pipeline_pt=featurization_pipeline_pt
+                )
+            except ValueError:
+                tpca = None
         else:
             tpca = None
         if has_hdf5 and vis_radius and tpca is not None:
@@ -193,15 +204,25 @@ class DARTsortAnalysis:
             qdares = None
 
         channel_index = getattr(sorting, "channel_index", None)
-        amplitudes = getattr(
-            sorting, clustering_features_cfg.amplitudes_dataset_name, None
-        )
+        amplitudes = xyza = None
+        for adn in [clustering_features_cfg.amplitudes_dataset_name] + list(
+            try_backup_amplitudes
+        ):
+            amplitudes = getattr(sorting, adn, None)
+            if amplitudes is not None:
+                break
         amplitude_vecs = getattr(
             sorting, clustering_features_cfg.amplitude_vectors_dataset_name, None
         )
-        xyza = getattr(
-            sorting, clustering_features_cfg.localizations_dataset_name, None
-        )
+        for ldn in [clustering_features_cfg.localizations_dataset_name] + list(
+            try_backup_localization
+        ):
+            xyza = getattr(sorting, ldn, None)
+            if xyza is not None and xyza.shape[1] == 2:
+                x, z = xyza.T
+                xyza = np.c_[x, np.zeros_like(x), z, np.zeros_like(x)]
+            if xyza is not None:
+                break
         tpca_features_dset = clustering_features_cfg.pca_dataset_name
         times_seconds = getattr(sorting, "times_seconds", None)
         assert times_seconds is not None
@@ -344,6 +365,7 @@ class DARTsortAnalysis:
         main_channel=None,
         random_seed=0,
         dtype=np.float32,
+        to_main_channel=False,
     ) -> "WaveformsBag | None":
         """Load raw waveforms for visualization"""
         if which is not None:
@@ -386,13 +408,22 @@ class DARTsortAnalysis:
         )
         waveforms = waveforms.astype(dtype)
 
-        waveforms, main_channel = self.unit_select_channels(
-            unit_id=unit_id,
-            which=which,
-            waveforms=waveforms,
-            read_chans=read_chans,
-            main_channel=main_channel,
-        )
+        if to_main_channel:
+            waveforms, main_channel = self.unit_select_channels(
+                unit_id=unit_id,
+                which=which,
+                waveforms=waveforms,
+                read_chans=read_chans,
+                main_channel=main_channel,
+            )
+            channels = self.vis_channel_index[main_channel]
+            channels = np.broadcast_to(
+                channels[None], (waveforms.shape[0], waveforms.shape[2])
+            )
+        else:
+            channels = read_channel_index[read_chans]
+            if main_channel is None:
+                main_channel = self.unit_max_channel(unit_id)
         return WaveformsBag(
             which=which,
             waveforms=waveforms,
@@ -400,7 +431,7 @@ class DARTsortAnalysis:
             geom=self.registered_geom,
             channel_index=self.vis_channel_index,
             temporal_slice=None,
-            channels=None,
+            channels=channels,
         )
 
     def tpca_features(self, which: np.ndarray):
@@ -534,7 +565,10 @@ class DARTsortAnalysis:
     def unit_max_channel(self, unit_id) -> int:
         assert self.coarse_template_data is not None
         temp = self.coarse_template_data.unit_templates(unit_id)
-        assert temp.ndim == 3 and temp.shape[0] == np.atleast_1d(unit_id).size
+        assert temp.ndim == 3, f"{self.name}: {unit_id=} {temp.shape=}"
+        assert temp.shape[0] == np.atleast_1d(unit_id).size, (
+            f"{self.name}: {unit_id=} {temp.shape=}"
+        )
 
         which = self.in_unit(unit_id)
         if self.motion.drifting and hasattr(self.sorting, "channel_index"):
@@ -617,7 +651,9 @@ class DARTsortAnalysis:
         assert td is not None
         assert self.merge_distances is not None
 
-        unit_ix = np.searchsorted(td.unit_ids, unit_id)
+        unit_ix = np.flatnonzero(td.unit_ids == unit_id)
+        assert unit_ix.shape[0] == 1
+        unit_ix = unit_ix[0]
         unit_dists = self.merge_distances[unit_ix]
         distance_order = np.argsort(unit_dists)
         distance_order = np.concatenate(

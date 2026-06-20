@@ -51,7 +51,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         fpctrl_spike_counts=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
         save_collidedness=False,
-        whiten_features=True,
+        whiten_features=False,
+        whiten_kernel_length=0,
         parent_sorting_hdf5_path: str | Path | None = None,
         dtype=torch.float,
     ):
@@ -77,7 +78,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             fixed_property_keys=fixed_prop_keys,
             dtype=dtype,
         )
-        self.p = p
+        self.p: MatchingConfig = p
         self.matching_templates = matching_templates
         self.matching_templates_builder = matching_templates_builder
         self.thresholdsq: float | None = None  # set in precompute
@@ -109,7 +110,9 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         )
         self.amp_scale_max = 1.0 + p.amplitude_scaling_boundary
         self.amp_scale_min = 1.0 / self.amp_scale_max
-        self.obj_pad_len = max(p.refractory_radius_frames, self.spike_length_samples)
+        self.whiten_pad = max(0, whiten_kernel_length - 1)
+        pt = self.spike_length_samples + self.whiten_pad
+        self.obj_pad_len = max(p.refractory_radius_frames, pt)
         conv_len = (
             self.chunk_length_samples
             + 2 * self.chunk_margin_samples
@@ -192,6 +195,10 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 matching_cfg.precomputed_templates_npz
             )
         assert trough_offset_samples == template_data.trough_offset_samples
+        if template_data.temporal_kernel is None:
+            whiten_kernel_length = 0
+        else:
+            whiten_kernel_length = template_data.temporal_kernel.shape[0]
 
         if motion is None:
             motion = MotionInfo.from_motion_est(geom=geom.numpy())
@@ -237,6 +244,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             parent_sorting_hdf5_path=parent_sorting_hdf5_path,
             save_collidedness=save_collidedness,
             whiten_features=matching_cfg.whiten_features,
+            whiten_kernel_length=whiten_kernel_length,
             fpctrl_spike_counts=template_data.spike_counts
             if matching_cfg.threshold == "fp_control"
             else None,
@@ -258,12 +266,17 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         chunk_center_samples = chunk_start_samples + self.chunk_length_samples // 2
         segment = self.recording._recording_segments[0]
         chunk_center_seconds = float(segment.sample_index_to_time(chunk_center_samples))
+        if self.whiten_features:
+            resid_offset = self.whiten_pad
+        else:
+            resid_offset = 0
         chunk_template_data = self.matching_templates.data_at_time(
             t_s=chunk_center_seconds,
             scaling=self.is_scaling,
             inv_lambda=self.inv_lambda,
             scale_min=self.amp_scale_min,
             scale_max=self.amp_scale_max,
+            resid_offset=resid_offset,
         )
 
         # deconvolve
@@ -282,7 +295,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             match_results["times_samples"] += chunk_start_samples - left_margin
         if match_results["n_spikes"] > self.p.max_spikes_per_second:
             raise ValueError(
-                f"Too many spikes {match_results['n_spikes']} > {self.max_spikes_per_second}."
+                f"Too many spikes {match_results['n_spikes']} > {self.p.max_spikes_per_second}."
             )
 
         return match_results
@@ -314,8 +327,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         # name objective variables so that we can update them in-place later
         # padded objective has an extra unit (for group_index) and refractory
         # padding (for easier implementation of enforce_refractory)
-        valid_len = traces.shape[0] - self.spike_length_samples + 1
-        padded_obj_len = valid_len + 2 * self.obj_pad_len
+        valid_len = traces.shape[0] - self.spike_length_samples - self.whiten_pad + 1
+        padded_obj_len = valid_len + 2 * self.obj_pad_len + self.whiten_pad
         padded_conv = traces.new_zeros(
             chunk_template_data.obj_n_templates, padded_obj_len
         )
@@ -419,6 +432,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         if not chunk_template_data.needs_residual:
             chunk_template_data.subtract(residual_padded, peaks)
 
+        assert residual.shape[0] == traces.shape[0]
         if not peaks.n_spikes:
             res = PeelingBatchResult(n_spikes=0)
             if return_residual:
@@ -522,7 +536,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         from scipy.stats import norm
 
         # TODO: remove?
-        if self.is_scaling and self.p.amplitude_scaling_variance < torch.inf:
+        if (
+            self.is_scaling
+            and self.p.scale_adjusts_threshold
+            and self.p.amplitude_scaling_variance < torch.inf
+        ):
             # adjust threshold by the scaling prior's constant term
             # nb, everything is x2 so halves are gone.
             scstd = np.sqrt(self.p.amplitude_scaling_variance)
@@ -534,7 +552,8 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             p_lo = nm.cdf(self.amp_scale_min)
             Z = p_up - p_lo
 
-            scale_const = norm_const - 2.0 * np.log(scstd) * np.log(Z)
+            # renormalize
+            scale_const = norm_const - 2.0 * np.log(Z)
 
             if isinstance(self.p.threshold, float):
                 tb = np.sqrt(max(0.0, self.p.threshold**2 - scale_const))

@@ -3,6 +3,9 @@ import spikeinterface.full as si
 from spikeinterface.core import BaseRecording
 
 from .internal_config import PreprocessingStrategy
+from .logging_util import get_logger
+
+logger = get_logger(__name__)
 
 preprocessing_strategies = {}
 
@@ -18,7 +21,7 @@ preprocessing_strategies["none"] = none
 def ibllike(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
-    if "inter_sample_shift" in rec._properties:
+    if "inter_sample_shift" in rec.get_property_keys():
         rec = si.phase_shift(rec)
     if rec.has_scaleable_traces():
         bcids = si.detect_bad_channels(rec, seed=0)
@@ -44,7 +47,7 @@ preprocessing_strategies["ibllike"] = ibllike
 def ibllikecmr(rec: BaseRecording, dtype: str) -> BaseRecording:
     rec = rec.astype(np.float32)
     rec = si.highpass_filter(rec)
-    if "inter_sample_shift" in rec._properties:
+    if "inter_sample_shift" in rec.get_property_keys():
         rec = si.phase_shift(rec)
     if rec.has_scaleable_traces():
         bcids = si.detect_bad_channels(rec, seed=0)
@@ -87,4 +90,5 @@ def preprocess(
     strategy: PreprocessingStrategy = "none",
     dtype: str = "float32",
 ) -> BaseRecording:
+    logger.info("applying preprocessing: %s", strategy)
     return preprocessing_strategies[strategy](rec, dtype)

@@ -160,9 +160,9 @@ def geomplot(
                 cj = c[j] if (hasattr(c, "__len__") and len(c) > 1) else c
                 draw_colors.append(to_rgba(cj))
             if linestyles is not None:
-                ls.append(linestyles[j])
+                ls.append(linestyles[j])  # type: ignore
             if linewidths is not None:
-                lw.append(linewidths[j])
+                lw.append(linewidths[j])  # type: ignore
     dx = xmax - xmin
     xpad = dx / 2 - xlim_factor * dx / 2
     ax.set_xlim([xmin + xpad, xmax - xpad])  # type: ignore
@@ -206,7 +206,7 @@ def geomplot(
             for j in range(len(subars)):
                 if subars[j] > 1.2 * max_abs_amp:
                     break
-            subar = subars[max(0, j - 1)]
+            subar = subars[max(0, j - 1)]  # type: ignore
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         if msbar:
             min_z += max_abs_amp
@@ -305,6 +305,7 @@ def geomplot_templates(
     registered_geom,
     title="",
     main_channel=None,
+    trough_offset=42,
     linestyles=None,
     legend_loc="best",
     color_reroll_seed=None,
@@ -351,6 +352,7 @@ def geomplot_templates(
             subar=True,
             bar_color="k",
             bar_background="w",
+            trough_offset=trough_offset,
             zlim="tight",
             color=color,
             linestyle=ls,

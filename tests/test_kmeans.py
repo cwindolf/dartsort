@@ -28,12 +28,15 @@ def blobs():
 
 @pytest.mark.parametrize(
     "algorithm",
-    [kmeans.kmeans, kmeans.truncated_kmeans],
+    [kmeans.kmeans, kmeans.truncated_kmeans, kmeans.batched_kmeans],
 )
 def test_kmeans(blobs, algorithm):
     res = algorithm(blobs["X"], n_components=blobs["K"])
-    order = np.lexsort(np.asarray(res["centroids"]).T)
-    labels = np.argsort(order)[np.asarray(res["labels"])]
+    centroids = res["centroids"] if isinstance(res, dict) else res.centroids
+    labels = res["labels"] if isinstance(res, dict) else res.labels
 
-    assert np.allclose(res["centroids"][order], blobs["centroids"], atol=0.25)
+    order = np.lexsort(np.asarray(centroids).T)
+    labels = np.argsort(order)[np.asarray(labels)]
+
+    assert np.allclose(centroids[order], blobs["centroids"], atol=0.25)
     assert np.array_equal(labels, blobs["labels"])

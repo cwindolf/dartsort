@@ -1,4 +1,5 @@
 """Home of the BasePeeler, where shared logic for other modules here lives."""
+
 import gc
 import tempfile
 from concurrent.futures import CancelledError
@@ -154,6 +155,7 @@ class BasePeeler(BModule):
             cleanup_and_log_gpu_usage(computation_cfg, "peel: Usage after model fits:")
         assert not self.needs_precompute()
         assert not self.needs_fit()
+        self.post_fit()
 
     def peel(
         self,
@@ -208,6 +210,7 @@ class BasePeeler(BModule):
         # this is -1 if we haven't started yet
         if ignore_resuming:
             done = False
+            last_chunk_index = -1
             next_chunk_index = 0
             resids_so_far = 0
         elif output_hdf5_filename is not None:
@@ -241,7 +244,7 @@ class BasePeeler(BModule):
             resids_remaining = total_residual_snips - resids_so_far
             chunks_remaining = len(chunks_to_do)
             chunks_done = n_chunks_orig - chunks_remaining
-            chunks_cover = int(np.floor(ensure_coverage * n_chunks_orig))
+            chunks_cover = int(np.ceil(ensure_coverage * n_chunks_orig))
             chunks_cover_remaining = chunks_cover - chunks_done
             if chunks_cover_remaining == 0:
                 assert resids_remaining == 0
@@ -401,7 +404,7 @@ class BasePeeler(BModule):
 
     def peel_chunk(
         self,
-        traces,
+        traces: torch.Tensor,
         *,
         chunk_start_samples=0,
         left_margin=0,
@@ -429,6 +432,9 @@ class BasePeeler(BModule):
 
     def peeling_needs_precompute(self) -> bool:
         return False
+
+    def post_fit(self):
+        pass
 
     def precompute_peeling_data(
         self, save_folder, overwrite=False, computation_cfg=None
@@ -495,18 +501,9 @@ class BasePeeler(BModule):
 
         Main function called in peeling workers
         """
-        if chunk_end_samples is None:
-            chunk_end_samples = chunk_start_samples + self.chunk_length_samples
-        chunk_end_samples = min(self.recording.get_num_samples(), chunk_end_samples)
-        chunk, left_margin, right_margin = get_chunk_with_margin(
-            self.recording._recording_segments[0],
-            start_frame=chunk_start_samples,
-            end_frame=chunk_end_samples,
-            channel_indices=None,
-            margin=self.chunk_margin_samples,
+        chunk, chunk_end_samples, left_margin, right_margin = self.get_chunk(
+            chunk_start_samples, chunk_end_samples
         )
-        device = self.b.channel_index.device
-        chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
         return_waveforms = not skip_features and bool(self.featurization_pipeline)
         peel_result = self.peel_chunk(
             chunk,
@@ -516,6 +513,45 @@ class BasePeeler(BModule):
             return_waveforms=return_waveforms,
             return_residual=return_residual or bool(n_resid_snips),
         )
+        chunk_result = self.featurize_chunk_result(
+            peel_result=peel_result,
+            to_cpu=to_cpu,
+            return_waveforms=return_waveforms,
+            chunk_start_samples=chunk_start_samples,
+            chunk_end_samples=chunk_end_samples,
+            device=chunk.device,
+            n_resid_snips=n_resid_snips,
+        )
+        return chunk_result
+
+    def get_chunk(self, chunk_start_samples: int, chunk_end_samples: int | None = None):
+        Ts = self.recording.get_num_samples()
+        if chunk_end_samples is None:
+            chunk_end_samples = chunk_start_samples + self.chunk_length_samples
+            chunk_end_samples = min(Ts, chunk_end_samples)
+        assert chunk_end_samples <= Ts
+        chunk, left_margin, right_margin = get_chunk_with_margin(
+            self.recording._recording_segments[0],
+            start_frame=chunk_start_samples,
+            end_frame=chunk_end_samples,
+            channel_indices=None,
+            margin=self.chunk_margin_samples,
+        )
+        device = self.b.channel_index.device
+        chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
+        return chunk, chunk_end_samples, left_margin, right_margin
+
+    def featurize_chunk_result(
+        self,
+        *,
+        peel_result,
+        to_cpu: bool,
+        return_waveforms: bool,
+        chunk_start_samples: int,
+        chunk_end_samples: int,
+        device: torch.device,
+        n_resid_snips: int | None,
+    ):
         if peel_result["n_spikes"] > 0 and to_cpu:
             t_s = self.recording.sample_index_to_time(
                 peel_result["times_samples"].numpy(force=True)
@@ -538,12 +574,13 @@ class BasePeeler(BModule):
         # a user who wants these must featurize with a waveform node
         # then they'll end up in `features`
         if "collisioncleaned_waveforms" in peel_result:
-            del peel_result["collisioncleaned_waveforms"]  # type: ignore
+            del peel_result["collisioncleaned_waveforms"]
 
         chunk_result = peel_result | features
         if to_cpu:
             chunk_result = {
-                k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in chunk_result.items()
+                k: v.cpu() if isinstance(v, torch.Tensor) else v
+                for k, v in chunk_result.items()
             }
             if "residual" in peel_result:
                 if torch.is_tensor(peel_result["residual"]):
@@ -566,7 +603,7 @@ class BasePeeler(BModule):
                 self.recording.sample_index_to_time(resid_times_samples)
             )
 
-        return chunk_result  # type: ignore
+        return chunk_result
 
     def gather_chunk_result(
         self,
@@ -1174,6 +1211,7 @@ class PeelerProcessContext:
         self.skip_features = skip_features
         self.chunk_length_samples = chunk_length_samples
         self.to_cpu = to_cpu
+        self.Ts = peeler.recording.get_num_samples()
 
 
 # this state will be set on each thread globally
@@ -1219,10 +1257,12 @@ def _peeler_process_job(chunk_start_samples__n_resid_snips):
     # by returning here, we are implicitly relying on pickle
     # TODO: replace with manual np.saves
     with torch.no_grad():
-        chunk_end_samples = None
         chlen = _peeler_process_context.ctx.chunk_length_samples
         if chlen is not None:
             chunk_end_samples = chunk_start_samples + chlen
+            chunk_end_samples = min(chunk_end_samples, _peeler_process_context.ctx.Ts)
+        else:
+            chunk_end_samples = None
         return _peeler_process_context.ctx.peeler.process_chunk(
             chunk_start_samples,
             n_resid_snips=n_resid_snips,

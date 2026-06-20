@@ -32,7 +32,7 @@ dependencies = [
   "scikit-learn",
   "spikeinterface>=0.104.0",
   "sympy",
-  "torch>=2.0",
+  "torch>=2.2",
   "tqdm",
   "typing-extensions",
 ]
@@ -81,9 +81,15 @@ ignore = ["F722"]
 [tool.ty.src]
 include = ["src", "tests"]
 
+[tool.basedpyright]
+include = ["src", "tests"]
+enableTypeIgnoreComments = true
+typeCheckingMode = "standard"
+
 [tool.ty.analysis]
 replace-imports-with-any = ["hdbscan"]
 
 [tool.ty.rules]
 "unsupported-base" = "ignore"
 "invalid-key" = "ignore"
+"possibly-unresolved-reference" = "error"

@@ -59,16 +59,16 @@ from .util.main_util import (
     motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
-from .util.noise_util import SpatialWhitener
+from .util.noise_util import Whitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
-from .util.py_util import dartcopytree, resolve_path, timer
+from .util.py_util import dartcopytree, ensure_path, timer
 from .util.torch_util import cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
 
 
-class DARTsortReturn(TypedDict):
+class DARTsortResult(TypedDict):
     sorting: DARTsortSorting
     """Output spike trains."""
     motion: MotionInfo
@@ -86,21 +86,25 @@ def dartsort(
     dredge_motion_est: MotionEstimate | None = None,
     overwrite=False,
 ):
-    """This function runs a spike sorter called dartsort.
+    """This function runs a spike sorter called *dartsort*.
 
     Parameters
     ---------
     recording : BaseRecording
-        A SpikeInterface `BaseRecording` object
+        A SpikeInterface `BaseRecording`
     output_dir : str or Path
-        Folder where outputs are stored
+        Folder where outputs are stored. See the `work_in_tmpdir` and `tmpdir_parent`
+        configuration options to store intermediate data in a scratch folder and
+        then only save the final outputs here.
     cfg : DARTsortUserConfig or DARTsortInternalConfig or str or Path
         Your settings. Either create a `DARTsortUserConfig` directly in code, or
         you can pass a string or Path pointing to a .toml file here.
     si_motion : spikeinterface.core.Motion, optional
-        Allows users to pass their own external motion estimate.
+        Allows users to pass their own external motion estimate. If this is given,
+        the do_motion_estimation configuration flag is ignored and this object is
+        used.
     dredge_motion_est : dredge.MotionEstimate, optional
-        Allows users to pass their own external motion estimate.
+        As in `si_motion`.
     overwrite : bool
         Ignore and overwrite stored results, if any. Otherwise, dartsort will
         try to resume from the last step that ran, or if it had finished then
@@ -108,17 +112,16 @@ def dartsort(
 
     Returns
     -------
-    results : DARTsortReturn
+    results : DARTsortResult
         Dictionary of sorting results, with keys:
 
           - "sorting": `DARTsortSorting`
           - "motion": MotionInfo
     """
-    output_dir = resolve_path(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    output_dir = ensure_path(output_dir, mkdir=True)
 
     # convert cfg to internal format and store it for posterity
-    cfg = to_internal_config(cfg)
+    cfg = to_internal_config(cfg, recording.get_num_channels())
     ds_dump_config(cfg, output_dir)
 
     # in benchmarking, it can be useful to resume from initial detection
@@ -131,7 +134,7 @@ def dartsort(
     if cfg.work_in_tmpdir:
         with TemporaryDirectory(prefix="dartsort", dir=cfg.tmpdir_parent) as work_dir:
             # copy files and possibly recording to temporary directory
-            work_dir = resolve_path(work_dir)
+            work_dir = ensure_path(work_dir)
             logger.dartsortdebug(f"Working in {work_dir}, outputs to {output_dir}.")
             recording, work_dir = ds_all_to_workdir(
                 internal_cfg=cfg,
@@ -243,6 +246,8 @@ def _dartsort_impl(
             sampling_cfg=cfg.peeler_sampling_cfg,
             waveform_cfg=cfg.waveform_cfg,
             overwrite=overwrite,
+            _save_cfg=cfg,
+            _save_dir=output_dir,
         )
     ret["motion"] = motion
 
@@ -281,6 +286,8 @@ def _dartsort_impl(
                     sampling_cfg=cfg.peeler_sampling_cfg,
                     waveform_cfg=cfg.waveform_cfg,
                     overwrite=overwrite,
+                    _save_cfg=cfg,
+                    _save_dir=output_dir,
                 )
             ret["motion"] = motion
             ds_save_motion(motion, output_dir, work_dir, overwrite)
@@ -301,6 +308,7 @@ def _dartsort_impl(
                 sorting,
                 motion=motion,
                 refinement_cfgs=r_cfgs,
+                computation_cfg=cfg.computation_cfg,
                 clustering_cfg=cfg.clustering_cfg,
                 clustering_features_cfg=cfg.clustering_features_cfg,
                 _save_cfg=cfg,
@@ -372,6 +380,7 @@ def _dartsort_impl(
                     recording=recording,
                     sorting=sorting,
                     motion=motion,
+                    computation_cfg=cfg.computation_cfg,
                     refinement_cfgs=step_ref_cfgs,
                     clustering_cfg=step_clus_cfg,
                     clustering_features_cfg=step_clfeat_cfg,
@@ -390,7 +399,7 @@ def _dartsort_impl(
 
     # finally handle scratch directory and delete intermediate files if requested
     if work_dir is not None:
-        orig_h5_path = resolve_path(sorting.parent_h5_path, strict=True)
+        orig_h5_path = ensure_path(sorting.parent_h5_path, strict=True)
         final_h5_path = output_dir / orig_h5_path.name
         assert final_h5_path.exists()
         sorting.parent_h5_path = final_h5_path
@@ -413,7 +422,27 @@ def initial_detection(
     motion: MotionInfo | None = None,
     overwrite=False,
     show_progress=True,
-):
+) -> DARTsortSorting:
+    """Initial spike detection
+
+    Runs the detection method specified by cfg.detection_type
+
+    Used by dartsort; users probably want to just run subtract(), match(),
+    or threshold() directly.
+
+    Parameters
+    ----------
+    output_dir : str | Path
+    recording : BaseRecording
+    cfg : DARTsortInternalConfig
+    motion : MotionInfo | None, optional
+    overwrite : bool, optional
+    show_progress : bool, optional
+
+    Returns
+    -------
+    DARTsortSorting
+    """
     if cfg.detection_type == "subtract":
         assert isinstance(cfg.initial_detection_cfg, SubtractionConfig)
         return subtract(
@@ -482,8 +511,8 @@ def subtract(
     show_progress=True,
     hdf5_filename="subtraction.h5",
     model_subdir="subtraction_models",
-) -> DARTsortSorting | None:
-    output_dir = resolve_path(output_dir)
+) -> DARTsortSorting:
+    output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
     check_recording(recording)
     subtraction_peeler = SubtractionPeeler.from_config(
@@ -542,9 +571,9 @@ def match(
     template_npz="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
-    whitener: SpatialWhitener | None = None,
+    whitener: Whitener | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -632,7 +661,7 @@ def grab(
     model_subdir="grab_models",
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     grabber = GrabAndFeaturize.from_config(
         sorting=sorting,
         recording=recording,
@@ -672,7 +701,7 @@ def threshold(
     model_subdir="threshold_models",
     computation_cfg: ComputationConfig | None = None,
 ) -> DARTsortSorting:
-    output_dir = resolve_path(output_dir)
+    output_dir = ensure_path(output_dir)
     computation_cfg = ensure_computation_config(computation_cfg)
     thresholder = Threshold.from_config(
         recording=recording,

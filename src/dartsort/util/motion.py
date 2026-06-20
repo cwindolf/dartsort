@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 from .drift_util import get_pitch, registered_geometry
 from .internal_config import (
     ComputationConfig,
+    DARTsortInternalConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     MotionEstimationConfig,
@@ -25,7 +26,7 @@ from .internal_config import (
 )
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
-from .py_util import databag, resolve_path
+from .py_util import databag, ensure_path
 from .registration_util import dredge_estimate_motion, dredge_to_si
 
 logger = get_logger(__name__)
@@ -57,6 +58,8 @@ def get_motion_info(
     amplitudes_dataset_name="denoised_ptp_amplitudes",
     overwrite: bool = False,
     show_progress: bool = True,
+    _save_cfg: DARTsortInternalConfig | None = None,
+    _save_dir: Path | None = None,
 ) -> "MotionInfo":
     """Get a MotionInfo object by loading from disk, from SI/dredge, or by computing it
 
@@ -65,14 +68,30 @@ def get_motion_info(
     motion based on the spike locations in the sorting object, using parameters
     from motion_cfg.
     """
+    from .main_util import ds_save_features
+
     if (motion := try_load_motion_info(output_directory, filename)) is not None:
         return motion
 
-    if detect_new_peaks:
+    have_si = si_motion is not None
+    have_dredge = dredge_motion_est is not None
+    have_motion = have_si or have_dredge
+    assert not (have_si and have_dredge)
+    need_motion_estimate = motion_cfg.do_motion_estimation and not have_motion
+
+    # skip peak detection if possible
+    _saving_intermediates = (
+        _save_cfg is not None and _save_cfg.save_intermediate_features
+    )
+    need_new_peaks = detect_new_peaks and (
+        need_motion_estimate or _saving_intermediates
+    )
+    if need_new_peaks:
         assert output_directory is not None
         assert sorting is not None
         assert sampling_cfg is not None
         assert waveform_cfg is not None
+        output_directory = ensure_path(output_directory)
         motion_sorting = detect_for_motion(
             output_directory=output_directory,
             recording=recording,
@@ -84,14 +103,17 @@ def get_motion_info(
             overwrite=overwrite,
             show_progress=show_progress,
         )
+        ds_save_features(
+            cfg=_save_cfg,
+            sorting=motion_sorting,
+            work_dir=output_directory,
+            output_dir=_save_dir,
+        )
     else:
         motion_sorting = sorting
-    assert motion_sorting is not None
 
-    have_si = si_motion is not None
-    have_dredge = dredge_motion_est is not None
-    assert not (have_si and have_dredge)
-    if not (have_si or have_dredge):
+    if need_motion_estimate:
+        assert motion_sorting is not None
         dredge_motion_est = dredge_estimate_motion(
             recording=recording,
             sorting=motion_sorting,
@@ -100,6 +122,7 @@ def get_motion_info(
             localizations_dataset_name=localizations_dataset_name,
             amplitudes_dataset_name=amplitudes_dataset_name,
         )
+
     motion = MotionInfo.from_motion_est(
         geom=recording.get_channel_locations(),
         dredge_motion_est=dredge_motion_est,
@@ -114,6 +137,9 @@ def get_motion_info(
 @databag
 class MotionInfo:
     """Holds motion-related info and helper functions."""
+
+    # TODO normalize this class to always use si_motion and use si's
+    # logic for ser/de
 
     drifting: bool
     """Was do_motion_estimation set, or are we ignoring motion?"""
@@ -356,7 +382,7 @@ class MotionInfo:
     def try_load(
         cls, output_directory: Path | str, filename="motion.pkl"
     ) -> Self | None:
-        fn = resolve_path(output_directory) / filename
+        fn = ensure_path(output_directory) / filename
         if not fn.exists():
             return None
         with open(fn, "rb") as jar:
@@ -369,7 +395,7 @@ class MotionInfo:
         filename="motion.pkl",
         overwrite: bool = False,
     ):
-        fn = resolve_path(output_directory) / filename
+        fn = ensure_path(output_directory) / filename
         if not overwrite and fn.exists():
             return
         v = dict(

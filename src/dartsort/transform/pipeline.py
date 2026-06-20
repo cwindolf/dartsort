@@ -1,5 +1,6 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Sequence
 
@@ -13,7 +14,7 @@ from ..util.internal_config import (
     WaveformConfig,
 )
 from ..util.logging_util import get_logger
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from ..util.waveform_util import assert_all_finite_in_probe
 from .transform_base import BaseWaveformFeaturizer, BaseWaveformModule
 
@@ -136,6 +137,9 @@ class WaveformPipeline(torch.nn.Module):
     ):
         """Construct a pipeline from a sequence of BaseWaveformModule class names and constructor arguments."""
         from .all_transformers import transformers_by_class_name
+
+        # need to modify this dict, so don't mess with the original
+        class_names_and_kwargs = deepcopy(class_names_and_kwargs)
 
         channel_index = torch.as_tensor(channel_index)
         geom = torch.as_tensor(geom)
@@ -297,7 +301,7 @@ class WaveformPipeline(torch.nn.Module):
         del waveforms
 
         if hdf5_filename is not None:
-            hdf5_filename = resolve_path(hdf5_filename, strict=True)
+            hdf5_filename = ensure_path(hdf5_filename, strict=True)
 
         if self.safe:
             assert torch.is_tensor(features["waveforms"])
@@ -377,7 +381,7 @@ class WaveformPipeline(torch.nn.Module):
         if up_to_index == 0:
             return
 
-        hdf5_filename = resolve_path(hdf5_filename, strict=True)
+        hdf5_filename = ensure_path(hdf5_filename, strict=True)
         dev = self.device
 
         # use sorting as a way to load all 1d features, which transformers
@@ -488,6 +492,12 @@ def featurization_config_to_class_names_and_kwargs(
                     "fit_radius": fc.tpca_fit_radius,
                 },
             )
+        )
+
+    if fc.fit_disabled_whitener:
+        assert fc.whiten_cfg is not None
+        class_names_and_kwargs.append(
+            ("WaveformWhitener", {"disabled": True, "whiten_cfg": fc.whiten_cfg})
         )
 
     # logic for picking an efficient combo of tpcas and nn denoisers
@@ -628,7 +638,7 @@ def _add_localization_and_ampvec(fc):
             )
         )
 
-    if fc.do_enforce_decrease == "loc_only" and fc.do_localization:
+    if (fc.do_enforce_decrease == "loc_only") and (fc.do_localization and do_feats):
         more.append(("EnforceDecrease", {}))
 
     if do_feats and fc.do_localization and fc.nn_localization:

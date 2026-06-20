@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from ..util.py_util import resolve_path
+from ..util.py_util import ensure_path
 from ..util.waveform_util import get_channels_in_probe, set_channels_in_probe
 from .transform_base import BaseWaveformDenoiser
 
@@ -108,7 +108,7 @@ class SingleChannelDenoiser(nn.Module):
         return self.out(x)
 
     def load(self, pretrained_path=default_pretrained_path):
-        pretrained_path = resolve_path(pretrained_path)
+        pretrained_path = ensure_path(pretrained_path)
         checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         self.load_state_dict(checkpoint)
         self.eval()

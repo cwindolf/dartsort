@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
-from .logging_util import get_logger
+from .logging_util import DARTSORTVERBOSE, get_logger
 
 if TYPE_CHECKING:
     from .internal_config import ComputationConfig
@@ -112,5 +112,48 @@ def cleanup_and_log_gpu_usage(computation_cfg: "ComputationConfig", message=""):
 
     torch.cuda.empty_cache()
 
-    message = f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
-    logger.dartsortdebug(message)
+    if logger.isEnabledFor(DARTSORTVERBOSE):
+        message = (
+            f"{message}\n{torch.cuda.memory_summary(device=dev, abbreviated=True)}"
+        )
+        logger.dartsortverbose(message)
+
+
+_logged_compile_thing = False
+
+
+def torch_compile(fn, dynamic=True, fullgraph=True):
+    """Try to use torch.compile if GPU is supported, else fall back on jit.script.
+
+    But they don't like us to use script anymore and say it's not supported on
+    Python 3.14 and later. Still, I have an old GPU personally so it helps me to
+    do this.
+
+    Here I'm using dynamic=True and fullgraph=True to try to be similar to how
+    script works, because I like the strictness but also this is used for little
+    utility functions where the input shapes change all the time.
+    """
+    # clearly I don't understand what compile does.
+    return torch.jit.script(fn)
+
+    # global _logged_compile_thing
+    # if not torch.cuda.is_available():
+    #     return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    # major, _ = torch.cuda.get_device_capability()
+    # if major >= 7:
+    #     return torch.compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    # else:
+    #     if not _logged_compile_thing:
+    #         logger.dartsortdebug(
+    #             "Falling back on torch.jit.script since GPU's capability version "
+    #             f"is {major}. You might see a deprecation warning from torch "
+    #             "depending on your Python version."
+    #         )
+    #         _logged_compile_thing = True
+    #     return torch.jit.script(fn)
+
+
+def torch_compiler(dynamic=True, fullgraph=True):
+    def dec(fn):
+        return torch_compile(fn, dynamic=dynamic, fullgraph=fullgraph)
+    return dec

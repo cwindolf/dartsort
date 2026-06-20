@@ -4,6 +4,7 @@ import numpy as np
 from matplotlib.patches import Ellipse
 from scipy.spatial import KDTree
 
+from ..clustering.clustering_features import SimpleMatrixFeatures
 from ..clustering.density import kdtree_inliers
 from .colors import glasbey1024
 
@@ -22,6 +23,7 @@ def scatter_spike_features(
     figure=None,
     axes=None,
     width_ratios=(1, 1, 3),
+    figsize=(15, 10),
     semilog_amplitudes=True,
     show_geom=True,
     geom_scatter_kw=dict(s=5, marker="s", color="k", lw=0),
@@ -57,8 +59,10 @@ def scatter_spike_features(
     if axes is not None:
         assert axes.size == 3
         figure = axes.flat[0].figure
-    if figure is None:
+    if figure is None and len(plt.get_fignums()):
         figure = plt.gcf()
+    elif figure is None:
+        figure = plt.figure(figsize=figsize)
     if extra_features is None:
         extra_features = {}
     else:
@@ -93,11 +97,14 @@ def scatter_spike_features(
         with h5py.File(hdf5_filename, "r", locking=False) as h5:
             if times_s is None:
                 times_s = h5["times_seconds"][:]
+            localizations = None
             if x is None or depths_um is None:
                 localizations = _try_load(h5, localizations_dataset_name)
             if x is None:
+                assert localizations is not None
                 x = localizations[:, 0]
             if depths_um is None:
+                assert localizations is not None
                 depths_um = localizations[:, 2]
             if amplitudes is None:
                 amplitudes = _try_load(h5, amplitudes_dataset_name)
@@ -255,6 +262,73 @@ def scatter_spike_features(
         axes[-1].set_xlabel("time (s)")
 
     return figure, axes, (s_x, s_a, *extra_scatters, s_t)
+
+
+def scatter_simple_features(
+    feat: SimpleMatrixFeatures,
+    labels: np.ndarray | None = None,
+    max_spikes_plot=2_048_000,
+    amplitude_color_cutoff=15.0,
+    amplitude_cmap="viridis",
+    s=1,
+    linewidth=0,
+    limits=None,
+    label_axes=True,
+    random_seed=0,
+    figscale=5,
+    figaspect=0.33,
+    show_triaged=True,
+    to_show=None,
+    **scatter_kw,
+):
+    z = feat.z if feat.z_reg is None else feat.z_reg
+    if z is None:
+        z = feat.features[:, 0]
+    assert np.array_equal(z, feat.features[:, 0])
+
+    if limits is not None and not isinstance(limits, str) and len(limits) == 2:
+        if to_show is None:
+            to_show = np.flatnonzero(z == z.clip(*limits))
+        else:
+            assert to_show.dtype.kind == "i"
+            zts = z[to_show]
+            to_show = to_show[zts == zts.clip(*limits)]
+
+    features = feat.features[:, 1:]
+    nfeat = features.shape[1]
+
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=nfeat,
+        figsize=(nfeat * figaspect * figscale, figscale),
+        layout="constrained",
+        gridspec_kw=dict(hspace=0.05, wspace=0.05),
+    )
+
+    extra_scatters = []
+    for j, feature in enumerate(features.T):
+        _, scatter = scatter_feature_vs_depth(
+            feature,
+            depths_um=z,
+            amplitudes=feat.amplitudes,
+            labels=labels,
+            ax=axes.flat[j],
+            to_show=to_show,
+            max_spikes_plot=max_spikes_plot,
+            amplitude_color_cutoff=amplitude_color_cutoff,
+            amplitude_cmap=amplitude_cmap,
+            s=s,
+            linewidth=linewidth,
+            limits=limits,
+            random_seed=random_seed,
+            show_triaged=show_triaged,
+            **scatter_kw,
+        )
+        extra_scatters.append(scatter)
+        if label_axes:
+            axes.flat[j].set_xlabel(f"f{j}")
+
+    return fig, axes
 
 
 def scatter_time_vs_depth(
@@ -713,6 +787,7 @@ def add_ellipses(
         color = glasbey1024[uid % len(glasbey1024)]
         in_unit = np.flatnonzero(labels[to_show] == uid)
         bad = in_unit.size <= 2
+        valid = slice(None)
         if not bad:
             # nans
             f = feature[in_unit]
@@ -721,29 +796,29 @@ def add_ellipses(
             bad = valid.size <= 2
         if not bad:
             # remove outliers to stabilize [co]variance
-            kdt = KDTree(np.c_[f[valid], d[valid]])
-            dd, ii = kdt.query(np.c_[f[valid], d[valid]], distance_upper_bound=10.0)
-            valid = valid[ii < kdt.n]
+            kdt = KDTree(np.c_[f[valid], d[valid]])  # type: ignore
+            dd, ii = kdt.query(np.c_[f[valid], d[valid]], distance_upper_bound=10.0)  # type: ignore
+            valid = valid[ii < kdt.n]  # type: ignore
             bad = valid.size <= 2
         if not bad:
-            fm = f[valid].mean()
-            dm = d[valid].mean()
-            cov = np.cov(f[valid], d[valid])
+            fm = f[valid].mean()  # type: ignore
+            dm = d[valid].mean()  # type: ignore
+            cov = np.cov(f[valid], d[valid])  # type: ignore
             vx, vy = cov[0, 0], cov[1, 1]
             if min(vx, vy) <= 0:
                 bad = True
             rhoss = cov[0, 1]
         if not bad:
-            apc2 = (vx + vy) / 2
-            amc2sq = ((vx - vy) ** 2) / 4
-            lambda1 = apc2 + np.sqrt(amc2sq + rhoss**2)
-            lambda2 = apc2 - np.sqrt(amc2sq + rhoss**2)
-            if rhoss == 0:
-                theta = (np.pi / 2) * (vx < vy)
+            apc2 = (vx + vy) / 2  # type: ignore
+            amc2sq = ((vx - vy) ** 2) / 4  # type: ignore
+            lambda1 = apc2 + np.sqrt(amc2sq + rhoss**2)  # type: ignore
+            lambda2 = apc2 - np.sqrt(amc2sq + rhoss**2)  # type: ignore
+            if rhoss == 0:  # type: ignore
+                theta = (np.pi / 2) * (vx < vy)  # type: ignore
             else:
-                theta = np.arctan2(lambda1 - vx, rhoss)
+                theta = np.arctan2(lambda1 - vx, rhoss)  # type: ignore
             theta = 180 * theta / np.pi
-            center = fm, dm
+            center = fm, dm  # type: ignore
         else:
             center = 0, 0
             color = (0, 0, 0, 0)

@@ -19,6 +19,7 @@ from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progrange
 from ..util.motion import MotionInfo
 from ..util.spiketorch import ptp
+from ..util.torch_util import torch_compile
 from .templates import TemplateData
 
 logger = get_logger(__name__)
@@ -90,11 +91,13 @@ def realign(
         templates.templates[:, templates.trough_offset_samples], mcs[:, None], axis=1
     )
     sgn = np.sign(sgn).reshape(mcs.shape)
-    aligned_sorting.add_ephemeral_feature("alignment_signs", sgn[sorting.labels])
+    sgn_ = np.full((templates.unit_ids.max() + 1,), np.nan, dtype=sgn.dtype)
+    sgn_[templates.unit_ids] = sgn
+    aligned_sorting.add_ephemeral_feature("alignment_signs", sgn_[sorting.labels])
     return aligned_sorting, templates
 
 
-@torch.jit.script
+@torch_compile
 def singlechan_alignments(
     traces: torch.Tensor, trough_factor: float = 3.0, dim: int = 1
 ) -> torch.Tensor:

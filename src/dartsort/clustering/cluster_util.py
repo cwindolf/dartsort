@@ -321,8 +321,29 @@ def combine_disjoint(inds_a, labels_a, inds_b, labels_b):
 
 
 def reorder_by_depth(
-    sorting, motion=None, spatial_footprints=None, geom=None, centroids=None
-):
+    sorting: DARTsortSorting,
+    motion: MotionInfo | None = None,
+    spatial_footprints: np.ndarray | None = None,
+    geom: np.ndarray | None = None,
+    centroids: np.ndarray | None = None,
+) -> tuple[DARTsortSorting, np.ndarray]:
+    """Reorder cluster labels so that centroid depth is increasing
+
+    Parameters
+    ----------
+    sorting : DARTsortSorting
+    motion : MotionInfo | None, optional
+    spatial_footprints : np.ndarray | None, optional
+    geom : np.ndarray | None, optional
+    centroids : np.ndarray | None, optional
+
+    Returns
+    -------
+    reordered_sorting: DARTsortSorting
+    reorder: np.ndarray
+        reorder[j] is the new label of original unit j.
+    """
+    assert sorting.labels is not None
     kept = np.flatnonzero(sorting.labels >= 0)
     kept_labels = sorting.labels[kept]
 
@@ -355,8 +376,9 @@ def reorder_by_depth(
     # this one is some food for thought, lol.
     reorder = np.argsort(np.argsort(centroids, kind="stable"), kind="stable")
     labels[kept] = reorder[kept_labels]
+    reordered_sorting = sorting.ephemeral_replace(labels=labels)
 
-    return sorting.ephemeral_replace(labels=labels)
+    return reordered_sorting, reorder
 
 
 def closest_registered_channels(
@@ -502,7 +524,22 @@ def get_main_channel_pcs(
     return features
 
 
-def decrumb(labels, min_size=5, in_place=False, flatten=True):
+def decrumb(labels: np.ndarray, min_size: int=5, in_place=False, flatten=True):
+    """Remove small units
+
+    Parameters
+    ----------
+    labels : np.ndarray
+    min_size : int
+    in_place : bool
+    flatten : bool
+        Flatten the output label space to be contiguous.
+
+    Returns
+    -------
+    labels
+        The (flattened) decrumbed labels.
+    """
     kept = np.flatnonzero(labels >= 0)
     labels_kept = labels[kept]
     labels = labels if in_place else labels.copy()

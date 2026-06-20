@@ -1,5 +1,5 @@
 """A peeler implementing mean or median reduction for estimating template waveforms."""
-from dataclasses import replace
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
@@ -30,8 +30,8 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.noise_util import SpatialWhitener
-from ..util.py_util import resolve_path
+from ..util.noise_util import Whitener
+from ..util.py_util import ensure_path
 from ..util.waveform_util import full_channel_index
 from .grab import GrabAndFeaturize
 
@@ -54,10 +54,11 @@ class ReductionTemplateData(TemplateData):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion: MotionInfo,
         tsvd=None,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         computation_cfg: ComputationConfig | None = None,
         show_progress: bool = True,
     ) -> TemplateData:
+        computation_cfg = ensure_computation_config(computation_cfg)
         # subsample sorting
         sorting = subsample_by_count_and_valid_time(
             sorting,
@@ -75,24 +76,25 @@ class ReductionTemplateData(TemplateData):
             motion=motion,
             waveform_cfg=waveform_cfg,
             template_cfg=template_cfg,
+            computation_cfg=computation_cfg,
             whitener=whitener,
             tsvd=tsvd,
         )
 
         # TODO: file not always needed
-        computation_cfg = ensure_computation_config(computation_cfg)
         if template_cfg.reduction == "mean":
             # TODO: reducer doesn't work in parallel when gathering means, go to single job
             computation_cfg = ComputationConfig(
                 device=computation_cfg.actual_device().type,
                 n_jobs_small=computation_cfg.n_jobs_small,
+                tmpdir_parent=computation_cfg.tmpdir_parent,
             )
         with TemporaryDirectory(
             prefix="dartsorttemplates",
             ignore_cleanup_errors=True,
             dir=computation_cfg.tmpdir_parent,
         ) as tdir:
-            tdir = resolve_path(tdir)
+            tdir = ensure_path(tdir)
             h5p = tdir / "tmp.h5"
             p.load_or_fit_and_save_models(tdir / "models")
             if template_cfg.denoising_method == "none" and not template_cfg.use_svd:
@@ -110,11 +112,7 @@ class ReductionTemplateData(TemplateData):
 
             # extract outputs and handle denoising method
             count, raw_mean, raw_std, svd_mean = p.reduction_results(
-                h5p,
-                computation_cfg=replace(
-                    computation_cfg, executor="ProcessPoolExecutor"
-                ),
-                show_progress=show_progress,
+                h5p, computation_cfg=computation_cfg, show_progress=show_progress
             )
 
         trough = waveform_cfg.trough_offset_samples(recording.sampling_frequency)
@@ -157,9 +155,9 @@ class ReductionTemplateData(TemplateData):
             templates *= msk
 
         if whitener is None:
-            whitener_np = None
+            whitener_np = covariance_np = tk_np = None
         else:
-            whitener_np = whitener.to_numpy()
+            whitener_np, covariance_np, tk_np = whitener.to_numpy()
 
         return TemplateData(
             unit_ids=unit_ids,
@@ -171,6 +169,8 @@ class ReductionTemplateData(TemplateData):
             trough_offset_samples=trough,
             tsvd=p.temporal_svd(),
             whitener=whitener_np,
+            covariance=covariance_np,
+            temporal_kernel=tk_np,
             sampling_frequency=recording.sampling_frequency,
             whiten_strategy=template_cfg.whitening.strategy,
         )
@@ -190,7 +190,8 @@ class TemplateReduction(GrabAndFeaturize):
         sorting: DARTsortSorting,
         waveform_cfg: WaveformConfig,
         template_cfg: TemplateConfig,
-        whitener: SpatialWhitener | None = None,
+        computation_cfg: ComputationConfig,
+        whitener: Whitener | None = None,
     ):
         # geom processing
         rgeom = torch.asarray(motion.rgeom)
@@ -206,12 +207,14 @@ class TemplateReduction(GrabAndFeaturize):
         pad_spike_len = padded_waveform_cfg.spike_length_samples(
             recording.sampling_frequency
         )
+        rank = template_cfg.denoising_rank
         if template_cfg.use_svd and tsvd is not None:
             if isinstance(tsvd, FullProbeTemporalPCAEmbedder):
                 if do_align:
                     raise ValueError("Haven't handled svd alignment in this case.")
             else:
-                assert tsvd.components_.shape[0] == template_cfg.denoising_rank
+                assert tsvd.components_.shape[0] <= rank
+                rank = tsvd.components_.shape[0]
                 tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
                     channel_index=channel_index,
                     pca=tsvd,
@@ -228,8 +231,10 @@ class TemplateReduction(GrabAndFeaturize):
                 motion=motion,
                 template_cfg=template_cfg,
                 waveform_cfg=waveform_cfg,
+                computation_cfg=computation_cfg,
             )
-            assert tsvd.components_.shape[0] == template_cfg.denoising_rank
+            assert tsvd.components_.shape[0] <= rank
+            rank = tsvd.components_.shape[0]
             tsvd = FullProbeTemporalPCAEmbedder.from_sklearn(
                 channel_index=channel_index,
                 pca=tsvd,
@@ -242,7 +247,7 @@ class TemplateReduction(GrabAndFeaturize):
         elif template_cfg.use_svd:
             tsvd = FullProbeTemporalPCAEmbedder(
                 channel_index=channel_index,
-                rank=template_cfg.denoising_rank,
+                rank=rank,
                 geom=geom,
                 fit_radius=template_cfg.denoising_fit_radius,
                 max_waveforms=template_cfg.denoising_fit_sampling_cfg.n_waveforms_fit,
@@ -320,7 +325,7 @@ class TemplateReduction(GrabAndFeaturize):
                 name_prefix="svd",
                 with_raw_std_dev=False,
                 n_units=sorting.n_units,
-                feature_dim=template_cfg.denoising_rank,
+                feature_dim=rank,
                 output_channels=len(rgeom),
                 reduction=template_cfg.reduction,
             )

@@ -1,8 +1,9 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dartsort.util import waveform_util
 from test_util import dense_layout
+
+from dartsort.util import waveform_util
 
 
 def test_make_channel_index():
@@ -79,7 +80,6 @@ def test_channel_subsetting():
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]]
     channel_index = waveform_util.make_channel_index(geom, 200)
-    n_neighbors = channel_index.shape[1]
 
     # test channel in probe get/set
     n_samples = 3

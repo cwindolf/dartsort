@@ -1,21 +1,16 @@
 from threading import local
-from typing import Literal, cast
+from typing import cast
 
 import numba
 import numpy as np
 import torch
-import torch.nn.functional as F
 from scipy.sparse import coo_array
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist, squareform
-from torch import Tensor
 
-from ..util.internal_config import ComputationConfig
-from ..util.job_util import ensure_computation_config
-from ..util.logging_util import get_logger, progbar, progrange
+from ..util.logging_util import DARTSORTVERBOSE, get_logger, progbar, progrange
 from ..util.multiprocessing_util import get_pool
-from ..util.py_util import timer
+from ..util.spiketorch import sqeuc_cdist_known_norm
 from .cluster_util import decrumb
 
 logger = get_logger(__name__)
@@ -266,136 +261,118 @@ def remove_border_points(
     return new_labels
 
 
-def guess_mode(
-    X,
-    sigma: float | Literal["rule_of_thumb"] = "rule_of_thumb",
-    outlier_neighbor_count=10,
-    outlier_sigma=3.0,
-    kdtree=None,
-    workers=1,
-):
-    """Use a KDE to guess the highest density point."""
-    n = len(X)
-    sigma0 = np.sqrt(X.var(axis=0).sum())
-    inliers, kdtree = kdtree_inliers(
-        X,
-        kdtree=kdtree,
-        n_neighbors=outlier_neighbor_count,
-        distance_upper_bound=outlier_sigma * sigma0,
-        workers=workers,
-    )
-
-    if sigma == "rule_of_thumb":
-        sigma_dens = (
-            1.06
-            * np.linalg.norm(np.std(X[inliers], axis=0))
-            * np.power(inliers.sum(), -0.2)
-        )
-    else:
-        sigma_dens = sigma
-
-    density = get_smoothed_density(X, inliers=inliers, sigma=sigma_dens)
-    assert isinstance(density, np.ndarray)
-    assert density.shape == (n,)
-
-    return np.argmax(density)
-
-
-def bucket_density_ratio(
-    X: np.ndarray,
-    scaled_geom: np.ndarray,
-    sigma: float,
-    sigma_regional: float,
-    max_sigma: float = 3.0,
-    computation_cfg: ComputationConfig | None = None,
-    workers=-1,
-    batch_size=8192,
-):
-    """
-
-    Algorithm:
-     - Assign spikes to channels with a geom-kdtree (make sure geom's x
-       scale matches the clustering feature's x scale.)
-     - Let Dc be pairwise distances between channels
-     - Compute sparse distance matrix. If Dx is pairwise distance between
-       all pairs of spikes, we just want the entries with Dx<max_dist.
-     - Note
-         |ci-cj| = |(ci-xi) + (xj-cj) + (xi-xj)|
-                <= 2C + |xi-xj|
-       Thus we need not consider i,j s.t. |ci-cj|-2C>max_dist.
-    """
-    computation_cfg = ensure_computation_config(computation_cfg)
-    with timer("geom bucketing"):
-        geom_kdt = KDTree(scaled_geom, leafsize=1)
-        dists, channels = geom_kdt.query(X[:, :2], workers=workers)
-
-    max_dist_by_chan = np.zeros(len(scaled_geom))
-    for c in range(len(scaled_geom)):
-        inc = np.flatnonzero(channels == c)
-        if inc.size:
-            max_dist_by_chan[c] = dists[inc].max()
-
-    larger_sigma = max(sigma, sigma_regional or 0.0)
-    max_dist = max_sigma * larger_sigma
-
-    lb = squareform(pdist(scaled_geom))
-    lb -= max_dist_by_chan[:, None]
-    lb -= max_dist_by_chan
-    chans_pair_mask = lb <= max_dist
-
-    device = computation_cfg.actual_device()
-    channels = torch.asarray(channels, device=device, dtype=torch.long)
-    Xt = torch.asarray(X, device=device, dtype=torch.float)
-    chans_pair_mask = torch.asarray(chans_pair_mask, device=device, dtype=torch.bool)
-    density_ratio = torch.full((len(X),), -torch.inf, device=device)
-
-    # for c in trange(len(scaled_geom), desc="bktdens"):
-    for c in progrange(25, desc="bktdens"):
-        (inc,) = (channels == c).nonzero(as_tuple=True)
-        (friends,) = chans_pair_mask[c][channels].nonzero(as_tuple=True)
-        density_ratio[inc] = _local_sparse_dens_ratio(
-            Xt, inc, friends, max_dist, sigma, sigma_regional, batch_size=batch_size
-        )
-
-    return density_ratio
-
-
-@torch.jit.script
-def _local_sparse_dens_ratio(
-    X: Tensor,
-    inc: Tensor,
-    inf: Tensor,
-    max_dist: float,
+def sort_density(
+    X: np.ndarray | torch.Tensor,
     sigma0: float,
     sigma1: float,
-    batch_size: int = 1024,
-):
-    nc = inc.shape[0]
-    nf = inf.shape[0]
-    dens_ratio = X.new_empty(nc)
+    max_sigma: float = 3.0,
+    device: torch.device = torch.device("cpu"),
+    batch_size: int = 2048,
+    col_batch_size: int = 1024,
+    show_progress: bool = False,
+) -> np.ndarray:
+    """Compute a ratio of Gaussian KDEs by ordering along the first dimension
 
-    s0_factor = (1.0 / (torch.sqrt(torch.tensor(2.0)) * sigma0)).to(X)
-    s1_factor = (1.0 / (torch.sqrt(torch.tensor(2.0)) * sigma1)).to(X)
+    This is only useful if the first dimension is much larger than the rest.
+    Otherwise, hopefully n is not too big ;).
 
-    for ic0 in range(0, nc, batch_size):
-        ic1 = min(nc, ic0 + batch_size)
-        Xc = X[inc[ic0:ic1]]
-        for if0 in range(0, nf, batch_size):
-            if1 = min(nf, if0 + batch_size)
-            Xf = X[inf[if0:if1]]
+    Parameters
+    ----------
+    X : np.ndarray | torch.Tensor
+        Data whose density ratio we want.
+    sigma0 : float
+        The smaller sigma
+    sigma1 : float
+        The larger sigma
+    max_sigma : float, optional
+        The maximum sigma value to use. Default is 3.0.
+    device : torch.device, optional
+    batch_size : int, optional
+    show_progress : bool, optional
 
-            d = torch.cdist(Xc, Xf)
-            F.threshold(d, threshold=max_dist, value=torch.inf, inplace=True)
+    Returns
+    -------
+    np.ndarray
+        The density ratio for each point in X.
+    """
+    X = torch.asarray(X, device=device)
+    order = torch.argsort(X[:, 0])
+    X = X[order]
+    X0 = X[:, 0].contiguous()
+    Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
+    n, dim = X.shape
 
-            d0 = d * s0_factor
-            d1 = d * s1_factor
-            d0.square_().neg_().exp_()
-            d1.square_().neg_().exp_()
-            d0 = d0.sum(1)
-            d1 = d1.sum(1)
-            torch.divide(d0, d1, out=dens_ratio[ic0:ic1])
+    radius = max_sigma * max(sigma0, sigma1)
+    radius_sq = X.new_tensor(radius * radius)
+    dens = X.new_zeros(n)
 
-    return dens_ratio.nan_to_num_()
+    k0 = X.new_tensor(-0.5 * sigma0**-2)
+    k1 = X.new_tensor(-0.5 * sigma1**-2)
+
+    n0 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma0 * sigma0))
+    n1 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma1 * sigma1))
+
+    if show_progress:
+        iter = progrange(0, n, batch_size, desc=f'SortDens:{device.type}')
+    else:
+        iter = range(0, n, batch_size)
+
+    i0 = i1 = 0
+    dist_buf = X.new_zeros((batch_size * col_batch_size,))
+    dist_buf2 = X.new_zeros((batch_size * col_batch_size,))
+    dist_buf3 = X.new_zeros((batch_size * col_batch_size,))
+    dens0_buf = X.new_zeros((batch_size,))
+    dens1_buf = X.new_zeros((batch_size,))
+    for q0 in iter:
+        q1 = min(n, q0 + batch_size)
+        nq = q1 - q0
+
+        Q = X[q0:q1]
+        x0 = Q[0, 0] - radius
+        x1 = Q[-1, 0] + radius
+
+        if i0 == q0:
+            assert q0 == 0
+        else:
+            assert q0 > i0
+            i0 = i0 + torch.searchsorted(X0[i0:q0], x0, side="right") - 1
+            i0.clamp_(min=0)
+            i0 = int(i0.item())
+
+        if q1 == n:
+            i1 = n
+        else:
+            i1 = q1 + torch.searchsorted(X0[q1:], x1, side="right")
+            i1.clamp_(max=n)
+            i1 = int(i1.item())
+
+        dens0 = dens0_buf[: q1 - q0].zero_()
+        dens1 = dens1_buf[: q1 - q0].zero_()
+        for j0 in range(i0, i1, col_batch_size):
+            j1 = min(j0 + col_batch_size, i1)
+            nj = j1 - j0
+            nbuf = nq * nj
+
+            dist = sqeuc_cdist_known_norm(
+                X=Q,
+                Xnormsq=Xnormsq[q0:q1],
+                Y=X[j0:j1],
+                Ynormsq=Xnormsq[j0:j1],
+                out=dist_buf[:nbuf].view(nq, nj),
+            )
+            dist.masked_fill_(dist > radius_sq, torch.inf)
+            gauss0 = torch.addcmul(
+                n0, k0, dist, out=dist_buf2[:nbuf].view(nq, nj)
+            ).exp_()
+            gauss1 = torch.addcmul(
+                n1, k1, dist, out=dist_buf3[:nbuf].view(nq, nj)
+            ).exp_()
+            dens0 += gauss0.sum(dim=1)
+            dens1 += gauss1.sum(dim=1)
+        dens[q0:q1] = dens0.div_(dens1)
+
+    dens = dens[torch.argsort(order)]
+    return dens.numpy(force=True)
 
 
 def kdt_density(
@@ -449,27 +426,34 @@ def _kdtdens_job(i0):
     jj = sdm["j"]
     v_local = sdm["v"]
     v_regional = sdm["v"].copy()
-    _gausskernel(v_local, sigma)
-    _gausskernel(v_regional, sigma_regional)
+    dim = float(X.shape[1])
+    _gausskernel(v_local, sigma, dim)
+    _gausskernel(v_regional, sigma_regional, dim)
     coo_local = coo_array(
         (v_local, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v_local.dtype
     )
     coo_regional = coo_array(
         (v_regional, (ii, jj)), shape=(batch_kdt.n, kdtree.n), dtype=v_local.dtype
     )
-    dens_local = coo_local.sum(axis=1)
+    dens = coo_local.sum(axis=1)
     dens_regional = coo_regional.sum(axis=1)
-    dens_local /= dens_regional
-    return i0, i1, dens_local
+    dens /= dens_regional
+
+    return i0, i1, dens
+
+
+_log_2pi = np.log(2.0 * np.pi)
 
 
 @numba.jit(
     parallel=False, nopython=True, boundscheck=False, nogil=True, error_model="numpy"
 )
-def _gausskernel(v: np.ndarray, sigma: float):
-    const = 1.0 / (np.sqrt(2.0) * sigma)
+def _gausskernel(v: np.ndarray, sigma: float, dim: float):
+    h = np.sqrt(2.0) * sigma
+    const = 1.0 / h
+    addconst = (dim / 2) * np.log(2.0 * np.pi * sigma * sigma)
     for i in range(v.size):
-        v[i] = np.exp(-np.square(v[i] * const))
+        v[i] = np.exp(-np.square(v[i] * const) - addconst)
 
 
 def knn_density(
@@ -507,8 +491,6 @@ def density_peaks(
     kdtree=None,
     density=None,
     knn_k=None,
-    use_knn=False,
-    use_histograms=False,
     sigma_local=5.0,
     sigma_regional=None,
     outlier_neighbor_count: int | None = 10,
@@ -522,7 +504,9 @@ def density_peaks(
     border_search_neighbors=3,
     inlier_dims=slice(0, 2),
     leafsize=24,
+    density_strategy="sort",
     workers=-1,
+    device: torch.device = torch.device("cpu"),
 ):
     """Density peaks clustering as described by Rodriguez and Laio, but...
 
@@ -536,6 +520,7 @@ def density_peaks(
     radius_search = radius_search * np.sqrt(X.shape[1])
     dim_arange = np.arange(X.shape[1])
     inlier_dim_ixs = dim_arange[inlier_dims]
+
     if outlier_radius is not None:
         outlier_radius = outlier_radius * np.sqrt(inlier_dim_ixs.size)
     inliers, kdtree = kdtree_inliers(
@@ -550,7 +535,8 @@ def density_peaks(
         kdtree = KDTree(X)
 
     if density is None:
-        if sigma_regional and not use_histograms:
+        if density_strategy == "kdt":
+            assert sigma_regional is not None
             density = kdt_density(
                 kdtree,
                 X,
@@ -558,24 +544,31 @@ def density_peaks(
                 sigma_regional=sigma_regional,
                 n_threads=workers,
             )
-        elif use_knn:
-            density = knn_density(
-                kdtree, X, k=knn_k, distance_upper_bound=radius_search, workers=workers
+        elif density_strategy == "sort":
+            assert sigma_regional is not None
+            density = sort_density(
+                X,
+                sigma0=sigma_local,
+                sigma1=sigma_regional,
+                device=device,
+                show_progress=logger.isEnabledFor(DARTSORTVERBOSE),
             )
-        elif use_histograms:
+        elif density_strategy == "hist":
             sigmas = [sigma_local]
             if sigma_regional is not None:
                 sigmas.append(sigma_regional)
             density = get_smoothed_density_ratio(X, inliers=inliers, sigmas=sigmas)
-        else:
+        elif density_strategy == "knn":
             density = knn_density(
                 kdtree,
                 X,
-                k=n_neighbors_search,
+                k=knn_k,
                 distance_upper_bound=radius_search,
                 workers=workers,
                 sigma=sigma_local,
             )
+        else:
+            raise ValueError(f"Unknown density strategy: {density_strategy}")
 
     nhdn = nearest_higher_density_neighbor(
         kdtree,
@@ -606,12 +599,7 @@ def density_peaks(
     if remove_clusters_smaller_than:
         labels = decrumb(labels, min_size=remove_clusters_smaller_than, in_place=True)
 
-    return dict(
-        density=density,
-        nhdn=nhdn,
-        labels=labels,
-        kdtree=kdtree,
-    )
+    return dict(density=density, nhdn=nhdn, labels=labels, kdtree=kdtree)
 
 
 def nearest_neighbor_assign(

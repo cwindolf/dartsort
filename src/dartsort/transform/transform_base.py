@@ -41,6 +41,7 @@ class BaseWaveformModule(BModule):
             if name_prefix:
                 name = f"{name_prefix}_{name}"
         self.name = name
+        self.submodule_names = None
         # these buffers below need to be copied, else they share references
         # across all the transformers which seems to cause problems!
         if channel_index is not None:
@@ -131,9 +132,22 @@ class BaseWaveformModule(BModule):
     def _pre_load_state(self, state_dict, prefix, *args, **kwargs):
         # wish torch would strip the prefix for us?
         extra_state_keys = [k for k in state_dict.keys() if k.endswith("_extra_state")]
-        assert len(extra_state_keys) <= 1
-        if extra_state_keys:
-            extra_state = state_dict[extra_state_keys[0]]
+
+        all_submodule_keys = []
+        if self.submodule_names:
+            for sn in self.submodule_names:
+                sn_keys = [
+                    k for k in extra_state_keys if k.endswith(f"{sn}._extra_state")
+                ]
+                assert len(sn_keys) == 1
+                all_submodule_keys.append(sn_keys[0])
+
+        my_extra_state_keys = [
+            k for k in extra_state_keys if k not in all_submodule_keys
+        ]
+        assert len(my_extra_state_keys) <= 1
+        if my_extra_state_keys:
+            extra_state = state_dict[my_extra_state_keys[0]]
 
             # some modules want to know the spike length before loading the state dict
             # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
@@ -146,6 +160,11 @@ class BaseWaveformModule(BModule):
             self.initialize_spike_length_dependent_params()
 
         self._other_pre_load_state(state_dict, prefix)
+
+        if self.submodule_names:
+            for sn, smk in zip(self.submodule_names, all_submodule_keys):
+                sn_dict = {smk: state_dict[smk]}
+                getattr(self, sn)._pre_load_state(sn_dict, prefix, *args, **kwargs)
 
     def initialize_spike_length_dependent_params(self):
         pass

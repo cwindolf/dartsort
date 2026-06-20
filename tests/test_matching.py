@@ -46,7 +46,7 @@ def refractory_sim(request, tmp_path_factory):
     upsampling, scaling, nc = request.param
 
     p = tmp_path_factory.mktemp(f"refsim_{upsampling}_{scaling}_{nc}")
-    p = dartsort.resolve_path(p)
+    p = dartsort.ensure_path(p)
     sim = simkit.generate_simulation(
         p / "sim",
         p / "noise",
@@ -116,6 +116,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         threshold=threshold,
         cd_iter=cd_iter,
         channel_selection_radius=channel_selection_radius,
+        template_svd_compression_min_explained_variance=0.0,
     )
     if method == "upcomp":
         cfg_kw["template_type"] = "individual_compressed_upsampled"
@@ -163,6 +164,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         inv_lambda=matcher.inv_lambda,
         scale_min=matcher.amp_scale_min,
         scale_max=matcher.amp_scale_max,
+        resid_offset=0,
     )
 
     conv = res["conv"].numpy(force=True)

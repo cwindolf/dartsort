@@ -1,3 +1,4 @@
+import math
 import warnings
 from logging import getLogger
 from typing import Any
@@ -278,7 +279,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         unsorted_missed_color=None,
         count=50,
         single_channel=False,
-        order="tprandom",
+        order="tpfpfn",
         show_sorted_matches=True,
         show_unsorted_matches=False,
         average=False,
@@ -327,6 +328,7 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
 
         waveforms = []
         colors = []
+        channels = []
         maa = 1.0
         for kind, color in self.colors.items():
             if w[kind] is None or not w[kind].size or not np.isfinite(w[kind]).any():
@@ -336,11 +338,15 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
                 maxs = np.nanmax(np.abs(w[kind]), axis=(1, 2))
             maxs = np.nan_to_num(maxs, nan=1.0)
             maa = max(maa, np.percentile(maxs, 90))
+            ch = w[f"channels_{kind}"]
             if self.average:
                 avg = w[kind].mean(0, keepdims=True)
+                assert np.all(ch == ch[0]), "Chans mismatch in avg"
                 waveforms.append(avg)
+                channels.append(ch[:1])
             else:
                 waveforms.append(w[kind])
+                channels.append(ch)
             colors.append(np.broadcast_to([color], waveforms[-1].shape[:1]))
 
         if not len(waveforms):
@@ -349,25 +355,26 @@ class MatchRawWaveformsPlot(UnitComparisonPlot):
         if self.order == "tprandom" and not self.average and len(waveforms) > 1:
             wlast = np.concatenate(waveforms[1:])
             clast = np.concatenate(colors[1:])
+            chanlast = np.concatenate(channels[1:])
             n = len(wlast)
             shuf = np.random.default_rng(0).permutation(n)
             waveforms = [waveforms[0], wlast[shuf]]
             colors = [colors[0], clast[shuf]]
+            channels = [channels[0], chanlast[shuf]]
 
         waveforms = np.concatenate(waveforms)
         colors = np.concatenate(colors)
-        max_channels = np.broadcast_to([w["max_chan"]], colors.shape)
+        channels = np.concatenate(channels)
+        chans = comparison.gt_analysis.vis_channel_index[w["max_chan"]]
+        chans = chans[chans < comparison.gt_analysis.vis_channel_index.shape[0]]
 
         ax = panel.subplots()
         max_abs_amp = maa
-        chans = w["channel_index"][w["max_chan"]]
-        chans = chans[chans < len(w["geom"])]
         geomplot(
             waveforms,
-            max_channels=max_channels,
-            channel_index=w["channel_index"],
             geom=w["geom"],
             ax=ax,
+            channels=channels,
             show_zero=False,
             max_abs_amp=max_abs_amp,
             annotate_z=True,
@@ -458,7 +465,7 @@ class TemplateDistanceHistogram(UnitComparisonPlot):
         x = x[np.isfinite(x)]
         ax.hist(x, color="orange", bins=bins)
         ax.grid(which="both")
-        if x.size:
+        if x.size > 1 and x.min() > 0:
             ax.semilogx()
         ax.set_xlabel("tested template distance to GT")
         ax.set_ylabel("count")
@@ -579,6 +586,11 @@ class NearbyTemplatesDistanceMatrix(UnitComparisonPlot):
             comparison, unit_id, which="tested"
         )
         dists = comparison.template_distances[gt_neighb_ixs][:, tested_neighb_ixs]
+        dists = np.nan_to_num(dists, nan=1000, posinf=1001, neginf=1002)
+        dists = np.maximum(dists, 0.0)
+        if not dists.size:
+            neighbor_error_panel(self, panel, unit_id, which="gt")
+            return
         ax = panel.subplots()
         # log1p_norm = FuncNorm((np.log1p, np.expm1), vmin=0)
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0)
@@ -676,7 +688,7 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
             conf = cfull[conf_rows][:, conf_cols]
 
         if self.confusion_kind in ("siconfusion", "greedy"):
-            union = union[conf_rows][:, conf_cols]  # type: ignore[reportPossiblyUnbound]
+            union = union[conf_rows][:, conf_cols]  # type: ignore
             union[union == 0] = 1
             conf = conf / union
             suffix = " iou"
@@ -689,6 +701,9 @@ class NearbyTemplatesConfusionMatrix(UnitComparisonPlot):
         if conf.min() < -1e-3:
             warnings.warn(f"Large {conf.min()=} with {self.confusion_kind=}.")
         conf = np.abs(np.clip(conf, 0.0, None))
+        if not np.isfinite(conf).all():
+            suffix += " [had infs!]"
+            conf[np.logical_not(np.isfinite(conf))] = 1000.0
 
         ax = panel.subplots()
         sqrt_norm = FuncNorm((np.sqrt, np.square), vmin=0, vmax=max(conf.max(), 0.01))
@@ -728,13 +743,16 @@ class MatchedMisalignmentHist(UnitComparisonPlot):
         df = comparison.delta_frames
         bins = np.arange(-df, df + 1)
         c = glasbey1024[unit_id % len(glasbey1024)]
-        _, _, hist = ax.hist(match_dt, bins=bins, color=c, log=True)
+        if match_dt.size and np.isfinite(match_dt).all():
+            _, _, hist = ax.hist(match_dt, bins=bins, color=c, log=True)
+        else:
+            hist = None
         ax.set_ylabel("frequency")
         ax.grid()
         gn = comparison.gt_name
         tn = comparison.tested_name
         ax.set_xlabel(f"matched {tn} time - {gn} time")
-        if match_dt.size:
+        if hist is not None:
             rms = np.sqrt(np.square(match_dt).mean())
             ax.legend(
                 handles=[hist[0]],
@@ -813,7 +831,7 @@ class NeighborCCGBreakdown(UnitComparisonPlot):
             ax.set_ylabel(f"{va.name} CCG v. {cat}", color=_class_colors[cat])
             if max(map(max, ccgs)) == 0:
                 ax.set_yticks([])
-        ax.set_xlabel("lag (samples)")
+        ax.set_xlabel("lag (samples)")  # type: ignore
         ns = _nmeth_names[self.neighbor_method]
         cs = " / ".join(self.categories)
         panel.suptitle(f"{ns} {va.name} CCGs for {cs}", fontsize=10)
@@ -856,14 +874,27 @@ class CollidednessBreakdown(UnitComparisonPlot):
         colls = [coll_match, coll_miss, coll_umiss]
         nothing = not any(a.size for a in colls)
         if nothing:
+            ax.text(0, 0, "blank collidedness", fontsize=8, ha="center", va="center")
+            ax.axis("off")
+            return
+        if nothing:
             mn = 1
             mx = 10
         else:
             mn = np.floor(min(a.min() for a in colls if a.size))
             mx = np.ceil(max(a.max() for a in colls if a.size))
-        if self.log_x:
+
+        can_scale = mx > mn and not nothing
+        if not math.isfinite(mn):
+            can_scale = False
+            mn = 1
+        if not math.isfinite(mx):
+            can_scale = False
+            mx = 10
+
+        if can_scale and self.log_x:
             bins = np.logspace(np.log10(mn), np.log10(mx), self.n_bins + 1)
-        elif self.sqrt_x:
+        elif can_scale and self.sqrt_x:
             bins = np.square(np.linspace(mn**0.5, mx**0.5, self.n_bins + 1))
         else:
             bins = np.linspace(mn, mx, self.n_bins + 1)
@@ -875,9 +906,9 @@ class CollidednessBreakdown(UnitComparisonPlot):
         ax.hist(
             colls, label=labels, color=colors, bins=bins, log=self.log, histtype="step"
         )
-        if self.log_x:
+        if can_scale and self.log_x:
             ax.set_xscale("log")
-        elif self.sqrt_x:
+        elif can_scale and self.sqrt_x:
             ax.set_xscale("function", functions=(np.sqrt, np.square))
         ax.grid()
         ticks = [0, 10, 25, 50, 100, 200, 350, 600]

@@ -1,8 +1,9 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dartsort.util import spiketorch
 from scipy.signal import resample
+
+from dartsort.util import spiketorch
 
 
 def test_ptp():

@@ -401,6 +401,7 @@ def conv_to_resid(
     template_a_norms = com_spatial_sing_a.square().sum((1, 2)).numpy(force=True)
     template_b_norms = com_spatial_sing_b.square().sum((1, 2)).numpy(force=True)
 
+    ta = tb = None
     if distance_kind == "max":
         ta = torch.bmm(
             torch.asarray(low_rank_templates_a.temporal_components[template_indices_a]),
@@ -442,6 +443,9 @@ def conv_to_resid(
             scalings[j] = scaling
         else:
             scaling = 1.0
+            b = best_conv
+            a = template_b_norms[j]
+            inv_lambda = 0.0
 
         if distance_kind in ("scaled_normeuc", "deconv"):
             if amplitude_scaling_variance:
@@ -451,6 +455,8 @@ def conv_to_resid(
             deconv_resid_norms[j] = template_a_norms[j] - norm_reduction
             # deconv_resid_norms[j] /= template_a_norms[j]
         elif distance_kind == "max":
+            assert ta is not None
+            assert tb is not None
             deconv_resid_norms[j] = np.abs(ta[j] - scaling * tb[j]).max()
             # deconv_resid_norms[j] /= np.abs(ta[j]).max()
         else:

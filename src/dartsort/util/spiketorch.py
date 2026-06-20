@@ -1,6 +1,5 @@
 import math
 import warnings
-from logging import getLogger
 from typing import overload
 
 import linear_operator
@@ -8,15 +7,24 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from linear_operator.utils.cholesky import psd_safe_cholesky
+from packaging.version import Version
 from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import squareform
 from sklearn.utils.extmath import svd_flip
 from torch import Tensor
 from torch.fft import irfft, rfft
 
-from .logging_util import progrange
+from .logging_util import get_logger, progrange
+from .torch_util import torch_compile, torch_compiler
 
-logger = getLogger(__name__)
+TORCH_IS_OLD = Version(torch.__version__) < Version("2.6.0")
+if TORCH_IS_OLD and torch.cuda.is_available():
+    warnings.warn(
+        f"Your PyTorch version ({torch.__version__}) is supported by dartsort, "
+        "but dartsort would be faster if you had >= 2.6.0."
+    )
+
+logger = get_logger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
@@ -25,7 +33,7 @@ _0 = torch.tensor(0.0)
 def spawn_torch_rg(
     seed: int | np.random.Generator | torch.Generator = 0,
     device: str | torch.device | None = "cpu",
-):
+) -> torch.Generator:
     if device is None:
         device = "cpu"
     device = torch.device(device)
@@ -103,7 +111,19 @@ def ptp(waveforms, dim=1, keepdims=False):
     return v.numpy()
 
 
-@torch.jit.script
+if TORCH_IS_OLD:
+
+    def _nonzero_static(x: Tensor, size: int):
+        nz = x.nonzero()
+        assert nz.shape[0] == size
+        return nz
+else:
+
+    def _nonzero_static(x: Tensor, size: int):
+        return x.nonzero_static(size=size)
+
+
+@torch_compile
 def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
     logQ = Q.log().nan_to_num_(nan=None, neginf=0.0)
     logP = log_liks.nan_to_num(nan=None, neginf=0.0)
@@ -112,7 +132,7 @@ def mean_elbo_dim1(Q: Tensor, log_liks: Tensor) -> Tensor:
     return oelbo
 
 
-@torch.jit.script
+@torch_compile
 def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     logP = log_liks.nan_to_num(neginf=0.0)
@@ -122,7 +142,7 @@ def elbo(Q: Tensor, log_liks: Tensor, reduce_mean: bool = True, dim: int = 1) ->
     return oelbo
 
 
-@torch.jit.script
+@torch_compile
 def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     logQ = Q.log().nan_to_num_(neginf=0.0)
     H = logQ.mul_(Q).sum(dim=dim)
@@ -131,7 +151,7 @@ def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     return H.neg_()
 
 
-@torch.jit.script
+@torch_compile
 def ecl(
     resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
 ) -> Tensor:
@@ -160,6 +180,19 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
 def minmax(x: np.ndarray) -> np.ndarray:
     x = x - np.min(x)
     return x / np.max(x)
+
+
+@torch_compile
+def sqeuc_cdist_known_norm(
+    X: Tensor,
+    Xnormsq: Tensor,
+    Y: Tensor,
+    Ynormsq: Tensor,
+    out: Tensor,
+):
+    out = torch.addmm(Xnormsq[:, None], X, Y.t(), out=out, alpha=-2.0)
+    out.add_(Ynormsq)
+    return out.relu_()
 
 
 def svd_lowrank_helper(
@@ -220,7 +253,7 @@ def shared_temporal_pconv(temporal_comps: Tensor, up_temporal_comps: Tensor) -> 
     return pconv
 
 
-@torch.jit.script
+@torch_compile
 def full_shared_pconv(
     tconv: Tensor, spatial_sing: Tensor, batch_size: int = 64
 ) -> Tensor:
@@ -243,7 +276,7 @@ def full_shared_pconv(
     return out
 
 
-@torch.jit.script
+@torch_compile
 def best_shared_pconv(
     tconv: Tensor, spatial_sing: Tensor, batch_size: int = 1024
 ) -> tuple[Tensor, Tensor]:
@@ -297,7 +330,7 @@ def best_shared_pconv(
     return conv_out, lag_out
 
 
-@torch.jit.script
+@torch_compiler(fullgraph=False)
 def weighted_best_lagged_scaled_normeuc_dist(
     tconv: Tensor,
     spatial_sing: Tensor,
@@ -443,7 +476,7 @@ def weighted_normeuc_distance(means, weights, batch_size=512, min_iou=0.75):
         nmj = (xj.square_().mul_(w)).mean(dim=(1, 2)).sqrt_()
 
         dist = dist.div_(nmi).div_(nmj)
-        pdist[i0 + valid] = dist
+        pdist[i0 + valid] = dist.sqrt_()
     pdist = pdist.numpy(force=True)
     return squareform(pdist)
 
@@ -496,7 +529,7 @@ def scaled_normeuc_from_dots(
     return dist
 
 
-@torch.jit.script
+@torch_compile
 def scaled_normeuc_distance(
     means: Tensor,
     scale_std: float = 0.01,
@@ -729,8 +762,19 @@ def reduce_at_(dest, ix, src, reduce, include_self=True):
     )
 
 
-@torch.jit.script
 def argrelmax(
+    *,
+    x: Tensor,
+    radius: int,
+    threshold: float,
+    arange: Tensor,
+):
+    msk = _argrelmax_mask(x=x, radius=radius, threshold=threshold, arange=arange)
+    return msk.nonzero()[:, 0]
+
+
+@torch_compile
+def _argrelmax_mask(
     *,
     x: Tensor,
     radius: int,
@@ -750,11 +794,9 @@ def argrelmax(
     # exclude edge
     x1[0].zero_()
     x1[-1].zero_()
-    ix = torch.nonzero(x1)[:, 0]
-    return ix
+    return x1
 
 
-@torch.jit.script
 def argrelmax_dedup(
     peak_radius: int = 1,
     *,
@@ -787,6 +829,27 @@ def argrelmax_dedup(
     peak time by +/- 1 (temporal upsampling stuff). Make your chunk margin 1 sample
     bigger if you care about that.
     """
+    msk = _argrelmax_dedup_mask(
+        peak_radius,
+        x=x,
+        dedup_radius=dedup_radius,
+        threshold=threshold,
+        arange=arange,
+        padding=padding,
+    )
+    return msk.nonzero()[:, 0]
+
+
+@torch_compile
+def _argrelmax_dedup_mask(
+    peak_radius: int = 1,
+    *,
+    x: Tensor,
+    dedup_radius: int,
+    threshold: float,
+    arange: Tensor,
+    padding: int,
+):
     nt = x.shape[0]
     xv = x.clone()
     x = x[None, None]
@@ -805,7 +868,7 @@ def argrelmax_dedup(
     remove2 = torch.logical_or(x1 < x2, inds2 != arange)
     x2.masked_fill_(remove2, 0.0)
     x2 = x2[0, 0]
-    return x2.nonzero()[:, 0]
+    return x2
 
 
 _cdtypes = {torch.float32: torch.complex64, torch.float64: torch.complex128}
@@ -854,6 +917,15 @@ def convolve_lowrank(
     return out
 
 
+def enforce_posdef(a, eps=0.0):
+    if eps:
+        a.diagonal(dim1=-2, dim2=-1).add_(eps)
+    vals, vecs = torch.linalg.eigh(a)
+    good = vals > 0
+    a = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+    return a
+
+
 def nancov(
     x,
     weights=None,
@@ -872,30 +944,31 @@ def nancov(
     if not nan_free:
         mask = x.isfinite().to(x)
         x = x.nan_to_num()
+    else:
+        mask = None
 
     if weights is not None:
         xtx = (x.T * weights) @ x
         if nan_free:
             nobs = weights.sum(0)
         else:
+            assert mask is not None
             nobs = (mask.T * weights) @ mask
     else:
         xtx = x.T @ x
         if nan_free:
-            nobs = np.array(len(x), dtype=x.dtype)
+            nobs = x.new_tensor(len(x))
         else:
+            assert mask is not None
             nobs = mask.T @ mask
     denom = nobs - correction
     denom[denom <= 0] = 1
     cov = xtx / denom
+    cov = torch.asarray(cov)
 
     if force_posdef:
         try:
-            if eps:
-                np.fill_diagonal(cov, np.diagonal(cov) + eps)
-            vals, vecs = torch.linalg.eigh(cov)
-            good = vals > 0
-            cov = (vecs[:, good] * vals[good]) @ vecs[:, good].T
+            cov = enforce_posdef(cov, eps=eps)
         except Exception as e:
             if not cov.isfinite().all():
                 raise e
@@ -1023,7 +1096,7 @@ def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
     return squareform(pdist)
 
 
-@torch.jit.script
+@torch_compile
 def normeuc_distance(means: Tensor):
     """|a-b|/sqrt(|a||b|)"""
     means = means.reshape(means.shape[0], -1)
@@ -1475,7 +1548,11 @@ def get_relative_index(source_channel_index, target_channel_index):
     """
     n_chans, n_source_chans = source_channel_index.shape
     n_chans_, n_target_chans = target_channel_index.shape
-    assert n_chans == n_chans_
+    if n_chans != n_chans_:
+        raise ValueError(
+            f"source/target shapes mismatch: {source_channel_index.shape=} "
+            f"{target_channel_index.shape=}."
+        )
     relative_index = torch.full_like(target_channel_index, n_source_chans)
     for c in range(n_chans):
         row = source_channel_index[c]

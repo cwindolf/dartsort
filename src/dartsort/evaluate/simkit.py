@@ -20,8 +20,8 @@ from ..templates import TemplateData
 from ..util.data_util import (
     DARTsortSorting,
     divide_randomly,
+    ensure_path,
     extract_random_snips,
-    resolve_path,
 )
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger, progbar
@@ -108,7 +108,7 @@ def generate_simulation(
             pass
 
     if noise_recording_folder is not None:
-        noise_recording_folder = resolve_path(noise_recording_folder)
+        noise_recording_folder = ensure_path(noise_recording_folder)
     else:
         assert noise_in_memory
     duration_samples = int(duration_seconds * sampling_frequency)
@@ -146,7 +146,7 @@ def generate_simulation(
         return
 
     if folder is not None:
-        folder = resolve_path(folder)
+        folder = ensure_path(folder)
     else:
         assert no_save
 
@@ -214,7 +214,7 @@ def generate_simulation(
 
 
 def load_simulation(folder):
-    folder = resolve_path(folder, strict=True)
+    folder = ensure_path(folder, strict=True)
     recording_dir = folder / "recording"
     templates_npz = folder / "templates.npz"
     sorting_h5 = folder / "dartsort_sorting.h5"
@@ -252,7 +252,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 **simulation_kwargs,
             )
         )
-        self.segment = cast(InjectSpikesPreprocessorSegment, self._recording_segments[0])
+        self.segment = cast(
+            InjectSpikesPreprocessorSegment, self._recording_segments[0]
+        )
 
     def basic_sorting(self) -> DARTsortSorting:
         return self.segment.basic_sorting()
@@ -406,7 +408,9 @@ class InjectSpikesPreprocessor(BasePreprocessor):
 
                 # residual snippets
                 if n_residual_snips:
-                    nrs_dset = h5.create_dataset("n_residuals", data=np.zeros((), dtype=np.int64))
+                    nrs_dset = h5.create_dataset(
+                        "n_residuals", data=np.zeros((), dtype=np.int64)
+                    )
                     residual = h5.create_dataset(
                         "residual",
                         shape=(n_residual_snips, *self.segment.wf_shape),
@@ -422,7 +426,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                         dtype=f_dt,
                     )
                 else:
-                    residual = residual_times = None
+                    nrs_dset = residual = residual_times = None
 
                 results = pool.map(self.segment._get_traces_and_inject_spikes_job, jobs)
                 if show_progress:
@@ -455,6 +459,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     assert nrs == cast(np.ndarray, s["residual"]).shape[0]
                     assert nrs == cast(np.ndarray, s["residual_times"]).shape[0]
                     assert residual is not None
+                    assert nrs_dset is not None
                     assert residual_times is not None
                     assert resid_ix is not None
                     residual[resid_ix : resid_ix + nrs] = s["residual"]
@@ -467,6 +472,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                     residual_times.resize((resid_ix, *residual_times.shape[1:]))
                 if residual is not None:
                     assert residual_times is not None
+                    assert nrs_dset is not None
                     assert residual.shape[0] == residual_times.shape[0] == resid_ix
                     assert nrs_dset[()] == resid_ix
                 assert i1_prev == n
@@ -486,7 +492,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         save_collidedness=False,
         chunk_len_s=0.5,
     ):
-        folder = resolve_path(folder)
+        folder = ensure_path(folder)
         folder.mkdir(exist_ok=True)
         recording_dir = folder / "recording"
         templates_npz = folder / "templates.npz"

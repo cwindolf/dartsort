@@ -235,8 +235,10 @@ def get_mlp(
         raise ValueError(f"Unsupported res_type: {res_type}")
 
     if output_layer == "linear":
+        assert isinstance(final_dim, int)
         layers.append(nn.Linear(final_dim, output_dim))
     elif output_layer == "gated_linear":
+        assert isinstance(final_dim, int)
         layers.append(nn.Linear(final_dim, 2 * output_dim))
         layers.append(nn.GLU())
     else:
@@ -355,6 +357,8 @@ class Rescaling(nn.Module):
     def forward(self, input):
         if self.waveform_only:
             input, masks = input
+        else:
+            masks = None
         dim = tuple(range(1, input.ndim))
         if self.scale_kind == "max":
             scales = input.abs().amax(dim=dim, keepdim=True)

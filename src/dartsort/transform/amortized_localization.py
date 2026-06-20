@@ -192,7 +192,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         a0 = masks * pred_amps_alpha1
         numer = a0.mul(obs_amps).sum(dim=1)
         denom = a0.square().sum(dim=1)
-        alphas = numer.div_(denom)
+        alphas = numer.div_(denom + 1e-6)
         if return_pred:
             return alphas, alphas.unsqueeze(1) * pred_amps_alpha1
         return alphas
@@ -203,13 +203,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             if self.localization_model == "gaussian":
                 pred_amps_alpha1 = dists.square().mul(-2).exp()
             else:
-                pred_amps_alpha1 = 1.0 / dists
+                pred_amps_alpha1 = 1.0 / (dists + 1e-6)
             alphas, pred_amps = self.get_alphas(
                 obs_amps, pred_amps_alpha1, masks, return_pred=True
             )
         else:
             alphas = F.softplus(z[:, 3])
-            pred_amps = alphas.unsqueeze(1) / dists
+            pred_amps = alphas.unsqueeze(1) / (dists + 1e-6)
 
         return alphas, pred_amps
 

@@ -32,6 +32,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         n_epochs=75,
         pad_depth_only=True,
         channelwise_dropout_p=0.0,
+        svd_projection_rank: int | None = None,
         with_conv_fullheight=False,
         val_split_p=0.0,
         min_epochs=10,
@@ -41,6 +42,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         res_type="none",
         lr_schedule="CosineAnnealingLR",
         lr_schedule_kwargs=None,
+        warmup_epochs=0,
+        warmup_lr=3e-4,
         inference_batch_size=1024,
         optimizer="Adam",
         optimizer_kwargs=None,
@@ -68,6 +71,8 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.with_conv_fullheight = with_conv_fullheight
         self.lr_schedule = lr_schedule
         self.lr_schedule_kwargs = lr_schedule_kwargs
+        self.warmup_epochs = warmup_epochs
+        self.warmup_lr = warmup_lr
         self.weight_decay = weight_decay
         self.optimizer = optimizer
         self.optimizer_kwargs = optimizer_kwargs
@@ -81,6 +86,7 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         self.res_type = res_type
         self.inference_batch_size = inference_batch_size
         self.epoch_size = epoch_size
+        self.svd_projection_rank = svd_projection_rank
 
         model_channel_index = regularize_channel_index(
             geom=self.geom, channel_index=channel_index, depth_only=pad_depth_only
@@ -123,7 +129,11 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
         )
         # we don't know these dimensions til we see a spike
         assert self.spike_length_samples is not None
-        self.wf_dim = self.spike_length_samples * self.b.model_channel_index.shape[1]
+        if self.svd_projection_rank:
+            dim0 = self.svd_projection_rank
+        else:
+            dim0 = self.spike_length_samples
+        self.wf_dim = dim0 * self.b.model_channel_index.shape[1]
         self.output_dim = self.wf_dim
 
     def get_optimizer(self):
@@ -153,7 +163,17 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
 
         sched_kw = self.lr_schedule_kwargs or dict(T_max=self.n_epochs)
         assert issubclass(lr_schedule, torch.optim.lr_scheduler.LRScheduler)
-        return lr_schedule(optimizer, **sched_kw)
+        sched = lr_schedule(optimizer, **sched_kw)
+
+        if self.warmup_epochs:
+            warm_sched = torch.optim.lr_scheduler.ConstantLR(
+                optimizer, self.warmup_lr, total_iters=self.warmup_epochs
+            )
+            sched = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, [warm_sched, sched], milestones=[self.warmup_epochs]
+            )
+
+        return sched
 
     def step_scheduler(self, scheduler, loss, val_loss):
         if scheduler is None:
@@ -182,8 +202,12 @@ class BaseMultichannelDenoiser(BaseWaveformDenoiser):
             hidden_dims = self.hidden_dims
         if output_layer is None:
             output_layer = "gated_linear" if self.signal_gates else "linear"
+        if self.svd_projection_rank:
+            dim0 = self.svd_projection_rank
+        else:
+            dim0 = self.spike_length_samples
         return nn_util.get_waveform_mlp(
-            self.spike_length_samples,
+            dim0,
             self.b.model_channel_index.shape[1],
             hidden_dims,
             self.output_dim,
@@ -297,7 +321,6 @@ def get_noise_h5(
         noise_waveforms = dset[ii, tt : tt + spike_length_samples]
     else:
         noise_waveforms = dset[ii]
-
 
     # channels...
     cc = channel_index[channels]

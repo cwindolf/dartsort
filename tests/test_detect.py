@@ -109,7 +109,7 @@ detect_edgecases = {
         *empty,
     ],
     # we do detect an event above the threshold
-    "single": 2 * [[T // 2], [1], [v0]],
+    "single2": 2 * [[T // 2], [1], [v0]],
     # we don't detect on the boundary
     "left": [[0], [1], [1.0], *empty],
     "right": [[T - 1], [1], [v0], *empty],
@@ -208,11 +208,11 @@ detect_edgecases = {
         [t0 + dt1], [1], [v1],
     ],
     # channels too far apart for dedup
-    "samevaltime": 2 * [[t0, t0], [1, 3], [v0, v0]],
+    "samevaltime3": 2 * [[t0, t0], [1, 3], [v0, v0]],
     "difvaltime": 2 * [[t0, t0], [1, 3], [v0, v1]],
     "samevaltime0": 2 * [[t0, t0 + dt0], [1, 3], [v0, v0]],
     "difvaltime0": 2 * [[t0, t0 + dt0], [1, 3], [v0, v1]],
-    "samevaltime1": 2 * [[t0, t0 + dt1], [1, 3], [v0, v0]],
+    "samevaltime2": 2 * [[t0, t0 + dt1], [1, 3], [v0, v0]],
     "difvaltime1": 2 * [[t0, t0 + dt1], [1, 3], [v0, v1]],
     # some cases with 3 spikes
     # all same time, center biggest

@@ -12,7 +12,7 @@ from ...util.logging_util import DARTSORTVERBOSE, get_logger
 from ...util.motion import MotionInfo
 from ...util.py_util import databag
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
-from ...util.torch_util import BModule
+from ...util.torch_util import BModule, torch_compiler
 
 logger = get_logger(__name__)
 _extra_checks = logger.isEnabledFor(DARTSORTVERBOSE)
@@ -83,6 +83,7 @@ class MatchingTemplates(BModule):
         inv_lambda: float,
         scale_min: float,
         scale_max: float,
+        resid_offset: int,
     ) -> "ChunkTemplateData":
         raise NotImplementedError
 
@@ -129,6 +130,9 @@ class MatchingTemplatesBuilder:
 class ChunkTemplateData:
     # -- subclasses must assign the following properties that the matcher uses.
     spike_length_samples: int
+    filter_length_samples: int
+    resid_offset: int
+
     # for the full templates
     unit_ids: Tensor
     main_channels: Tensor
@@ -260,7 +264,7 @@ class ChunkTemplateData:
         assert nt > 2 * padding
         times = argrelmax_dedup(
             x=objective_max,
-            dedup_radius=self.spike_length_samples,
+            dedup_radius=self.filter_length_samples,
             threshold=thresholdsq,
             arange=obj_arange[:nt],
             padding=padding,
@@ -329,12 +333,13 @@ class ChunkTemplateData:
         assert times is not None
 
         # get noise
+        # TODO check the offset is correct
         waveforms = grab_spikes(
             residual_padded,
             times,
             channels,
             sel_ci,
-            trough_offset=0,
+            trough_offset=self.resid_offset,
             spike_length_samples=self.spike_length_samples,
             buffer=0,
             already_padded=True,
@@ -534,7 +539,7 @@ def subtract_precomputed_pconv(
         )
 
 
-@torch.jit.script
+@torch_compiler(fullgraph=False)
 def _subtract_precomputed_pconv_unscaled(
     conv: Tensor,
     pconv: Tensor,
@@ -557,7 +562,7 @@ def _subtract_precomputed_pconv_unscaled(
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
-@torch.jit.script
+@torch_compiler(fullgraph=False)
 def _subtract_precomputed_pconv_scaled(
     conv: Tensor,
     pconv: Tensor,
@@ -583,7 +588,7 @@ def _subtract_precomputed_pconv_scaled(
         conv[i0:i1].scatter_add_(dim=1, src=batch, index=ix)
 
 
-@torch.jit.script
+@torch_compiler()
 def _free_coarse_objective(
     conv: Tensor,
     normsq: Tensor,
@@ -597,7 +602,7 @@ def _free_coarse_objective(
     return obj
 
 
-@torch.jit.script
+@torch_compiler()
 def _scaled_coarse_objective(
     conv: Tensor,
     normsq: Tensor,
