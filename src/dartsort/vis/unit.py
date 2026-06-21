@@ -21,14 +21,7 @@ from ..evaluate.analysis import DARTsortAnalysis, WaveformsBag
 from ..util.job_util import get_global_computation_config
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, cloudpickle, get_pool
 from . import layout
-from .analysis_plots import (
-    bar,
-    bimod_stats,
-    centered_bins,
-    correlogram,
-    isi_hist,
-    plot_correlogram,
-)
+from .analysis_plots import bimod_stats, centered_bins, isi_hist, plot_correlogram
 from .colors import glasbey1024
 from .waveforms import geomplot, geomplot_templates
 
@@ -680,18 +673,12 @@ class NeighborQDAMatrices(UnitPlot):
 class NeighborCCGPlot(UnitPlot):
     kind = "medium"
 
-    def __init__(
-        self, n_neighbors=3, max_lag=50, bin=1, unit="samples"
-    ):
+    def __init__(self, n_neighbors=3, max_lag=50, bin=1, unit="samples"):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
-        if self.with_merged_acg:
-            self.height = 1.0
-            self.width = 3.0
-        else:
-            self.height = 1.75
-            self.width = 2
+        self.height = 1.75
+        self.width = 2
         self.unit = unit
         self.bin = bin
 
@@ -718,23 +705,14 @@ class NeighborCCGPlot(UnitPlot):
             for nid in neighbor_ids
         ]
 
-        if self.with_merged_acg:
-            axes = panel.subplots(
-                nrows=1 + self.with_merged_acg,
-                ncols=len(neighb_sts),
-                sharey="row",
-                sharex=True,
-                squeeze=False,
-            )
-        else:
-            axes = panel.subplots(
-                ncols=1 + self.with_merged_acg,
-                nrows=len(neighb_sts),
-                sharey="row",
-                sharex=True,
-                squeeze=False,
-            )
-            axes = axes.T
+        axes = panel.subplots(
+            ncols=1,
+            nrows=len(neighb_sts),
+            sharey="row",
+            sharex=True,
+            squeeze=False,
+        )
+        axes = axes.T
 
         samples_per_ms = sorting_analysis.sorting.sampling_frequency / 1000
         if self.unit == "samples":
