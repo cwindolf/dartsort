@@ -1046,9 +1046,8 @@ def coentropy_merge_mask(
     union -= c.rival_count
     iou = c.rival_count / union
 
-    mask = np.logical_and.reduce(
-        [cov >= coverage_threshold, iou >= iou_threshold, c.coentropy >= min_coentropy]
-    )
+    mask = np.logical_or(cov >= coverage_threshold, iou >= iou_threshold)
+    mask = np.logical_and(c.coentropy >= min_coentropy, mask)
     np.fill_diagonal(mask, True)
     return mask, c
 
