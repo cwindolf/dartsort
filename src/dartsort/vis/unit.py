@@ -52,20 +52,20 @@ class UnitTextInfo(UnitPlot):
 
         h5_path = sorting_analysis.sorting.parent_h5_path
         if h5_path:
-            msg += f"feature source: {h5_path.name}\n"
+            msg += f"from: {h5_path.name}\n"
 
         nspikes = cast(np.ndarray, sorting_analysis.sorting.labels == unit_id).sum()
-        msg += f"n spikes: {nspikes}\n"
+        msg += f"count: {nspikes}\n"
 
         assert sorting_analysis.template_data is not None
         temps = sorting_analysis.template_data.unit_templates(unit_id)
         if not temps.size:
-            msg += "no template (too few spikes)"
+            msg += "no template\n(too few spikes)"
         elif temps.shape[0] == 1:
             ptp = np.ptp(temps, 1).max(1)[0]
-            msg += f"maxptp: {ptp:0.2f} su\n"
+            msg += f"ptp: {ptp:0.2f} su\n"
             snr = ptp * np.sqrt(nspikes)
-            msg += f"template snr: {snr:.1f}"
+            msg += f"snr: {snr:.1f}"
         else:
             assert False
 
@@ -84,6 +84,8 @@ class ACG(UnitPlot):
         self.max_lag = max_lag
         self.bin = bin
         self.unit = unit
+        if unit == "ms":
+            self.width = 2
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
@@ -104,6 +106,7 @@ class ACG(UnitPlot):
             samples_per_ms=samples_per_ms,
             to_ms=self.unit == "ms",
         )
+        axis.grid(which="both")
         axis.set_ylabel("acg")
 
 
@@ -138,6 +141,7 @@ class ISIHistogram(UnitPlot):
             color=color,
             label=label,
         )
+        axis.grid(which="both")
 
 
 class XZScatter(UnitPlot):
@@ -235,41 +239,67 @@ class PCAScatter(UnitPlot):
 
 
 class TimeFeatScatter(UnitPlot):
-    kind = "medium"
+    kind = "ctimefeat"
     width = 2
     height = 0.75
 
     def __init__(
         self,
         feat_name,
+        color_by_template_if_possible=False,
         color_by_amplitude=True,
         amplitude_color_cutoff=15,
         alpha=1.0,
         label=None,
+        cbar=True,
     ):
         super().__init__()
         self.feat_name = feat_name
         self.amplitude_color_cutoff = amplitude_color_cutoff
         self.color_by_amplitude = color_by_amplitude
+        self.color_by_template_if_possible = color_by_template_if_possible
         self.alpha = alpha
         self.label = label or feat_name
+        self.cbar = cbar
 
     def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
         axis = panel.subplots()
         assert sorting_analysis.times_seconds is not None
         assert sorting_analysis.amplitudes is not None
+
         in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
         t = sorting_analysis.times_seconds[in_unit]
         feat = sorting_analysis.named_feature(self.feat_name, which=in_unit)
         c = None
-        if self.color_by_amplitude:
+        cbar = self.cbar
+        did_by_template = False
+        if c is None and self.color_by_template_if_possible:
+            temp_ix = getattr(sorting_analysis.sorting, "template_inds", None)
+            if temp_ix is not None:
+                temp_ix = temp_ix[in_unit]
+                c = glasbey1024[temp_ix % len(glasbey1024)]
+                did_by_template = True
+                cbar = False
+        if c is None and self.color_by_amplitude:
             amps = sorting_analysis.amplitudes[in_unit]
             c = np.minimum(amps, self.amplitude_color_cutoff)
         s = axis.scatter(t, feat, c=c, lw=0, s=3, alpha=self.alpha, rasterized=True)
         axis.set_xlabel("time (s)")
         axis.set_ylabel(self.label)
-        if self.color_by_amplitude:
-            plt.colorbar(s, ax=axis, shrink=0.5, label="amp (su)")
+        axis.grid()
+        axis.set_axisbelow(True)
+        if cbar and self.color_by_amplitude:
+            plt.colorbar(s, ax=axis, shrink=0.5, pad=0.01, label="amp (su)")
+        if did_by_template:
+            axis.text(
+                0.97,
+                0.97,
+                "color: template",
+                ha="right",
+                va="top",
+                transform=axis.transAxes,
+                fontsize="small",
+            )
 
 
 class TimeZScatter(TimeFeatScatter):
@@ -283,8 +313,64 @@ class TimeRegZScatter(TimeFeatScatter):
 
 
 class TimeAmpScatter(TimeFeatScatter):
-    def __init__(self, **kwargs):
-        super().__init__(feat_name="amplitudes", label="amp (su)", **kwargs)
+    def __init__(self, color_by_template_if_possible=True, **kwargs):
+        super().__init__(
+            feat_name="amplitudes",
+            label="amp (su)",
+            color_by_template_if_possible=color_by_template_if_possible,
+            **kwargs,
+        )
+
+
+class AmplitudeHistogramByDiscreteVariable(UnitPlot):
+    kind = "camphist"
+    width = 2
+    height = 0.75
+
+    def __init__(self, var="channels"):
+        self.var = var
+
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis, unit_id: int):
+        axis = panel.subplots()
+        assert sorting_analysis.amplitudes is not None
+        z = getattr(sorting_analysis.sorting, self.var, None)
+        if z is None:
+            axis.axis("off")
+            return
+        in_unit = sorting_analysis.in_unit(unit_id, at_most=50_000)
+        a = sorting_analysis.amplitudes[in_unit]
+        z = z[in_unit]
+        bins = np.arange(np.floor(a.min()), np.ceil(a.max()) + 0.1)
+        uqz = np.unique(z)
+        for uz in uqz:
+            axis.hist(
+                a[z == uz],
+                color=glasbey1024[uz % len(glasbey1024)],
+                histtype="step",
+                lw=1,
+                label=uz,
+                bins=bins,
+            )
+        if uqz.size < 4:
+            axis.legend(title=self.var, fancybox=False, loc="upper right")
+        else:
+            msg = f"{self.var}, {uqz.size} uniques"
+            if uqz.size < 8:
+                msg += ":\n"
+                msg += ",".join(list(map(str, uqz.tolist())))
+            axis.text(
+                0.97,
+                0.97,
+                msg,
+                fontsize="small",
+                ha="right",
+                va="top",
+                transform=axis.transAxes,
+            )
+        axis.grid()
+        axis.set_axisbelow(True)
+        axis.semilogy()
+        axis.set_xlabel("amplitude (s.u.)")
 
 
 # -- waveform plots
@@ -451,9 +537,9 @@ class WaveformPlot(UnitPlot):
 
         shift_str = "shifted " * sorting_analysis.shifting
         if self.title is None:
-            axis.set_title(shift_str + self.wfs_kind + rmsg)
+            axis.set_title(shift_str + self.wfs_kind + rmsg, fontsize="small")
         else:
-            axis.set_title(self.title + rmsg)
+            axis.set_title(self.title + rmsg, fontsize="small")
         axis.set_xticks([])
         axis.set_yticks([])
 
@@ -477,7 +563,7 @@ class RawWaveformPlot(WaveformPlot):
 
 
 class TPCAWaveformPlot(WaveformPlot):
-    wfs_kind = "coll.-cl. tpca wfs"
+    wfs_kind = "c-c tpca wfs"
 
     def get_waveforms(
         self, sorting_analysis: DARTsortAnalysis, unit_id: int
@@ -605,7 +691,7 @@ class CoarseTemplateDistancePlot(UnitPlot):
         ):
             tx.set_color(colors[i])
             ty.set_color(colors[i])
-        axis.set_title(self.title)
+        axis.set_title(self.title, fontsize="small")
 
 
 class NeighborQDAMatrices(UnitPlot):
@@ -667,17 +753,17 @@ class NeighborQDAMatrices(UnitPlot):
             ):
                 tx.set_color(colors[i])
                 ty.set_color(colors[i])
-            ax.set_title(title)
+            ax.set_title(title, fontsize="small")
 
 
 class NeighborCCGPlot(UnitPlot):
-    kind = "medium"
+    kind = "bneighborccg"
 
-    def __init__(self, n_neighbors=3, max_lag=50, bin=1, unit="samples"):
+    def __init__(self, n_neighbors=5, max_lag=50, bin=1, unit="samples"):
         super().__init__()
         self.n_neighbors = n_neighbors
         self.max_lag = max_lag
-        self.height = 1.75
+        self.height = 2
         self.width = 2
         self.unit = unit
         self.bin = bin
@@ -733,7 +819,16 @@ class NeighborCCGPlot(UnitPlot):
                 to_ms=self.unit == "ms",
                 fc=colors[j],
             )
-            axes[0, j].set_title(f"ccg vs. unit {neighbor_ids[j]}")
+            axes[0, j].grid(which="both")
+            axes[0, j].text(
+                0.97,
+                0.97,
+                f"vs. unit {neighbor_ids[j]}",
+                ha="right",
+                va="top",
+                transform=axes[0, j].transAxes,
+                fontsize="small",
+            )
 
 
 class NeighborQDAPlot(UnitPlot):
@@ -809,6 +904,7 @@ class NeighborQDAPlot(UnitPlot):
 
             ax.axvline(0, color="k", lw=0.8)
             ax.grid()
+            ax.set_axisbelow(True)
             hstat = kstat = ""
 
             if self.kind == "hist":
@@ -881,6 +977,7 @@ def default_plots(sorting_analysis=None):
         ISIHistogram(),
         ISIHistogram(bin_ms=0.25, max_ms=50.0),
         XZScatter(),
+        AmplitudeHistogramByDiscreteVariable(),
         TimeAmpScatter(),
         RawWaveformPlot(),
         NearbyCoarseTemplatesPlot(),
@@ -894,6 +991,10 @@ def default_plots(sorting_analysis=None):
         p.extend([PCAScatter(), TPCAWaveformPlot()])
     if sorting_analysis is not None and sorting_analysis.qda is not None:
         p.extend([NeighborQDAMatrices(), NeighborQDAPlot()])
+    if sorting_analysis is not None and hasattr(
+        sorting_analysis.sorting, "template_inds"
+    ):
+        p.extend([AmplitudeHistogramByDiscreteVariable("template_inds")])
     return p
 
 
@@ -922,7 +1023,7 @@ def make_unit_summary(
     pca_radius_um=75.0,
     plots=None,
     max_height=4,
-    figsize=(16, 8.5),
+    figsize=(18, 8.5),
     figure=None,
     gizmo_name="sorting_analysis",
     **other_global_params,
@@ -956,7 +1057,7 @@ def make_all_summaries(
     amplitude_color_cutoff=15.0,
     pca_radius_um=75.0,
     max_height=4,
-    figsize=(16, 8.5),
+    figsize=(18, 8.5),
     dpi=200,
     image_ext="png",
     n_jobs=None,

@@ -360,7 +360,6 @@ def isi_hist(
         dt_ms, bin_edges, color=color, label=label, histtype=histtype, alpha=alpha
     )
     axis.set_xlabel("isi (ms)")
-    axis.set_ylabel(f"count (out of {dt_ms.size} total isis)")
 
 
 def centered_bins(x, dx=1.0):
@@ -460,7 +459,7 @@ def plot_correlogram(
     ctr = ms_lags.shape[0] // 2
     assert ms_lags.shape == (2 * ctr + 1,)
     for j in range(max_lag):
-        binix = (j / samples_per_ms) // bin
+        binix = int((j / samples_per_ms) // bin)
         ms_ccg[ctr + binix] += ccg[max_lag + j]
         if j:
             ms_ccg[ctr - binix] += ccg[max_lag - j]
