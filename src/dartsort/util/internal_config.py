@@ -679,7 +679,7 @@ class SubtractionConfig:
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius_um: float | None = 50.0
-    temporal_dedup_radius_samples: int = 11
+    temporal_dedup_radius_samples: int = 7
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0

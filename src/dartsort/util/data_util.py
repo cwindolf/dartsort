@@ -15,9 +15,11 @@ from spikeinterface.core import (
     create_sorting_analyzer,
     get_random_data_chunks,
 )
+from spikeinterface.core.sparsity import estimate_sparsity
 
 from ..detect import detect_and_deduplicate
 from .internal_config import (
+    TemplateConfig,
     WaveformConfig,
     default_clustering_features_cfg,
     default_waveform_cfg,
@@ -223,7 +225,10 @@ class DARTsortSorting:
         self,
         recording: BaseRecording,
         template_data: "TemplateData | None" = None,
+        template_cfg: TemplateConfig | None = None,
+        motion: "MotionInfo | None" = None,
         drop_doubles: bool = True,
+        compute_extensions: Sequence[str] | None = ("random_spikes", "waveforms"),
         features_cfg=default_clustering_features_cfg,
     ) -> SortingAnalyzer:
         """Export dartsort's internal data to a SortingAnalyzer
@@ -231,18 +236,36 @@ class DARTsortSorting:
         This will first call to_numpy_sorting() and then register some of the sorting's
         features as extensions for the analyzer.
 
-        If template_data is supplied, a templates extension will be registered.
+        If template_data is supplied, a templates extension will be registered. Or, you
+        can supply template_cfg and motion to compute that.
 
         The implementation is based on SpikeInterface's `read_kilosort_as_analyzer()`,
         thanks to Chris Halcrow for that.
 
-        TODO: This doesn't handle gain_to_uV or random waveforms, sparsity, or probably
-        other important things.
+        The return value here can be passed into SpikeInterface's Phy export machine
+        `export_to_phy()`.
+
+        TODO: This doesn't handle gain_to_uV... should I not be doing my own amps here?
 
         Parameters
         ----------
         recording : BaseRecording
         template_data : TemplateData | None, optional
+            Templates to register with SortingAnalyzer as the templates
+            extension
+        template_cfg : TemplateConfig | None, optional
+            If template_data is not supplied but this is (together with motion),
+            templates will be estimated using dartsort machinery
+        motion: MotionInfo | None, optional
+        drop_doubles : bool
+            Call .drop_doubles(). This will probably do nothing if the sorting had
+            dedup_ms > 0 in the parameters.
+        compute_extensions : Sequence[str] | None
+            Extra analyzer extensions to compute. The default set is what's needed for
+            SpikeInterface's `export_to_phy()` to run. These are included here because
+            SpikeInterface is picky about extension order and will evict the template
+            extension if some of these are computed after the templates, which would then
+            cause the Phy export to fail.
         features_cfg : ClusteringFeaturesConfig
             Stores attribute dataset names
 
@@ -256,11 +279,17 @@ class DARTsortSorting:
             ComputeUnitLocations,
         )
 
-        sorting, kept_indices = self.to_numpy_sorting(drop_doubles=drop_doubles, return_kept_indices=True)  # type: ignore
+        sorting, kept_indices = self.to_numpy_sorting(
+            drop_doubles=drop_doubles, return_kept_indices=True
+        )  # type: ignore
 
+        sparsity = estimate_sparsity(sorting, recording)
         analyzer = create_sorting_analyzer(
-            sorting=sorting, recording=recording, sparse=False, return_in_uV=False
+            sorting=sorting, recording=recording, sparsity=sparsity, return_in_uV=False
         )
+
+        for ext in compute_extensions or []:
+            analyzer.compute_one_extension(ext)
 
         loc_name = features_cfg.localizations_dataset_name
         if (locs := self.localizations_as_structured_array(loc_name)) is not None:
@@ -270,6 +299,16 @@ class DARTsortSorting:
             loc_ext.params = {}
             loc_ext.run_info = {"run_completed": True}
             analyzer.extensions["spike_locations"] = loc_ext
+
+        if template_data is None and template_cfg is not None:
+            from ..templates.postprocess_util import estimate_template_library
+
+            _, template_data = estimate_template_library(
+                recording=recording,
+                sorting=self,
+                motion=motion,
+                template_cfg=template_cfg,
+            )
 
         if template_data is not None:
             td_ext = ComputeTemplates(analyzer)
@@ -1156,6 +1195,7 @@ def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
         structured_array["y"] = locs[:, 1]
 
     return structured_array
+
 
 def filter_link_h5(in_h5_path: str | Path, out_h5_path: str | Path, keep_filter):
     in_h5_path = ensure_path(in_h5_path, strict=True)
