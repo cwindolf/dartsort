@@ -47,7 +47,7 @@ class DARTsortUserConfig:
     relevant if `preprocessing != 'none'`. If the recording isn't getting saved,
     stick to float32."""
 
-    subsampling_spikes: int | None = 2_048_000
+    subsampling_spikes_per_channel: int | None = 5000
     """Detection steps before the final matching round will run until at least
     this many spikes are found or the whole recording is covered, to make sure
     that there is enough data for clustering. See also subsampling_fraction.
@@ -123,10 +123,9 @@ class DARTsortUserConfig:
     alignment_ms: Annotated[float, Field(gt=0)] = 1.5
     """Largest time shift allowed when re-aligning events."""
 
-    deduplication_ms:  Annotated[float, Field(gt=0)] = 0.5
+    deduplication_ms: Annotated[float, Field(gt=0)] = 0.5
     """As a final postprocessing step, only the higher-scoring of any spikes within
     this time radius of each other are kept.
-
     If this is negative, it does nothing. If it's 0, exact duplicates are dropped.
     """
 
@@ -146,7 +145,7 @@ class DARTsortUserConfig:
     threshold in Kilosort and other sorters, and it represents reduction in
     Euclidean norm of standardized data due to matching a new event."""
 
-    initial_threshold: Annotated[float, Field(gt=0)] = 10.0
+    initial_threshold: Annotated[float, Field(gt=0)] = 9.0
     """Initial detection's neural net matching threshold. Same as
     matching_threshold, except that a neural net is trying to guess
     the true waveforms here, rather than using cluster templates."""
@@ -232,7 +231,7 @@ class DeveloperConfig(DARTsortUserConfig):
     """Additional parameters for experiments. This API will never be stable."""
 
     # high level behavior
-    initial_steps: Sequence[MixtureStep] = ("split", "demolish")
+    initial_steps: Sequence[MixtureStep] = ("split", "demolish", "demolish")
     later_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     detection_type: Literal["subtract", "match", "threshold"] = "subtract"
     cluster_strategy: str = "dpc"
@@ -243,7 +242,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_waveforms_fit: int = 40_000
     max_waveforms_fit: int = 50_000
     fit_sampling: Literal["random", "amp_reweighted"] = "amp_reweighted"
-    n_residual_snips: int = 4 * 4096
+    n_residual_snips: int = 2 * 4096
 
     # initial detection
     nn_denoiser_max_waveforms_fit: int = 512_000
@@ -254,6 +253,12 @@ class DeveloperConfig(DARTsortUserConfig):
     first_denoiser_spatial_dedup_radius: float = 100.0
     realign_to_denoiser: bool = True
     use_nn_in_subtraction: bool = True
+    whiten_in_subtraction: bool = True
+    threshold_before_whitening: float = 10.0
+    temporal_dedup_radius_samples: int = 7
+    positive_temporal_dedup_radius_samples: int = 41
+    spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_max_distance: float = 0.5
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
@@ -278,6 +283,7 @@ class DeveloperConfig(DARTsortUserConfig):
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "prewhiten_postapply"
     whiten_estimator: WhiteningEstimator = "localzca"
+    whiten_temporal_length: int | None = None
     whiten_features: bool = False
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
@@ -348,6 +354,7 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_df: float = 4.0
     demolish_during_selection: bool = False
     em_after_demolish: bool = False
+    tpca_from_templates: bool = True
 
     # agglomeration
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"

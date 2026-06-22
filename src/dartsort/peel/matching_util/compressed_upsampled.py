@@ -260,7 +260,9 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         inv_lambda: float,
         scale_min: float,
         scale_max: float,
+        resid_offset: int,
     ) -> "CompressedUpsampledChunkTemplateData":
+        assert not resid_offset
         if self.drifting:
             shifts, padded_spatial_sing = templates_at_time(
                 t_s=t_s,
@@ -300,6 +302,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
 
         return CompressedUpsampledChunkTemplateData(
             coarse_objective=self.coarse_objective,
+            resid_offset=resid_offset,
             grouping=self.have_groups,
             upsampling=self.upsampling,
             scaling=scaling,
@@ -308,6 +311,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
             n_templates=self.n_templates,
             obj_n_templates=self.obj_n_templates,
             spike_length_samples=self.spike_length_samples,
+            filter_length_samples=self.spike_length_samples,
             up_factor=self.b.cup_index.shape[1],
             inv_lambda=torch.tensor(inv_lambda, device=normsq.device),
             scale_min=torch.tensor(scale_min, device=normsq.device),
@@ -354,6 +358,8 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
     inv_lambda: Tensor
     scale_min: Tensor
     scale_max: Tensor
+    resid_offset: int
+    filter_length_samples: int
 
     # objective props
     obj_normsq: Tensor
@@ -458,7 +464,12 @@ class CompressedUpsampledChunkTemplateData(ChunkTemplateData):
         )
 
     def fine_match(
-        self, *, peaks: MatchingPeaks, residual: Tensor | None, conv: Tensor, padding: int = 0
+        self,
+        *,
+        peaks: MatchingPeaks,
+        residual: Tensor | None,
+        conv: Tensor,
+        padding: int = 0,
     ):
         """Determine superres ids, temporal upsampling, and scaling
 

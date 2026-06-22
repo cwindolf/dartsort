@@ -25,7 +25,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.noise_util import SpatialWhitener
+from ..util.noise_util import Whitener
 from ..util.py_util import ensure_path
 from ..util.spiketorch import ptp
 from . import TemplateData, realign
@@ -49,7 +49,7 @@ def estimate_template_library(
     realign_cfg: TemplateRealignmentConfig | None = None,
     template_merge_cfg: TemplateMergeConfig | None = None,
     tsvd: PCA | TruncatedSVD | None = None,
-    whitener: SpatialWhitener | None = None,
+    whitener: Whitener | None = None,
     computation_cfg: ComputationConfig | None = None,
     fit_featurization_tsvd: bool = False,
     featurization_cfg: FeaturizationConfig | None = None,
@@ -384,8 +384,6 @@ def _handle_merge(
     if merge_cfg is None or not merge_cfg.merge_distance_threshold:
         return sorting, template_data
 
-    from ..clustering.merge import merge_templates
-
     if template_cfg.denoising_method == "svd":
         # use new shared basis stuff
         from ..clustering.agglomerate import agglomerate
@@ -406,6 +404,8 @@ def _handle_merge(
         del agg
     else:
         # TODO: remove old impl?
+        from ..clustering.merge import merge_templates
+
         merge_shift_samples = waveform_cfg.ms_to_samples(merge_cfg.max_shift_ms)
         merge_res = merge_templates(
             sorting=sorting,

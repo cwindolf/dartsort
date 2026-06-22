@@ -19,7 +19,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.noise_util import SpatialWhitener
+from ..util.noise_util import Whitener
 from ..util.py_util import databag
 from .template_util import weighted_average
 
@@ -51,6 +51,8 @@ class TemplateData:
     properties: dict[str, np.ndarray] | None = None
     tsvd: TruncatedSVD | PCA | None = None
     whitener: np.ndarray | None = None
+    covariance: np.ndarray | None = None
+    temporal_kernel: np.ndarray | None = None
     whiten_strategy: WhiteningStrategy = "none"
     featurization_basis: np.ndarray | None = None
 
@@ -160,6 +162,10 @@ class TemplateData:
             to_save["raw_std_dev"] = self.raw_std_dev
         if self.whitener is not None:
             to_save["whitener"] = self.whitener
+            if self.covariance is not None:
+                to_save["covariance"] = self.covariance
+            if self.temporal_kernel is not None:
+                to_save["temporal_kernel"] = self.temporal_kernel
         if self.featurization_basis is not None:
             to_save["featurization_basis"] = self.featurization_basis
         if not npz_path.parent.exists():
@@ -248,7 +254,7 @@ class TemplateData:
         save_folder: Path | None = None,
         overwrite=False,
         motion: MotionInfo | None = None,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         save_npz_name: str | None = "template_data.npz",
         tsvd=None,
         featurization_basis=None,
@@ -270,7 +276,7 @@ class TemplateData:
             motion = MotionInfo.from_motion_est(geom=recording.get_channel_locations())
         if template_cfg.whitening.strategy != "none" and whitener is None:
             assert sorting is not None
-            whitener = SpatialWhitener.from_config(
+            whitener = Whitener.from_config(
                 sorting=sorting,
                 motion=motion,
                 whiten_cfg=template_cfg.whitening,
@@ -319,7 +325,7 @@ class TemplateData:
         template_cfg: TemplateConfig,
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         motion: MotionInfo,
-        whitener: SpatialWhitener | None = None,
+        whitener: Whitener | None = None,
         tsvd=None,
         computation_cfg: ComputationConfig | None = None,
     ) -> "TemplateData":

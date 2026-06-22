@@ -1,10 +1,11 @@
 import dataclasses
+
 import dartsort
 
 
 def test_cfg_consistency():
     """Ensure config.py and internal_config.py don't diverge."""
-    cfg0 = dartsort.to_internal_config(dartsort.DeveloperConfig())
+    cfg0 = dartsort.to_internal_config(dartsort.DeveloperConfig(), 10)
     cfg1 = dartsort.DARTsortInternalConfig()
 
     # can just do assert cfg0 == cfg1, but pytest gives a better

@@ -979,7 +979,9 @@ class EmbeddedNoise(BModule):
                 cov = torch.cov(x_spatial.T.double())
                 cov = spiketorch.enforce_posdef(cov, eps=eps)
             else:
-                cov = spiketorch.nancov(x_spatial[:, valid].double(), force_posdef=True, eps=eps)
+                cov = spiketorch.nancov(
+                    x_spatial[:, valid].double(), force_posdef=True, eps=eps
+                )
             assert torch.is_tensor(cov)
             if shrinkage:
                 cov = F.softshrink(cov, shrinkage)
@@ -1449,26 +1451,18 @@ def fp_control_threshold_from_h5(
 def residual_covariance(
     sorting: DARTsortSorting,
     do_interpolation: bool,
-    motion: MotionInfo,
+    motion: MotionInfo | None,
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params,
     device: torch.device | None = None,
-    rgeom=None,
     residual_times_s_dataset_name="residual_times_seconds",
     residual_dataset_name="residual",
     seed: int = 0,
     batch_size=256,
-):
+) -> Tensor:
     assert sorting.parent_h5_path is not None
 
     if do_interpolation:
-        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-            geom = cast(h5py.Dataset, h5["geom"])[:].astype(np.float32)
-        if rgeom is None:
-            if motion is None:
-                rgeom = geom
-            else:
-                rgeom = motion.rgeom
-            rgeom = rgeom.astype(np.float32)
+        assert motion is not None
         snipgen = generate_interpolated_residual_snippets(
             motion=motion,
             hdf5_path=sorting.parent_h5_path,
@@ -1503,8 +1497,54 @@ def residual_covariance(
         N += n
         w = n / N
         cov += scov.sub_(cov).mul_(w)
+    assert N > 0
+    assert cov is not None
 
     return cov
+
+
+def residual_welch_whitener(
+    sorting: DARTsortSorting,
+    device: torch.device | None = None,
+    residual_dataset_name="residual",
+    batch_size=1024,
+    temporal_length: int = 11,
+    spatial_whitener: torch.Tensor | None = None,
+):
+    """Estimate a 0-phase whitening convolution kernel with Welch's method"""
+    assert sorting.parent_h5_path is not None
+    snipgen = sorting._yield_dataset(residual_dataset_name, batch_size=batch_size)
+
+    if spatial_whitener is not None:
+        W = torch.asarray(spatial_whitener, device=device)
+    else:
+        W = None
+
+    # Welch's method to estimate residual PSD
+    snip_psds = []
+    block_len = temporal_length
+    for snip in snipgen:
+        block_len = next_fast_len(snip.shape[1])
+        snip = torch.asarray(snip).to(device=device, non_blocking=True)
+        if W is not None:
+            snip = torch.einsum("ntc,cd->ntd", snip, W)
+        snip = snip.permute(0, 2, 1).reshape(-1, snip.shape[1])
+        periodogram = torch.fft.rfft(snip, n=block_len, norm="ortho")
+        dens = (periodogram * periodogram.conj()).mean(dim=0)
+        snip_psds.append(dens)
+    snip_psds = torch.stack(snip_psds, dim=0)
+    spectral_density = snip_psds.mean(0).sqrt_()
+
+    # estimate 0-phase FIR whitener
+    wkernel = torch.fft.irfft(1.0 / spectral_density, n=block_len)
+    wkernel = torch.fft.fftshift(wkernel)
+
+    # trim to requested length
+    assert temporal_length <= wkernel.shape[0]
+    i0 = wkernel.shape[0] // 2 - temporal_length // 2
+    i1 = i0 + temporal_length
+    wkernel = wkernel[i0:i1].clone()
+    return wkernel
 
 
 def fullzca_whitener(
@@ -1519,7 +1559,6 @@ def fullzca_whitener(
 def localzca_whitener(
     cov: np.ndarray, channel_index: np.ndarray, eps=1e-6
 ) -> np.ndarray:
-    """"""
     w = np.zeros_like(cov)
     for j, chans in enumerate(channel_index):
         chans = chans[chans < len(channel_index)]
@@ -1558,30 +1597,78 @@ whitening_estimators = {
 }
 
 
-class SpatialWhitener(BModule):
-    def __init__(self, whitener: Tensor):
+class Whitener(BModule):
+    def __init__(
+        self, whitener: Tensor, covariance: Tensor, temporal_kernel: Tensor | None
+    ):
         super().__init__()
         self.register_buffer("whitener", whitener)
+        self.register_buffer("covariance", covariance)
+        self.temporal = temporal_kernel is not None
+        self.register_buffer_or_none("temporal_kernel", temporal_kernel)
+        if temporal_kernel is not None:
+            self.temporal_length = temporal_kernel.shape[0]
+            tk_twice = self._convolve(temporal_kernel)
+        else:
+            self.temporal_length = 0
+            tk_twice = None
+        self.register_buffer_or_none("temporal_kernel_twice", tk_twice)
 
     @classmethod
-    def from_numpy(cls, whitener: np.ndarray):
-        logger.dartsortverbose("Load whitener from numpy.")
-        return cls(whitener=torch.asarray(whitener))
+    def blank(cls, n_channels: int, device: torch.device, temporal_length: int | None):
+        w = torch.zeros((n_channels, n_channels), device=device)
+        if temporal_length:
+            k = torch.zeros((temporal_length,), device=device)
+        else:
+            k = None
+        return cls(w, torch.zeros_like(w), k)
 
-    def to_numpy(self) -> np.ndarray:
-        return self.b.whitener.numpy(force=True)
+    @classmethod
+    def from_numpy(
+        cls,
+        whitener: np.ndarray,
+        covariance: np.ndarray,
+        temporal_kernel: np.ndarray | None,
+    ):
+        if temporal_kernel is None:
+            tk = None
+            tmsg = ""
+        else:
+            tmsg = f" with temporal length {temporal_kernel.shape[0]}"
+            tk = torch.asarray(temporal_kernel)
+        logger.dartsortverbose("Load whitener%s from numpy.", tmsg)
+        return cls(
+            whitener=torch.asarray(whitener),
+            covariance=torch.asarray(covariance),
+            temporal_kernel=tk,
+        )
+
+    def to_numpy(self) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        tk = self.b.temporal_kernel
+        if tk is not None:
+            tk = tk.numpy(force=True)
+        return (
+            self.b.whitener.numpy(force=True),
+            self.b.covariance.numpy(force=True),
+            tk,
+        )
 
     @classmethod
     def from_config(
         cls,
         *,
         sorting: DARTsortSorting,
-        motion: MotionInfo,
+        motion: MotionInfo | None,
         whiten_cfg: WhiteningConfig,
         computation_cfg: ComputationConfig | None = None,
     ) -> Self:
         logger.dartsortdebug(
-            "Estimating %s-%s whitener.", whiten_cfg.strategy, whiten_cfg.estimator
+            "Estimating %s-%s whitener%s.",
+            whiten_cfg.strategy,
+            whiten_cfg.estimator,
+            ""
+            if not whiten_cfg.temporal_length
+            else f"temporal length: {whiten_cfg.temporal_length}",
         )
         device = ensure_computation_config(computation_cfg).actual_device()
         cov = residual_covariance(
@@ -1599,25 +1686,76 @@ class SpatialWhitener(BModule):
             cov_np, channel_index=neighbs
         )
         whitener = torch.asarray(whitener).to(cov)
-        return cls(whitener=whitener)
+
+        if whiten_cfg.temporal_length:
+            assert whiten_cfg.strategy != "postwhiten"
+            temporal_kernel = residual_welch_whitener(
+                sorting=sorting,
+                device=device,
+                temporal_length=whiten_cfg.temporal_length,
+                spatial_whitener=whitener,
+            )
+            assert temporal_kernel.shape == (whiten_cfg.temporal_length,)
+        else:
+            temporal_kernel = None
+
+        return cls(whitener=whitener, covariance=cov, temporal_kernel=temporal_kernel)
+
+    def _convolve(self, x: Tensor, twice=False, padding="same"):
+        if not self.temporal:
+            return x
+        *shp, t = x.shape
+        x = x.reshape(-1, 1, t)
+        if twice:
+            k = self.b.temporal_kernel_twice
+        else:
+            k = self.b.temporal_kernel
+        if padding == "full":
+            padding = k.shape[0] - 1
+        k = k.to(device=x.device)
+        res = F.conv1d(
+            input=x,
+            weight=k[None, None],
+            padding=padding,
+            groups=x.shape[1],
+        )
+        if padding == "same":
+            assert res.shape[-1] == t
+            ot = t
+        else:
+            assert isinstance(padding, int)
+            ot = t + padding
+        res = res.reshape(*shp, ot)
+        return res
 
     def whiten_traces_spatial_major(
-        self, x: Tensor, out: Tensor | None = None
+        self, x: Tensor, out: Tensor | None = None, padding="same"
     ) -> Tensor:
-        return torch.mm(self.b.whitener, x.T, out=out)
+        assert x.ndim == 2
+        out = torch.mm(self.b.whitener, x.T, out=out)
+        out = self._convolve(out, padding=padding)
+        return out
 
-    def whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+    def whiten(
+        self, x: Tensor, out: Tensor | None = None, spatial_only: bool = False
+    ) -> Tensor:
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener.T, out=out)
         x = x.reshape(*shp, c)
+        if self.temporal and not spatial_only:
+            x = self._convolve(x.mT).mT
         return x
 
-    def transpose_whiten(self, x: Tensor, out: Tensor | None = None) -> Tensor:
+    def transpose_whiten(
+        self, x: Tensor, out: Tensor | None = None, spatial_only: bool = False
+    ) -> Tensor:
         *shp, c = x.shape
         x = x.reshape(-1, c)
         x = torch.mm(x, self.b.whitener, out=out)
         x = x.reshape(*shp, c)
+        if self.temporal and not spatial_only:
+            x = self._convolve(x.mT).mT
         return x
 
     def prec_mul(self, x: Tensor) -> Tensor:
@@ -1625,4 +1763,19 @@ class SpatialWhitener(BModule):
         x = x.reshape(-1, c)
         x = x @ (self.b.whitener.T @ self.b.whitener)
         x = x.reshape(*shp, c)
+        if self.temporal:
+            x = self._convolve(x.mT, twice=True).mT
         return x
+
+    def local_whiteners(self, channel_index: Tensor, eps=1e-6):
+        channel_index = torch.asarray(channel_index)
+        nc, cloc = channel_index.shape
+        assert nc == self.b.covariance.shape[0]
+        w = self.b.covariance.new_zeros((nc, cloc, cloc))
+        for j, chans in enumerate(channel_index):
+            mask = (chans < nc).nonzero()[:, 0]
+            chans = chans[mask]
+            cj = self.b.covariance[chans][:, chans]
+            wj = fullzca_whitener(cj.numpy(force=True).astype(np.float64), eps=eps)
+            w[j, mask[:, None], mask[None, :]] = torch.asarray(wj).to(w)
+        return w

@@ -1,6 +1,5 @@
 import math
 import warnings
-from logging import getLogger
 from typing import overload
 
 import linear_operator
@@ -8,16 +7,24 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from linear_operator.utils.cholesky import psd_safe_cholesky
+from packaging.version import Version
 from scipy.fftpack import next_fast_len
 from scipy.spatial.distance import squareform
 from sklearn.utils.extmath import svd_flip
 from torch import Tensor
 from torch.fft import irfft, rfft
 
-from .logging_util import progrange
+from .logging_util import get_logger, progrange
 from .torch_util import torch_compile, torch_compiler
 
-logger = getLogger(__name__)
+TORCH_IS_OLD = Version(torch.__version__) < Version("2.6.0")
+if TORCH_IS_OLD and torch.cuda.is_available():
+    warnings.warn(
+        f"Your PyTorch version ({torch.__version__}) is supported by dartsort, "
+        "but dartsort would be faster if you had >= 2.6.0."
+    )
+
+logger = get_logger(__name__)
 log2pi = torch.log(torch.tensor(2 * np.pi))
 _1 = torch.tensor(1.0)
 _0 = torch.tensor(0.0)
@@ -102,6 +109,18 @@ def ptp(waveforms, dim=1, keepdims=False):
     if is_tensor:
         return v
     return v.numpy()
+
+
+if TORCH_IS_OLD:
+
+    def _nonzero_static(x: Tensor, size: int):
+        nz = x.nonzero()
+        assert nz.shape[0] == size
+        return nz
+else:
+
+    def _nonzero_static(x: Tensor, size: int):
+        return x.nonzero_static(size=size)
 
 
 @torch_compile
@@ -752,7 +771,7 @@ def argrelmax(
 ):
     msk = _argrelmax_mask(x=x, radius=radius, threshold=threshold, arange=arange)
     return msk.nonzero()[:, 0]
-    
+
 
 @torch_compile
 def _argrelmax_mask(
@@ -819,7 +838,7 @@ def argrelmax_dedup(
         padding=padding,
     )
     return msk.nonzero()[:, 0]
-    
+
 
 @torch_compile
 def _argrelmax_dedup_mask(

@@ -11,14 +11,23 @@ from spikeinterface.core import (
     BaseRecording,
     BaseSorting,
     NumpySorting,
+    SortingAnalyzer,
+    create_sorting_analyzer,
     get_random_data_chunks,
 )
+from spikeinterface.core.sparsity import estimate_sparsity
 
 from ..detect import detect_and_deduplicate
-from .internal_config import WaveformConfig, default_waveform_cfg
+from .internal_config import (
+    TemplateConfig,
+    WaveformConfig,
+    default_clustering_features_cfg,
+    default_waveform_cfg,
+)
 from .logging_util import get_logger, progbar
 
 if TYPE_CHECKING:
+    from ..templates.templates import TemplateData
     from .motion import MotionInfo
 from .job_util import ensure_computation_config
 from .py_util import ensure_path
@@ -87,6 +96,10 @@ class DARTsortSorting:
         if ephemeral_features is not None:
             for k, v in ephemeral_features.items():
                 check_shape = not self._no_check_needed(k)
+                if k in self._persistent_features:
+                    assert np.array_equal(v, self._persistent_features[k])
+                    assert hasattr(self, k)
+                    continue
                 self.add_ephemeral_feature(k, v, check_shape=check_shape)
 
     @property
@@ -126,6 +139,7 @@ class DARTsortSorting:
             labels_list=labels,
             sampling_frequency=st.sampling_frequency,
         )
+        numpy_sorting._compute_and_cache_spike_vector()
         if return_kept_indices:
             # kept_indices[i] is the original index of numpy_sorting's ith spike
             kept_indices = st.mask_indices[order]
@@ -206,6 +220,138 @@ class DARTsortSorting:
                 uw = w[inu]
                 trains[unit_id] = Tsd(t=ut, d=uw)
         return TsGroup(trains, metadata=metadata)
+
+    def to_sorting_analyzer(
+        self,
+        recording: BaseRecording,
+        template_data: "TemplateData | None" = None,
+        template_cfg: TemplateConfig | None = None,
+        motion: "MotionInfo | None" = None,
+        drop_doubles: bool = True,
+        compute_extensions: Sequence[str] | None = ("random_spikes", "waveforms"),
+        features_cfg=default_clustering_features_cfg,
+    ) -> SortingAnalyzer:
+        """Export dartsort's internal data to a SortingAnalyzer
+
+        This will first call to_numpy_sorting() and then register some of the sorting's
+        features as extensions for the analyzer.
+
+        If template_data is supplied, a templates extension will be registered. Or, you
+        can supply template_cfg and motion to compute that.
+
+        The implementation is based on SpikeInterface's `read_kilosort_as_analyzer()`,
+        thanks to Chris Halcrow for that.
+
+        The return value here can be passed into SpikeInterface's Phy export machine
+        `export_to_phy()`.
+
+        TODO: This doesn't handle gain_to_uV... should I not be doing my own amps here?
+
+        Parameters
+        ----------
+        recording : BaseRecording
+        template_data : TemplateData | None, optional
+            Templates to register with SortingAnalyzer as the templates
+            extension
+        template_cfg : TemplateConfig | None, optional
+            If template_data is not supplied but this is (together with motion),
+            templates will be estimated using dartsort machinery
+        motion: MotionInfo | None, optional
+        drop_doubles : bool
+            Call .drop_doubles(). This will probably do nothing if the sorting had
+            dedup_ms > 0 in the parameters.
+        compute_extensions : Sequence[str] | None
+            Extra analyzer extensions to compute. The default set is what's needed for
+            SpikeInterface's `export_to_phy()` to run. These are included here because
+            SpikeInterface is picky about extension order and will evict the template
+            extension if some of these are computed after the templates, which would then
+            cause the Phy export to fail.
+        features_cfg : ClusteringFeaturesConfig
+            Stores attribute dataset names
+
+        Returns
+        -------
+        analyzer : SortingAnalyzer
+        """
+        from spikeinterface.core import ComputeTemplates
+        from spikeinterface.postprocessing import (
+            ComputeSpikeLocations,
+            ComputeUnitLocations,
+        )
+
+        sorting, kept_indices = self.to_numpy_sorting(
+            drop_doubles=drop_doubles, return_kept_indices=True
+        )  # type: ignore
+
+        sparsity = estimate_sparsity(sorting, recording)
+        analyzer = create_sorting_analyzer(
+            sorting=sorting, recording=recording, sparsity=sparsity, return_in_uV=False
+        )
+
+        for ext in compute_extensions or []:
+            analyzer.compute_one_extension(ext)
+
+        loc_name = features_cfg.localizations_dataset_name
+        if (locs := self.localizations_as_structured_array(loc_name)) is not None:
+            locs = locs[kept_indices]
+            loc_ext = ComputeSpikeLocations(analyzer)
+            loc_ext.data = {"spike_locations": locs}
+            loc_ext.params = {}
+            loc_ext.run_info = {"run_completed": True}
+            analyzer.extensions["spike_locations"] = loc_ext
+
+        if template_data is None and template_cfg is not None:
+            from ..templates.postprocess_util import estimate_template_library
+
+            _, template_data = estimate_template_library(
+                recording=recording,
+                sorting=self,
+                motion=motion,
+                template_cfg=template_cfg,
+            )
+
+        if template_data is not None:
+            td_ext = ComputeTemplates(analyzer)
+            assert np.array_equal(
+                template_data.unit_ids, np.arange(len(template_data.unit_ids))
+            )
+            s_before = template_data.trough_offset_samples
+            s_after = template_data.spike_length_samples - s_before
+            ms_per_sample = 1000 / self.sampling_frequency
+
+            td_ext.data = {"average": template_data.templates}
+            td_ext.params = {
+                "operators": ["average"],
+                "ms_before": s_before * ms_per_sample,
+                "ms_after": s_after * ms_per_sample,
+                "peak_sign": "both",
+            }
+            td_ext.run_info = {"run_completed": True}
+            analyzer.extensions["templates"] = td_ext
+
+            uloc_ext = ComputeUnitLocations(analyzer)
+            uloc_ext.params = {"method": "monopolar_triangulation"}
+            # turns out they don't want a structured array in this extension
+            ulocs = template_data.template_locations(mode="localization")
+            uloc_ext.data = {"unit_locations": ulocs}
+            uloc_ext.run_info = {"run_completed": True}
+            analyzer.extensions["unit_locations"] = uloc_ext
+
+        return analyzer
+
+    def localizations_as_structured_array(
+        self, property_name="point_source_localizations"
+    ) -> np.ndarray | None:
+        locs = getattr(self, property_name, None)
+        if locs is None:
+            return None
+
+        return si_structured_localizations_array(locs)
+
+    def permute_labels(self, seed=0):
+        assert self.labels is not None
+        rg = np.random.default_rng(seed)
+        return self.ephemeral_replace(labels=rg.permutation(self.labels))
 
     def copy(self) -> Self:
         """Shallow copy. Doesn't copy data, but copies references and internal state."""
@@ -902,6 +1048,8 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
         if k in ("TemporalPCA", "TemporalPCAFeaturizer")
         and v["name_prefix"] == name_prefix
     ]
+    if len(tpca_kw) == 0:
+        raise ValueError(f"No TPCA found in {featurization_pipeline_pt}.")
     assert len(tpca_kw) == 1
     ix, clsname, kw = tpca_kw[0]
     tpca = transformers_by_class_name[clsname](
@@ -1025,6 +1173,28 @@ def sorting_from_spikeinterface(
         computation_cfg=computation_cfg,
         workers=workers,
     )
+
+
+def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
+    """Convert our localization format to SpikeInterface's"""
+    # NB: spikeinterface's y is our z. I like theirs better, I'm sorry, it's not my fault.
+    if locs.shape[1] >= 3:
+        column_names = ["x", "y", "z"]
+    elif locs.shape[1] == 2:
+        column_names = ["x", "y"]
+    else:
+        assert False
+    dtype = [(name, locs.dtype) for name in column_names]
+
+    structured_array = np.zeros(len(locs), dtype=dtype)
+    structured_array["x"] = locs[:, 0]
+    if locs.shape[1] >= 3:
+        structured_array["y"] = locs[:, 2]
+        structured_array["z"] = locs[:, 1]
+    elif locs.shape[1] == 2:
+        structured_array["y"] = locs[:, 1]
+
+    return structured_array
 
 
 def filter_link_h5(in_h5_path: str | Path, out_h5_path: str | Path, keep_filter):

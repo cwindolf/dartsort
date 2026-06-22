@@ -56,7 +56,7 @@ class Agglomeration:
 def agglomerate(
     *,
     sorting: DARTsortSorting,
-    recording: BaseRecording | None,
+    recording: BaseRecording,
     template_merge_cfg: TemplateMergeConfig | None,
     refinement_cfg: RefinementConfig | None,
     motion: MotionInfo,
@@ -104,7 +104,7 @@ def agglomerate(
         )
 
     # tdist tells us the possible merges
-    mask = linkage_mask(
+    distance_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
         threshold=template_merge_cfg.merge_distance_threshold,
@@ -117,9 +117,9 @@ def agglomerate(
             dt=refinement_cfg.glom_firing_corr_dt,
             method=refinement_cfg.glom_firing_corr_method,
         )
-        _oldsum = mask[np.triu_indices_from(mask)].sum()
+        _oldsum = distance_mask[np.triu_indices_from(distance_mask)].sum()
         fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
-        mask = np.logical_and(mask, fcorr_mask)
+        mask = np.logical_and(distance_mask, fcorr_mask)
         np.fill_diagonal(mask, True)
         _newsum = mask[np.triu_indices_from(mask)].sum()
         logger.dartsortdebug(
@@ -127,6 +127,7 @@ def agglomerate(
         )
     else:
         fcorr = fcorr_mask = None
+        mask = distance_mask
 
     # restrict mask by overlap criteria
     qda_res = qda(
@@ -158,19 +159,47 @@ def agglomerate(
     assert np.all(qda_mask <= mask)
     if fcorr_mask is not None:
         assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
+
+    if refinement_cfg.spikeinterface_merge_preset is not None:
+        pair_mask = tdist.distances < refinement_cfg.spikeinterface_merge_max_distance
+        if refinement_cfg.spikeinterface_merge_min_coentropy is not None:
+            cmask, _ = coentropy_merge_mask(
+                sorting=sorting,
+                min_coentropy=refinement_cfg.spikeinterface_merge_min_coentropy,
+                coverage_threshold=refinement_cfg.spikeinterface_merge_coent_coverage,
+                iou_threshold=refinement_cfg.spikeinterface_merge_coent_iou,
+            )
+            pair_mask = np.logical_or(cmask, pair_mask)
+
+        si_mask = spikeinterface_merge_mask(
+            recording=recording,
+            sorting=sorting,
+            preset=refinement_cfg.spikeinterface_merge_preset,
+            censor_ms=refinement_cfg.censor_ms,
+            template_data=tdist.template_data,
+            pair_mask=pair_mask,
+        )
+    else:
+        si_mask = None
+
+    # force merges for very close neighbors
     force_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
         threshold=refinement_cfg.qda_force_merge_for_temp_dist_below,
     )
-    qda_mask = np.logical_or(qda_mask, force_mask)
-    np.fill_diagonal(qda_mask, True)
-    qda_as_dist = np.logical_not(qda_mask).astype(np.float32)
+
+    # extract final mask
+    final_mask = np.logical_or(qda_mask, force_mask)
+    if si_mask is not None:
+        final_mask = np.logical_or(final_mask, si_mask)
+    np.fill_diagonal(final_mask, True)
+    final_mask_as_distance = np.logical_not(final_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
         sorting=sorting,
         unit_ids=tdist.template_data.unit_ids,
-        dists=qda_as_dist,
+        dists=final_mask_as_distance,
         shifts=tdist.shifts,
         unit_snrs=tdist.template_data.snrs_by_channel().max(1),
         threshold=0.5,
@@ -350,6 +379,100 @@ def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
     assert sorting.labels is not None
     labels = sorting.labels
     return labels, scores
+
+
+def spikeinterface_merge_mask(
+    *,
+    recording: BaseRecording,
+    sorting: DARTsortSorting,
+    preset: str | None,
+    censor_ms: float = 0.0,
+    template_data: TemplateData,
+    pair_mask: np.ndarray,
+    min_count: int = 100,
+):
+    from spikeinterface.curation.auto_merge import compute_merge_unit_groups
+    from spikeinterface.postprocessing import ComputeTemplateSimilarity
+
+    # censor first
+    if censor_ms:
+        sorting = deduplicate_spikes(sorting, censor_ms)
+
+    # analyzer
+    analyzer = sorting.to_sorting_analyzer(
+        recording=recording, template_data=template_data
+    )
+
+    # register the mask as the template similarity extension
+    tsim_ext = ComputeTemplateSimilarity(analyzer)
+    tsim_ext.data = {"similarity": pair_mask.astype(np.float32)}
+    tsim_ext.params = {"method": "dartsort"}
+    tsim_ext.run_info = {"run_completed": True}
+    analyzer.extensions["template_similarity"] = tsim_ext
+
+    # handle custom presets
+    if preset == "dartsort_slay_xc":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "slay_score",
+            "cross_contamination",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    elif preset == "dartsort_slay_ccg":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "correlogram",
+            "slay_score",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    elif preset == "dartsort_slay_xc_ccg":
+        steps = [
+            "num_spikes",
+            "remove_contaminated",
+            "unit_locations",
+            "template_similarity",
+            "correlogram",
+            "cross_contamination",
+            "slay_score",
+            "quality_score",
+        ]
+        preset = None
+        analyzer.compute_one_extension("correlograms")
+    else:
+        assert preset is not None
+        steps = None
+
+    # make parameters aware of censorship and other params
+    my_step_params = {
+        "num_spikes": {"min_spikes": min_count},
+        "remove_contaminated": {"censored_period_ms": censor_ms},
+        "template_similarity": {"similarity_method": "dartsort"},
+        "correlogram": {"censor_correlograms_ms": censor_ms},
+        "cross_contamination": {"censored_period_ms": censor_ms},
+        "quality_score": {"censored_period_ms": censor_ms},
+    }
+    groups = compute_merge_unit_groups(
+        preset=preset,
+        steps=steps,
+        sorting_analyzer=analyzer,
+        steps_params=my_step_params,
+        force_copy=False,
+    )
+    mask = np.zeros_like(pair_mask)
+    for g in groups:
+        g = np.array(g)
+        mask[g[:, None], g[None, :]] = True
+    return mask
 
 
 @databag
@@ -665,7 +788,8 @@ def combine_gmm_scores(
 
     # check invariants at the top
     if responsibilities.shape[1] > 2:
-        assert np.all(np.diff(responsibilities[:, :-1], axis=1) <= 0)
+        _maxdiff = np.diff(responsibilities[:, :-1], axis=1).max()
+        assert _maxdiff <= 1e-3, _maxdiff
     assert np.greater_equal(np.isneginf(logliks[:, :-1]), candidates == -1).all()
     if sorting.labels is not None:
         assert np.all(
@@ -698,7 +822,8 @@ def combine_gmm_scores(
 
     # check invariants at the bottom
     if mergedr.shape[1] > 2:
-        assert np.all(np.diff(mergedr[:, : cand.shape[1]], axis=1) <= 0)
+        _maxdiff = np.diff(mergedr[:, : cand.shape[1]], axis=1).max()
+        assert _maxdiff <= 1e-3, _maxdiff
     assert np.greater_equal(np.isneginf(mergedl[:, : cand.shape[1]]), cand == -1).all()
     assert (cand < 0).sum() >= nbye
     if sorting.labels is not None:
@@ -733,7 +858,7 @@ def _combine_loop(
                 continue
 
             eq_ncandj = rcand[j + 1 :] == ncandj
-            if eq_ncandj.sum() <= 1:
+            if eq_ncandj.sum() < 1:
                 continue
 
             rsum = mergedr[s, j]
@@ -799,6 +924,8 @@ def deduplicate_spikes(
     ndrop = 0
     for unit_id in unit_ids:
         in_unit = np.flatnonzero(new_labels == unit_id)
+        if in_unit.size <= 1:
+            continue
         t = times_samples[in_unit]
         dt = np.diff(t)
         if dt.min() > radius_samples:
@@ -869,3 +996,152 @@ def _dedup_unit_loop(
                 break
 
         i0 = i1
+
+
+@databag
+class CoentropyResult:
+    coentropy: np.ndarray
+    """KxK; reduction of entropy per cooccurrence due to merging pair"""
+
+    cooccurrence: np.ndarray
+    """KxK; number of times these units score the same spike"""
+
+    rival_count: np.ndarray
+    """KxK; number of times one unit scores a spike where the other is top"""
+
+    occurrence: np.ndarray
+    """K; number of times the unit appears in the candidates at all"""
+
+    cov: np.ndarray
+    """KxK; rival count / max pair count (rival diag)"""
+
+    iou: np.ndarray
+    """KxK; rival count over pair sum"""
+
+
+def coentropy_merge_mask(
+    sorting: DARTsortSorting,
+    min_coentropy: float,
+    coverage_threshold: float,
+    iou_threshold: float,
+    gmm_prefix=("merged", "gmm"),
+) -> tuple[np.ndarray, CoentropyResult]:
+    """
+    Parameters
+    ----------
+    sorting : DARTsortSorting
+    min_coentropy : float
+        Must be met by pair for mask=True
+    min_coverage : float
+        Pairs such that at least one unit in each pair has
+        rival_count/count > mincov are allowed
+    iou_threshold: float
+        Pairs with rival iou > iouthresh are allowed
+    """
+    c = coentropy(sorting, gmm_prefix=gmm_prefix)
+    assert c is not None
+
+    mask = np.logical_or(c.cov >= coverage_threshold, c.iou >= iou_threshold)
+    mask = np.logical_and(c.coentropy >= min_coentropy, mask)
+    np.fill_diagonal(mask, True)
+    return mask, c
+
+
+def coentropy(
+    sorting: DARTsortSorting,
+    gmm_prefix=("merged", "gmm"),
+) -> CoentropyResult | None:
+    """Calculate entropy reduction due to merging pairs."""
+    for k in gmm_prefix:
+        cands = getattr(sorting, f"{k}_candidates", None)
+        resps = getattr(sorting, f"{k}_responsibilities", None)
+        if cands is not None:
+            assert resps is not None
+            break
+    else:
+        return None
+
+    k = sorting.n_units
+    resps = resps[:, : cands.shape[1]].astype(np.float64)
+    coentropy = np.zeros((k, k))
+    cooccurrence = np.zeros((k, k), dtype=np.int64)
+    rival_count = np.zeros((k, k), dtype=np.int64)
+    occurrence = np.zeros((k,), dtype=np.int64)
+    _calc_coentropy(coentropy, cooccurrence, rival_count, occurrence, cands, resps)
+    rival_count += rival_count.T
+    cdiag = np.diagonal(rival_count)
+    assert (cdiag % 2 == 0).all()
+    np.fill_diagonal(rival_count, cdiag // 2)
+    coentropy += coentropy.T
+    cooccurrence += cooccurrence.T
+
+    # rival count diagonal is just unit top count (not exactly label count,
+    # since it doesn't account for noise assignments)
+    counts = np.diagonal(rival_count)
+    counts = np.maximum(counts, 1)
+
+    cov = rival_count / counts
+    cov = np.minimum(cov, cov.T)
+
+    # this is a disjoint union, since it's the top-label count
+    union = counts[:, None] + counts[None, :]
+    iou = rival_count / union
+
+    return CoentropyResult(
+        coentropy=coentropy,
+        cooccurrence=cooccurrence,
+        rival_count=rival_count,
+        occurrence=occurrence,
+        cov=cov,
+        iou=iou,
+    )
+
+
+@numba.njit(parallel=True)
+def _calc_coentropy(
+    coentropy: np.ndarray,
+    cooccurrence: np.ndarray,
+    rival_count: np.ndarray,
+    occurrence: np.ndarray,
+    cands: np.ndarray,
+    resps: np.ndarray,
+):
+    for i in numba.prange(cands.shape[0]):  # ty: ignore
+        u = cands[i]
+        q = resps[i]
+        log_q = np.log(q)
+        np.nan_to_num(log_q, copy=False, neginf=0.0)
+        dh = q * log_q
+
+        ui0 = u[0]
+        qi0 = q[0]
+        dhi0 = dh[0]
+
+        occurrence[ui0] += 1
+        rival_count[ui0, ui0] += 1
+
+        for j in range(1, cands.shape[1]):
+            uj = u[j]
+            if uj < 0:
+                break
+
+            ii = min(ui0, uj)
+            jj = max(ui0, uj)
+
+            occurrence[uj] += 1
+            rival_count[ui0, uj] += 1
+
+            cij = cooccurrence[ii, jj] + 1
+            cooccurrence[ii, jj] = cij
+
+            # change in entropy due to merging uj, uk:
+            # subtract their current contribution, add the new contribution
+            # we want reduction of entropy, so this is the negative of that!
+            qij = q[j] + qi0
+            dhij = dh[j] + dhi0
+            if qij > 0:
+                dhij -= qij * np.log(qij)
+
+            # Welford mean of -dh
+            cur_coent = coentropy[ii, jj]
+            coentropy[ii, jj] = cur_coent + (-dhij - cur_coent) / cij

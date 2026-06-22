@@ -494,6 +494,12 @@ def featurization_config_to_class_names_and_kwargs(
             )
         )
 
+    if fc.fit_disabled_whitener:
+        assert fc.whiten_cfg is not None
+        class_names_and_kwargs.append(
+            ("WaveformWhitener", {"disabled": True, "whiten_cfg": fc.whiten_cfg})
+        )
+
     # logic for picking an efficient combo of tpcas and nn denoisers
     class_names_and_kwargs.extend(
         _add_tpca_and_nn(featurization_cfg, waveform_cfg, sampling_frequency)
@@ -632,7 +638,7 @@ def _add_localization_and_ampvec(fc):
             )
         )
 
-    if fc.do_enforce_decrease == "loc_only" and fc.do_localization:
+    if (fc.do_enforce_decrease == "loc_only") and (fc.do_localization and do_feats):
         more.append(("EnforceDecrease", {}))
 
     if do_feats and fc.do_localization and fc.nn_localization:

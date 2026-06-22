@@ -1,4 +1,5 @@
 """High-level spike sorting toolbox functions."""
+
 import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -59,7 +60,7 @@ from .util.main_util import (
     motion_needs_peaks,
 )
 from .util.motion import MotionInfo, get_motion_info
-from .util.noise_util import SpatialWhitener
+from .util.noise_util import Whitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
 from .util.py_util import dartcopytree, ensure_path, timer
@@ -118,11 +119,10 @@ def dartsort(
           - "sorting": `DARTsortSorting`
           - "motion": MotionInfo
     """
-    output_dir = ensure_path(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    output_dir = ensure_path(output_dir, mkdir=True)
 
     # convert cfg to internal format and store it for posterity
-    cfg = to_internal_config(cfg)
+    cfg = to_internal_config(cfg, recording.get_num_channels())
     ds_dump_config(cfg, output_dir)
 
     # in benchmarking, it can be useful to resume from initial detection
@@ -252,7 +252,7 @@ def _dartsort_impl(
         )
     ret["motion"] = motion
 
-    is_subsampling = cfg.subsampling_spikes is not None
+    is_subsampling = cfg.subsampling_spikes_per_channel is not None
     is_subsampling = is_subsampling and cfg.subsampling_presence != 1.0
 
     if next_step == 0:
@@ -341,7 +341,10 @@ def _dartsort_impl(
         else:
             previous_detection_cfg = cfg.matching_cfg
 
-        _nspk = None if is_final else cfg.subsampling_spikes
+        if is_final or cfg.subsampling_spikes_per_channel is None:
+            _nspk = None
+        else:
+            _nspk = cfg.subsampling_spikes_per_channel * motion.geom.shape[0]
         _pres = 1.0 if is_final else cfg.subsampling_presence
         step_clus_cfg, step_clfeat_cfg, step_ref_cfgs, step_feat_cfg, samp_cfg = (
             _matching_step_cfgs(is_final, is_subsampling, cfg)
@@ -444,6 +447,10 @@ def initial_detection(
     -------
     DARTsortSorting
     """
+    if cfg.subsampling_spikes_per_channel is None:
+        _nspk = None
+    else:
+        _nspk = cfg.subsampling_spikes_per_channel * recording.get_num_channels()
     if cfg.detection_type == "subtract":
         assert isinstance(cfg.initial_detection_cfg, SubtractionConfig)
         return subtract(
@@ -454,7 +461,7 @@ def initial_detection(
             subtraction_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             computation_cfg=cfg.computation_cfg,
-            stop_after_n_spikes=cfg.subsampling_spikes,
+            stop_after_n_spikes=_nspk,
             ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -468,7 +475,7 @@ def initial_detection(
             thresholding_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             featurization_cfg=cfg.featurization_cfg,
-            stop_after_n_spikes=cfg.subsampling_spikes,
+            stop_after_n_spikes=_nspk,
             ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -485,7 +492,7 @@ def initial_detection(
             matching_cfg=cfg.initial_detection_cfg,
             sampling_cfg=cfg.peeler_sampling_cfg,
             motion=motion,
-            stop_after_n_spikes=cfg.subsampling_spikes,
+            stop_after_n_spikes=_nspk,
             ensure_coverage=cfg.subsampling_presence,
             overwrite=overwrite,
             show_progress=show_progress,
@@ -572,7 +579,7 @@ def match(
     template_npz="template_data.npz",
     computation_cfg: ComputationConfig | None = None,
     template_denoising_tsvd=None,
-    whitener: SpatialWhitener | None = None,
+    whitener: Whitener | None = None,
 ) -> DARTsortSorting:
     output_dir = ensure_path(output_dir)
     model_dir = output_dir / model_subdir

@@ -129,6 +129,7 @@ _kmethods = {"zero", "nearest", "nan", "clampna"}
 @cfg_dataclass
 class InterpolationParams:
     """Spatial waveform or feature interpolation parameters"""
+
     method: InterpMethod = "kriging"
     kernel: InterpKernel = "thinplate"
     extrap_method: InterpMethod | None = None
@@ -213,10 +214,11 @@ default_fit_max_reweighting = 4.0
 @cfg_dataclass
 class FitSamplingConfig:
     """Data sampling parameters for model fitting"""
+
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
-    n_residual_snips: int = 4 * 4096
+    n_residual_snips: int = 2 * 4096
     residual_snip_ms: float | None = None
     residual_sampling_target_density: float = 0.25
     seed: int = 0
@@ -235,6 +237,7 @@ default_clustering_fit_sampling_cfg = FitSamplingConfig(
 @cfg_dataclass
 class ClusteringFeaturesConfig:
     """Parameters to control which features are used for initial clustering"""
+
     # simple matrix feature controls
     use_x: bool = True
     use_z: bool = True
@@ -269,6 +272,7 @@ class ClusteringFeaturesConfig:
 @cfg_dataclass
 class ClusteringConfig:
     """Initial clustering parameters"""
+
     cluster_strategy: str = "dpc"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -285,6 +289,7 @@ class ClusteringConfig:
     noise_density: float = 0.0
     outlier_radius: float | None = 25.0
     outlier_neighbor_count: int = 10
+    dpc_kmeans_cleanup: bool = False
 
     # gmm density peaks additional parameters
     kmeanspp_initializations: int = 10
@@ -318,10 +323,12 @@ WhiteningEstimator = Literal["fullzca", "localzca", "sparsechol"]
 @cfg_dataclass
 class WhiteningConfig:
     """Whitening parameters"""
+
     strategy: WhiteningStrategy = "none"
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
+    temporal_length: int | None = None
 
 
 TemplateSVDMethod = Literal[
@@ -332,6 +339,7 @@ TemplateSVDMethod = Literal[
 @cfg_dataclass
 class TemplateConfig:
     """Template waveform estimation parameters"""
+
     spikes_per_unit: int = 500
     with_raw_std_dev: bool = False
     reduction: Literal["median", "mean"] = "median"
@@ -367,6 +375,7 @@ class TemplateConfig:
     try_reload_svd: bool = True
     svd_alignment_iterations: int = 0
     svd_alignment_ms: float = 0.75
+    svd_min_explained_variance: float = 5e-3
 
     # exp weight denoising
     exp_weight_snr_threshold: float = 50.0
@@ -410,6 +419,7 @@ RealignStrategy = Literal[
 @cfg_dataclass
 class TemplateRealignmentConfig:
     """Template waveform alignment parameters"""
+
     realign_peaks: bool = True
     realign_strategy: RealignStrategy = "snr_weighted_trough_factor"
     realign_shift_ms: float = 1.5
@@ -421,6 +431,7 @@ class TemplateRealignmentConfig:
 @cfg_dataclass
 class TemplateMergeConfig:
     """Parameters describing how to judge whether to merge groups of templates"""
+
     distance_kind: Literal[
         "scaled_normeuc", "deconv", "max", "weighted_scaled_normeuc"
     ] = "weighted_scaled_normeuc"
@@ -452,13 +463,14 @@ class TemplateMergeConfig:
         )
 
 
-MixtureStep = Literal["split", "merge", "demolish"]
+MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
 
 
 @cfg_dataclass
 class RefinementConfig:
     """Parameters for clustering refinement"""
+
     refinement_strategy: str = "tmm"
     sampling_cfg: FitSamplingConfig = default_clustering_fit_sampling_cfg
 
@@ -506,7 +518,9 @@ class RefinementConfig:
     mixture_steps: Sequence[MixtureStep] = ("split", "merge", "demolish")
     prior_pseudocount: float = 0.0
     kmeansk: int = 4
-    kmeans_tries: int = 5
+    single_split_k: int = 3
+    kmeans_tries: int = 10
+    kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
     full_proposal_every: int = 10
     main_min_iters: int = 20
@@ -515,8 +529,9 @@ class RefinementConfig:
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
-    demolition_min_resp_ratio: float = 1.1
+    demolition_min_resp_ratio: float = 0.9
     demolish_during_selection: bool = False
+    refit_in_demolition: bool = False
     em_after_demolish: bool = False
     whiten_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
@@ -536,6 +551,11 @@ class RefinementConfig:
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
     qda_force_merge_for_temp_dist_below: float = 0.3
+    spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_max_distance: float = 0.5
+    spikeinterface_merge_min_coentropy: float | None = 0.01
+    spikeinterface_merge_coent_coverage: float = 0.8
+    spikeinterface_merge_coent_iou: float = 0.5
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -551,6 +571,7 @@ class RefinementConfig:
 
     # deduplication control
     dedup_ms: float = 0.0
+    censor_ms: float = 0.3
 
 
 @cfg_dataclass
@@ -629,6 +650,10 @@ class FeaturizationConfig:
     gmm_refinement_cfg: RefinementConfig | None = None
     gmm_clustering_features_cfg: ClusteringFeaturesConfig | None = None
 
+    # helper for fitting whiteners
+    fit_disabled_whitener: bool = False
+    whiten_cfg: WhiteningConfig | None = None
+
     # used when naming datasets saved to h5 files
     input_waveforms_name: str = "collisioncleaned"
     output_waveforms_name: str = "denoised"
@@ -640,6 +665,7 @@ PeakSign = Literal["pos", "neg", "both"]
 @cfg_dataclass
 class SubtractionConfig:
     """Parameters for neural-net based spike detection"""
+
     # peeling common
     chunk_length_samples: int = 30_000
     fit_only: bool = False
@@ -653,11 +679,11 @@ class SubtractionConfig:
     relative_peak_radius_samples: int = 5
     relative_peak_radius_um: float | None = 35.0
     spatial_dedup_radius_um: float | None = 50.0
-    temporal_dedup_radius_samples: int = 11
+    temporal_dedup_radius_samples: int = 7
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0
-    residnorm_decrease_threshold: float = 10.0
+    residnorm_decrease_threshold: float = 9.0
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv"
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
@@ -665,6 +691,9 @@ class SubtractionConfig:
     convexity_threshold: float | None = None
     convexity_radius: int = 7
     max_iter: int = 100
+    whiten: bool = True
+    threshold_before_whitening: float = 10.0
+    whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
 
     # how will waveforms be denoised before subtraction?
     # users can also save waveforms/features during subtraction
@@ -694,6 +723,7 @@ class SubtractionConfig:
 @cfg_dataclass
 class ThresholdingConfig:
     """Parameters for threshold-crossing spike detection"""
+
     # peeling common
     chunk_length_samples: int = 30_000
 
@@ -720,6 +750,7 @@ class ThresholdingConfig:
 @cfg_dataclass
 class MatchingConfig:
     """Template matching pursuit parameters"""
+
     # peeling common
     chunk_length_samples: int = 30_000
     max_spikes_per_second: int = 16384
@@ -729,6 +760,7 @@ class MatchingConfig:
     # template matching parameters
     threshold: float | Literal["fp_control"] = 8.0
     template_svd_compression_rank: int = 5
+    template_svd_compression_min_explained_variance: float = 5e-3
     up_factor: int = 4
     upsampling_radius: int = 8
     template_min_channel_amplitude: float = 1.0
@@ -814,6 +846,7 @@ class MotionEstimationConfig:
 @cfg_dataclass
 class ComputationConfig:
     """Multiprocessing or threading parameters"""
+
     n_jobs_cpu: int = 0
     n_jobs_gpu: int = 0
     n_jobs_small: int = -2
@@ -872,7 +905,9 @@ default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
-default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish"))
+default_initial_refinement_cfg = RefinementConfig(
+    mixture_steps=("split", "demolish", "demolish")
+)
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
@@ -916,7 +951,7 @@ class DARTsortInternalConfig:
     recluster_after_first_matching: bool = False
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
-    subsampling_spikes: int | None = 2_048_000
+    subsampling_spikes_per_channel: int | None = 5000
     # need to cover at least this fraction of chunks
     subsampling_presence: float = 0.1
 
@@ -935,13 +970,16 @@ class DARTsortInternalConfig:
     save_everything_on_error: bool = False
 
 
-def to_internal_config(cfg) -> DARTsortInternalConfig:
+def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     """Laundromat of configuration formats
 
     Parameters
     ----------
     cfg : str | Path | DARTsortUserConfig | DeveloperConfig
         If str or Path, it should point to a .toml file.
+    n_channels : int
+        The number of channels in the input recording, used to adjust
+        parameters which are specified as counts per channel.
 
     Returns
     -------
@@ -988,8 +1026,29 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         tpca_max_waveforms=cfg.n_waveforms_fit,
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         save_collidedness=save_collidedness,
+        tpca_from_templates=cfg.tpca_from_templates,
     )
-    if cfg.dredge_only:
+    if cfg.template_interp_kind == "tps":
+        temp_interp_params = tps_interp_clampna_extrap_params
+    elif cfg.template_interp_kind == "clampna":
+        temp_interp_params = clampna_interp_params
+    else:
+        assert False
+    if cfg.matching_interp_kind == "tps":
+        match_interp_params = tps_interp_clampna_extrap_params
+    elif cfg.matching_interp_kind == "clampna":
+        match_interp_params = clampna_interp_params
+    else:
+        assert False
+    whiten_cfg = WhiteningConfig(
+        strategy=cfg.whiten_strategy,
+        estimator=cfg.whiten_estimator,
+        radius=cfg.subtraction_radius_um,
+        interp_params=temp_interp_params,
+        temporal_length=cfg.whiten_temporal_length,
+    )
+    # TODO: dredge_only is a bad name for this.
+    if cfg.dredge_only and not cfg.whiten_in_subtraction:
         n_residual_snips = 0
     else:
         n_residual_snips = cfg.n_residual_snips
@@ -1028,6 +1087,10 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             first_denoiser_noise_snips=cfg.nn_denoiser_noise_waveforms,
             first_denoiser_spatial_dedup_radius=cfg.first_denoiser_spatial_dedup_radius,
             subtraction_denoising_cfg=subtraction_denoising_cfg,
+            temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
+            positive_temporal_dedup_radius_samples=cfg.positive_temporal_dedup_radius_samples,
+            whiten=cfg.whiten_in_subtraction,
+            whiten_cfg=whiten_cfg,
         )
     elif cfg.detection_type == "threshold":
         initial_detection_cfg = ThresholdingConfig(
@@ -1035,6 +1098,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             detection_threshold=cfg.voltage_threshold,
             spatial_dedup_radius_um=cfg.deduplication_radius_um,
             chunk_length_samples=cfg.chunk_length_samples,
+            temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
         )
     elif cfg.detection_type == "match":
         assert cfg.precomputed_templates_npz is not None
@@ -1056,24 +1120,6 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
     else:
         raise ValueError(f"Unknown detection_type {cfg.detection_type}.")
 
-    if cfg.template_interp_kind == "tps":
-        temp_interp_params = tps_interp_clampna_extrap_params
-    elif cfg.template_interp_kind == "clampna":
-        temp_interp_params = clampna_interp_params
-    else:
-        assert False
-    if cfg.matching_interp_kind == "tps":
-        match_interp_params = tps_interp_clampna_extrap_params
-    elif cfg.matching_interp_kind == "clampna":
-        match_interp_params = clampna_interp_params
-    else:
-        assert False
-    whiten_cfg = WhiteningConfig(
-        strategy=cfg.whiten_strategy,
-        estimator=cfg.whiten_estimator,
-        radius=cfg.subtraction_radius_um,
-        interp_params=temp_interp_params,
-    )
     template_cfg = TemplateConfig(
         denoising_fit_radius=cfg.fit_radius_um,
         spikes_per_unit=cfg.template_spikes_per_unit,
@@ -1195,13 +1241,13 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         detection_threshold=cfg.motion_voltage_threshold,
         chunk_length_samples=cfg.chunk_length_samples,
         peak_sign=cfg.peak_sign,
-        shave_score=cfg.initial_threshold,
+        shave_score=cfg.threshold_before_whitening,
     )
     motion_estimation_cfg = MotionEstimationConfig(
         **motion_kw,
         tpca_rank=cfg.temporal_pca_rank,
         threshold_cfg=motion_threshold_cfg,
-        spike_denoising_score=cfg.initial_threshold,
+        spike_denoising_score=cfg.threshold_before_whitening,
     )
     matching_cfg = MatchingConfig(
         threshold="fp_control" if cfg.matching_fp_control else cfg.matching_threshold,
@@ -1269,6 +1315,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_merge_cfg=agg_tmcfg,
             qda_threshold=0.0,
             dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
+            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
@@ -1289,6 +1337,8 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
             template_merge_cfg=agg_tmcfg,
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
             dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
+            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     else:
         assert False
@@ -1326,7 +1376,7 @@ def to_internal_config(cfg) -> DARTsortInternalConfig:
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
-        subsampling_spikes=cfg.subsampling_spikes,
+        subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
         always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
     )

@@ -19,7 +19,16 @@ from ..util.job_util import ensure_computation_config
 from ..util.main_util import ds_save_intermediate_labels
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
-from . import agglomerate, cluster_util, density, forward_backward, mixture, refine_util
+from ..util.torch_util import cleanup_and_log_gpu_usage
+from . import (
+    agglomerate,
+    cluster_util,
+    density,
+    forward_backward,
+    kmeans,
+    mixture,
+    refine_util,
+)
 from .clustering_features import SimpleMatrixFeatures, StableWaveformFeatures
 
 if TYPE_CHECKING:
@@ -292,6 +301,10 @@ class DensityPeaksClusterer(Clusterer):
         workers=-1,
         uhdversion=False,
         random_seed=0,
+        kmeans_cleanup=True,
+        kmeans_max_sigma: float = 5.0,
+        kmeans_iter=100,
+        device=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -308,6 +321,10 @@ class DensityPeaksClusterer(Clusterer):
         self.workers = workers
         self.uhdversion = uhdversion
         self.random_seed = random_seed
+        self.kmeans_cleanup = kmeans_cleanup
+        self.kmeans_max_sigma = kmeans_max_sigma
+        self.kmeans_iter = kmeans_iter
+        self.device = device
 
     @classmethod
     def from_config(
@@ -335,6 +352,7 @@ class DensityPeaksClusterer(Clusterer):
             outlier_radius=clustering_cfg.outlier_radius,
             outlier_neighbor_count=clustering_cfg.outlier_neighbor_count,
             workers=workers,
+            device=computation_cfg.actual_device(),
             uhdversion=uhdversion,
             computation_cfg=computation_cfg,
             waveform_cfg=waveform_cfg,
@@ -342,6 +360,9 @@ class DensityPeaksClusterer(Clusterer):
             save_labels_dir=save_labels_dir,
             labels_fmt=labels_fmt,
             sampling_cfg=clustering_cfg.sampling_cfg,
+            kmeans_cleanup=clustering_cfg.dpc_kmeans_cleanup,
+            kmeans_iter=clustering_cfg.kmeans_iter,
+            kmeans_max_sigma=clustering_cfg.gmmdpc_max_sigma,
         )
 
     def _cluster(
@@ -424,6 +445,19 @@ class DensityPeaksClusterer(Clusterer):
         else:
             kdtree = None
             labels = res["labels"]
+
+        if self.kmeans_cleanup:
+            kres = kmeans.truncated_kmeans_from_labels(
+                X=X,
+                labels=labels,
+                device=self.device,
+                max_sigma=self.kmeans_max_sigma,
+                n_iter=self.kmeans_iter,
+            )
+            assert kres.labels is not None
+            labels = kres.labels.numpy(force=True)
+            del kres
+            cleanup_and_log_gpu_usage(self.computation_cfg, "DPC->kmeans")
 
         labels = cluster_util.decrumb(
             labels, min_size=self.remove_clusters_smaller_than, in_place=True
@@ -821,6 +855,7 @@ class AgglomerateRefinement(Refinement):
         recording: BaseRecording | None,
         motion: MotionInfo,
     ):
+        assert recording is not None
         return agglomerate.agglomerate(
             recording=recording,
             sorting=sorting,
