@@ -255,10 +255,11 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     whiten_in_subtraction: bool = True
     threshold_before_whitening: float = 10.0
-    temporal_dedup_radius_samples: int = 11
+    temporal_dedup_radius_samples: int = 7
     positive_temporal_dedup_radius_samples: int = 41
-    spatial_dedup_radius_um: float | None = 50.0
+    spatial_dedup_radius_um: float | None = 35.0
     spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_max_distance: float = 0.5
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (

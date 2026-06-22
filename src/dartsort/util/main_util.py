@@ -143,7 +143,7 @@ def motion_needs_peaks(
 ):
     if cfg.subsampling_presence == 1.0:
         return False
-    if cfg.subsampling_spikes is None:
+    if cfg.subsampling_spikes_per_channel is None:
         return False
 
     # assert sorting's chunk starts, sorted, match full recording's

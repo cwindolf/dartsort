@@ -218,7 +218,7 @@ class FitSamplingConfig:
     max_waveforms_fit: int = 50_000
     n_waveforms_fit: int = 40_000
     more_waveforms_fit: int = 2000 * 1024
-    n_residual_snips: int = 4 * 4096
+    n_residual_snips: int = 2 * 4096
     residual_snip_ms: float | None = None
     residual_sampling_target_density: float = 0.25
     seed: int = 0
@@ -553,9 +553,9 @@ class RefinementConfig:
     qda_force_merge_for_temp_dist_below: float = 0.3
     spikeinterface_merge_preset: str | None = None
     spikeinterface_merge_max_distance: float = 0.5
-    spikeinterface_merge_min_coentropy: float | None = 0.1
-    spikeinterface_merge_coent_coverage: float = 0.9
-    spikeinterface_merge_coent_iou: float = 0.6
+    spikeinterface_merge_min_coentropy: float | None = 0.01
+    spikeinterface_merge_coent_coverage: float = 0.8
+    spikeinterface_merge_coent_iou: float = 0.5
 
     # forward_backward parameters
     chunk_size_s: float = 300.0
@@ -905,7 +905,9 @@ default_matching_cfg = MatchingConfig()
 default_motion_estimation_cfg = MotionEstimationConfig()
 default_computation_cfg = ComputationConfig()
 default_refinement_cfg = RefinementConfig()
-default_initial_refinement_cfg = RefinementConfig(mixture_steps=("split", "demolish", "demolish"))
+default_initial_refinement_cfg = RefinementConfig(
+    mixture_steps=("split", "demolish", "demolish")
+)
 default_pre_refinement_cfg = RefinementConfig(refinement_strategy="pcmerge")
 default_agglomerate_cfg = RefinementConfig(
     refinement_strategy="agglomerate",
@@ -949,7 +951,7 @@ class DARTsortInternalConfig:
     recluster_after_first_matching: bool = False
     # subsampling: intermediate peels will continue until both criteria satisfied
     # need at least this many spikes
-    subsampling_spikes: int | None = 2_048_000
+    subsampling_spikes_per_channel: int | None = 5000
     # need to cover at least this fraction of chunks
     subsampling_presence: float = 0.1
 
@@ -1314,6 +1316,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             qda_threshold=0.0,
             dedup_ms=cfg.deduplication_ms,
             spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
+            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     elif cfg.agg_kind == "qda":
         agg_whiten_cfg = WhiteningConfig(
@@ -1335,14 +1338,10 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             qda_force_merge_for_temp_dist_below=cfg.agg_no_qda_template_distance,
             dedup_ms=cfg.deduplication_ms,
             spikeinterface_merge_preset=cfg.spikeinterface_merge_preset,
+            spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     else:
         assert False
-
-    if cfg.subsampling_spikes_per_channel is not None:
-        subsampling_spikes = cfg.subsampling_spikes_per_channel * n_channels
-    else:
-        subsampling_spikes = None
 
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
@@ -1377,7 +1376,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         save_everything_on_error=cfg.save_everything_on_error,
         link_from=cfg.link_from,
         link_step=cfg.link_step,
-        subsampling_spikes=subsampling_spikes,
+        subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
         always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
     )
