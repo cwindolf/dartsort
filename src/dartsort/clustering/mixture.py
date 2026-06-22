@@ -5049,10 +5049,13 @@ def all_demolished_partitions(
                 can_demolish_mask.shape == part.unit_ids.shape == part.group_ids.shape
             )
         single_ixs = torch.tensor(part.single_ixs, dtype=torch.long)
+        npart = single_ixs.numel()
         (part_demo_ix,) = can_demolish_mask[single_ixs].nonzero(as_tuple=True)
 
         for demo_ixs in subsets(part_demo_ix.tolist()):
             demo_ixs = list(demo_ixs)
+            if len(demo_ixs) == npart:
+                continue
             demo_group_ids = part.group_ids.clone()
             demo_group_ids[single_ixs[demo_ixs]] = -1
             demo_part = replace(
