@@ -229,6 +229,7 @@ class DARTsortSorting:
         motion: "MotionInfo | None" = None,
         drop_doubles: bool = True,
         compute_extensions: Sequence[str] | None = ("random_spikes", "waveforms"),
+        estimate_si_sparsity: bool = True,
         features_cfg=default_clustering_features_cfg,
     ) -> SortingAnalyzer:
         """Export dartsort's internal data to a SortingAnalyzer
@@ -283,9 +284,16 @@ class DARTsortSorting:
             drop_doubles=drop_doubles, return_kept_indices=True
         )  # type: ignore
 
-        sparsity = estimate_sparsity(sorting, recording)
+        if estimate_si_sparsity:
+            sparsity = estimate_sparsity(sorting, recording)
+        else:
+            sparsity = None
         analyzer = create_sorting_analyzer(
-            sorting=sorting, recording=recording, sparsity=sparsity, return_in_uV=False
+            sorting=sorting,
+            recording=recording,
+            sparsity=sparsity,
+            sparse=estimate_si_sparsity,
+            return_in_uV=False,
         )
 
         for ext in compute_extensions or []:

@@ -204,6 +204,15 @@ class DARTsortUserConfig:
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
+    # -- final merge step
+    spikeinterface_merge_preset: str | None = None
+    """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
+    Setting this is slightly different' from calling auto_merge() externally, since the internal
+    version will make use of dartsort's templates and template distances.
+    dartsort extends auto_merge() with some additional presets: dartsort_slay_xc_ccg,
+    dartsort_slay_xc, dartsort_slay_ccg. These are conservative presets; see and cite
+    Koukuntla et al., 2025 for the SLAY score criterion."""
+
     # -- motion estimation parameters
     rigid: bool = False
     """Use rigid registration and ignore the window parameters."""
@@ -257,8 +266,7 @@ class DeveloperConfig(DARTsortUserConfig):
     threshold_before_whitening: float = 10.0
     temporal_dedup_radius_samples: int = 7
     positive_temporal_dedup_radius_samples: int = 41
-    spikeinterface_merge_preset: str | None = None
-    spikeinterface_merge_max_distance: float = 0.5
+    spikeinterface_merge_max_distance: float = 0.8
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
