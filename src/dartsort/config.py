@@ -353,7 +353,7 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
     demolish_during_selection: bool = False
-    em_after_demolish: bool = False
+    em_after_demolish: bool = True
     tpca_from_templates: bool = True
 
     # agglomeration

@@ -914,6 +914,7 @@ class GroupPartition:
     unit_ids: Tensor
     group_ids: Tensor
     n_groups: int
+    n_groups_before_demolish: int
     single_ixs: list[int]
     subset_ids: list[int]
     unit_ids_combined: list[int]
@@ -3133,7 +3134,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             gkeep = (gids >= 0).logical_and_((train_labels == gids.unsqueeze(1)).any(1))
             (gkeep,) = gkeep.nonzero(as_tuple=True)
             unflat_group_ids = gids[gkeep].unique()
-            flatspace = gids.new_full((merge_res.grouping.n_groups,), -1)
+            flatspace = gids.new_full((merge_res.grouping.n_groups_before_demolish,), -1)
             flat_group_ids = torch.arange(unflat_group_ids.numel(), device=gids.device)
             flatspace[unflat_group_ids] = flat_group_ids
             if pnoid:
@@ -5023,6 +5024,7 @@ def allowed_partitions(
                     unit_ids=unit_ids,
                     group_ids=group_ids.clone(),
                     n_groups=n_groups,
+                    n_groups_before_demolish=n_groups,
                     single_ixs=single_ixs,
                     subset_ids=subset_ids,
                     unit_ids_combined=uids_combined,
