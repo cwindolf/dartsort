@@ -398,9 +398,12 @@ def spikeinterface_merge_mask(
     if censor_ms:
         sorting = deduplicate_spikes(sorting, censor_ms)
 
-    # analyzer
+    # analyzer (lightweight one)
     analyzer = sorting.to_sorting_analyzer(
-        recording=recording, template_data=template_data
+        recording=recording,
+        template_data=template_data,
+        compute_extensions=None,
+        estimate_si_sparsity=False,
     )
 
     # register the mask as the template similarity extension
