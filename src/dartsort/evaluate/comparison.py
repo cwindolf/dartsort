@@ -114,7 +114,7 @@ class DARTsortGroundTruthComparison:
         self._agreement_scores = a
         return a
 
-    def unit_amplitudes(self, unit_id):
+    def unit_amplitudes(self, unit_id=None):
         return self.gt_analysis.unit_amplitudes(unit_id)
 
     def get_match(self, gt_unit):

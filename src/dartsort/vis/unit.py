@@ -1154,7 +1154,7 @@ def pngname(unit_id, sorting_analysis=None, nameby=None, ext="png"):
         raise ValueError("Need a sorting_analysis if nameby.")
     name, namearr = nameby
     nameval = namearr[sorting_analysis.unit_ids == unit_id].item()
-    nameval = f"{nameval:07.4f}"
+    nameval = f"{nameval:08.4f}"
     return f"{name}{nameval}_unit{unit_id:04d}.{ext}"
 
 
