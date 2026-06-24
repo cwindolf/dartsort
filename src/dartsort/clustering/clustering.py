@@ -870,6 +870,32 @@ class AgglomerateRefinement(Refinement):
 refinement_strategies["agglomerate"] = AgglomerateRefinement
 
 
+class FilterRefinement(Refinement):
+    """Runs various filters as specified in cfg"""
+
+    def _refine(
+        self,
+        features: SimpleMatrixFeatures,
+        stable_features: StableWaveformFeatures | None,
+        sorting: DARTsortSorting,
+        recording: BaseRecording | None,
+        motion: MotionInfo,
+    ):
+        assert recording is not None
+
+        if self.refinement_cfg.gmm_isolation_threshold:
+            sorting = refine_util.gmm_isolation_filter(
+                sorting=sorting,
+                refinement_cfg=self.refinement_cfg,
+                computation_cfg=self.computation_cfg,
+            ).sorting
+
+        return sorting
+
+
+refinement_strategies["filter"] = FilterRefinement
+
+
 class ForwardBackwardEnsembler(Refinement):
     """If there are more time chunk ones, make a new ABC with this logic."""
 

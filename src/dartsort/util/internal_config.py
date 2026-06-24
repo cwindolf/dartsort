@@ -570,6 +570,9 @@ class RefinementConfig:
     impute_kind: Literal["interp", "impute"] = "impute"
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
+    # bad unit filter params
+    gmm_isolation_threshold: float | None = 0.5
+
     # deduplication control
     dedup_ms: float = 0.0
     censor_ms: float = 0.3
