@@ -331,6 +331,9 @@ class DeveloperConfig(DARTsortUserConfig):
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
 
+    # filters
+    gmm_isolation_threshold: float | None = None
+
     # gaussian mixture high level
     initial_rank: int | None = None
     initialize_at_rank_0: bool = False

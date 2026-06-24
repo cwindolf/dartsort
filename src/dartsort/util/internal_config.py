@@ -571,7 +571,7 @@ class RefinementConfig:
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # bad unit filter params
-    gmm_isolation_threshold: float | None = 0.5
+    gmm_isolation_threshold: float | None = None
     gmm_isolation_neighbor_fraction: float = 0.9
 
     # deduplication control
@@ -939,7 +939,7 @@ class DARTsortInternalConfig:
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
-    post_refinement_cfg: RefinementConfig | None = None
+    post_refinement_cfgs: Sequence[RefinementConfig] = ()
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
@@ -1348,6 +1348,13 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     else:
         assert False
 
+    post_refinement_cfgs: list[RefinementConfig] = []
+    if cfg.post_refinement_merge:
+        assert pre_refinement_cfg is not None
+        post_refinement_cfgs.append(pre_refinement_cfg)
+    if cfg.gmm_isolation_threshold:
+        post_refinement_cfgs.append(RefinementConfig(refinement_strategy="filter", gmm_isolation_threshold=cfg.gmm_isolation_threshold))
+
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
@@ -1357,7 +1364,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
-        post_refinement_cfg=pre_refinement_cfg if cfg.post_refinement_merge else None,
+        post_refinement_cfgs=post_refinement_cfgs,
         agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,
