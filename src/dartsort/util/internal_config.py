@@ -497,6 +497,7 @@ class RefinementConfig:
     initialize_at_rank_0: bool = False
     cl_alpha: float = 0.05
     cl_split_only: bool = True
+    demolish_cl_alpha: float = 0.5
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096

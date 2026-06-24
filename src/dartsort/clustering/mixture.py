@@ -803,6 +803,7 @@ class TMMParams:
     criterion_em_iters: int
     cl_alpha: float
     cl_split_only: bool
+    demolish_cl_alpha: float
     latent_prior_std: float
     min_count: int
     min_channel_count: int
@@ -847,6 +848,7 @@ class TMMParams:
             main_min_iters=refinement_cfg.main_min_iters,
             cl_alpha=refinement_cfg.cl_alpha,
             cl_split_only=refinement_cfg.cl_split_only,
+            demolish_cl_alpha=refinement_cfg.demolish_cl_alpha,
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
@@ -3455,7 +3457,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         cur_crit = ecl(
             resps=val_scores.responsibilities,
             log_liks=val_scores.log_liks,
-            cl_alpha=alpha,
+            cl_alpha=self.p.demolish_cl_alpha,
         ).item()
 
         # checking this invariant at the top
@@ -5451,7 +5453,7 @@ def evaluate_group_demolitions(
 
     # criterion:
     # loop over possible demolitions, evaluate their improvements, track best
-    alpha = 0.0 if mm.p.cl_split_only else mm.p.cl_alpha
+    alpha = mm.p.demolish_cl_alpha
     if cur_crit is None:
         cur_crit = ecl(
             resps=eval_scores.responsibilities,
