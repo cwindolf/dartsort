@@ -499,7 +499,9 @@ def qda(
     from ..util.data_util import get_gmm_scores
 
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    glabels, gscores = get_gmm_scores(sorting)
+    gscores = get_gmm_scores(sorting)
+    glabels = sorting.labels
+    assert glabels is not None
 
     if mask is None:
         mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)

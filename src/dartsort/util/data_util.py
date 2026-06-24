@@ -1313,9 +1313,7 @@ def merged_responsibilities(
     )
 
 
-def get_gmm_scores(
-    sorting: DARTsortSorting, prefixes=("merged", "gmm")
-) -> "tuple[np.ndarray, Scores]":
+def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Scores":
     from ..clustering.mixture import Scores
 
     for prefix in prefixes:
@@ -1325,7 +1323,7 @@ def get_gmm_scores(
         if cand is not None:
             break
     else:
-        raise ValueError("No scores attached to sorting.")
+        raise AttributeError("No scores attached to sorting.")
 
     assert cand is not None
     assert log_liks is not None
@@ -1338,9 +1336,7 @@ def get_gmm_scores(
     scores = Scores(
         candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
     )
-    assert sorting.labels is not None
-    labels = sorting.labels
-    return labels, scores
+    return scores
 
 
 def explode_soft_assignment_sorting(
