@@ -27,6 +27,7 @@ from .internal_config import (
 from .logging_util import get_logger, progbar
 
 if TYPE_CHECKING:
+    from ..clustering.mixture import Scores
     from ..templates.templates import TemplateData
     from .motion import MotionInfo
 from .job_util import ensure_computation_config
@@ -1310,6 +1311,36 @@ def merged_responsibilities(
     return dict(
         K=Klabel, Kcand=Kcand, merged_responsibilities=mergedr, merged_candidates=c
     )
+
+
+def get_gmm_scores(
+    sorting: DARTsortSorting, prefixes=("merged", "gmm")
+) -> "tuple[np.ndarray, Scores]":
+    from ..clustering.mixture import Scores
+
+    for prefix in prefixes:
+        cand = getattr(sorting, f"{prefix}_candidates", None)
+        log_liks = getattr(sorting, f"{prefix}_log_liks", None)
+        resp = getattr(sorting, f"{prefix}_responsibilities", None)
+        if cand is not None:
+            break
+    else:
+        raise ValueError("No scores attached to sorting.")
+
+    assert cand is not None
+    assert log_liks is not None
+    assert resp is not None
+
+    cand = torch.asarray(cand)
+    log_liks = torch.asarray(log_liks)
+    resp = torch.asarray(resp)
+
+    scores = Scores(
+        candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
+    )
+    assert sorting.labels is not None
+    labels = sorting.labels
+    return labels, scores
 
 
 def explode_soft_assignment_sorting(

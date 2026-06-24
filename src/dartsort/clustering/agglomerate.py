@@ -39,7 +39,6 @@ from .cluster_util import (
     reorder_by_depth,
     sparsify_labels,
 )
-from .mixture import Scores
 
 logger = get_logger(__name__)
 
@@ -360,27 +359,6 @@ def template_distances(
     )
 
 
-def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
-    cand = getattr(sorting, "gmm_candidates", None)
-    log_liks = getattr(sorting, "gmm_log_liks", None)
-    resp = getattr(sorting, "gmm_responsibilities", None)
-
-    assert cand is not None
-    assert log_liks is not None
-    assert resp is not None
-
-    cand = torch.asarray(cand)
-    log_liks = torch.asarray(log_liks)
-    resp = torch.asarray(resp)
-
-    scores = Scores(
-        candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
-    )
-    assert sorting.labels is not None
-    labels = sorting.labels
-    return labels, scores
-
-
 def spikeinterface_merge_mask(
     *,
     recording: BaseRecording,
@@ -518,8 +496,10 @@ def qda(
     show_progress: bool,
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
+    from ..util.data_util import get_gmm_scores
+
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    glabels, gscores = _get_scores(sorting)
+    glabels, gscores = get_gmm_scores(sorting)
 
     if mask is None:
         mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)
