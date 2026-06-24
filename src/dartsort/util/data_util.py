@@ -1421,6 +1421,7 @@ def check_recording(
     threshold=5,
     dedup_spatial_radius=75,
     expected_value_range=1e4,
+    too_few_spikes_per_sec=10,
     expected_spikes_per_sec=10_000,
     num_chunks_per_segment=5,
     dtype=torch.float,
@@ -1457,22 +1458,31 @@ def check_recording(
     avg_detections_per_second = np.mean(spike_rates)
     max_abs = np.max(random_chunks)
 
+    err_tail = (
+        "You may want to check that your data has been preprocessed, "
+        "including standardization. If it seems right, then you may need to "
+        "shrink the chunk_length_samples parameters in the configuration if "
+        "you experience memory issues."
+    )
+
     failed = False
     if avg_detections_per_second > expected_spikes_per_sec:
         warnings.warn(
-            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is "
-            "large. You may want to check that your data has been preprocessed, "
-            "including standardization. If it seems right, then you may need to "
-            "shrink the chunk_length_samples parameters in the configuration if "
-            "you experience memory issues.",
+            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is large. "
+            + err_tail,
             RuntimeWarning,
         )
         failed = True
-
+    if avg_detections_per_second < too_few_spikes_per_sec:
+        warnings.warn(
+            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is small."
+            + err_tail,
+            RuntimeWarning,
+        )
+        failed = True
     if max_abs > expected_value_range:
         warnings.warn(
-            f"Recording values exceed |{expected_value_range}|. You may want to "
-            "check that your data has been preprocessed, including standardization.",
+            f"Recording values exceed |{expected_value_range}|. " + err_tail,
             RuntimeWarning,
         )
         failed = True
