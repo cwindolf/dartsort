@@ -533,7 +533,7 @@ class RefinementConfig:
     demolition_min_resp_ratio: float = 0.9
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
-    em_after_demolish: bool = False
+    em_after_demolish: bool = True
     whiten_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
@@ -572,6 +572,7 @@ class RefinementConfig:
 
     # bad unit filter params
     gmm_isolation_threshold: float | None = 0.5
+    gmm_isolation_neighbor_fraction: float = 0.9
 
     # deduplication control
     dedup_ms: float = 0.0

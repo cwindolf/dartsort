@@ -69,7 +69,10 @@ eval_refinement_kwargs = [
     dict(refinement_strategy="tmm", demolish_during_selection=False),
 ]
 eval_post_refinement_kwargs = [
-    dict(refinement_strategy="agglomerate", dedup_ms=0.5),
+    (
+        dict(refinement_strategy="filter", gmm_isolation_threshold=0.5),
+        dict(refinement_strategy="agglomerate", dedup_ms=0.5),
+    )
 ]
 
 eval_clustering_kwargs = [clukw | ck for ck in eval_clustering_kwargs]
@@ -176,7 +179,7 @@ def test_accurate(subtests, simulations, sim_name, cluskw, initrefkw, refkw, pos
         refinement_cfgs=[
             RefinementConfig(**initrefkw),
             RefinementConfig(**refkw),
-            RefinementConfig(**postrefkw),
+            *[RefinementConfig(**v) for v in postrefkw],
         ],
     )
     assert res_sorting.labels is not None

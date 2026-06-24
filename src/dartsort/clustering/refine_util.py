@@ -284,16 +284,37 @@ def _iso_job(unit_id):
 
     # get my log likelihood ratio vs the rest of the mixture (not noise unit)
     ll = p.log_liks[inu]
-    lr = ll[:, 0] - ll[:, 1 : p.cand.shape[1]].logsumexp(dim=1)
+    log_num = ll[:, 0]
+    log_denom = ll[:, 1 : p.cand.shape[1]].logsumexp(dim=1)
+    min_denom, max_denom = log_denom.aminmax()
+    min_num, max_num = log_num.aminmax()
+    assert torch.isfinite(min_num)
+    assert torch.isfinite(max_num)
+    if torch.isneginf(max_denom):
+        # this unit is super isolated.
+        return 0.0
+    lr = log_num - log_denom
+    if torch.isneginf(min_denom):
+        # first check that enough are finite
+        (finite,) = torch.isfinite(lr).nonzero(as_tuple=True)
+        nfinite = finite.numel()
+        if nfinite < p.cfg.min_count:
+            return np.nan
+        if nfinite / inu.size < p.cfg.gmm_isolation_neighbor_fraction:
+            return np.nan
+
+        # handle +inf lrs by clamping to a big value
+        lr.clamp_(max=log_num[finite].abs_().add_(lr[finite].amax() + 10.0))
 
     # fit kde. will symmetrize around 0 to avoid boundary issues (since lr>=0)
-    lr = lr.numpy(force=True)
     amax = lr.amax().item()
+    lr = lr.numpy(force=True)
     lr = np.concatenate([-lr, lr])
     kde = FFTKDE(bw="ISJ").fit(lr)
 
-    # evaluate kde
-    grid = np.arange(-amax, amax + p.dx / 2, p.dx)
+    # evaluate kde. grid needs to cover data.
+    end = p.dx * np.ceil((amax + p.dx) / p.dx)
+    grid = np.arange(-end, end + p.dx / 2, p.dx)
     ev = kde.evaluate(grid)
 
     # compare value at 0 to peak value
