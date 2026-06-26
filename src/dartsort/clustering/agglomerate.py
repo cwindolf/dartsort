@@ -868,7 +868,7 @@ def _combine_loop(
 def deduplicate_spikes(
     sorting: DARTsortSorting,
     radius_ms: float = -1.0,
-    score_by=("merged_logliks", "gmm_logliks", "scores"),
+    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
 ) -> DARTsortSorting:
     """The lower-scoring of any spikes within radius_samples of each other is relabeled to -1.
 
@@ -893,7 +893,7 @@ def deduplicate_spikes(
             break
     if scores is None:
         raise ValueError(f"sorting had none of {score_by}.")
-    if scores.ndim == 2:
+    if scores.ndim >= 2:
         scores = scores[:, 0]
     assert scores.ndim == 1
     assert scores.shape == new_labels.shape
