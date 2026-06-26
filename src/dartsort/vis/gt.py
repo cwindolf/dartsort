@@ -24,6 +24,45 @@ class ComparisonPlot(BasePlot):
         raise NotImplementedError
 
 
+class TextInfo(ComparisonPlot):
+    kind = "matrix"
+    width = 3
+    height = 2
+
+    def draw(self, panel, comparison):
+        df = comparison.unit_info_dataframe(perf_only=True)
+        big = df.gt_pt_amplitude >= 10.0
+        bad = df.accuracy <= 0.8
+        bb = df[np.logical_and(big, bad)].index.values.tolist()
+        if bb:
+            big_bad_msg = f"{bb[0]}"
+            nb = 1
+            for ii in bb[1:]:
+                big_bad_msg += f",{str(ii)}"
+                nb += 1
+                if nb > 8:
+                    big_bad_msg += "\n"
+        else:
+            big_bad_msg = ""
+
+        ax = panel.subplots()
+        ax.axis("off")
+
+        text = ""
+        if big_bad_msg:
+            text += f"High-amp low-acc units:\n  {big_bad_msg}"
+
+        ax.text(
+            0.01,
+            0.01,
+            text,
+            ha="left",
+            va="top",
+            fontsize="small",
+            transform=ax.transAxes,
+        )
+
+
 class AgreementMatrix(ComparisonPlot):
     kind = "wide"
     width = 3

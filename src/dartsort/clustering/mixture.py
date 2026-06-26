@@ -3136,7 +3136,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             gkeep = (gids >= 0).logical_and_((train_labels == gids.unsqueeze(1)).any(1))
             (gkeep,) = gkeep.nonzero(as_tuple=True)
             unflat_group_ids = gids[gkeep].unique()
-            flatspace = gids.new_full((merge_res.grouping.n_groups_before_demolish,), -1)
+            flatspace = gids.new_full(
+                (merge_res.grouping.n_groups_before_demolish,), -1
+            )
             flat_group_ids = torch.arange(unflat_group_ids.numel(), device=gids.device)
             flatspace[unflat_group_ids] = flat_group_ids
             if pnoid:
@@ -6416,6 +6418,65 @@ def proportion_adjust_scores(
         responsibilities=new_log_liks.softmax(dim=1),
         duties=scores.duties,
     )
+
+
+def ensure_sorted_scores(scores: Scores) -> Scores:
+    """Re-sort score properties so that log liks decrease."""
+    C = scores.candidates.shape[1]
+    order = scores.log_liks[:, :C].argsort(dim=1, descending=True, stable=True)
+
+    candidates = scores.candidates.take_along_dim(indices=order, dim=1)
+    log_liks = torch.empty_like(scores.log_liks)
+    torch.take_along_dim(
+        scores.log_liks[:, :C], indices=order, dim=1, out=log_liks[:, :C]
+    )
+    if C < scores.log_liks.shape[1]:
+        assert scores.log_liks.shape[1] == C + 1
+        log_liks[:, -1] = scores.log_liks[:, -1]
+    if scores.responsibilities is not None:
+        responsibilities = F.softmax(log_liks, dim=1)
+    else:
+        responsibilities = None
+
+    return Scores(
+        candidates=candidates,
+        log_liks=log_liks,
+        responsibilities=responsibilities,
+        duties=scores.duties,
+    )
+
+
+def drop_units_and_update_scores(
+    train_scores: Scores,
+    scores: Scores | None,
+    n_units: int,
+    remove_ids: Tensor,
+):
+    # determine mean responsibilities before and after removing units
+    orig_prop = mean_responsibilities(train_scores, n_units=n_units)
+    train_scores = remove_units_from_scores(train_scores, remove_ids)
+    new_prop = mean_responsibilities(train_scores, n_units=n_units)
+    assert orig_prop.shape == new_prop.shape == (n_units + 1,), 1
+
+    # pick log props
+    model_prop = orig_prop[:n_units].sum().item()
+    new_prop *= model_prop / new_prop.sum()
+    orig_log_prop = orig_prop.log()
+    new_log_prop = new_prop.log()
+    updated = torch.logical_not(torch.isclose(orig_log_prop, new_log_prop))
+    updated[remove_ids] = False
+
+    # update the train scores
+    train_scores = proportion_adjust_scores(train_scores, orig_log_prop, new_log_prop)
+    train_scores = ensure_sorted_scores(train_scores)
+
+    # update other scores
+    if scores is not None:
+        scores = remove_units_from_scores(scores, remove_ids)
+        scores = proportion_adjust_scores(scores, orig_log_prop, new_log_prop)
+        scores = ensure_sorted_scores(scores)
+
+    return train_scores, scores
 
 
 def mean_responsibilities(
