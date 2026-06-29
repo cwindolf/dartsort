@@ -94,6 +94,12 @@ class WaveformConfig:
             return slice(None)
         return slice(start_offset, other_len - end_offset)
 
+    def relative_cfg(self, sl: slice, sampling_frequency: float) -> Self:
+        trough = self.trough_offset_samples(sampling_frequency)
+        nbefore = trough - sl.start
+        nafter = sl.stop - trough
+        return self.__class__.from_samples(nbefore, nafter, sampling_frequency)
+
     def pad(self, padding_ms: float) -> Self:
         return self.__class__(
             ms_before=self.ms_before + padding_ms,
@@ -497,7 +503,7 @@ class RefinementConfig:
     initialize_at_rank_0: bool = False
     cl_alpha: float = 0.05
     cl_split_only: bool = True
-    demolish_cl_alpha: float = 0.5
+    demolish_cl_alpha: float = 0.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
@@ -573,6 +579,7 @@ class RefinementConfig:
     # bad unit filter params
     gmm_isolation_threshold: float | None = None
     gmm_isolation_neighbor_fraction: float = 0.9
+    collision_cleaning_error_threshold: float | None = None
 
     # deduplication control
     dedup_ms: float = 0.0
@@ -1352,8 +1359,14 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     if cfg.post_refinement_merge:
         assert pre_refinement_cfg is not None
         post_refinement_cfgs.append(pre_refinement_cfg)
-    if cfg.gmm_isolation_threshold:
-        post_refinement_cfgs.append(RefinementConfig(refinement_strategy="filter", gmm_isolation_threshold=cfg.gmm_isolation_threshold))
+    if cfg.gmm_isolation_threshold or cfg.collision_cleaning_error_threshold:
+        post_refinement_cfgs.append(
+            RefinementConfig(
+                refinement_strategy="filter",
+                gmm_isolation_threshold=cfg.gmm_isolation_threshold,
+                collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
+            )
+        )
 
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,

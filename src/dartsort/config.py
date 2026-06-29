@@ -332,7 +332,8 @@ class DeveloperConfig(DARTsortUserConfig):
     n_neighbors_search: int | None = 50
 
     # filters
-    gmm_isolation_threshold: float | None = None
+    gmm_isolation_threshold: float | None = 0.975
+    collision_cleaning_error_threshold: float | None = 0.3
 
     # gaussian mixture high level
     initial_rank: int | None = None

@@ -811,14 +811,37 @@ class DARTsortSorting:
         kept_indices = np.setdiff1d(np.arange(len(self)), viol_ixs)
         return st, kept_indices
 
-    def flatten(self) -> Self:
+    def flatten(self, include_gmm_properties: bool = False) -> Self:
         """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
-        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        old_unique, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        if np.array_equal(old_unique, np.arange(old_unique.max() + 1)):
+            return self
         new_labels = np.full_like(self.labels, -1)
         new_labels[valid] = flat_labels
-        return self.ephemeral_replace(labels=new_labels)
+
+        keys = ("merged_candidates", "gmm_candidates")
+        if not include_gmm_properties or not any(hasattr(self, k) for k in keys):
+            return self.ephemeral_replace(labels=new_labels)
+
+        remapping = np.full((old_unique.max() + 1,), -1)
+        remapping[old_unique] = np.arange(len(old_unique))
+        new_props = dict(labels=new_labels)
+        for k in keys:
+            v = getattr(self, k, None)
+            if v is None:
+                continue
+            valid = v >= 0
+            v_valid = v[valid]
+            new_v = v.copy()
+            new_v[valid] = remapping[v_valid]
+            new_props[k] = new_v
+
+            # if merged candidates were present, the labels
+            # don't match gmm_candidates
+            break
+        return self.ephemeral_replace(**new_props)
 
     def __str__(self):
         name = self.__class__.__name__

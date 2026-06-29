@@ -206,7 +206,7 @@ def geomplot(
             for j in range(len(subars)):
                 if subars[j] > 1.2 * max_abs_amp:
                     break
-            subar = subars[max(0, j - 1)]  # type: ignore
+            subar = subars[max(0, j - 1)]  # type: ignore  # ty: ignore[x]
         min_z = min(geom_plot[c, 1] for c in unique_chans)
         if msbar:
             min_z += max_abs_amp

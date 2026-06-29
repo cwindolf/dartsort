@@ -3455,7 +3455,6 @@ class TruncatedMixtureModel(BaseMixtureModel):
             scores=train_scores, n_units=self.n_units
         )
         mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
-        alpha = 0.0 if self.p.cl_split_only else self.p.cl_alpha
         cur_crit = ecl(
             resps=val_scores.responsibilities,
             log_liks=val_scores.log_liks,
@@ -6065,7 +6064,7 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
         return luts[0]
     adj = luts[0].b.lut < luts[0].b.unit_ids.shape[0]
     for ll in luts[1:]:
-        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])
+        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].b.lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)

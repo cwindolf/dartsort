@@ -873,6 +873,9 @@ refinement_strategies["agglomerate"] = AgglomerateRefinement
 class FilterRefinement(Refinement):
     """Runs various filters as specified in cfg"""
 
+    def needs_stable_features(self):
+        return bool(self.refinement_cfg.collision_cleaning_error_threshold)
+
     def _refine(
         self,
         features: SimpleMatrixFeatures,
@@ -882,6 +885,17 @@ class FilterRefinement(Refinement):
         motion: MotionInfo,
     ):
         assert recording is not None
+
+        if self.refinement_cfg.collision_cleaning_error_threshold:
+            assert stable_features is not None
+            sorting = refine_util.collision_cleaning_error_filter(
+                sorting=sorting,
+                recording=recording,
+                stable_features=stable_features,
+                refinement_cfg=self.refinement_cfg,
+                motion=motion,
+                computation_cfg=self.computation_cfg,
+            ).sorting
 
         if self.refinement_cfg.gmm_isolation_threshold:
             sorting = refine_util.gmm_isolation_filter(
