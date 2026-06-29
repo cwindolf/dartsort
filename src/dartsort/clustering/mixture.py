@@ -1743,6 +1743,9 @@ class TruncatedSpikeData(BatchedSpikeData):
                 search_sets=search_sets,
                 n_explore=self.n_explore,
             )
+            assert (
+                p.shape[0] == inds.shape[0] == self.un_adj_lut.b.unit_ids.shape[0] + 1
+            )
             _sample_explore_candidates(
                 p=p,
                 inds=inds,
@@ -2743,6 +2746,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighb_ixs: Tensor | None = None,
         lut_ixs: Tensor | None = None,
         allow_blanks: bool = False,
+        force_rank0: bool = False,
     ) -> Scores:
         assert self.lut_params is not None
         return _score_batch(
@@ -2767,6 +2771,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             static_size=batch.candidate_count,
             allow_blanks=allow_blanks,
             skip_noise=skip_noise,
+            force_rank0=force_rank0,
         )
 
     def estep_stats_batch(
@@ -2825,6 +2830,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         full_proposal_view: bool,
         max_iter: int = 10,
         show_progress: int = 0,
+        force_rank0: bool = False,
     ) -> Scores:
         """Run E steps until candidates converge, holding my LUT fixed.
 
@@ -2875,7 +2881,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         for it in iters:
             for batch in target_data.batches(show_progress=show_batch_progress):
                 batch_scores = self.score_batch(
-                    batch, data.n_candidates, allow_blanks=True
+                    batch, data.n_candidates, allow_blanks=True, force_rank0=force_rank0
                 )
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
@@ -6299,6 +6305,10 @@ def _get_explore_sampling_data(
     inds.masked_fill_(pzero, -1)
     p.masked_fill_(pzero, torch.finfo(p.dtype).tiny)
 
+    # pad p with an extra LUT index (row), inds with a -1
+    p = F.pad(p, (0, 0, 0, 1))
+    inds = F.pad(inds, (0, 0, 0, 1), value=-1)
+
     return p, inds
 
 
@@ -6727,6 +6737,7 @@ def _score_batch(
     skip_responsibility: bool = False,
     skip_noise: bool = False,
     allow_blanks: bool = False,
+    force_rank0: bool = False,
 ):
     n, Ctot = candidates.shape
     assert whitenedx.shape[0] == n
@@ -6756,7 +6767,7 @@ def _score_batch(
         lls[:, -1] = noise_logliks
         lls[:, -1] += noise_log_prop
 
-    if lut_params.signal_rank:
+    if lut_params.signal_rank and not force_rank0:
         lls[spike_ixs, candidate_ixs] = _calc_loglik_ppca(
             whitenedx=whitenedx,
             log_proportions=log_proportions,

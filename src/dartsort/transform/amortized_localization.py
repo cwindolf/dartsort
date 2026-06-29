@@ -151,7 +151,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def reparameterize(self, mu, var):
         if var is None:
             return mu
-        std = var.sqrt()
+        std = var.relu().sqrt_()
         eps = torch.randn_like(std)
         return mu + eps * std
 
@@ -180,7 +180,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         y = F.softplus(z[:, 1]).unsqueeze(1)
         dists = dx**2 + dz**2 + y**2
         if self.decay_power == 1:
-            dists = dists.sqrt_()
+            dists = dists.relu_().sqrt_()
         elif self.decay_power == 2:
             pass
         else:
@@ -192,7 +192,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         a0 = masks * pred_amps_alpha1
         numer = a0.mul(obs_amps).sum(dim=1)
         denom = a0.square().sum(dim=1)
-        alphas = numer.div_(denom + 1e-6)
+        alphas = numer.div_(denom.relu_().add_(1e-6))
         if return_pred:
             return alphas, alphas.unsqueeze(1) * pred_amps_alpha1
         return alphas
@@ -203,7 +203,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             if self.localization_model == "gaussian":
                 pred_amps_alpha1 = dists.square().mul(-2).exp()
             else:
-                pred_amps_alpha1 = 1.0 / (dists + 1e-6)
+                pred_amps_alpha1 = (dists.relu_().add_(1e-6)).reciprocal_()
             alphas, pred_amps = self.get_alphas(
                 obs_amps, pred_amps_alpha1, masks, return_pred=True
             )
@@ -266,7 +266,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         x_masked = x * mask
         if self.scale_loss_by_mean:
             # 1/(n_chans_retained*mean amplitude)
-            rescale = 1.0 / x_masked.sum(1, keepdim=True)
+            rescale = x_masked.sum(1, keepdim=True).clamp_(min=1e-8).reciprocal_()
         else:
             rescale = 1.0 / mask.sum(1, keepdim=True)
         x_masked *= rescale

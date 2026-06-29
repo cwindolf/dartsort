@@ -534,7 +534,8 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
 
     # top indices
     (inu,) = (p.cand[:, 0] == unit_id).nonzero(as_tuple=True)
-    if inu.numel() <= p.min_count:
+    ninu = inu.numel()
+    if ninu <= p.min_count:
         return np.nan, None, None
 
     # likelihood ratio when unit comes first vs second
@@ -552,7 +553,7 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
         nfinite = finite.numel()
         if nfinite < p.min_count:
             return np.nan, None, None
-        if nfinite / inu.size < p.neighbor_fraction:
+        if nfinite / ninu < p.neighbor_fraction:
             return np.nan, None, None
 
         # handle +inf lrs by replacing with neg log liks
@@ -596,7 +597,6 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
     if no_right_peak:
         # no isolation
         iso = 1.0
-        dip = ev0
     else:
         # main case
         rad = int(np.ceil(10 / p.dx))
