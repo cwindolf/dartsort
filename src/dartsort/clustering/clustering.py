@@ -874,7 +874,9 @@ class FilterRefinement(Refinement):
     """Runs various filters as specified in cfg"""
 
     def needs_stable_features(self):
-        return bool(self.refinement_cfg.collision_cleaning_error_threshold)
+        return super().needs_stable_features() or bool(
+            self.refinement_cfg.collision_cleaning_error_threshold
+        )
 
     def _refine(
         self,

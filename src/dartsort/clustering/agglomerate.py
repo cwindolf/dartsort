@@ -381,7 +381,9 @@ def spikeinterface_merge_mask(
         recording=recording,
         template_data=template_data,
         compute_extensions=None,
+        compute_extensions_if_templates=None,
         estimate_si_sparsity=False,
+        compute_template_similarity=False,
     )
 
     # register the mask as the template similarity extension

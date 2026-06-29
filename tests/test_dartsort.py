@@ -114,7 +114,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
 
-    cfg_add = {}
+    cfg_add = {"whiten_strategy": "none", "whiten_temporal_length": None}
     if type == "drifty_match":
         type = "match"
         cfg_add["matching_template_type"] = "drifty"

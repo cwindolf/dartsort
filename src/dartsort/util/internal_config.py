@@ -334,7 +334,7 @@ class WhiteningConfig:
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
-    temporal_length: int | None = None
+    temporal_length: int | None = 3
 
 
 TemplateSVDMethod = Literal[
@@ -577,9 +577,9 @@ class RefinementConfig:
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # bad unit filter params
-    gmm_isolation_threshold: float | None = None
+    gmm_isolation_threshold: float | None = 0.975
     gmm_isolation_neighbor_fraction: float = 0.9
-    collision_cleaning_error_threshold: float | None = None
+    collision_cleaning_error_threshold: float | None = 0.3
 
     # deduplication control
     dedup_ms: float = 0.0
@@ -928,6 +928,8 @@ default_agglomerate_cfg = RefinementConfig(
     ),
     dedup_ms=0.5,
 )
+default_post_refinement_cfg = RefinementConfig(refinement_strategy="filter")
+default_post_refinement_cfgs = (default_post_refinement_cfg,)
 
 
 @cfg_dataclass
@@ -946,7 +948,7 @@ class DARTsortInternalConfig:
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
-    post_refinement_cfgs: Sequence[RefinementConfig] = ()
+    post_refinement_cfgs: Sequence[RefinementConfig] = default_post_refinement_cfgs
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
@@ -1377,7 +1379,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
-        post_refinement_cfgs=post_refinement_cfgs,
+        post_refinement_cfgs=tuple(post_refinement_cfgs),
         agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,

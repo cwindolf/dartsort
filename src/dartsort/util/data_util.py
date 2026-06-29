@@ -20,6 +20,7 @@ from spikeinterface.core.sparsity import estimate_sparsity
 from ..detect import detect_and_deduplicate
 from .internal_config import (
     TemplateConfig,
+    TemplateMergeConfig,
     WaveformConfig,
     default_clustering_features_cfg,
     default_waveform_cfg,
@@ -229,8 +230,14 @@ class DARTsortSorting:
         template_cfg: TemplateConfig | None = None,
         motion: "MotionInfo | None" = None,
         drop_doubles: bool = True,
-        compute_extensions: Sequence[str] | None = ("random_spikes", "waveforms"),
+        compute_extensions: Sequence[str] | None = (
+            "random_spikes",
+            "waveforms",
+            "correlograms",
+        ),
+        compute_extensions_if_templates: Sequence[str] | None = ("spike_amplitudes",),
         estimate_si_sparsity: bool = True,
+        compute_template_similarity: bool = True,
         features_cfg=default_clustering_features_cfg,
     ) -> SortingAnalyzer:
         """Export dartsort's internal data to a SortingAnalyzer
@@ -278,6 +285,7 @@ class DARTsortSorting:
         from spikeinterface.core import ComputeTemplates
         from spikeinterface.postprocessing import (
             ComputeSpikeLocations,
+            ComputeTemplateSimilarity,
             ComputeUnitLocations,
         )
 
@@ -296,9 +304,6 @@ class DARTsortSorting:
             sparse=estimate_si_sparsity,
             return_in_uV=False,
         )
-
-        for ext in compute_extensions or []:
-            analyzer.compute_one_extension(ext)
 
         loc_name = features_cfg.localizations_dataset_name
         if (locs := self.localizations_as_structured_array(loc_name)) is not None:
@@ -345,6 +350,29 @@ class DARTsortSorting:
             uloc_ext.data = {"unit_locations": ulocs}
             uloc_ext.run_info = {"run_completed": True}
             analyzer.extensions["unit_locations"] = uloc_ext
+
+        if compute_template_similarity and template_data is not None:
+            from ..clustering.agglomerate import template_distances
+
+            dist_res = template_distances(
+                sorting=self,
+                template_data=template_data,
+                template_merge_cfg=TemplateMergeConfig(),
+                motion=motion,
+            )
+            sim = np.clip(1.0 - dist_res.distances, min=0.0, max=1.0)
+            tsim_ext = ComputeTemplateSimilarity(analyzer)
+            tsim_ext.data = {"similarity": sim}
+            tsim_ext.params = {"method": "dartsort"}
+            tsim_ext.run_info = {"run_completed": True}
+            analyzer.extensions["template_similarity"] = tsim_ext
+
+        compute_extensions = compute_extensions or []
+        if template_data is not None:
+            extra = compute_extensions_if_templates or []
+            compute_extensions = list(compute_extensions) + list(extra)
+        for ext in compute_extensions:
+            analyzer.compute_one_extension(ext)
 
         return analyzer
 
