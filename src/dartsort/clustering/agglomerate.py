@@ -159,7 +159,8 @@ def agglomerate(
     if fcorr_mask is not None:
         assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
 
-    if refinement_cfg.spikeinterface_merge_preset is not None:
+    simg = refinement_cfg.spikeinterface_merge_preset
+    if simg is not None and simg != "none":
         pair_mask = tdist.distances < refinement_cfg.spikeinterface_merge_max_distance
         if refinement_cfg.spikeinterface_merge_min_coentropy is not None:
             cmask, _ = coentropy_merge_mask(

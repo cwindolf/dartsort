@@ -205,7 +205,7 @@ class DARTsortUserConfig:
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
     # -- final merge step
-    spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_preset: str | Literal["none"] | None = None
     """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
     Setting this is slightly different' from calling auto_merge() externally, since the internal
     version will make use of dartsort's templates and template distances.

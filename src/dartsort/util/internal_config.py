@@ -558,7 +558,7 @@ class RefinementConfig:
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
     qda_force_merge_for_temp_dist_below: float = 0.3
-    spikeinterface_merge_preset: str | None = None
+    spikeinterface_merge_preset: str | Literal["none"] | None = None
     spikeinterface_merge_max_distance: float = 0.8
     spikeinterface_merge_min_coentropy: float | None = 0.01
     spikeinterface_merge_coent_coverage: float = 0.8
