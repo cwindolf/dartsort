@@ -383,4 +383,6 @@ class DeveloperConfig(DARTsortUserConfig):
     precomputed_templates_npz: str | None = None
     save_everything_on_error: bool = False
     link_from: str | None = None
-    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
+    link_step: Literal[
+        "denoising", "detection", "refined0", "matching1_models", "matching1"
+    ] = "refined0"

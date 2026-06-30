@@ -101,6 +101,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         ncand = gmm_refinement_cfg.n_candidates
         assert gmm_refinement_cfg.robust_strategy == "none"  # not implemented atm
         self.n_candidates = ncand
+        self.feature_rank = self.clustering_features_cfg.feature_rank
         self.save_neighborhood_ids = save_neighborhood_ids
         self.shape = [(), (ncand,), (ncand + 1,), (ncand + 1,)]
         self.dtype = [torch.int32, torch.int32, torch.float32, torch.float32]
@@ -207,6 +208,8 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             motion=self.motion,
             tpca=tpca,
         )
+        assert mix_data.tmm.noise is not None
+        self.feature_rank = mix_data.tmm.noise.rank
 
         if not self.motion.drifting:
             # in this case, channel index is a superset of neighborhoods and
@@ -297,7 +300,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
             self.motion,
             tmm_dict,
             neighborhoods=neighborhoods,
-            feature_rank=self.clustering_features_cfg.feature_rank,
+            feature_rank=self.feature_rank,
             refinement_cfg=self.gmm_refinement_cfg,
         )
         self.tmm.lut_params = None

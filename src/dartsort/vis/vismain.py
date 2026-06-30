@@ -119,11 +119,14 @@ def visualize_sorting(
         single_unit_ids=single_unit_ids,
         allow_qda=allow_qda,
     )
-    sum_png, unit_sum_dir, comp_png, comp_csv, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
+    sum_png, sum_csv, unit_sum_dir, comp_png, comp_csv, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
         paths_or_nones
     )
 
     try:
+        if sum_csv is not None and analysis is not None:
+            if overwrite or not sum_csv.exists():
+                analysis.summary_df().to_csv(sum_csv)
         if sum_png is not None:
             if overwrite or not sum_png.exists():
                 fig = make_sorting_summary(analysis, figure=None)
@@ -480,12 +483,13 @@ def _plan_vis(
 
     if make_sorting_summaries and is_labeled:
         sorting_summary_png = output_directory / "sorting_summary.png"
-        need_summary = overwrite or not sorting_summary_png.exists()
+        sorting_summary_csv = output_directory / "sorting_summary.csv"
+        need_summary = overwrite or not sorting_summary_png.exists() or not sorting_summary_csv.exists()
         need_analysis = need_analysis or need_summary
         if not need_summary:
-            sorting_summary_png = None
+            sorting_summary_csv = sorting_summary_png = None
     else:
-        sorting_summary_png = None
+        sorting_summary_csv = sorting_summary_png = None
 
     if make_unit_summaries and is_labeled:
         unit_summary_dir = output_directory / "single_unit_summaries"
@@ -658,6 +662,7 @@ def _plan_vis(
         mix,
         venn_cmps,
         sorting_summary_png,
+        sorting_summary_csv,
         unit_summary_dir,
         comparison_png,
         comparison_csv,

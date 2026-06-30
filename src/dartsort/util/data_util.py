@@ -305,6 +305,9 @@ class DARTsortSorting:
             return_in_uV=False,
         )
 
+        for ext in compute_extensions or []:
+            analyzer.compute_one_extension(ext)
+
         loc_name = features_cfg.localizations_dataset_name
         if (locs := self.localizations_as_structured_array(loc_name)) is not None:
             locs = locs[kept_indices]
@@ -331,7 +334,7 @@ class DARTsortSorting:
             )
             s_before = template_data.trough_offset_samples
             s_after = template_data.spike_length_samples - s_before
-            ms_per_sample = 1000 / self.sampling_frequency
+            ms_per_sample = 1000.0 / self.sampling_frequency
 
             td_ext.data = {"average": template_data.templates}
             td_ext.params = {
@@ -360,19 +363,16 @@ class DARTsortSorting:
                 template_merge_cfg=TemplateMergeConfig(),
                 motion=motion,
             )
-            sim = np.clip(1.0 - dist_res.distances, min=0.0, max=1.0)
+            sim = np.clip(1.0 - dist_res.distances, a_min=0.0, a_max=1.0)
             tsim_ext = ComputeTemplateSimilarity(analyzer)
             tsim_ext.data = {"similarity": sim}
             tsim_ext.params = {"method": "dartsort"}
             tsim_ext.run_info = {"run_completed": True}
             analyzer.extensions["template_similarity"] = tsim_ext
 
-        compute_extensions = compute_extensions or []
         if template_data is not None:
-            extra = compute_extensions_if_templates or []
-            compute_extensions = list(compute_extensions) + list(extra)
-        for ext in compute_extensions:
-            analyzer.compute_one_extension(ext)
+            for ext in compute_extensions_if_templates or []:
+                analyzer.compute_one_extension(ext)
 
         return analyzer
 

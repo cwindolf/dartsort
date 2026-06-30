@@ -976,7 +976,9 @@ class DARTsortInternalConfig:
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     tmpdir_parent: str | None = None
     link_from: str | None = None
-    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
+    link_step: Literal[
+        "denoising", "detection", "refined0", "matching1_models", "matching1"
+    ] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
