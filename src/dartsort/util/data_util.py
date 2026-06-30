@@ -990,6 +990,8 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         st = DARTsortSorting.load(f)
     elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
         st = DARTsortSorting.load(f / "dartsort_sorting.npz")
+    elif f.is_dir() and (f / "sorting.npz").exists():
+        st = DARTsortSorting.load(f / "sorting.npz")
     else:
         raise ValueError(f"Not sure how to load '{f}'.")
 
