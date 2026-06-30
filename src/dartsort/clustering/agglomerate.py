@@ -202,7 +202,7 @@ def agglomerate(
         dists=final_mask_as_distance,
         shifts=tdist.shifts,
         unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-        threshold=0.5,
+        threshold=0.5,  # binary input here
         link=template_merge_cfg.linkage,
     )
 

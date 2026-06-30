@@ -121,7 +121,7 @@ class ISIViolCDF(OverviewPlot):
         assert sorting_analysis.sorting.labels is not None
         qdf = sorting_analysis.summary_df()
         if 'isi_violation_ratio' not in qdf.columns:
-            ax = panel.subplot()
+            ax = panel.subplots()
             ax.axis('off')
             return
         vi = qdf.isi_violation_ratio
