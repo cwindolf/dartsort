@@ -11,6 +11,7 @@ This should also make it easier to compute drift-aware metrics
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import spikeinterface.core as sc
 import torch
 from sklearn.decomposition import PCA
@@ -51,6 +52,7 @@ class DARTsortAnalysis:
 
     sorting: DARTsortSorting
     recording: sc.BaseRecording
+    quality_df: pd.DataFrame
     template_data: TemplateData | None
     coarse_template_data: TemplateData | None
     motion: MotionInfo
@@ -107,6 +109,13 @@ class DARTsortAnalysis:
             "positions",
         ),
         try_backup_amplitudes=("amplitudes", "ptp_amplitudes"),
+        quality_metrics=(
+            "sliding_rp_violation",
+            "isi_violation",
+            "presence_ratio",
+            "firing_rate",
+            "num_spikes",
+        ),
     ):
         """Try to re-load as much info as possible from the sorting itself
 
@@ -273,10 +282,20 @@ class DARTsortAnalysis:
         spike_counts = spike_counts[unit_ids >= 0]
         unit_ids = unit_ids[unit_ids >= 0]
 
+        analyzer = sorting.to_sorting_analyzer(
+            recording=recording,
+            template_data=template_data,
+            motion=motion,
+            features_cfg=clustering_features_cfg,
+        )
+        analyzer.compute("quality_metrics", metric_names=quality_metrics)
+        qc_df = analyzer.get_extension("quality_metrics").get_data()
+
         return cls(
             sorting=sorting,
             recording=recording,
             template_data=template_data,
+            quality_df=qc_df,
             coarse_template_data=coarse_template_data,
             motion=motion,
             merge_distances=merge_distances,
@@ -353,6 +372,16 @@ class DARTsortAnalysis:
 
     def has_pca(self):
         return self.sorting._has_dataset(self.tpca_features_dset)
+
+    def summary_df(self):
+        if hasattr(self, "_summary_df"):
+            return self._summary_df
+        df = self.quality_df.copy()
+        uids = self.sorting.unit_ids
+        df["ds_unit_amplitudes"] = pd.Series(index=uids, data=self.unit_amplitudes())
+        df["ds_firing_rates"] = pd.Series(index=uids, data=self.firing_rates())
+        self._summary_df = df
+        return df
 
     # cluster-dependent feature loading methods
 

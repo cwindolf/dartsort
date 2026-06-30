@@ -169,12 +169,13 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
     link_from = ensure_path(cfg.link_from, strict=True, resolve=True)
     assert link_from.is_dir()
 
-    link_patterns = []
     link_matching1 = cfg.link_step == "matching1"
-    link_refined0 = link_matching1 or cfg.link_step == "refined0"
+    link_matching1_models = link_matching1 or cfg.link_step == "matching1_models"
+    link_refined0 = link_matching1_models or cfg.link_step == "refined0"
     link_detection = link_refined0 or cfg.link_step == "detection"
     link_denoising = link_detection or cfg.link_step == "denoising"
 
+    link_patterns = []
     if link_denoising:
         link_patterns.extend(["subtraction_models/*denoising_pipeline.pt"])
     if link_detection:
@@ -188,8 +189,10 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
         )
     if link_refined0:
         link_patterns.extend(["initial*.npy", "refined0*.npy"])
+    if link_matching1_models:
+        link_patterns.extend(["matching1_models"])
     if link_matching1:
-        link_patterns.extend(["matching1.h5", "matching1_models"])
+        link_patterns.extend(["matching1.h5"])
 
     for pattern in link_patterns:
         for src in link_from.glob(pattern):

@@ -68,6 +68,7 @@ class DARTsortGroundTruthComparison:
         self._unsorted_detection = self._greedy_confusion = None
         if self.compute_unsorted_recall:
             self._calculate_greedy_confusion_and_detection()
+        self._unit_info_cache = {}
 
     def _check(self):
         gt_td = self.gt_analysis.template_data
@@ -114,7 +115,7 @@ class DARTsortGroundTruthComparison:
         self._agreement_scores = a
         return a
 
-    def unit_amplitudes(self, unit_id):
+    def unit_amplitudes(self, unit_id=None):
         return self.gt_analysis.unit_amplitudes(unit_id)
 
     def get_match(self, gt_unit):
@@ -126,6 +127,14 @@ class DARTsortGroundTruthComparison:
         return int(self.comparison.best_match_12[gt_unit])
 
     def unit_info_dataframe(self, force_distances=False, perf_only=False):
+        k = (force_distances, perf_only)
+        if k in self._unit_info_cache:
+            return self._unit_info_cache[k]
+        res = self._unit_info_dataframe(force_distances, perf_only)
+        self._unit_info_cache[k] = res
+        return res
+
+    def _unit_info_dataframe(self, force_distances=False, perf_only=False):
         amplitudes = self.gt_analysis.unit_amplitudes()
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()

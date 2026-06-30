@@ -170,10 +170,11 @@ def linkage_mask(
     return mask
 
 
-def sparsify_labels(labels: np.ndarray) -> dict[int, np.ndarray]:
+def sparsify_labels(labels: np.ndarray, ids: np.ndarray | None = None) -> dict[int, np.ndarray]:
     assert labels.ndim == 1
-    ids = np.unique(labels)
-    ids = ids[ids >= 0]
+    if ids is None:
+        ids = np.unique(labels)
+        ids = ids[ids >= 0]
     inj = {}
     for j in ids:
         inj[j] = np.flatnonzero(labels == j)

@@ -463,6 +463,14 @@ class SubtractionPeeler(BasePeeler):
                     waveforms_dataset_name="subtract_fit_waveforms",
                     device="cpu" if which == "denoisers" else device,
                 )
+                if not len(waveforms):
+                    raise ValueError(
+                        "Found no spikes when trying to fit subtraction models. "
+                        f"The already fitted models were: {already_fitted}. "
+                        "This error indicates that fitting went wrong with one "
+                        "of those models."
+                    )
+
                 # these are on CPU for now.
                 if which == "denoisers":
                     assert fit_feats is not None

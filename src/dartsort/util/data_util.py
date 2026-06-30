@@ -20,6 +20,7 @@ from spikeinterface.core.sparsity import estimate_sparsity
 from ..detect import detect_and_deduplicate
 from .internal_config import (
     TemplateConfig,
+    TemplateMergeConfig,
     WaveformConfig,
     default_clustering_features_cfg,
     default_waveform_cfg,
@@ -27,6 +28,7 @@ from .internal_config import (
 from .logging_util import get_logger, progbar
 
 if TYPE_CHECKING:
+    from ..clustering.mixture import Scores
     from ..templates.templates import TemplateData
     from .motion import MotionInfo
 from .job_util import ensure_computation_config
@@ -228,7 +230,14 @@ class DARTsortSorting:
         template_cfg: TemplateConfig | None = None,
         motion: "MotionInfo | None" = None,
         drop_doubles: bool = True,
-        compute_extensions: Sequence[str] | None = ("random_spikes", "waveforms"),
+        compute_extensions: Sequence[str] | None = (
+            "random_spikes",
+            "waveforms",
+            "correlograms",
+        ),
+        compute_extensions_if_templates: Sequence[str] | None = ("spike_amplitudes",),
+        estimate_si_sparsity: bool = True,
+        compute_template_similarity: bool = True,
         features_cfg=default_clustering_features_cfg,
     ) -> SortingAnalyzer:
         """Export dartsort's internal data to a SortingAnalyzer
@@ -276,6 +285,7 @@ class DARTsortSorting:
         from spikeinterface.core import ComputeTemplates
         from spikeinterface.postprocessing import (
             ComputeSpikeLocations,
+            ComputeTemplateSimilarity,
             ComputeUnitLocations,
         )
 
@@ -283,9 +293,16 @@ class DARTsortSorting:
             drop_doubles=drop_doubles, return_kept_indices=True
         )  # type: ignore
 
-        sparsity = estimate_sparsity(sorting, recording)
+        if estimate_si_sparsity:
+            sparsity = estimate_sparsity(sorting, recording)
+        else:
+            sparsity = None
         analyzer = create_sorting_analyzer(
-            sorting=sorting, recording=recording, sparsity=sparsity, return_in_uV=False
+            sorting=sorting,
+            recording=recording,
+            sparsity=sparsity,
+            sparse=estimate_si_sparsity,
+            return_in_uV=False,
         )
 
         for ext in compute_extensions or []:
@@ -317,7 +334,7 @@ class DARTsortSorting:
             )
             s_before = template_data.trough_offset_samples
             s_after = template_data.spike_length_samples - s_before
-            ms_per_sample = 1000 / self.sampling_frequency
+            ms_per_sample = 1000.0 / self.sampling_frequency
 
             td_ext.data = {"average": template_data.templates}
             td_ext.params = {
@@ -336,6 +353,26 @@ class DARTsortSorting:
             uloc_ext.data = {"unit_locations": ulocs}
             uloc_ext.run_info = {"run_completed": True}
             analyzer.extensions["unit_locations"] = uloc_ext
+
+        if compute_template_similarity and template_data is not None:
+            from ..clustering.agglomerate import template_distances
+
+            dist_res = template_distances(
+                sorting=self,
+                template_data=template_data,
+                template_merge_cfg=TemplateMergeConfig(),
+                motion=motion,
+            )
+            sim = np.clip(1.0 - dist_res.distances, a_min=0.0, a_max=1.0)
+            tsim_ext = ComputeTemplateSimilarity(analyzer)
+            tsim_ext.data = {"similarity": sim}
+            tsim_ext.params = {"method": "dartsort"}
+            tsim_ext.run_info = {"run_completed": True}
+            analyzer.extensions["template_similarity"] = tsim_ext
+
+        if template_data is not None:
+            for ext in compute_extensions_if_templates or []:
+                analyzer.compute_one_extension(ext)
 
         return analyzer
 
@@ -802,14 +839,37 @@ class DARTsortSorting:
         kept_indices = np.setdiff1d(np.arange(len(self)), viol_ixs)
         return st, kept_indices
 
-    def flatten(self) -> Self:
+    def flatten(self, include_gmm_properties: bool = False) -> Self:
         """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
-        _, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        old_unique, flat_labels = np.unique(self.labels[valid], return_inverse=True)
+        if np.array_equal(old_unique, np.arange(old_unique.max() + 1)):
+            return self
         new_labels = np.full_like(self.labels, -1)
         new_labels[valid] = flat_labels
-        return self.ephemeral_replace(labels=new_labels)
+
+        keys = ("merged_candidates", "gmm_candidates")
+        if not include_gmm_properties or not any(hasattr(self, k) for k in keys):
+            return self.ephemeral_replace(labels=new_labels)
+
+        remapping = np.full((old_unique.max() + 1,), -1)
+        remapping[old_unique] = np.arange(len(old_unique))
+        new_props = dict(labels=new_labels)
+        for k in keys:
+            v = getattr(self, k, None)
+            if v is None:
+                continue
+            valid = v >= 0
+            v_valid = v[valid]
+            new_v = v.copy()
+            new_v[valid] = remapping[v_valid]
+            new_props[k] = new_v
+
+            # if merged candidates were present, the labels
+            # don't match gmm_candidates
+            break
+        return self.ephemeral_replace(**new_props)
 
     def __str__(self):
         name = self.__class__.__name__
@@ -1304,6 +1364,32 @@ def merged_responsibilities(
     )
 
 
+def get_gmm_scores(sorting: DARTsortSorting, prefixes=("merged", "gmm")) -> "Scores":
+    from ..clustering.mixture import Scores
+
+    for prefix in prefixes:
+        cand = getattr(sorting, f"{prefix}_candidates", None)
+        log_liks = getattr(sorting, f"{prefix}_log_liks", None)
+        resp = getattr(sorting, f"{prefix}_responsibilities", None)
+        if cand is not None:
+            break
+    else:
+        raise AttributeError("No scores attached to sorting.")
+
+    assert cand is not None
+    assert log_liks is not None
+    assert resp is not None
+
+    cand = torch.asarray(cand)
+    log_liks = torch.asarray(log_liks)
+    resp = torch.asarray(resp)
+
+    scores = Scores(
+        candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
+    )
+    return scores
+
+
 def explode_soft_assignment_sorting(
     sorting: DARTsortSorting,
     responsibilities_key="merged_responsibilities",
@@ -1386,6 +1472,7 @@ def check_recording(
     threshold=5,
     dedup_spatial_radius=75,
     expected_value_range=1e4,
+    too_few_spikes_per_sec=10,
     expected_spikes_per_sec=10_000,
     num_chunks_per_segment=5,
     dtype=torch.float,
@@ -1422,22 +1509,31 @@ def check_recording(
     avg_detections_per_second = np.mean(spike_rates)
     max_abs = np.max(random_chunks)
 
+    err_tail = (
+        "You may want to check that your data has been preprocessed, "
+        "including standardization. If it seems right, then you may need to "
+        "shrink the chunk_length_samples parameters in the configuration if "
+        "you experience memory issues."
+    )
+
     failed = False
     if avg_detections_per_second > expected_spikes_per_sec:
         warnings.warn(
-            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is "
-            "large. You may want to check that your data has been preprocessed, "
-            "including standardization. If it seems right, then you may need to "
-            "shrink the chunk_length_samples parameters in the configuration if "
-            "you experience memory issues.",
+            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is large. "
+            + err_tail,
             RuntimeWarning,
         )
         failed = True
-
+    if avg_detections_per_second < too_few_spikes_per_sec:
+        warnings.warn(
+            f"Detected {avg_detections_per_second:0.1f} spikes/s, which is small."
+            + err_tail,
+            RuntimeWarning,
+        )
+        failed = True
     if max_abs > expected_value_range:
         warnings.warn(
-            f"Recording values exceed |{expected_value_range}|. You may want to "
-            "check that your data has been preprocessed, including standardization.",
+            f"Recording values exceed |{expected_value_range}|. " + err_tail,
             RuntimeWarning,
         )
         failed = True

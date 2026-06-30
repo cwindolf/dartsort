@@ -95,8 +95,6 @@ def union_arg_type(tp):
     # let's just exclude some bad ideas here, because I don't
     # really want to figure out how to disambiguate these cases
     assert bool not in tps
-    if str in tps:
-        assert len(tps) == 2
     if int in tps:
         assert float not in tps
     assert not any(typing.get_origin(tp) == typing.Union for tp in tps)

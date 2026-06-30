@@ -204,6 +204,15 @@ class DARTsortUserConfig:
     temporal_upsamples: Annotated[int, Field(ge=1)] = 4
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
+    # -- final merge step
+    spikeinterface_merge_preset: str | Literal["none"] | None = None
+    """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
+    Setting this is slightly different' from calling auto_merge() externally, since the internal
+    version will make use of dartsort's templates and template distances.
+    dartsort extends auto_merge() with some additional presets: dartsort_slay_xc_ccg,
+    dartsort_slay_xc, dartsort_slay_ccg. These are conservative presets; see and cite
+    Koukuntla et al., 2025 for the SLAY score criterion."""
+
     # -- motion estimation parameters
     rigid: bool = False
     """Use rigid registration and ignore the window parameters."""
@@ -257,8 +266,7 @@ class DeveloperConfig(DARTsortUserConfig):
     threshold_before_whitening: float = 10.0
     temporal_dedup_radius_samples: int = 7
     positive_temporal_dedup_radius_samples: int = 41
-    spikeinterface_merge_preset: str | None = None
-    spikeinterface_merge_max_distance: float = 0.5
+    spikeinterface_merge_max_distance: float = 0.8
 
     # matching
     matching_template_type: Literal["individual_compressed_upsampled", "drifty"] = (
@@ -283,7 +291,7 @@ class DeveloperConfig(DARTsortUserConfig):
     trough_factor: float = 3.0
     whiten_strategy: WhiteningStrategy = "prewhiten_postapply"
     whiten_estimator: WhiteningEstimator = "localzca"
-    whiten_temporal_length: int | None = None
+    whiten_temporal_length: int | None = 3
     whiten_features: bool = False
     matching_fp_control: bool = False
     refractory_radius_frames: int = 0
@@ -323,6 +331,10 @@ class DeveloperConfig(DARTsortUserConfig):
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
 
+    # filters
+    gmm_isolation_threshold: float | None = 0.975
+    collision_cleaning_error_threshold: float | None = 0.3
+
     # gaussian mixture high level
     initial_rank: int | None = None
     initialize_at_rank_0: bool = False
@@ -353,7 +365,7 @@ class DeveloperConfig(DARTsortUserConfig):
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
     demolish_during_selection: bool = False
-    em_after_demolish: bool = False
+    em_after_demolish: bool = True
     tpca_from_templates: bool = True
 
     # agglomeration
@@ -371,4 +383,6 @@ class DeveloperConfig(DARTsortUserConfig):
     precomputed_templates_npz: str | None = None
     save_everything_on_error: bool = False
     link_from: str | None = None
-    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
+    link_step: Literal[
+        "denoising", "detection", "refined0", "matching1_models", "matching1"
+    ] = "refined0"

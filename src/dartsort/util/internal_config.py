@@ -94,6 +94,12 @@ class WaveformConfig:
             return slice(None)
         return slice(start_offset, other_len - end_offset)
 
+    def relative_cfg(self, sl: slice, sampling_frequency: float) -> Self:
+        trough = self.trough_offset_samples(sampling_frequency)
+        nbefore = trough - sl.start
+        nafter = sl.stop - trough
+        return self.__class__.from_samples(nbefore, nafter, sampling_frequency)
+
     def pad(self, padding_ms: float) -> Self:
         return self.__class__(
             ms_before=self.ms_before + padding_ms,
@@ -328,7 +334,7 @@ class WhiteningConfig:
     estimator: WhiteningEstimator = "localzca"
     interp_params: InterpolationParams = tps_interp_clampna_extrap_params
     radius: float = 200.0
-    temporal_length: int | None = None
+    temporal_length: int | None = 3
 
 
 TemplateSVDMethod = Literal[
@@ -497,6 +503,7 @@ class RefinementConfig:
     initialize_at_rank_0: bool = False
     cl_alpha: float = 0.05
     cl_split_only: bool = True
+    demolish_cl_alpha: float = 0.0
     latent_prior_std: float = 1.0
     initial_basis_shrinkage: float = 1.0
     n_spikes_fit: int = 4096
@@ -532,7 +539,7 @@ class RefinementConfig:
     demolition_min_resp_ratio: float = 0.9
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
-    em_after_demolish: bool = False
+    em_after_demolish: bool = True
     whiten_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
@@ -551,8 +558,8 @@ class RefinementConfig:
     qda_min_coverage: float = 0.35
     qda_min_iou: float = 0.5
     qda_force_merge_for_temp_dist_below: float = 0.3
-    spikeinterface_merge_preset: str | None = None
-    spikeinterface_merge_max_distance: float = 0.5
+    spikeinterface_merge_preset: str | Literal["none"] | None = None
+    spikeinterface_merge_max_distance: float = 0.8
     spikeinterface_merge_min_coentropy: float | None = 0.01
     spikeinterface_merge_coent_coverage: float = 0.8
     spikeinterface_merge_coent_iou: float = 0.5
@@ -568,6 +575,11 @@ class RefinementConfig:
     val_proportion: float = 0.5
     impute_kind: Literal["interp", "impute"] = "impute"
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
+
+    # bad unit filter params
+    gmm_isolation_threshold: float | None = 0.975
+    gmm_isolation_neighbor_fraction: float = 0.9
+    collision_cleaning_error_threshold: float | None = 0.3
 
     # deduplication control
     dedup_ms: float = 0.0
@@ -916,6 +928,8 @@ default_agglomerate_cfg = RefinementConfig(
     ),
     dedup_ms=0.5,
 )
+default_post_refinement_cfg = RefinementConfig(refinement_strategy="filter")
+default_post_refinement_cfgs = (default_post_refinement_cfg,)
 
 
 @cfg_dataclass
@@ -934,7 +948,7 @@ class DARTsortInternalConfig:
     initial_refinement_cfg: RefinementConfig = default_initial_refinement_cfg
     pre_refinement_cfg: RefinementConfig | None = default_pre_refinement_cfg
     refinement_cfg: RefinementConfig = default_refinement_cfg
-    post_refinement_cfg: RefinementConfig | None = None
+    post_refinement_cfgs: Sequence[RefinementConfig] = default_post_refinement_cfgs
     agglomerate_cfg: RefinementConfig | None = default_agglomerate_cfg
     matching_cfg: MatchingConfig = default_matching_cfg
     motion_estimation_cfg: MotionEstimationConfig = default_motion_estimation_cfg
@@ -962,7 +976,9 @@ class DARTsortInternalConfig:
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
     tmpdir_parent: str | None = None
     link_from: str | None = None
-    link_step: Literal["denoising", "detection", "refined0", "matching1"] = "refined0"
+    link_step: Literal[
+        "denoising", "detection", "refined0", "matching1_models", "matching1"
+    ] = "refined0"
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
@@ -1343,6 +1359,19 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     else:
         assert False
 
+    post_refinement_cfgs: list[RefinementConfig] = []
+    if cfg.post_refinement_merge:
+        assert pre_refinement_cfg is not None
+        post_refinement_cfgs.append(pre_refinement_cfg)
+    if cfg.gmm_isolation_threshold or cfg.collision_cleaning_error_threshold:
+        post_refinement_cfgs.append(
+            RefinementConfig(
+                refinement_strategy="filter",
+                gmm_isolation_threshold=cfg.gmm_isolation_threshold,
+                collision_cleaning_error_threshold=cfg.collision_cleaning_error_threshold,
+            )
+        )
+
     return DARTsortInternalConfig(
         waveform_cfg=waveform_cfg,
         featurization_cfg=featurization_cfg,
@@ -1352,7 +1381,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         clustering_cfg=clustering_cfg,
         pre_refinement_cfg=pre_refinement_cfg,
         initial_refinement_cfg=initial_refinement_cfg,
-        post_refinement_cfg=pre_refinement_cfg if cfg.post_refinement_merge else None,
+        post_refinement_cfgs=tuple(post_refinement_cfgs),
         agglomerate_cfg=agg_cfg,
         refinement_cfg=refinement_cfg,
         matching_cfg=matching_cfg,

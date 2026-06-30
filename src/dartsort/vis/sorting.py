@@ -24,6 +24,8 @@ class SortingTextInfo(OverviewPlot):
         axis.axis("off")
         msg = ""
 
+        qdf = sorting_analysis.summary_df()
+
         if sorting_analysis.name:
             msg += f"Sorting: {sorting_analysis.name}\n"
 
@@ -39,9 +41,19 @@ class SortingTextInfo(OverviewPlot):
         msg += f"{nspikes} total spikes\n"
         if triaged:
             tpct = 100 * triaged / nspikes
-            msg += f"{triaged} ({tpct:0.1f}%) of these are triaged"
+            msg += f"{triaged} ({tpct:0.1f}%) noise\n"
         else:
-            msg += f"no triaged spikes"
+            msg += "no noise spikes\n"
+
+        if 'isi_violations_ratio' in qdf.columns:
+            vi = qdf.isi_violations_ratio
+            nclean = (vi < 0.1).sum()
+            nviol = (vi >= 0.1).sum()
+            cleanyield = qdf.num_spikes[vi < 0.1].sum()
+            cleanpct = f"{100 * cleanyield / nspikes:0.1f}%"
+
+            msg += f"{nclean} <10%viol ({nviol} viol) units\n"
+            msg += f"{cleanyield} spikes in <10%viol ({cleanpct})\n"
 
         n_units = sorting_analysis.sorting.n_units
         msg += f"{n_units} units"
@@ -65,7 +77,7 @@ class CoarseTemplateMaxChannelsPlot(OverviewPlot):
         )
 
 
-class SpikeCountHistogram(OverviewPlot):
+class FiringRateHistogram(OverviewPlot):
     kind = "histogram"
     width = 2
 
@@ -76,15 +88,54 @@ class SpikeCountHistogram(OverviewPlot):
     def draw(self, panel, sorting_analysis: DARTsortAnalysis):
         assert sorting_analysis.coarse_template_data is not None
         assert sorting_analysis.sorting.labels is not None
+        qdf = sorting_analysis.summary_df()
+        show = dict(fr=qdf.ds_firing_rates)
+        if 'firing_rate' in qdf.columns:
+            show['sifr'] = qdf.firing_rate
         axis = panel.subplots()
-        counts = np.unique(sorting_analysis.sorting.labels, return_counts=True)[1],
         axis.hist(
-            counts,
+            show.values(),
+            label=show.keys(),
             bins=self.n_bins,
             log=self.log,
-            histtype="stepfilled",
-            color="k",
+            histtype="step",
+            color="k" if len(show) <= 1 else ["k", "gray"],
         )
+        axis.set_ylim(bottom=0)
+        if len(show) > 1:
+            axis.legend(fancybox=False)
+        axis.grid()
+        axis.set_xlabel("firing rate")
+
+
+class ISIViolCDF(OverviewPlot):
+    kind = "histogram"
+    width = 2
+
+    def __init__(self, n_bins=128, log=True):
+        self.n_bins = n_bins
+        self.log = log
+
+    def draw(self, panel, sorting_analysis: DARTsortAnalysis):
+        assert sorting_analysis.coarse_template_data is not None
+        assert sorting_analysis.sorting.labels is not None
+        qdf = sorting_analysis.summary_df()
+        if 'isi_violation_ratio' not in qdf.columns:
+            ax = panel.subplots()
+            ax.axis('off')
+            return
+        vi = qdf.isi_violation_ratio
+        axis = panel.subplots()
+        axis.hist(
+            vi.values,
+            bins=self.n_bins,
+            log=self.log,
+            histtype="step",
+            color="k",
+            cumulative=True,
+        )
+        axis.set_ylim(bottom=0)
+        axis.grid(which='both')
         axis.set_xlabel("per-unit spike count")
 
 
@@ -136,9 +187,10 @@ class RasterPlot(OverviewPlot):
 sorting_plots = (
     SortingTextInfo(),
     CoarseTemplateMaxChannelsPlot(),
-    SpikeCountHistogram(),
+    FiringRateHistogram(),
+    ISIViolCDF(),
     MergeDistanceMatrix(),
-    RasterPlot(),
+    # RasterPlot(),
 )
 
 

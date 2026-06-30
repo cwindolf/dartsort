@@ -1063,6 +1063,7 @@ def make_all_summaries(
     n_jobs=None,
     show_progress=True,
     namebyamp=False,
+    nameby: tuple[str, np.ndarray] | None=None,
     overwrite=False,
     unit_ids=None,
     gizmo_name="sorting_analysis",
@@ -1080,11 +1081,13 @@ def make_all_summaries(
         rg = np.random.default_rng(seed)
         unit_ids = rg.choice(unit_ids, size=n_units, replace=False)
         unit_ids.sort()
+    if nameby is None and namebyamp:
+        nameby = ("amp", sorting_analysis.unit_amplitudes())
     if not overwrite and all_summaries_done(
         unit_ids,
         save_folder,
         sorting_analysis=sorting_analysis,
-        namebyamp=namebyamp,
+        nameby=nameby,
         ext=image_ext,
     ):
         return
@@ -1107,7 +1110,7 @@ def make_all_summaries(
         overwrite,
         global_params,
         gizmo_name,
-        namebyamp,
+        nameby,
     )
     if n_jobs is None:
         n_jobs = get_global_computation_config().n_jobs_cpu
@@ -1144,26 +1147,30 @@ def trim_waveforms(waveforms, old_offset=42, new_offset=42, new_length=121):
     return waveforms[:, start:end]
 
 
-def pngname(unit_id, sorting_analysis=None, namebyamp=False, ext="png"):
-    if not namebyamp:
+def pngname(unit_id, sorting_analysis=None, nameby=None, ext="png"):
+    if nameby is None:
         return f"unit{unit_id:04d}.{ext}"
     if sorting_analysis is None:
-        raise ValueError("Need a sorting_analysis if namebyamp.")
-    amp = float(sorting_analysis.unit_amplitudes(unit_id).item())
-    amp = f"{amp:07.2f}"
-    return f"amp{amp}_unit{unit_id:04d}.{ext}"
+        raise ValueError("Need a sorting_analysis if nameby.")
+    name, namearr = nameby
+    nameval = namearr[sorting_analysis.unit_ids == unit_id].item()
+    nameval = f"{nameval:08.4f}"
+    return f"{name}{nameval}_unit{unit_id:04d}.{ext}"
 
 
 def all_summaries_done(
-    unit_ids, save_folder, sorting_analysis=None, namebyamp=False, ext="png"
+    unit_ids, save_folder, sorting_analysis=None, namebyamp=False, nameby=None, ext="png"
 ):
     if not save_folder.exists():
         return False
+    if nameby is None and namebyamp:
+        assert sorting_analysis is not None
+        nameby = ("amp", sorting_analysis.unit_amplitudes())
     return all(
         (
             save_folder
             / pngname(
-                unit_id, sorting_analysis=sorting_analysis, namebyamp=namebyamp, ext=ext
+                unit_id, sorting_analysis=sorting_analysis, nameby=nameby, ext=ext
             )
         ).exists()
         for unit_id in unit_ids
@@ -1186,7 +1193,7 @@ class SummaryJobContext:
         overwrite,
         global_params,
         gizmo_name,
-        namebyamp,
+        nameby,
     ):
         self.sorting_analysis = sorting_analysis
         self.plots = plots
@@ -1198,7 +1205,7 @@ class SummaryJobContext:
         self.overwrite = overwrite
         self.global_params = global_params
         self.gizmo_name = gizmo_name
-        self.namebyamp = namebyamp
+        self.nameby = nameby
 
 
 _summary_job_context = None
@@ -1219,7 +1226,7 @@ def _summary_job(unit_id: int):
     imfn = pngname(
         unit_id,
         sorting_analysis=_summary_job_context.sorting_analysis,
-        namebyamp=_summary_job_context.namebyamp,
+        nameby=_summary_job_context.nameby,
         ext=_summary_job_context.image_ext,
     )
     final_out = _summary_job_context.save_folder / imfn

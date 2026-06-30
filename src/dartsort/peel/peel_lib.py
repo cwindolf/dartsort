@@ -945,6 +945,12 @@ def threshold_to_fit(
                 waveforms_dataset_name="waveforms",
                 subsample_by_weighting=True,
             )
+            if not len(waveforms):
+                raise ValueError(
+                    "Found no spikes when thresholding to get model fitting data. "
+                    "This usually indicates a preprocessing issue, since it means "
+                    f"that no spikes could be found at threshold {threshold_cfg.detection_threshold}."
+                )
 
             # fit the thing
             pipeline = pipeline.to(device)

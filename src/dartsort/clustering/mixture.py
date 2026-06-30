@@ -803,6 +803,7 @@ class TMMParams:
     criterion_em_iters: int
     cl_alpha: float
     cl_split_only: bool
+    demolish_cl_alpha: float
     latent_prior_std: float
     min_count: int
     min_channel_count: int
@@ -847,6 +848,7 @@ class TMMParams:
             main_min_iters=refinement_cfg.main_min_iters,
             cl_alpha=refinement_cfg.cl_alpha,
             cl_split_only=refinement_cfg.cl_split_only,
+            demolish_cl_alpha=refinement_cfg.demolish_cl_alpha,
             latent_prior_std=refinement_cfg.latent_prior_std,
             robust_strategy=refinement_cfg.robust_strategy,
             demolition_min_resp_ratio=refinement_cfg.demolition_min_resp_ratio,
@@ -914,6 +916,7 @@ class GroupPartition:
     unit_ids: Tensor
     group_ids: Tensor
     n_groups: int
+    n_groups_before_demolish: int
     single_ixs: list[int]
     subset_ids: list[int]
     unit_ids_combined: list[int]
@@ -1739,6 +1742,9 @@ class TruncatedSpikeData(BatchedSpikeData):
                 explore_adj=self.explore_adj,
                 search_sets=search_sets,
                 n_explore=self.n_explore,
+            )
+            assert (
+                p.shape[0] == inds.shape[0] == self.un_adj_lut.b.unit_ids.shape[0] + 1
             )
             _sample_explore_candidates(
                 p=p,
@@ -2740,6 +2746,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         neighb_ixs: Tensor | None = None,
         lut_ixs: Tensor | None = None,
         allow_blanks: bool = False,
+        force_rank0: bool = False,
     ) -> Scores:
         assert self.lut_params is not None
         return _score_batch(
@@ -2764,6 +2771,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             static_size=batch.candidate_count,
             allow_blanks=allow_blanks,
             skip_noise=skip_noise,
+            force_rank0=force_rank0,
         )
 
     def estep_stats_batch(
@@ -2822,6 +2830,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         full_proposal_view: bool,
         max_iter: int = 10,
         show_progress: int = 0,
+        force_rank0: bool = False,
     ) -> Scores:
         """Run E steps until candidates converge, holding my LUT fixed.
 
@@ -2872,7 +2881,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         for it in iters:
             for batch in target_data.batches(show_progress=show_batch_progress):
                 batch_scores = self.score_batch(
-                    batch, data.n_candidates, allow_blanks=True
+                    batch, data.n_candidates, allow_blanks=True, force_rank0=force_rank0
                 )
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
@@ -3133,7 +3142,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             gkeep = (gids >= 0).logical_and_((train_labels == gids.unsqueeze(1)).any(1))
             (gkeep,) = gkeep.nonzero(as_tuple=True)
             unflat_group_ids = gids[gkeep].unique()
-            flatspace = gids.new_full((merge_res.grouping.n_groups,), -1)
+            flatspace = gids.new_full(
+                (merge_res.grouping.n_groups_before_demolish,), -1
+            )
             flat_group_ids = torch.arange(unflat_group_ids.numel(), device=gids.device)
             flatspace[unflat_group_ids] = flat_group_ids
             if pnoid:
@@ -3450,11 +3461,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
             scores=train_scores, n_units=self.n_units
         )
         mean_val_resp = mean_responsibilities(scores=val_scores, n_units=self.n_units)
-        alpha = 0.0 if self.p.cl_split_only else self.p.cl_alpha
         cur_crit = ecl(
             resps=val_scores.responsibilities,
             log_liks=val_scores.log_liks,
-            cl_alpha=alpha,
+            cl_alpha=self.p.demolish_cl_alpha,
         ).item()
 
         # checking this invariant at the top
@@ -5023,6 +5033,7 @@ def allowed_partitions(
                     unit_ids=unit_ids,
                     group_ids=group_ids.clone(),
                     n_groups=n_groups,
+                    n_groups_before_demolish=n_groups,
                     single_ixs=single_ixs,
                     subset_ids=subset_ids,
                     unit_ids_combined=uids_combined,
@@ -5449,7 +5460,7 @@ def evaluate_group_demolitions(
 
     # criterion:
     # loop over possible demolitions, evaluate their improvements, track best
-    alpha = 0.0 if mm.p.cl_split_only else mm.p.cl_alpha
+    alpha = mm.p.demolish_cl_alpha
     if cur_crit is None:
         cur_crit = ecl(
             resps=eval_scores.responsibilities,
@@ -6059,7 +6070,7 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
         return luts[0]
     adj = luts[0].b.lut < luts[0].b.unit_ids.shape[0]
     for ll in luts[1:]:
-        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])
+        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].b.lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
@@ -6294,6 +6305,10 @@ def _get_explore_sampling_data(
     inds.masked_fill_(pzero, -1)
     p.masked_fill_(pzero, torch.finfo(p.dtype).tiny)
 
+    # pad p with an extra LUT index (row), inds with a -1
+    p = F.pad(p, (0, 0, 0, 1))
+    inds = F.pad(inds, (0, 0, 0, 1), value=-1)
+
     return p, inds
 
 
@@ -6412,6 +6427,65 @@ def proportion_adjust_scores(
         responsibilities=new_log_liks.softmax(dim=1),
         duties=scores.duties,
     )
+
+
+def ensure_sorted_scores(scores: Scores) -> Scores:
+    """Re-sort score properties so that log liks decrease."""
+    C = scores.candidates.shape[1]
+    order = scores.log_liks[:, :C].argsort(dim=1, descending=True, stable=True)
+
+    candidates = scores.candidates.take_along_dim(indices=order, dim=1)
+    log_liks = torch.empty_like(scores.log_liks)
+    torch.take_along_dim(
+        scores.log_liks[:, :C], indices=order, dim=1, out=log_liks[:, :C]
+    )
+    if C < scores.log_liks.shape[1]:
+        assert scores.log_liks.shape[1] == C + 1
+        log_liks[:, -1] = scores.log_liks[:, -1]
+    if scores.responsibilities is not None:
+        responsibilities = F.softmax(log_liks, dim=1)
+    else:
+        responsibilities = None
+
+    return Scores(
+        candidates=candidates,
+        log_liks=log_liks,
+        responsibilities=responsibilities,
+        duties=scores.duties,
+    )
+
+
+def drop_units_and_update_scores(
+    train_scores: Scores,
+    scores: Scores | None,
+    n_units: int,
+    remove_ids: Tensor,
+):
+    # determine mean responsibilities before and after removing units
+    orig_prop = mean_responsibilities(train_scores, n_units=n_units)
+    train_scores = remove_units_from_scores(train_scores, remove_ids)
+    new_prop = mean_responsibilities(train_scores, n_units=n_units)
+    assert orig_prop.shape == new_prop.shape == (n_units + 1,), 1
+
+    # pick log props
+    model_prop = orig_prop[:n_units].sum().item()
+    new_prop *= model_prop / new_prop.sum()
+    orig_log_prop = orig_prop.log()
+    new_log_prop = new_prop.log()
+    updated = torch.logical_not(torch.isclose(orig_log_prop, new_log_prop))
+    updated[remove_ids] = False
+
+    # update the train scores
+    train_scores = proportion_adjust_scores(train_scores, orig_log_prop, new_log_prop)
+    train_scores = ensure_sorted_scores(train_scores)
+
+    # update other scores
+    if scores is not None:
+        scores = remove_units_from_scores(scores, remove_ids)
+        scores = proportion_adjust_scores(scores, orig_log_prop, new_log_prop)
+        scores = ensure_sorted_scores(scores)
+
+    return train_scores, scores
 
 
 def mean_responsibilities(
@@ -6663,6 +6737,7 @@ def _score_batch(
     skip_responsibility: bool = False,
     skip_noise: bool = False,
     allow_blanks: bool = False,
+    force_rank0: bool = False,
 ):
     n, Ctot = candidates.shape
     assert whitenedx.shape[0] == n
@@ -6692,7 +6767,7 @@ def _score_batch(
         lls[:, -1] = noise_logliks
         lls[:, -1] += noise_log_prop
 
-    if lut_params.signal_rank:
+    if lut_params.signal_rank and not force_rank0:
         lls[spike_ixs, candidate_ixs] = _calc_loglik_ppca(
             whitenedx=whitenedx,
             log_proportions=log_proportions,

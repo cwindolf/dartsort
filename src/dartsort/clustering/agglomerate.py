@@ -39,7 +39,6 @@ from .cluster_util import (
     reorder_by_depth,
     sparsify_labels,
 )
-from .mixture import Scores
 
 logger = get_logger(__name__)
 
@@ -160,7 +159,8 @@ def agglomerate(
     if fcorr_mask is not None:
         assert np.all(np.logical_and(qda_mask, fcorr_mask) <= mask)
 
-    if refinement_cfg.spikeinterface_merge_preset is not None:
+    simg = refinement_cfg.spikeinterface_merge_preset
+    if simg is not None and simg != "none":
         pair_mask = tdist.distances < refinement_cfg.spikeinterface_merge_max_distance
         if refinement_cfg.spikeinterface_merge_min_coentropy is not None:
             cmask, _ = coentropy_merge_mask(
@@ -202,7 +202,7 @@ def agglomerate(
         dists=final_mask_as_distance,
         shifts=tdist.shifts,
         unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-        threshold=0.5,
+        threshold=0.5,  # binary input here
         link=template_merge_cfg.linkage,
     )
 
@@ -360,27 +360,6 @@ def template_distances(
     )
 
 
-def _get_scores(sorting: DARTsortSorting) -> tuple[np.ndarray, Scores]:
-    cand = getattr(sorting, "gmm_candidates", None)
-    log_liks = getattr(sorting, "gmm_log_liks", None)
-    resp = getattr(sorting, "gmm_responsibilities", None)
-
-    assert cand is not None
-    assert log_liks is not None
-    assert resp is not None
-
-    cand = torch.asarray(cand)
-    log_liks = torch.asarray(log_liks)
-    resp = torch.asarray(resp)
-
-    scores = Scores(
-        candidates=cand, log_liks=log_liks, responsibilities=resp, duties=None
-    )
-    assert sorting.labels is not None
-    labels = sorting.labels
-    return labels, scores
-
-
 def spikeinterface_merge_mask(
     *,
     recording: BaseRecording,
@@ -398,9 +377,14 @@ def spikeinterface_merge_mask(
     if censor_ms:
         sorting = deduplicate_spikes(sorting, censor_ms)
 
-    # analyzer
+    # analyzer (lightweight one)
     analyzer = sorting.to_sorting_analyzer(
-        recording=recording, template_data=template_data
+        recording=recording,
+        template_data=template_data,
+        compute_extensions=None,
+        compute_extensions_if_templates=None,
+        estimate_si_sparsity=False,
+        compute_template_similarity=False,
     )
 
     # register the mask as the template similarity extension
@@ -515,8 +499,12 @@ def qda(
     show_progress: bool,
     computation_cfg: ComputationConfig,
 ) -> QDAResult:
+    from ..util.data_util import get_gmm_scores
+
     # reconstruct scores from sorting attached data (exclude train_ix?)
-    glabels, gscores = _get_scores(sorting)
+    gscores = get_gmm_scores(sorting)
+    glabels = sorting.labels
+    assert glabels is not None
 
     if mask is None:
         mask = np.ones((sorting.n_units, sorting.n_units), dtype=bool)
@@ -883,7 +871,7 @@ def _combine_loop(
 def deduplicate_spikes(
     sorting: DARTsortSorting,
     radius_ms: float = -1.0,
-    score_by=("merged_logliks", "gmm_logliks", "scores"),
+    score_by=("merged_log_liks", "gmm_log_liks", "scores"),
 ) -> DARTsortSorting:
     """The lower-scoring of any spikes within radius_samples of each other is relabeled to -1.
 
@@ -908,7 +896,7 @@ def deduplicate_spikes(
             break
     if scores is None:
         raise ValueError(f"sorting had none of {score_by}.")
-    if scores.ndim == 2:
+    if scores.ndim >= 2:
         scores = scores[:, 0]
     assert scores.ndim == 1
     assert scores.shape == new_labels.shape

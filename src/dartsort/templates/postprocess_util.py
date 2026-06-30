@@ -88,6 +88,32 @@ def estimate_template_library(
         motion=motion,
     )
 
+    # filter out low-count/snr units
+    need_templates = (
+        min_template_count or min_template_snr or min_template_ptp or always_keep_ptp
+    )
+    if templates0 is None and need_templates:
+        templates0 = quick_mean_templates(
+            recording=recording,
+            sorting=sorting,
+            waveform_cfg=waveform_cfg,
+            computation_cfg=computation_cfg,
+            motion=motion,
+        )
+
+    sorting, templates0 = mask_out_units(
+        sorting,
+        templates0,
+        min_template_count=min_template_count,
+        min_template_snr=min_template_snr,
+        min_template_ptp=min_template_ptp,
+        max_cc_flag_rate=max_cc_flag_rate,
+        always_keep_ptp=always_keep_ptp,
+        cc_flag_entropy_cutoff=cc_flag_entropy_cutoff,
+        detection_cfg=detection_cfg,
+        template_cfg=template_cfg,
+    )
+
     # use templates0 to fit tsvd if relevant
     need_tsvd = template_cfg.use_svd and tsvd is None
     if need_tsvd and template_cfg.svd_method == "raw_template":
@@ -115,34 +141,6 @@ def estimate_template_library(
         )
     else:
         featurization_basis = None
-
-    # filter out low-count/snr units
-    if templates0 is None and (min_template_count or min_template_snr):
-        templates0 = quick_mean_templates(
-            recording=recording,
-            sorting=sorting,
-            waveform_cfg=waveform_cfg,
-            computation_cfg=computation_cfg,
-            motion=motion,
-        )
-    if min_template_count or min_template_snr or (max_cc_flag_rate < 1.0):
-        assert templates0 is not None
-        count_mask = templates0.spike_counts >= min_template_count
-        snr_mask = templates0.snrs_by_channel().max(1) >= min_template_snr
-        amp = ptp(templates0.templates).max(1)
-        amp_mask = amp >= min_template_ptp
-        mask = count_mask & snr_mask & amp_mask
-        mask |= amp >= always_keep_ptp
-        flag_mask = cc_flag_criterion(
-            sorting,
-            detection_cfg,
-            max_cc_flag_rate,
-            cc_flag_entropy_cutoff,
-            amplitudes_dataset_name=template_cfg.amplitudes_dataset_name,
-        )
-        if flag_mask is not None:
-            mask = mask & flag_mask
-        sorting = filter_by_unit_mask(sorting, mask, mask_ids=templates0.unit_ids)
     del templates0
 
     _check_still_valid(sorting)
@@ -268,6 +266,64 @@ def realign_and_chuck_noisy_template_units(
             new_template_data.to_npz(npz)
 
     return new_sorting, new_template_data
+
+
+def mask_out_units(
+    sorting: DARTsortSorting,
+    templates0: TemplateData | None,
+    min_template_count: int,
+    min_template_snr: float,
+    min_template_ptp: float,
+    max_cc_flag_rate: float,
+    always_keep_ptp: float | None,
+    cc_flag_entropy_cutoff: float,
+    detection_cfg,
+    template_cfg,
+):
+    mask = None
+
+    if min_template_count:
+        assert templates0 is not None
+        m = templates0.spike_counts >= min_template_count
+        mask = np.logical_and(mask, m) if mask is not None else m.copy()
+
+    if min_template_snr:
+        assert templates0 is not None
+        m = templates0.snrs_by_channel().max(1) >= min_template_snr
+        mask = np.logical_and(mask, m) if mask is not None else m.copy()
+
+    if min_template_ptp:
+        assert templates0 is not None
+        amp = ptp(templates0.templates).max(1)
+        m = amp >= min_template_ptp
+        mask = np.logical_and(mask, m) if mask is not None else m.copy()
+
+    if mask is not None and always_keep_ptp is not None:
+        assert templates0 is not None
+        amp = ptp(templates0.templates).max(1)
+        mask |= amp >= always_keep_ptp
+
+    if max_cc_flag_rate < 1.0:
+        m = cc_flag_criterion(
+            sorting,
+            detection_cfg,
+            max_cc_flag_rate,
+            cc_flag_entropy_cutoff,
+            amplitudes_dataset_name=template_cfg.amplitudes_dataset_name,
+        )
+        if m is not None:
+            mask = np.logical_and(mask, m) if mask is not None else m.copy()
+
+    if mask is None:
+        return sorting, templates0
+
+    if templates0 is not None:
+        sorting = filter_by_unit_mask(sorting, mask, mask_ids=templates0.unit_ids)
+        templates0 = templates0[mask]
+    else:
+        sorting = filter_by_unit_mask(sorting, mask)
+
+    return sorting, templates0
 
 
 def snr_mask(template_data, min_n_spikes=50, min_template_snr=15.0):
