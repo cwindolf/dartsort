@@ -1049,7 +1049,7 @@ class DenseSpikeData:
         """
         unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
         covered = self.lut_coverage(unit_ids, lut)
-        candidates = torch.where(covered, unit_ids[None, :], -1)
+        candidates = torch.where(covered, unit_ids[None, :], -1).long()
         candidate_counts = covered.sum(dim=1).cpu()
 
         batches = []
@@ -1501,7 +1501,7 @@ class StreamingSpikeData(BatchedSpikeData):
         assert self.max_n_total is not None
         assert self.n_total == self.max_n_total
         proposals = full_proposal_by_neighb(self.un_adj_lut, self.n_total)
-        self.proposals = proposals.to(self.device)
+        self.proposals = proposals.to(self.device, dtype=torch.long)
 
     def _update_sizes_from_n_units(self, n_units: int):
         if self.max_n_total is None or self.max_n_explore is None:
@@ -1708,7 +1708,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             self.un_adj_lut.b.lut,
             (0, 0, 0, 1),
             value=self.un_adj_lut.b.unit_ids.shape[0],
-        )
+        ).long()
         top_lut_ixs = lut_padded[
             self.candidates[:, : self.n_candidates], self.neighborhood_ids[:, None]
         ]
@@ -6106,7 +6106,7 @@ def candidate_search_sets(
     tops, topunits = torch.topk(s, k=n_search, dim=1)
     topunits.masked_fill_(tops == 0, -1)
     # pad with row of -1s for the invalid lut ixs (===n_lut)
-    topunits = F.pad(topunits, (0, 0, 0, 1), value=-1)
+    topunits = F.pad(topunits, (0, 0, 0, 1), value=-1).long()
 
     return topunits
 
@@ -6120,7 +6120,7 @@ def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
     """Returns n_neighbs x max possible proposed units array, basically transposing the LUT's nonzeros."""
     n_neighbs = lut.b.lut.shape[1]
     n_lut = lut.b.unit_ids.shape[0]
-    proposals = torch.full((n_neighbs, max_proposed), -1)
+    proposals = torch.full((n_neighbs, max_proposed), -1, dtype=torch.long)
     for neighb_id in range(n_neighbs):
         row = lut.b.lut[:, neighb_id]
         (row_valid,) = (row < n_lut).nonzero(as_tuple=True)
