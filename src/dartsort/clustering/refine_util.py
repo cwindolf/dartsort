@@ -592,8 +592,7 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
 
     # find the HIGHEST local max right of 0, if any
     peak_ix_right = _find_right_peak_index(ev, 1)
-    evpeak = ev[peak_ix_right]
-    no_right_peak = peak_ix_right == ev.shape[0] or ev0 > evpeak
+    no_right_peak = peak_ix_right == ev.shape[0] or ev0 > ev[peak_ix_right]
 
     if no_right_peak:
         # no isolation
@@ -620,121 +619,6 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
 
     # compare value at 0 to peak value
     return iso, domain, kde
-
-
-# def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
-#     p = cast(_GMMIsolationContext, _iso_ctx.ctx)
-#     assert p is not None
-
-#     # top indices
-#     (inu,) = (p.cand[:, 0] == unit_id).nonzero(as_tuple=True)
-#     if inu.numel() <= p.min_count:
-#         return np.nan, None, None
-
-#     # second best indices
-#     (byu,) = (p.cand[:, 1] == unit_id).nonzero(as_tuple=True)
-
-#     # likelihood ratio when unit comes first vs second
-#     in_ll = p.log_liks[inu, :-1]
-#     # in_denom = in_ll[:, 1:].logsumexp(dim=1)
-#     in_denom = in_ll[:, 1]
-#     min_denom, max_denom = in_denom.aminmax()
-#     in_lr = in_ll[:, 0] - in_denom
-#     if torch.isneginf(max_denom):
-#         # this unit is super isolated.
-#         return 0.0, None, None
-#     if torch.isneginf(min_denom):
-#         # first check that enough are finite
-#         (finite,) = torch.isfinite(in_lr).nonzero(as_tuple=True)
-#         nfinite = finite.numel()
-#         if nfinite < p.min_count:
-#             return np.nan, None, None
-#         if nfinite / inu.size < p.neighbor_fraction:
-#             return np.nan, None, None
-
-#         # handle +inf lrs by replacing with neg log liks
-#         in_lr.clamp_(max=in_ll[:, 0].abs_())
-
-#     # by_lr is finite by construction unless numerical catastrophe happens
-#     by_lr = p.log_liks[byu, :2].diff(dim=1)[:, 0]
-#     by_lr.clamp_(min=-1000.0)
-
-#     in_lr = in_lr.double()
-#     lr = torch.concatenate([by_lr, in_lr])
-
-#     # # weights to avoid being overwhelmed by the "by" category
-#     # nin = in_lr.numel()
-#     # nby = by_lr.numel()
-#     # if nby > nin:
-#     #     weights = torch.empty_like(lr, device="cpu").numpy(force=True)
-#     #     weights[:nby] = nin / nby
-#     #     weights[nby:] = 1.0
-#     # else:
-#     #     weights = None
-#     weights = None
-
-#     # fit kde. will symmetrize around 0 to avoid boundary issues (since lr>=0)
-#     amax = lr.abs().amax().item()
-#     lr = lr.numpy(force=True)
-#     try:
-#         # select bandwidth based on positive part
-#         bw = improved_sheather_jones(in_lr.numpy(force=True)[:, None])
-#         kde = FFTKDE(bw=bw).fit(lr, weights=weights)
-#     except ValueError:
-#         return np.nan, None, None
-
-#     # evaluate kde. grid needs to cover data.
-#     end = p.dx * np.ceil((amax + p.dx) / p.dx)
-#     grid = np.arange(0, end + p.dx / 2, p.dx)
-#     grid_left = -grid[1:][::-1]
-#     grid = np.concatenate((grid_left, grid))
-#     nc = grid.shape[0] // 2
-#     # nc = 0
-#     assert grid.shape == (2 * nc + 1,)
-#     assert grid[nc] == 0.0
-#     ev = kde.evaluate(grid)
-
-#     # find the HIGHEST local max right of 0, if any
-#     peak_ix_right = _find_right_peak_index(ev, nc)
-#     # find the NEAREST local max left or at 0, if any
-#     peak_ix_left = _find_left_peak_index(ev, nc)
-#     no_right_peak = peak_ix_right == ev.shape[0]
-#     no_left_peak = peak_ix_left == -1
-#     # make sure that we don't hit unreachable code in left peak
-#     assert peak_ix_left != -2
-#     # there has to be a peak. kdes can't ever be flat.
-#     assert not (no_left_peak and no_right_peak)
-
-#     if no_right_peak:
-#         # no isolation
-#         iso = 1.0
-#     elif no_left_peak:
-#         # good isolation
-#         iso = 0.0
-#     else:
-#         # main case
-#         assert peak_ix_right > peak_ix_left
-#         rad = int(np.ceil(5 / p.dx))
-#         dip = np.min(ev[max(nc - rad, peak_ix_left) : min(nc + rad + 1, peak_ix_right)])
-#         peak = ev[peak_ix_right]
-#         iso = dip / peak
-
-#     if p.return_kdes:
-#         # ev = ev[nc:]
-#         if grid[-1] < p.kde_rhs:
-#             domain = np.arange(-p.kde_rhs, p.kde_rhs + p.dx / 2, p.dx)
-#             npad = domain.size - grid.size
-#             assert npad % 2 == 0
-#             kde = np.pad(ev, (npad // 2, npad // 2))
-#         else:
-#             mask = grid == grid.clip(-p.kde_rhs, p.kde_rhs)
-#             kde = ev[mask]
-#             domain = grid[mask]
-#     else:
-#         kde = domain = None
-
-#     # compare value at 0 to peak value
-#     return iso, domain, kde
 
 
 @numba.njit
