@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, cast
 
 import numpy as np
-from dredge.motion_util import MotionEstimate
+from dredge.motion_util import MotionEstimate, get_motion_estimate
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
@@ -412,6 +412,15 @@ class MotionInfo:
             return self.si_motion
         elif self.dredge_motion_est is not None:
             return dredge_to_si(self.dredge_motion_est)
+        else:
+            assert not self.drifting
+            return None
+
+    def to_dredge(self) -> MotionEstimate | None:
+        if self.dredge_motion_est is not None:
+            return self.dredge_motion_est
+        elif self.si_motion is not None:
+            return si_to_dredge(self.si_motion)
         else:
             assert not self.drifting
             return None
