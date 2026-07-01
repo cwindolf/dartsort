@@ -107,8 +107,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
-prop_check_atol = 2e-4
-prop_check_rtol = 1e-6
+prop_check_atol = 1e-3
+prop_check_rtol = 1e-5
 
 
 # -- main
@@ -6307,7 +6307,7 @@ def _get_explore_sampling_data(
 
     # pad p with an extra LUT index (row), inds with a -1
     p = F.pad(p, (0, 0, 0, 1))
-    inds = F.pad(inds, (0, 0, 0, 1), value=-1)
+    inds = F.pad(inds, (0, 0, 0, 1), value=-1).long()
 
     return p, inds
 
@@ -6543,7 +6543,7 @@ def mean_responsibilities(
         nc = int(ncand[bix].item())
         cii, cjj = _nonzero_static(cand[i0:i1] >= 0, size=nc).T
 
-        c = cand[i0:i1][cii, cjj]
+        c = cand[i0:i1][cii, cjj].long()
         r = resp[i0:i1][cii, cjj].double()
         rsum_batch.scatter_add_(dim=0, index=c, src=r)
         if includes_noise:

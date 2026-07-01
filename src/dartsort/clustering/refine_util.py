@@ -276,30 +276,31 @@ def collision_cleaning_error_filter(
     new_labels = np.where(spike_keep_mask, sorting.labels, -1)
 
     new_props = dict(labels=new_labels)
-    try:
-        scores = get_gmm_scores(sorting, prefixes=["gmm"])
-        scores, _ = drop_units_and_update_scores(
-            train_scores=scores,
-            scores=None,
-            n_units=nu0,
-            remove_ids=torch.tensor(bad_ids),
-        )
+    if bad_ids.size:
+        try:
+            scores = get_gmm_scores(sorting, prefixes=["gmm"])
+            scores, _ = drop_units_and_update_scores(
+                train_scores=scores,
+                scores=None,
+                n_units=nu0,
+                remove_ids=torch.tensor(bad_ids, dtype=torch.long),
+            )
 
-        # but also fully delete those spikes.
-        cand = scores.candidates.numpy(force=True)
-        ll = scores.log_liks.numpy(force=True)
-        del_mask = np.logical_not(spike_keep_mask)
-        cand[del_mask] = -1
-        ll[del_mask, : cand.shape[1]] = -np.inf
-        new_props["gmm_candidates"] = cand
-        new_props["gmm_log_liks"] = ll
-        if scores.responsibilities is not None:
-            resp = scores.responsibilities.numpy(force=True)
-            resp[del_mask, : cand.shape[1]] = 0.0
-            resp[del_mask, -1] = 1.0
-            new_props["gmm_responsibilities"] = resp
-    except AttributeError:
-        pass
+            # but also fully delete those spikes.
+            cand = scores.candidates.numpy(force=True)
+            ll = scores.log_liks.numpy(force=True)
+            del_mask = np.logical_not(spike_keep_mask)
+            cand[del_mask] = -1
+            ll[del_mask, : cand.shape[1]] = -np.inf
+            new_props["gmm_candidates"] = cand
+            new_props["gmm_log_liks"] = ll
+            if scores.responsibilities is not None:
+                resp = scores.responsibilities.numpy(force=True)
+                resp[del_mask, : cand.shape[1]] = 0.0
+                resp[del_mask, -1] = 1.0
+                new_props["gmm_responsibilities"] = resp
+        except AttributeError:
+            pass
 
     sorting = sorting.ephemeral_replace(**new_props)
     sorting = sorting.flatten(include_gmm_properties=True)
@@ -388,7 +389,7 @@ def gmm_isolation_filter(
                 train_scores=scores,
                 scores=None,
                 n_units=unit_ids.shape[0],
-                remove_ids=torch.tensor([bad_guy]),
+                remove_ids=torch.tensor([bad_guy], dtype=torch.long),
             )
 
     keep_mask = np.ones(unit_ids.max() + 1)
