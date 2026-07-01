@@ -6402,12 +6402,13 @@ def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
     new_log_lik = scores.log_liks.clone()
     new_log_lik[:, : new_cand.shape[1]].masked_fill_(bye, -torch.inf)
     new_resp = new_log_lik.softmax(dim=1).nan_to_num_()
-    return Scores(
+    scores = Scores(
         candidates=new_cand,
         log_liks=new_log_lik,
         responsibilities=new_resp,
         duties=scores.duties,
     )
+    return ensure_sorted_scores(scores)
 
 
 def proportion_adjust_scores(
@@ -6417,18 +6418,17 @@ def proportion_adjust_scores(
     diff = new_log_props - orig_log_props
     diff = F.pad(diff, (0, 1))
     diff = diff[scores.candidates]
-    if pnoid:
-        assert diff.isfinite().all()
     new_log_liks = scores.log_liks.clone()
     if scores.duties is not None:
         diff *= scores.duties[:, None]
     new_log_liks[:, : diff.shape[1]] += diff
-    return Scores(
+    scores = Scores(
         log_liks=new_log_liks,
         candidates=scores.candidates,
         responsibilities=new_log_liks.softmax(dim=1).nan_to_num_(),
         duties=scores.duties,
     )
+    return ensure_sorted_scores(scores)
 
 
 def ensure_sorted_scores(scores: Scores) -> Scores:

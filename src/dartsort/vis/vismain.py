@@ -54,8 +54,6 @@ def visualize_sorting(
     amplitude_color_cutoff=15.0,
     n_units=None,
     pca_radius_um=75.0,
-    chunk_length_s=300.0,
-    frame_interval=1500,
     exhaustive_gt=True,
     dpi=200,
     overwrite=False,
