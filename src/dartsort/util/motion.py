@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, cast
 
 import numpy as np
-from dredge.motion_util import MotionEstimate, get_motion_estimate
+from dredge.motion_util import MotionEstimate
 from scipy.spatial import KDTree
 from scipy.spatial.distance import pdist
 from spikeinterface.core import BaseRecording, Motion
@@ -27,7 +27,7 @@ from .internal_config import (
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
 from .py_util import databag, ensure_path
-from .registration_util import dredge_estimate_motion, dredge_to_si
+from .registration_util import dredge_estimate_motion, dredge_to_si, si_to_dredge
 
 logger = get_logger(__name__)
 
