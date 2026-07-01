@@ -3834,7 +3834,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert n_new_units == sum(lp.numel() for lp in new_log_props)
         if self.signal_rank:
             assert all(b is not None for b in new_bases)
-            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore
+            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore  # ty: ignore[x]
 
         # resize params to allow space for the new guys
         Korig = self.n_units
@@ -6070,7 +6070,7 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
         return luts[0]
     adj = luts[0].b.lut < luts[0].b.unit_ids.shape[0]
     for ll in luts[1:]:
-        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore
+        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore  # ty: ignore[x]
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].b.lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)

@@ -131,7 +131,7 @@ def test_reproducible_and_residual(
             sampling_frequency=10_000.0,
             duration_seconds=8.1,
             templates_kind=templates_kind.removesuffix("grid"),
-            **kw,  # type: ignore
+            **kw,  # type: ignore  # ty: ignore[x]
         )
         sims.append(sim)
     sim0, sim1 = sims

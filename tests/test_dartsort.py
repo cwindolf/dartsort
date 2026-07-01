@@ -1,6 +1,7 @@
 import dataclasses
 import subprocess
 import warnings
+from typing import Any
 
 import pytest
 
@@ -114,7 +115,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     sim = simulations["driftn_szmini"]
     sim["templates"].to_npz(tmp_path / "temps.npz")
 
-    cfg_add = {"whiten_strategy": "none", "whiten_temporal_length": None}
+    cfg_add: dict[str, Any] = {"whiten_strategy": "none", "whiten_temporal_length": None}
     if type == "drifty_match":
         type = "match"
         cfg_add["matching_template_type"] = "drifty"
@@ -132,7 +133,7 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         detection_type=type,
         precomputed_templates_npz=str(tmp_path / "temps.npz"),
         save_intermediates=True,
-        **cfg_add,  # type: ignore
+        **cfg_add,  # type: ignore  # ty: ignore[x]
     )
     with warnings.catch_warnings():
         warnings.filterwarnings(
