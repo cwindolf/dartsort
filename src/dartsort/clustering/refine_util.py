@@ -566,6 +566,8 @@ def _iso_job(unit_id) -> tuple[float, np.ndarray | None, np.ndarray | None]:
     try:
         # select bandwidth based on positive part
         bw = improved_sheather_jones(lr[:, None])
+        if not np.isfinite(bw):
+            return np.nan, None, None
         # reweight near 0
         weights = norm.sf(0, loc=lr, scale=bw)
         # reflect and stack

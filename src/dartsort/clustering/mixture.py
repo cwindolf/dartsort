@@ -6401,7 +6401,7 @@ def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
     new_cand = scores.candidates.masked_fill(bye, -1)
     new_log_lik = scores.log_liks.clone()
     new_log_lik[:, : new_cand.shape[1]].masked_fill_(bye, -torch.inf)
-    new_resp = new_log_lik.softmax(dim=1)
+    new_resp = new_log_lik.softmax(dim=1).nan_to_num_()
     return Scores(
         candidates=new_cand,
         log_liks=new_log_lik,
@@ -6417,6 +6417,8 @@ def proportion_adjust_scores(
     diff = new_log_props - orig_log_props
     diff = F.pad(diff, (0, 1))
     diff = diff[scores.candidates]
+    if pnoid:
+        assert diff.isfinite().all()
     new_log_liks = scores.log_liks.clone()
     if scores.duties is not None:
         diff *= scores.duties[:, None]
@@ -6424,7 +6426,7 @@ def proportion_adjust_scores(
     return Scores(
         log_liks=new_log_liks,
         candidates=scores.candidates,
-        responsibilities=new_log_liks.softmax(dim=1),
+        responsibilities=new_log_liks.softmax(dim=1).nan_to_num_(),
         duties=scores.duties,
     )
 
@@ -6472,8 +6474,6 @@ def drop_units_and_update_scores(
     new_prop *= model_prop / new_prop.sum()
     orig_log_prop = orig_prop.log()
     new_log_prop = new_prop.log()
-    updated = torch.logical_not(torch.isclose(orig_log_prop, new_log_prop))
-    updated[remove_ids] = False
 
     # update the train scores
     train_scores = proportion_adjust_scores(train_scores, orig_log_prop, new_log_prop)
@@ -6538,14 +6538,16 @@ def mean_responsibilities(
     for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
         i1 = min(resp.shape[0], i0 + batch_size)
         nbatch = i1 - i0
+        if not nbatch:
+            continue
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
         cii, cjj = _nonzero_static(cand[i0:i1] >= 0, size=nc).T
-
-        c = cand[i0:i1][cii, cjj].long()
-        r = resp[i0:i1][cii, cjj].double()
-        rsum_batch.scatter_add_(dim=0, index=c, src=r)
+        if cii.numel():
+            c = cand[i0:i1][cii, cjj].long()
+            r = resp[i0:i1][cii, cjj].double()
+            rsum_batch.scatter_add_(dim=0, index=c, src=r)
         if includes_noise:
             rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
@@ -6554,7 +6556,8 @@ def mean_responsibilities(
 
     # check that things didn't explode
     assert resp_mean.isfinite().all(), "Responsibility mean not finite"
-    assert torch.all(resp_mean >= 0), "Responsiblity mean negative"
+    assert torch.all(resp_mean >= -prop_check_atol), "Responsiblity mean negative"
+    resp_mean.relu_()
     assert torch.all(resp_mean <= 1.0 + prop_check_atol), (
         f"Responsiblity mean > 1, largest: {resp_mean.amax()}"
     )

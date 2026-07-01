@@ -287,6 +287,7 @@ class DARTsortAnalysis:
             template_data=template_data,
             motion=motion,
             features_cfg=clustering_features_cfg,
+            compute_extensions_if_templates=None,
         )
         analyzer.compute("quality_metrics", metric_names=quality_metrics)
         qc_df = analyzer.get_extension("quality_metrics").get_data()
