@@ -577,7 +577,7 @@ class RefinementConfig:
     noise_interp_params: InterpolationParams = tps_interp_clampna_extrap_params
 
     # bad unit filter params
-    gmm_isolation_threshold: float | None = 0.975
+    gmm_isolation_threshold: float | None = None
     gmm_isolation_neighbor_fraction: float = 0.9
     collision_cleaning_error_threshold: float | None = 0.3
 

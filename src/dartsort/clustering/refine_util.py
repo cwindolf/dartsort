@@ -378,6 +378,7 @@ def gmm_isolation_filter(
             if ngood == gi.isolation.shape[0]:
                 break
 
+            # TODO: why is bad_guy coming through in sorted order?
             bad_guy = np.argmax(np.where(good, -np.inf, gi.isolation))
             removed_ids.append(bad_guy)
 

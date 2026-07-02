@@ -5554,7 +5554,10 @@ def _evaluate_single_demolition(
 
     # evaluate effect on heldout set
     eval_scores_adj = proportion_adjust_scores(
-        scores=eval_scores, orig_log_props=orig_log_props, new_log_props=new_log_props
+        scores=eval_scores,
+        orig_log_props=orig_log_props,
+        new_log_props=new_log_props,
+        sort=False,
     )
     return ecl(
         resps=eval_scores_adj.responsibilities,
@@ -6395,7 +6398,7 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
     )
 
 
-def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
+def remove_units_from_scores(scores: Scores, unit_ids: Tensor, sort=True) -> Scores:
     """Return copy of scores where log_liks for candidates in unit_ids are -inf (and resps are 0)."""
     bye = torch.isin(scores.candidates, unit_ids.to(scores.candidates))
     new_cand = scores.candidates.masked_fill(bye, -1)
@@ -6408,11 +6411,14 @@ def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
         responsibilities=new_resp,
         duties=scores.duties,
     )
-    return ensure_sorted_scores(scores)
+    if sort:
+        return ensure_sorted_scores(scores)
+    else:
+        return scores
 
 
 def proportion_adjust_scores(
-    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor
+    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor, sort=True
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
     diff = new_log_props - orig_log_props
@@ -6429,7 +6435,10 @@ def proportion_adjust_scores(
         responsibilities=new_log_liks.softmax(dim=1).nan_to_num_(),
         duties=scores.duties,
     )
-    return ensure_sorted_scores(scores)
+    if sort:
+        return ensure_sorted_scores(scores)
+    else:
+        return scores
 
 
 def ensure_sorted_scores(scores: Scores) -> Scores:
@@ -6446,7 +6455,7 @@ def ensure_sorted_scores(scores: Scores) -> Scores:
         assert scores.log_liks.shape[1] == C + 1
         log_liks[:, -1] = scores.log_liks[:, -1]
     if scores.responsibilities is not None:
-        responsibilities = F.softmax(log_liks, dim=1)
+        responsibilities = F.softmax(log_liks, dim=1).nan_to_num_()
     else:
         responsibilities = None
 
@@ -6478,13 +6487,11 @@ def drop_units_and_update_scores(
 
     # update the train scores
     train_scores = proportion_adjust_scores(train_scores, orig_log_prop, new_log_prop)
-    train_scores = ensure_sorted_scores(train_scores)
 
     # update other scores
     if scores is not None:
-        scores = remove_units_from_scores(scores, remove_ids)
+        scores = remove_units_from_scores(scores, remove_ids, sort=False)
         scores = proportion_adjust_scores(scores, orig_log_prop, new_log_prop)
-        scores = ensure_sorted_scores(scores)
 
     return train_scores, scores
 
