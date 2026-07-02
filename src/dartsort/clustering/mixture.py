@@ -6416,6 +6416,7 @@ def proportion_adjust_scores(
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
     diff = new_log_props - orig_log_props
+    diff.nan_to_num_()
     diff = F.pad(diff, (0, 1))
     diff = diff[scores.candidates]
     new_log_liks = scores.log_liks.clone()
