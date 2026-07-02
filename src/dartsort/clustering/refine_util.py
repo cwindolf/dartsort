@@ -271,6 +271,9 @@ def collision_cleaning_error_filter(
     # discard bad units
     keep_mask = np.ones(nu0, dtype=np.bool)
     bad_ids = np.flatnonzero(dist > refinement_cfg.collision_cleaning_error_threshold)
+    logger.dartsortdebug(
+        f"Collision-cleaning error filter drops {bad_ids.size} / {nu0} units."
+    )
     keep_mask[bad_ids] = False
     spike_keep_mask = keep_mask[sorting.labels]
     new_labels = np.where(spike_keep_mask, sorting.labels, -1)
@@ -385,6 +388,12 @@ def gmm_isolation_filter(
             update[needs_update[needs_update >= 0]] = True
             update[good] = False
 
+            logger.dartsortverbose(
+                f"Drop {bad_guy} (%s / %s total, %s good).",
+                len(removed_ids),
+                update.size,
+                ngood,
+            )
             scores, _ = drop_units_and_update_scores(
                 train_scores=scores,
                 scores=None,
