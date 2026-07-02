@@ -6512,7 +6512,6 @@ def mean_responsibilities(
         cand = scores.candidates
     else:
         assert False
-
     assert resp is not None
     assert cand is not None
     ncand = cand.shape[1]

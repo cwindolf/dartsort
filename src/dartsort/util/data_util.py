@@ -349,7 +349,7 @@ class DARTsortSorting:
             uloc_ext = ComputeUnitLocations(analyzer)
             uloc_ext.params = {"method": "monopolar_triangulation"}
             # turns out they don't want a structured array in this extension
-            ulocs = template_data.template_locations(mode="localization")
+            ulocs = template_data.template_locations()
             uloc_ext.data = {"unit_locations": ulocs}
             uloc_ext.run_info = {"run_completed": True}
             analyzer.extensions["unit_locations"] = uloc_ext
