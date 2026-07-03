@@ -502,15 +502,16 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         if recording_dir.exists():
             try:
                 recording = read_binary_folder(recording_dir)
-            except Exception as e:
-                raise ValueError("Partially written recording.") from e
+                logger.info("Loaded", recording_dir)
+            except Exception:
+                recording = None
         else:
             recording = None
         if recording  is None:
             with warnings.catch_warnings(record=True) as ws:
                 recording = self.save_to_folder(
                     folder=recording_dir,
-                    overwrite=overwrite,
+                    overwrite=True,
                     n_jobs=n_jobs or 1,
                     pool_engine="thread",
                     chunk_duration=chunk_len_s,
