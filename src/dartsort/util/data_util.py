@@ -1886,7 +1886,8 @@ def subsample_waveforms(
                 waveforms = batched_h5_read(
                     h5[waveforms_dataset_name], choices, show_progress=True
                 )
-                weights = weights[choices]
+                if weights is not None:
+                    weights = weights[choices]
                 fixed_properties = {
                     k: batched_h5_read(h5[k], choices) for k in fixed_property_keys
                 }
@@ -1896,7 +1897,8 @@ def subsample_waveforms(
                     h5[waveforms_dataset_name], uchoices, show_progress=True
                 )
                 waveforms = waveforms[ichoices]
-                weights = weights[uchoices[ichoices]]
+                if weights is not None:
+                    weights = weights[uchoices[ichoices]]
                 fixed_properties = {
                     k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys
                 }
@@ -1930,14 +1932,14 @@ def fit_reweighting(
     fit_sampling: Literal["random", "amp_reweighted"] = "random",
     fit_max_reweighting=4.0,
     voltages_dataset_name="voltages",
-):
+) -> np.ndarray | None:
     if fit_sampling == "random":
         return None
     assert fit_sampling == "amp_reweighted"
 
     if voltages is None:
         if h5 is not None:
-            voltages = h5[voltages_dataset_name][:]
+            voltages: np.ndarray = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
@@ -1959,7 +1961,7 @@ def fit_reweighting(
     v = np.nan_to_num(v)
     sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
-    dens = get_smoothed_density(v[:, None], sigma=sigma)
+    dens: np.ndarray = get_smoothed_density(v[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)
