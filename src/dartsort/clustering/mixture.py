@@ -1657,6 +1657,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         explore_neighb_steps: int = 1,
         neighb_overlap: float = 0.75,
         batch_size: int = 128,
+        allow_gaps=False,
     ) -> Self:
         assert len(x) == len(neighborhoods.b.neighborhood_ids)
         xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
@@ -1685,9 +1686,11 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         assert self.candidates is not None
         self.candidates[:, 0] = labels
-        if pnoid:
-            _k = labels.amax() + 1 + int((labels < 0).any())
-            assert labels.unique().shape == (_k,)
+        if pnoid and not allow_gaps:
+            luniq = labels.unique().cpu()
+            luniq = luniq[luniq >= 0]
+            assert luniq.numel() > 0, str(luniq.tolist())
+            assert luniq.numel() == luniq.amax() + 1, str(luniq.tolist())
         return self
 
     def update(
@@ -4243,6 +4246,7 @@ def get_truncated_datasets(
             neighb_cov=neighb_cov,
             seed=rg,
             batch_size=refinement_cfg.eval_batch_size,
+            allow_gaps=True,
         )
         assert torch.equal(
             val_data.neighborhoods.b.neighborhoods,
@@ -4427,6 +4431,8 @@ def instantiate_and_bootstrap_tmm(
         sorting, min_spikes=refinement_cfg.min_count
     )
     sorting = sorting.flatten()
+    if not sorting.n_units:
+        raise ValueError("No units to cluster.")
 
     neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs = (
         get_truncated_datasets(
