@@ -582,7 +582,9 @@ class DARTsortSorting:
                 "sampling_frequency",
             ]
             if load_feature_names is None and load_all_features:
-                load_feature_names = list(h5.keys())
+                load_feature_names = [
+                    k for k in h5.keys() if h5[k].ndim > 0 and h5[k].shape[0] == n
+                ]
             elif load_feature_names is None and load_simple_features:
                 load_feature_names = []
                 for k in h5.keys():
