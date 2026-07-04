@@ -211,7 +211,7 @@ def agglomerate(
     agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
 
     agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
-    new_ids = reorder[new_ids]
+    new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
