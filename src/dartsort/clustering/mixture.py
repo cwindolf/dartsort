@@ -6359,7 +6359,9 @@ def _dedup_candidates(candidates):
 
 def _count_candidates(candidates, batch_candidate_counts, batch_size):
     counts = candidates.new_zeros(batch_candidate_counts.shape)
-    for b, i0 in enumerate(range(0, candidates.shape[0], batch_size)):
+    batch_iter = range(0, candidates.shape[0], batch_size)
+    assert counts.shape[0] == len(batch_iter)
+    for b, i0 in enumerate(batch_iter):
         counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
     batch_candidate_counts.copy_(counts.cpu())
 
