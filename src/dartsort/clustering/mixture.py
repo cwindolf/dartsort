@@ -6230,17 +6230,20 @@ def _fill_blank_labels(
     if ensure_coverage_only:
         return None, n_new_units
 
+    if pnoid:
+        assert adj.amin() >= 0
+
     for i0 in range(0, Nblank, batch_size):
         i1 = min(Nblank, i0 + batch_size)
         ii = blank[i0:i1]
         nn = neighborhood_ids[ii]
         p = adj.T[nn]
         p_is_0 = p.sum(1) <= 0.0
-        p[:, 0] += p_is_0.to(p)
+        p[:, 0].clamp_min_(p_is_0.to(p))
         draws = torch.multinomial(p, 1, replacement=True, generator=gen)
         draws = draws.view(ii.shape[0])
         draws.masked_fill_(p_is_0, -1)
-        labels[ii] = draws.view(ii.shape[0])
+        labels[ii] = draws
 
     return keep_same_adj, n_new_units
 
@@ -6319,7 +6322,9 @@ def _get_explore_sampling_data(
     p.masked_fill_(pzero, torch.finfo(p.dtype).tiny)
 
     # pad p with an extra LUT index (row), inds with a -1
-    p = F.pad(p, (0, 0, 0, 1))
+    # the tiny mops up cases with no overlaps, and that case is
+    # sometimes allowed by the logic which gets us here
+    p = F.pad(p, (0, 0, 0, 1), value=torch.finfo(p.dtype).tiny)
     inds = F.pad(inds, (0, 0, 0, 1), value=-1).long()
 
     return p, inds
@@ -6362,7 +6367,6 @@ def _dedup_candidates(candidates):
 
 
 def _count_candidates(candidates, batch_candidate_counts, batch_size):
-    candidates = candidates.cpu()
     counts = candidates.new_zeros(batch_candidate_counts.shape)
     batch_iter = range(0, candidates.shape[0], batch_size)
     assert counts.shape[0] == len(batch_iter)
