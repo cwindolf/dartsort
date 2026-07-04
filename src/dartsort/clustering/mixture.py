@@ -6166,13 +6166,13 @@ def _fill_blank_labels(
 
     # need full coverage of neighborhoods here. would prefer only to branch out with
     # explore as needed, so make those probs tiny.
-    keep_same_adj = un_adj.sum(0).min().cpu().item() > 0
+    keep_same_adj = un_adj.sum(0).amin().cpu().item() > 0
     n_new_units = 0
     if keep_same_adj:
         adj = un_adj
     else:
         adj = un_adj + explore_adj * torch.finfo(explore_adj.dtype).tiny
-        uncovered = adj.sum(0).min().cpu().item() == 0
+        uncovered = adj.sum(0).amin().cpu().item() == 0
         if uncovered:
             uncovered_adj = adj.clone()
         else:
@@ -6185,7 +6185,7 @@ def _fill_blank_labels(
             if adj.sum(0).min().cpu().item() > 0:
                 break
 
-        still_uncovered = adj.sum(0).min().cpu().item() == 0
+        still_uncovered = adj.sum(0).amin().cpu().item() == 0
         if still_uncovered and ensure_coverage_only and allow_new_units:
             # make new units by getting connected components of the uncovered
             # neighborhood graph
@@ -6234,8 +6234,12 @@ def _fill_blank_labels(
         i1 = min(Nblank, i0 + batch_size)
         ii = blank[i0:i1]
         nn = neighborhood_ids[ii]
-        p = adj[:, nn].mT
+        p = adj.T[nn]
+        p_is_0 = p.sum(1) <= 0.0
+        p[:, 0] += p_is_0.to(p)
         draws = torch.multinomial(p, 1, replacement=True, generator=gen)
+        draws = draws.view(ii.shape[0])
+        draws.masked_fill_(p_is_0, -1)
         labels[ii] = draws.view(ii.shape[0])
 
     return keep_same_adj, n_new_units
@@ -6358,11 +6362,12 @@ def _dedup_candidates(candidates):
 
 
 def _count_candidates(candidates, batch_candidate_counts, batch_size):
+    candidates = candidates.cpu()
     counts = candidates.new_zeros(batch_candidate_counts.shape)
     batch_iter = range(0, candidates.shape[0], batch_size)
     assert counts.shape[0] == len(batch_iter)
     for b, i0 in enumerate(batch_iter):
-        counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
+        counts[b] = (candidates[i0 : i0 + batch_size] >= 0).count_nonzero()
     batch_candidate_counts.copy_(counts.cpu())
 
 
@@ -6540,7 +6545,7 @@ def mean_responsibilities(
     assert n_units > 0
 
     # count candidates per batch
-    ncand = (cand >= 0).sum(1)
+    ncand = (cand >= 0).count_nonzero(dim=1)
     padlen = batch_size * int(math.ceil(cand.shape[0] / batch_size))
     if padlen > ncand.shape[0]:
         ncand = F.pad(ncand, (0, padlen - ncand.shape[0]))
