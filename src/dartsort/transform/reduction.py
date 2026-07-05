@@ -179,7 +179,6 @@ class TemplateWaveformReducer(BaseWaveformFeaturizer):
             return count, mean, std
         finally:
             global _reduction_stuff
-            del _reduction_stuff.ctx
             _reduction_stuff.ctx = None
 
     def _initialize(self, wf_shape: tuple[int, int]):

@@ -27,7 +27,7 @@ from .internal_config import (
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
 from .py_util import databag, ensure_path
-from .registration_util import dredge_estimate_motion, dredge_to_si
+from .registration_util import dredge_estimate_motion, dredge_to_si, si_to_dredge
 
 logger = get_logger(__name__)
 
@@ -412,6 +412,15 @@ class MotionInfo:
             return self.si_motion
         elif self.dredge_motion_est is not None:
             return dredge_to_si(self.dredge_motion_est)
+        else:
+            assert not self.drifting
+            return None
+
+    def to_dredge(self) -> MotionEstimate | None:
+        if self.dredge_motion_est is not None:
+            return self.dredge_motion_est
+        elif self.si_motion is not None:
+            return si_to_dredge(self.si_motion)
         else:
             assert not self.drifting
             return None

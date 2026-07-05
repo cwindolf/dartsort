@@ -349,7 +349,7 @@ class DARTsortSorting:
             uloc_ext = ComputeUnitLocations(analyzer)
             uloc_ext.params = {"method": "monopolar_triangulation"}
             # turns out they don't want a structured array in this extension
-            ulocs = template_data.template_locations(mode="localization")
+            ulocs = template_data.template_locations()
             uloc_ext.data = {"unit_locations": ulocs}
             uloc_ext.run_info = {"run_completed": True}
             analyzer.extensions["unit_locations"] = uloc_ext
@@ -582,7 +582,9 @@ class DARTsortSorting:
                 "sampling_frequency",
             ]
             if load_feature_names is None and load_all_features:
-                load_feature_names = list(h5.keys())
+                load_feature_names = [
+                    k for k in h5.keys() if h5[k].ndim > 0 and h5[k].shape[0] == n
+                ]
             elif load_feature_names is None and load_simple_features:
                 load_feature_names = []
                 for k in h5.keys():
@@ -990,6 +992,8 @@ def load(f: str | Path, labels_stem: str | None = None) -> DARTsortSorting:
         st = DARTsortSorting.load(f)
     elif f.is_dir() and (f / "dartsort_sorting.npz").exists():
         st = DARTsortSorting.load(f / "dartsort_sorting.npz")
+    elif f.is_dir() and (f / "sorting.npz").exists():
+        st = DARTsortSorting.load(f / "sorting.npz")
     else:
         raise ValueError(f"Not sure how to load '{f}'.")
 
@@ -1884,7 +1888,8 @@ def subsample_waveforms(
                 waveforms = batched_h5_read(
                     h5[waveforms_dataset_name], choices, show_progress=True
                 )
-                weights = weights[choices]
+                if weights is not None:
+                    weights = weights[choices]
                 fixed_properties = {
                     k: batched_h5_read(h5[k], choices) for k in fixed_property_keys
                 }
@@ -1894,7 +1899,8 @@ def subsample_waveforms(
                     h5[waveforms_dataset_name], uchoices, show_progress=True
                 )
                 waveforms = waveforms[ichoices]
-                weights = weights[uchoices[ichoices]]
+                if weights is not None:
+                    weights = weights[uchoices[ichoices]]
                 fixed_properties = {
                     k: batched_h5_read(h5[k], uchoices) for k in fixed_property_keys
                 }
@@ -1928,14 +1934,14 @@ def fit_reweighting(
     fit_sampling: Literal["random", "amp_reweighted"] = "random",
     fit_max_reweighting=4.0,
     voltages_dataset_name="voltages",
-):
+) -> np.ndarray | None:
     if fit_sampling == "random":
         return None
     assert fit_sampling == "amp_reweighted"
 
     if voltages is None:
         if h5 is not None:
-            voltages = h5[voltages_dataset_name][:]
+            voltages: np.ndarray = h5[voltages_dataset_name][:]
         elif hdf5_path is not None:
             with h5py.File(hdf5_path) as h5:
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
@@ -1957,7 +1963,7 @@ def fit_reweighting(
     v = np.nan_to_num(v)
     sigma = 1.06 * v.std() * np.power(len(v), -0.2)
     assert np.isfinite(sigma)
-    dens = get_smoothed_density(v[:, None], sigma=sigma)
+    dens: np.ndarray = get_smoothed_density(v[:, None], sigma=sigma)
     assert isinstance(dens, np.ndarray)
     sample_p = dens.mean() / dens
     sample_p = sample_p.clip(1.0 / fit_max_reweighting, fit_max_reweighting)

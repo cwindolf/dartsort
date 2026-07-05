@@ -234,7 +234,7 @@ def distance_matrix_dendro(
         so = 5 if show_dendrogram else 0
         for (j, i), val in np.ndenumerate(show_values_from[order][:, order]):
             if value_color is None:
-                lc = invert(image_cmap(val / vmax))  # type: ignore
+                lc = invert(image_cmap(val / vmax))  # type: ignore  # ty: ignore[x]
             else:
                 lc = value_color
             ax_im.text(

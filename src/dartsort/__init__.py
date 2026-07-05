@@ -6,12 +6,12 @@ from .clustering import (
     StableWaveformFeatures,
     cluster_util,
     clustering_strategies,
+    deduplicate_spikes,
     density,
     get_clusterer,
     kmeans,
     merge,
     refinement_strategies,
-    deduplicate_spikes,
 )
 from .config import *
 from .evaluate import config_grid, hybrid_util, simkit, simlib
@@ -23,9 +23,9 @@ from .localize.localize_util import (
     localize_waveforms,
 )
 from .main import (
+    DARTsortResult,
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    DARTsortResult,
     check_recording,
     cluster,
     dartsort,

@@ -50,7 +50,7 @@ class DARTsortUserConfig:
     subsampling_spikes_per_channel: int | None = 5000
     """Detection steps before the final matching round will run until at least
     this many spikes are found or the whole recording is covered, to make sure
-    that there is enough data for clustering. See also subsampling_fraction.
+    that there is enough data for clustering. See also subsampling_presence.
     Set to None to disable subsampling."""
 
     subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.1
@@ -332,7 +332,7 @@ class DeveloperConfig(DARTsortUserConfig):
     n_neighbors_search: int | None = 50
 
     # filters
-    gmm_isolation_threshold: float | None = 0.975
+    gmm_isolation_threshold: float | None = None
     collision_cleaning_error_threshold: float | None = 0.3
 
     # gaussian mixture high level

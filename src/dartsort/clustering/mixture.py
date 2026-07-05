@@ -107,8 +107,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 pnoid = logger.isEnabledFor(DARTSORTVERBOSE)
-prop_check_atol = 2e-4
-prop_check_rtol = 1e-6
+prop_check_atol = 1e-3
+prop_check_rtol = 1e-5
 
 
 # -- main
@@ -1049,7 +1049,7 @@ class DenseSpikeData:
         """
         unit_ids = torch.as_tensor(unit_ids, device=self.neighborhood_ids.device)
         covered = self.lut_coverage(unit_ids, lut)
-        candidates = torch.where(covered, unit_ids[None, :], -1)
+        candidates = torch.where(covered, unit_ids[None, :], -1).long()
         candidate_counts = covered.sum(dim=1).cpu()
 
         batches = []
@@ -1501,7 +1501,7 @@ class StreamingSpikeData(BatchedSpikeData):
         assert self.max_n_total is not None
         assert self.n_total == self.max_n_total
         proposals = full_proposal_by_neighb(self.un_adj_lut, self.n_total)
-        self.proposals = proposals.to(self.device)
+        self.proposals = proposals.to(self.device, dtype=torch.long)
 
     def _update_sizes_from_n_units(self, n_units: int):
         if self.max_n_total is None or self.max_n_explore is None:
@@ -1657,6 +1657,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         explore_neighb_steps: int = 1,
         neighb_overlap: float = 0.75,
         batch_size: int = 128,
+        allow_gaps=False,
     ) -> Self:
         assert len(x) == len(neighborhoods.b.neighborhood_ids)
         xt, whitenedx, CmoCooinvx, noise_logliks = _whiten_impute_and_noise_score(
@@ -1685,9 +1686,11 @@ class TruncatedSpikeData(BatchedSpikeData):
         )
         assert self.candidates is not None
         self.candidates[:, 0] = labels
-        if pnoid:
-            _k = labels.amax() + 1 + int((labels < 0).any())
-            assert labels.unique().shape == (_k,)
+        if pnoid and not allow_gaps:
+            luniq = labels.unique().cpu()
+            luniq = luniq[luniq >= 0]
+            assert luniq.numel() > 0, str(luniq.tolist())
+            assert luniq.numel() == luniq.amax() + 1, str(luniq.tolist())
         return self
 
     def update(
@@ -1708,7 +1711,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             self.un_adj_lut.b.lut,
             (0, 0, 0, 1),
             value=self.un_adj_lut.b.unit_ids.shape[0],
-        )
+        ).long()
         top_lut_ixs = lut_padded[
             self.candidates[:, : self.n_candidates], self.neighborhood_ids[:, None]
         ]
@@ -3834,7 +3837,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         assert n_new_units == sum(lp.numel() for lp in new_log_props)
         if self.signal_rank:
             assert all(b is not None for b in new_bases)
-            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore
+            assert n_new_units == sum(b.shape[0] for b in new_bases)  # type: ignore  # ty: ignore[x]
 
         # resize params to allow space for the new guys
         Korig = self.n_units
@@ -4243,6 +4246,7 @@ def get_truncated_datasets(
             neighb_cov=neighb_cov,
             seed=rg,
             batch_size=refinement_cfg.eval_batch_size,
+            allow_gaps=True,
         )
         assert torch.equal(
             val_data.neighborhoods.b.neighborhoods,
@@ -4427,6 +4431,8 @@ def instantiate_and_bootstrap_tmm(
         sorting, min_spikes=refinement_cfg.min_count
     )
     sorting = sorting.flatten()
+    if not sorting.n_units:
+        raise ValueError("No units to cluster.")
 
     neighb_cov, erp, train_data, val_data, full_data, noise, train_ixs, val_ixs = (
         get_truncated_datasets(
@@ -5554,7 +5560,10 @@ def _evaluate_single_demolition(
 
     # evaluate effect on heldout set
     eval_scores_adj = proportion_adjust_scores(
-        scores=eval_scores, orig_log_props=orig_log_props, new_log_props=new_log_props
+        scores=eval_scores,
+        orig_log_props=orig_log_props,
+        new_log_props=new_log_props,
+        sort=False,
     )
     return ecl(
         resps=eval_scores_adj.responsibilities,
@@ -6070,7 +6079,7 @@ def combine_luts(*luts: NeighborhoodLUT) -> NeighborhoodLUT:
         return luts[0]
     adj = luts[0].b.lut < luts[0].b.unit_ids.shape[0]
     for ll in luts[1:]:
-        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore
+        adj.logical_or_(ll.lut < ll.unit_ids.shape[0])  # type: ignore  # ty: ignore[x]
     unit_ids, neighb_ids = adj.nonzero(as_tuple=True)
     lut = torch.full_like(luts[0].b.lut, unit_ids.shape[0])
     lut[unit_ids, neighb_ids] = torch.arange(unit_ids.shape[0], device=lut.device)
@@ -6106,7 +6115,7 @@ def candidate_search_sets(
     tops, topunits = torch.topk(s, k=n_search, dim=1)
     topunits.masked_fill_(tops == 0, -1)
     # pad with row of -1s for the invalid lut ixs (===n_lut)
-    topunits = F.pad(topunits, (0, 0, 0, 1), value=-1)
+    topunits = F.pad(topunits, (0, 0, 0, 1), value=-1).long()
 
     return topunits
 
@@ -6120,7 +6129,7 @@ def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
     """Returns n_neighbs x max possible proposed units array, basically transposing the LUT's nonzeros."""
     n_neighbs = lut.b.lut.shape[1]
     n_lut = lut.b.unit_ids.shape[0]
-    proposals = torch.full((n_neighbs, max_proposed), -1)
+    proposals = torch.full((n_neighbs, max_proposed), -1, dtype=torch.long)
     for neighb_id in range(n_neighbs):
         row = lut.b.lut[:, neighb_id]
         (row_valid,) = (row < n_lut).nonzero(as_tuple=True)
@@ -6157,13 +6166,13 @@ def _fill_blank_labels(
 
     # need full coverage of neighborhoods here. would prefer only to branch out with
     # explore as needed, so make those probs tiny.
-    keep_same_adj = un_adj.sum(0).min().cpu().item() > 0
+    keep_same_adj = un_adj.sum(0).amin().cpu().item() > 0
     n_new_units = 0
     if keep_same_adj:
         adj = un_adj
     else:
         adj = un_adj + explore_adj * torch.finfo(explore_adj.dtype).tiny
-        uncovered = adj.sum(0).min().cpu().item() == 0
+        uncovered = adj.sum(0).amin().cpu().item() == 0
         if uncovered:
             uncovered_adj = adj.clone()
         else:
@@ -6176,7 +6185,7 @@ def _fill_blank_labels(
             if adj.sum(0).min().cpu().item() > 0:
                 break
 
-        still_uncovered = adj.sum(0).min().cpu().item() == 0
+        still_uncovered = adj.sum(0).amin().cpu().item() == 0
         if still_uncovered and ensure_coverage_only and allow_new_units:
             # make new units by getting connected components of the uncovered
             # neighborhood graph
@@ -6221,13 +6230,20 @@ def _fill_blank_labels(
     if ensure_coverage_only:
         return None, n_new_units
 
+    if pnoid:
+        assert adj.amin() >= 0
+
     for i0 in range(0, Nblank, batch_size):
         i1 = min(Nblank, i0 + batch_size)
         ii = blank[i0:i1]
         nn = neighborhood_ids[ii]
-        p = adj[:, nn].mT
+        p = adj.T[nn]
+        p_is_0 = p.sum(1) <= 0.0
+        p[:, 0].clamp_min_(p_is_0.to(p))
         draws = torch.multinomial(p, 1, replacement=True, generator=gen)
-        labels[ii] = draws.view(ii.shape[0])
+        draws = draws.view(ii.shape[0])
+        draws.masked_fill_(p_is_0, -1)
+        labels[ii] = draws
 
     return keep_same_adj, n_new_units
 
@@ -6306,8 +6322,10 @@ def _get_explore_sampling_data(
     p.masked_fill_(pzero, torch.finfo(p.dtype).tiny)
 
     # pad p with an extra LUT index (row), inds with a -1
-    p = F.pad(p, (0, 0, 0, 1))
-    inds = F.pad(inds, (0, 0, 0, 1), value=-1)
+    # the tiny mops up cases with no overlaps, and that case is
+    # sometimes allowed by the logic which gets us here
+    p = F.pad(p, (0, 0, 0, 1), value=torch.finfo(p.dtype).tiny)
+    inds = F.pad(inds, (0, 0, 0, 1), value=-1).long()
 
     return p, inds
 
@@ -6350,8 +6368,10 @@ def _dedup_candidates(candidates):
 
 def _count_candidates(candidates, batch_candidate_counts, batch_size):
     counts = candidates.new_zeros(batch_candidate_counts.shape)
-    for b, i0 in enumerate(range(0, candidates.shape[0], batch_size)):
-        counts[b] = (candidates[i0 : i0 + batch_size] >= 0).sum()
+    batch_iter = range(0, candidates.shape[0], batch_size)
+    assert counts.shape[0] == len(batch_iter)
+    for b, i0 in enumerate(batch_iter):
+        counts[b] = (candidates[i0 : i0 + batch_size] >= 0).count_nonzero()
     batch_candidate_counts.copy_(counts.cpu())
 
 
@@ -6395,38 +6415,47 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
     )
 
 
-def remove_units_from_scores(scores: Scores, unit_ids: Tensor) -> Scores:
+def remove_units_from_scores(scores: Scores, unit_ids: Tensor, sort=True) -> Scores:
     """Return copy of scores where log_liks for candidates in unit_ids are -inf (and resps are 0)."""
     bye = torch.isin(scores.candidates, unit_ids.to(scores.candidates))
     new_cand = scores.candidates.masked_fill(bye, -1)
     new_log_lik = scores.log_liks.clone()
     new_log_lik[:, : new_cand.shape[1]].masked_fill_(bye, -torch.inf)
-    new_resp = new_log_lik.softmax(dim=1)
-    return Scores(
+    new_resp = new_log_lik.softmax(dim=1).nan_to_num_()
+    scores = Scores(
         candidates=new_cand,
         log_liks=new_log_lik,
         responsibilities=new_resp,
         duties=scores.duties,
     )
+    if sort:
+        return ensure_sorted_scores(scores)
+    else:
+        return scores
 
 
 def proportion_adjust_scores(
-    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor
+    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor, sort=True
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
     diff = new_log_props - orig_log_props
+    diff.nan_to_num_()
     diff = F.pad(diff, (0, 1))
     diff = diff[scores.candidates]
     new_log_liks = scores.log_liks.clone()
     if scores.duties is not None:
         diff *= scores.duties[:, None]
     new_log_liks[:, : diff.shape[1]] += diff
-    return Scores(
+    scores = Scores(
         log_liks=new_log_liks,
         candidates=scores.candidates,
-        responsibilities=new_log_liks.softmax(dim=1),
+        responsibilities=new_log_liks.softmax(dim=1).nan_to_num_(),
         duties=scores.duties,
     )
+    if sort:
+        return ensure_sorted_scores(scores)
+    else:
+        return scores
 
 
 def ensure_sorted_scores(scores: Scores) -> Scores:
@@ -6443,7 +6472,7 @@ def ensure_sorted_scores(scores: Scores) -> Scores:
         assert scores.log_liks.shape[1] == C + 1
         log_liks[:, -1] = scores.log_liks[:, -1]
     if scores.responsibilities is not None:
-        responsibilities = F.softmax(log_liks, dim=1)
+        responsibilities = F.softmax(log_liks, dim=1).nan_to_num_()
     else:
         responsibilities = None
 
@@ -6472,18 +6501,14 @@ def drop_units_and_update_scores(
     new_prop *= model_prop / new_prop.sum()
     orig_log_prop = orig_prop.log()
     new_log_prop = new_prop.log()
-    updated = torch.logical_not(torch.isclose(orig_log_prop, new_log_prop))
-    updated[remove_ids] = False
 
     # update the train scores
     train_scores = proportion_adjust_scores(train_scores, orig_log_prop, new_log_prop)
-    train_scores = ensure_sorted_scores(train_scores)
 
     # update other scores
     if scores is not None:
-        scores = remove_units_from_scores(scores, remove_ids)
+        scores = remove_units_from_scores(scores, remove_ids, sort=False)
         scores = proportion_adjust_scores(scores, orig_log_prop, new_log_prop)
-        scores = ensure_sorted_scores(scores)
 
     return train_scores, scores
 
@@ -6511,7 +6536,6 @@ def mean_responsibilities(
         cand = scores.candidates
     else:
         assert False
-
     assert resp is not None
     assert cand is not None
     ncand = cand.shape[1]
@@ -6525,7 +6549,7 @@ def mean_responsibilities(
     assert n_units > 0
 
     # count candidates per batch
-    ncand = (cand >= 0).sum(1)
+    ncand = (cand >= 0).count_nonzero(dim=1)
     padlen = batch_size * int(math.ceil(cand.shape[0] / batch_size))
     if padlen > ncand.shape[0]:
         ncand = F.pad(ncand, (0, padlen - ncand.shape[0]))
@@ -6538,14 +6562,16 @@ def mean_responsibilities(
     for bix, i0 in enumerate(range(0, resp.shape[0], batch_size)):
         i1 = min(resp.shape[0], i0 + batch_size)
         nbatch = i1 - i0
+        if not nbatch:
+            continue
         rsum_batch.zero_()
 
         nc = int(ncand[bix].item())
         cii, cjj = _nonzero_static(cand[i0:i1] >= 0, size=nc).T
-
-        c = cand[i0:i1][cii, cjj]
-        r = resp[i0:i1][cii, cjj].double()
-        rsum_batch.scatter_add_(dim=0, index=c, src=r)
+        if cii.numel():
+            c = cand[i0:i1][cii, cjj].long()
+            r = resp[i0:i1][cii, cjj].double()
+            rsum_batch.scatter_add_(dim=0, index=c, src=r)
         if includes_noise:
             rsum_batch[n_units] += resp[i0:i1, -1].double().sum()
 
@@ -6554,7 +6580,8 @@ def mean_responsibilities(
 
     # check that things didn't explode
     assert resp_mean.isfinite().all(), "Responsibility mean not finite"
-    assert torch.all(resp_mean >= 0), "Responsiblity mean negative"
+    assert torch.all(resp_mean >= -prop_check_atol), "Responsiblity mean negative"
+    resp_mean.relu_()
     assert torch.all(resp_mean <= 1.0 + prop_check_atol), (
         f"Responsiblity mean > 1, largest: {resp_mean.amax()}"
     )

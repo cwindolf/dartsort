@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from dredge.dredge_ap import register as dredge_register
-from dredge.motion_util import MotionEstimate, speed_limit_filter
+from dredge.motion_util import MotionEstimate, get_motion_estimate, speed_limit_filter
 from spikeinterface.core import BaseRecording, Motion
 
 from .data_util import DARTsortSorting
@@ -73,7 +73,7 @@ def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:
     disp = dredge_motion_est.displacement
     t = dredge_motion_est.time_bin_centers_s
     if disp.ndim == 1:
-        # rigid case
+        # rigid case only for now
         return Motion(
             displacement=disp[:, None],
             temporal_bins_s=t,
@@ -82,3 +82,14 @@ def dredge_to_si(dredge_motion_est: MotionEstimate) -> Motion:
     else:
         # TODO
         raise NotImplementedError
+
+
+def si_to_dredge(si_motion: Motion) -> MotionEstimate:
+    assert len(si_motion.displacement) == 1
+    assert isinstance(si_motion.temporal_bins_s, list)
+    assert len(si_motion.temporal_bins_s) == 1
+    return get_motion_estimate(
+        time_bin_centers_s=np.asarray(si_motion.temporal_bins_s[0]),
+        spatial_bin_centers_um=np.asarray(si_motion.spatial_bins_um),
+        displacement=np.asarray(si_motion.displacement[0]).T,
+    )

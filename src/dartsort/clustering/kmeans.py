@@ -24,7 +24,6 @@ from ..util.sparse_util import (
     sparse_centroid_distsq,
 )
 from ..util.spiketorch import spawn_torch_rg, sqeuc_cdist_known_norm
-from ..util.torch_util import torch_compile, torch_compiler
 
 logger = get_logger(__name__)
 
@@ -78,6 +77,7 @@ def kmeanspp(
 
     simple_case = (not min_distance) and (not skip_assignment)
     if simple_case:
+        assert assignments is not None
         _kmeanspp_simple_loop(
             X=X,
             Xnormsq=Xnormsq,
@@ -475,19 +475,16 @@ def kmeans(
     )
 
 
-@torch.compiler.disable
 def _uniform(gen: torch.Generator, buf: Tensor):
     return buf.uniform_(generator=gen)
 
 
-@torch_compiler(fullgraph=False)
 def _one_gumbel_nolog(p: Tensor, gen: torch.Generator, buf: Tensor):
     z = _uniform(gen, buf)
     z = z.log_()
     return torch.divide(p, z, out=z).argmin(dim=0)
 
 
-@torch_compile
 def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
     torch.addmm(Xnormsq, X, Y.transpose(0, 1), alpha=-2.0, out=out)
     Ynormsq = (Y**2).sum(dim=1)
@@ -495,7 +492,6 @@ def _sqeuc(X: Tensor, Xnormsq: Tensor, Y: Tensor, out: Tensor):
     return out
 
 
-@torch_compiler(fullgraph=False)
 def _kmeanspp_simple_loop(
     *,
     X: Tensor,
@@ -531,7 +527,6 @@ def _kmeanspp_simple_loop(
         torch.minimum(dists, newdists, out=dists)
 
 
-@torch_compiler(fullgraph=False)
 def _kmeanspp_noassign_loop(
     *,
     X: Tensor,
@@ -563,7 +558,6 @@ def _kmeanspp_noassign_loop(
         torch.minimum(dists, newdists, out=dists)
 
 
-@torch_compiler(fullgraph=False)
 def _kmeans_main_loop(
     n_iter: int,
     e: Tensor,

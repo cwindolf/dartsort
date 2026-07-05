@@ -499,21 +499,30 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         sorting_h5 = folder / "dartsort_sorting.h5"
         unit_info_csv = folder / "unit_information.csv"
 
-        with warnings.catch_warnings(record=True) as ws:
-            recording = self.save_to_folder(
-                folder=recording_dir,
-                overwrite=overwrite,
-                n_jobs=n_jobs or 1,
-                pool_engine="thread",
-                chunk_duration=chunk_len_s,
-            )
-            for w in ws:
-                msg = str(w.message)
-                if msg.startswith("The extractor is not serializable "):
-                    continue
-                if msg.startswith("auto_cast_uint"):
-                    continue
-                raise w.category(w.message)
+        if recording_dir.exists():
+            try:
+                recording = read_binary_folder(recording_dir)
+                logger.info("Loaded", recording_dir)
+            except Exception:
+                recording = None
+        else:
+            recording = None
+        if recording  is None:
+            with warnings.catch_warnings(record=True) as ws:
+                recording = self.save_to_folder(
+                    folder=recording_dir,
+                    overwrite=True,
+                    n_jobs=n_jobs or 1,
+                    pool_engine="thread",
+                    chunk_duration=chunk_len_s,
+                )
+                for w in ws:
+                    msg = str(w.message)
+                    if msg.startswith("The extractor is not serializable "):
+                        continue
+                    if msg.startswith("auto_cast_uint"):
+                        continue
+                    raise w.category(w.message)
         n_residual_snips = 0 if featurization_cfg is None else n_residual_snips
         self.save_features_to_hdf5(
             sorting_h5,

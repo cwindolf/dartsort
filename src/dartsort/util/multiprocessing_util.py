@@ -152,7 +152,7 @@ def handle_negative_jobs(n_jobs: int):
         n_cores = os.process_cpu_count()  # type: ignore
     except AttributeError:
         try:
-            my_cores = os.sched_getaffinity(0)
+            my_cores = os.sched_getaffinity(0)  # type: ignore  # ty: ignore[x]
             if my_cores:
                 n_cores = len(my_cores)
             else:

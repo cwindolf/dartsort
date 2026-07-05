@@ -211,7 +211,7 @@ def agglomerate(
     agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
 
     agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
-    new_ids = reorder[new_ids]
+    new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
 
     return Agglomeration(
         agglomerated_sorting=agg_sorting,
@@ -957,7 +957,9 @@ def _dedup_unit_loop(
         score_slice = scores[i0 : i1 + 1]
         dt_slice = dt[i0:i1]
         order = np.argsort(score_slice)
-        for oo in order:
+        # putting the -1 there ensures at least one spike is kept
+        # that case is only relevant when 0 in dt_slice
+        for oo in order[:-1]:
             # discard spike i0 + oo
             ii = i0 + oo
             discard[ii] = True
