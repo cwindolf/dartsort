@@ -709,6 +709,7 @@ def set_plt_style(
     plt.rc("axes", xmargin=margin)
     plt.rc("axes", ymargin=margin)
     plt.rc("axes", grid=grid)
+    plt.rc("pdf", fonttype=42)
 
     plt.rc("axes", prop_cycle=plt.cycler(color=glasbey1024))
 
