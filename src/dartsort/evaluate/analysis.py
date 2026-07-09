@@ -379,7 +379,8 @@ class DARTsortAnalysis:
             return self._summary_df
         df = self.quality_df.copy()
         uids = self.sorting.unit_ids
-        df["ds_unit_amplitudes"] = pd.Series(index=uids, data=self.unit_amplitudes())
+        if self.template_data is not None:
+            df["ds_unit_amplitudes"] = pd.Series(index=uids, data=self.unit_amplitudes())
         df["ds_firing_rates"] = pd.Series(index=uids, data=self.firing_rates())
         self._summary_df = df
         return df
