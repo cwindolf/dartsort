@@ -7,6 +7,7 @@ implement a view and controller.
 This should also make it easier to compute drift-aware metrics
 (e.g., d' using registered templates and shifted waveforms).
 """
+from kilosort.parameters import s
 
 from dataclasses import dataclass
 
@@ -108,6 +109,8 @@ class DARTsortAnalysis:
             "localizations",
             "positions",
         ),
+        compute_extensions=("correlograms",),
+        compute_extensions_if_templates=None,
         try_backup_amplitudes=("amplitudes", "ptp_amplitudes"),
         quality_metrics=(
             "sliding_rp_violation",
@@ -288,6 +291,7 @@ class DARTsortAnalysis:
             motion=motion,
             features_cfg=clustering_features_cfg,
             compute_extensions_if_templates=None,
+            compute_extensions=compute_extensions,s
         )
         analyzer.compute("quality_metrics", metric_names=quality_metrics)
         qc_df = analyzer.get_extension("quality_metrics").get_data()
@@ -380,7 +384,9 @@ class DARTsortAnalysis:
         df = self.quality_df.copy()
         uids = self.sorting.unit_ids
         if self.template_data is not None:
-            df["ds_unit_amplitudes"] = pd.Series(index=uids, data=self.unit_amplitudes())
+            df["ds_unit_amplitudes"] = pd.Series(
+                index=uids, data=self.unit_amplitudes()
+            )
         df["ds_firing_rates"] = pd.Series(index=uids, data=self.firing_rates())
         self._summary_df = df
         return df
