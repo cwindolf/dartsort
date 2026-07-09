@@ -7,7 +7,6 @@ implement a view and controller.
 This should also make it easier to compute drift-aware metrics
 (e.g., d' using registered templates and shifted waveforms).
 """
-from kilosort.parameters import s
 
 from dataclasses import dataclass
 
@@ -15,6 +14,7 @@ import numpy as np
 import pandas as pd
 import spikeinterface.core as sc
 import torch
+from kilosort.parameters import s
 from sklearn.decomposition import PCA
 
 from ..clustering.agglomerate import QDAResult, qda, template_distances
