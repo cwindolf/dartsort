@@ -110,7 +110,7 @@ class DARTsortAnalysis:
             "positions",
         ),
         compute_extensions=("correlograms",),
-        compute_extensions_if_templates=None,
+        estimate_si_sparsity=False,
         try_backup_amplitudes=("amplitudes", "ptp_amplitudes"),
         quality_metrics=(
             "sliding_rp_violation",
@@ -292,6 +292,7 @@ class DARTsortAnalysis:
             features_cfg=clustering_features_cfg,
             compute_extensions_if_templates=None,
             compute_extensions=compute_extensions,
+            estimate_si_sparsity=estimate_si_sparsity,
         )
         analyzer.compute("quality_metrics", metric_names=quality_metrics)
         qc_df = analyzer.get_extension("quality_metrics").get_data()
