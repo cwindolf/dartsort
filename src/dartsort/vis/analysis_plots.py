@@ -560,6 +560,7 @@ def plot_denoiser_scores(
     recording: BaseRecording,
     vis_sorting: DARTsortSorting,
     load_denoiser_from_sorting: DARTsortSorting | None = None,
+    templates: np.ndarray | None = None,
     count_per_unit: int = 128,
     figscale: float = 2.0,
     decrease_objective="deconv",
@@ -595,6 +596,8 @@ def plot_denoiser_scores(
     labels = []
     scores_unwhitened = []
     scores_whitened = None if local_whiteners is None else []
+    template_scores_unwhitened = []
+    template_scores_whitened = []
     assert vis_sorting.labels is not None
     for unit_id in np.unique(vis_sorting.unit_ids):
         if unit_id < 0:
@@ -631,6 +634,35 @@ def plot_denoiser_scores(
         labels.append(vis_sorting.labels[choices])
         scores_unwhitened.append(sc_res_a["residnorm_decreases"])
 
+        if templates is not None:
+            temp = np.pad(templates[unit_id], [(0, 0), (0, 1)])
+            ty = np.take_along_axis(temp, axis=1, indices=cc)
+            ty = torch.asarray(ty).to(x)
+
+            _, template_sc_res_a = check_residual_decrease(
+                x,
+                ty,
+                decrease_objective=decrease_objective,
+                threshold=-1.0,
+                save_residnorm_decrease=True,
+            )
+            template_scores_unwhitened.append(template_sc_res_a["residnorm_decreases"])
+
+            if local_whiteners is None:
+                continue
+            assert scores_whitened is not None
+
+            _, template_sc_res_b = check_residual_decrease(
+                x,
+                ty,
+                decrease_objective=decrease_objective,
+                threshold=-1.0,
+                save_residnorm_decrease=True,
+                local_whiteners=local_whiteners,
+                channels=torch.asarray(cc),
+            )
+            template_scores_whitened.append(template_sc_res_b["residnorm_decreases"])
+
         if local_whiteners is None:
             continue
         assert scores_whitened is not None
@@ -655,6 +687,14 @@ def plot_denoiser_scores(
     if scores_whitened is not None:
         data["score_whitened"] = np.sqrt(
             np.maximum(0.0, np.concatenate(scores_whitened))
+        )
+    if templates is not None:
+        data["template_score_unwhitened"] = np.sqrt(
+            np.maximum(0.0, np.concatenate(template_scores_unwhitened))
+        )
+    if local_whiteners is not None:
+        data["template_score_whitened"] = np.sqrt(
+            np.maximum(0.0, np.concatenate(template_scores_whitened))
         )
     df = pd.DataFrame(data)
 
