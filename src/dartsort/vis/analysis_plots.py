@@ -561,6 +561,10 @@ def plot_denoiser_scores(
     vis_sorting: DARTsortSorting,
     load_denoiser_from_sorting: DARTsortSorting | None = None,
     templates: np.ndarray | None = None,
+    dn=None,
+    whitener=None,
+    geom=None,
+    channel_index=None,
     count_per_unit: int = 128,
     figscale: float = 2.0,
     decrease_objective="deconv",
@@ -574,7 +578,8 @@ def plot_denoiser_scores(
     # load denoiser
     if load_denoiser_from_sorting is None:
         load_denoiser_from_sorting = vis_sorting
-    dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
+    if dn is None:
+        dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
     assert dn is not None
     assert channel_index is not None
     assert geom is not None
