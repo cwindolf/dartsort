@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import spikeinterface.core as sc
 import torch
-from kilosort.parameters import s
 from sklearn.decomposition import PCA
 
 from ..clustering.agglomerate import QDAResult, qda, template_distances
