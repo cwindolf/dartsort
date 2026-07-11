@@ -562,7 +562,6 @@ def plot_denoiser_scores(
     load_denoiser_from_sorting: DARTsortSorting | None = None,
     templates: np.ndarray | None = None,
     dn=None,
-    whitener=None,
     geom=None,
     channel_index=None,
     count_per_unit: int = 128,
