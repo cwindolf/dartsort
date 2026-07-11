@@ -696,6 +696,7 @@ def set_plt_style(
         avail = matplotlib.font_manager.get_font_names()
         for font in fonts:
             if font in avail:
+                print("Using:", font)
                 plt.rc("font", family=font)
                 break
         else:
