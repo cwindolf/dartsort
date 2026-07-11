@@ -258,7 +258,7 @@ def scatter_spike_features(
     if label_axes:
         axes[0].set_ylabel(("registered " * registered) + "depth (um)")
         axes[0].set_xlabel("x (um)")
-        axes[1].set_xlabel("amplitude (su)")
+        axes[1].set_xlabel("amplitude (s.u.)")
         axes[-1].set_xlabel("time (s)")
 
     return figure, axes, (s_x, s_a, *extra_scatters, s_t)
