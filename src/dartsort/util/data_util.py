@@ -1829,7 +1829,13 @@ def extract_random_snips(
     rg = np.random.default_rng(rg)
 
     # we can extract at most this many snips
-    n = min(n, max(1, chunk.shape[0] // sniplen))
+    n = min(n, chunk.shape[0] // sniplen)
+    if not n:
+        if torch.is_tensor(chunk):
+            chunk = chunk.numpy(force=True)
+        r_empty = np.empty((0, sniplen, chunk.shape[1]), dtype=chunk.dtype)
+        t_empty = np.empty((0,), dtype=np.int64)
+        return r_empty, t_empty
 
     # how many samples will not be covered
     empty_len = chunk.shape[0] - sniplen * n
