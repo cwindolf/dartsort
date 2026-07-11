@@ -570,10 +570,13 @@ def plot_denoiser_scores(
     decrease_objective="deconv",
     seed: int = 0,
     vmax=50.0,
+    volt_rad=75.0,
+    volt_dt=15,
     dv=0.5,
 ):
     from ..peel.peel_lib import check_residual_decrease
     from ..transform import WaveformWhitener
+    from ..util.waveform_util import make_channel_index
 
     # load denoiser
     if load_denoiser_from_sorting is None:
@@ -583,6 +586,7 @@ def plot_denoiser_scores(
     assert dn is not None
     assert channel_index is not None
     assert geom is not None
+    volt_ci = make_channel_index(geom, radius=volt_rad)
 
     # try load whitener
     fp = get_featurization_pipeline(load_denoiser_from_sorting)
@@ -603,6 +607,7 @@ def plot_denoiser_scores(
     scores_whitened = None if local_whiteners is None else []
     template_scores_unwhitened = []
     template_scores_whitened = []
+    volts = []
     assert vis_sorting.labels is not None
     for unit_id in np.unique(vis_sorting.unit_ids):
         if unit_id < 0:
@@ -624,6 +629,19 @@ def plot_denoiser_scores(
             channel_index=channel_index.numpy(force=True),
         )
         x = torch.asarray(x, dtype=torch.float)
+        volt = np.abs(
+            np.nan_to_num(
+                spikeio.read_waveforms_channel_index(
+                    recording,
+                    times_samples=tt,
+                    main_channels=cc,
+                    channel_index=volt_ci,
+                    trough_offset_samples=volt_dt - 1,
+                    spike_length_samples=volt_dt * 2,
+                ),
+                copy=False,
+            )
+        ).max(axis=(1, 2))
         y, _ = dn(x, channels=torch.asarray(cc))
 
         _, sc_res_a = check_residual_decrease(
@@ -638,10 +656,17 @@ def plot_denoiser_scores(
         channels.append(cc)
         labels.append(vis_sorting.labels[choices])
         scores_unwhitened.append(sc_res_a["residnorm_decreases"])
+        volts.append(volt)
 
         if templates is not None:
-            temp = np.pad(templates[unit_id], [(0, 0), (0, 1)])
-            ty = np.take_along_axis(temp, axis=1, indices=cc)
+            mytemp = np.pad(templates[unit_id], [(0, 0), (0, 1)])
+            mytemp = torch.asarray(mytemp)
+            mytemp = mytemp[None].broadcast_to((len(cc), *mytemp.shape))
+            indices = channel_index[cc][:, None, :]
+            indices = indices.broadcast_to(
+                cc.shape[0], mytemp.shape[1], channel_index.shape[1]
+            )
+            ty = mytemp.take_along_dim(dim=2, indices=indices)
             ty = torch.asarray(ty).to(x)
 
             _, template_sc_res_a = check_residual_decrease(
@@ -687,6 +712,7 @@ def plot_denoiser_scores(
         time_samples=np.concatenate(times_samples),
         channel=np.concatenate(channels),
         label=np.concatenate(labels),
+        volt=np.concatenate(volts),
         score_unwhitened=np.sqrt(np.maximum(0.0, np.concatenate(scores_unwhitened))),
     )
     if scores_whitened is not None:
@@ -697,7 +723,7 @@ def plot_denoiser_scores(
         data["template_score_unwhitened"] = np.sqrt(
             np.maximum(0.0, np.concatenate(template_scores_unwhitened))
         )
-    if local_whiteners is not None:
+    if templates is not None and local_whiteners is not None:
         data["template_score_whitened"] = np.sqrt(
             np.maximum(0.0, np.concatenate(template_scores_whitened))
         )
@@ -725,6 +751,26 @@ def plot_denoiser_scores(
             histtype="step",
             color=glasbey1024[unit_id % len(glasbey1024)],
         )
+
+    if templates is not None:
+        for unit_id, sub_df in df.groupby("label"):
+            unit_id = int(unit_id)  # type: ignore
+            axes[0, 0].hist(
+                sub_df.template_score_unwhitened,
+                bins=bins,
+                histtype="step",
+                linestyle=":",
+                color=glasbey1024[unit_id % len(glasbey1024)],
+            )
+            if scores_whitened is None:
+                continue
+            axes[0, 1].hist(
+                sub_df.template_score_whitened,
+                bins=bins,
+                histtype="step",
+                linestyle=":",
+                color=glasbey1024[unit_id % len(glasbey1024)],
+            )
 
     for ax, name in zip(axes.flat, ["original", "whitened"]):
         ax.grid()
