@@ -770,7 +770,7 @@ def combine_gmm_scores(
             **{
                 f"{new_prefix}_candidates": candidates,
                 f"{new_prefix}_responsibilities": responsibilities,
-                f"{new_prefix}_logliks": logliks,
+                f"{new_prefix}_log_liks": logliks,
             }
         )
 
@@ -826,7 +826,7 @@ def combine_gmm_scores(
         **{
             f"{new_prefix}_candidates": cand,
             f"{new_prefix}_responsibilities": mergedr,
-            f"{new_prefix}_logliks": mergedl,
+            f"{new_prefix}_log_liks": mergedl,
         },
     )
 
@@ -873,11 +873,6 @@ def deduplicate_spikes(
     radius_ms: float = -1.0,
     score_by=("merged_log_liks", "gmm_log_liks", "scores"),
 ) -> DARTsortSorting:
-    """The lower-scoring of any spikes within radius_samples of each other is relabeled to -1.
-
-    scores are grabbed from the first entry of score_by which is a valid property of the sorting.
-    If it's mu
-    """
     if radius_ms < 0 or sorting.labels is None:
         return sorting
 

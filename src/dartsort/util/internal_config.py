@@ -582,7 +582,7 @@ class RefinementConfig:
     collision_cleaning_error_threshold: float | None = 0.3
 
     # deduplication control
-    dedup_ms: float = 0.0
+    dedup_ms: float = 0.3
     censor_ms: float = 0.3
 
 
