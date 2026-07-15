@@ -251,7 +251,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         if self.whiten:
             W = self.b.components / self.b.whitener
         else:
-            W = self.b.components
+            W = self.b.components[:r]
         Wt = W.t()
         assert Wt.shape[1] == r
         out = features.new_empty((n, Wt.shape[0], c))

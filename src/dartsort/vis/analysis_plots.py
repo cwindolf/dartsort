@@ -537,20 +537,23 @@ def visualize_denoiser(
 
     for j in range(n_show):
         for tr, c, ll in zip(
-            [xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]
+            [xm, zm, ym], ["k", "darkgray", "orange"], ["raw input", "residual", "denoised"]
         ):
             axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
+            sns.despine(ax=axes[0, j], right=True, top=True)
+            # axes[0, j].axhline(0, color='k', lw=0.8)
         if j == n_show - 1:
-            axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
-        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
+            axes[0, j].legend(frameon=False, ncols=1, loc="lower right")
+        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw input", "denoised", "residual"])):
             im = axes[i + 1, j].imshow(
                 wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
             )
             sns.despine(ax=axes[i + 1, j], left=bool(j))
             if j == n_show - 1:
-                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3)
+                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3, label='standardized voltage')
             if j == 0:
-                axes[i + 1, j].set_ylabel(ll)
+                axes[i + 1, j].set_ylabel(f"{ll}\nlocal channel index")
+    axes[0, 0].set_ylabel('main trace view\nstandardized voltage')
     if suptitle:
         fig.suptitle(suptitle)
     return fig
