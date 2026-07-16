@@ -108,6 +108,8 @@ class DARTsortAnalysis:
             "localizations",
             "positions",
         ),
+        compute_extensions=("correlograms",),
+        estimate_si_sparsity=False,
         try_backup_amplitudes=("amplitudes", "ptp_amplitudes"),
         quality_metrics=(
             "sliding_rp_violation",
@@ -288,6 +290,8 @@ class DARTsortAnalysis:
             motion=motion,
             features_cfg=clustering_features_cfg,
             compute_extensions_if_templates=None,
+            compute_extensions=compute_extensions,
+            estimate_si_sparsity=estimate_si_sparsity,
         )
         analyzer.compute("quality_metrics", metric_names=quality_metrics)
         qc_df = analyzer.get_extension("quality_metrics").get_data()
@@ -379,7 +383,10 @@ class DARTsortAnalysis:
             return self._summary_df
         df = self.quality_df.copy()
         uids = self.sorting.unit_ids
-        df["ds_unit_amplitudes"] = pd.Series(index=uids, data=self.unit_amplitudes())
+        if self.template_data is not None:
+            df["ds_unit_amplitudes"] = pd.Series(
+                index=uids, data=self.unit_amplitudes()
+            )
         df["ds_firing_rates"] = pd.Series(index=uids, data=self.firing_rates())
         self._summary_df = df
         return df

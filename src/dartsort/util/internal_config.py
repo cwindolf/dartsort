@@ -273,6 +273,7 @@ class ClusteringFeaturesConfig:
     amplitude_vectors_dataset_name: str = "denoised_ptp_amplitude_vectors"
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
+    raise_for_numerics: bool = False
 
 
 @cfg_dataclass
@@ -582,7 +583,7 @@ class RefinementConfig:
     collision_cleaning_error_threshold: float | None = 0.3
 
     # deduplication control
-    dedup_ms: float = 0.0
+    dedup_ms: float = 0.3
     censor_ms: float = 0.3
 
 

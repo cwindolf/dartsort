@@ -696,6 +696,7 @@ def set_plt_style(
         avail = matplotlib.font_manager.get_font_names()
         for font in fonts:
             if font in avail:
+                print("Using:", font)
                 plt.rc("font", family=font)
                 break
         else:
@@ -709,6 +710,7 @@ def set_plt_style(
     plt.rc("axes", xmargin=margin)
     plt.rc("axes", ymargin=margin)
     plt.rc("axes", grid=grid)
+    plt.rc("pdf", fonttype=42)
 
     plt.rc("axes", prop_cycle=plt.cycler(color=glasbey1024))
 

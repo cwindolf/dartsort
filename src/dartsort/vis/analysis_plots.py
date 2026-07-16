@@ -537,20 +537,23 @@ def visualize_denoiser(
 
     for j in range(n_show):
         for tr, c, ll in zip(
-            [xm, zm, ym], ["k", "darkgray", "b"], ["raw", "res", "dn"]
+            [xm, zm, ym], ["k", "darkgray", "orange"], ["raw input", "residual", "denoised"]
         ):
             axes[0, j].plot(tr[j], color=c, lw=1, label=ll)
+            sns.despine(ax=axes[0, j], right=True, top=True)
+            # axes[0, j].axhline(0, color='k', lw=0.8)
         if j == n_show - 1:
-            axes[0, j].legend(frameon=False, ncols=3, loc="lower right")
-        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw", "denoised", "residual"])):
+            axes[0, j].legend(frameon=False, ncols=1, loc="lower right")
+        for i, (wf, ll) in enumerate(zip([x, y, z], ["raw input", "denoised", "residual"])):
             im = axes[i + 1, j].imshow(
                 wf[j].T, cmap=cmap, vmin=-5, vmax=5, interpolation="none", aspect="auto"
             )
             sns.despine(ax=axes[i + 1, j], left=bool(j))
             if j == n_show - 1:
-                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3)
+                plt.colorbar(im, ax=axes[i + 1, j], shrink=0.3, label='standardized voltage')
             if j == 0:
-                axes[i + 1, j].set_ylabel(ll)
+                axes[i + 1, j].set_ylabel(f"{ll}\nlocal channel index")
+    axes[0, 0].set_ylabel('main trace view\nstandardized voltage')
     if suptitle:
         fig.suptitle(suptitle)
     return fig
@@ -560,23 +563,32 @@ def plot_denoiser_scores(
     recording: BaseRecording,
     vis_sorting: DARTsortSorting,
     load_denoiser_from_sorting: DARTsortSorting | None = None,
+    templates: np.ndarray | None = None,
+    dn=None,
+    geom=None,
+    channel_index=None,
     count_per_unit: int = 128,
     figscale: float = 2.0,
     decrease_objective="deconv",
     seed: int = 0,
     vmax=50.0,
+    volt_rad=75.0,
+    volt_dt=15,
     dv=0.5,
 ):
     from ..peel.peel_lib import check_residual_decrease
     from ..transform import WaveformWhitener
+    from ..util.waveform_util import make_channel_index
 
     # load denoiser
     if load_denoiser_from_sorting is None:
         load_denoiser_from_sorting = vis_sorting
-    dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
+    if dn is None:
+        dn, geom, channel_index = try_get_denoising_pipeline(load_denoiser_from_sorting)
     assert dn is not None
     assert channel_index is not None
     assert geom is not None
+    volt_ci = make_channel_index(geom, radius=volt_rad)
 
     # try load whitener
     fp = get_featurization_pipeline(load_denoiser_from_sorting)
@@ -595,6 +607,9 @@ def plot_denoiser_scores(
     labels = []
     scores_unwhitened = []
     scores_whitened = None if local_whiteners is None else []
+    template_scores_unwhitened = []
+    template_scores_whitened = []
+    volts = []
     assert vis_sorting.labels is not None
     for unit_id in np.unique(vis_sorting.unit_ids):
         if unit_id < 0:
@@ -616,6 +631,19 @@ def plot_denoiser_scores(
             channel_index=channel_index.numpy(force=True),
         )
         x = torch.asarray(x, dtype=torch.float)
+        volt = np.abs(
+            np.nan_to_num(
+                spikeio.read_waveforms_channel_index(
+                    recording,
+                    times_samples=tt,
+                    main_channels=cc,
+                    channel_index=volt_ci,
+                    trough_offset_samples=volt_dt - 1,
+                    spike_length_samples=volt_dt * 2,
+                ),
+                copy=False,
+            )
+        ).max(axis=(1, 2))
         y, _ = dn(x, channels=torch.asarray(cc))
 
         _, sc_res_a = check_residual_decrease(
@@ -630,6 +658,42 @@ def plot_denoiser_scores(
         channels.append(cc)
         labels.append(vis_sorting.labels[choices])
         scores_unwhitened.append(sc_res_a["residnorm_decreases"])
+        volts.append(volt)
+
+        if templates is not None:
+            mytemp = np.pad(templates[unit_id], [(0, 0), (0, 1)])
+            mytemp = torch.asarray(mytemp)
+            mytemp = mytemp[None].broadcast_to((len(cc), *mytemp.shape))
+            indices = channel_index[cc][:, None, :]
+            indices = indices.broadcast_to(
+                cc.shape[0], mytemp.shape[1], channel_index.shape[1]
+            )
+            ty = mytemp.take_along_dim(dim=2, indices=indices)
+            ty = torch.asarray(ty).to(x)
+
+            _, template_sc_res_a = check_residual_decrease(
+                x,
+                ty,
+                decrease_objective=decrease_objective,
+                threshold=-1.0,
+                save_residnorm_decrease=True,
+            )
+            template_scores_unwhitened.append(template_sc_res_a["residnorm_decreases"])
+
+            if local_whiteners is None:
+                continue
+            assert scores_whitened is not None
+
+            _, template_sc_res_b = check_residual_decrease(
+                x,
+                ty,
+                decrease_objective=decrease_objective,
+                threshold=-1.0,
+                save_residnorm_decrease=True,
+                local_whiteners=local_whiteners,
+                channels=torch.asarray(cc),
+            )
+            template_scores_whitened.append(template_sc_res_b["residnorm_decreases"])
 
         if local_whiteners is None:
             continue
@@ -650,11 +714,20 @@ def plot_denoiser_scores(
         time_samples=np.concatenate(times_samples),
         channel=np.concatenate(channels),
         label=np.concatenate(labels),
+        volt=np.concatenate(volts),
         score_unwhitened=np.sqrt(np.maximum(0.0, np.concatenate(scores_unwhitened))),
     )
     if scores_whitened is not None:
         data["score_whitened"] = np.sqrt(
             np.maximum(0.0, np.concatenate(scores_whitened))
+        )
+    if templates is not None:
+        data["template_score_unwhitened"] = np.sqrt(
+            np.maximum(0.0, np.concatenate(template_scores_unwhitened))
+        )
+    if templates is not None and local_whiteners is not None:
+        data["template_score_whitened"] = np.sqrt(
+            np.maximum(0.0, np.concatenate(template_scores_whitened))
         )
     df = pd.DataFrame(data)
 
@@ -680,6 +753,26 @@ def plot_denoiser_scores(
             histtype="step",
             color=glasbey1024[unit_id % len(glasbey1024)],
         )
+
+    if templates is not None:
+        for unit_id, sub_df in df.groupby("label"):
+            unit_id = int(unit_id)  # type: ignore
+            axes[0, 0].hist(
+                sub_df.template_score_unwhitened,
+                bins=bins,
+                histtype="step",
+                linestyle=":",
+                color=glasbey1024[unit_id % len(glasbey1024)],
+            )
+            if scores_whitened is None:
+                continue
+            axes[0, 1].hist(
+                sub_df.template_score_whitened,
+                bins=bins,
+                histtype="step",
+                linestyle=":",
+                color=glasbey1024[unit_id % len(glasbey1024)],
+            )
 
     for ax, name in zip(axes.flat, ["original", "whitened"]):
         ax.grid()

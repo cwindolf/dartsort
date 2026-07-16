@@ -496,6 +496,7 @@ class BasePeeler(BModule):
         skip_features: bool = False,
         n_resid_snips: int | None = None,
         to_cpu: bool = True,
+        **peel_kw,
     ) -> "PeelingBatchResult":
         """Grab, peel, and featurize a chunk, returning a dict of numpy arrays
 
@@ -512,6 +513,7 @@ class BasePeeler(BModule):
             right_margin=right_margin,
             return_waveforms=return_waveforms,
             return_residual=return_residual or bool(n_resid_snips),
+            **peel_kw,
         )
         chunk_result = self.featurize_chunk_result(
             peel_result=peel_result,

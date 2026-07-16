@@ -135,12 +135,12 @@ class DARTsortGroundTruthComparison:
         return res
 
     def _unit_info_dataframe(self, force_distances=False, perf_only=False):
-        amplitudes = self.gt_analysis.unit_amplitudes()
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
         assert isinstance(df, pd.DataFrame)
         df = df.astype(float)  # not sure what the problem was...
-        df["gt_ptp_amplitude"] = amplitudes
+        if self.gt_analysis.template_data is not None:
+            df["gt_ptp_amplitude"] = self.gt_analysis.unit_amplitudes()
         df["gt_firing_rate"] = firing_rates
         df["gt_sorter_name"] = self.gt_analysis.name or ""
         df["tested_sorter_name"] = self.tested_analysis.name or ""

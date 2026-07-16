@@ -24,7 +24,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
-from ..util.waveform_util import make_channel_index
+from ..util.waveform_util import full_channel_index, make_channel_index
 from .matching_util import (
     ChunkTemplateData,
     MatchingPeaks,
@@ -260,6 +260,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         return_residual=False,
         return_waveforms=True,
         return_conv=False,
+        return_clean_waveforms=False,
     ) -> PeelingBatchResult:
         assert self.matching_templates is not None
         # get chunk center time and template info at that time
@@ -288,6 +289,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             return_residual=return_residual,
             return_conv=return_conv,
             return_collisioncleaned_waveforms=return_waveforms,
+            return_clean_waveforms=return_clean_waveforms,
         )
 
         # process spike times and create return result
@@ -304,9 +306,11 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         self,
         traces: Tensor,
         chunk_template_data: ChunkTemplateData,
+        *,
         left_margin=0,
         right_margin=0,
         return_collisioncleaned_waveforms=True,
+        return_clean_waveforms=False,
         return_residual=False,
         return_conv=False,
         unit_mask=None,
@@ -475,6 +479,14 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
             assert self.p.channel_selection == "template"
             channels = chunk_template_data.main_channels[peaks.template_inds]
             waveforms = None
+        if return_clean_waveforms:
+            ci_full = full_channel_index(self.b.channel_index.shape[0], True)
+            ci_full = ci_full.to(self.b.channel_index)
+            res["clean_waveforms"] = chunk_template_data.get_clean_waveforms(
+                peaks=peaks,
+                channels=channels,
+                channel_index=ci_full,
+            )
         res["channels"] = channels
         if return_collisioncleaned_waveforms:
             assert waveforms is not None

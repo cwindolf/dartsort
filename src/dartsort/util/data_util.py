@@ -1125,7 +1125,8 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
         if k == "_extra_state":
             tpca.spike_length_samples = v["spike_length_samples"]
             tpca._needs_fit = v["needs_fit"]
-            assert len(v) == 2
+            tpca.rank = v["rank"]
+            assert len(v) == 3
             continue
         tpca.register_buffer(k, v)
     tpca.initialize_spike_length_dependent_params()
@@ -1479,6 +1480,8 @@ def check_recording(
     too_few_spikes_per_sec=10,
     expected_spikes_per_sec=10_000,
     num_chunks_per_segment=5,
+    max_std=10.0,
+    min_std=0.1,
     dtype=torch.float,
 ):
     """Sanity check spike detection rate and data range of input recording."""
@@ -1498,6 +1501,8 @@ def check_recording(
 
     # run detection and compute spike detection rate and data range
     spike_rates = []
+    max_abs = -np.inf
+    mads = []
     for chunk in random_chunks:
         dres = detect_and_deduplicate(
             torch.tensor(chunk, dtype=dtype),
@@ -1509,13 +1514,16 @@ def check_recording(
         del dres
         chunk_len_s = rec.sampling_frequency / chunk.shape[0]
         spike_rates.append(times.shape[0] / chunk_len_s)
+        max_abs = max(max_abs, np.max(chunk))
+        mads.append(np.median(np.abs(chunk)))
 
     avg_detections_per_second = np.mean(spike_rates)
-    max_abs = np.max(random_chunks)
+    std = np.mean(mads).item() * 1.4826
 
     err_tail = (
         "You may want to check that your data has been preprocessed, "
-        "including standardization. If it seems right, then you may need to "
+        "including standardization (see the `preprocessing` flag in "
+        "the config for some presets). If it seems right, then you may need to "
         "shrink the chunk_length_samples parameters in the configuration if "
         "you experience memory issues."
     )
@@ -1538,6 +1546,13 @@ def check_recording(
     if max_abs > expected_value_range:
         warnings.warn(
             f"Recording values exceed |{expected_value_range}|. " + err_tail,
+            RuntimeWarning,
+        )
+        failed = True
+    if std > max_std or std < min_std:
+        warnings.warn(
+            f"Recording standard deviation {std:0.2f} was not in the generous "
+            f"expected range [{min_std}, {max_std}]. " + err_tail,
             RuntimeWarning,
         )
         failed = True
@@ -1815,7 +1830,13 @@ def extract_random_snips(
     rg = np.random.default_rng(rg)
 
     # we can extract at most this many snips
-    n = min(n, max(1, chunk.shape[0] // sniplen))
+    n = min(n, chunk.shape[0] // sniplen)
+    if not n:
+        if torch.is_tensor(chunk):
+            chunk = chunk.numpy(force=True)
+        r_empty = np.empty((0, sniplen, chunk.shape[1]), dtype=chunk.dtype)
+        t_empty = np.empty((0,), dtype=np.int64)
+        return r_empty, t_empty
 
     # how many samples will not be covered
     empty_len = chunk.shape[0] - sniplen * n

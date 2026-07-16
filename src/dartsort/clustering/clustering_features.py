@@ -1,4 +1,5 @@
 from typing import Self, cast
+from logging import WARN
 
 import h5py
 import numpy as np
@@ -38,9 +39,14 @@ class SimpleMatrixFeatures:
     xyza: np.ndarray | None
     signed_amplitudes: np.ndarray
     amplitudes: np.ndarray
+    keep_mask: np.ndarray | None
 
     def mask(self, mask) -> Self:
         a = self.amplitudes[mask]
+        if self.keep_mask is not None:
+            k = self.keep_mask[mask]
+        else:
+            k = None
         return self.__class__(
             n=a.shape[0],
             features=self.features[mask],
@@ -50,6 +56,7 @@ class SimpleMatrixFeatures:
             xyza=None if self.xyza is None else self.xyza[mask],
             signed_amplitudes=self.signed_amplitudes[mask],
             amplitudes=a,
+            keep_mask=k,
         )
 
     @classmethod
@@ -68,14 +75,19 @@ class SimpleMatrixFeatures:
         )
         if xyza is not None:
             x = xyza[:, 0]
-            if not _allfinite(x):
-                raise ValueError(_numbers_error_str("x", x))
+            _check_numbers(
+                "x", x, raise_for_numerics=clustering_features_cfg.raise_for_numerics
+            )
             z = xyza[:, 2]
-            if not _allfinite(z):
-                raise ValueError(_numbers_error_str("z", z))
+            _check_numbers(
+                "z", z, raise_for_numerics=clustering_features_cfg.raise_for_numerics
+            )
             z_reg = motion.correct_s(t_s, z)
-            if not _allfinite(z_reg):
-                raise ValueError(_numbers_error_str("z_reg", z_reg))
+            _check_numbers(
+                "z_reg",
+                z_reg,
+                raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+            )
         else:
             x = z = z_reg = None
 
@@ -96,14 +108,20 @@ class SimpleMatrixFeatures:
         amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
         if clustering_features_cfg.use_amplitude:
             assert amp is not None
-            if not _allfinite(amp):
-                raise ValueError(_numbers_error_str("amp", amp))
+            _check_numbers(
+                "amp",
+                amp,
+                raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+            )
             ampft = amp.copy()
             if clustering_features_cfg.log_transform_amplitude:
                 ampft = np.log(clustering_features_cfg.amp_log_c + ampft)
                 ampft *= clustering_features_cfg.amp_scale
-            if not _allfinite(ampft):
-                raise ValueError(_numbers_error_str("ampft", ampft))
+            _check_numbers(
+                "ampft",
+                ampft,
+                raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+            )
             features.append(ampft[:, None])
 
         v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
@@ -124,8 +142,11 @@ class SimpleMatrixFeatures:
                 rank=clustering_features_cfg.n_main_channel_pcs,
                 dataset_name=clustering_features_cfg.pca_dataset_name,
             )
-            if not _allfinite(pcs):
-                raise ValueError(_numbers_error_str("No motion pcs", pcs))
+            _check_numbers(
+                "No motion pcs",
+                pcs,
+                raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+            )
         elif do_pcs and clustering_features_cfg.motion_aware:
             shifts, n_pitches_shift = motion.pitch_shifts(
                 sorting=sorting,
@@ -144,8 +165,11 @@ class SimpleMatrixFeatures:
             mask = np.broadcast_to(mask, len(schan))
             if hasattr(sorting, clustering_features_cfg.pca_dataset_name):
                 pcs = getattr(sorting, clustering_features_cfg.pca_dataset_name)
-                if not _allfinite(pcs):
-                    raise ValueError(_numbers_error_str("sorting pcs", pcs))
+                _check_numbers(
+                    "sorting pcs",
+                    pcs,
+                    raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+                )
                 erp, pcs = interpolate_by_chunk(
                     mask=mask,
                     dataset=pcs,
@@ -158,8 +182,11 @@ class SimpleMatrixFeatures:
                     params=clustering_features_cfg.interp_params,
                 )
                 pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
-                if not _allfinite(pcs):
-                    raise ValueError(_numbers_error_str("sorting interp pcs", pcs))
+                _check_numbers(
+                    "sorting interp pcs",
+                    pcs,
+                    raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+                )
             else:
                 assert sorting.parent_h5_path is not None
                 with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
@@ -175,8 +202,11 @@ class SimpleMatrixFeatures:
                         params=clustering_features_cfg.interp_params,
                     )
                     pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
-                if not _allfinite(pcs):
-                    raise ValueError(_numbers_error_str("h5 interp pcs", pcs))
+                _check_numbers(
+                    "h5 interp pcs",
+                    pcs,
+                    raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+                )
 
         if do_pcs:
             assert pcs is not None
@@ -192,8 +222,11 @@ class SimpleMatrixFeatures:
             else:
                 assert pctf in ("none", None)
             pcs *= clustering_features_cfg.pc_scale
-            if not _allfinite(pcs):
-                raise ValueError(_numbers_error_str(f"{pctf} pcs", pcs))
+            _check_numbers(
+                f"{pctf} pcs",
+                pcs,
+                raise_for_numerics=clustering_features_cfg.raise_for_numerics,
+            )
             if torch.is_tensor(pcs):
                 pcs = pcs.numpy(force=True)
             features.append(pcs)
@@ -203,6 +236,9 @@ class SimpleMatrixFeatures:
             features = np.concatenate(features, axis=1)
         else:
             features = np.empty((n, 0))
+        keep = np.atleast_1d(np.isfinite(features).all(axis=1))
+        if keep.all():
+            keep = None
         return cls(
             n=n,
             features=features,
@@ -212,6 +248,7 @@ class SimpleMatrixFeatures:
             xyza=xyza,
             amplitudes=amp,
             signed_amplitudes=samp,
+            keep_mask=keep,
         )
 
 
@@ -331,7 +368,18 @@ def _allfinite(x):
         return np.isfinite(x).all()
 
 
-def _numbers_error_str(name: str, x: np.ndarray):
+def _check_numbers(name: str, x: np.ndarray, raise_for_numerics=False):
     if isinstance(x, torch.Tensor):
         x = x.numpy(force=True)
-    return f"{name}: {np.isposinf(x).sum()} +inf, {np.isneginf(x).sum()} -inf, {np.isnan(x).sum()} nan."
+
+    npinf = np.isposinf(x).sum()
+    nninf = np.isneginf(x).sum()
+    nna = np.isnan(x).sum()
+    if not (npinf + nninf + nna):
+        return
+
+    err = f"{name}: {npinf} +inf, {nninf} -inf, {nna} nan."
+    if raise_for_numerics:
+        raise ValueError(err)
+    else:
+        logger.warn(err)

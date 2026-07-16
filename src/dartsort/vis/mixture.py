@@ -786,27 +786,40 @@ class CovarianceView(MixtureComponentPlot):
     height = 3
 
     def __init__(
-        self, n_waveforms_show=128, neigs=16, cov_vert=False, reference_cov="interp"
+        self,
+        n_waveforms_show=128,
+        neigs=16,
+        cov_vert=False,
+        reference_cov="interp",
+        min_chan_count=0,
     ):
         self.n_waveforms_show = n_waveforms_show
         self.colors = dict(emp="k", interp="gray", noise="r", signal="g", model="b")
         self.neigs = neigs
         self.cov_vert = cov_vert
         self.reference_cov = reference_cov
+        self.min_chan_count = min_chan_count
 
-    def compute(self, mix_data: MixtureVisData, unit_id: int):
+    def compute(self, mix_data: MixtureVisData, unit_id: int, channels: np.ndarray | None = None):
         # load data
         inu_train, wchans, features, waveforms = mix_data.random_train_waveforms(
             unit_id=unit_id, count=self.n_waveforms_show
         )
 
         # pick channels and put data there
-        chan_set = torch.asarray(wchans).unique().to(device=mix_data.tmm.b.means.device)
+        chan_set, chan_counts = torch.asarray(wchans).unique(return_counts=True)
+        chan_set = chan_set.to(device=mix_data.tmm.b.means.device)
         chan_set = chan_set[chan_set < mix_data.tmm.neighb_cov.n_channels]
         features = features.reshape(
             features.shape[0], -1, mix_data.tmm.neighb_cov.max_nc_obs
         )
         features = torch.asarray(features)
+
+        if channels is None:
+            target_chans = chan_set.cpu()
+        else:
+            target_chans = torch.asarray(channels).cpu()
+
         # -- with nans
         feat_nan = features.new_full(
             (*features.shape[:2], mix_data.tmm.neighb_cov.n_channels + 1), torch.nan
@@ -818,14 +831,14 @@ class CovarianceView(MixtureComponentPlot):
             index=ix,
             src=features,
         )
-        feat_nan = feat_nan[:, :, chan_set.cpu()]
+        feat_nan = feat_nan[:, :, target_chans]
         feat_nan = feat_nan.view(feat_nan.shape[0], -1)
         # -- with interp
         assert mix_data.tmm.erp is not None
         feat_interp = mix_data.tmm.erp.interp_to_chans(
             waveforms=features.to(mix_data.tmm.b.means),
             neighborhood_ids=mix_data.train_data.neighborhood_ids[inu_train],
-            target_channels=chan_set,
+            target_channels=target_chans,
         )
         feat_interp = feat_interp.view(feat_interp.shape[0], -1)
 
@@ -839,7 +852,7 @@ class CovarianceView(MixtureComponentPlot):
 
         # noise covariance
         assert mix_data.tmm.noise is not None
-        cov_noise = mix_data.tmm.noise.marginal_covariance(channels=chan_set).to_dense()
+        cov_noise = mix_data.tmm.noise.marginal_covariance(channels=target_chans).to_dense()
         assert cov_noise.shape == cov_interp.shape
 
         # signal covariance
@@ -848,7 +861,7 @@ class CovarianceView(MixtureComponentPlot):
             basis = basis.view(
                 mix_data.tmm.signal_rank, -1, mix_data.tmm.neighb_cov.n_channels
             )
-            basis = basis[:, :, chan_set].view(mix_data.tmm.signal_rank, -1)
+            basis = basis[:, :, target_chans].view(mix_data.tmm.signal_rank, -1)
             basis = basis * mix_data.tmm.p.latent_prior_std
             cov_signal = basis.T @ basis
             assert cov_signal.shape == cov_noise.shape
@@ -864,6 +877,14 @@ class CovarianceView(MixtureComponentPlot):
         cov_noise = cov_noise.numpy(force=True)
         cov_signal = cov_signal.numpy(force=True)
         cov_model = cov_model.numpy(force=True)
+
+        if channels is None and self.min_chan_count:
+            (ckeep,) = (chan_counts >= self.min_chan_count).nonzero(as_tuple=True)
+            cov_nan = cov_nan[ckeep][:, ckeep]
+            cov_interp = cov_interp[ckeep][:, ckeep]
+            cov_noise = cov_noise[ckeep][:, ckeep]
+            cov_signal = cov_signal[ckeep][:, ckeep]
+            cov_model = cov_model[ckeep][:, ckeep]
 
         # spectra: empirical, noise, sginal, model
         ev_nan = np.linalg.eigvalsh(cov_nan)[::-1]
