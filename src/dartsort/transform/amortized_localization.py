@@ -162,7 +162,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             assert obs_amps is not None
             if neighborhoods is None:
                 neighborhoods = self.b.padded_geom[self.b.model_channel_index[channels]]
-            w = obs_amps / obs_amps.sum(1, keepdims=True)
+            w = obs_amps / obs_amps.sum(1, keepdims=True).clamp(min=1e-6)
             centers = torch.sum(w.unsqueeze(-1) * neighborhoods, dim=1)
             return centers
         else:
@@ -266,9 +266,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         x_masked = x * mask
         if self.scale_loss_by_mean:
             # 1/(n_chans_retained*mean amplitude)
-            rescale = x_masked.sum(1, keepdim=True).clamp(min=1e-8).reciprocal()
+            rescale = x_masked.sum(1, keepdim=True).clamp(min=1e-6).reciprocal()
         else:
-            rescale = 1.0 / mask.sum(1, keepdim=True)
+            rescale = mask.sum(1, keepdim=True).clamp(min=1e-6).reciprocal()
         x_masked *= rescale
         recon_x_masked *= rescale
         mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
