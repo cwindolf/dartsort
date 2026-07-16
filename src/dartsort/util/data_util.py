@@ -1125,7 +1125,8 @@ def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=
         if k == "_extra_state":
             tpca.spike_length_samples = v["spike_length_samples"]
             tpca._needs_fit = v["needs_fit"]
-            assert len(v) == 2
+            tpca.rank = v["rank"]
+            assert len(v) == 3
             continue
         tpca.register_buffer(k, v)
     tpca.initialize_spike_length_dependent_params()
