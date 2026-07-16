@@ -153,13 +153,13 @@ class BaseWaveformModule(BModule):
             # and unfortunately set_extra_state usually runs after. doesn't hurt to run now.
             self.spike_length_samples = extra_state["spike_length_samples"]
 
+        self._other_pre_load_state(state_dict, prefix)
+
         # and this is how subclasses use that info
         # if state dict was dumped before fit, then sls was never known and we
         # don't want to call that initializer, so don't if sls is None.
         if self.spike_length_samples is not None:
             self.initialize_spike_length_dependent_params()
-
-        self._other_pre_load_state(state_dict, prefix)
 
         if self.submodule_names:
             for sn, smk in zip(self.submodule_names, all_submodule_keys):

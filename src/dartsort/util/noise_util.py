@@ -1533,7 +1533,7 @@ def residual_welch_whitener(
         if ina.size:
             snip = snip[:ina[0]]
         if not snip.size:
-            break
+            continue
 
         # to torch, whiten
         snip = torch.asarray(snip).to(device=device, non_blocking=True)

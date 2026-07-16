@@ -4381,7 +4381,7 @@ def get_full_neighborhood_data(
     assert xfull.shape[2] == full_neighborhoods.b.neighborhoods.shape[1]
     frank = xfull.shape[1]
     if clustering_features_cfg is not None:
-        assert frank == clustering_features_cfg.feature_rank
+        assert 0 < frank <= clustering_features_cfg.feature_rank
     assert xfull.shape[0] == full_neighborhoods.b.neighborhood_ids.shape[0]
     xfull = xfull.view(len(xfull), -1)
     xfull = xfull.nan_to_num_()

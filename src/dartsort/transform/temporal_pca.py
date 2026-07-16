@@ -80,6 +80,15 @@ class BaseTemporalPCA(BaseWaveformModule):
         self.shape = (rank, channel_index.shape[1])
         self.nt = None
 
+    def get_extra_state(self):
+        es = super().get_extra_state()
+        es["rank"] = self.rank
+        return es
+
+    def _other_pre_load_state(self, state_dict, prefix):
+        extra_state = state_dict[f"{prefix}_extra_state"]
+        self.rank = extra_state["rank"]
+
     def fit(
         self,
         recording,
@@ -406,18 +415,21 @@ class BaseTemporalPCA(BaseWaveformModule):
         assert not self.centered
         assert not self.whiten
         self.spike_length_samples = td.templates.shape[1]
-        self.initialize_spike_length_dependent_params()
         basis = td.featurization_basis
         if basis is None:
             if self.temporal_slice is not None:
                 td = replace(td, templates=td.templates[:, self.temporal_slice])
             basis = pca_from_templates(td, rank=self.rank).components_
+
+        self.rank = min(self.rank, basis.shape[0])
+        self.initialize_spike_length_dependent_params()
+
         if self.temporal_slice is None:
             assert basis.shape[1] == self.spike_length_samples
         else:
             dt = self.temporal_slice.stop - self.temporal_slice.start
             assert basis.shape[1] == dt
-        self.rank = min(self.rank, basis.shape[0])
+
         self.shape = (self.rank, self.b.channel_index.shape[1])
         self.b.mean.zero_()
         comps = torch.asarray(basis[: self.rank])
