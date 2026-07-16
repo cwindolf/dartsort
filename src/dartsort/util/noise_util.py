@@ -1522,16 +1522,30 @@ def residual_welch_whitener(
 
     # Welch's method to estimate residual PSD
     snip_psds = []
-    block_len = temporal_length
+    block_len = -1
     for snip in snipgen:
-        block_len = next_fast_len(snip.shape[1])
+        if block_len < 0:
+            block_len = next_fast_len(snip.shape[1])
+
+        # handle early stopping in residual extractor, ignore nans
+        # if there are nans, they'll be the same on dims 1,2.
+        ina = np.flatnonzero(np.isnan(snip[:, 0, 0]))
+        if ina.size:
+            snip = snip[:ina[0]]
+        if not snip.size:
+            break
+
+        # to torch, whiten
         snip = torch.asarray(snip).to(device=device, non_blocking=True)
         if W is not None:
             snip = torch.einsum("ntc,cd->ntd", snip, W)
+
+        # Welch
         snip = snip.permute(0, 2, 1).reshape(-1, snip.shape[1])
         periodogram = torch.fft.rfft(snip, n=block_len, norm="ortho")
         dens = (periodogram * periodogram.conj()).mean(dim=0)
         snip_psds.append(dens)
+
     snip_psds = torch.stack(snip_psds, dim=0)
     spectral_density = snip_psds.mean(0).sqrt_()
 
@@ -1544,6 +1558,8 @@ def residual_welch_whitener(
     i0 = wkernel.shape[0] // 2 - temporal_length // 2
     i1 = i0 + temporal_length
     wkernel = wkernel[i0:i1].clone()
+    assert wkernel.isfinite().all()
+
     return wkernel
 
 
