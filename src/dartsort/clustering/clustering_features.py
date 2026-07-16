@@ -1,5 +1,5 @@
-import warnings
 from typing import Self, cast
+from logging import WARN
 
 import h5py
 import numpy as np
@@ -375,9 +375,11 @@ def _check_numbers(name: str, x: np.ndarray, raise_for_numerics=False):
     npinf = np.isposinf(x).sum()
     nninf = np.isneginf(x).sum()
     nna = np.isnan(x).sum()
-    err = f"{name}: {npinf} +inf, {nninf} -inf, {nna} nan."
+    if not (npinf + nninf + nna):
+        return
 
+    err = f"{name}: {npinf} +inf, {nninf} -inf, {nna} nan."
     if raise_for_numerics:
         raise ValueError(err)
     else:
-        warnings.warn(err, stacklevel=2)
+        logger.warn(err)

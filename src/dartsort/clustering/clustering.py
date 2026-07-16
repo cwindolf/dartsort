@@ -460,7 +460,7 @@ class DensityPeaksClusterer(Clusterer):
             labels = cluster_util.combine_disjoint(
                 ixs, res["labels"], rest, other_labels
             )
-            labels[isna] = -1
+            labels[rest[isna]] = -1
         else:
             kdtree = None
             labels = res["labels"]
