@@ -273,6 +273,7 @@ class ClusteringFeaturesConfig:
     amplitude_vectors_dataset_name: str = "denoised_ptp_amplitude_vectors"
     localizations_dataset_name: str = "point_source_localizations"
     pca_dataset_name: str = "collisioncleaned_tpca_features"
+    raise_for_numerics: bool = False
 
 
 @cfg_dataclass

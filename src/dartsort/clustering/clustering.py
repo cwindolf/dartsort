@@ -155,10 +155,23 @@ class Clusterer:
     def handle_sampling(
         self, features: SimpleMatrixFeatures
     ) -> tuple[Literal[False], slice] | tuple[Literal[True], np.ndarray]:
+        if features.keep_mask is not None:
+            mask_ix = np.flatnonzero(features.keep_mask)
+        else:
+            mask_ix = None
         if self.sampling_cfg is None:
-            return False, slice(None)
+            if mask_ix is not None:
+                return True, mask_ix
+            else:
+                return False, slice(None)
         elif features.n <= self.sampling_cfg.n_waveforms_fit:
-            return False, slice(None)
+            if mask_ix is not None:
+                return True, mask_ix
+            else:
+                return False, slice(None)
+
+        if mask_ix is not None:
+            features = features.mask(mask_ix)
 
         weights = fit_reweighting(
             voltages=features.signed_amplitudes,
@@ -173,6 +186,8 @@ class Clusterer:
             replace=False,
         )
         ixs.sort()
+        if mask_ix is not None:
+            ixs = mask_ix[ixs]
         return True, ixs
 
     def cluster(
@@ -432,16 +447,20 @@ class DensityPeaksClusterer(Clusterer):
             kdtree = res["kdtree"]
             assert isinstance(ixs, np.ndarray)
             rest = np.setdiff1d(np.arange(len(X)), ixs)
+            Xr = X[rest]
+            isna = np.isnan(Xr).any(axis=1)
+            np.nan_to_num(Xr, copy=False)
             other_labels = density.nearest_neighbor_assign(
                 kdtree,
                 res["labels"],
-                X[rest],
+                Xr,
                 radius_search=self.radius_search,
                 workers=self.workers,
             )
             labels = cluster_util.combine_disjoint(
                 ixs, res["labels"], rest, other_labels
             )
+            labels[isna] = -1
         else:
             kdtree = None
             labels = res["labels"]
