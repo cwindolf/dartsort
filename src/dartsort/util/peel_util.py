@@ -11,7 +11,10 @@ from ..peel.peel_base import BasePeeler
 from .data_util import DARTsortSorting
 from .internal_config import ComputationConfig, FeaturizationConfig
 from .job_util import ensure_computation_config
+from .logging_util import get_logger
 from .py_util import ensure_path, timer
+
+logger = get_logger(__name__)
 
 
 def run_peeler(
@@ -89,6 +92,19 @@ def run_peeler(
         workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
         _, workers = handle_negative_jobs(workers)
         peeler.featurization_pipeline.register_cpu_workers(workers)
+
+    if hasattr(peeler, "subtraction_denoising_pipeline"):
+        logger.dartsortverbose(
+            f"Run {peeler.__class__.__name__} with denoising pipeline %s "
+            "and feature pipeline %s",
+            peeler.subtraction_denoising_pipeline,
+            peeler.featurization_pipeline,
+        )
+    else:
+        logger.dartsortverbose(
+            f"Run {peeler.__class__.__name__} with feature pipeline %s",
+            peeler.featurization_pipeline,
+        )
     with timer(f"peel ({peeler.__class__.__name__})"):
         peeler.peel(
             output_hdf5_filename,

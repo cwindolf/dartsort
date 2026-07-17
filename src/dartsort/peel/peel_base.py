@@ -9,6 +9,7 @@ from pathlib import Path
 from sys import getrefcount
 from threading import Lock, local
 from typing import Any, Sequence, TypedDict
+from warnings import catch_warnings, filterwarnings
 
 import h5py
 import numpy as np
@@ -539,8 +540,17 @@ class BasePeeler(BModule):
             channel_indices=None,
             margin=self.chunk_margin_samples,
         )
+        assert isinstance(chunk, np.ndarray)
         device = self.b.channel_index.device
-        chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
+        if device.type == "cpu":
+            chunk = torch.tensor(chunk, device=device, dtype=self.dtype)
+        else:
+            # we have to copy anyway to go to device, so working around the
+            # torch warning here. this way, can avoid blocking.
+            with catch_warnings():
+                filterwarnings("ignore", message="The given NumPy array is not ")
+                chunk = torch.from_numpy(chunk)
+                chunk = chunk.to(device=device, dtype=self.dtype, non_blocking=True)
         return chunk, chunk_end_samples, left_margin, right_margin
 
     def featurize_chunk_result(

@@ -20,6 +20,7 @@ from ..util.internal_config import (
 )
 from ..util.job_util import ensure_computation_config
 from ..util.spiketorch import grab_spikes, ptp, subtract_spikes_
+from ..util.torch_util import torch_compile
 from ..util.waveform_util import get_relative_subset, make_channel_index
 from .peel_base import PeelingBatchResult
 
@@ -89,46 +90,32 @@ def check_residual_decrease(
         return None, {}
     assert orig_wfs is not None
 
-    if local_whiteners is not None:
-        assert channels is not None
-        W = local_whiteners[channels]
-
-        # remove nans
-        if overwrite_orig_waveforms:
-            orig_wfs = orig_wfs.nan_to_num_()
-        else:
-            orig_wfs = orig_wfs.nan_to_num()
-        dn_wfs = dn_wfs.nan_to_num()
-
-        # spatial mul -- putting temporal dim last here
-        orig_wfs = W.bmm(orig_wfs.mT)
-        dn_wfs = W.bmm(dn_wfs.mT)
-
-        # temporal conv if needed
-        if whitening_kernel is not None:
-            *shp, t = orig_wfs.shape
-            k = whitening_kernel[None, None]
-            orig_wfs = F.conv1d(orig_wfs.view(-1, 1, t), k, padding="same")
-            dn_wfs = F.conv1d(dn_wfs.view(-1, 1, t), k, padding="same")
-            orig_wfs = orig_wfs.view(*shp, t)
-            dn_wfs = dn_wfs.view(*shp, t)
+    orig_wfs = flatten_denan_and_whiten_batched(
+        orig_wfs,
+        channels,
+        local_whiteners,
+        whitening_kernel,
+        overwrite=overwrite_orig_waveforms,
+    )
+    dn_wfs = flatten_denan_and_whiten_batched(
+        dn_wfs, channels, local_whiteners, whitening_kernel
+    )
 
     if decrease_objective == "deconv":
         if overwrite_orig_waveforms:
-            buf = orig_wfs.mul_(dn_wfs).nan_to_num_()
-            conv = buf.sum(dim=(1, 2))
+            buf = orig_wfs.mul_(dn_wfs)
+            conv = buf.sum(dim=1)
             torch.square(dn_wfs, out=buf)
-            norm = buf.nan_to_num_().sum(dim=(1, 2))
+            norm = buf.sum(dim=1)
         else:
-            dn_wfs = dn_wfs.nan_to_num()
-            conv = (orig_wfs * dn_wfs).nan_to_num_().sum(dim=(1, 2))
-            norm = dn_wfs.square_().sum(dim=(1, 2))
+            conv = (orig_wfs * dn_wfs).sum(dim=1)
+            norm = dn_wfs.square_().sum(dim=1)
         reduction = conv.mul_(2.0).sub_(norm)
         threshold = threshold**2
     elif decrease_objective in ("norm", "normsq"):
-        orig_decobj = orig_wfs.square().sum(dim=(1, 2))
-        orig_wfs = orig_wfs.sub_(dn_wfs).nan_to_num_()
-        new_decobj = orig_wfs.square_().sum(dim=(1, 2))
+        orig_decobj = orig_wfs.square().sum(dim=1)
+        orig_wfs = orig_wfs.sub_(dn_wfs)
+        new_decobj = orig_wfs.square_().sum(dim=1)
         if decrease_objective == "norm":
             orig_decobj = orig_decobj.sqrt_()
             new_decobj = new_decobj.sqrt_()
@@ -145,6 +132,51 @@ def check_residual_decrease(
     else:
         features = {}
     return keep, features
+
+
+@torch_compile
+def flatten_denan_and_whiten_batched(
+    wfs: torch.Tensor,
+    channels: torch.Tensor | None,
+    local_whiteners: Tensor | None,
+    whitening_kernel: Tensor | None,
+    overwrite: bool = False,
+    batch_size: int = 4096,
+):
+    N = wfs.shape[0]
+    T = wfs.shape[1]
+    C = wfs.shape[2]
+    if overwrite:
+        wfs = wfs.nan_to_num_()
+    else:
+        wfs = wfs.nan_to_num()
+
+    if local_whiteners is None:
+        return wfs.view(N, -1)
+
+    assert channels is not None
+
+    W = local_whiteners[channels]
+    wfs = W.bmm(wfs.mT)
+    if whitening_kernel is None:
+        return wfs.view(N, -1)
+
+    k = whitening_kernel[None, None]
+    NC = N * C
+    wfs = wfs.view(NC, 1, T)
+
+    for i0 in range(0, NC, batch_size):
+        i1 = min(NC, i0 + batch_size)
+        nb = i1 - i0
+        y = wfs[i0:i1]
+        if nb < batch_size:
+            y = F.pad(y, (0, 0, 0, 0, 0, batch_size - nb))
+        z = F.conv1d(y, k, padding="same")
+        if nb < batch_size:
+            z = z[:nb]
+        wfs[i0:i1] = z
+
+    return wfs.view(N, -1)
 
 
 ChunkSubtractionResult = namedtuple(
