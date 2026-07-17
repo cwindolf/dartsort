@@ -1,4 +1,5 @@
 import dataclasses
+from math import isfinite
 from typing import cast
 
 import h5py
@@ -659,6 +660,8 @@ class Decollider(BaseMultichannelDenoiser):
                 train_losses = {
                     k: v.item() / len(train_data) for k, v in train_losses.items()
                 }
+                if not all(isfinite(v) for v in train_losses.values()):
+                    raise ValueError(f"Denoiser training diverged: {train_losses}.")
                 train_records.append({**train_losses})
 
                 # Validation phase (only if val_loader is not None)
