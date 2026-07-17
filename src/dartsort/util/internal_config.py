@@ -969,7 +969,7 @@ class DARTsortInternalConfig:
     # need at least this many spikes
     subsampling_spikes_per_channel: int | None = 5000
     # need to cover at least this fraction of chunks
-    subsampling_presence: float = 0.1
+    subsampling_presence: float = 0.025
 
     # development / debugging flags
     work_in_tmpdir: bool = False
