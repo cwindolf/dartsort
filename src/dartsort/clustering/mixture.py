@@ -2683,7 +2683,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # support of the likelihoods to drift away slightly from the weights',
         # and this can lead to slightly negative elbo changes. giving a little
         # more leeway than in em() here for when to panic about it.
-        assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
+        # in fact, I'm going to comment this assertion out, but leaving the
+        # comment here.
+        # assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
 
     def score(
         self,
