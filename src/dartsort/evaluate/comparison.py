@@ -68,6 +68,7 @@ class DARTsortGroundTruthComparison:
         self._unsorted_detection = self._greedy_confusion = None
         if self.compute_unsorted_recall:
             self._calculate_greedy_confusion_and_detection()
+        self._matched_and_missed_cache = {}
         self._unit_info_cache = {}
 
     def _check(self):
@@ -338,6 +339,8 @@ class DARTsortGroundTruthComparison:
         assert self._unsorted_detection.shape == (gtns,)
 
     def matched_and_missed(self, gt_unit):
+        if gt_unit in self._matched_and_missed_cache:
+            return self._matched_and_missed_cache[gt_unit]
         (gt_spike_labels,) = self.comparison.get_labels1(gt_unit)
         assert self.gt_analysis.sorting.labels is not None
         in_gt_unit = self.gt_si_inds[
@@ -346,7 +349,9 @@ class DARTsortGroundTruthComparison:
         matched_gt_mask = gt_spike_labels == "TP"
         matched_gt_indices = in_gt_unit[matched_gt_mask]
         only_gt_indices = in_gt_unit[np.logical_not(matched_gt_mask)]
-        return in_gt_unit, matched_gt_indices, only_gt_indices
+        ret = in_gt_unit, matched_gt_indices, only_gt_indices
+        self._matched_and_missed_cache[gt_unit] = ret
+        return ret
 
     def get_spikes_by_category(self, gt_unit, tested_unit=None):
         if tested_unit is None:

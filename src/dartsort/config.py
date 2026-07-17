@@ -53,10 +53,10 @@ class DARTsortUserConfig:
     that there is enough data for clustering. See also subsampling_presence.
     Set to None to disable subsampling."""
 
-    subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.1
+    subsampling_presence: Annotated[float, Field(gt=0.0, le=1.0)] = 0.025
     """Early detection steps which have already found `subsampling_spikes`
     spikes are only allowed to end early if they additionally cover this
-    fraction of the recording, to make sure there's good coverage of
+    fraction of the recording, to make sure there's some coverage of
     conditions for template estimation."""
 
     matching_iterations: int = 1
@@ -379,7 +379,7 @@ class DeveloperConfig(DARTsortUserConfig):
     # store extra intermediates@
     save_subtracted_waveforms: bool = False
     save_collisioncleaned_waveforms: bool = False
-    always_save_final_tpca_feature: bool = False
+    always_save_detailed_features: bool = False
     precomputed_templates_npz: str | None = None
     save_everything_on_error: bool = False
     link_from: str | None = None

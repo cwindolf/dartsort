@@ -72,6 +72,9 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
             ptp_max_amplitude or ptp_amplitude_vectors or log_peak_to_trough
         )
         self.compute_maxchan = ptp_max_amplitude or log_peak_to_trough
+        self.just_maxptp = ptp_max_amplitude and not (
+            log_peak_to_trough or ptp_amplitude_vectors or peak_amplitude_vectors
+        )
 
         super().__init__(name=names)
 
@@ -83,11 +86,16 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
         max_vectors = min_vectors = ptp_vectors = None
         maxs = mins = ptps = None
         if self.compute_minmax_vectors:
-            max_vectors = waveforms.amax(dim=1)
-            min_vectors = waveforms.amin(dim=1)
-            ptp_vectors = max_vectors - min_vectors
-        if self.compute_maxchan:
-            assert ptp_vectors is not None
+            min_vectors, max_vectors = waveforms.aminmax(dim=1)
+        if self.just_maxptp:
+            assert min_vectors is not None
+            assert max_vectors is not None
+            ptp_vectors = max_vectors.sub_(min_vectors)
+            ptps = ptp_vectors.nan_to_num_().amax(dim=1)
+        elif self.compute_maxchan:
+            assert min_vectors is not None
+            assert max_vectors is not None
+            ptp_vectors = max_vectors.sub(min_vectors)
             maxchans = torch.argmax(ptp_vectors.nan_to_num(), dim=1, keepdim=True)
             if self.log_peak_to_trough:
                 assert max_vectors is not None
@@ -98,7 +106,6 @@ class AmplitudeFeatures(BaseWaveformFeaturizer):
                     ptps = maxs - mins
             elif self.ptp_max_amplitude:
                 ptps = torch.take_along_dim(ptp_vectors, maxchans, dim=1)[:, 0]
-
         if self.ptp_amplitude_vectors:
             features[self.ptp_amplitude_vectors_name] = ptp_vectors
         if self.ptp_max_amplitude:

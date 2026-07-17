@@ -387,7 +387,7 @@ def _matching_step_cfgs(
 
     if cfg.final_refinement and gmm_as_classifier:
         still_need_projs_saved = (
-            cfg.recluster_after_first_matching or cfg.always_save_final_tpca_feature
+            cfg.recluster_after_first_matching or cfg.always_save_detailed_features
         )
         feat_cfg = replace(
             cfg.featurization_cfg,
@@ -396,6 +396,7 @@ def _matching_step_cfgs(
             use_gmm_classifier=True,
             pre_gmm_clustering_cfg=gmm_clus_cfg,
             gmm_clustering_features_cfg=cfg.clustering_features_cfg,
+            save_amplitude_vectors=cfg.always_save_detailed_features,
             pre_gmm_refinement_cfgs=[cfg.pre_refinement_cfg],
             gmm_refinement_cfg=cfg.refinement_cfg,
         )

@@ -226,7 +226,7 @@ class FitSamplingConfig:
     more_waveforms_fit: int = 2000 * 1024
     n_residual_snips: int = 2 * 4096
     residual_snip_ms: float | None = None
-    residual_sampling_target_density: float = 0.25
+    residual_sampling_target_density: float = 0.5
     seed: int = 0
     chunk_sampling: Literal["random", "kmeanspp"] = "kmeanspp"
     fit_sampling: FitSamplingMethod = "amp_reweighted"
@@ -627,6 +627,7 @@ class FeaturizationConfig:
     save_output_tpca_projs: bool = False
     save_collidedness: bool = False
     save_amplitudes: bool = True
+    save_amplitude_vectors: bool = False
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
     do_localization: bool = True
@@ -968,7 +969,7 @@ class DARTsortInternalConfig:
     # need at least this many spikes
     subsampling_spikes_per_channel: int | None = 5000
     # need to cover at least this fraction of chunks
-    subsampling_presence: float = 0.1
+    subsampling_presence: float = 0.025
 
     # development / debugging flags
     work_in_tmpdir: bool = False
@@ -983,7 +984,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
-    always_save_final_tpca_feature: bool = False
+    always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
 
 
@@ -1408,7 +1409,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         link_step=cfg.link_step,
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
-        always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
+        always_save_detailed_features=cfg.always_save_detailed_features,
     )
 
 
