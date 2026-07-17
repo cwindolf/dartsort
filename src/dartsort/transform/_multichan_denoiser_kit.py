@@ -1,14 +1,15 @@
-from queue import Queue
-from threading import Thread
+from queue import Empty, Queue
+from threading import Lock, Thread, local
 
 import h5py
+import numba
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from ..util import nn_util, spikeio
 from ..util.logging_util import get_logger
-from ..util.spiketorch import get_relative_index, reindex
+from ..util.spiketorch import get_relative_index, reindex, spawn_torch_rg
 from ..util.waveform_util import regularize_channel_index
 from .transform_base import BaseWaveformDenoiser
 
@@ -308,12 +309,17 @@ def get_noise_h5(
     spike_length_samples=121,
     rg: np.random.Generator,
     count: int | None = None,
+    local=True,
 ):
     if count is None:
         count = dset.shape[0]
 
-    ii = rg.choice(count, size=len(channels), replace=False)
-    ii.sort()
+    if local:
+        ii0 = rg.integers(count - len(channels)).item()
+        ii = slice(ii0, ii0 + len(channels))
+    else:
+        ii = rg.choice(count, size=len(channels), replace=False)
+        ii.sort()
 
     if dset.shape[1] > spike_length_samples:
         pad = dset.shape[1] - spike_length_samples
@@ -324,15 +330,24 @@ def get_noise_h5(
 
     # channels...
     cc = channel_index[channels]
-    valid = cc < channel_index.shape[0]
-    cc = np.where(valid, cc, 0)
     targ_shp = (cc.shape[0], noise_waveforms.shape[1], cc.shape[1])
-    cc = np.broadcast_to(cc[:, None, :], targ_shp)
-    noise_waveforms = np.take_along_axis(noise_waveforms, indices=cc, axis=2)
-    # mask out
-    noise_waveforms *= valid[:, None, :].astype(noise_waveforms.dtype)
+    out = np.empty_like(noise_waveforms, shape=targ_shp)
+    take_along_dim2_masked(noise_waveforms, out, cc, channel_index.shape[0])
 
-    return torch.from_numpy(noise_waveforms)
+    return torch.from_numpy(out)
+
+
+@numba.njit(parallel=True)
+def take_along_dim2_masked(arr, out, channels, mask_val):
+    for i in numba.prange(arr.shape[0]):  # type: ignore
+        wf = arr[i]
+        cc = channels[i]
+        for t in range(arr.shape[1]):
+            for j, c in enumerate(cc):
+                if c == mask_val:
+                    out[i, t, j] = 0.0
+                else:
+                    out[i, t, j] = wf[t, c]
 
 
 class NoneDataset(Dataset):
@@ -519,19 +534,29 @@ class AsyncBatchDataset(RefreshableDataset):
         n_examples,
         spike_length_samples=121,
         generator=None,
+        rg=None,
         chunk_size=2048,
         queue_chunks=8,
+        n_workers=1,
     ):
         super().__init__()
         self.spike_length_samples = spike_length_samples
         # note: although there's threading here, this is only used in one
         # thread, so that's okay.
-        self.generator = generator
+        self._generator = generator
+        self._rg = rg
         self.n_examples = n_examples
+        self.n_workers = n_workers
+
+        self.lock = Lock()
+        self.locals = local()
+        self.locals.rg = None
+        self.locals.generator = None
 
         self.chunk_size = chunk_size
         self._queue = Queue(maxsize=queue_chunks)
-        self._thread = None
+        self._batches = Queue()
+        self._threads = None
         self._indices = None
         self._cur_data_ix = None
         self._cur_chunk = None
@@ -543,7 +568,10 @@ class AsyncBatchDataset(RefreshableDataset):
 
     def destroy(self):
         self.bye = True
-        if self._thread is not None:
+        if self._batches is not None:
+            if hasattr(self._batches, "shutdown"):
+                self._batches.shutdown(True)  # type: ignore
+        if self._threads is not None:
             if hasattr(self._queue, "shutdown"):
                 self._queue.shutdown(True)  # type: ignore
             while True:
@@ -551,20 +579,26 @@ class AsyncBatchDataset(RefreshableDataset):
                     self._queue.get()
                 except Exception:
                     break
-            self._thread.join()
-            assert not self._thread.is_alive()
-        self._thread = None
+            for th in self._threads:
+                th.join()
+            for th in self._threads:
+                assert not th.is_alive()
+        self._threads = None
 
     def cleanup(self):
-        if self._thread is not None:
-            self._thread.join()
-            assert not self._thread.is_alive()
-        self._thread = None
+        if self._threads is not None:
+            for th in self._threads:
+                th.join()
+            for th in self._threads:
+                assert not th.is_alive()
+        self._threads = None
 
     def refresh(self, indices):
-        assert self._thread is None, "Run cleanup()!"
+        assert self._threads is None, "Run cleanup()!"
         self._cur_data_ix = 0
         self._indices = indices
+        for batch in range(0, len(self._indices), self.chunk_size):
+            self._batches.put(batch)
         self._run_thread()
 
     def __getitem__(self, index):
@@ -572,8 +606,9 @@ class AsyncBatchDataset(RefreshableDataset):
         assert self._cur_data_ix is not None
 
         bs = len(index)
-        my_indices = self._indices[self._cur_data_ix : self._cur_data_ix + bs]
-        assert torch.equal(torch.asarray(index), my_indices)
+        # if self.n_workers == 1:
+        # my_indices = self._indices[self._cur_data_ix : self._cur_data_ix + bs]
+        # assert torch.equal(torch.asarray(index), my_indices)
 
         # need to batch up the chunks...
         if self._cur_chunk is None:
@@ -594,19 +629,45 @@ class AsyncBatchDataset(RefreshableDataset):
         self._cur_data_ix += bs
         return noise_batch
 
+    def _initialize_locals(self):
+        if self._rg is not None and not hasattr(self.locals, "rg"):
+            with self.lock:
+                self.locals.rg = self._rg.spawn(1)[0]
+        if self._generator is not None and not hasattr(self.locals, "generator"):
+            with self.lock:
+                self.locals.generator = spawn_torch_rg(self._generator)
+
+    @property
+    def rg(self):
+        return self.locals.rg
+
+    @property
+    def generator(self):
+        return self.locals.generator
+
     def _run_thread(self):
-        self._thread = Thread(target=self._thread_main, daemon=True)
-        self._thread.start()
+        self._threads = [
+            Thread(target=self._thread_main, daemon=True) for _ in range(self.n_workers)
+        ]
+        for th in self._threads:
+            th.start()
 
     def _thread_main(self):
         assert self._indices is not None
-        for chunk_start in range(0, len(self._indices), self.chunk_size):
-            chunk_end = min(len(self._indices), chunk_start + self.chunk_size)
+        assert self._batches is not None
+        self._initialize_locals()
+        while True:
+            try:
+                chunk_start = self._batches.get(timeout=0.01)
 
-            index = self._indices[chunk_start:chunk_end]
-            noise = self.load_batch(index)
+                chunk_end = min(len(self._indices), chunk_start + self.chunk_size)
 
-            self._queue.put(noise)
+                index = self._indices[chunk_start:chunk_end]
+                noise = self.load_batch(index)
+
+                self._queue.put(noise)
+            except Empty:
+                break
             if self.bye:
                 break
 
@@ -624,15 +685,19 @@ class AsyncSameChannelNoiseDataset(AsyncBatchDataset):
         channels,
         spike_length_samples=121,
         generator=None,
+        rg=None,
         chunk_size=2048,
         queue_chunks=8,
+        n_workers=1,
     ):
         super().__init__(
             n_examples=len(channels) if channels is not None else torch.inf,
             spike_length_samples=spike_length_samples,
             generator=generator,
+            rg=rg,
             chunk_size=chunk_size,
             queue_chunks=queue_chunks,
+            n_workers=n_workers,
         )
         self.channels = channels
         self.channel_index = channel_index
@@ -654,9 +719,11 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
         generator=None,
         chunk_size=256,
         queue_chunks=8,
+        n_workers=1,
         dataset_name="residual",
         count_name="n_residuals",
         memmap=True,
+        memory=False,
     ):
         super().__init__(
             channels=channels,
@@ -664,9 +731,16 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
             spike_length_samples=spike_length_samples,
             generator=generator,
             chunk_size=chunk_size,
+            rg=rg,
             queue_chunks=queue_chunks,
+            n_workers=n_workers,
         )
-        if memmap:
+        if memory:
+            with h5py.File(hdf5_filename, "r", locking=False) as h5:
+                self.count = h5[count_name][()]
+                self.dset = h5[dataset_name][: self.count]
+            self.h5 = None
+        elif memmap:
             # this only works with contiguous datasets
             # hacky but h5 reading is so slow... and this is so fast...
             with h5py.File(hdf5_filename, "r", locking=False) as h5:
@@ -688,7 +762,6 @@ class AsyncSameChannelHDF5NoiseDataset(AsyncSameChannelNoiseDataset):
             )
             self.dset = self.h5[dataset_name]
             self.count = self.h5[count_name][()]
-        self.rg = rg
         assert self.dset.shape[1] >= spike_length_samples
         assert self.dset.shape[2] == channel_index.shape[0]
 
@@ -719,6 +792,7 @@ class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
         generator=None,
         chunk_size=2048,
         queue_chunks=8,
+        n_workers=1,
     ):
         super().__init__(
             channels=channels,
@@ -727,6 +801,7 @@ class AsyncSameChannelRecordingNoiseDataset(AsyncSameChannelNoiseDataset):
             generator=generator,
             chunk_size=chunk_size,
             queue_chunks=queue_chunks,
+            n_workers=n_workers,
         )
         self.recording = recording
 

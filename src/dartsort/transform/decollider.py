@@ -6,13 +6,10 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from torch.utils.data import (
-    DataLoader,
-    StackDataset,
-    TensorDataset,
-)
+from torch.utils.data import DataLoader, StackDataset, TensorDataset
 
 from ..util.logging_util import get_logger, progrange
+from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
@@ -43,6 +40,8 @@ class Decollider(BaseMultichannelDenoiser):
         name=None,
         name_prefix="",
         batch_size=512,
+        batches_per_chunk=4,
+        n_data_workers=1,
         learning_rate=2e-4,
         weight_decay=0.0,
         n_epochs=100,
@@ -127,6 +126,8 @@ class Decollider(BaseMultichannelDenoiser):
             warmup_lr=warmup_lr,
         )
         self.queue_chunks = queue_chunks
+        self.batches_per_chunk = batches_per_chunk
+        self.n_data_workers = n_data_workers
 
         self.inference_z_samples = inference_z_samples
         self.detach_amortizer = detach_amortizer
@@ -433,6 +434,8 @@ class Decollider(BaseMultichannelDenoiser):
     ):
         rg = np.random.default_rng(self.random_seed)
 
+        _, n_data_workers = handle_negative_jobs(self.n_data_workers)
+
         val_size = 0
         train_indices = slice(None)
         val_indices = None
@@ -463,7 +466,8 @@ class Decollider(BaseMultichannelDenoiser):
                 rg=np.random.default_rng(rg.spawn(1)[0]),
                 queue_chunks=self.queue_chunks,
                 dataset_name=dataset_name,
-                chunk_size=self.batch_size,
+                chunk_size=self.batches_per_chunk * self.batch_size,
+                n_workers=n_data_workers,
             )
         else:
             logger.dartsortdebug("Load Decollider train noise data from recording.")
@@ -474,6 +478,7 @@ class Decollider(BaseMultichannelDenoiser):
                 spike_length_samples=spike_length_samples,
                 generator=spawn_torch_rg(rg),
                 queue_chunks=self.queue_chunks,
+                n_workers=n_data_workers,
             )
         if self.cycle_loss_alpha and can_load_h5:
             logger.dartsortdebug(
@@ -488,6 +493,7 @@ class Decollider(BaseMultichannelDenoiser):
                 queue_chunks=self.queue_chunks,
                 dataset_name=dataset_name,
                 chunk_size=self.batch_size,
+                n_workers=n_data_workers,
             )
         elif self.cycle_loss_alpha:
             logger.dartsortdebug("Load Decollider cycle noise data from recording.")
@@ -498,6 +504,7 @@ class Decollider(BaseMultichannelDenoiser):
                 spike_length_samples=spike_length_samples,
                 generator=spawn_torch_rg(rg),
                 queue_chunks=self.queue_chunks,
+                n_workers=n_data_workers,
             )
         else:
             train_cycle_noise_dataset = NoneDataset(len(train_channels))
@@ -556,8 +563,8 @@ class Decollider(BaseMultichannelDenoiser):
             # val set does not need shuffling
             val_loader = DataLoader(
                 val_dataset,
-                num_workers=self.n_data_workers,  # type: ignore  # ty: ignore[x]
-                persistent_workers=bool(self.n_data_workers),
+                num_workers=n_data_workers,  # type: ignore  # ty: ignore[x]
+                persistent_workers=bool(n_data_workers),
                 batch_size=self.batch_size,
             )
             val_data = DecolliderDataLoader(
