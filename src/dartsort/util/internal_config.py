@@ -627,6 +627,7 @@ class FeaturizationConfig:
     save_output_tpca_projs: bool = False
     save_collidedness: bool = False
     save_amplitudes: bool = True
+    save_amplitude_vectors: bool = False
     save_all_amplitudes: bool = False
     # localization runs on output waveforms
     do_localization: bool = True
@@ -983,7 +984,7 @@ class DARTsortInternalConfig:
     save_intermediate_labels: bool = False
     save_intermediate_features: bool = False
     save_final_features: bool = True
-    always_save_final_tpca_feature: bool = False
+    always_save_detailed_features: bool = False
     save_everything_on_error: bool = False
 
 
@@ -1408,7 +1409,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         link_step=cfg.link_step,
         subsampling_spikes_per_channel=cfg.subsampling_spikes_per_channel,
         subsampling_presence=cfg.subsampling_presence,
-        always_save_final_tpca_feature=cfg.always_save_final_tpca_feature,
+        always_save_detailed_features=cfg.always_save_detailed_features,
     )
 
 

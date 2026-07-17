@@ -616,12 +616,18 @@ def _add_localization_and_ampvec(fc):
     more = []
 
     do_ptp_amp = do_feats and fc.save_amplitudes
-    do_peak_vec = do_feats and (
-        fc.do_localization
-        and fc.localization_amplitude_type == "peak"
-        and not fc.nn_localization
+    do_peak_vec = (
+        do_feats
+        and fc.do_localization
+        and (fc.localization_amplitude_type == "peak")
+        and (fc.save_amplitude_vectors or not fc.nn_localization)
     )
-    do_ptp_vec = do_feats and fc.save_amplitudes
+    do_ptp_vec = (
+        do_feats
+        and fc.do_localization
+        and (fc.localization_amplitude_type == "ptp")
+        and (fc.save_amplitude_vectors or not fc.nn_localization)
+    )
     do_logptt = do_feats and fc.save_amplitudes
     do_any_amp = do_peak_vec or do_ptp_vec or do_ptp_amp or do_logptt
     if do_any_amp or (do_feats and fc.save_all_amplitudes):
