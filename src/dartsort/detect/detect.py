@@ -136,17 +136,16 @@ def detect_and_deduplicate(
             Xdd[:-1] += dedup_chans_salt
         if dedup_time_salt is not None:
             Xdd[:-1] += dedup_time_salt[i00:i11]
-        not_detect = torch.logical_not(detect, out=tmp)
-        Xdd[:-1].masked_fill_(not_detect, 0.0)
+        mask_out = torch.logical_not(detect, out=tmp)
+        if detection_mask is not None:
+            mask_out.logical_and_(detection_mask[i00:i11].T)
+        Xdd[:-1].masked_fill_(mask_out, 0.0)
 
         # no-threshold max pool for deduplication
         dedup = _is_extreme(
             Xdd, dt=dedup_temporal_radius, neighbors=dedup_channel_index, out=tmp
         )
         all_peaks[i0:i1] = detect.logical_and_(dedup)[:, istart:iend].T
-
-    if detection_mask is not None:
-        all_peaks.logical_and_(detection_mask)
 
     if exclude_edges:
         all_peaks[0].zero_()
