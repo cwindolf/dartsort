@@ -607,13 +607,13 @@ class LUTParams(BModule):
         self.n_lut = n0 = n_lut_new
 
         self.b.muo.resize_(n0, *self.b.muo.shape[1:])
-        self.b.muo.fill_(0.0)
+        self.b.muo.zero_()
         self.b.Linvmuo.resize_(n0, *self.b.Linvmuo.shape[1:])
-        self.b.Linvmuo.fill_(0.0)
+        self.b.Linvmuo.zero_()
         self.b.CmoCooinvmuo.resize_(n0, *self.b.CmoCooinvmuo.shape[1:])
-        self.b.CmoCooinvmuo.fill_(0.0)
+        self.b.CmoCooinvmuo.zero_()
         self.b.constplogdet.resize_(n0, *self.b.constplogdet.shape[1:])
-        self.b.constplogdet.fill_(0.0)
+        self.b.constplogdet.zero_()
         if not self.signal_rank:
             return
         assert self.TWoCooinvsqrt is not None
@@ -621,13 +621,13 @@ class LUTParams(BModule):
         assert self.Tpad is not None
         assert self.wburyroot is not None
         self.b.TWoCooinvsqrt.resize_(n0, *self.b.TWoCooinvsqrt.shape[1:])
-        self.b.TWoCooinvsqrt.fill_(0.0)
+        self.b.TWoCooinvsqrt.zero_()
         self.b.TWoCooinvmuo.resize_(n0, *self.b.TWoCooinvmuo.shape[1:])
-        self.b.TWoCooinvmuo.fill_(0.0)
+        self.b.TWoCooinvmuo.zero_()
         self.b.Tpad.resize_(n0, *self.b.Tpad.shape[1:])
-        self.b.Tpad.fill_(0.0)
+        self.b.Tpad.zero_()
         self.b.wburyroot.resize_(n0, *self.b.wburyroot.shape[1:])
-        self.b.wburyroot.fill_(0.0)
+        self.b.wburyroot.zero_()
 
     def check(self):
         muo_f = self.b.muo.isfinite().all()
@@ -6025,8 +6025,8 @@ def coincidence_matrix(
     yy = y[pos_ii]
 
     if pnoid:
-        assert xx.max() < nx
-        assert yy.max() < ny
+        assert xx.max() < nx, f"{xx.max()} {nx}"
+        assert yy.max() < ny, f"{yy.max()} {ny}"
         assert xx.min() >= 0
         assert yy.min() >= 0
 
