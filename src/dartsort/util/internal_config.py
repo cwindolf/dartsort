@@ -701,7 +701,6 @@ class SubtractionConfig:
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv"
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
-    cumulant_order: int | None = None
     convexity_threshold: float | None = None
     convexity_radius: int = 7
     max_iter: int = 100
@@ -750,7 +749,6 @@ class ThresholdingConfig:
     relative_peak_radius_samples: int = 5
     temporal_dedup_radius_samples: int = 11
     remove_exact_duplicates: bool = True
-    cumulant_order: int | None = None
     convexity_threshold: float | None = None
     convexity_radius: int = 7
 

@@ -14,7 +14,7 @@ from ..util.internal_config import (
     default_thresholding_cfg,
     default_waveform_cfg,
 )
-from ..util.waveform_util import get_channel_index_rel_inds, make_channel_index
+from ..util.waveform_util import make_channel_index
 from .peel_base import BasePeeler, PeelingBatchResult, peeling_empty_result
 from .peel_lib import threshold_chunk
 
@@ -74,11 +74,6 @@ class Threshold(BasePeeler):
             "spatial_jitter_channel_index", spatial_jitter_channel_index
         )
         self.register_buffer_or_none("dedup_channel_index", dedup_channel_index)
-        if dedup_channel_index is not None:
-            dedup_rel_inds = get_channel_index_rel_inds(dedup_channel_index)
-        else:
-            dedup_rel_inds = None
-        self.register_buffer_or_none("dedup_rel_inds", dedup_rel_inds)
         self.register_buffer_or_none("peak_channel_index", peak_channel_index)
 
         # parameters for random perturbation of detections
@@ -163,8 +158,6 @@ class Threshold(BasePeeler):
             detection_threshold=self.p.detection_threshold,
             peak_sign=self.p.peak_sign,
             dedup_channel_index=self.b.dedup_channel_index,
-            dedup_rel_inds=self.b.dedup_rel_inds,
-            dedup_batch_size=self.dedup_batch_size,
             trough_offset_samples=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
             left_margin=left_margin,
@@ -172,7 +165,6 @@ class Threshold(BasePeeler):
             peak_channel_index=self.b.peak_channel_index,
             temporal_dedup_radius_samples=self.p.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.p.remove_exact_duplicates,
-            cumulant_order=self.p.cumulant_order,
             convexity_threshold=self.p.convexity_threshold,
             convexity_radius=self.p.convexity_radius,
             thinning=self.thinning,

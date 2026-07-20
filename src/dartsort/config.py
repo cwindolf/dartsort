@@ -205,6 +205,9 @@ class DARTsortUserConfig:
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
     # -- final merge step
+    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
+    """Final distance or GMM-based merge type."""
+
     spikeinterface_merge_preset: str | Literal["none"] | None = None
     """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
     Setting this is slightly different' from calling auto_merge() externally, since the internal
@@ -369,7 +372,6 @@ class DeveloperConfig(DARTsortUserConfig):
     tpca_from_templates: bool = True
 
     # agglomeration
-    agg_kind: Literal["none", "template_distance", "qda"] = "qda"
     agg_qda_max_template_distance: float = 0.6
     agg_no_qda_template_distance: float = 0.3
     agg_qda_linkage: Literal["single", "complete"] = "single"

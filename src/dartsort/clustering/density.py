@@ -85,7 +85,7 @@ def get_smoothed_density(
     # figure out what bandwidths we'll be working on
 
     if do_ramp := bool(sigma_low):
-        min_sigma = min(sigma, sigma_low)  # type: ignore
+        min_sigma = min(sigma, sigma_low)  # type: ignore  # ty: ignore[x]
     else:
         min_sigma = sigma
 

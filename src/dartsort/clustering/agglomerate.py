@@ -71,7 +71,7 @@ def agglomerate(
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
     if template_data is None:
-        sorting = sorting.flatten()
+        sorting = sorting.flatten(include_gmm_properties=True)
 
     tdist = template_distances(
         sorting=sorting,
@@ -751,6 +751,8 @@ def combine_gmm_scores(
     responsibilities = getattr(sorting, f"{old_prefix}_responsibilities", None)
     logliks = getattr(sorting, f"{old_prefix}_log_liks", None)
 
+    assert not hasattr(sorting, f"{new_prefix}_responsibilities")
+
     havec = candidates is not None
     haver = responsibilities is not None
     havel = logliks is not None
@@ -780,10 +782,9 @@ def combine_gmm_scores(
         assert _maxdiff <= 1e-3, _maxdiff
     assert np.greater_equal(np.isneginf(logliks[:, :-1]), candidates == -1).all()
     if sorting.labels is not None:
-        assert np.all(
-            np.logical_or(
-                sorting.labels < 0, sorting.labels == new_ids[candidates[:, 0]]
-            )
+        not_noise = np.flatnonzero(sorting.labels >= 0)
+        assert np.array_equal(
+            sorting.labels[not_noise], new_ids[candidates[not_noise, 0]]
         )
 
     # two steps: first merge, then sort
@@ -839,20 +840,24 @@ def _combine_loop(
     mergedl: np.ndarray,
 ):
     for s in numba.prange(cand.shape[0]):  # ty: ignore
-        rcand = cand[s]
+        spike_cand = cand[s]
         for j in range(cand.shape[1] - 1):
-            ncandj = rcand[j]
-            if ncandj < 0 or new_id_counts[ncandj] <= 1:
+            spike_candj = spike_cand[j]
+
+            # noise or not a merge
+            if spike_candj < 0 or new_id_counts[spike_candj] <= 1:
                 continue
 
-            eq_ncandj = rcand[j + 1 :] == ncandj
-            if eq_ncandj.sum() < 1:
+            # what later indices are equal to me?
+            eq_spike_candj = spike_cand[j + 1 :] == spike_candj
+            if eq_spike_candj.sum() < 1:
                 continue
 
+            # loop through and combine liks/resps, and -1 out the cands
             rsum = mergedr[s, j]
             lsum = mergedl[s, j]
             for i, k in enumerate(range(j + 1, cand.shape[1])):
-                if not eq_ncandj[i]:
+                if not eq_spike_candj[i]:
                     continue
                 cand[s, k] = -1
 
@@ -866,6 +871,18 @@ def _combine_loop(
 
             mergedr[s, j] = rsum
             mergedl[s, j] = lsum
+
+        # vacuum into noise component
+        # this is partly to handle stuff that was missed before getting here
+        # from flatten, for example
+        for j in range(cand.shape[1]):
+            if 0 <= spike_cand[j] < new_id_counts.shape[0]:
+                continue
+            rsj = mergedr[s, j]
+            if rsj == 0:
+                continue
+            mergedr[s, -1] += rsj
+            mergedr[s, j] = 0.0
 
 
 def deduplicate_spikes(

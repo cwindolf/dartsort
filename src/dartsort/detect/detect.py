@@ -4,6 +4,10 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+# holds values used for deduplicating identical peaks
+_salt = {}
+_pepper = {}
+
 
 def detect_and_deduplicate(
     traces: Tensor,
@@ -13,21 +17,18 @@ def detect_and_deduplicate(
     peak_channel_index: Tensor | None = None,
     dedup_temporal_radius=11,
     dedup_channel_index: torch.Tensor | None = None,
-    spatial_dedup_batch_size=550,
-    exclude_edges=True,
-    remove_exact_duplicates=False,
-    dedup_index_inds: Tensor | None = None,
-    return_energies=False,
-    detection_mask: Tensor | None = None,
     trough_priority: float | None = None,
-    cumulant_order: int | None = None,
+    batch_size=1024,
+    remove_exact_duplicates=True,
+    detection_mask: Tensor | None = None,
+    exclude_edges=True,
+    return_energies=False,
+    dedup_salt_eps=1e-4,
 ):
     """Detect and deduplicate peaks
 
     torch-based peak detection and deduplication, relying
     on max pooling and scatter operations
-
-    TODO: reuse bufs and pre-pad.
 
     Parameters
     ----------
@@ -52,357 +53,133 @@ def detect_and_deduplicate(
         peak times in samples relative to start of traces, along
         with corresponding channels
     """
-    if cumulant_order is not None:
-        # TODO: combine.
-        return detect_and_deduplicate_2d_filters(
-            traces,
-            cumulant_order=cumulant_order,
-            threshold=threshold,
-            dedup_channel_index=dedup_channel_index,
-            peak_sign=peak_sign,
-            relative_peak_radius=relative_peak_radius,
-            spatial_dedup_batch_size=spatial_dedup_batch_size,
-            exclude_edges=exclude_edges,
-            return_energies=return_energies,
-            detection_mask=detection_mask,
-            trough_priority=trough_priority,
-        )
+    T, C = traces.shape
+    all_peaks = torch.zeros_like(traces, dtype=torch.bool)
+    will_dedup = bool(dedup_temporal_radius) or dedup_channel_index is not None
+    pad = relative_peak_radius + dedup_temporal_radius
+    batch_size = batch_size - 2 * pad
+    assert batch_size > 0
 
-    nsamples, nchans = traces.shape
-    sbs = min(nsamples, spatial_dedup_batch_size)
-    all_dedup = isinstance(dedup_channel_index, str) and dedup_channel_index == "all"
-    if not all_dedup and dedup_channel_index is not None:
-        assert dedup_channel_index.shape[0] == nchans
-
-    # -- handle peak sign. we use max pool below, so make peaks positive
-    if peak_sign == "neg":
-        energies = traces.neg()
-    elif peak_sign == "both":
-        energies = traces.abs()
+    if dedup_channel_index is not None and remove_exact_duplicates:
+        key = (traces.device.type, traces.device.index, C)
+        if key in _salt:
+            dedup_chans_salt = _salt[key]
+        else:
+            # favor earlier channels when deduplicating identical values (at float16 prec)
+            dedup_chans_salt = torch.linspace(
+                dedup_salt_eps, 0.0, steps=C, device=traces.device
+            )
+            _salt[key] = dedup_chans_salt = dedup_chans_salt.unsqueeze(1)
     else:
-        assert peak_sign == "pos"
-        # no need to copy since max pooling will
-        energies = traces
+        dedup_chans_salt = None
 
-    # used later
-    if detection_mask is not None:
-        detection_mask = detection_mask.to(energies)
-
-    # we used to implement with max_pool -> unique, but we can use max_unpool
-    # to speed up the second step temporal max pooling
-    energies, indices = F.max_pool1d_with_indices(
-        energies.T.unsqueeze(0),
-        kernel_size=(2 * relative_peak_radius + 1,),
-        stride=(1,),
-        padding=(relative_peak_radius,),
-    )
-
-    # spatial peak criterion
-    if peak_channel_index is not None:
-        # we are in 1CT right now
-        batch_buffer = energies.new_zeros((nchans + 1, sbs))
-        batch_max = energies.new_zeros((nchans, sbs))
-        for batch_start in range(0, nsamples, sbs):
-            batch_end = min(nsamples, batch_start + sbs)
-            batch = energies[:, :, batch_start:batch_end]
-            batch_buffer[:nchans, : batch_end - batch_start] = batch
-            batch = batch_buffer[:, : batch_end - batch_start]
-            torch.amax(
-                batch[peak_channel_index],
-                dim=1,
-                out=batch_max[:, : batch_end - batch_start],
-            )
-            energies[:, :, batch_start:batch_end].masked_fill_(
-                batch_max[:, : batch_end - batch_start]
-                > energies[:, :, batch_start:batch_end],
-                0.0,
-            )
-    # unpool will set non-maxima to 0
-    energies = F.max_unpool1d(
-        energies,
-        indices,
-        kernel_size=(2 * relative_peak_radius + 1,),
-        stride=(1,),
-        padding=(relative_peak_radius,),
-        output_size=energies.shape,
-    )
-    # remove peaks smaller than our threshold
-    F.threshold(energies, threshold, 0.0, inplace=True)
-    if trough_priority and peak_sign == "both":
-        tp = torch.where(traces.T < 0, trough_priority, 1.0)
-        energies.mul_(tp)
-
-    # discard peaks which are blocked by previous detections
-    if detection_mask is not None:
-        energies.mul_(detection_mask.T)
-
-    # -- temporal deduplication
-    remove = None
     if dedup_temporal_radius and remove_exact_duplicates:
-        del indices
-        max_energies, indices = F.max_pool1d_with_indices(
-            energies,
-            kernel_size=(2 * dedup_temporal_radius + 1,),
-            stride=(1,),
-            padding=(dedup_temporal_radius,),
-        )
-        self_ix = torch.arange(indices.shape[-1], device=indices.device)
-        remove = indices != self_ix
-        energies.masked_fill_(remove, 0.0)
-    elif dedup_temporal_radius:
-        max_energies = F.max_pool1d(
-            energies,
-            kernel_size=2 * dedup_temporal_radius + 1,
-            stride=1,
-            padding=dedup_temporal_radius,
-        )
+        slen = 2 * dedup_temporal_radius
+        nrep = (T // slen) + 1
+        Tp = slen * nrep
+        key = (traces.device.type, traces.device.index, Tp, dedup_temporal_radius)
+        if key in _pepper:
+            dedup_time_salt = _pepper[key]
+        else:
+            # favor earlier times when deduplicating identical values (at float16 prec)
+            dedup_time_salt = torch.linspace(
+                dedup_salt_eps, 0.0, steps=slen, device=traces.device
+            )
+            dedup_time_salt = dedup_time_salt.repeat(nrep)
+            _pepper[key] = dedup_time_salt = dedup_time_salt
     else:
-        max_energies = energies
-    # back to TC
-    energies = energies[0].T
-    max_energies = max_energies[0].T
-    if remove is not None:
-        remove = remove[0].T
+        dedup_time_salt = None
 
-    # -- spatial deduplication
-    # this is max pooling within the channel index's neighborhood's
-    if all_dedup:
-        max_energies = max_energies.amax(dim=1, keepdim=True)
-    elif dedup_channel_index is not None and remove_exact_duplicates:
-        assert remove is not None
-        assert dedup_index_inds is not None
-        for batch_start in range(0, nsamples, sbs):
-            batch_end = min(nsamples, batch_start + sbs)
+    for i0 in range(0, T, batch_size):
+        i1 = min(T, i0 + batch_size)
+        i00 = max(0, i0 - pad)
+        istart = i0 - i00
+        i11 = min(T, i1 + pad)
+        iend = istart + (i1 - i0)
 
-            batch = F.pad(max_energies[batch_start:batch_end], (0, 1))
-            max_energies[batch_start:batch_end], binds = torch.max(
-                batch[:, dedup_channel_index], dim=2
-            )
-            torch.logical_or(
-                remove[batch_start:batch_end],
-                binds != dedup_index_inds,
-                out=remove[batch_start:batch_end],
-            )
-    elif dedup_channel_index is not None:
-        # pad channel axis with extra chan of 0s
-        batch_buffer = max_energies.new_zeros((sbs, nchans + 1))
-        for batch_start in range(0, nsamples, sbs):
-            batch_end = min(nsamples, batch_start + sbs)
-            batch = max_energies[batch_start:batch_end]
-            batch_buffer[: batch_end - batch_start, :nchans] = batch
-            batch = batch_buffer[: batch_end - batch_start]
-            torch.amax(
-                batch[:, dedup_channel_index],
-                dim=2,
-                out=max_energies[batch_start:batch_end],
-            )
+        # life is easier in channels-major here
+        X = F.pad(traces[i00:i11].T, (0, 0, 0, 1))
 
-    # if temporal/spatial max made you grow, you were not a peak!
-    if remove is not None:
-        energies.masked_fill_(remove, 0.0)
-    if dedup_temporal_radius or (dedup_channel_index is not None):
-        if all_dedup:
-            remove = torch.gt(max_energies, energies, out=remove)
-            keep = remove.logical_not_()
-            max_energies = keep.to(max_energies) * max_energies
+        # data for threshold and deduplication criteria
+        if peak_sign == "neg":
+            Xdd = Xth = X.neg_()
+        elif peak_sign == "pos":
+            Xdd = Xth = X
+        elif peak_sign == "both":
+            if trough_priority:
+                # deduplication takes trough priority into account.
+                Xdd = F.leaky_relu(X, negative_slope=-trough_priority)
+                Xth = X.abs_()
+            else:
+                Xdd = Xth = X.abs_()
         else:
-            remove = torch.gt(max_energies, energies, out=remove)
-            max_energies.masked_fill_(remove, 0.0)
+            assert False
 
-    # this matches the behavior of scipy argrelmax
+        # -- detect peaks
+        detect = Xth[:-1] > threshold
+        peak = _is_extreme(
+            Xdd,
+            dt=relative_peak_radius,
+            neighbors=peak_channel_index,
+        )
+        detect = detect.logical_and_(peak)
+        tmp = peak
+        del peak
+
+        # check if deduping
+        if not will_dedup:
+            all_peaks[i0:i1] = detect[:, istart:iend].T
+            continue
+
+        # -- deduplicate peaks
+        if dedup_chans_salt is not None:
+            Xdd[:-1] += dedup_chans_salt
+        if dedup_time_salt is not None:
+            Xdd[:-1] += dedup_time_salt[i00:i11]
+        mask_out = torch.logical_not(detect, out=tmp)
+        if detection_mask is not None:
+            mask_out.logical_and_(detection_mask[i00:i11].T)
+        Xdd[:-1].masked_fill_(mask_out, 0.0)
+
+        # no-threshold max pool for deduplication
+        dedup = _is_extreme(
+            Xdd, dt=dedup_temporal_radius, neighbors=dedup_channel_index, out=tmp
+        )
+        all_peaks[i0:i1] = detect.logical_and_(dedup)[:, istart:iend].T
+
     if exclude_edges:
-        max_energies[[0, -1], :] = 0.0
+        all_peaks[0].zero_()
+        all_peaks[-1].zero_()
 
-    # sparsify and return
-    times, chans = torch.nonzero(max_energies, as_tuple=True)
-
+    times, chans = all_peaks.nonzero(as_tuple=True)
     if return_energies:
-        return times, chans, energies[times, chans]
-
-    return times, chans
-
-
-def compute_sliding_2d_cumulant(radiality, order, win_size, chunk_size=256):
-    """
-    Compute sliding cumulant statistics (mean, variance, skewness, kurtosis) over spatial 2D windows,
-    processing the W-axis in manageable chunks.
-
-    Args:
-        radiality: (C, H, W) tensor
-        order: cumulant order (1=mean, 2=variance, 3=skewness, 4=kurtosis)
-        win_size: size of spatial window (must be odd for symmetry)
-        chunk_size: number of W-axis columns to process per chunk (default: 30,000)
-
-    Returns:
-        Tensor of shape (C, H, W) with the cumulant statistic at each spatial location
-    """
-    C, H, W = radiality.shape
-
-    if win_size % 2 == 0:
-        raise ValueError("win_size must be odd for symmetric padding")
-
-    padding = win_size // 2
-
-    # Pad spatial dimensions
-    padded = F.pad(
-        radiality.unsqueeze(1), (padding, padding, padding, padding), mode="reflect"
-    )  # (C, 1, H+2p, W+2p)
-
-    results = []
-    start = 0
-    while start < W:
-        end = min(start + chunk_size, W)
-
-        # Extract current chunk with extra padding
-        # Pad adds padding to both sides, so for columns start:end in the original,
-        # we need columns start:end + 2*padding in padded space
-        padded_start = start
-        padded_end = end + 2 * padding
-
-        chunk = padded[
-            :, :, :, padded_start:padded_end
-        ]  # (C, 1, H+2p, chunk_width + 2p)
-
-        # Unfold to extract sliding windows
-        windows = chunk.unfold(2, win_size, 1).unfold(
-            3, win_size, 1
-        )  # (C, 1, H, chunk_width, win_size, win_size)
-        windows = windows.contiguous().view(
-            C, H, end - start, -1
-        )  # (C, H, chunk_width, win_size*win_size)
-
-        # Cumulant calculations
-        if order == 1:
-            result = windows.mean(dim=-1)
-        elif order == 2:
-            result = windows.var(dim=-1, unbiased=False)
-        elif order == 3:
-            mean = windows.mean(dim=-1, keepdim=True)
-            std = windows.std(dim=-1, unbiased=False, keepdim=True) + 1e-8
-            result = (((windows - mean) / std) ** 3).mean(dim=-1)
-        elif order == 4:
-            mean = windows.mean(dim=-1, keepdim=True)
-            std = windows.std(dim=-1, unbiased=False, keepdim=True) + 1e-8
-            result = (((windows - mean) / std) ** 4).mean(dim=-1) - 3
-        else:
-            raise ValueError(f"Unsupported order: {order}")
-
-        results.append(result)  # (C, H, chunk_width)
-        start = end
-
-    return torch.cat(results, dim=-1)  # (C, H, W)
+        return times, chans, traces[times, chans].abs_()
+    else:
+        return times, chans
 
 
-def detect_and_deduplicate_2d_filters(
-    traces,
-    cum_traces=None,
-    cumulant_order=2,
-    cumulant_win_size=11,
-    radiality=None,
-    threshold=4.0,
-    dedup_channel_index=None,
-    peak_sign="neg",
-    relative_peak_radius=5,
-    spatial_dedup_batch_size=512,
-    exclude_edges=True,
-    return_energies=False,
-    detection_mask=None,
-    trough_priority=None,
+def _is_extreme(
+    X: Tensor,
+    dt=5,
+    neighbors: Tensor | None = None,
+    out=None,
 ):
-    if cumulant_order and cum_traces is None:
-        inp = radiality if radiality is not None else traces
-        cum_traces = compute_sliding_2d_cumulant(
-            inp.unsqueeze(0), cumulant_order, cumulant_win_size
-        )
-        cum_traces = cum_traces.unsqueeze(0)
+    if neighbors is not None:
+        # CT -> C, n_neighbors, T
+        Xneighb = X[neighbors]
+        Xmax = Xneighb.amax(dim=1)
     else:
-        cum_traces = traces.unsqueeze(0).unsqueeze(0)
-
-    if radiality is not None:
-        radiality = radiality.unsqueeze(0).unsqueeze(0)
-
-    if peak_sign == "neg":
-        energies = traces.neg()
-        if radiality is not None:
-            radiality = radiality.neg()
-    elif peak_sign == "both":
-        energies = traces.abs()
-        if radiality is not None:
-            radiality = radiality.abs()
-    else:
-        assert peak_sign == "pos"
-        energies = traces
-
-    energies = energies.unsqueeze(0).unsqueeze(0)
-
-    # max_cum_traces = F.max_pool2d(
-    #     cum_traces,
-    #     kernel_size=2 * relative_peak_radius + 1,
-    #     stride=1,
-    #     padding=relative_peak_radius,
-    # )
-    #
-    # maxima_mask = (cum_traces >= 0.5 * max_cum_traces)  # (1, 1, T, C)
-    #
-    # # Apply maxima mask
-    # energies = energies * maxima_mask
-
-    if radiality is not None:
-        max_radiality = F.max_pool2d(
-            radiality,
-            kernel_size=2 * relative_peak_radius + 1,
-            stride=1,
-            padding=relative_peak_radius,
-        )
-
-        maxima_mask = radiality == max_radiality  # (1, 1, T, C)
-
-        # Apply maxima mask
-        energies = energies * maxima_mask
-    else:
-        max_cum_traces = F.max_pool2d(
-            cum_traces,
-            kernel_size=2 * relative_peak_radius + 1,
-            stride=1,
-            padding=relative_peak_radius,
-        )
-
-        maxima_mask = cum_traces == max_cum_traces  # (1, 1, T, C)
-
-        # Apply maxima mask
-        energies = energies * maxima_mask
-
-    threshold_mask = cum_traces >= threshold
-    energies = energies * threshold_mask
-    # F.threshold_(energies, threshold, 0.0)
-
-    if trough_priority and peak_sign == "both":
-        tp = torch.where(traces < 0, trough_priority, 1.0)
-        energies.mul_(tp)
-
-    max_energies = F.max_pool2d(
-        energies,
-        kernel_size=2 * relative_peak_radius + 1,
-        stride=1,
-        padding=relative_peak_radius,
+        Xmax = X[:-1]
+    Xmax = F.max_pool1d(
+        Xmax[None],
+        stride=(1,),
+        kernel_size=(2 * dt + 1,),
+        padding=(dt,),
     )
+    Xmax = Xmax[0]
 
-    if detection_mask is not None:
-        energies.mul_(detection_mask.to(energies))
-    else:
-        max_energies = energies
+    # if max pool made you grow, or if thresholding made you grow,
+    # then you were not a peak
+    peak = torch.ge(X[:-1], Xmax, out=out)
 
-    # Transpose back to (T, C)
-    energies = energies[0][0]
-    max_energies = max_energies[0][0]
-
-    max_energies.masked_fill_(max_energies > energies, 0.0)
-
-    if exclude_edges:
-        max_energies[[0, -1], :] = 0.0
-    times, chans = torch.nonzero(max_energies, as_tuple=True)
-
-    if return_energies:
-        return times, chans, energies[times, chans]
-
-    return times, chans
+    return peak

@@ -607,13 +607,13 @@ class LUTParams(BModule):
         self.n_lut = n0 = n_lut_new
 
         self.b.muo.resize_(n0, *self.b.muo.shape[1:])
-        self.b.muo.fill_(0.0)
+        self.b.muo.zero_()
         self.b.Linvmuo.resize_(n0, *self.b.Linvmuo.shape[1:])
-        self.b.Linvmuo.fill_(0.0)
+        self.b.Linvmuo.zero_()
         self.b.CmoCooinvmuo.resize_(n0, *self.b.CmoCooinvmuo.shape[1:])
-        self.b.CmoCooinvmuo.fill_(0.0)
+        self.b.CmoCooinvmuo.zero_()
         self.b.constplogdet.resize_(n0, *self.b.constplogdet.shape[1:])
-        self.b.constplogdet.fill_(0.0)
+        self.b.constplogdet.zero_()
         if not self.signal_rank:
             return
         assert self.TWoCooinvsqrt is not None
@@ -621,13 +621,13 @@ class LUTParams(BModule):
         assert self.Tpad is not None
         assert self.wburyroot is not None
         self.b.TWoCooinvsqrt.resize_(n0, *self.b.TWoCooinvsqrt.shape[1:])
-        self.b.TWoCooinvsqrt.fill_(0.0)
+        self.b.TWoCooinvsqrt.zero_()
         self.b.TWoCooinvmuo.resize_(n0, *self.b.TWoCooinvmuo.shape[1:])
-        self.b.TWoCooinvmuo.fill_(0.0)
+        self.b.TWoCooinvmuo.zero_()
         self.b.Tpad.resize_(n0, *self.b.Tpad.shape[1:])
-        self.b.Tpad.fill_(0.0)
+        self.b.Tpad.zero_()
         self.b.wburyroot.resize_(n0, *self.b.wburyroot.shape[1:])
-        self.b.wburyroot.fill_(0.0)
+        self.b.wburyroot.zero_()
 
     def check(self):
         muo_f = self.b.muo.isfinite().all()
@@ -1342,6 +1342,7 @@ class BatchedSpikeData:
         allow_new_units: bool,
         allow_uncovered: bool = False,
         max_steps: int | None = None,
+        next_label: int | None = None,
     ):
         self.update_adjacency(n_units=None)
         assert self.candidates is not None
@@ -1356,6 +1357,7 @@ class BatchedSpikeData:
             ensure_coverage_only=True,
             allow_new_units=allow_new_units,
             allow_uncovered=allow_uncovered,
+            next_label=next_label,
             max_steps=max_steps if max_steps is not None else self.coverage_steps,
         )
         assert res is None
@@ -1864,6 +1866,8 @@ class TruncatedSpikeData(BatchedSpikeData):
         ids_new = remapping.mapping.unique()
         ids_new = ids_new[ids_new >= 0]
         n_units_new = ids_new.shape[0]
+        _n_units_new = ids_new.amax() + 1
+        assert _n_units_new == n_units_new
         assert self.candidates is not None
         assert n_units_new <= n_units_orig
 
@@ -1871,7 +1875,8 @@ class TruncatedSpikeData(BatchedSpikeData):
             assert distances.shape[0] == distances.shape[1]
             assert distances.shape[0] == n_units_new
             assert distances.shape[0] <= n_units_orig
-            assert remapping.mapping.max() + 1 == distances.shape[0]
+            assert remapping.mapping.amax() + 1 == distances.shape[0]
+            assert _n_units_new == distances.shape[0]
 
         self._update_sizes_from_n_units(n_units_new)
 
@@ -1900,6 +1905,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             allow_new_units=not allow_uncovered,
             allow_uncovered=allow_uncovered,
             max_steps=0 if allow_uncovered else None,
+            next_label=n_units_new,
         )
         if allow_uncovered:
             assert n_new == 0
@@ -6025,8 +6031,8 @@ def coincidence_matrix(
     yy = y[pos_ii]
 
     if pnoid:
-        assert xx.max() < nx
-        assert yy.max() < ny
+        assert xx.max() < nx, f"{xx.max()} {nx}"
+        assert yy.max() < ny, f"{yy.max()} {ny}"
         assert xx.min() >= 0
         assert yy.min() >= 0
 
@@ -6152,6 +6158,7 @@ def _fill_blank_labels(
     ensure_coverage_only: bool = False,
     allow_uncovered: bool = False,
     allow_new_units: bool = False,
+    next_label: int | None = None,
     max_steps=2,
 ):
     assert neighborhood_ids.shape == labels.shape
@@ -6170,6 +6177,8 @@ def _fill_blank_labels(
     # explore as needed, so make those probs tiny.
     keep_same_adj = un_adj.sum(0).amin().cpu().item() > 0
     n_new_units = 0
+    if next_label is None:
+        next_label = un_adj.shape[0]
     if keep_same_adj:
         adj = un_adj
     else:
@@ -6210,7 +6219,7 @@ def _fill_blank_labels(
                 n_spikes += in_nid.numel()
                 if pnoid:
                     assert (labels[in_nid] < 0).all()
-                labels[in_nid] = un_adj.shape[0] + neighb_component_ids[j]
+                labels[in_nid] = next_label + neighb_component_ids[j]
             if pnoid:
                 Knew = labels.max() + 1 + int((labels < 0).any())
                 assert labels.unique().shape[0] <= Knew

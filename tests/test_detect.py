@@ -14,15 +14,6 @@ def test_detect_and_deduplicate(dedup_exact):
     g = np.c_[h["x"], h["y"]]
     ci = make_channel_index(g, 75, to_torch=True)
 
-    if dedup_exact:
-        carange = torch.arange(len(ci))
-        jj, dedup_index_inds = (ci == carange[:, None]).nonzero(as_tuple=True)
-        assert torch.equal(jj, carange)
-        cvals = ci.take_along_dim(dedup_index_inds[:, None], dim=1)[:, 0]
-        assert torch.equal(carange, cvals)
-    else:
-        dedup_index_inds = None
-
     threshold = 10
     dedup_t = 7
 
@@ -47,7 +38,6 @@ def test_detect_and_deduplicate(dedup_exact):
         dedup_channel_index=ci,
         dedup_temporal_radius=dedup_t,
         remove_exact_duplicates=dedup_exact,
-        dedup_index_inds=dedup_index_inds,
     )
 
     assert np.array_equal(times.numpy(), desired_times)
@@ -61,7 +51,6 @@ def test_detect_and_deduplicate(dedup_exact):
         dedup_channel_index=ci,
         dedup_temporal_radius=dedup_t,
         remove_exact_duplicates=dedup_exact,
-        dedup_index_inds=dedup_index_inds,
     )
     assert np.array_equal(times.numpy(), times2.numpy())
     assert np.array_equal(chans.numpy(), chans2.numpy())
@@ -73,7 +62,6 @@ def test_detect_and_deduplicate(dedup_exact):
         dedup_channel_index=ci,
         dedup_temporal_radius=dedup_t,
         remove_exact_duplicates=dedup_exact,
-        dedup_index_inds=dedup_index_inds,
     )
     assert times.numel() == chans.numel() == 0
 
@@ -256,15 +244,17 @@ def test_detect_edgecases(case, peak_sign, convexity_threshold):
 
     in_t, in_c, in_v = case_tcv[:3]
     targ_t, targ_c, targ_v = case_tcv[3:]
+    print(f"{in_t=} {in_c=} {in_v.tolist()=}")
+    print(f"{targ_t=} {targ_c=} {targ_v.tolist()=}")
 
     traces = torch.zeros((T, C), dtype=torch.float, device=dev)
     traces[in_t, in_c] = in_v
+    print(f"{traces.shape=}")
     res = detect_and_deduplicate(
         traces,
         threshold=threshold,
         peak_sign=peak_sign,
         dedup_channel_index=torch.tensor(dedup_channel_index, device=dev),
-        dedup_index_inds=torch.tensor(dedup_cinds, device=dev),
         dedup_temporal_radius=dedup_dt,
         relative_peak_radius=peak_dt,
         return_energies=True,
@@ -276,6 +266,7 @@ def test_detect_edgecases(case, peak_sign, convexity_threshold):
     out_t = out_t[keep]
     out_c = out_c[keep]
     out_v = out_v[keep]
+    print(f"{out_t=} {out_c=} {out_v.tolist()=}")
     if peak_sign == "neg":
         assert torch.equal(out_t, emptyi.to(dev))
         assert torch.equal(out_c, emptyi.to(dev))
@@ -284,6 +275,7 @@ def test_detect_edgecases(case, peak_sign, convexity_threshold):
         assert out_t.numel() == targ_t.numel()
         assert out_t.numel() == out_c.numel() == out_v.numel()
 
-        assert torch.equal(out_t, targ_t)
-        assert torch.equal(out_c, targ_c)
+        if torch.unique(in_v).numel() == in_v.numel():
+            assert torch.equal(out_t, targ_t)
+            assert torch.equal(out_c, targ_c)
         assert torch.equal(out_v, targ_v)
