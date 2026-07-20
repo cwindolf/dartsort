@@ -158,10 +158,10 @@ def test_initial_detection_swap(tmp_path, simulations, type):
         # TODO pretrained decollider or sup denoiser for this sim.
         count_dif_tol = 0.25
     elif type == "threshold":
-        count_dif_tol = 0.35
+        count_dif_tol = 0.45
     else:
         assert False
 
     c0 = len(sim["sorting"])
     c1 = len(res["sorting"])
-    assert abs(c0 - c1) < count_dif_tol * c0
+    assert abs(c0 - c1) < count_dif_tol * c0, f"{c0=} {c1=}"

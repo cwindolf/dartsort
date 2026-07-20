@@ -65,7 +65,7 @@ def test_check_recording():
         check_recording(rec)
     warnings = {(w.category, w.message.args[0][:11]) for w in warninfo}  # type: ignore
     expected = {
-        (RuntimeWarning, "Detected 50"),
+        (RuntimeWarning, "Detected 53"),
         (RuntimeWarning, "Recording s"),
         (RuntimeWarning, "Recording v"),
     }

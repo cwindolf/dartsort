@@ -82,6 +82,10 @@ class SubtractionPeeler(BasePeeler):
             geom, p.subtract_radius_um, to_torch=True
         )
         self.register_buffer("sub_channel_index", sub_channel_index)
+        sub_dedup_channel_index = make_channel_index(
+            geom, 2.0 * p.subtract_radius_um, to_torch=True
+        )
+        self.register_buffer("sub_dedup_channel_index", sub_dedup_channel_index)
         self.register_buffer(
             "subtract_index_rel_inds", get_channel_index_rel_inds(sub_channel_index)
         )
@@ -115,11 +119,6 @@ class SubtractionPeeler(BasePeeler):
         else:
             peak_channel_index = None
         self.register_buffer_or_none("peak_channel_index", peak_channel_index)
-        if dedup_channel_index is not None:
-            dedup_rel_inds = get_channel_index_rel_inds(dedup_channel_index)
-        else:
-            dedup_rel_inds = None
-        self.register_buffer_or_none("dedup_rel_inds", dedup_rel_inds)
         self.add_module(
             "subtraction_denoising_pipeline", subtraction_denoising_pipeline
         )
@@ -268,6 +267,7 @@ class SubtractionPeeler(BasePeeler):
             traces,
             self.b.sub_channel_index,
             self.subtraction_denoising_pipeline,
+            sub_dedup_channel_index=self.b.sub_dedup_channel_index,
             extract_index=extract_index,
             extract_mask=self.extract_subtract_mask,
             trough_offset_samples=self.trough_offset_samples,
@@ -279,7 +279,6 @@ class SubtractionPeeler(BasePeeler):
             peak_sign=self.p.peak_sign,
             peak_channel_index=self.b.peak_channel_index,
             dedup_channel_index=self.b.dedup_channel_index,
-            dedup_batch_size=self.dedup_batch_size,
             dedup_temporal_radius=self.p.temporal_dedup_radius_samples,
             remove_exact_duplicates=self.p.remove_exact_duplicates,
             pos_dedup_temporal_radius=self.p.positive_temporal_dedup_radius_samples,
@@ -287,14 +286,12 @@ class SubtractionPeeler(BasePeeler):
             decrease_objective=self.p.decrease_objective,
             trough_priority=self.p.trough_priority,
             growth_tolerance=self.p.growth_tolerance,
-            cumulant_order=self.p.cumulant_order,
             convexity_threshold=self.p.convexity_threshold,
             convexity_radius=self.p.convexity_radius,
             save_iteration=self.save_iteration,
             save_residnorm_decrease=self.save_residnorm_decrease,
             max_iter=self.p.max_iter,
             subtract_rel_inds=self.b.subtract_index_rel_inds,
-            dedup_rel_inds=self.b.dedup_rel_inds,
             realign_to_denoiser=self.p.realign_to_denoiser,
             denoiser_realignment_shift=self.p.denoiser_realignment_shift,
             denoiser_realignment_channel=self.p.denoiser_realignment_channel,
@@ -517,7 +514,6 @@ class SubtractionPeeler(BasePeeler):
             temporal_dedup_radius_samples=self.spike_length_samples,
             time_jitter=self.p.first_denoiser_temporal_jitter,
             thinning=self.first_denoiser_thinning,
-            cumulant_order=self.p.cumulant_order,
             remove_exact_duplicates=self.p.remove_exact_duplicates,
             convexity_threshold=self.p.convexity_threshold,
             trough_priority=self.p.trough_priority,

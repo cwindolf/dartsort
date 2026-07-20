@@ -196,6 +196,7 @@ def subtract_chunk(
     traces: Tensor,
     channel_index: Tensor,
     denoising_pipeline: "WaveformPipeline",
+    sub_dedup_channel_index: Tensor | None = None,
     extract_index: Tensor | None = None,
     extract_mask: Tensor | None = None,
     trough_offset_samples=42,
@@ -212,7 +213,6 @@ def subtract_chunk(
     peak_channel_index: Tensor | None = None,
     dedup_channel_index: Tensor | None = None,
     subtract_rel_inds: Tensor | None = None,
-    dedup_rel_inds: Tensor | None = None,
     residnorm_decrease_threshold=16.0,
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv",
     local_whiteners: Tensor | None = None,
@@ -221,12 +221,10 @@ def subtract_chunk(
     dedup_temporal_radius=7,
     remove_exact_duplicates=True,
     pos_dedup_temporal_radius=None,
-    dedup_batch_size=512,
     no_subtraction=False,
     max_iter=100,
     trough_priority: float | None = None,
     growth_tolerance: float | None = None,
-    cumulant_order=None,
     save_iteration=False,
     save_residnorm_decrease=False,
     compute_collidedness=False,
@@ -240,16 +238,13 @@ def subtract_chunk(
             peak_sign=peak_sign,
             peak_channel_index=peak_channel_index,
             dedup_channel_index=dedup_channel_index,
-            dedup_rel_inds=dedup_rel_inds,
             trough_offset_samples=trough_offset_samples,
             spike_length_samples=spike_length_samples,
             left_margin=left_margin,
             right_margin=right_margin,
             relative_peak_radius=relative_peak_radius,
             temporal_dedup_radius_samples=dedup_temporal_radius,
-            dedup_batch_size=dedup_batch_size,
             remove_exact_duplicates=remove_exact_duplicates,
-            cumulant_order=cumulant_order,
             convexity_threshold=convexity_threshold,
             convexity_radius=convexity_radius,
             max_spikes_per_chunk=None,
@@ -278,6 +273,8 @@ def subtract_chunk(
     assert traces.shape[1] == channel_index.shape[0]
     if dedup_channel_index is not None:
         assert traces.shape[1] == dedup_channel_index.shape[0]
+    if sub_dedup_channel_index is None:
+        sub_dedup_channel_index = channel_index
 
     # can only subtract spikes with trough time >=trough_offset and <max_trough
     post_trough_samples = spike_length_samples - trough_offset_samples
@@ -296,7 +293,7 @@ def subtract_chunk(
     spike_times = []
     spike_channels = []
     spike_features = []
-    detection_mask = torch.ones_like(residual)
+    detection_mask = torch.ones_like(residual, dtype=torch.bool)
     dedup_temporal_ix = torch.arange(
         -dedup_temporal_radius, dedup_temporal_radius + 1, device=residual.device
     )
@@ -317,16 +314,13 @@ def subtract_chunk(
             residual_det,
             detection_threshold,
             peak_channel_index=peak_channel_index,
-            dedup_channel_index=channel_index,
+            dedup_channel_index=sub_dedup_channel_index,
             peak_sign=peak_sign,
             relative_peak_radius=relative_peak_radius,
             dedup_temporal_radius=spike_length_samples,
-            spatial_dedup_batch_size=dedup_batch_size,
             remove_exact_duplicates=remove_exact_duplicates,
-            dedup_index_inds=subtract_rel_inds,
             detection_mask=detection_mask[:, :-1] if it else None,
             trough_priority=trough_priority,
-            cumulant_order=cumulant_order,
         )
         if not times_samples.numel():
             break
@@ -361,7 +355,7 @@ def subtract_chunk(
             chan_ix = dedup_channel_index[channels]
         else:
             chan_ix = channels.unsqueeze(1)
-        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0.0
+        detection_mask[time_ix[:, :, None], chan_ix[:, None, :]] = 0
 
         # take extra care to exclude positive peaks appearing near stronger troughs
         if pos_dedup_temporal_radius:
@@ -449,15 +443,15 @@ def subtract_chunk(
         # -- follow the nn's realignment advice, if requested
         if realign_to_denoiser:
             features["time_shifts"] = denoiser_time_shifts(
-                waveforms,
-                channels,
-                voltages,
-                subtract_rel_inds,
-                trough_offset_samples,
-                spike_length_samples,
-                peak_sign,
-                denoiser_realignment_shift,
-                denoiser_realignment_channel,
+                waveforms=waveforms,
+                channels=channels,
+                voltages=voltages,
+                subtract_rel_inds=subtract_rel_inds,
+                trough_offset_samples=trough_offset_samples,
+                spike_length_samples=spike_length_samples,
+                peak_sign=peak_sign,
+                denoiser_realignment_shift=denoiser_realignment_shift,
+                denoiser_realignment_channel=denoiser_realignment_channel,
             )
 
         # -- store this iter's outputs
@@ -568,8 +562,6 @@ def threshold_chunk(
     peak_sign: PeakSign = "both",
     peak_channel_index=None,
     dedup_channel_index=None,
-    dedup_rel_inds=None,
-    dedup_batch_size=512,
     trough_offset_samples=42,
     spike_length_samples=121,
     left_margin=0,
@@ -582,7 +574,6 @@ def threshold_chunk(
     time_jitter=0,
     trough_priority=None,
     spatial_jitter_channel_index=None,
-    cumulant_order=None,
     convexity_threshold=None,
     convexity_radius=3,
     return_waveforms=True,
@@ -592,18 +583,15 @@ def threshold_chunk(
     n_index = channel_index.shape[1]
     times_rel, channels, energies = detect_and_deduplicate(
         traces,
-        detection_threshold,
+        threshold=detection_threshold,
         peak_channel_index=peak_channel_index,
         dedup_channel_index=dedup_channel_index,
-        dedup_index_inds=dedup_rel_inds,
-        spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
         dedup_temporal_radius=temporal_dedup_radius_samples,
         remove_exact_duplicates=remove_exact_duplicates,
         relative_peak_radius=relative_peak_radius,
         return_energies=True,
         trough_priority=trough_priority,
-        cumulant_order=cumulant_order,
     )
     if not times_rel.numel():
         return PeelingBatchResult(
@@ -771,8 +759,6 @@ def shave_chunk(
     peak_sign: PeakSign = "both",
     peak_channel_index=None,
     dedup_channel_index=None,
-    dedup_rel_inds=None,
-    dedup_batch_size=512,
     trough_offset_samples=42,
     spike_length_samples=121,
     left_margin=0,
@@ -787,8 +773,6 @@ def shave_chunk(
         detection_threshold,
         peak_channel_index=peak_channel_index,
         dedup_channel_index=dedup_channel_index,
-        dedup_index_inds=dedup_rel_inds,
-        spatial_dedup_batch_size=dedup_batch_size,
         peak_sign=peak_sign,
         dedup_temporal_radius=temporal_dedup_radius_samples,
         remove_exact_duplicates=remove_exact_duplicates,
