@@ -1342,6 +1342,7 @@ class BatchedSpikeData:
         allow_new_units: bool,
         allow_uncovered: bool = False,
         max_steps: int | None = None,
+        next_label: int | None = None,
     ):
         self.update_adjacency(n_units=None)
         assert self.candidates is not None
@@ -1356,6 +1357,7 @@ class BatchedSpikeData:
             ensure_coverage_only=True,
             allow_new_units=allow_new_units,
             allow_uncovered=allow_uncovered,
+            next_label=next_label,
             max_steps=max_steps if max_steps is not None else self.coverage_steps,
         )
         assert res is None
@@ -1864,6 +1866,8 @@ class TruncatedSpikeData(BatchedSpikeData):
         ids_new = remapping.mapping.unique()
         ids_new = ids_new[ids_new >= 0]
         n_units_new = ids_new.shape[0]
+        _n_units_new = ids_new.amax() + 1
+        assert _n_units_new == n_units_new
         assert self.candidates is not None
         assert n_units_new <= n_units_orig
 
@@ -1871,7 +1875,8 @@ class TruncatedSpikeData(BatchedSpikeData):
             assert distances.shape[0] == distances.shape[1]
             assert distances.shape[0] == n_units_new
             assert distances.shape[0] <= n_units_orig
-            assert remapping.mapping.max() + 1 == distances.shape[0]
+            assert remapping.mapping.amax() + 1 == distances.shape[0]
+            assert _n_units_new == distances.shape[0]
 
         self._update_sizes_from_n_units(n_units_new)
 
@@ -1900,6 +1905,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             allow_new_units=not allow_uncovered,
             allow_uncovered=allow_uncovered,
             max_steps=0 if allow_uncovered else None,
+            next_label=n_units_new,
         )
         if allow_uncovered:
             assert n_new == 0
@@ -6152,6 +6158,7 @@ def _fill_blank_labels(
     ensure_coverage_only: bool = False,
     allow_uncovered: bool = False,
     allow_new_units: bool = False,
+    next_label: int | None = None,
     max_steps=2,
 ):
     assert neighborhood_ids.shape == labels.shape
@@ -6170,6 +6177,8 @@ def _fill_blank_labels(
     # explore as needed, so make those probs tiny.
     keep_same_adj = un_adj.sum(0).amin().cpu().item() > 0
     n_new_units = 0
+    if next_label is None:
+        next_label = un_adj.shape[0]
     if keep_same_adj:
         adj = un_adj
     else:
@@ -6210,7 +6219,7 @@ def _fill_blank_labels(
                 n_spikes += in_nid.numel()
                 if pnoid:
                     assert (labels[in_nid] < 0).all()
-                labels[in_nid] = un_adj.shape[0] + neighb_component_ids[j]
+                labels[in_nid] = next_label + neighb_component_ids[j]
             if pnoid:
                 Knew = labels.max() + 1 + int((labels < 0).any())
                 assert labels.unique().shape[0] <= Knew
