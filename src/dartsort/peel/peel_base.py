@@ -801,7 +801,10 @@ class BasePeeler(BModule):
                     waveforms_dataset_name="peeled_waveforms_fit",
                     **fixed_properties,
                 )
-                assert getrefcount(waveforms) <= 2
+                if getrefcount(waveforms) > 2:
+                    logger.warn(f"Fit waveforms had {getrefcount(waveforms)=}")
+                    for obj in gc.get_referrers(waveforms):
+                        logger.warn(f"{repr(obj)}: {str(obj)}")
                 featurization_pipeline = featurization_pipeline.to("cpu")
                 self.featurization_pipeline = featurization_pipeline
             finally:
