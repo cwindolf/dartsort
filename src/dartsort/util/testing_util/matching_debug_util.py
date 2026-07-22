@@ -93,7 +93,7 @@ def yield_step_results(
         inv_lambda=matcher.inv_lambda,
         scale_min=matcher.amp_scale_min,
         scale_max=matcher.amp_scale_max,
-        resid_offset=0,#matcher.whiten_pad,
+        resid_offset=0,  # matcher.whiten_pad,
     )
     cur_residual = chunk.clone()
 
@@ -386,6 +386,7 @@ class DebugMatchingTemplates(MatchingTemplates):
     def data_at_time(
         self,
         t_s: float,
+        *,
         scaling: bool,
         inv_lambda: float,
         scale_min: float,
@@ -475,7 +476,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
         time_ix = torch.arange(wfs.shape[1], device=wfs.device)
         times = peaks.times
         assert times is not None
-        for t, wf in zip(times, wfs):
+        for t, wf in zip(times, wfs, strict=True):
             if sign == -1:
                 traces[t + time_ix, :-1] -= wf
             elif sign == 1:

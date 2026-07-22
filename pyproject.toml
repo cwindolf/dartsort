@@ -74,7 +74,7 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 line-length = 88
 
 [tool.ruff.lint]
-extend-select = ["E", "F", "I", "N", "B", "SIM", "NPY", "RUF", "PTH", "PD", "FURB", "PT", "FBT"]
+extend-select = ["E", "F", "I", "N", "B", "SIM", "NPY", "RUF", "PTH", "PD", "FURB"]
 ignore = ["F722", "N812", "SIM102", "SIM108", "E501", "N806", "N803", "N815"]
 
 [tool.jupytext]

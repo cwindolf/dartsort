@@ -10,7 +10,7 @@ from ...templates import TemplateData
 from ...util.internal_config import ComputationConfig, MatchingConfig
 from ...util.logging_util import DARTSORTVERBOSE, get_logger
 from ...util.motion import MotionInfo
-from ...util.py_util import databag
+from ...util.py_util import databag, panic
 from ...util.spiketorch import argrelmax_dedup, grab_spikes, ptp
 from ...util.torch_util import BModule, torch_compiler
 
@@ -22,7 +22,7 @@ class MatchingTemplates(BModule):
     # subclasses should have their own template_type
     template_type = "base"
     # shared subclass registry for from_config()
-    _registry = {}
+    _registry = {}  # noqa: RUF012
 
     # these should be assigned in __init__. adding here for typing.
     spike_length_samples: int
@@ -79,6 +79,7 @@ class MatchingTemplates(BModule):
     def data_at_time(
         self,
         t_s: float,
+        *,
         scaling: bool,
         inv_lambda: float,
         scale_min: float,
@@ -326,7 +327,7 @@ class ChunkTemplateData:
             sel_ci = channel_selection_index
             channels = self.main_channels[peaks.template_inds]
         else:
-            assert False
+            panic(channels)
         assert isinstance(channels, Tensor)
 
         times = peaks.times

@@ -30,6 +30,7 @@ from ..util.internal_config import (
 from ..util.interpolation_util import StableFeaturesInterpolator, pad_geom
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.py_util import panic
 from ..util.torch_util import cleanup_and_log_gpu_usage, torch_compile
 from .transform_base import BaseWaveformFeaturizer
 
@@ -89,7 +90,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         assert name is None
         name = ("labels", "gmm_candidates", "gmm_log_liks", "gmm_responsibilities")
         if save_neighborhood_ids:
-            name = name + ("neighborhood_ids",)
+            name = (*name, "neighborhood_ids")
         super().__init__(
             channel_index=channel_index,
             geom=geom,
@@ -219,7 +220,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         tpca = pipeline.get_transformer(self.pca_ds)
 
         # build sorting object
-        load_features = ["times_seconds"] + self.load_feat_names
+        load_features = ["times_seconds", *self.load_feat_names]
         sorting = DARTsortSorting.from_peeling_hdf5(
             h5_path=hdf5_filename, load_feature_names=load_features
         )
@@ -345,7 +346,7 @@ class TruncatedMixtureModelTransformer(BaseWaveformFeaturizer):
         elif self.motion_depth_mode == "channel":
             z = self.b.geom[channels, 1].numpy(force=True)
         else:
-            assert False
+            panic(self.motion_depth_mode)
 
         # drifting channel mapping
         assert self.motion is not None
@@ -431,7 +432,7 @@ def neighborhood_mapping_at_time(
         elif shift_mode == "round":
             n_pitches_shift = np.round(probe_disp / motion.pitch).astype(np.int32)
         else:
-            assert False
+            panic(shift_mode)
         shift = n_pitches_shift * motion.pitch
         shifted_neighbs = static_neighbs.copy()
         shifted_neighbs[:, :, 1] += shift

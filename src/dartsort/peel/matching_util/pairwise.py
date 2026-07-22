@@ -232,9 +232,7 @@ class CompressedPairwiseConv(PconvBase):
             assert self.b.upsampled_shifted_template_index_b.shape[2] == 1
             upsampled_shifted_template_index = upsampled_shifted_template_index[..., 0]
         else:
-            b_ix = b_ix + (
-                torch.atleast_1d(torch.asarray(upsampling_indices_b, device=dev)),
-            )
+            b_ix = (*b_ix, torch.atleast_1d(torch.asarray(upsampling_indices_b, device=dev)))
 
         # get shifted template indices for A
         shifted_temp_ix_a = shifted_template_index[a_ix]

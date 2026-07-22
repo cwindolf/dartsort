@@ -56,7 +56,7 @@ from ...util.job_util import ensure_computation_config
 from ...util.logging_util import get_logger
 from ...util.motion import MotionInfo
 from ...util.noise_util import Whitener
-from ...util.py_util import databag
+from ...util.py_util import databag, panic
 from ...util.spiketorch import full_shared_pconv, shared_temporal_pconv
 from ...util.torch_util import torch_compiler
 from ...util.waveform_util import upsample_singlechan_torch
@@ -178,18 +178,14 @@ class DriftyMatchingTemplates(MatchingTemplates):
             assert whitener is not None
             self.whitener = whitener.to(spatial_sing.device)
             conv_spatial_sing = self.whitener.whiten(spatial_sing, spatial_only=True)
-        elif self.whiten_strategy == "prewhiten_postapply":
-            assert whitener is not None
-            self.whitener = whitener.to(spatial_sing.device)
-            conv_spatial_sing = None
-        elif self.whiten_strategy == "prewhiten":
+        elif self.whiten_strategy in ("prewhiten_postapply", "prewhiten"):
             assert whitener is not None
             self.whitener = whitener.to(spatial_sing.device)
             conv_spatial_sing = None
         elif self.whiten_strategy == "none":
             self.whitener = conv_spatial_sing = None
         else:
-            assert False
+            panic(self.whiten_strategy)
         if conv_spatial_sing is not None:
             conv_spatial_sing = conv_spatial_sing.contiguous()
         self.register_buffer_or_none("conv_spatial_sing", conv_spatial_sing)
@@ -322,7 +318,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
                 spatial_sing = conv_spatial_sing
             normsq_spatial_sing = conv_spatial_sing
         else:
-            assert False
+            panic(self.whiten_strategy)
 
         # normsq for channel selection from original
         norm_discount = self.b.norm_discount
@@ -347,6 +343,7 @@ class DriftyMatchingTemplates(MatchingTemplates):
     def data_at_time(
         self,
         t_s: float,
+        *,
         scaling: bool,
         inv_lambda: float,
         scale_min: float,
@@ -660,7 +657,7 @@ def get_interp_upsampling_data(
     elif up_method == "keys4":
         up_radius = 3
     else:
-        assert False
+        panic(up_method)
     ixs = get_interp_upsampling_indices(
         up_factor=up_factor, up_radius=up_radius, device=device
     )
@@ -674,7 +671,7 @@ def get_interp_upsampling_data(
         kernel = _this_keys_kernel(4, up_tt)
         zpad = 0
     else:
-        assert False
+        panic(up_method)
     return UpsamplingData(
         objective_window=objective_window,
         objective_tt=objective_tt,
@@ -775,6 +772,7 @@ def _upsampling_fine_match(
 
 def _subtract_templates_loop(
     traces: Tensor,
+    *,
     up_inds: Tensor | None,
     scalings: Tensor | None,
     template_inds: Tensor,
@@ -861,7 +859,7 @@ def _this_keys_kernel(deg: Literal[3, 4], xx_: Tensor) -> Tensor:
     elif deg == 4:
         kernel = _keys4_u(u_arg)
     else:
-        assert False
+        panic(deg)
 
     # interp at |s| = 0 is exact, and I didn't handle that case in _keys_u
     kernel[:, xx_.shape[0] // 2] = 0.0

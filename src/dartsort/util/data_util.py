@@ -584,13 +584,14 @@ class DARTsortSorting:
                 labels_dataset,
                 "sampling_frequency",
             ]
+            h5_keys = list(h5.keys())
             if load_feature_names is None and load_all_features:
                 load_feature_names = [
-                    k for k in h5.keys() if h5[k].ndim > 0 and h5[k].shape[0] == n
+                    k for k in h5_keys if h5[k].ndim > 0 and h5[k].shape[0] == n
                 ]
             elif load_feature_names is None and load_simple_features:
                 load_feature_names = []
-                for k in h5.keys():
+                for k in h5_keys:
                     if k in already_loaded:
                         continue
                     if cls._no_check_needed(k):
@@ -601,9 +602,9 @@ class DARTsortSorting:
                     if is_simple:
                         load_feature_names.append(k)
             elif load_feature_names is None:
-                load_feature_names = [k for k in h5.keys() if cls._no_check_needed(k)]
+                load_feature_names = [k for k in h5_keys if cls._no_check_needed(k)]
             elif load_feature_names is not None:
-                basic_props = [k for k in h5.keys() if cls._no_check_needed(k)]
+                basic_props = [k for k in h5_keys if cls._no_check_needed(k)]
                 load_feature_names = list(load_feature_names) + basic_props
             assert load_feature_names is not None
             load_feature_names = [
@@ -1102,7 +1103,7 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=N
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
 
-    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+    geom, _channel_index, model_dir = _get_featurization_loading_meta(sorting)
 
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
@@ -1486,7 +1487,7 @@ def candidates_to_labels(clabels, labels, Klabel, Kcand):
     lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
     lc = lc[(lc >= 0).all(axis=1)]
     # each candidate only appears once -- it is a merge.
-    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1]), "ctol"
+    assert np.all(np.unique(lc[:, 1], return_counts=True)[1] == 1), "ctol"
     ctol = np.full((Kcand + 1,), fill_value=Klabel)
     ctol[lc[:, 1]] = lc[:, 0]
     return lc, ctol

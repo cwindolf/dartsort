@@ -386,7 +386,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
             assert obj.isfinite().all()
 
             # find peaks...
-            peak_times, peak_units, peak_energies = detect_and_deduplicate(
+            _peak_times, peak_units, peak_energies = detect_and_deduplicate(
                 obj.T,
                 min_threshold,
                 peak_sign="pos",
@@ -1531,7 +1531,7 @@ def residual_welch_whitener(
         # if there are nans, they'll be the same on dims 1,2.
         ina = np.flatnonzero(np.isnan(snip[:, 0, 0]))
         if ina.size:
-            snip = snip[:ina[0]]
+            snip = snip[: ina[0]]
         if not snip.size:
             continue
 
