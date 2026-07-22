@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generator, Literal, Self, Sequence, cast
 
 import h5py
+import numba
 import numpy as np
 import torch
 from spikeinterface.core import (
@@ -843,7 +844,7 @@ class DARTsortSorting:
         kept_indices = np.setdiff1d(np.arange(len(self)), viol_ixs)
         return st, kept_indices
 
-    def flatten(self, include_gmm_properties: bool = False) -> Self:
+    def flatten(self, *, include_gmm_properties: bool = False) -> Self:
         """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
@@ -868,11 +869,24 @@ class DARTsortSorting:
             v_valid = v[valid]
             new_v = v.copy()
             new_v[valid] = remapping[v_valid]
+
+            # now, "ghost" units (not top candidates but still existing
+            # in the lower ranks) can have some probability mass that
+            # needs to be deleted.
+            resp_key = k.replace("candidates", "responsibilities")
+            resps = getattr(self, resp_key).copy()
+            loglik_key = k.replace("candidates", "log_liks")
+            logliks = getattr(self, loglik_key).copy()
+            vacuum_neg_candidate_prob(old_unique.shape[0], new_v, resps, logliks)
+
             new_props[k] = new_v
+            new_props[resp_key] = resps
+            new_props[loglik_key] = logliks
 
             # if merged candidates were present, the labels
             # don't match gmm_candidates
             break
+
         return self.ephemeral_replace(**new_props)
 
     def __str__(self):
@@ -2038,3 +2052,23 @@ def divide_randomly(
     assert things_per_bin.sum() == n_things
 
     return things_per_bin
+
+
+@numba.njit(parallel=True)
+def vacuum_neg_candidate_prob(
+    n_units: int, cand: np.ndarray, resp: np.ndarray, loglik: np.ndarray
+):
+    for s in numba.prange(cand.shape[0]):  # ty: ignore
+        spike_cand = cand[s]
+        # vacuum into noise component
+        # this is partly to handle stuff that was missed before getting here
+        # from flatten, for example
+        for j in range(cand.shape[1]):
+            if 0 <= spike_cand[j] < n_units:
+                continue
+            rsj = resp[s, j]
+            if rsj == 0:
+                continue
+            resp[s, -1] += rsj
+            resp[s, j] = 0.0
+            loglik[s, j] = -np.inf
