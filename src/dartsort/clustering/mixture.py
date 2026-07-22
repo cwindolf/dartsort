@@ -603,33 +603,37 @@ class LUTParams(BModule):
             self._resize_(n_lut)
         return self
 
-    def _resize_(self, n_lut_new):
+    def _resize_(self, n_lut_new: int, *, zero_all: bool = True):
         if n_lut_new == self.n_lut:
             return
 
         self.n_lut = n0 = n_lut_new
 
         self.b.muo.resize_(n0, *self.b.muo.shape[1:])
-        self.b.muo.zero_()
         self.b.Linvmuo.resize_(n0, *self.b.Linvmuo.shape[1:])
-        self.b.Linvmuo.zero_()
         self.b.CmoCooinvmuo.resize_(n0, *self.b.CmoCooinvmuo.shape[1:])
-        self.b.CmoCooinvmuo.zero_()
         self.b.constplogdet.resize_(n0, *self.b.constplogdet.shape[1:])
+
+        self.b.muo.zero_()
+        self.b.Linvmuo.zero_()
+        self.b.CmoCooinvmuo.zero_()
         self.b.constplogdet.zero_()
+
         if not self.signal_rank:
             return
         assert self.TWoCooinvsqrt is not None
         assert self.TWoCooinvmuo is not None
         assert self.Tpad is not None
         assert self.wburyroot is not None
+
         self.b.TWoCooinvsqrt.resize_(n0, *self.b.TWoCooinvsqrt.shape[1:])
-        self.b.TWoCooinvsqrt.zero_()
         self.b.TWoCooinvmuo.resize_(n0, *self.b.TWoCooinvmuo.shape[1:])
-        self.b.TWoCooinvmuo.zero_()
         self.b.Tpad.resize_(n0, *self.b.Tpad.shape[1:])
-        self.b.Tpad.zero_()
         self.b.wburyroot.resize_(n0, *self.b.wburyroot.shape[1:])
+
+        self.b.TWoCooinvsqrt.zero_()
+        self.b.TWoCooinvmuo.zero_()
+        self.b.Tpad.zero_()
         self.b.wburyroot.zero_()
 
     def check(self):
@@ -1873,7 +1877,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         distances: Tensor | None,
         *,
         allow_uncovered: bool = False,
-    ) -> NeighborhoodLUT | None:
+    ) -> tuple[NeighborhoodLUT | None, int]:
         """Re-map my top candidate labels and re-do LUTs, search, explore."""
         n_units_orig = remapping.mapping.shape[0]
         ids_new = remapping.mapping.unique()
@@ -1939,7 +1943,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             _, lut = self.update(new_top_candidates=None, distances=distances)
         else:
             lut = self.un_adj_lut
-        return lut
+        return lut, n_new
 
     def update_from_split(
         self,
@@ -3476,8 +3480,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         distances = self.unit_distance_matrix()
         if pnoid:
             assert not distances.isnan().any()
-        lut = train_data.remap(remapping=flat_map, distances=distances)
+        lut, n_new = train_data.remap(remapping=flat_map, distances=distances)
         assert lut is not None
+        assert not n_new
         self.update_lut(lut)
         assert self.lut_params is not None
         self._check_logprop()
@@ -3661,13 +3666,17 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # discard the units and notify train data
         remap = UnitRemapping.discard_mapping(self.n_units, unit_ids)
         self.cleanup(remap)
-        lut = train_data.remap(
+        lut, n_new = train_data.remap(
             remapping=remap,
             distances=None if allow_uncovered else self.unit_distance_matrix(),
             allow_uncovered=allow_uncovered,
         )
         assert lut is not None
-        self.update_lut(lut, no_parameter_changes=True)
+        if allow_uncovered:
+            assert not n_new
+        if n_new:
+            self.add_new_blank_units(n_new)
+        self.update_lut(lut, no_parameter_changes=not n_new)
 
         return remap
 
@@ -3773,6 +3782,19 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert self.b.bases[:, 0, 0].isfinite().all()
 
         return new_remapping
+
+    def add_new_blank_units(self, n_new: int):
+        if not n_new:
+            return
+        new_n_units = self.n_units + n_new
+        self.b.means.resize_(new_n_units, *self.b.means.shape[1:])
+        self.b.log_proportions.resize_(new_n_units, *self.b.log_proportions.shape[1:])
+        self.b.means[self.n_units :].zero_()
+        self.b.log_proportions[self.n_units :].fill_(self.LP_MIN)
+        if self.signal_rank:
+            self.b.bases.resize_(new_n_units, *self.b.bases.shape[1:])
+            self.b.bases[self.n_units :].zero_()
+        self.n_units = new_n_units
 
     def _apply_splits(
         self,
@@ -3918,8 +3940,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         self.cleanup(discard)
         # tell train data about this
-        lut = train_data.remap(remapping=discard, distances=None)
+        lut, n_new = train_data.remap(remapping=discard, distances=None)
         del lut  # ignoring this LUT, since we'll shortly get another
+        self.add_new_blank_units(n_new)
         # and we will shortly give these labels to train data
         F.threshold(train_labels, -1, Knew, inplace=True)
         train_labels = discard.padded_map()[train_labels]
