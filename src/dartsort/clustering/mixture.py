@@ -181,9 +181,9 @@ def tmm_demix(
             if step_type.endswith("split"):
                 run_split(
                     tmm,
-                    train_data,
-                    val_data,
-                    prog_level,
+                    train_data=train_data,
+                    val_data=val_data,
+                    prog_level=prog_level,
                     single=step_type.startswith("single"),
                 )
                 tmm.em(
@@ -206,12 +206,15 @@ def tmm_demix(
                 _not_last = _not_last or (inner_it + 1 < n_inner_iters)
                 _will_em = _not_last or refinement_cfg.em_after_demolish
                 tmm.demolish(
-                    train_data, val_data, bool(prog_level), allow_uncovered=not _will_em
+                    train_data=train_data,
+                    val_data=val_data,
+                    show_progress=bool(prog_level),
+                    allow_uncovered=not _will_em,
                 )
                 if _will_em:
                     allow_blanks = True
                     tmm.em(
-                        train_data,
+                        data=train_data,
                         show_progress=prog_level,
                         allow_blanks=allow_blanks,
                         min_iters=tmm.p.main_min_iters,
@@ -719,6 +722,7 @@ class SufficientStatistics:
     @classmethod
     def zeros(
         cls,
+        *,
         n_units: int,
         n_lut: int,
         n_channels: int,
@@ -1240,7 +1244,7 @@ class BatchedSpikeData:
         )
         self._update_sizes(n_candidates, n_search, n_explore)
 
-    def _fill_missing(self, n_units: int, allow_uncovered: bool = False):
+    def _fill_missing(self, *, n_units: int, allow_uncovered: bool = False):
         # fill in missing labels randomly, obeying un_adj
         if self.candidates is None:
             return
@@ -1273,7 +1277,7 @@ class BatchedSpikeData:
             )
 
     def batches(
-        self, show_progress: bool = False, desc: str = "Batches"
+        self, *, show_progress: bool = False, desc: str = "Batches"
     ) -> Iterable[SpikeDataBatch]:
         if show_progress:
             batch_starts = progrange(0, self.N, self.batch_size, desc=desc)
@@ -1290,6 +1294,7 @@ class BatchedSpikeData:
 
     def update_adjacency(
         self,
+        *,
         n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
         expand_lut: bool = False,
@@ -1371,11 +1376,12 @@ class BatchedSpikeData:
     def bootstrap_candidates(
         self,
         distances: Tensor,
+        *,
         un_adj_lut: NeighborhoodLUT | None = None,
         allow_uncovered: bool = False,
     ) -> NeighborhoodLUT:
         self.update_adjacency(n_units=distances.shape[0], un_adj_lut=un_adj_lut)
-        self._fill_missing(distances.shape[0], allow_uncovered=allow_uncovered)
+        self._fill_missing(n_units=distances.shape[0], allow_uncovered=allow_uncovered)
 
         # fill in candidates[:, 1:n_candidates] at random obeying un_adj
         # choosing not to use distances here, since they get used in search sets
@@ -1400,6 +1406,7 @@ class BatchedSpikeData:
         self,
         new_top_candidates: Tensor | None,
         distances: Tensor,
+        *,
         expand_lut: bool = False,
         skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
@@ -1475,6 +1482,7 @@ class StreamingSpikeData(BatchedSpikeData):
         self,
         new_top_candidates: Tensor | None,
         distances: Tensor,
+        *,
         expand_lut: bool = False,
         skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
@@ -1489,6 +1497,7 @@ class StreamingSpikeData(BatchedSpikeData):
         self,
         n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
+        *,
         expand_lut: bool = False,
     ):
         super().update_adjacency(
@@ -1643,6 +1652,7 @@ class TruncatedSpikeData(BatchedSpikeData):
     @classmethod
     def initialize_from_labels(
         cls,
+        *,
         n_candidates: int,
         n_search: int,
         n_explore: int,
@@ -1700,6 +1710,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         self,
         new_top_candidates: Tensor | None,
         distances: Tensor,
+        *,
         expand_lut: bool = False,
         skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
@@ -1708,7 +1719,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.candidates is not None
         if new_top_candidates is not None:
             self.candidates[:, : self.n_candidates] = new_top_candidates
-            self.update_adjacency(distances.shape[0], expand_lut=expand_lut)
+            self.update_adjacency(n_units=distances.shape[0], expand_lut=expand_lut)
 
         lut_padded = F.pad(
             self.un_adj_lut.b.lut,
@@ -1860,6 +1871,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         self,
         remapping: UnitRemapping,
         distances: Tensor | None,
+        *,
         allow_uncovered: bool = False,
     ) -> NeighborhoodLUT | None:
         """Re-map my top candidate labels and re-do LUTs, search, explore."""
@@ -1902,7 +1914,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         if pnoid and distances is not None:
             _max_cand = self.candidates.amax()
             assert _max_cand < distances.shape[0], f"{_max_cand} {distances.shape}"
-        self.update_adjacency(n_units_new)
+        self.update_adjacency(n_units=n_units_new)
         n_new = self.ensure_coverage(
             allow_new_units=not allow_uncovered,
             allow_uncovered=allow_uncovered,
@@ -1988,6 +2000,7 @@ class FullProposalDataView(BatchedSpikeData):
         self,
         new_top_candidates: Tensor | None,
         distances: Tensor,
+        *,
         expand_lut: bool = False,
         skip_explore: bool = False,
     ) -> tuple[bool, NeighborhoodLUT]:
@@ -1995,6 +2008,7 @@ class FullProposalDataView(BatchedSpikeData):
 
     def update_adjacency(
         self,
+        *,
         n_units: int | None,
         un_adj_lut: NeighborhoodLUT | None = None,
         expand_lut: bool = False,
@@ -2081,6 +2095,7 @@ class BaseMixtureModel(BModule):
         self,
         train_data: DenseSpikeData,
         eval_data: DenseSpikeData | None,
+        *,
         pair_mask: Tensor | None,
         cur_scores: Scores,
         cur_unit_ids: Tensor,
@@ -2458,6 +2473,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def em(
         self,
         data: TruncatedSpikeData,
+        *,
         show_progress: int = 1,
         allow_blanks: bool = False,
         min_iters: int | None = None,
@@ -2514,6 +2530,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def e_step(
         self,
         data: TruncatedSpikeData | FullProposalDataView,
+        *,
         show_progress: bool = False,
         allow_blanks: bool = False,
     ) -> TruncatedEStepResult:
@@ -2532,7 +2549,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         for batch in data.batches(show_progress=show_progress, desc="E"):
             batch_scores = self.score_batch(
-                batch, data.n_candidates, allow_blanks=allow_blanks
+                batch, n_candidates=data.n_candidates, allow_blanks=allow_blanks
             )
             batch_stats = self.estep_stats_batch(
                 batch, batch_scores, allow_blanks=allow_blanks
@@ -2550,7 +2567,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
         return TruncatedEStepResult(candidates=candidates, stats=stats)
 
-    def m_step(self, stats: SufficientStatistics, skip_proportions: bool = False):
+    def m_step(self, stats: SufficientStatistics, *, skip_proportions: bool = False):
         # proportions
         if not skip_proportions:
             assert stats.noise_N is not None
@@ -2590,7 +2607,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert lp.isfinite().all()
 
     def fixed_weight_em(
-        self, data: DenseSpikeData, responsibilities: Tensor, debug: bool = False
+        self, data: DenseSpikeData, responsibilities: Tensor, *, debug: bool = False
     ):
         assert self.lut_params is not None
         batches = data.to_batches(self.unit_ids, self.lut)
@@ -2750,11 +2767,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def score_batch(
         self,
         batch: SpikeDataBatch,
+        *,
         n_candidates: int,
         fixed_responsibilities: Tensor | None = None,
         skip_responsibility: bool = False,
         skip_noise: bool = False,
-        *,
         spike_ixs: Tensor | None = None,
         candidate_ixs: Tensor | None = None,
         unit_ixs: Tensor | None = None,
@@ -2896,7 +2913,10 @@ class TruncatedMixtureModel(BaseMixtureModel):
         for it in iters:
             for batch in target_data.batches(show_progress=show_batch_progress):
                 batch_scores = self.score_batch(
-                    batch, data.n_candidates, allow_blanks=True, force_rank0=force_rank0
+                    batch,
+                    n_candidates=data.n_candidates,
+                    allow_blanks=True,
+                    force_rank0=force_rank0,
                 )
                 assert batch_scores.responsibilities is not None
                 bix = batch.batch
@@ -2932,6 +2952,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def update_lut(
         self,
         lut: NeighborhoodLUT,
+        *,
         no_parameter_changes: bool = False,
         puff: float | None = None,
     ):
@@ -2953,6 +2974,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
     def split_group(
         self,
+        *,
         group: Tensor,
         train_data: TruncatedSpikeData,
         eval_data: TruncatedSpikeData | None,
@@ -3117,7 +3139,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # handle edge case when merge_res is none. this could arise when there are no
         # allowed partitions, so handle that first.
-        no_allowed_partitions = not pair_mask.fill_diagonal_(False).any()
+        no_allowed_partitions = not pair_mask.fill_diagonal_(fill_value=False).any()
         if no_allowed_partitions:
             assert merge_res is None
             # units are too separated to merge. just assign by scoring.
@@ -3222,6 +3244,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_data: TruncatedSpikeData | None,
         train_scores: Scores,
         eval_scores: Scores,
+        *,
         show_progress: bool = True,
         friend_distance: float | None = None,
         _stop_after: int | None = None,
@@ -3244,7 +3267,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_labels = labels_from_scores_(eval_scores)
         split_results = (
             self.split_group(
-                gp, train_data, eval_data, eval_scores, train_labels, eval_labels
+                group=gp,
+                train_data=train_data,
+                eval_data=eval_data,
+                eval_scores=eval_scores,
+                train_labels=train_labels,
+                eval_labels=eval_labels,
             )[0]
             for gp in split_groups
         )
@@ -3344,6 +3372,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_data: TruncatedSpikeData | None,
         train_scores: Scores,
         eval_scores: Scores,
+        *,
         show_progress: bool = True,
     ) -> UnitRemapping:
         """Break into subgroups and merge those. This will also modify data objects."""
@@ -3460,6 +3489,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
     def demolish(
         self,
+        *,
         train_data: TruncatedSpikeData,
         val_data: TruncatedSpikeData,
         show_progress: bool = True,
@@ -3569,6 +3599,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
     def destroy_units(
         self,
         unit_ids: Tensor,
+        *,
         train_data: TruncatedSpikeData,
         train_scores: Scores,
         full_proposal_view: bool = True,
@@ -3917,7 +3948,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             train_split_spike_labels=train_labels,
         )
 
-    def _check_logprop(self, allow_neginf: bool = False):
+    def _check_logprop(self, *, allow_neginf: bool = False):
         if not allow_neginf:
             assert self.b.log_proportions.isfinite().all()
         assert self.noise_log_prop.isfinite()
@@ -4516,6 +4547,7 @@ def instantiate_and_bootstrap_tmm(
 
 def run_split(
     tmm: TruncatedMixtureModel,
+    *,
     train_data: TruncatedSpikeData,
     val_data: TruncatedSpikeData | None,
     prog_level: int,
@@ -4782,7 +4814,7 @@ def initialize_params_from_dense_data(
             x,
             covered_chans,
             noise,
-            rank,
+            rank=rank,
             prior_pseudocount=prior_pseudocount,
             latent_prior_std=latent_prior_std,
             mean=mean,
@@ -4861,6 +4893,7 @@ def tree_groups(
 def brute_merge(
     mm: BaseMixtureModel,
     train_data: DenseSpikeData,
+    *,
     eval_data: DenseSpikeData | None,
     pair_mask: Tensor | None,
     responsibilities: Tensor | None,
@@ -4904,7 +4937,7 @@ def brute_merge(
 
     # what possible subgroups are there?
     partitions, subset_to_id, id_to_subset = allowed_partitions(
-        mm.unit_ids, pair_mask, skip_full=skip_full, skip_single=skip_single
+        mm.unit_ids, pair_mask=pair_mask, skip_full=skip_full, skip_single=skip_single
     )
     assert len(subset_to_id) == len(id_to_subset)
     if debug:
@@ -5005,6 +5038,7 @@ def brute_merge(
 
 def allowed_partitions(
     unit_ids: Tensor,
+    *,
     pair_mask: Tensor | None,
     skip_full: bool = False,
     skip_single: bool = False,
@@ -5278,6 +5312,7 @@ def _select_partition(
 
 
 def _determine_part_score(
+    *,
     rest_logliks: Tensor,
     crit_full_log_liks: Tensor,
     crit_subset_log_liks: Tensor,
@@ -5656,7 +5691,7 @@ def _evaluate_single_refit_demolition(
     )
 
 
-def submasks(mask: Tensor, skip_empty=True, skip_full=False):
+def submasks(mask: Tensor, *, skip_empty=True, skip_full=False):
     mask_ = mask.cpu()
     (on,) = mask_.nonzero(as_tuple=True)
     on = on.tolist()
@@ -5670,7 +5705,7 @@ def submasks(mask: Tensor, skip_empty=True, skip_full=False):
         yield m
 
 
-def labels_from_scores_(scores: Scores, remove_noise: bool = True) -> Tensor:
+def labels_from_scores_(scores: Scores, *, remove_noise: bool = True) -> Tensor:
     """Pick either top candidate or noise."""
     if pnoid:
         nc = scores.candidates.shape[1]
@@ -5682,7 +5717,7 @@ def labels_from_scores_(scores: Scores, remove_noise: bool = True) -> Tensor:
     return labels
 
 
-def labels_from_scores(scores: Scores, remove_noise: bool = True) -> np.ndarray:
+def labels_from_scores(scores: Scores, *, remove_noise: bool = True) -> np.ndarray:
     return labels_from_scores_(scores, remove_noise=remove_noise).numpy(force=True)
 
 
@@ -5690,6 +5725,7 @@ def relabel_and_add_scores(
     sorting: DARTsortSorting,
     tmm: TruncatedMixtureModel,
     full_data: BatchedSpikeData,
+    *,
     full_proposal_view=True,
     needs_bootstrap=False,
 ) -> DARTsortSorting:
@@ -5906,6 +5942,7 @@ def _initialize_single(
     x: Tensor,
     chans: Tensor,
     noise: EmbeddedNoise,
+    *,
     rank: int,
     latent_prior_std: float = 1.0,
     prior_pseudocount: float = 0.0,
@@ -6158,6 +6195,7 @@ def full_proposal_by_neighb(lut: NeighborhoodLUT, max_proposed: int):
 def _fill_blank_labels(
     labels: Tensor,
     un_adj: Tensor,
+    *,
     explore_adj: Tensor,
     neighborhood_ids: Tensor,
     neighb_adj: Tensor,
@@ -6434,7 +6472,7 @@ def concatenate_scores(scoress: list[Scores], dim=0) -> Scores:
     )
 
 
-def remove_units_from_scores(scores: Scores, unit_ids: Tensor, sort=True) -> Scores:
+def remove_units_from_scores(scores: Scores, unit_ids: Tensor, *, sort=True) -> Scores:
     """Return copy of scores where log_liks for candidates in unit_ids are -inf (and resps are 0)."""
     bye = torch.isin(scores.candidates, unit_ids.to(scores.candidates))
     new_cand = scores.candidates.masked_fill(bye, -1)
@@ -6454,7 +6492,7 @@ def remove_units_from_scores(scores: Scores, unit_ids: Tensor, sort=True) -> Sco
 
 
 def proportion_adjust_scores(
-    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor, sort=True
+    scores: Scores, orig_log_props: Tensor, new_log_props: Tensor, *, sort=True
 ) -> Scores:
     """What would the scores be if the log props were these, not those?"""
     diff = new_log_props - orig_log_props
@@ -6867,6 +6905,7 @@ def _score_batch(
 def _sparsify_candidates(
     candidates: Tensor,
     neighborhood_ids: Tensor,
+    *,
     static_size: int | None,
     allow_blanks: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:

@@ -23,6 +23,7 @@ def detect_and_deduplicate(
     dedup_channel_index: torch.Tensor | None = None,
     trough_priority: float | None = None,
     batch_size=1024,
+    *,
     remove_exact_duplicates=True,
     detection_mask: Tensor | None = None,
     exclude_edges=True,

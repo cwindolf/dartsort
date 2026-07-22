@@ -150,7 +150,7 @@ def agglomerate(
         _oldsum = distance_mask[np.triu_indices_from(distance_mask)].sum()
         fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
         mask = np.logical_and(distance_mask, fcorr_mask)
-        np.fill_diagonal(mask, True)
+        np.fill_diagonal(mask, val=True)
         _newsum = mask[np.triu_indices_from(mask)].sum()
         logger.dartsortdebug(
             f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
@@ -224,7 +224,7 @@ def agglomerate(
     final_mask = np.logical_or(qda_mask, force_mask)
     if si_mask is not None:
         final_mask = np.logical_or(final_mask, si_mask)
-    np.fill_diagonal(final_mask, True)
+    np.fill_diagonal(final_mask, val=True)
     final_mask_as_distance = np.logical_not(final_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
@@ -1076,7 +1076,7 @@ def coentropy_merge_mask(
 
     mask = np.logical_or(c.cov >= coverage_threshold, c.iou >= iou_threshold)
     mask = np.logical_and(c.coentropy >= min_coentropy, mask)
-    np.fill_diagonal(mask, True)
+    np.fill_diagonal(mask, val=True)
     return mask, c
 
 

@@ -262,8 +262,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def drift(self, t_samples):
         return self.segment.drift(t_samples)
 
-    def templates(self, t_samples=None, up=False):
-        return self.segment.templates(t_samples, up)
+    def templates(self, t_samples=None, *, up=False):
+        return self.segment.templates(t_samples, up=up)
 
     def motion(self) -> MotionInfo:
         return self.segment.motion
@@ -323,6 +323,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def save_features_to_hdf5(
         self,
         hdf5_path,
+        *,
         overwrite=False,
         n_jobs=1,
         show_progress=True,
@@ -481,6 +482,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def save_simulation(
         self,
         folder,
+        *,
         overwrite=False,
         n_jobs=1,
         featurization_cfg=default_sim_featurization_cfg,
@@ -733,7 +735,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
 
         raise ValueError(f"Unknown {self.drift_type=}")
 
-    def templates(self, t_samples=None, up=False, padded=False, pad_value=np.nan):
+    def templates(self, t_samples=None, *, up=False, padded=False, pad_value=np.nan):
         drift = 0 if t_samples is None else self.drift(t_samples)
         pos, templates, offsets = self.template_simulator.templates(
             drift=drift, up=up, padded=padded, pad_value=pad_value
@@ -752,6 +754,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         noise_with_margin,
         start_frame,
         end_frame,
+        *,
         in_chunk_only=True,
         extract=False,
         n_residual_snips=0,
@@ -846,6 +849,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         start_frame,
         end_frame,
         channel_indices=None,
+        *,
         extract=False,
         inject=False,
         n_residual_snips=0,
