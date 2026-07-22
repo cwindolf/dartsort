@@ -1915,6 +1915,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             )
             d[:n_units_new, :n_units_new] = distances
             d[n_units_new:, n_units_new:].fill_diagonal_(0.0)
+            distances = d
         if pnoid and distances is not None:
             assert self.candidates.amax() < distances.shape[0], 2
         if distances is not None:
