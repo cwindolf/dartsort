@@ -74,7 +74,7 @@ def apply_reclustering(
 
     # align to best snr unit
     times_updated = sorting.times_samples.copy()
-    for new_label, orig_labels in clust_inverse.items():
+    for orig_labels in clust_inverse.values():
         # we don't need to realign clusters which didn't change
         if len(orig_labels) <= 1:
             continue
@@ -170,7 +170,9 @@ def linkage_mask(
     return mask
 
 
-def sparsify_labels(labels: np.ndarray, ids: np.ndarray | None = None) -> dict[int, np.ndarray]:
+def sparsify_labels(
+    labels: np.ndarray, ids: np.ndarray | None = None
+) -> dict[int, np.ndarray]:
     assert labels.ndim == 1
     if ids is None:
         ids = np.unique(labels)
@@ -186,7 +188,7 @@ def leafsets(Z, max_distance=np.inf):
     n = len(Z) + 1
     leaves = {}
     for i, row in enumerate(Z):
-        pa, pb, dist, nab = row
+        pa, pb, dist, _nab = row
         if dist > max_distance:
             break
         leavesa = leaves.get(pa, [int(pa)])
@@ -206,7 +208,7 @@ def maximal_leaf_groups(
     leaves = {k: set(v) for k, v in leaves.items()}
     group_parents = []
     for i, row in reversed(list(enumerate(Z))):
-        pa, pb, dist, nab = row
+        _pa, _pb, _dist, nab = row
         if nab > max_group_size:
             continue
         if n + i not in leaves:
@@ -278,7 +280,7 @@ def is_largest_set_smaller_than(Z, leaf_descendants, max_size=5):
     # at each branch, if #descendents<size, branch gets true and
     # its parents are set to false. that way only one ancestor
     # is true for each leaf.
-    for i, (pa, pb, dist, nab) in enumerate(Z):
+    for i, (pa, pb, _dist, _nab) in enumerate(Z):
         sz = len(leaf_descendants[n_units + i])
         if sz > max_size:
             continue
@@ -309,7 +311,7 @@ def combine_distances(
     has threshold 1.
     """
     dists = distances[0] / thresholds[0]
-    for dist, thresh in zip(distances[1:], thresholds[1:]):
+    for dist, thresh in zip(distances[1:], thresholds[1:], strict=True):
         dists = agg_function(dists, dist / thresh)
     return sym_function(dists, dists.T)
 
@@ -525,7 +527,7 @@ def get_main_channel_pcs(
     return features
 
 
-def decrumb(labels: np.ndarray, min_size: int=5, in_place=False, flatten=True):
+def decrumb(labels: np.ndarray, min_size: int = 5, in_place=False, flatten=True):
     """Remove small units
 
     Parameters

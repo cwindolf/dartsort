@@ -353,7 +353,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             )
             jobs = (
                 ((t, min(t + bs, nt)), dict(extract=True, n_residual_snips=nrs))
-                for t, nrs in zip(chunk_starts, residual_snips_per_chunk)
+                for t, nrs in zip(chunk_starts, residual_snips_per_chunk, strict=True)
             )
             with h5py.File(hdf5_path, "w", locking=False) as h5:
                 n = self.segment.n_spikes
@@ -654,7 +654,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
                 max_fr=max_fr_hz,
             )
         else:
-            assert False
+            raise ValueError(f"Unknown {firing_kind=}")
         self.random_seed = random_seed
         sorting = simulate_sorting(
             self.n_units,
@@ -731,7 +731,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             # -1 to 1 and back to -1, so divide by 4 to have 2*ptp=drift_speed*drift_period.
             return wave * (self.drift_speed * self.drift_period / 4.0)
 
-        assert False
+        raise ValueError(f"Unknown {self.drift_type=}")
 
     def templates(self, t_samples=None, up=False, padded=False, pad_value=np.nan):
         drift = 0 if t_samples is None else self.drift(t_samples)

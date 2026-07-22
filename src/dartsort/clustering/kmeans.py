@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from dartsort.util.py_util import databag
+from ..util.py_util import databag, panic
 
 try:
     import cupy  # type: ignore # ty: ignore[x]
@@ -58,7 +58,7 @@ def kmeanspp(
         closest = torch.cdist(X, X.mean(0, keepdim=True)).argmax()
         centroid_ixs[0] = closest.item()
     else:
-        assert False
+        panic()
 
     if Xnormsq is None:
         Xnormsq = torch.linalg.vector_norm(X, dim=1).square_()
@@ -227,7 +227,7 @@ def truncated_kmeans(
         log_likelihoods = None
 
     if show_progress:
-        it = progrange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
+        it = progrange(n_iter, desc=f"kmeans sigma={sigma:0.4f}")
     else:
         it = range(n_iter)
 
@@ -323,7 +323,7 @@ def truncated_kmeans(
                 break
         prev_sigma = sigma
         if show_progress:
-            it.set_description(f"kmeans σ={sigma:0.4f}")  # type: ignore
+            it.set_description(f"kmeans sigma={sigma:0.4f}")  # type: ignore
 
     return dict(
         centroid_ixs=centroid_ixs,
@@ -447,7 +447,7 @@ def kmeans(
     if weights is not None:
         weights = weights.to(device=X.device)
     with torch.jit.optimized_execution(True):
-        for j in range(n_kmeans_tries):
+        for _ in range(n_kmeans_tries):
             aa, ee, cc, dists = kmeans_inner(
                 X,
                 n_kmeanspp_tries=n_kmeanspp_tries,
@@ -810,7 +810,7 @@ def truncated_kmeans_from_labels(
     distsq_buf = (distsq_buf, torch.zeros_like(distsq_buf))
 
     if show_progress:
-        it = progrange(n_iter, desc=f"kmeans σ={sigma:0.4f}")
+        it = progrange(n_iter, desc=f"kmeans sigma={sigma:0.4f}")
     else:
         it = range(n_iter)
 
@@ -891,7 +891,7 @@ def truncated_kmeans_from_labels(
 
         prev_sigma = sigma
         if show_progress:
-            it.set_description(f"kmeans σ={sigma:0.4f}")  # type: ignore
+            it.set_description(f"kmeans sigma={sigma:0.4f}")  # type: ignore
 
     return KMeansResult(
         labels=labels,

@@ -72,7 +72,9 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 
 [tool.ruff]
 line-length = 88
-extend-select = ["I"]
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "RUF"]
 ignore = ["F722"]
 
 [tool.jupytext]

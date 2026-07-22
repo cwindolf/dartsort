@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..util.py_util import panic
 from ..util.torch_util import torch_compile
 
 # holds values used for deduplicating identical peaks
@@ -116,7 +117,7 @@ def detect_and_deduplicate(
             else:
                 Xdd = Xth = X.abs_()
         else:
-            assert False
+            panic(peak_sign)
 
         # -- detect peaks
         detect = Xth[:-1] > threshold

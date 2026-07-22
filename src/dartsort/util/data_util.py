@@ -31,8 +31,10 @@ if TYPE_CHECKING:
     from ..clustering.mixture import Scores
     from ..templates.templates import TemplateData
     from .motion import MotionInfo
+from itertools import pairwise
+
 from .job_util import ensure_computation_config
-from .py_util import ensure_path
+from .py_util import ensure_path, panic
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -169,7 +171,7 @@ class DARTsortSorting:
             locfns = [fn for fn in fnames if "localizations" in fn]
             extract_location_if_possible = len(locfns) == 1
         if extract_location_if_possible:
-            locfn = [fn for fn in fnames if "localizations" in fn][0]
+            locfn = next(fn for fn in fnames if "localizations" in fn)
             locs = getattr(self, locfn)
             # naming like IBL DANDI.
             data["relative_depth"] = np.ascontiguousarray(locs[:, 2])
@@ -194,7 +196,7 @@ class DARTsortSorting:
         if add_feature_mean_metadata:
             df = self.to_pandas()
             float_columns = [k for k in df if df[k].dtype.kind == "f"]
-            df = df[["labels"] + float_columns]
+            df = df[["labels", *float_columns]]
             means = df.groupby("labels").mean()
             means = means[means.index >= 0]
             renamer = {k: "mean_" + str(k) for k in means}
@@ -208,7 +210,7 @@ class DARTsortSorting:
         w = getattr(self, weight_key, None)
         trains = {}
         reorder = np.argsort(self.times_samples, kind="stable")
-        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
+        t_s = self.times_seconds
         t_s_reorder = t_s[reorder]
         l_reorder = self.labels[reorder]
         if w is not None:
@@ -659,7 +661,7 @@ class DARTsortSorting:
         if self.labels is not None:
             data["labels"] = self.labels
         if hasattr(self, "geom"):
-            data["geom"] = getattr(self, "geom")
+            data["geom"] = self.geom
         do_hdf5 = save_h5_path and self.parent_h5_path is not None
         if do_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
@@ -1042,8 +1044,8 @@ def try_get_denoising_pipeline(sorting: DARTsortSorting):
 
     from dartsort.transform import WaveformPipeline
 
-    geom = torch.asarray(getattr(sorting, "geom"))
-    channel_index = torch.asarray(getattr(sorting, "sub_channel_index"))
+    geom = torch.asarray(sorting.geom)
+    channel_index = torch.asarray(sorting.sub_channel_index)
     dn = WaveformPipeline.from_state_dict_pt(geom, candidates[0])
     dn = dn.eval()
     return dn, geom, channel_index
@@ -1248,7 +1250,7 @@ def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
     elif locs.shape[1] == 2:
         column_names = ["x", "y"]
     else:
-        assert False
+        raise ValueError(f"Unsupported {locs.shape=}")
     dtype = [(name, locs.dtype) for name in column_names]
 
     structured_array = np.zeros(len(locs), dtype=dtype)
@@ -1410,7 +1412,7 @@ def explode_soft_assignment_sorting(
     """
     from .spiketorch import entropy
 
-    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+    t_s = sorting.times_seconds
 
     if needs_merge:
         mgr = merged_responsibilities(
@@ -1534,6 +1536,7 @@ def check_recording(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is large. "
             + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if avg_detections_per_second < too_few_spikes_per_sec:
@@ -1541,12 +1544,14 @@ def check_recording(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is small."
             + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if max_abs > expected_value_range:
         warnings.warn(
             f"Recording values exceed |{expected_value_range}|. " + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if std > max_std or std < min_std:
@@ -1554,6 +1559,7 @@ def check_recording(
             f"Recording standard deviation {std:0.2f} was not in the generous "
             f"expected range [{min_std}, {max_std}]. " + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
 
@@ -1732,7 +1738,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+    chunk_time_ranges_s = list(pairwise(chunk_times_s))
 
     return chunk_time_ranges_s
 
@@ -1780,7 +1786,7 @@ def yield_chunks(
             for s in range(0, len(dataset), fallback_chunk_length)
         )
     else:
-        for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
+        for c, s in zip(dataset.chunks[1:], dataset.shape[1:], strict=True):
             if c == s:
                 continue
             raise ValueError(
@@ -1967,7 +1973,7 @@ def fit_reweighting(
             with h5py.File(hdf5_path) as h5:
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
-            assert False
+            panic()
     assert isinstance(voltages, np.ndarray)
 
     from ..clustering.density import get_smoothed_density

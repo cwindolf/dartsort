@@ -646,7 +646,7 @@ def _qda_job(ij):
     try:
         kde = FFTKDE(bw="ISJ").fit(dll)
     except ValueError as e:
-        logger.dartsortdebug(f"KDEpy error: {str(e)}")
+        logger.dartsortdebug(f"KDEpy error: {e}")
         p.score[i, j] = p.score[j, i] = 0.0
         p.min_ratio[i, j] = p.min_ratio[j, i] = 0.0
         return
@@ -753,7 +753,7 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
         vv = row[ii]
         vv = vv / vv.sum()
 
-        for channel, value in zip(ii, vv):
+        for channel, value in zip(ii, vv, strict=True):
             cixs = ci[channel]
             cixs = cixs[cixs < motion.rgeom.shape[0]]
             weights[uu, cixs] += value
@@ -765,7 +765,7 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
 
 def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
     if method != "binsqrt":
-        assert False
+        raise ValueError(f"Unknown {method=}.")
 
     tsg = sorting.to_tsgroup()
     fr = tsg.count(bin_size=dt) / dt
