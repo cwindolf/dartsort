@@ -1205,7 +1205,7 @@ try:
     # so I'm keeping it in here. everything seems to be fine just setting
     # it to dict in practice in the except clause.
 
-    class PeelingBatchResult(TypedDict, extra_items=torch.Tensor):
+    class PeelingBatchResult(TypedDict, extra_items=torch.Tensor):  # ty: ignore[unknown-argument]
         n_spikes: int
 except TypeError:
     PeelingBatchResult = dict  # type: ignore
