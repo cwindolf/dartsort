@@ -858,17 +858,19 @@ class DARTsortSorting:
         if not include_gmm_properties or not any(hasattr(self, k) for k in keys):
             return self.ephemeral_replace(labels=new_labels)
 
-        remapping = np.full((old_unique.max() + 1,), -1)
-        remapping[old_unique] = np.arange(len(old_unique))
         new_props = dict(labels=new_labels)
         for k in keys:
-            v = getattr(self, k, None)
-            if v is None:
+            candidates = getattr(self, k, None)
+            if candidates is None:
                 continue
-            valid = v >= 0
-            v_valid = v[valid]
-            new_v = v.copy()
-            new_v[valid] = remapping[v_valid]
+            valid = candidates >= 0
+            cands_valid = candidates[valid]
+            new_candidates = candidates.copy()
+
+            remapping = np.full((cands_valid.max() + 1,), -1)
+            remapping[old_unique] = np.arange(len(old_unique))
+
+            new_candidates[valid] = remapping[cands_valid]
 
             # now, "ghost" units (not top candidates but still existing
             # in the lower ranks) can have some probability mass that
@@ -877,9 +879,11 @@ class DARTsortSorting:
             resps = getattr(self, resp_key).copy()
             loglik_key = k.replace("candidates", "log_liks")
             logliks = getattr(self, loglik_key).copy()
-            vacuum_neg_candidate_prob(old_unique.shape[0], new_v, resps, logliks)
+            vacuum_neg_candidate_prob(
+                old_unique.shape[0], new_candidates, resps, logliks
+            )
 
-            new_props[k] = new_v
+            new_props[k] = new_candidates
             new_props[resp_key] = resps
             new_props[loglik_key] = logliks
 
