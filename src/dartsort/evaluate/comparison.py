@@ -135,6 +135,100 @@ class DARTsortGroundTruthComparison:
         self._unit_info_cache[k] = res
         return res
 
+    def soft_assignment_key(
+        self, to_try=["merged_responsibilities", "gmm_responsibilities"]
+    ) -> str | None:
+        if hasattr(self, "_soft_assignment_key"):
+            return self._soft_assignment_key
+        for k in to_try:
+            if hasattr(self.tested_analysis.sorting, k):
+                self._soft_assignment_key = k
+                return k
+        self._soft_assignment_key = None
+        return None
+
+    def brier_score(self, gt_unit: int) -> tuple[float, float | None]:
+        """Compute something like a Brier score in our context
+
+        There are edge cases in spike sorting that normal Brier score doesn't deal with.
+        First of all, the GT and tested event counts are different, as are the GT and tested
+        class counts. This means we have FPs and FNs for both events and classes. So we have
+        to handle those cases.
+
+        For handling the class mapping from GT to tested:
+            - Use the best matching sorted unit's soft score as the probability of the
+            true class.
+            - If a GT unit has no matched sorted unit, its Brier score is 2, the worst
+            possible score.
+
+        That's how we deal with classe. Now for the spikes.
+
+        Else, we go spike by spike through the GT spikes and get a score for the
+        ith spike as brier[i], and output mean(brier).
+        The cases are: TP, FP, FN.
+
+            -  For a true positive, it's standard. Spike i's resp[i, 0] is its true class
+            prob, so...
+                brier[i] = (1 - resp[i, 0])**2 + (resp[i, 1:]**2).sum()
+
+            -  Now, for a false positive. This spike might come from another class, but we
+            don't know which one here. It's debatable what to do -- you could try to figure out
+            what the best matching unit is for the true class... but we don't even know if the
+            spike exists in the GT sorting, much less which one it is. So, we just set
+                brier[i] = 2
+            The worst possible value.
+
+            -  For a false negative, it's the same situation. Maybe the spike got picked up by another
+            unit and has some mass on the best matching unit's component, but we don't
+            know that, so we set
+                brier[i] = 2
+        """
+        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(gt_unit)
+
+        # hard brier score
+
+
+        tpmask = gt_is_tp[in_gt]
+        fnmask = np.logical_not(tpmask)
+        hard_brier = 2.0 * fnmask.mean()
+        brier_records.append(
+            dict(
+                gt_unit_id=gt_unit_id,
+                matched=matched,
+                brier=hard_brier,
+                kind='hard',
+                true_class_mean_prob=tpmask.mean(),
+            )
+        )
+
+        # soft...
+        tested_ix = tested_index_of_gt[in_gt]
+        uresp = resp[tested_ix]
+        ucand = cand[tested_ix]
+        # handle subtraction of true class one hot
+        isbest = ucand == tested_best_match
+
+        true_class_probs = uresp[isbest]
+        uresp[isbest] = 0.0
+        sbrier = np.square(uresp).sum(axis=1)
+        sbrier += np.square(noiseresp[tested_ix])
+        sbrier += np.logical_not(isbest.any(1))
+        pass
+
+    def brier_scores(self) -> tuple[np.ndarray, np.ndarray | None]:
+        has_soft = self.soft_assignment_key() is not None
+        hard_scores = np.zeros(self.n_gt_units)
+        if has_soft:
+            soft_scores = np.zeros_like(hard_scores)
+        else:
+            soft_scores = None
+        for j, gt_unit in enumerate(self.unit_ids):
+            hard_scores[j], ss = self.brier_score(gt_unit)
+            if ss is not None:
+                assert soft_scores is not None
+                soft_scores[j] = ss
+        return hard_scores, soft_scores
+
     def _unit_info_dataframe(self, force_distances=False, perf_only=False):
         firing_rates = self.gt_analysis.firing_rates()
         df = self.comparison.get_performance()
@@ -145,6 +239,12 @@ class DARTsortGroundTruthComparison:
         df["gt_firing_rate"] = firing_rates
         df["gt_sorter_name"] = self.gt_analysis.name or ""
         df["tested_sorter_name"] = self.tested_analysis.name or ""
+
+        # hbrier, sbrier = self.brier_scores()
+        # df["brier_hard"] = hbrier
+        # if sbrier is not None:
+        #     df["brier_soft"] = sbrier
+
         if perf_only:
             return df
 

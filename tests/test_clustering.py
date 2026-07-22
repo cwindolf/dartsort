@@ -56,7 +56,6 @@ refinement_kwargs = [
 refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0)] + refinement_kwargs
 refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
-
 # only some methods are good enough to actually test the outcome
 eval_clustering_kwargs = [
     dict(cluster_strategy="none"),  # ground truth
