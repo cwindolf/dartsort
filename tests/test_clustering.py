@@ -53,7 +53,7 @@ clustering_kwargs = [clukw | ck for ck in clustering_kwargs]
 refinement_kwargs = [
     dict(refinement_strategy=k) for k in refinement_strategies if k != "agglomerate"
 ]
-refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0)] + refinement_kwargs
+refinement_kwargs = [dict(refinement_strategy="tmm", signal_rank=0), *refinement_kwargs]
 refinement_kwargs = [refkw | rk for rk in refinement_kwargs]
 
 # only some methods are good enough to actually test the outcome
