@@ -6487,7 +6487,7 @@ def ensure_sorted_scores(scores: Scores) -> Scores:
     torch.take_along_dim(
         scores.log_liks[:, :C], indices=order, dim=1, out=log_liks[:, :C]
     )
-    if C < scores.log_liks.shape[1]:
+    if scores.log_liks.shape[1] > C:
         assert scores.log_liks.shape[1] == C + 1
         log_liks[:, -1] = scores.log_liks[:, -1]
     if scores.responsibilities is not None:

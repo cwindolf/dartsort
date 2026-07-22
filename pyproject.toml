@@ -74,8 +74,8 @@ include = 'src\/.*\.pyi?$|tests\/.*\.pyi?$'
 line-length = 88
 
 [tool.ruff.lint]
-extend-select = ["I", "B", "RUF"]
-ignore = ["F722"]
+extend-select = ["E", "F", "I", "N", "B", "SIM", "NPY", "RUF"]
+ignore = ["F722", "N812", "SIM102", "SIM108", "E501", "N806", "N803", "N815"]
 
 [tool.jupytext]
 "formats" = "ipynb,py:percent"
