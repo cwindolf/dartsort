@@ -546,7 +546,9 @@ class RefinementConfig:
     whiten_dist: bool = True
 
     # template merge parameters
-    template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(linkage="single")
+    template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
+        linkage="single"
+    )
 
     # other agglomeration parameters
     glom_max_firing_corr: float | None = -0.1
@@ -1311,7 +1313,14 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
 
     # final aggregation
     if cfg.agg_kind == "none":
-        agg_cfg = None
+        agg_cfg = RefinementConfig(
+            refinement_strategy="agglomerate",
+            template_merge_cfg=None,
+            qda_force_merge_for_temp_dist_below=0.0,
+            dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset="none",
+            spikeinterface_merge_max_distance=0.0,
+        )
     elif cfg.agg_kind == "template_distance":
         agg_whiten_cfg = WhiteningConfig(
             strategy=cfg.agg_template_whiten_strategy,

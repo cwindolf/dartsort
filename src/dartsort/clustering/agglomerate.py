@@ -47,8 +47,8 @@ logger = get_logger(__name__)
 class Agglomeration:
     agglomerated_sorting: DARTsortSorting
     merge_mapping: np.ndarray
-    distances: np.ndarray
-    shifts: np.ndarray
+    distances: np.ndarray | None
+    shifts: np.ndarray | None
     firing_corr: np.ndarray | None
 
 
@@ -71,38 +71,64 @@ def agglomerate(
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
     if template_data is None:
+        did_flatten = True
         sorting = sorting.flatten(include_gmm_properties=True)
+    else:
+        did_flatten = False
 
-    tdist = template_distances(
-        sorting=sorting,
-        recording=recording,
-        motion=motion,
-        template_data=template_data,
-        waveform_cfg=waveform_cfg,
-        template_merge_cfg=template_merge_cfg,
-        computation_cfg=computation_cfg,
-    )
+    if template_merge_cfg is not None:
+        tdist = template_distances(
+            sorting=sorting,
+            recording=recording,
+            motion=motion,
+            template_data=template_data,
+            waveform_cfg=waveform_cfg,
+            template_merge_cfg=template_merge_cfg,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        tdist = None
 
     # if not doing any QDA, be done now.
     if refinement_cfg is None or not refinement_cfg.qda_threshold:
-        agg_sorting, new_ids = recluster(
-            sorting=sorting,
-            unit_ids=tdist.template_data.unit_ids,
-            dists=tdist.distances,
-            shifts=tdist.shifts,
-            unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-            threshold=template_merge_cfg.merge_distance_threshold,
-            link=template_merge_cfg.linkage,
-        )
+        if tdist is not None:
+            assert template_merge_cfg is not None
+            agg_sorting, new_ids = recluster(
+                sorting=sorting,
+                unit_ids=tdist.template_data.unit_ids,
+                dists=tdist.distances,
+                shifts=tdist.shifts,
+                unit_snrs=tdist.template_data.snrs_by_channel().max(1),
+                threshold=template_merge_cfg.merge_distance_threshold,
+                link=template_merge_cfg.linkage,
+            )
+        elif not did_flatten:
+            agg_sorting = sorting.flatten(include_gmm_properties=True)
+            new_ids = None
+        else:
+            agg_sorting = sorting
+            new_ids = None
+
+        if refinement_cfg is not None:
+            agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
+
+        agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
+        if new_ids is None:
+            new_ids = reorder
+        else:
+            new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
+
         return Agglomeration(
             agglomerated_sorting=agg_sorting,
             merge_mapping=new_ids,
-            distances=tdist.distances,
-            shifts=tdist.shifts,
+            distances=None if tdist is None else tdist.distances,
+            shifts=None if tdist is None else tdist.shifts,
             firing_corr=None,
         )
 
     # tdist tells us the possible merges
+    assert tdist is not None
+    assert template_merge_cfg is not None
     distance_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
