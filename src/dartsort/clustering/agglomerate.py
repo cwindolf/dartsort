@@ -90,7 +90,12 @@ def agglomerate(
         tdist = None
 
     # if not doing any QDA, be done now.
-    if refinement_cfg is None or not refinement_cfg.qda_threshold:
+    no_further_glom = (
+        (refinement_cfg is None)
+        or (template_merge_cfg is None)
+        or (not refinement_cfg.qda_threshold)
+    )
+    if no_further_glom:
         if tdist is not None:
             assert template_merge_cfg is not None
             agg_sorting, new_ids = recluster(
