@@ -130,7 +130,6 @@ class SimpleMatrixFeatures:
             samp = amp * np.sign(v)
 
         if clustering_features_cfg.use_signed_amplitude:
-            samp *= clustering_features_cfg.amp_scale
             features.append(clustering_features_cfg.amp_scale * samp[:, None])
 
         do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)

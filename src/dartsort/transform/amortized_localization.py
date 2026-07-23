@@ -313,8 +313,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
 
         # make a validation set for early stopping
         if self.val_split_p:
-            n_train = int(np.ceil(self.val_split_p * len(amps)))
-            n_val = min(len(amps) - n_train, self.epoch_size)
+            n_val = int(np.ceil(self.val_split_p * len(amps)))
             istrain = np.ones(len(amps), dtype=bool)
             val_ix = rg.choice(len(amps), size=n_val, replace=False)
             val_ix.sort()
@@ -444,9 +443,9 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 obs_amps = ptp(waveforms)
             elif self.amplitude_kind == "peak":
                 obs_amps = waveforms.abs().max(dim=1).values
-                waveforms = obs_amps[:, None]
             else:
                 panic(self.amplitude_kind)
+            waveforms = obs_amps[:, None]
 
         waveforms = waveforms.to(device=self.relative_index.device)
         waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)

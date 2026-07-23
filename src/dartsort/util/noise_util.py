@@ -770,7 +770,7 @@ class EmbeddedNoise(BModule):
             marg_cov = marg_cov.reshape(r * ncl, r * nc)
             return linear_operator.to_linear_operator(marg_cov)
 
-        if self.cov_kind in "factorized":
+        if self.cov_kind == "factorized":
             rank_root = self.b.rank_vt.T * self.b.rank_std
             rank_cov = rank_root @ rank_root.T
             chan_root = self.b.channel_vt.T[channels] * self.b.channel_std
@@ -1539,7 +1539,7 @@ def residual_welch_whitener(
         # to torch, whiten
         snip = torch.asarray(snip).to(device=device, non_blocking=True)
         if W is not None:
-            snip = torch.einsum("ntc,cd->ntd", snip, W)
+            snip = torch.einsum("ntc,dc->ntd", snip, W)
 
         # Welch
         snip = snip.permute(0, 2, 1).reshape(-1, snip.shape[1])

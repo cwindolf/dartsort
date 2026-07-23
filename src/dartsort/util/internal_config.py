@@ -537,7 +537,7 @@ class RefinementConfig:
     robust_fixed_std_dataset: str = "collidedness"
     robust_fixed_power: float = 40.0
     robust_df: float = 4.0
-    demolition_min_resp_ratio: float = 0.9
+    demolition_min_resp_ratio: float = 0.0
     demolish_during_selection: bool = False
     refit_in_demolition: bool = False
     em_after_demolish: bool = True
