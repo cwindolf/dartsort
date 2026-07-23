@@ -626,15 +626,9 @@ def get_channel_subset(
     show_progress=True,
 ):
     """Given a binary mask indicating which channels to keep, grab those channels"""
-    if waveforms.ndim == 3:
-        C = waveforms.shape[2]
-        pads = [(0, 0), (0, 0)]
-    elif waveforms.ndim == 2:
-        # for instance, amplitudes
-        C = waveforms.shape[2]
-        pads = [(0, 0)]
-    else:
-        panic(waveforms.shape)
+    C = waveforms.shape[-1]
+    pads = [(0, 0)] * (waveforms.ndim - 1)
+    assert waveforms.ndim in (2, 3)
     C_ = channel_index_mask.shape[1]
     assert C == C_
     is_torch = torch.is_tensor(waveforms)
