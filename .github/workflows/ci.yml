@@ -46,3 +46,4 @@ jobs:
         uses: coverallsapp/github-action@master
         with:
           path-to-lcov: coverage.lcov
+          fail-on-error: false
