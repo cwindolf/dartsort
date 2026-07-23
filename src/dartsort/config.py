@@ -138,14 +138,14 @@ class DARTsortUserConfig:
     """Threshold in standardized (SNR) voltage units for initial detection;
     peaks or troughs larger than this value will be grabbed."""
 
-    matching_threshold: Annotated[float, Field(gt=0)] = 8.0
+    matching_threshold: Annotated[float, Field(gt=0)] = 6.0
     """Template matching threshold. If subtracting a template leads
     to at least this great of a decrease in the norm of the residual,
     that match will be used. This is in the same units as the corresponding
     threshold in Kilosort and other sorters, and it represents reduction in
     Euclidean norm of standardized data due to matching a new event."""
 
-    initial_threshold: Annotated[float, Field(gt=0)] = 9.0
+    initial_threshold: Annotated[float, Field(gt=0)] = 7.0
     """Initial detection's neural net matching threshold. Same as
     matching_threshold, except that a neural net is trying to guess
     the true waveforms here, rather than using cluster templates."""
@@ -208,7 +208,7 @@ class DARTsortUserConfig:
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"
     """Final distance or GMM-based merge type."""
 
-    spikeinterface_merge_preset: str | Literal["none"] | None = None
+    spikeinterface_merge_preset: str | Literal["none"] | None = "dartsort_slay_xc_ccg"
     """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
     Setting this is slightly different' from calling auto_merge() externally, since the internal
     version will make use of dartsort's templates and template distances.

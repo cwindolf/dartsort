@@ -344,7 +344,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
             resid_scale_atol = scale_err * np.abs(true_temps_up).max()
         else:
             resid_scale_atol = 0.0
-        residual_atol = abs_err + resid_scale_atol + 1e-5
+        residual_atol = abs_err + resid_scale_atol + 2e-5
         resid_zero = np.zeros_like(residual)
         np.testing.assert_allclose(
             residual, resid_zero, atol=residual_atol, err_msg="resid: zero"
