@@ -26,7 +26,7 @@ from .internal_config import (
 )
 from .job_util import ensure_computation_config
 from .logging_util import get_logger
-from .py_util import databag, ensure_path
+from .py_util import databag, ensure_path, panic
 from .registration_util import dredge_estimate_motion, dredge_to_si, si_to_dredge
 
 logger = get_logger(__name__)
@@ -209,7 +209,7 @@ class MotionInfo:
                 assert si_motion is not None
                 d = np.asarray(si_motion.displacement)
             else:
-                assert False
+                panic()
             rgeom = registered_geometry(
                 geom, displacement=d, pitch=pitch, min_distance=min_dist
             )
@@ -239,7 +239,7 @@ class MotionInfo:
         if not self.drifting:
             return False
         if self.dredge_motion_est is not None:
-            if not hasattr(self.dredge_motion_est, "spatial_bin_centers_um"):
+            if not hasattr(self.dredge_motion_est, "spatial_bin_centers_um"):  # noqa: SIM114
                 return False
             elif self.dredge_motion_est.spatial_bin_centers_um is None:
                 return False
@@ -248,7 +248,7 @@ class MotionInfo:
         elif self.si_motion is not None:
             return self.si_motion.spatial_bins_um.size > 1
         else:
-            assert False
+            panic()
 
     @property
     def time_bins_s(self) -> np.ndarray:
@@ -264,7 +264,7 @@ class MotionInfo:
             assert self.si_motion.num_segments == 1
             return self.si_motion.temporal_bins_s[0]
         else:
-            assert False
+            panic()
 
     @property
     def spatial_bins_um(self) -> np.ndarray:
@@ -277,7 +277,7 @@ class MotionInfo:
         elif self.si_motion is not None:
             return self.si_motion.spatial_bins_um
         else:
-            assert False
+            panic()
 
     def disp_at_s(
         self, times_s: np.ndarray, depths_um: np.ndarray, grid: bool = False
@@ -291,7 +291,7 @@ class MotionInfo:
                 times_s=times_s, locations_um=depths_um, grid=grid
             )
         else:
-            assert False
+            panic()
         return d.astype(depths_um.dtype)
 
     def correct_s(self, times_s: np.ndarray, depths_um: np.ndarray) -> np.ndarray:
@@ -343,13 +343,13 @@ class MotionInfo:
         """
         if depths_um is None:
             assert sorting is not None
-            times_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+            times_s = sorting.times_seconds
             if motion_depth_mode == "localization":
                 depths_um = cast(np.ndarray, getattr(sorting, localizations_dset))
             elif motion_depth_mode == "channel":
                 depths_um = self.geom[sorting.channels, 1]
             else:
-                assert False
+                panic(motion_depth_mode)
         assert depths_um is not None
         if not self.drifting:
             out_like = reg_depths_um if reg_depths_um is not None else depths_um
@@ -374,7 +374,7 @@ class MotionInfo:
         elif shift_mode == "round":
             n_pitches_shift = np.round(probe_disp / self.pitch).astype(np.int32)
         else:
-            assert False
+            panic(shift_mode)
 
         return probe_disp, n_pitches_shift
 
@@ -385,7 +385,7 @@ class MotionInfo:
         fn = ensure_path(output_directory) / filename
         if not fn.exists():
             return None
-        with open(fn, "rb") as jar:
+        with fn.open("rb") as jar:
             v = pickle.load(jar)
         return cls.from_motion_est(**v)
 
@@ -404,7 +404,7 @@ class MotionInfo:
             dredge_motion_est=self.dredge_motion_est,
             si_motion=self.si_motion,
         )
-        with open(fn, "wb") as jar:
+        with fn.open("wb") as jar:
             pickle.dump(v, jar)
 
     def to_spikeinterface(self) -> Motion | None:

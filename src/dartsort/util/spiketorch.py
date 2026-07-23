@@ -21,7 +21,8 @@ TORCH_IS_OLD = Version(torch.__version__) < Version("2.6.0")
 if TORCH_IS_OLD and torch.cuda.is_available():
     warnings.warn(
         f"Your PyTorch version ({torch.__version__}) is supported by dartsort, "
-        "but dartsort would be faster if you had >= 2.6.0."
+        "but dartsort would be faster if you had >= 2.6.0.",
+        stacklevel=2,
     )
 
 logger = get_logger(__name__)
@@ -170,9 +171,9 @@ def taper(waveforms, t_start=10, t_end=20, dim=1):
     t2 = torch.linspace(0, -torch.pi, steps=t_end)
     domain = torch.concatenate((t0, t1, t2))
     window = torch.cos(domain).add(1.0).div(2.0)
-    for j in range(dim):
+    for _ in range(dim):
         window = window.unsqueeze(0)
-    for j in range(dim + 1, waveforms.ndim):
+    for _ in range(dim + 1, waveforms.ndim):
         window = window.unsqueeze(-1)
     return waveforms * window.to(waveforms)
 
@@ -1060,7 +1061,7 @@ def weighted_normsup_distance(means, weights, batch_size=512, min_iou=0.75):
 def maxz_distance(means, stderrs, weights, batch_size=512, min_iou=0.75):
     assert means.ndim == 3
     assert weights.ndim == 2
-    k, p = means.shape[:2]
+    k = means.shape[0]
     assert weights.shape == (k, means.shape[2])
 
     ii, jj = torch.triu_indices(k, k, offset=1)

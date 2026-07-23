@@ -186,7 +186,7 @@ def pc_merge(
     )
     sf = means.square_().sum(dim=1).sqrt_() * counts.sqrt()
     sf = sf.numpy(force=True)
-    sorting, new_ids = reorder_by_depth(
+    sorting, _new_ids = reorder_by_depth(
         sorting, motion=motion, spatial_footprints=sf, geom=motion.rgeom
     )
     return PCMergeResult(sorting=sorting)
@@ -505,15 +505,15 @@ def gmm_isolation_scores(
             if dd is None:
                 continue
 
-            assert return_kdes, 1
-            assert kde is not None, 2
+            assert return_kdes
+            assert kde is not None
             if domain is None:
                 domain = dd
-                assert kdes is None, 3
+                assert kdes is None
                 kdes = np.full((unit_ids.size, domain.shape[0]), np.nan)
             else:
-                assert np.array_equal(domain, dd), 4
-            assert kdes is not None, 5
+                assert np.array_equal(domain, dd)
+            assert kdes is not None
             kdes[j] = kde
 
     return GMMIsolationScores(isolation=isolation, kde_domain=domain, kdes=kdes)

@@ -30,6 +30,7 @@ from ..util.internal_config import (
 from ..util.job_util import ensure_computation_config
 from ..util.logging_util import DARTSORTDEBUG, get_logger, progbar, progrange
 from ..util.motion import MotionInfo
+from ..util.py_util import panic
 from ..util.spiketorch import spawn_torch_rg
 from ..util.torch_util import BModule
 from ..util.waveform_util import make_channel_index
@@ -369,7 +370,7 @@ class StationaryFactorizedNoise(torch.nn.Module):
         obj = None  # var for reusing buffers
         units = []
         scores = []
-        for j in progrange(size, desc="False positives"):
+        for _ in progrange(size, desc="False positives"):
             # note: simulating with padding so that the valid conv has length t.
             sample = self.simulate(t=t + nt - 1, generator=generator)[0].T
             assert sample.isfinite().all()
@@ -512,7 +513,7 @@ class EmbeddedNoise(BModule):
         elif self.mean_kind == "full":
             return cast(Tensor, self.mean)
         else:
-            assert False
+            panic(self.mean_kind)
 
     def marginal_mean(self):
         """Return noise mean as a rank x channels tensor"""
@@ -523,7 +524,7 @@ class EmbeddedNoise(BModule):
             return cast(Tensor, self.mean)[:, None].broadcast_to(shape).contiguous()
         if self.mean_kind == "full":
             return self.mean
-        assert False
+        panic(self.mean_kind)
 
     def whitener(self, channels=slice(None)):
         cov = self.marginal_covariance(channels=channels)
@@ -803,7 +804,7 @@ class EmbeddedNoise(BModule):
                 return more_operators.NonSquareBlockLinearOperator(blocks)
             return operators.BlockDiagLinearOperator(blocks)
 
-        assert False
+        panic(self.cov_kind)
 
     @classmethod
     def estimate(
@@ -852,7 +853,7 @@ class EmbeddedNoise(BModule):
             )
             x = x - mean
         else:
-            assert False
+            panic(mean_kind)
 
         # estimate covs
         # still n, rank, n_channels
@@ -1370,13 +1371,13 @@ def fp_control_threshold(
     # account for different time ranges
     fp_per_tp = fp_num_frames / (clustering_subsampling_rate * clustering_num_frames)
 
-    for uid, tp in zip(tp_unit_ids[has_fp], tp_counts[has_fp]):
+    for uid, tp in zip(tp_unit_ids[has_fp], tp_counts[has_fp], strict=True):
         in_uid = fp_dataframe.units == uid
         if not in_uid.any():
             continue
 
         # does the unit even have any fps at this threshold?
-        fp_scores = fp_dataframe[in_uid].scores.values
+        fp_scores = fp_dataframe[in_uid].scores.array
         if threshold > fp_scores.max():
             continue
 
@@ -1404,7 +1405,7 @@ def fp_control_threshold(
                 break
         else:
             # a break should always be hit thanks to the continues above
-            assert False
+            panic()
 
     return threshold
 

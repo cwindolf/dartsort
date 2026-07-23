@@ -249,7 +249,7 @@ class Decollider(BaseMultichannelDenoiser):
                 panic()
         elif self.inference_kind == "exz_fromz":
             pred = torch.zeros_like(waveforms)
-            for j in range(self.inference_z_samples):
+            for _ in range(self.inference_z_samples):
                 m = get_noise(
                     self.recording,
                     channels.numpy(force=True),

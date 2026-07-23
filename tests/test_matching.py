@@ -132,7 +132,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         cfg_kw["template_type"] = "drifty"
         cfg_kw["up_method"] = "keys4"
     else:
-        assert False
+        pytest.fail(method)
     matching_cfg = MatchingConfig(**cfg_kw, whitening=dartsort.WhiteningConfig())
     matcher = ObjectiveUpdateTemplateMatchingPeeler.from_config(
         recording=recording,
@@ -233,7 +233,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         slen = template_data.templates.shape[1]
         chk_labels = gt_sorting.labels[gt_in_chunk]
         for pkt, pkl, pku, pks, pksh in zip(
-            times_rel, chk_labels, gt_up, gt_scale, gt_shift
+            times_rel, chk_labels, gt_up, gt_scale, gt_shift, strict=True
         ):
             pk = chunk[pkt - pksh - toff : pkt - pksh - toff + slen].numpy(force=True)
             if upsampling > 1:
@@ -370,7 +370,7 @@ def test_no_crumbs(subtests, refractory_sim, method, cd_iter, channel_selection_
         gt_up_inds = gt_sorting.jitter_ix[gt_in_chunk]
         gt_channels = gt_sorting.channels[gt_in_chunk]
         for wf, label, chan, up_ind, sc in zip(
-            cc_wfs, gt_labels, gt_channels, gt_up_inds, gt_scale
+            cc_wfs, gt_labels, gt_channels, gt_up_inds, gt_scale, strict=True
         ):
             assert torch.equal(extract_chans[chan].cpu(), torch.arange(nc))
             true_wf = sc * true_temps_up[label, up_ind]
@@ -413,7 +413,9 @@ def tiny_up_sim():
         times, channels, labels, upsampling_indices = np.array(tclu).reshape(-1, 4).T
         trough_shifts = []
         rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-        for t, ll, u, c in zip(times, labels, upsampling_indices, channels):
+        for t, ll, u, c in zip(
+            times, labels, upsampling_indices, channels, strict=True
+        ):
             temp = cupts.compressed_upsampled_templates[
                 cupts.compressed_upsampling_map[ll, u]
             ]
@@ -510,7 +512,7 @@ def test_tiny_up(tiny_up_sim, tmp_path, up_factor, scaling, cd_iter, up_offset):
                 np.arange(1), np.arange(1), upsampling_indices_b=up
             )
             centerpc = pconv[:, spike_length_samples - 1]
-            for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
+            for ia, ib, pc, _pcf in zip(ixa, ixb, centerpc, pconv, strict=True):
                 tempupb = tempup.compressed_upsampled_templates[
                     tempup.compressed_upsampling_map[ib, up]
                 ]
@@ -595,9 +597,9 @@ def test_static(tmp_path, up_factor, cd_iter):
         35001, 0, 1,
     ]
     # fmt: on
-    times, channels, labels = np.array(tcl).reshape(-1, 3).T
+    times, channels, labels = np.array(tcl).reshape(-1, 3).T  # noqa: RUF059
     rec0 = np.zeros((recording_length_samples, n_channels), dtype="float32")
-    for t, ll in zip(times, labels):
+    for t, ll in zip(times, labels, strict=True):
         rec0[
             t - trough_offset_samples : t - trough_offset_samples + spike_length_samples
         ] += templates[ll]
@@ -670,7 +672,7 @@ def test_static(tmp_path, up_factor, cd_iter):
                 upsampling_indices_b=up + np.zeros(3, dtype=np.int64),
             )
             centerpc = pconv[:, spike_length_samples - 1]
-            for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv):
+            for ia, ib, pc, pcf in zip(ixa, ixb, centerpc, pconv, strict=True):
                 tempupb = tempup.compressed_upsampled_templates[
                     tempup.compressed_upsampling_map[ib, up]
                 ]
@@ -756,7 +758,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
     # combine to make templates
     templates = np.array(
-        [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
+        [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps, strict=True)]
     )
     norm = np.abs(templates[0]).max()
     templates[0] *= 100 / norm
@@ -788,7 +790,7 @@ def test_fakedata_nonn(tmp_path, threshold=7.0):
 
     # inject the spikes into a noise background
     rec0 = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, ll in zip(times, labels):
+    for t, ll in zip(times, labels, strict=True):
         rec0[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec0) > 80) >= 50
     assert np.sum(np.abs(rec0) > 40) >= 100

@@ -174,7 +174,7 @@ class InterpolationParams:
     def extrap_diff(self):
         if self.actual_extrap_method != self.method:
             return True
-        if self.actual_extrap_kernel != self.kernel:
+        if self.actual_extrap_kernel != self.kernel:  # noqa: SIM103
             return True
         return False
 

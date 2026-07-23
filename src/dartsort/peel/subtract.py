@@ -22,6 +22,7 @@ from ..util.internal_config import (
     default_subtraction_cfg,
     default_waveform_cfg,
 )
+from ..util.py_util import panic
 from ..util.waveform_util import (
     get_channel_index_rel_inds,
     make_channel_index,
@@ -376,7 +377,7 @@ class SubtractionPeeler(BasePeeler):
                 for t in self.subtraction_denoising_pipeline
             )
         else:
-            assert False
+            panic(which)
 
         if not needs_fit:
             return False

@@ -13,6 +13,7 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
 
 from .logging_util import progrange
+from .py_util import panic
 
 # -- geometry utils
 
@@ -77,7 +78,7 @@ def get_orders(geom):
             sgns.update(np.unique(np.sign(np.diff(geom[at_x, dim]))))
 
         if len(sgns) == 1:
-            sign = list(sgns)[0]
+            sign = next(iter(sgns))
             orders[dim] = sign
     return orders
 
@@ -97,15 +98,9 @@ def fill_geom_holes(geom):
     is_original = [True] * len(geom)
     for shift in range(-pitches_pad, pitches_pad + 1):
         shifted_geom = geom + [0, pitch * shift]
-        # sz = shifted_geom[:, 1]
-        # szinside = sz == sz.clip(
-        #     geom[:, 1].min() - np.sqrt(min_distance),
-        #     geom[:, 1].max() + np.sqrt(min_distance),
-        # )
-        # shifted_geom = shifted_geom[szinside]
         dists = cdist(shifted_geom, unique_shifted_positions, metric="sqeuclidean")
-        for site, dists in zip(shifted_geom, dists):
-            if np.all(dists > min_distance):
+        for site, sdists in zip(shifted_geom, dists, strict=True):
+            if np.all(sdists > min_distance):
                 unique_shifted_positions.append(site)
                 is_original.append(False)
     unique_shifted_positions = np.array(unique_shifted_positions)
@@ -325,7 +320,7 @@ def make_regular_channel_index(geom, radius, p=2, to_torch=False, depth_only=Tru
     # determine original geom's position in the regularized one, and which
     # channels are fake chans (they are unmatched in the query)
     kdt = KDTree(geom)
-    dists, reg2orig = kdt.query(rgeom, k=1, distance_upper_bound=eps)
+    _dists, reg2orig = kdt.query(rgeom, k=1, distance_upper_bound=eps)
     # the usual extra padding chan
     reg2orig = np.concatenate((reg2orig, [kdt.n]))
 
@@ -423,7 +418,7 @@ def single_channel_index(n_channels, to_torch=False):
 
 
 def get_channels_in_probe(waveforms, max_channels, channel_index):
-    n, t, c = waveforms.shape
+    n, _t, c = waveforms.shape
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
     waveforms = waveforms.permute(0, 2, 1)
@@ -482,7 +477,9 @@ def channel_subset_mask(channel_index_full, channel_index_new, to_torch=True):
     mask = np.stack(
         [
             np.isin(row_full, np.setdiff1d(row_new, [n_channels]))
-            for row_full, row_new in zip(channel_index_full, channel_index_new)
+            for row_full, row_new in zip(
+                channel_index_full, channel_index_new, strict=True
+            )
         ],
         axis=0,
     )
@@ -511,7 +508,11 @@ def channel_subset_by_index(
     if torch.is_tensor(channel_index_full):
         channel_index_mask = torch.from_numpy(channel_index_mask)
     return get_channel_subset(
-        waveforms, max_channels, channel_index_mask, chunk_length=chunk_length
+        waveforms,
+        max_channels,
+        channel_index_mask,
+        chunk_length=chunk_length,
+        fill_value=fill_value,
     )
 
 
@@ -626,15 +627,15 @@ def get_channel_subset(
 ):
     """Given a binary mask indicating which channels to keep, grab those channels"""
     if waveforms.ndim == 3:
-        N, T, C = waveforms.shape
+        C = waveforms.shape[2]
         pads = [(0, 0), (0, 0)]
     elif waveforms.ndim == 2:
         # for instance, amplitudes
-        N, C = waveforms.shape
+        C = waveforms.shape[2]
         pads = [(0, 0)]
     else:
-        assert False
-    n_channels, C_ = channel_index_mask.shape
+        panic(waveforms.shape)
+    C_ = channel_index_mask.shape[1]
     assert C == C_
     is_torch = torch.is_tensor(waveforms)
     npx = np

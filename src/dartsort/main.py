@@ -63,7 +63,7 @@ from .util.motion import MotionInfo, get_motion_info
 from .util.noise_util import Whitener
 from .util.peel_util import run_peeler
 from .util.preprocess_util import preprocess
-from .util.py_util import dartcopytree, ensure_path, timer
+from .util.py_util import dartcopytree, ensure_path, panic, timer
 from .util.torch_util import cleanup_and_log_gpu_usage
 
 logger = get_logger(__name__)
@@ -162,7 +162,7 @@ def dartsort(
             except Exception as e:
                 traceback_path = output_dir / "traceback.txt"
                 error_data_path = output_dir / "error_state"
-                with open(traceback_path, "w") as f:
+                with traceback_path.open("w") as f:
                     traceback.print_exception(e, file=f)
                 logger.exception(e)
                 if cfg.save_everything_on_error:
@@ -194,7 +194,7 @@ def dartsort(
         )
     except Exception as e:
         traceback_path = output_dir / "traceback.txt"
-        with open(traceback_path, "w") as f:
+        with traceback_path.open("w") as f:
             traceback.print_exception(e, file=f)
         logger.exception(e)
         logger.critical(f"Hit an error. Wrote traceback to {traceback_path}.")
@@ -335,7 +335,7 @@ def _dartsort_impl(
         is_final = step == cfg.matching_iterations
 
         if step == 0:
-            assert False
+            panic(step)
         elif step == 1:
             previous_detection_cfg = cfg.initial_detection_cfg
         else:
@@ -379,7 +379,7 @@ def _dartsort_impl(
             break
 
         with timer(f"cluster{step}", ret["timing"]):
-            if step_clus_cfg or step_ref_cfgs is not None and len(step_ref_cfgs):
+            if step_clus_cfg or (step_ref_cfgs is not None and len(step_ref_cfgs)):
                 sorting = cluster(
                     recording=recording,
                     sorting=sorting,

@@ -13,6 +13,7 @@ from torch.utils.data import (
 
 from ..util import nn_util
 from ..util.logging_util import progrange
+from ..util.py_util import panic
 from ..util.spiketorch import get_relative_index, ptp, reindex, spawn_torch_rg
 from ..util.waveform_util import make_regular_channel_index
 from .transform_base import BaseWaveformFeaturizer
@@ -119,7 +120,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
     def fit(
         self, recording, waveforms, *, computation_cfg, channels, **fixed_properties
     ):
-        weights = fixed_properties.get("weights", None)
+        weights = fixed_properties.get("weights")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )  # just for spike len stuff
@@ -166,7 +167,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             centers = torch.sum(w.unsqueeze(-1) * neighborhoods, dim=1)
             return centers
         else:
-            assert False
+            panic(self.reference)
 
     def local_distances(self, z, channels, obs_amps=None):
         """Return distances from each z to its local geom centered at channels."""
@@ -184,7 +185,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         elif self.decay_power == 2:
             pass
         else:
-            assert False
+            panic(self.decay_power)
         return dists
 
     def get_alphas(self, obs_amps, pred_amps_alpha1, masks, return_pred=False):
@@ -246,7 +247,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         elif self.localization_model == "dipole":
             alphas, pred_amps = self.dipole_model(z, obs_amps, masks, channels)
         else:
-            assert False
+            panic(self.localization_model)
         return alphas, pred_amps
 
     def forward(self, x, mask, obs_amps, channels):
@@ -258,7 +259,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             mu, var = mu.chunk(2, dim=-1)
             var = F.softplus(var)
         z = self.reparameterize(mu, var)
-        alphas, pred_amps = self.decode(z, channels, obs_amps, mask)
+        _alphas, pred_amps = self.decode(z, channels, obs_amps, mask)
         return pred_amps, mu, var
 
     def loss_function(self, recon_x, x, mask, mu, var):
@@ -297,7 +298,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 amin, amax = waveforms.aminmax(dim=1)
                 amps = torch.maximum(amin.abs_(), amax.abs_())
             else:
-                assert False
+                panic(self.amplitude_kind)
             amps = reindex(
                 channels.to(device=wf_dev),
                 amps[:, None],
@@ -445,7 +446,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                 obs_amps = waveforms.abs().max(dim=1).values
                 waveforms = obs_amps[:, None]
             else:
-                assert False
+                panic(self.amplitude_kind)
 
         waveforms = waveforms.to(device=self.relative_index.device)
         waveforms = reindex(channels, waveforms, self.relative_index, pad_value=0.0)
@@ -460,9 +461,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         # this is where we need to batch
         assert self.encoder is not None
         mu = self.encoder(x_mask)
-        var = None
         if self.variational:
-            mu, var = mu.chunk(2, dim=-1)
+            mu, _var = mu.chunk(2, dim=-1)
         x, y, z = mu[:, :3].T
         y = F.softplus(y)
         mx, mz = self.get_reference_points(channels, obs_amps=obs_amps).T
@@ -471,7 +471,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         locs = torch.column_stack((x, y, z))
 
         if return_extra:
-            alphas, pred_amps = self.decode(mu, channels, obs_amps, mask)
+            _alphas, pred_amps = self.decode(mu, channels, obs_amps, mask)
             return dict(locs=locs, obs_amps=obs_amps, pred_amps=pred_amps, mx=mx, mz=mz)
 
         return locs

@@ -159,12 +159,7 @@ class Clusterer:
             mask_ix = np.flatnonzero(features.keep_mask)
         else:
             mask_ix = None
-        if self.sampling_cfg is None:
-            if mask_ix is not None:
-                return True, mask_ix
-            else:
-                return False, slice(None)
-        elif features.n <= self.sampling_cfg.n_waveforms_fit:
+        if self.sampling_cfg is None or features.n <= self.sampling_cfg.n_waveforms_fit:
             if mask_ix is not None:
                 return True, mask_ix
             else:

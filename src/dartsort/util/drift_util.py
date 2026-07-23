@@ -158,7 +158,7 @@ def registered_geometry(
 
         # sign is flipped, since we're shifting the bad guys
         cur_pos_shifted = cur_pos - [0, pitch * shift]
-        d, i = kdt.query(cur_pos_shifted, distance_upper_bound=min_distance)
+        _, i = kdt.query(cur_pos_shifted, distance_upper_bound=min_distance)
 
         # figure out which were unmatched
         i_unobs = np.setdiff1d(chan_ix, i)
@@ -198,7 +198,7 @@ def registered_channels(
     registered_kdtree = KDTree(registered_geom)
     if distance_upper_bound is None:
         distance_upper_bound = pdist(registered_geom).min() / 2
-    distances, registered_channels = registered_kdtree.query(
+    _distances, registered_channels = registered_kdtree.query(
         shifted_positions, distance_upper_bound=distance_upper_bound
     )
     # make sure there were no unmatched points
@@ -693,7 +693,7 @@ def grab_static(waveforms, shifted_channels, n_static_channels, fill_value=np.na
     two_d = waveforms.ndim == 2
     if two_d:
         waveforms = waveforms[:, None, :]
-    n_spikes, t, c = waveforms.shape
+    n_spikes, t = waveforms.shape[:2]
     if torch.is_tensor(waveforms):
         static_waveforms = torch.full(
             (n_spikes, t, n_static_channels + 1),

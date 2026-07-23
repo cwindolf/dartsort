@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from .data_util import yield_masked_chunks
 from .internal_config import InterpolationParams, tps_interp_params
 from .motion import MotionInfo
+from .py_util import panic
 from .torch_util import BModule, torch_compile
 from .waveform_util import make_channel_index
 
@@ -181,7 +182,7 @@ def interp_precompute(
     elif params.kriging_poly_degree == 2:
         design_vars = 1 + dim + (dim * (dim + 1)) // 2
     else:
-        assert False
+        panic(params.kriging_poly_degree)
 
     solvers = source_pos.new_zeros(
         (ns, neighb_size + design_vars, neighb_size + design_vars)
@@ -215,9 +216,9 @@ def interp_precompute(
                     p12 = (pos[:, 1] * pos[:, 2]).unsqueeze(1)
                     design = torch.cat([pos, pos.square(), p01, p02, p12, const], dim=1)
                 else:
-                    assert False
+                    panic(dim)
             else:
-                assert False
+                panic(params.kriging_poly_degree)
             assert design.shape[1] == design_vars
 
             top = torch.cat([kernel, design], dim=1)
@@ -391,7 +392,7 @@ def _kernel_interpolate(
             out.masked_fill_(dmin > (2 * params.sigma) ** 2, torch.nan)
             return out
         else:
-            assert False
+            panic()
 
     kernel = get_kernel(source_pos=source_pos, target_pos=target_pos, params=params)
 
@@ -470,7 +471,7 @@ def get_kernel(
             order=params.polyharmonic_order,
         )
     else:
-        assert False
+        panic(kernel_name)
 
     kernel = kernel.nan_to_num_()
     if normalized and kernel_name not in ("rbf", "nearest"):
@@ -529,10 +530,10 @@ def kriging_neighborhood_solve(
     we'd otherwise be trying to invert large ill-conditioned kriging coefficient
     matrices.
     """
-    assert kernels.ndim == 3, 1
-    assert kernels.shape[0] == 1, 2  # shared kernel in this context
+    assert kernels.ndim == 3
+    assert kernels.shape[0] == 1  # shared kernel in this context
     kernel = kernels[0]
-    assert kernel.shape[0] == features.shape[2], 3
+    assert kernel.shape[0] == features.shape[2]
     del kernels
     assert target_pos.shape[0] == 1
     target_pos = target_pos[0]
@@ -553,7 +554,7 @@ def kriging_neighborhood_solve(
     # each output channel's kernel is k[:, neighb[outchan], outchan], plus the
     # expansion that would normally be done by kriging_poly_expand below
     neighb_kernels = kernel[neighborhoods, arange_out[:, None]]
-    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb), 4
+    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb)
     neighb_kernels, _, extra_dim = kriging_poly_expand(
         target_pos=target_pos[:, None],
         features=None,
@@ -561,9 +562,9 @@ def kriging_neighborhood_solve(
         poly_degree=poly_degree,
         sigma=sigma,
     )
-    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb + extra_dim, 1), 5
+    assert neighb_kernels.shape == (n_neighborhoods, nc_neighb + extra_dim, 1)
     neighb_solved = solvers.bmm(neighb_kernels)
-    assert neighb_solved.shape == (n_neighborhoods, nc_neighb + extra_dim, 1), 6
+    assert neighb_solved.shape == (n_neighborhoods, nc_neighb + extra_dim, 1)
     neighb_solved = neighb_solved[:, :, 0]
 
     # now, pad out neighborhoods with extra_dim `input_channels`s so that the
@@ -574,7 +575,7 @@ def kriging_neighborhood_solve(
     assert neighborhoods_padded.ndim == 2
     assert neighborhoods_padded.shape == neighb_solved.shape
     out_flat = _kneighb_loop(features_flat, neighborhoods_padded, neighb_solved)
-    assert out_flat.shape[1] == output_channels, 7
+    assert out_flat.shape[1] == output_channels
     out = out_flat.view(*features.shape[:2], output_channels)
     return out
 
@@ -644,10 +645,10 @@ def kriging_poly_expand(
                 xy[:, 1:2] * xy[:, 2:3],
             )
         else:
-            assert False
+            panic(dim)
         kernels = torch.concatenate([kernels, xy, *xysq, const], dim=1)
     else:
-        assert False
+        panic(poly_degree)
 
     if extra_dim and features is not None:
         rank = features.shape[1]
@@ -677,7 +678,7 @@ def bake_interpolation_1d(
     elif need_design and params.kriging_poly_degree == 1:
         k = torch.concatenate([k, xx_[None], torch.ones_like(xx_[None])], dim=0)
     elif need_design:
-        assert False
+        panic(params.kriging_poly_degree)
 
     pdata = interp_precompute(source_pos=xx[None, :, None], params=params)
     if pdata is not None:
@@ -1010,7 +1011,7 @@ class StableFeaturesInterpolator(BModule):
                 [torch.zeros_like(source_shifts), source_shifts], dim=-1
             )
         else:
-            assert False
+            panic(self.shift_dim)
 
         # used to shift the source, but for kriging it's better to shift targets
         # so that we can cache source kernel choleskys (i.e., my neighb_data)

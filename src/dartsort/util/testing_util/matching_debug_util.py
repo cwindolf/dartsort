@@ -20,7 +20,7 @@ from ..data_util import DARTsortSorting
 from ..internal_config import ComputationConfig, MatchingConfig
 from ..job_util import ensure_computation_config
 from ..logging_util import progrange
-from ..py_util import databag
+from ..py_util import databag, panic
 from ..waveform_util import upsample_multichan
 
 
@@ -233,7 +233,7 @@ def visualize_step_results(
         axes = panel.subplots(nrows=6, sharex=True)
 
         for x, ax, name in zip(
-            (chunk, resid, chunk - resid), axes, ("chunk", "resid", "signal")
+            (chunk, resid, chunk - resid), axes, ("chunk", "resid", "signal"), strict=True
         ):
             if chunk_vis_style == "im":
                 ax.imshow(
@@ -261,7 +261,7 @@ def visualize_step_results(
 
         if vline_new_peaks:
             for ax in axes.flat:
-                for ts, ll in zip(times_samples, labels):
+                for ts, ll in zip(times_samples, labels, strict=True):
                     ax.axvline(ts, c=glasbey1024[ll % len(glasbey1024)], lw=0.5, ls=":")
 
         if gt_t is not None:
@@ -292,7 +292,7 @@ def visualize_step_results(
                 obj_domain, c[obj_sl], color=glasbey1024[j % len(glasbey1024)], lw=0.5
             )
         axes[-2].set_ylabel("pre-step " + ("obj" if obj_mode else "conv"))
-        for t, ll in zip(times_samples, labels):
+        for t, ll in zip(times_samples, labels, strict=True):
             axes[-2].axvline(t, color=glasbey1024[ll % len(glasbey1024)], lw=1, ls=":")
         for j, c in enumerate(conv):
             axes[-1].plot(
@@ -482,7 +482,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
             elif sign == 1:
                 traces[t + time_ix, :-1] += wf
             else:
-                assert False
+                panic(sign)
 
     def subtract_conv(
         self, conv: Tensor, peaks: "MatchingPeaks", padding=0, batch_size=256, sign=-1
@@ -555,7 +555,7 @@ class DebugChunkTemplateData(ChunkTemplateData):
         up_inds = torch.zeros_like(template_inds)
         scores = conv.new_zeros(times.shape)
 
-        for n, (t, ll) in enumerate(zip(times, template_inds)):
+        for n, (t, ll) in enumerate(zip(times, template_inds, strict=True)):
             bank = self.templates_up[ll]
             resid_chunk = residual[t : t + nt + 1]
             T = resid_chunk.shape[0]

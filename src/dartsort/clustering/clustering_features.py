@@ -1,5 +1,4 @@
 from typing import Self, cast
-from logging import WARN
 
 import h5py
 import numpy as np
@@ -170,7 +169,7 @@ class SimpleMatrixFeatures:
                     pcs,
                     raise_for_numerics=clustering_features_cfg.raise_for_numerics,
                 )
-                erp, pcs = interpolate_by_chunk(
+                _erp, pcs = interpolate_by_chunk(
                     mask=mask,
                     dataset=pcs,
                     geom=motion.geom,
@@ -190,7 +189,7 @@ class SimpleMatrixFeatures:
             else:
                 assert sorting.parent_h5_path is not None
                 with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                    erp, pcs = interpolate_by_chunk(
+                    _erp, pcs = interpolate_by_chunk(
                         mask=mask,
                         dataset=h5[clustering_features_cfg.pca_dataset_name],
                         geom=motion.geom,

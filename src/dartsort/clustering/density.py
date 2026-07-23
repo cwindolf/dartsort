@@ -105,7 +105,10 @@ def get_smoothed_density(
         )
     nbins = np.ceil(dextents / bin_sizes).astype(int)
     nbins = nbins.clip(min_n_bins, max_n_bins)
-    bin_edges = [np.linspace(e[0], e[1], num=nb + 1) for e, nb in zip(extents, nbins)]
+    bin_edges = [
+        np.linspace(e[0], e[1], num=nb + 1)
+        for e, nb in zip(extents, nbins, strict=True)
+    ]
 
     # compute histogram and figure out how big the bins actually were
     raw_histogram, bin_edges = np.histogramdd(infeats, bins=bin_edges)
@@ -178,7 +181,7 @@ def get_smoothed_density_ratio(
             max_n_bins=max_n_bins,
             min_n_bins=min_n_bins,
         )
-        for sigma, sigma_low in zip(sigmas, sigma_lows)
+        for sigma, sigma_low in zip(sigmas, sigma_lows, strict=True)
     ]
     if len(sigmas) == 1:
         return dens[0]
@@ -233,7 +236,7 @@ def nearest_higher_density_neighbor(
 def remove_border_points(
     labels, density, kdtree, search_radius=1.0, n_neighbors_search=5, workers=1
 ):
-    distances, indices = kdtree.query(
+    _distances, indices = kdtree.query(
         kdtree.data,
         k=1 + n_neighbors_search,
         distance_upper_bound=search_radius,
@@ -249,7 +252,7 @@ def remove_border_points(
 
     units = np.unique(labels)
     new_labels = labels.copy()
-    for i, u in enumerate(units[units > 0]):
+    for u in units[units > 0]:
         in_unit = np.flatnonzero(labels == u)
         in_unit_border = in_border[labels_in_border == u]
         if not in_unit_border.size:
@@ -266,7 +269,7 @@ def sort_density(
     sigma0: float,
     sigma1: float,
     max_sigma: float = 3.0,
-    device: torch.device = torch.device("cpu"),
+    device: torch.device | str = "cpu",
     batch_size: int = 2048,
     col_batch_size: int = 1024,
     show_progress: bool = False,
@@ -295,6 +298,7 @@ def sort_density(
     np.ndarray
         The density ratio for each point in X.
     """
+    device = torch.device(device)
     X = torch.asarray(X, device=device)
     order = torch.argsort(X[:, 0])
     X = X[order]
@@ -313,7 +317,7 @@ def sort_density(
     n1 = X.new_tensor(-0.5 * dim * np.log(2.0 * np.pi * sigma1 * sigma1))
 
     if show_progress:
-        iter = progrange(0, n, batch_size, desc=f'SortDens:{device.type}')
+        iter = progrange(0, n, batch_size, desc=f"SortDens:{device.type}")
     else:
         iter = range(0, n, batch_size)
 
@@ -384,7 +388,7 @@ def kdt_density(
     max_sigma: float = 3.0,
     n_threads=8,
 ):
-    n, d = X.shape
+    n = X.shape[0]
     max_dist = max_sigma * sigma_regional
 
     jobs = range(0, n, batch_size)
@@ -506,7 +510,7 @@ def density_peaks(
     leafsize=24,
     density_strategy="sort",
     workers=-1,
-    device: torch.device = torch.device("cpu"),
+    device: torch.device | str = "cpu",
 ):
     """Density peaks clustering as described by Rodriguez and Laio, but...
 
@@ -584,7 +588,7 @@ def density_peaks(
     has_nhdn = np.flatnonzero(nhdn < n).astype(np.intc)
     data = np.ones(has_nhdn.size)
     graph = coo_array((data, (nhdn[has_nhdn], has_nhdn)), shape=(n, n))
-    ncc, labels = connected_components(graph)
+    _ncc, labels = connected_components(graph)
 
     if remove_borders:
         labels = remove_border_points(
@@ -724,7 +728,7 @@ def gmm_density_peaks(
 
     Xi = X[choices]
     nc = len(Xi)
-    inliers, kdtree = kdtree_inliers(
+    inliers, _kdtree = kdtree_inliers(
         Xi,
         n_neighbors=outlier_neighbor_count,
         distance_upper_bound=outlier_radius * np.sqrt(X.shape[1]),
@@ -735,7 +739,7 @@ def gmm_density_peaks(
 
     Xi = X[inliers]
     ni = len(Xi)
-    uchans, cchans = np.unique(channels[inliers], return_counts=True)
+    _uchans, cchans = np.unique(channels[inliers], return_counts=True)
     comps_per_chan = np.minimum(
         max_components_per_channel,
         np.ceil(cchans / min_spikes_per_component).astype(int),
@@ -1211,7 +1215,7 @@ def _density_peaks_clustering_uhd_implementation(
     )
 
     graph = coo_array((np.ones(2 * has_nhdn.size), rc), shape=(n, n))
-    ncc, labels = connected_components(graph, directed=False)
+    _ncc, labels = connected_components(graph, directed=False)
 
     if remove_borders:
         labels = remove_border_points(

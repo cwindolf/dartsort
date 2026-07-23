@@ -3,8 +3,9 @@ import torch.nn.functional as F
 from torch import vmap
 from torch.func import grad_and_value, hessian
 
-from dartsort.util.torch_optimization_util import batched_levenberg_marquardt
-from dartsort.util.waveform_util import channel_subset_by_radius, full_channel_index
+from ..util.py_util import panic
+from ..util.torch_optimization_util import batched_levenberg_marquardt
+from ..util.waveform_util import channel_subset_by_radius, full_channel_index
 
 
 def localize_amplitude_vectors(
@@ -129,7 +130,7 @@ def localize_amplitude_vectors(
     locs = torch.column_stack((xcom, torch.full_like(xcom, y0), zcom))
 
     if model == "pointsource":
-        locs, i = batched_levenberg_marquardt(
+        locs, _i = batched_levenberg_marquardt(
             locs,
             vmap_point_source_grad_and_mse,
             vmap_point_source_hessian,
@@ -151,7 +152,7 @@ def localize_amplitude_vectors(
         return results
 
     elif model == "dipole":
-        locs, i = batched_levenberg_marquardt(
+        locs, _i = batched_levenberg_marquardt(
             locs,
             vmap_dipole_grad_and_mse,
             vmap_dipole_hessian,
@@ -177,7 +178,7 @@ def localize_amplitude_vectors(
         return dict(x=x, y=y, z_rel=z_rel, z_abs=z_abs, alpha=projected_dist)
 
     else:
-        assert False
+        panic(model)
 
 
 # -- point source / dipole model library functions

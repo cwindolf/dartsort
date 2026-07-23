@@ -185,7 +185,7 @@ def calculate_merge_distances(
     np.fill_diagonal(dists, 0.0)  # sometimes numerical 0 is -1e-6.
     min_dist = dists.min()
     if min_dist < -1e-3:
-        warnings.warn(f"Alarmingly negative min distance {min_dist}.")
+        warnings.warn(f"Alarmingly negative min distance {min_dist}.", stacklevel=2)
     dists = np.maximum(dists, 0.0, out=dists)
 
     return units, dists, shifts, template_snrs

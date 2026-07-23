@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from .pipeline import WaveformPipeline
 
 
+default_whitening_cfg = WhiteningConfig()
+
+
 class WaveformWhitener(BaseWaveformDenoiser):
     default_name = "whiten"
     needs_residual = True
@@ -32,7 +35,7 @@ class WaveformWhitener(BaseWaveformDenoiser):
         waveform_cfg: WaveformConfig | None = default_waveform_cfg,
         whitener: "Whitener | None" = None,
         disabled: bool = True,
-        whiten_cfg: WhiteningConfig = WhiteningConfig(),
+        whiten_cfg: WhiteningConfig = default_whitening_cfg,
         sampling_frequency: float = 30_000.0,
     ):
         super().__init__(
