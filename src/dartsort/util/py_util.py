@@ -8,7 +8,7 @@ import threading
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from time import perf_counter
-from typing import dataclass_transform
+from typing import dataclass_transform, NoReturn
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -213,3 +213,7 @@ def _rsync(src, dest, archive=True, follow_symlinks=False, excludes=None, vp=Fal
         logger.info(" ".join(cmd))
     res = subprocess.run(cmd)
     assert not res.returncode
+
+
+def panic(msg="") -> NoReturn:
+    raise AssertionError(msg)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generator, Literal, Self, Sequence, cast
 
 import h5py
+import numba
 import numpy as np
 import torch
 from spikeinterface.core import (
@@ -31,8 +32,10 @@ if TYPE_CHECKING:
     from ..clustering.mixture import Scores
     from ..templates.templates import TemplateData
     from .motion import MotionInfo
+from itertools import pairwise
+
 from .job_util import ensure_computation_config
-from .py_util import ensure_path
+from .py_util import ensure_path, panic
 from .waveform_util import make_channel_index
 
 logger = get_logger(__name__)
@@ -169,7 +172,7 @@ class DARTsortSorting:
             locfns = [fn for fn in fnames if "localizations" in fn]
             extract_location_if_possible = len(locfns) == 1
         if extract_location_if_possible:
-            locfn = [fn for fn in fnames if "localizations" in fn][0]
+            locfn = next(fn for fn in fnames if "localizations" in fn)
             locs = getattr(self, locfn)
             # naming like IBL DANDI.
             data["relative_depth"] = np.ascontiguousarray(locs[:, 2])
@@ -194,7 +197,7 @@ class DARTsortSorting:
         if add_feature_mean_metadata:
             df = self.to_pandas()
             float_columns = [k for k in df if df[k].dtype.kind == "f"]
-            df = df[["labels"] + float_columns]
+            df = df[["labels", *float_columns]]
             means = df.groupby("labels").mean()
             means = means[means.index >= 0]
             renamer = {k: "mean_" + str(k) for k in means}
@@ -208,7 +211,7 @@ class DARTsortSorting:
         w = getattr(self, weight_key, None)
         trains = {}
         reorder = np.argsort(self.times_samples, kind="stable")
-        t_s = cast(np.ndarray, getattr(self, "times_seconds"))
+        t_s = self.times_seconds
         t_s_reorder = t_s[reorder]
         l_reorder = self.labels[reorder]
         if w is not None:
@@ -581,13 +584,14 @@ class DARTsortSorting:
                 labels_dataset,
                 "sampling_frequency",
             ]
+            h5_keys = list(h5.keys())
             if load_feature_names is None and load_all_features:
                 load_feature_names = [
-                    k for k in h5.keys() if h5[k].ndim > 0 and h5[k].shape[0] == n
+                    k for k in h5_keys if h5[k].ndim > 0 and h5[k].shape[0] == n
                 ]
             elif load_feature_names is None and load_simple_features:
                 load_feature_names = []
-                for k in h5.keys():
+                for k in h5_keys:
                     if k in already_loaded:
                         continue
                     if cls._no_check_needed(k):
@@ -598,9 +602,9 @@ class DARTsortSorting:
                     if is_simple:
                         load_feature_names.append(k)
             elif load_feature_names is None:
-                load_feature_names = [k for k in h5.keys() if cls._no_check_needed(k)]
+                load_feature_names = [k for k in h5_keys if cls._no_check_needed(k)]
             elif load_feature_names is not None:
-                basic_props = [k for k in h5.keys() if cls._no_check_needed(k)]
+                basic_props = [k for k in h5_keys if cls._no_check_needed(k)]
                 load_feature_names = list(load_feature_names) + basic_props
             assert load_feature_names is not None
             load_feature_names = [
@@ -659,7 +663,7 @@ class DARTsortSorting:
         if self.labels is not None:
             data["labels"] = self.labels
         if hasattr(self, "geom"):
-            data["geom"] = getattr(self, "geom")
+            data["geom"] = self.geom
         do_hdf5 = save_h5_path and self.parent_h5_path is not None
         if do_hdf5:
             # path needs to be relative to npz path's parent in case user moves stuff
@@ -841,7 +845,7 @@ class DARTsortSorting:
         kept_indices = np.setdiff1d(np.arange(len(self)), viol_ixs)
         return st, kept_indices
 
-    def flatten(self, include_gmm_properties: bool = False) -> Self:
+    def flatten(self, *, include_gmm_properties: bool = False) -> Self:
         """Flatten the unit IDs so that there are no gaps in the sorted unique label set."""
         assert self.labels is not None
         valid = np.flatnonzero(self.labels >= 0)
@@ -855,22 +859,39 @@ class DARTsortSorting:
         if not include_gmm_properties or not any(hasattr(self, k) for k in keys):
             return self.ephemeral_replace(labels=new_labels)
 
-        remapping = np.full((old_unique.max() + 1,), -1)
-        remapping[old_unique] = np.arange(len(old_unique))
         new_props = dict(labels=new_labels)
         for k in keys:
-            v = getattr(self, k, None)
-            if v is None:
+            candidates = getattr(self, k, None)
+            if candidates is None:
                 continue
-            valid = v >= 0
-            v_valid = v[valid]
-            new_v = v.copy()
-            new_v[valid] = remapping[v_valid]
-            new_props[k] = new_v
+            valid = candidates >= 0
+            cands_valid = candidates[valid]
+            new_candidates = candidates.copy()
+
+            remapping = np.full((cands_valid.max() + 1,), -1)
+            remapping[old_unique] = np.arange(len(old_unique))
+
+            new_candidates[valid] = remapping[cands_valid]
+
+            # now, "ghost" units (not top candidates but still existing
+            # in the lower ranks) can have some probability mass that
+            # needs to be deleted.
+            resp_key = k.replace("candidates", "responsibilities")
+            resps = getattr(self, resp_key).copy()
+            loglik_key = k.replace("candidates", "log_liks")
+            logliks = getattr(self, loglik_key).copy()
+            vacuum_neg_candidate_prob(
+                old_unique.shape[0], new_candidates, resps, logliks
+            )
+
+            new_props[k] = new_candidates
+            new_props[resp_key] = resps
+            new_props[loglik_key] = logliks
 
             # if merged candidates were present, the labels
             # don't match gmm_candidates
             break
+
         return self.ephemeral_replace(**new_props)
 
     def __str__(self):
@@ -1042,8 +1063,8 @@ def try_get_denoising_pipeline(sorting: DARTsortSorting):
 
     from dartsort.transform import WaveformPipeline
 
-    geom = torch.asarray(getattr(sorting, "geom"))
-    channel_index = torch.asarray(getattr(sorting, "sub_channel_index"))
+    geom = torch.asarray(sorting.geom)
+    channel_index = torch.asarray(sorting.sub_channel_index)
     dn = WaveformPipeline.from_state_dict_pt(geom, candidates[0])
     dn = dn.eval()
     return dn, geom, channel_index
@@ -1082,7 +1103,7 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=N
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
 
-    geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
+    geom, _channel_index, model_dir = _get_featurization_loading_meta(sorting)
 
     if featurization_pipeline_pt is None:
         featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
@@ -1248,7 +1269,7 @@ def si_structured_localizations_array(locs: np.ndarray) -> np.ndarray:
     elif locs.shape[1] == 2:
         column_names = ["x", "y"]
     else:
-        assert False
+        raise ValueError(f"Unsupported {locs.shape=}")
     dtype = [(name, locs.dtype) for name in column_names]
 
     structured_array = np.zeros(len(locs), dtype=dtype)
@@ -1410,7 +1431,7 @@ def explode_soft_assignment_sorting(
     """
     from .spiketorch import entropy
 
-    t_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+    t_s = sorting.times_seconds
 
     if needs_merge:
         mgr = merged_responsibilities(
@@ -1466,7 +1487,7 @@ def candidates_to_labels(clabels, labels, Klabel, Kcand):
     lc = np.unique(np.c_[labels[kept], clabels[kept]], axis=0)
     lc = lc[(lc >= 0).all(axis=1)]
     # each candidate only appears once -- it is a merge.
-    assert np.all(1 == np.unique(lc[:, 1], return_counts=True)[1]), "ctol"
+    assert np.all(np.unique(lc[:, 1], return_counts=True)[1] == 1), "ctol"
     ctol = np.full((Kcand + 1,), fill_value=Klabel)
     ctol[lc[:, 1]] = lc[:, 0]
     return lc, ctol
@@ -1534,6 +1555,7 @@ def check_recording(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is large. "
             + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if avg_detections_per_second < too_few_spikes_per_sec:
@@ -1541,12 +1563,14 @@ def check_recording(
             f"Detected {avg_detections_per_second:0.1f} spikes/s, which is small."
             + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if max_abs > expected_value_range:
         warnings.warn(
             f"Recording values exceed |{expected_value_range}|. " + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
     if std > max_std or std < min_std:
@@ -1554,6 +1578,7 @@ def check_recording(
             f"Recording standard deviation {std:0.2f} was not in the generous "
             f"expected range [{min_std}, {max_std}]. " + err_tail,
             RuntimeWarning,
+            stacklevel=2,
         )
         failed = True
 
@@ -1732,7 +1757,7 @@ def chunk_time_ranges(recording, chunk_length_samples=None):
         np.array([0, recording.get_num_samples() - 1])
     )
     chunk_times_s = np.linspace(start_time_s, end_time_s, num=n_chunks + 1)
-    chunk_time_ranges_s = list(zip(chunk_times_s[:-1], chunk_times_s[1:]))
+    chunk_time_ranges_s = list(pairwise(chunk_times_s))
 
     return chunk_time_ranges_s
 
@@ -1780,7 +1805,7 @@ def yield_chunks(
             for s in range(0, len(dataset), fallback_chunk_length)
         )
     else:
-        for c, s in zip(dataset.chunks[1:], dataset.shape[1:]):
+        for c, s in zip(dataset.chunks[1:], dataset.shape[1:], strict=True):
             if c == s:
                 continue
             raise ValueError(
@@ -1967,7 +1992,7 @@ def fit_reweighting(
             with h5py.File(hdf5_path) as h5:
                 voltages: np.ndarray = h5[voltages_dataset_name][:]
         else:
-            assert False
+            panic()
     assert isinstance(voltages, np.ndarray)
 
     from ..clustering.density import get_smoothed_density
@@ -2032,3 +2057,23 @@ def divide_randomly(
     assert things_per_bin.sum() == n_things
 
     return things_per_bin
+
+
+@numba.njit(parallel=True)
+def vacuum_neg_candidate_prob(
+    n_units: int, cand: np.ndarray, resp: np.ndarray, loglik: np.ndarray
+):
+    for s in numba.prange(cand.shape[0]):  # ty: ignore
+        spike_cand = cand[s]
+        # vacuum into noise component
+        # this is partly to handle stuff that was missed before getting here
+        # from flatten, for example
+        for j in range(cand.shape[1]):
+            if 0 <= spike_cand[j] < n_units:
+                continue
+            rsj = resp[s, j]
+            if rsj == 0:
+                continue
+            resp[s, -1] += rsj
+            resp[s, j] = 0.0
+            loglik[s, j] = -np.inf

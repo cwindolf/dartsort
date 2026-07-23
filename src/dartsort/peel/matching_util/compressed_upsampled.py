@@ -185,7 +185,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
         assert save_folder is not None
         computation_cfg = ensure_computation_config(computation_cfg)
 
-        unit_ids, id_counts = np.unique(template_data.unit_ids, return_counts=True)
+        _, id_counts = np.unique(template_data.unit_ids, return_counts=True)
         have_groups = np.any(id_counts > 1)
         coarse_objective = matching_cfg.coarse_objective and have_groups
 
@@ -256,6 +256,7 @@ class CompressedUpsampledMatchingTemplates(MatchingTemplates):
     def data_at_time(
         self,
         t_s: float,
+        *,
         scaling: bool,
         inv_lambda: float,
         scale_min: float,

@@ -24,6 +24,7 @@ from ..util.internal_config import (
 )
 from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
+from ..util.py_util import panic
 from ..util.waveform_util import full_channel_index, make_channel_index
 from .matching_util import (
     ChunkTemplateData,
@@ -50,6 +51,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         waveform_cfg: WaveformConfig = default_waveform_cfg,
         fpctrl_spike_counts=None,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
+        *,
         save_collidedness=False,
         whiten_features=False,
         whiten_kernel_length=0,
@@ -65,7 +67,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
 
         fixed_prop_keys = ("channels", "labels", "times_seconds")
         if save_collidedness:
-            fixed_prop_keys = fixed_prop_keys + ("collidedness",)
+            fixed_prop_keys = (*fixed_prop_keys, "collidedness")
 
         super().__init__(
             recording=recording,
@@ -99,7 +101,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         elif p.channel_selection == "template":
             channel_selection_index = None
         else:
-            assert False
+            panic(p.channel_selection)
         self.register_buffer_or_none("channel_selection_index", channel_selection_index)
         self.is_upsampling = p.up_factor > 1
 
@@ -206,9 +208,13 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
         nofeat = featurization_cfg.skip or featurization_cfg.denoise_only
         do_tpca = featurization_cfg.save_input_tpca_projs and not nofeat
         if do_tpca and featurization_cfg.tpca_from_templates:
-            from ..transform import TemporalPCAFeaturizer as TF
+            from ..transform import TemporalPCAFeaturizer
 
-            (tpca,) = [f for f in featurization_pipeline if isinstance(f, TF)]
+            (tpca,) = [
+                f
+                for f in featurization_pipeline
+                if isinstance(f, TemporalPCAFeaturizer)
+            ]
             tpca.initialize_from_templates(template_data)
 
         builder = MatchingTemplatesBuilder(
@@ -365,7 +371,7 @@ class ObjectiveUpdateTemplateMatchingPeeler(BasePeeler):
                 refrac_mask = torch.zeros_like(refrac_mask)
 
             current_peaks = []
-            for match_it in range(max_iter):
+            for _ in range(max_iter):
                 if not initializing_cd:
                     assert previous_peaks is not None
                 if (

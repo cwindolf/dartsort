@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, StackDataset, TensorDataset
 
 from ..util.logging_util import get_logger, progrange
 from ..util.multiprocessing_util import handle_negative_jobs
+from ..util.py_util import panic
 from ..util.spiketorch import reindex, spawn_torch_rg
 from ._multichan_denoiser_kit import (
     AOTIndicesWeightedRandomBatchSampler,
@@ -245,7 +246,7 @@ class Decollider(BaseMultichannelDenoiser):
             elif hasattr(self, "eyz"):
                 pred = self.eyz(net_input)
             else:
-                assert False
+                panic()
         elif self.inference_kind == "exz_fromz":
             pred = torch.zeros_like(waveforms)
             for j in range(self.inference_z_samples):
@@ -273,7 +274,7 @@ class Decollider(BaseMultichannelDenoiser):
                     emz = self.emz(net_input)
                     pred += z - emz
                 else:
-                    assert False
+                    panic(self.exz_estimator)
             pred /= self.inference_z_samples
         elif self.inference_kind == "exz":
             if self.exz_estimator == "n2n":
@@ -290,9 +291,9 @@ class Decollider(BaseMultichannelDenoiser):
                 emz = self.emz(net_input)
                 pred = waveforms - emz
             else:
-                assert False
+                panic(self.exz_estimator)
         else:
-            assert False
+            panic(self.inference_kind)
 
         pred = self.to_orig_channels(pred, channels)
 
@@ -322,7 +323,7 @@ class Decollider(BaseMultichannelDenoiser):
             emz = self.emz(net_input)
             exz = y - emz
         else:
-            assert False
+            panic(self.exz_estimator)
 
         # predictions given y, if relevant
         if self.inference_kind == "amortized":

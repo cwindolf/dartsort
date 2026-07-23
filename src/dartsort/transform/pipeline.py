@@ -51,6 +51,10 @@ class WaveformPipeline(torch.nn.Module):
     def device(self):
         return self._device_tracker.device
 
+    def __str__(self):
+        tstr = ", ".join(t.__class__.__name__ for t in self.transformers)
+        return f"{self.__class__.__name__}([{tstr}])"
+
     def __len__(self):
         return len(self.transformers)
 

@@ -69,7 +69,7 @@ def visualize_sorting(
         elif sorting_path.name.endswith(".npz"):
             sorting = DARTsortSorting.load(sorting_path)
         else:
-            assert False
+            raise ValueError(f"Confusing {sorting_path=}")
 
     try:
         if make_scatterplots:
@@ -84,7 +84,7 @@ def visualize_sorting(
             )
     except Exception as e:
         if errors_to_warnings:
-            warnings.warn(str(e))
+            warnings.warn(str(e), stacklevel=2)
         else:
             raise
         plt.close("all")
@@ -117,9 +117,17 @@ def visualize_sorting(
         single_unit_ids=single_unit_ids,
         allow_qda=allow_qda,
     )
-    sum_png, sum_csv, unit_sum_dir, comp_png, comp_csv, unit_comp_dir, vs_png, mix_dir, venn_dirs = (
-        paths_or_nones
-    )
+    (
+        sum_png,
+        sum_csv,
+        unit_sum_dir,
+        comp_png,
+        comp_csv,
+        unit_comp_dir,
+        vs_png,
+        mix_dir,
+        venn_dirs,
+    ) = paths_or_nones
 
     try:
         if sum_csv is not None and analysis is not None:
@@ -132,7 +140,7 @@ def visualize_sorting(
                 plt.close(fig)
     except Exception as e:
         if errors_to_warnings:
-            warnings.warn(str(e))
+            warnings.warn(str(e), stacklevel=2)
         else:
             raise
 
@@ -154,7 +162,7 @@ def visualize_sorting(
                 plt.close(fig)
     except Exception as e:
         if errors_to_warnings:
-            warnings.warn(str(e))
+            warnings.warn(str(e), stacklevel=2)
         else:
             raise
 
@@ -175,7 +183,7 @@ def visualize_sorting(
             )
     except Exception as e:
         if errors_to_warnings:
-            warnings.warn(str(e))
+            warnings.warn(str(e), stacklevel=2)
         else:
             raise
 
@@ -220,7 +228,7 @@ def visualize_sorting(
             unit_ids=single_unit_ids,
         )
 
-    for vdir, vcmp in zip(venn_dirs, venn_cmps):
+    for vdir, vcmp in zip(venn_dirs, venn_cmps, strict=True):
         if vdir is None:
             continue
         assert vcmp is not None
@@ -391,7 +399,7 @@ def sorting_scatterplots(
 ):
     scatter_unreg = output_directory / "scatter_unreg.png"
     if overwrite or not scatter_unreg.exists():
-        fig, axes, scatters = scatterplots.scatter_spike_features(
+        fig, axes, _scatters = scatterplots.scatter_spike_features(
             sorting=sorting,
             amplitude_color_cutoff=amplitude_color_cutoff,
             amplitudes_dataset_name=amplitudes_dataset_name,
@@ -405,7 +413,7 @@ def sorting_scatterplots(
 
     scatter_reg = output_directory / "scatter_reg.png"
     if motion is not None and (overwrite or not scatter_reg.exists()):
-        fig, axes, scatters = scatterplots.scatter_spike_features(
+        fig, axes, _scatters = scatterplots.scatter_spike_features(
             sorting=sorting,
             motion=motion,
             registered=True,
@@ -482,7 +490,11 @@ def _plan_vis(
     if make_sorting_summaries and is_labeled:
         sorting_summary_png = output_directory / "sorting_summary.png"
         sorting_summary_csv = output_directory / "sorting_summary.csv"
-        need_summary = overwrite or not sorting_summary_png.exists() or not sorting_summary_csv.exists()
+        need_summary = (
+            overwrite
+            or not sorting_summary_png.exists()
+            or not sorting_summary_csv.exists()
+        )
         need_analysis = need_analysis or need_summary
         if not need_summary:
             sorting_summary_csv = sorting_summary_png = None
@@ -505,7 +517,9 @@ def _plan_vis(
     if can_gt and make_gt_overviews:
         comparison_png = output_directory / "gt_comparison.png"
         comparison_csv = output_directory / "gt_comparison.csv"
-        need_comp = overwrite or not comparison_png.exists() or not comparison_csv.exists()
+        need_comp = (
+            overwrite or not comparison_png.exists() or not comparison_csv.exists()
+        )
         need_comp = need_comp or (single_unit_ids == "gtrelevant" and need_summaries)
         need_analysis = need_analysis or need_comp
         need_comparison = need_comparison or need_comp
@@ -550,7 +564,7 @@ def _plan_vis(
     if can_gt and other_analyses is not None and make_venns:
         ovns = [f"venn_{oa.name}___vs___{sorting_name}" for oa in other_analyses]
         venn_dirs = [output_directory / ovn for ovn in ovns]
-        for oa, vdir in zip(other_analyses, venn_dirs):
+        for oa, vdir in zip(other_analyses, venn_dirs, strict=True):
             need_venn_cmp = overwrite or not unit.all_summaries_done(
                 oa.sorting.unit_ids,
                 vdir,
@@ -559,7 +573,7 @@ def _plan_vis(
             )
             need_venn_cmps.append(need_venn_cmp)
         venn_dirs = [
-            vdir if _n else None for vdir, _n in zip(venn_dirs, need_venn_cmps)
+            vdir if _n else None for vdir, _n in zip(venn_dirs, need_venn_cmps, strict=True)
         ]
         need_analysis = need_analysis or any(need_venn_cmps)
     else:
@@ -631,7 +645,7 @@ def _plan_vis(
     if other_analyses is not None and any(need_venn_cmps):
         assert sorting_analysis is not None
         venn_cmps = []
-        for oa, _n in zip(other_analyses, need_venn_cmps):
+        for oa, _n in zip(other_analyses, need_venn_cmps, strict=True):
             if not _n:
                 venn_cmps.append(None)
                 continue
@@ -684,7 +698,7 @@ def set_plt_style(
     grid=False,
     dpi=200,
     figsize=(3, 3),
-    fonts=["Helvetica", "Arial", "Nimbus Sans"],
+    fonts=("Helvetica", "Arial", "Nimbus Sans"),
 ):
     from .colors import glasbey1024
 

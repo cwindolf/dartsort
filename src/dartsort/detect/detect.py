@@ -4,11 +4,15 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..util.py_util import panic
+from ..util.torch_util import torch_compile
+
 # holds values used for deduplicating identical peaks
 _salt = {}
 _pepper = {}
 
 
+@torch.inference_mode()
 def detect_and_deduplicate(
     traces: Tensor,
     threshold: float,
@@ -19,6 +23,7 @@ def detect_and_deduplicate(
     dedup_channel_index: torch.Tensor | None = None,
     trough_priority: float | None = None,
     batch_size=1024,
+    *,
     remove_exact_duplicates=True,
     detection_mask: Tensor | None = None,
     exclude_edges=True,
@@ -113,7 +118,7 @@ def detect_and_deduplicate(
             else:
                 Xdd = Xth = X.abs_()
         else:
-            assert False
+            panic(peak_sign)
 
         # -- detect peaks
         detect = Xth[:-1] > threshold
@@ -143,7 +148,7 @@ def detect_and_deduplicate(
 
         # no-threshold max pool for deduplication
         dedup = _is_extreme(
-            Xdd, dt=dedup_temporal_radius, neighbors=dedup_channel_index, out=tmp
+            Xdd, dt=dedup_temporal_radius, neighbors=dedup_channel_index
         )
         all_peaks[i0:i1] = detect.logical_and_(dedup)[:, istart:iend].T
 
@@ -158,11 +163,11 @@ def detect_and_deduplicate(
         return times, chans
 
 
+@torch_compile
 def _is_extreme(
     X: Tensor,
-    dt=5,
+    dt: int = 5,
     neighbors: Tensor | None = None,
-    out=None,
 ):
     if neighbors is not None:
         # CT -> C, n_neighbors, T
@@ -180,6 +185,6 @@ def _is_extreme(
 
     # if max pool made you grow, or if thresholding made you grow,
     # then you were not a peak
-    peak = torch.ge(X[:-1], Xmax, out=out)
+    peak = torch.ge(X[:-1], Xmax)
 
     return peak

@@ -57,9 +57,9 @@ def moppca_simulations():
 # @pytest.mark.parametrize("t_w", ["zero", "smooth"])
 @pytest.mark.parametrize("t_w", ["smooth"])
 # @pytest.mark.parametrize("t_missing", test_t_missing)
-@pytest.mark.parametrize("t_missing", ("random", "by_cluster"))
+@pytest.mark.parametrize("t_missing", ["random", "by_cluster"])
 # @pytest.mark.parametrize("corruption", test_corruption)
-@pytest.mark.parametrize("corruption", (0.2,))
+@pytest.mark.parametrize("corruption", [0.2])
 # @pytest.mark.parametrize("demoinsel", [False, True])
 @pytest.mark.parametrize("demoinsel", [True])
 def test_truncated_mixture(
@@ -163,8 +163,9 @@ def test_truncated_mixture(
 
             # re-bootstrap everything
             distances = tmm.unit_distance_matrix()
-            lut = train_data.remap(distances=distances, remapping=flat_map)
+            lut, n_new = train_data.remap(distances=distances, remapping=flat_map)
             assert lut is not None
+            assert not n_new
             tmm.update_lut(lut)
             em_res = tmm.em(train_data)
 
@@ -182,7 +183,7 @@ def test_truncated_mixture(
                 data=train_data, full_proposal_view=True, needs_bootstrap=False
             )
             train_labels = mixture.labels_from_scores_(train_scores)
-            for unit_id, kmeansk in zip(to_split, n_pieces):
+            for unit_id, kmeansk in zip(to_split, n_pieces, strict=True):
                 split_data = train_data.dense_slice_by_unit(
                     unit_id, gen=tmm.rg, min_count=tmm.p.min_count, labels=train_labels
                 )
@@ -304,8 +305,9 @@ def test_truncated_mixture(
 
             # re-bootstrap everything
             distances = tmm.unit_distance_matrix()
-            lut = train_data.remap(distances=distances, remapping=flat_map)
+            lut, n_new = train_data.remap(distances=distances, remapping=flat_map)
             assert lut is not None
+            assert not n_new
             tmm.update_lut(lut)
 
         em_res = tmm.em(train_data)
@@ -432,11 +434,11 @@ def test_component_initialization(
     np.testing.assert_allclose(subspace_, subspace, atol=subspace_atol)
 
 
-@pytest.mark.parametrize("link", ("single", "complete"))
-@pytest.mark.parametrize("max_distance", (0.0, 0.1, 1.0, 2.0))
-@pytest.mark.parametrize("max_group_size", (1, 2, 5))
-@pytest.mark.parametrize("dist_kind", ("flipeye", "randn", "zero", "real"))
-@pytest.mark.parametrize("K", (1, 2, 5))
+@pytest.mark.parametrize("link", ["single", "complete"])
+@pytest.mark.parametrize("max_distance", [0.0, 0.1, 1.0, 2.0])
+@pytest.mark.parametrize("max_group_size", [1, 2, 5])
+@pytest.mark.parametrize("dist_kind", ["flipeye", "randn", "zero", "real"])
+@pytest.mark.parametrize("K", [1, 2, 5])
 def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
     logger.debug(f"{K=} {dist_kind=} {max_group_size=} {max_distance=}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -456,7 +458,7 @@ def test_tree_groups(K, dist_kind, max_group_size, max_distance, link):
             return
         K = dist.shape[0]
     else:
-        assert False
+        pytest.fail(dist_kind)
 
     groups = mixture.tree_groups(
         dist, max_group_size=max_group_size, max_distance=max_distance, link=link

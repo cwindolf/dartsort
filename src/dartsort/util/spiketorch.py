@@ -281,7 +281,7 @@ def best_shared_pconv(
     tconv: Tensor, spatial_sing: Tensor, batch_size: int = 1024
 ) -> tuple[Tensor, Tensor]:
     rank, rank_, conv_len = tconv.shape
-    n_units, rank__, chans = spatial_sing.shape
+    n_units, rank__ = spatial_sing.shape[:2]
     assert rank == rank_ == rank__
     lag_offset = conv_len // 2
 
@@ -340,7 +340,7 @@ def weighted_best_lagged_scaled_normeuc_dist(
     scale_boundary: float = 1.0 / 3.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
     rank, rank_, conv_len = tconv.shape
-    n_units, rank__, chans = spatial_sing.shape
+    n_units, rank__ = spatial_sing.shape[:2]
     assert rank == rank_ == rank__
     lag_offset = conv_len // 2
 
@@ -693,7 +693,7 @@ def add_spikes_(
     Regular old Tensor.add_() does not do this!
     """
     n_spikes, spike_length_samples, spike_n_chans = waveforms.shape
-    T, C_ = traces.shape
+    C_ = traces.shape[1]
     # traces may be padded with an extra chan, so C is the real n_chans
     C = C_ - int(already_padded)
     assert channel_index.shape == (C, spike_n_chans)
@@ -974,7 +974,8 @@ def nancov(
                 raise e
             else:
                 warnings.warn(
-                    f"Error in nancov's eigh, shown below, was ignored because the covariance remained finite. {e}"
+                    f"Error in nancov's eigh, shown below, was ignored because the covariance remained finite. {e}",
+                    stacklevel=2,
                 )
 
     if return_nobs:
@@ -1388,7 +1389,7 @@ def depthwise_oaconv1d(input, weight, f2=None, padding=0):
         res = res[:, valid_start - padding : valid_start + valid_len + padding]
         return res
 
-    nstep1, pad1, nstep2, pad2 = steps_and_pad(
+    nstep1, pad1, _nstep2, _pad2 = steps_and_pad(
         s1, in1_step, s2, in2_step, block_size, overlap
     )
 
@@ -1444,7 +1445,7 @@ def single_inv_oaconv1d(input, f2, s2, block_size, padding=0, norm="backward"):
     assert overlap is not None
     # case is hard to support...
 
-    nstep1, pad1, nstep2, pad2 = steps_and_pad(
+    nstep1, pad1, _nstep2, _pad2 = steps_and_pad(
         s1, in1_step, s2, in2_step, block_size, overlap
     )
 

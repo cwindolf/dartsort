@@ -47,8 +47,8 @@ logger = get_logger(__name__)
 class Agglomeration:
     agglomerated_sorting: DARTsortSorting
     merge_mapping: np.ndarray
-    distances: np.ndarray
-    shifts: np.ndarray
+    distances: np.ndarray | None
+    shifts: np.ndarray | None
     firing_corr: np.ndarray | None
 
 
@@ -71,38 +71,69 @@ def agglomerate(
         template_merge_cfg = refinement_cfg.template_merge_cfg
 
     if template_data is None:
+        did_flatten = True
         sorting = sorting.flatten(include_gmm_properties=True)
+    else:
+        did_flatten = False
 
-    tdist = template_distances(
-        sorting=sorting,
-        recording=recording,
-        motion=motion,
-        template_data=template_data,
-        waveform_cfg=waveform_cfg,
-        template_merge_cfg=template_merge_cfg,
-        computation_cfg=computation_cfg,
-    )
+    if template_merge_cfg is not None:
+        tdist = template_distances(
+            sorting=sorting,
+            recording=recording,
+            motion=motion,
+            template_data=template_data,
+            waveform_cfg=waveform_cfg,
+            template_merge_cfg=template_merge_cfg,
+            computation_cfg=computation_cfg,
+        )
+    else:
+        tdist = None
 
     # if not doing any QDA, be done now.
-    if refinement_cfg is None or not refinement_cfg.qda_threshold:
-        agg_sorting, new_ids = recluster(
-            sorting=sorting,
-            unit_ids=tdist.template_data.unit_ids,
-            dists=tdist.distances,
-            shifts=tdist.shifts,
-            unit_snrs=tdist.template_data.snrs_by_channel().max(1),
-            threshold=template_merge_cfg.merge_distance_threshold,
-            link=template_merge_cfg.linkage,
-        )
+    no_further_glom = (
+        (refinement_cfg is None)
+        or (template_merge_cfg is None)
+        or (not refinement_cfg.qda_threshold)
+    )
+    if no_further_glom:
+        if tdist is not None:
+            assert template_merge_cfg is not None
+            agg_sorting, new_ids = recluster(
+                sorting=sorting,
+                unit_ids=tdist.template_data.unit_ids,
+                dists=tdist.distances,
+                shifts=tdist.shifts,
+                unit_snrs=tdist.template_data.snrs_by_channel().max(1),
+                threshold=template_merge_cfg.merge_distance_threshold,
+                link=template_merge_cfg.linkage,
+            )
+        elif not did_flatten:
+            agg_sorting = sorting.flatten(include_gmm_properties=True)
+            new_ids = None
+        else:
+            agg_sorting = sorting
+            new_ids = None
+
+        if refinement_cfg is not None:
+            agg_sorting = deduplicate_spikes(agg_sorting, refinement_cfg.dedup_ms)
+
+        agg_sorting, reorder = reorder_by_depth(agg_sorting, motion=motion)
+        if new_ids is None:
+            new_ids = reorder
+        else:
+            new_ids = reorder[np.unique(new_ids, return_inverse=True)[1]]
+
         return Agglomeration(
             agglomerated_sorting=agg_sorting,
             merge_mapping=new_ids,
-            distances=tdist.distances,
-            shifts=tdist.shifts,
+            distances=None if tdist is None else tdist.distances,
+            shifts=None if tdist is None else tdist.shifts,
             firing_corr=None,
         )
 
     # tdist tells us the possible merges
+    assert tdist is not None
+    assert template_merge_cfg is not None
     distance_mask = linkage_mask(
         tdist.distances,
         linkage_method=template_merge_cfg.linkage,
@@ -119,7 +150,7 @@ def agglomerate(
         _oldsum = distance_mask[np.triu_indices_from(distance_mask)].sum()
         fcorr_mask = fcorr <= refinement_cfg.glom_max_firing_corr
         mask = np.logical_and(distance_mask, fcorr_mask)
-        np.fill_diagonal(mask, True)
+        np.fill_diagonal(mask, val=True)
         _newsum = mask[np.triu_indices_from(mask)].sum()
         logger.dartsortdebug(
             f"Firing corr dropped QDA candidate count from {_oldsum} -> {_newsum}."
@@ -193,7 +224,7 @@ def agglomerate(
     final_mask = np.logical_or(qda_mask, force_mask)
     if si_mask is not None:
         final_mask = np.logical_or(final_mask, si_mask)
-    np.fill_diagonal(final_mask, True)
+    np.fill_diagonal(final_mask, val=True)
     final_mask_as_distance = np.logical_not(final_mask).astype(np.float32)
 
     agg_sorting, new_ids = recluster(
@@ -615,7 +646,7 @@ def _qda_job(ij):
     try:
         kde = FFTKDE(bw="ISJ").fit(dll)
     except ValueError as e:
-        logger.dartsortdebug(f"KDEpy error: {str(e)}")
+        logger.dartsortdebug(f"KDEpy error: {e}")
         p.score[i, j] = p.score[j, i] = 0.0
         p.min_ratio[i, j] = p.min_ratio[j, i] = 0.0
         return
@@ -722,7 +753,7 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
         vv = row[ii]
         vv = vv / vv.sum()
 
-        for channel, value in zip(ii, vv):
+        for channel, value in zip(ii, vv, strict=True):
             cixs = ci[channel]
             cixs = cixs[cixs < motion.rgeom.shape[0]]
             weights[uu, cixs] += value
@@ -734,7 +765,7 @@ def count_radial_weights(sorting: DARTsortSorting, motion: MotionInfo, radius: f
 
 def firing_corr(sorting: DARTsortSorting, dt: float, method="binsqrt"):
     if method != "binsqrt":
-        assert False
+        raise ValueError(f"Unknown {method=}.")
 
     tsg = sorting.to_tsgroup()
     fr = tsg.count(bin_size=dt) / dt
@@ -1045,7 +1076,7 @@ def coentropy_merge_mask(
 
     mask = np.logical_or(c.cov >= coverage_threshold, c.iou >= iou_threshold)
     mask = np.logical_and(c.coentropy >= min_coentropy, mask)
-    np.fill_diagonal(mask, True)
+    np.fill_diagonal(mask, val=True)
     return mask, c
 
 

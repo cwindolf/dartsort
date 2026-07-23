@@ -15,8 +15,8 @@ try:
 except ImportError:
     try:
         from importlib_resources import files  # type: ignore  # ty: ignore[x]
-    except ImportError:
-        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
+    except ImportError as e:
+        raise ValueError("Need python>=3.10 or pip install importlib_resources.") from e
 
 _default_pretrained_path: Traversable = files("dartsort.pretrained")
 _default_pretrained_path = _default_pretrained_path.joinpath("single_chan_denoiser.pt")
@@ -546,7 +546,9 @@ class RefinementConfig:
     whiten_dist: bool = True
 
     # template merge parameters
-    template_merge_cfg: TemplateMergeConfig = TemplateMergeConfig(linkage="single")
+    template_merge_cfg: TemplateMergeConfig | None = TemplateMergeConfig(
+        linkage="single"
+    )
 
     # other agglomeration parameters
     glom_max_firing_corr: float | None = -0.1
@@ -1049,13 +1051,13 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     elif cfg.template_interp_kind == "clampna":
         temp_interp_params = clampna_interp_params
     else:
-        assert False
+        raise ValueError(f"Unknown {cfg.template_interp_kind=}")
     if cfg.matching_interp_kind == "tps":
         match_interp_params = tps_interp_clampna_extrap_params
     elif cfg.matching_interp_kind == "clampna":
         match_interp_params = clampna_interp_params
     else:
-        assert False
+        raise ValueError(f"Unknown {cfg.matching_interp_kind=}")
     whiten_cfg = WhiteningConfig(
         strategy=cfg.whiten_strategy,
         estimator=cfg.whiten_estimator,
@@ -1176,7 +1178,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     elif cfg.gmm_metric == "scaled_normeuc":
         dist_thresh = cfg.gmm_scaled_normeuc_threshold
     else:
-        assert False
+        raise ValueError(f"Unknown {cfg.gmm_metric=}")
     interp_params = InterpolationParams(
         method=cfg.interp_method,
         kernel=cfg.interp_kernel,
@@ -1311,7 +1313,14 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
 
     # final aggregation
     if cfg.agg_kind == "none":
-        agg_cfg = None
+        agg_cfg = RefinementConfig(
+            refinement_strategy="agglomerate",
+            template_merge_cfg=None,
+            qda_force_merge_for_temp_dist_below=0.0,
+            dedup_ms=cfg.deduplication_ms,
+            spikeinterface_merge_preset="none",
+            spikeinterface_merge_max_distance=0.0,
+        )
     elif cfg.agg_kind == "template_distance":
         agg_whiten_cfg = WhiteningConfig(
             strategy=cfg.agg_template_whiten_strategy,
@@ -1357,7 +1366,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             spikeinterface_merge_max_distance=cfg.spikeinterface_merge_max_distance,
         )
     else:
-        assert False
+        raise ValueError(f"Unknown {cfg.agg_kind=}.")
 
     post_refinement_cfgs: list[RefinementConfig] = []
     if cfg.post_refinement_merge:

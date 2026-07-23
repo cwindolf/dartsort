@@ -262,8 +262,8 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def drift(self, t_samples):
         return self.segment.drift(t_samples)
 
-    def templates(self, t_samples=None, up=False):
-        return self.segment.templates(t_samples, up)
+    def templates(self, t_samples=None, *, up=False):
+        return self.segment.templates(t_samples, up=up)
 
     def motion(self) -> MotionInfo:
         return self.segment.motion
@@ -323,6 +323,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def save_features_to_hdf5(
         self,
         hdf5_path,
+        *,
         overwrite=False,
         n_jobs=1,
         show_progress=True,
@@ -353,7 +354,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
             )
             jobs = (
                 ((t, min(t + bs, nt)), dict(extract=True, n_residual_snips=nrs))
-                for t, nrs in zip(chunk_starts, residual_snips_per_chunk)
+                for t, nrs in zip(chunk_starts, residual_snips_per_chunk, strict=True)
             )
             with h5py.File(hdf5_path, "w", locking=False) as h5:
                 n = self.segment.n_spikes
@@ -481,6 +482,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
     def save_simulation(
         self,
         folder,
+        *,
         overwrite=False,
         n_jobs=1,
         featurization_cfg=default_sim_featurization_cfg,
@@ -507,7 +509,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
                 recording = None
         else:
             recording = None
-        if recording  is None:
+        if recording is None:
             with warnings.catch_warnings(record=True) as ws:
                 recording = self.save_to_folder(
                     folder=recording_dir,
@@ -574,8 +576,13 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         compute_collision_waveforms=False,
     ):
         super().__init__(parent_recording_segment)
-        assert self.sampling_frequency is not None
         assert drift_type in ("line", "triangle")
+
+        fs = getattr(self, "sampling_frequency", None)
+        if fs is None:
+            fs = getattr(self, "_sampling_frequency", None)
+        assert fs is not None
+        self.fs = fs
 
         self.drift_type = drift_type
         self.drift_speed = drift_speed
@@ -584,9 +591,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         self.temporal_jitter_family = temporal_jitter_family
         self.features_dtype = features_dtype
         self.template_simulator = template_simulator
-        self.refractory_samples = int(
-            refractory_ms * (self.sampling_frequency / 1000.0)
-        )
+        self.refractory_samples = int(refractory_ms * (fs / 1000.0))
 
         # store motion
 
@@ -596,7 +601,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             duration_s = np.ceil(self.get_end_time() - self.get_start_time())
             t = np.arange(duration_s)
             time_bin_centers = t + 0.5 * np.diff(t).mean()
-            tbc_samples = time_bin_centers * self.sampling_frequency
+            tbc_samples = time_bin_centers * fs
             displacement = self.drift(tbc_samples)
             dredge_me = motion_util.get_motion_estimate(
                 displacement=displacement, time_bin_centers_s=time_bin_centers
@@ -635,7 +640,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
 
         # bake all random stuff
         rg = np.random.default_rng(random_seed)
-        n_bins = int(np.ceil(self.get_num_samples() / self.sampling_frequency))
+        n_bins = int(np.ceil(self.get_num_samples() / fs))
         if firing_kind == "uniform":
             firing_rates = rg.uniform(min_fr_hz, max_fr_hz, size=self.n_units)
             states = np.zeros(n_bins, dtype=np.int32)
@@ -651,7 +656,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
                 max_fr=max_fr_hz,
             )
         else:
-            assert False
+            raise ValueError(f"Unknown {firing_kind=}")
         self.random_seed = random_seed
         sorting = simulate_sorting(
             self.n_units,
@@ -660,7 +665,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             rg=rg,
             nbefore=self.trough_offset_samples,
             spike_length_samples=self.spike_length_samples,
-            sampling_frequency=self.sampling_frequency,
+            sampling_frequency=fs,
             refractory_samples=self.refractory_samples,
             globally_refractory=globally_refractory,
         )
@@ -699,12 +704,12 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             ]
 
     def basic_sorting(self) -> DARTsortSorting:
-        assert isinstance(self.sampling_frequency, (int, float))
+        assert isinstance(self.fs, (int, float))
         return DARTsortSorting(
             times_samples=self.times_samples + self.upsampling_offsets,
             labels=self.labels,
             channels=np.zeros_like(self.times_samples),
-            sampling_frequency=self.sampling_frequency,
+            sampling_frequency=self.fs,
             ephemeral_features=dict(
                 time_shifts=self.upsampling_offsets,
                 jitter_ix=self.jitter_ix,
@@ -718,7 +723,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
 
         if self.drift_type == "line":
             t_center = self.get_num_samples() / 2
-            dt = (t_samples - t_center) / self.sampling_frequency
+            dt = (t_samples - t_center) / self.fs
             return dt * self.drift_speed
 
         if self.drift_type == "triangle":
@@ -728,9 +733,9 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
             # -1 to 1 and back to -1, so divide by 4 to have 2*ptp=drift_speed*drift_period.
             return wave * (self.drift_speed * self.drift_period / 4.0)
 
-        assert False
+        raise ValueError(f"Unknown {self.drift_type=}")
 
-    def templates(self, t_samples=None, up=False, padded=False, pad_value=np.nan):
+    def templates(self, t_samples=None, *, up=False, padded=False, pad_value=np.nan):
         drift = 0 if t_samples is None else self.drift(t_samples)
         pos, templates, offsets = self.template_simulator.templates(
             drift=drift, up=up, padded=padded, pad_value=pad_value
@@ -749,6 +754,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         noise_with_margin,
         start_frame,
         end_frame,
+        *,
         in_chunk_only=True,
         extract=False,
         n_residual_snips=0,
@@ -843,6 +849,7 @@ class InjectSpikesPreprocessorSegment(BasePreprocessorSegment):
         start_frame,
         end_frame,
         channel_indices=None,
+        *,
         extract=False,
         inject=False,
         n_residual_snips=0,
