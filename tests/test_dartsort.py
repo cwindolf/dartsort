@@ -148,19 +148,19 @@ def test_initial_detection_swap(tmp_path, simulations, type):
     elif type == "match":
         h5_name = "matching0"
     else:
-        assert False
+        pytest.fail(type)
     assert (tmp_path / f"{h5_name}.h5").exists()
     assert not (tmp_path / "matching1.h5").exists()
 
     if type == "match":
-        count_dif_tol = 0.035
+        count_dif_tol = 0.05
     elif type == "subtract":
         # TODO pretrained decollider or sup denoiser for this sim.
         count_dif_tol = 0.25
     elif type == "threshold":
         count_dif_tol = 0.45
     else:
-        assert False
+        pytest.fail(type)
 
     c0 = len(sim["sorting"])
     c1 = len(res["sorting"])

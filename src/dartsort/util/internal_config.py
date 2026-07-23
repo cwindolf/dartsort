@@ -699,7 +699,7 @@ class SubtractionConfig:
     remove_exact_duplicates: bool = True
     positive_temporal_dedup_radius_samples: int = 41
     subtract_radius_um: float = 200.0
-    residnorm_decrease_threshold: float = 9.0
+    residnorm_decrease_threshold: float = 7.0
     decrease_objective: Literal["norm", "normsq", "deconv"] = "deconv"
     growth_tolerance: float | None = None
     trough_priority: float | None = 2.0
@@ -772,7 +772,7 @@ class MatchingConfig:
     coarse_cd: bool = True
 
     # template matching parameters
-    threshold: float | Literal["fp_control"] = 8.0
+    threshold: float | Literal["fp_control"] = 6.0
     template_svd_compression_rank: int = 5
     template_svd_compression_min_explained_variance: float = 5e-3
     up_factor: int = 4
