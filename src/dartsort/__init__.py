@@ -26,7 +26,6 @@ from .main import (
     DARTsortResult,
     ObjectiveUpdateTemplateMatchingPeeler,
     SubtractionPeeler,
-    check_recording,
     cluster,
     dartsort,
     grab,

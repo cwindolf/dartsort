@@ -45,7 +45,7 @@ from ..util.interpolation_util import (
 from ..util.job_util import ensure_computation_config
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import CloudpicklePoolExecutor, get_pool
-from ..util.py_util import databag
+from ..util.py_util import databag, panic
 from .analysis_plots import bimod_stats, centered_bins, distance_matrix_dendro
 from .colors import glasbey1024
 from .layout import BasePlot, flow_layout
@@ -232,7 +232,7 @@ class ISIHistogram(MixtureComponentPlot):
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
         axis = panel.subplots()
-        inu_full, times_s = mix_data.inu_and_times_full(unit_id)
+        _inu_full, times_s = mix_data.inu_and_times_full(unit_id)
         dt_ms = np.diff(times_s) * 1000
         bin_edges = np.arange(
             -0.5 * self.bin_ms, self.max_ms + self.bin_ms + 1e-5, self.bin_ms
@@ -254,7 +254,7 @@ class ChansHeatmap(MixtureComponentPlot):
         self.snr_cmap = plt.get_cmap(snr_cmap)
 
     def draw(self, panel, mix_data: MixtureVisData, unit_id: int):
-        inu_train, chans = mix_data.train_inds_and_chans(unit_id)
+        _inu_train, chans = mix_data.train_inds_and_chans(unit_id)
         chans = chans[chans < mix_data.tmm.neighb_cov.n_channels]
         uchans, counts = np.unique(chans, return_counts=True)
 
@@ -309,7 +309,7 @@ class LikelihoodsView(MixtureComponentPlot):
             self.nrows = 1
             self.width_ratios = [3, 2, 1]
         else:
-            assert False
+            panic(layout)
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
         inu, t = mix_data.inu_and_times_full(unit_id)
@@ -379,7 +379,7 @@ class NeighborMeans(MixtureComponentPlot):
         self.vis_radius = vis_radius
 
     def compute(self, mix_data: MixtureVisData, unit_id: int):
-        dists, neighbors = mix_data.friends(unit_id, count=self.count)
+        _dists, neighbors = mix_data.friends(unit_id, count=self.count)
         k = len(neighbors)
         chans = mix_data.chans_in_radius(unit_id, self.vis_radius)
         means = mix_data.tmm.b.means[neighbors].view(
@@ -479,12 +479,12 @@ class NeighborQDAPlot(MixtureComponentPlot):
             ncols=self.ncols,
             gridspec_kw=dict(hspace=0.0, wspace=0.0),
         )
-        for ax, nid, color in zip(axes.flat, neighbors, colors):
+        for ax, nid, color in zip(axes.flat, neighbors, colors, strict=False):
             ious = {}
             covs = {}
             dlls = {}
             ls = []
-            for split, linestyle in zip(["full", "eval"], "-:"):
+            for split, linestyle in zip(["full", "eval"], "-:", strict=False):
                 if split == "full":
                     ssco = mix_data.full_scores
                     in_unit_id = mix_data.full_inunits[int(unit_id)]
@@ -494,7 +494,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
                     in_nid = mix_data.eval_inunits.get(int(nid), empty)
                     in_unit_id = mix_data.eval_inunits.get(int(unit_id), empty)
                 else:
-                    assert False
+                    panic(split)
 
                 na = in_unit_id.size
                 nb = in_nid.size
@@ -549,7 +549,7 @@ class NeighborQDAPlot(MixtureComponentPlot):
             elif self.kind == "kde":
                 made_one = False
                 messages = []
-                for (label, dll), linestyle in zip(dlls.items(), ls):
+                for (label, dll), linestyle in zip(dlls.items(), ls, strict=False):
                     bines, bincs = centered_bins(dll)
                     if not bincs.size:
                         continue
@@ -731,7 +731,7 @@ class MeanView(MixtureComponentPlot):
         mean = mix_data.tmm.b.means[unit_id]
         mean_recon = mix_data.reconstruct_flat(mean)
         mean_recon = mean_recon.reshape(1, -1, mix_data.tmm.neighb_cov.n_channels)
-        inu_train, wchans, features, waveforms = mix_data.random_train_waveforms(
+        _inu_train, wchans, _features, waveforms = mix_data.random_train_waveforms(
             unit_id=unit_id, count=self.n_waveforms_show
         )
         if self.mini:
@@ -753,7 +753,7 @@ class MeanView(MixtureComponentPlot):
 
         ax = panel.subplots()
         ax.axis("off")
-        lines, pchans = geomplot(
+        _lines, pchans = geomplot(
             waveforms=waveforms,
             channels=wchans,
             color="k",
@@ -802,7 +802,7 @@ class CovarianceView(MixtureComponentPlot):
 
     def compute(self, mix_data: MixtureVisData, unit_id: int, channels: np.ndarray | None = None):
         # load data
-        inu_train, wchans, features, waveforms = mix_data.random_train_waveforms(
+        inu_train, wchans, features, _waveforms = mix_data.random_train_waveforms(
             unit_id=unit_id, count=self.n_waveforms_show
         )
 
@@ -920,7 +920,7 @@ class CovarianceView(MixtureComponentPlot):
         )
         res_kw = cov_kw | dict(vmin=-vm, vmax=vm)
 
-        for row_top, (name, (cov, ev)) in zip(axes_top, stats.items()):
+        for row_top, (name, (cov, ev)) in zip(axes_top, stats.items(), strict=False):
             c = self.colors[name]
             if self.cov_vert:
                 row_top[0].set_ylabel(name, color=c)
@@ -968,7 +968,7 @@ class SplitView(MixtureComponentPlot):
 
     def __init__(
         self,
-        colors=["r", "g", "b", "darkorange", "darkviolet", "mediumturquoise"],
+        colors=("r", "g", "b", "darkorange", "darkviolet", "mediumturquoise"),
         bail_color="k",
         vis_radius=50.0,
         dist_cmap="plasma",
@@ -1134,7 +1134,7 @@ class SplitView(MixtureComponentPlot):
             for uid in group.tolist():
                 myl = kmeans_labels[orig_labels == uid]
                 uu, cc = myl.unique(return_counts=True)
-                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc, strict=False))
                 cstrs.append(f"{uid}->[{cc}]")
             cstr = "orig->km: " + "\n      ".join(cstrs)
             txt += cstr + "\n"
@@ -1143,7 +1143,7 @@ class SplitView(MixtureComponentPlot):
             for uid in group.tolist():
                 myl = split_res.train_assignments[orig_labels == uid]
                 uu, cc = myl.unique(return_counts=True)
-                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc, strict=False))
                 cstrs.append(f"{uid}->[{cc}]")
             cstr = "orig->sp: " + "\n      ".join(cstrs)
             txt += cstr + "\n"
@@ -1152,7 +1152,7 @@ class SplitView(MixtureComponentPlot):
             for uid in range(split_res.n_split):
                 myl = orig_labels[split_res.train_assignments.cpu() == uid]
                 uu, cc = np.unique(myl, return_counts=True)
-                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc))
+                cc = ",".join(f"{int(uuu)}:{int(ccc)}" for uuu, ccc in zip(uu, cc, strict=False))
                 cstrs.append(f"{uid}->[{cc}]")
             cstr = "sp->orig " + "\n      ".join(cstrs)
             txt += cstr + "\n"
@@ -1200,7 +1200,7 @@ class SplitView(MixtureComponentPlot):
             means,
             mean_chans,
             chans_by_km,
-            split_inds,
+            _split_inds,
             tw,
         ) = c
 
@@ -1400,7 +1400,7 @@ def fit_mixture_for_vis(
     if em or split or merge or both:
         mix_data.tmm.em(mix_data.train_data)
     for _ in range(max(int(split), int(both))):
-        run_split(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
+        run_split(mix_data.tmm, train_data=mix_data.train_data, val_data=mix_data.val_data, prog_level=1)
         mix_data.tmm.em(mix_data.train_data)
     if merge or both:
         run_merge(mix_data.tmm, mix_data.train_data, mix_data.val_data, prog_level=1)
@@ -1455,7 +1455,7 @@ def fit_mixture_for_vis(
     else:
         val_ixs = None
 
-    times_s = cast(np.ndarray, getattr(sorting, "times_seconds"))
+    times_s = sorting.times_seconds
 
     return MixtureVisData(
         tmm=mix_data.tmm,
@@ -1570,7 +1570,7 @@ def make_mixture_summaries(
                 smoothing=0,
                 total=len(unit_ids),
             )
-        for res in results:
+        for _ in results:
             pass
 
 
@@ -1795,7 +1795,7 @@ def vis_split_interpolation(
         )
     maa = max([np.abs(w).max() for w in orig_wfs])
 
-    for col, iwf, owf, ochans, c in zip(axes, interp_wfs, orig_wfs, orig_chans, "rgb"):
+    for col, iwf, owf, ochans, c in zip(axes, interp_wfs, orig_wfs, orig_chans, "rgb", strict=True):
         geomplot(
             waveforms=iwf,
             channels=kmeans_chans[None].broadcast_to(iwf.shape[0], *kmeans_chans.shape),
@@ -1805,6 +1805,7 @@ def vis_split_interpolation(
             ax=col[1],
             max_abs_amp=maa,
             linewidth=1,
+            color=c,
             zlim=None,
         )
         for ax in col[: 1 + overlay]:
@@ -1902,10 +1903,10 @@ def vis_obs_interpolation(
     ax_top = panels[0].subplots()
     ax_top.scatter(t_s, disp, c=dcolors, s=3, lw=0)
 
-    for row, (name, wf) in zip(panels[1:], waveforms.items()):
+    for row, (name, wf) in zip(panels[1:], waveforms.items(), strict=False):
         row_axs = row.subplots(ncols=2)
         row.suptitle(name, fontsize="small")
-        for ax, cs in zip(row_axs, (dcolors, tcolors)):
+        for ax, cs in zip(row_axs, (dcolors, tcolors), strict=False):
             geomplot(
                 waveforms=wf,
                 channels=tchans.numpy(force=True),

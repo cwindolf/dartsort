@@ -217,8 +217,6 @@ def simulate_moppca(
     x = x.to(device)
     noise = noise.to(device)
     neighbs = neighbs.to(device)
-    noise_log_priors = noise.detection_prior_log_prob(mu)
-    noise_log_priors = noise_log_priors[labels]
 
     return dict(
         prgeom=prgeom,
@@ -235,7 +233,6 @@ def simulate_moppca(
         cov=cov,
         x=x,
         channel_observed_by_unit=clus_mask,
-        noise_log_priors=noise_log_priors,
         n_channels=nc,
     )
 

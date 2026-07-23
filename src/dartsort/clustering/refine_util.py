@@ -1,7 +1,6 @@
 from threading import local
 from typing import cast
 
-import h5py
 import numba
 import numpy as np
 import torch
@@ -12,7 +11,6 @@ from spikeinterface.core.baserecording import BaseRecording
 
 from dartsort.clustering.mixture import Scores
 
-from ..transform.temporal_pca import BaseTemporalPCA
 from ..util import data_util, spiketorch
 from ..util.internal_config import ComputationConfig, RefinementConfig
 from ..util.logging_util import DARTSORTDEBUG, DARTSORTVERBOSE, get_logger, progbar
@@ -23,57 +21,6 @@ from .cluster_util import hierarchical_cluster, reorder_by_depth
 from .clustering_features import StableWaveformFeatures
 
 logger = get_logger(__name__)
-
-
-def get_noise_log_priors(noise, sorting, refinement_cfg):
-    from dartsort.templates import TemplateData
-
-    if not refinement_cfg.noise_fp_correction:
-        return None
-
-    h5_name = sorting.parent_h5_path
-    if h5_name is None:
-        return None
-    stem = h5_name.stem
-
-    if stem.startswith("matching"):
-        model_dir = h5_name.parent / f"{stem}_models"
-        templates_npz = model_dir / "template_data.npz"
-        if not templates_npz.exists():
-            raise ValueError(f"{templates_npz} is not there?")
-
-        with h5py.File(h5_name, "r", locking=False) as h5:
-            matching_labels = h5["labels"][:]
-
-        template_data = TemplateData.from_npz(templates_npz)
-        tpca = data_util.get_tpca(sorting)
-        assert isinstance(tpca, BaseTemporalPCA)
-        if (sl := getattr(tpca, "temporal_slice", None)) is not None:
-            temps_tpca = torch.asarray(template_data.templates[:, sl])
-        else:
-            temps_tpca = torch.asarray(template_data.templates)
-
-        n, t, c = temps_tpca.shape
-        temps_tpca = temps_tpca.permute(0, 2, 1).reshape(n * c, t)
-        temps_tpca = tpca._transform_in_probe(temps_tpca)
-        temps_tpca = temps_tpca.reshape(n, c, -1).permute(0, 2, 1)
-
-        noise_log_priors = noise.detection_prior_log_prob(temps_tpca)
-        logger.dartsortdebug(
-            f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}."
-        )
-        noise_log_priors = noise_log_priors[matching_labels]
-
-        return noise_log_priors
-    elif stem.startswith("subtract"):
-        noise_log_priors = noise.channelwise_detection_prior_log_prob()
-        logger.dartsortdebug(
-            f"Got log priors ranging {noise_log_priors.min()}-{noise_log_priors.max()}."
-        )
-        noise_log_priors = noise_log_priors[sorting.channels]
-        return noise_log_priors
-    else:
-        return None
 
 
 @databag

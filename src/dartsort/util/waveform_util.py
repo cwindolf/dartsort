@@ -13,7 +13,6 @@ from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
 
 from .logging_util import progrange
-from .py_util import panic
 
 # -- geometry utils
 
