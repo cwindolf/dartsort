@@ -929,6 +929,7 @@ default_agglomerate_cfg = RefinementConfig(
         merge_distance_threshold=0.6, linkage="single"
     ),
     dedup_ms=0.5,
+    spikeinterface_merge_preset="dartsort_slay_xc_ccg",
 )
 default_post_refinement_cfg = RefinementConfig(refinement_strategy="filter")
 default_post_refinement_cfgs = (default_post_refinement_cfg,)
