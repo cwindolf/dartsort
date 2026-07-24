@@ -1934,8 +1934,7 @@ class TruncatedSpikeData(BatchedSpikeData):
             d[:n_units_new, :n_units_new] = distances
             d[n_units_new:, n_units_new:].fill_diagonal_(0.0)
             distances = d
-        if n_new:
-            self.update_adjacency(n_units=n_units_new + n_new)
+        self.update_adjacency(n_units=n_units_new + n_new)
         if pnoid and distances is not None:
             _max_cand = self.candidates.amax()
             assert _max_cand < distances.shape[0], f"{_max_cand} {distances.shape}"
