@@ -208,7 +208,7 @@ class DARTsortUserConfig:
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"
     """Final distance or GMM-based merge type."""
 
-    spikeinterface_merge_preset: str | Literal["none"] | None = "dartsort_slay_xc_ccg"
+    spikeinterface_merge_preset: str | Literal["none"] = "none"
     """Call out to SpikeInterface's auto_merge() for a final merge using timing / RP information.
     Setting this is slightly different' from calling auto_merge() externally, since the internal
     version will make use of dartsort's templates and template distances.

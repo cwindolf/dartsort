@@ -1,7 +1,8 @@
 import warnings
+from collections.abc import Callable, Sequence
 from logging import getLogger
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Literal
 
 import matplotlib.font_manager
 import matplotlib.pyplot as plt
@@ -45,7 +46,7 @@ def visualize_sorting(
     make_versus=True,
     make_venns=True,
     analysis=None,
-    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
+    single_unit_ids: Sequence[int] | Literal["gtrelevant", "existing"] | None = None,
     allow_qda=True,
     template_cfg=raw_template_cfg,
     mix_refinement_cfg=default_refinement_cfg,
@@ -278,7 +279,7 @@ def visualize_all_sorting_steps(
     exhaustive_gt=True,
     start_from_matching=False,
     n_units=None,
-    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
+    single_unit_ids: Sequence[int] | Literal["gtrelevant", "existing"] | None = None,
     stop_after=None,
     dpi=200,
     overwrite=False,
@@ -449,7 +450,7 @@ def _plan_vis(
     computation_cfg=None,
     seed=0,
     n_units=None,
-    single_unit_ids: Sequence[int] | None | Literal["gtrelevant", "existing"] = None,
+    single_unit_ids: Sequence[int] | Literal["gtrelevant", "existing"] | None = None,
 ):
     computation_cfg = ensure_computation_config(computation_cfg)
 
@@ -573,7 +574,8 @@ def _plan_vis(
             )
             need_venn_cmps.append(need_venn_cmp)
         venn_dirs = [
-            vdir if _n else None for vdir, _n in zip(venn_dirs, need_venn_cmps, strict=True)
+            vdir if _n else None
+            for vdir, _n in zip(venn_dirs, need_venn_cmps, strict=True)
         ]
         need_analysis = need_analysis or any(need_venn_cmps)
     else:

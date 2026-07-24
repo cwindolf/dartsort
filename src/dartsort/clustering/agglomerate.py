@@ -607,7 +607,6 @@ class QDACtx:
 
 
 def _qda_init(ctx):
-    global _qda_context
     _qda_context.ctx = ctx
 
 

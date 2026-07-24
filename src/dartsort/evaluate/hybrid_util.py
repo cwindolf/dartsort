@@ -1,9 +1,10 @@
 import dataclasses
 import time
 import warnings
+from collections.abc import Generator
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, cast
 
 import numpy as np
 from probeinterface import Probe
@@ -95,7 +96,8 @@ def get_drifty_hybrid_recording(
 
     if not sorting.check_serializability(type="json"):
         warnings.warn(
-            "Your sorting is not serializable, which could lead to problems later."
+            "Your sorting is not serializable, which could lead to problems later.",
+            stacklevel=2,
         )
 
     rec = InjectDriftingTemplatesRecording(
@@ -210,13 +212,13 @@ def greedy_match(
     if show_progress:
         thresholds = progbar(thresholds, desc="Greedy match")
 
-    for j, thresh in enumerate(thresholds):
+    for thresh in thresholds:
         test_unmatched = np.flatnonzero(assignments < 0)
         if not test_unmatched.size:
             break
         test_kdtree = KDTree(test_coords[test_unmatched])
         gt_ix = np.flatnonzero(gt_unmatched)
-        d, i = test_kdtree.query(
+        _, i = test_kdtree.query(
             gt_coords[gt_ix],
             k=1,
             distance_upper_bound=min(thresh, max_val),
@@ -357,7 +359,7 @@ def sorting_from_times_labels(
         # these positions can drift off the probe if the main channel does! so in that case
         # we can't really upper bound the distance query. i guess it would be, like, the
         # largest distance that a unit would ever extend, or something, but let's not worry.
-        d, channels = motion.geom_kdt.query(guess_pos, workers=n_jobs)
+        _, channels = motion.geom_kdt.query(guess_pos, workers=n_jobs)
 
     assert isinstance(channels, np.ndarray)
     sorting = sorting.ephemeral_replace(channels=channels)
@@ -482,7 +484,7 @@ def load_dartsort_step_sortings(
                     st0.ephemeral_replace(labels=np.load(npy)),
                 )
             else:
-                warnings.warn(f"Initial {npy} does not exist.")
+                warnings.warn(f"Initial {npy} does not exist.", stacklevel=2)
                 yield None, None
 
             other_initial_npys = sorted(sorting_dir.glob("initial_*_labels.npy"))

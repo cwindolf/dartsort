@@ -136,7 +136,7 @@ class DARTsortGroundTruthComparison:
         return res
 
     def soft_assignment_key(
-        self, to_try=["merged_responsibilities", "gmm_responsibilities"]
+        self, to_try=("merged_responsibilities", "gmm_responsibilities")
     ) -> str | None:
         if hasattr(self, "_soft_assignment_key"):
             return self._soft_assignment_key
@@ -183,10 +183,11 @@ class DARTsortGroundTruthComparison:
             know that, so we set
                 brier[i] = 2
         """
-        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(gt_unit)
+        in_gt_unit, matched_gt_indices, only_gt_indices = self.matched_and_missed(
+            gt_unit
+        )
 
         # hard brier score
-
 
         tpmask = gt_is_tp[in_gt]
         fnmask = np.logical_not(tpmask)
@@ -196,7 +197,7 @@ class DARTsortGroundTruthComparison:
                 gt_unit_id=gt_unit_id,
                 matched=matched,
                 brier=hard_brier,
-                kind='hard',
+                kind="hard",
                 true_class_mean_prob=tpmask.mean(),
             )
         )

@@ -3263,9 +3263,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
             max_group_size=max(1, self.p.split_k - 1),
         )
         if _stop_after:
-            split_groups = list(
+            split_groups = [
                 sg for _, sg in zip(range(_stop_after), split_groups, strict=False)
-            )
+            ]
         if show_progress:
             split_groups = progbar(split_groups, desc="Split", smoothing=0.0)
 
