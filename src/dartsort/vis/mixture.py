@@ -1,6 +1,7 @@
 import math
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, cast
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -976,20 +977,25 @@ class SplitView(MixtureComponentPlot):
         bail_color="k",
         vis_radius=50.0,
         dist_cmap="plasma",
+        manual_group=None,
+        keep_original_components=False,
     ):
         self.colors = np.array(colors)
         self.bail_color = bail_color
         self.vis_radius = vis_radius
         self.dist_cmap = plt.get_cmap(dist_cmap)
+        self.manual_group = manual_group
+        self.keep_original_components = keep_original_components
 
     def compute(
         self, mix_data: MixtureVisData, unit_id: int, split_res=None, debug_info=None
     ):
         # my group...
-        if mix_data.tmm.p.split_friend_distance:
-            _, friends = mix_data.friends(
-                unit_id, count=mix_data.tmm.p.max_group_size, me_last=False
-            )
+        if self.manual_group is not None:
+            group = torch.tensor(self.manual_group)
+        elif mix_data.tmm.p.split_friend_distance:
+            groupsize = max(1, mix_data.tmm.p.split_k - 1) - 1
+            _, friends = mix_data.friends(unit_id, count=groupsize, me_last=False)
             friends = torch.as_tensor(friends)
             D = mix_data.inf_diag_unit_distance_matrix[friends][:, friends].clone()
             D.fill_diagonal_(0.0)
@@ -1012,6 +1018,7 @@ class SplitView(MixtureComponentPlot):
                 train_labels=torch.asarray(mix_data.train_labels),
                 eval_labels=mix_data.eval_labels,
                 debug=True,
+                keep_original_components=self.keep_original_components,
             )
         else:
             if split_res is not None:
@@ -1631,9 +1638,7 @@ def _summary_init(*args):
 
 
 def _summary_job(unit_id):
-    global _summary_job_context
     assert _summary_job_context is not None
-    tmp_out = None
     try:
         ext = _summary_job_context.image_ext
         tmp_out = _summary_job_context.save_folder / f"tmp_unit{unit_id:04d}.{ext}"

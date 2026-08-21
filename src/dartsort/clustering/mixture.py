@@ -1850,6 +1850,7 @@ class TruncatedSpikeData(BatchedSpikeData):
         assert self.candidates is not None
         assert unit_ids is not None
         unit_ids = torch.as_tensor(unit_ids, device=self.candidates.device)
+        n_ids = unit_ids.numel()
         if labels is None:
             labels = self.candidates[:, 0]
         else:
@@ -1865,9 +1866,9 @@ class TruncatedSpikeData(BatchedSpikeData):
         (ixs,) = mask.nonzero(as_tuple=True)
         if min_count and ixs.numel() < min_count:
             return None
-        if (nixs := ixs.numel()) > self.dense_slice_size_per_unit:
+        if (nixs := ixs.numel()) > self.dense_slice_size_per_unit * n_ids:
             perm = torch.randperm(nixs, generator=gen, device=ixs.device)
-            ixs = ixs[perm[: self.dense_slice_size_per_unit]]
+            ixs = ixs[perm[: self.dense_slice_size_per_unit * n_ids]]
             ixs = torch.msort(ixs)
 
         return self.dense_slice(ixs)
@@ -2989,6 +2990,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         train_labels: Tensor,
         eval_labels: Tensor,
         debug: bool = False,
+        keep_original_components: bool = False,
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
         assert self.noise is not None
         assert self.erp is not None
@@ -3009,6 +3011,12 @@ class TruncatedMixtureModel(BaseMixtureModel):
         elif split_data is None:
             return None, None
 
+        if keep_original_components:
+            ixs = split_data.indices
+            split_data_labels = train_labels.to(ixs.device)[ixs]
+        else:
+            split_data_labels = None
+
         # kmeans on interp whitened feats
         kmeans_responsibilities, kmeans_x, kmeans_chans = try_kmeans(
             data=split_data,
@@ -3025,6 +3033,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             weights=split_data.duties,
             debug=debug,
             whiten=self.p.whiten_split,
+            force_labels=split_data_labels,
         )
         if debug or logger.isEnabledFor(DARTSORTVERBOSE):
             group_str = ",".join(map(str, group.tolist()))
@@ -5455,6 +5464,7 @@ def try_kmeans(
     debug: bool = False,
     whiten: bool = False,
     bail_at: int = 1,
+    force_labels: Tensor | None = None,
 ) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
     # interpolate whitened data
     channels = data.covered_channels(min_channel_count)
@@ -5466,41 +5476,52 @@ def try_kmeans(
     x = x.view(len(x), -1)
     x_ret = x if debug else None
 
-    # kmeans
-    _can_batch = (
-        weights is None
-        and with_proportions
-        and not drop_prop
-        and kmeanspp_initial == "random"
-    )
-    if _can_batch:
-        kres = batched_kmeans(
-            x,
-            k,
-            seed=gen,
-            n_iter=n_iter,
-            kmeanspp_seeds_per_try=n_kmeanspp_tries,
-            n_tries=n_kmeans_tries,
-            beta=kmeans_beta,
-        )
+    if force_labels is not None:
+        # debugging vis path.
+        _, labels = force_labels.to(x.device).unique(return_inverse=True)
+        e = F.one_hot(labels).to(x)
+        if weights is not None:
+            e = e * weights.to(x)[:, None]
+        log_props = e.sum(0).div(e.sum()).log_()
+        centroids = (e / e.sum(0)).T @ x
+        dists = torch.cdist(x, centroids).square_()
+        resps = log_props.sub(dists, alpha=0.5 * kmeans_beta).softmax(dim=1)
     else:
-        assert kmeans_beta == 1.0
-        kres = kmeans(
-            x,
-            n_components=k,
-            random_state=gen,
-            n_iter=n_iter,
-            with_proportions=with_proportions,
-            drop_prop=drop_prop,
-            kmeanspp_initial=kmeanspp_initial,
-            n_kmeans_tries=n_kmeans_tries,
-            n_kmeanspp_tries=n_kmeanspp_tries,
-            weights=weights.to(x) if weights is not None else None,
+        # kmeans
+        _can_batch = (
+            weights is None
+            and with_proportions
+            and not drop_prop
+            and kmeanspp_initial == "random"
         )
-    resps = kres.responsibilities
+        if _can_batch:
+            kres = batched_kmeans(
+                x,
+                k,
+                seed=gen,
+                n_iter=n_iter,
+                kmeanspp_seeds_per_try=n_kmeanspp_tries,
+                n_tries=n_kmeans_tries,
+                beta=kmeans_beta,
+            )
+        else:
+            assert kmeans_beta == 1.0
+            kres = kmeans(
+                x,
+                n_components=k,
+                random_state=gen,
+                n_iter=n_iter,
+                with_proportions=with_proportions,
+                drop_prop=drop_prop,
+                kmeanspp_initial=kmeanspp_initial,
+                n_kmeans_tries=n_kmeans_tries,
+                n_kmeanspp_tries=n_kmeanspp_tries,
+                weights=weights.to(x) if weights is not None else None,
+            )
+        resps = kres.responsibilities
     if resps is None:
         return None, x_ret, channels
-    assert resps.shape[1] <= k
+    assert resps.shape[1] <= k or force_labels is not None
     big_enough_mask = resps.sum(dim=0) >= min_count
     n_big = big_enough_mask.sum().cpu().item()
     if n_big <= bail_at:
