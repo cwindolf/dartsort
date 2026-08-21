@@ -37,10 +37,13 @@ class HybridDataset:
         spike_length: int = 121,
         override_recording: sc.BaseRecording | None = None,
         override_motion: MotionInfo | None = None,
+        recompute_templates: bool = False,
         template_cfg=raw_template_cfg,
     ) -> DARTsortAnalysis:
         if override_motion is None:
-            if spike_length != self.gt_templates.spike_length_samples:
+            if recompute_templates:
+                template_data = None
+            elif spike_length != self.gt_templates.spike_length_samples:
                 i0 = self.gt_templates.trough_offset_samples - trough_offset
                 assert i0 >= 0
                 template_data = replace(

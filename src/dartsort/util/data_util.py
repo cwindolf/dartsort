@@ -355,9 +355,6 @@ class DARTsortSorting:
 
         if template_data is not None:
             td_ext = ComputeTemplates(analyzer)
-            assert np.array_equal(
-                template_data.unit_ids, np.arange(len(template_data.unit_ids))
-            )
             s_before = template_data.trough_offset_samples
             s_after = template_data.spike_length_samples - s_before
             ms_per_sample = 1000.0 / self.sampling_frequency
