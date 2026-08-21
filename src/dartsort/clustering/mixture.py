@@ -2380,7 +2380,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         )
 
     @classmethod
-    def initialize_from_dense_data_with_fixed_responsibilities(
+    def initialize_from_dense_data_and_responsibilities(
         cls,
         *,
         signal_rank: int,
@@ -3055,7 +3055,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # initialize dense model with fixed resps
         group_lp = self.b.log_proportions[group].logsumexp(dim=0).item()
         split_model, _, split_data, any_spikes_discarded, _, keep_spikes = (
-            TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+            TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibilities,
                 signal_rank=self.signal_rank,
@@ -5184,7 +5184,7 @@ def _fit_subset_models(
     for s0 in range(0, n_subsets, max_fit_at_once):
         s1 = min(n_subsets, s0 + max_fit_at_once)
         s0m, s0valid, _, s0discard, s0mask, _ = (
-            TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+            TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                 data=train_data,
                 responsibilities=subset_resps[:, s0:s1],
                 signal_rank=mm.signal_rank,
@@ -5706,7 +5706,7 @@ def _evaluate_single_refit_demolition(
 
     # re-fit model to train_scores_adj
     chopped_model, _s0valid, _, _s0discard, _s0mask, _ = (
-        TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+        TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
             data=group_train_data,
             responsibilities=chopped_responsibilities,
             signal_rank=mm.signal_rank,
