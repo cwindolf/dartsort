@@ -23,7 +23,8 @@ from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import databag
-from ..util.waveform_util import single_channel_index
+from ..util.spiketorch import svd_lowrank_helper
+from ..util.waveform_util import make_channel_index, single_channel_index
 from . import cluster_util
 
 logger = get_logger(__name__)
@@ -144,22 +145,31 @@ class SimpleMatrixFeatures:
                 raise_on_na=raise_on_na,
             )
             assert pcs is not None
-            pctf = clustering_features_cfg.pc_transform
-            if pctf == "log":
-                pcs = signed_log1p(
-                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+            features.append(
+                _transform_pcs(
+                    pcs,
+                    clustering_features_cfg=clustering_features_cfg,
+                    raise_on_na=raise_on_na,
                 )
-            elif pctf == "sqrt":
-                pcs = signed_sqrt_transform(
-                    pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+            )
+
+        if clustering_features_cfg.n_multi_channel_pcs:
+            pcs = _compute_multi_channel_pcs(
+                sorting=sorting,
+                motion=motion,
+                clustering_features_cfg=clustering_features_cfg,
+                computation_cfg=computation_cfg,
+                raise_on_na=raise_on_na,
+            )
+            assert pcs is not None
+            features.append(
+                _transform_pcs(
+                    pcs,
+                    clustering_features_cfg=clustering_features_cfg,
+                    raise_on_na=raise_on_na,
+                    name="multi-channel pcs",
                 )
-            else:
-                assert pctf in ("none", None)
-            pcs *= clustering_features_cfg.pc_scale
-            check_numbers(f"{pctf} pcs", pcs, raise_for_numerics=raise_on_na)
-            if torch.is_tensor(pcs):
-                pcs = pcs.numpy(force=True)
-            features.append(pcs)
+            )
 
         n = t_s.shape[0]
         if len(features):
@@ -324,6 +334,169 @@ def _compute_main_channel_pcs(
         check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
     else:
         pcs = None
+    return pcs
+
+
+def _compute_multi_channel_pcs(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+    raise_on_na: bool,
+):
+    n_pcs = clustering_features_cfg.n_multi_channel_pcs
+    if not n_pcs:
+        return None
+
+    feats, neighborhoods, neighborhood_ids, n_target_channels = _multi_channel_features(
+        sorting=sorting,
+        clustering_features_cfg=clustering_features_cfg,
+        motion=motion,
+        computation_cfg=computation_cfg,
+    )
+    pcs = _multi_channel_embedding(
+        feats=feats,
+        neighborhoods=neighborhoods,
+        neighborhood_ids=neighborhood_ids,
+        n_target_channels=n_target_channels,
+        n_pcs=n_pcs,
+    )
+    check_numbers("multi channel pcs", pcs, raise_for_numerics=raise_on_na)
+    return pcs
+
+
+def _multi_channel_features(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+) -> tuple[Tensor, np.ndarray, np.ndarray, int]:
+    geom = motion.geom
+    multi_ci = make_channel_index(geom, clustering_features_cfg.multi_channel_pc_radius)
+    n_spikes = len(sorting)
+
+    if clustering_features_cfg.motion_aware:
+        shifts, n_pitches_shift = motion.pitch_shifts(
+            sorting=sorting,
+            motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+        )
+        target_geom = motion.rgeom
+        _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+        target_channels, neighborhoods, neighborhood_ids, *_ = get_stable_channels(
+            motion=motion,
+            channels=sorting.channels,
+            channel_index=multi_ci,
+            n_pitches_shift=n_pitches_shift,
+            workers=workers,
+        )
+    else:
+        shifts = np.zeros(n_spikes, dtype=np.float32)
+        target_geom = geom
+        neighborhoods, chan_to_neighborhood_id = np.unique(
+            multi_ci, axis=0, return_inverse=True
+        )
+        neighborhood_ids = chan_to_neighborhood_id[sorting.channels]
+        target_channels = neighborhoods[neighborhood_ids]
+
+    assert sorting.parent_h5_path is not None
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        _erp, feats = interpolate_by_chunk(
+            mask=None,
+            dataset=h5[clustering_features_cfg.pca_dataset_name],
+            geom=geom,
+            channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+            channels=sorting.channels,
+            shifts=shifts,
+            registered_geom=target_geom,
+            target_channels=target_channels,
+            params=clustering_features_cfg.interp_params,
+            trim_to_rank=clustering_features_cfg.feature_rank,
+            show_progress=False,
+        )
+
+    feats = torch.asarray(feats)
+    return feats, neighborhoods, neighborhood_ids, len(target_geom)
+
+
+def _multi_channel_embedding(
+    *,
+    feats: Tensor,
+    neighborhoods: np.ndarray,
+    neighborhood_ids: np.ndarray | Tensor,
+    n_target_channels: int,
+    n_pcs: int,
+) -> Tensor:
+    n_spikes, rank, n_chans = feats.shape
+    dim = rank * n_chans
+    assert dim >= n_pcs, f"{n_pcs=} {dim=}."
+    feats_flat = feats.view(n_spikes, dim)
+
+    neighborhood_ids = torch.asarray(neighborhood_ids)
+    obs_mask = torch.asarray(neighborhoods) < n_target_channels
+    neighb_is_full = obs_mask.all(dim=1)
+    spike_is_full = neighb_is_full[neighborhood_ids]
+
+    if spike_is_full.all():
+        fit_feats = feats_flat
+    elif neighb_is_full.any():
+        fit_feats = feats_flat[spike_is_full]
+    else:
+        logger.warning("No full neighborhoods??")
+        fit_feats = torch.nan_to_num(feats_flat)
+    logger.dartsortdebug(
+        f"mcPCA: rank {n_pcs} fit to {fit_feats.shape=} ({feats.shape=})."
+    )
+    _, components, *_ = svd_lowrank_helper(fit_feats, rank=n_pcs)
+    del fit_feats
+
+    pcs = feats_flat @ components.T
+    basis = components.T.reshape(rank, n_chans, n_pcs).double()
+    order = torch.argsort(neighborhood_ids)
+    starts = torch.zeros(len(neighborhoods) + 1, dtype=torch.long)
+    torch.cumsum(
+        torch.bincount(neighborhood_ids, minlength=len(neighborhoods)),
+        dim=0,
+        out=starts[1:],
+    )
+    for j in neighb_is_full.logical_not().nonzero(as_tuple=True)[0]:
+        in_neighb = order[starts[j] : starts[j + 1]]
+        if not in_neighb.numel():
+            continue
+        obs = obs_mask[j]
+        # (rank * n_obs, n_pcs)
+        w = basis[:, obs].reshape(-1, n_pcs)
+        # (n_in_neighb, rank * n_obs)
+        x = feats[in_neighb][:, :, obs].reshape(in_neighb.numel(), -1).double()
+        # inv(w'w) w' x' for each spike
+        pcs[in_neighb] = torch.linalg.solve(w.T @ w, (x @ w).T).T.to(pcs)
+
+    return pcs
+
+
+def _transform_pcs(
+    pcs,
+    *,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    raise_on_na: bool,
+    name: str = "pcs",
+) -> np.ndarray:
+    pctf = clustering_features_cfg.pc_transform
+    if pctf == "log":
+        pcs = signed_log1p(
+            pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+        )
+    elif pctf == "sqrt":
+        pcs = signed_sqrt_transform(
+            pcs, pre_scale=clustering_features_cfg.pc_pre_transform_scale
+        )
+    else:
+        assert pctf in ("none", None)
+    pcs *= clustering_features_cfg.pc_scale
+    check_numbers(f"{pctf} {name}", pcs, raise_for_numerics=raise_on_na)
+    if torch.is_tensor(pcs):
+        pcs = pcs.numpy(force=True)
     return pcs
 
 

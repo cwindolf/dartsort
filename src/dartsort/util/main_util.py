@@ -472,7 +472,11 @@ def _matching_step_cfgs(
         samp_cfg = cfg.refinement_cfg.sampling_cfg
         assert clus_cfg is None
         if not still_need_projs_saved:
-            clfeat_cfg = replace(cfg.clustering_features_cfg, n_main_channel_pcs=0)
+            clfeat_cfg = replace(
+                cfg.clustering_features_cfg,
+                n_main_channel_pcs=0,
+                n_multi_channel_pcs=0,
+            )
     else:
         feat_cfg = cfg.featurization_cfg
         samp_cfg = cfg.peeler_sampling_cfg

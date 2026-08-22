@@ -256,6 +256,8 @@ class ClusteringFeaturesConfig:
     amp_scale: float = 3.0
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
+    n_multi_channel_pcs: int = 0
+    multi_channel_pc_radius: float = 50.0
     pc_scale: float = 2.0
     pc_transform: Literal["log", "sqrt", "none"] | None = "none"
     pc_pre_transform_scale: float = 0.5
