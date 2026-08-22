@@ -1994,6 +1994,38 @@ def yield_masked_chunks(
         offset += nsrc
 
 
+# -- misc
+
+
+def reconstruct_amplitude_vectors(
+    sorting: DARTsortSorting,
+    tpca_dataset="collisioncleaned_tpca_features",
+    out_dataset="amplitude_vectors",
+    kind="ptp",
+    show_progress: bool = True,
+):
+    from .spiketorch import ptp
+
+    pca = get_tpca(sorting=sorting)
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[tpca_dataset]
+        outd = h5.create_dataset(
+            out_dataset, shape=(ind.shape[0], ind.shape[2]), dtype=ind.dtype
+        )
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            x = torch.as_tensor(x)
+            y = pca.force_reconstruct(x)
+            if kind == "peak":
+                z = y.abs().amax(dim=1)
+            elif kind == "ptp":
+                z = ptp(y, dim=1)
+            else:
+                panic(kind)
+            outd[sli] = z
+
+
 # -- residual
 
 
