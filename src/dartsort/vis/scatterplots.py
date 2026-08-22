@@ -270,6 +270,7 @@ def scatter_simple_features(
     feat: SimpleMatrixFeatures,
     labels: np.ndarray | None = None,
     max_spikes_plot=2_048_000,
+    amplitudes=None,
     amplitude_color_cutoff=15.0,
     amplitude_cmap="viridis",
     s=1,
@@ -312,7 +313,7 @@ def scatter_simple_features(
         _, scatter = scatter_feature_vs_depth(
             feature,
             depths_um=z,
-            amplitudes=feat.amplitudes,
+            amplitudes=amplitudes if amplitudes is not None else feat.amplitudes,
             labels=labels,
             ax=axes.flat[j],
             to_show=to_show,
@@ -690,7 +691,7 @@ def scatter_feature_vs_depth(
         if show_triaged:
             triaged = labels[to_show] < 0
             tc = np.clip(amplitudes[to_show[triaged]], 0, amplitude_color_cutoff)
-            tc = plt.cm.binary(tc / amplitude_color_cutoff)  # type: ignore
+            tc = plt.cm.gray_r(tc / amplitude_color_cutoff)  # type: ignore
             c[triaged, :3] = tc[..., :3]
         else:
             c = c[labels[to_show] >= 0]
