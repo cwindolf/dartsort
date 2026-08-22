@@ -114,7 +114,11 @@ class SimpleMatrixFeatures:
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
         amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
-        if clustering_features_cfg.use_amplitude:
+        v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
+        if (
+            clustering_features_cfg.use_amplitude
+            or clustering_features_cfg.use_signed_amplitude
+        ):
             assert amp is not None
             check_numbers("amp", amp, raise_for_numerics=raise_on_na)
             if clustering_features_cfg.log_transform_amplitude:
@@ -122,64 +126,23 @@ class SimpleMatrixFeatures:
                 np.log(ampft, out=ampft)
             else:
                 ampft = amp.copy()
+
+            if clustering_features_cfg.use_signed_amplitude:
+                if v is not None:
+                    ampft *= np.sign(v)
+
             ampft *= clustering_features_cfg.amp_scale
             check_numbers("ampft", ampft, raise_for_numerics=raise_on_na)
             features.append(ampft[:, None])
 
-        v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
-        if v is None:
-            samp = amp.copy()
-        else:
-            samp = amp * np.sign(v)
-
-        if clustering_features_cfg.use_signed_amplitude:
-            samp *= clustering_features_cfg.amp_scale
-            features.append(samp[:, None])
-
-        do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
-        if do_pcs and not clustering_features_cfg.motion_aware:
-            pcs = cluster_util.get_main_channel_pcs(
-                sorting,
-                rank=clustering_features_cfg.n_main_channel_pcs,
-                dataset_name=clustering_features_cfg.pca_dataset_name,
-            )
-            check_numbers("No motion pcs", pcs, raise_for_numerics=raise_on_na)
-        elif do_pcs and clustering_features_cfg.motion_aware:
-            shifts, n_pitches_shift = motion.pitch_shifts(
+        if clustering_features_cfg.n_main_channel_pcs:
+            pcs = _compute_main_channel_pcs(
                 sorting=sorting,
-                motion_depth_mode=clustering_features_cfg.motion_depth_mode,
-            )
-            mainchan_ci = single_channel_index(len(motion.geom))
-            _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
-            schan, *_ = get_stable_channels(
                 motion=motion,
-                channels=sorting.channels,
-                channel_index=mainchan_ci,
-                n_pitches_shift=n_pitches_shift,
-                workers=workers,
+                clustering_features_cfg=clustering_features_cfg,
+                computation_cfg=computation_cfg,
+                raise_on_na=raise_on_na,
             )
-            assert sorting.parent_h5_path is not None
-            with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-                _erp, pcs = interpolate_by_chunk(
-                    mask=None,
-                    dataset=h5[clustering_features_cfg.pca_dataset_name],
-                    geom=motion.geom,
-                    channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
-                    channels=sorting.channels,
-                    shifts=shifts,
-                    registered_geom=motion.rgeom,
-                    target_channels=schan,
-                    params=clustering_features_cfg.interp_params,
-                    trim_to_rank=clustering_features_cfg.n_main_channel_pcs,
-                    show_progress=False,
-                )
-                assert pcs.shape[2] == 1  # just one channel here
-                pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
-            check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
-        else:
-            pcs = None
-
-        if do_pcs:
             assert pcs is not None
             pctf = clustering_features_cfg.pc_transform
             if pctf == "log":
@@ -206,6 +169,10 @@ class SimpleMatrixFeatures:
         keep = np.atleast_1d(np.isfinite(features).all(axis=1))
         if keep.all():
             keep = None
+        if v is not None:
+            samp = amp * v
+        else:
+            samp = amp
         return cls(
             n=n,
             features=features,
@@ -302,6 +269,62 @@ class StableWaveformFeatures:
 
 
 # -- helpers
+
+
+def _compute_main_channel_pcs(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    motion: MotionInfo,
+    computation_cfg: ComputationConfig,
+    raise_on_na: bool,
+):
+    do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
+    if not do_pcs:
+        return None
+
+    if not clustering_features_cfg.motion_aware:
+        pcs = cluster_util.get_main_channel_pcs(
+            sorting,
+            rank=clustering_features_cfg.n_main_channel_pcs,
+            dataset_name=clustering_features_cfg.pca_dataset_name,
+        )
+        check_numbers("No motion pcs", pcs, raise_for_numerics=raise_on_na)
+    elif clustering_features_cfg.motion_aware:
+        shifts, n_pitches_shift = motion.pitch_shifts(
+            sorting=sorting,
+            motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+        )
+        mainchan_ci = single_channel_index(len(motion.geom))
+        _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+        schan, *_ = get_stable_channels(
+            motion=motion,
+            channels=sorting.channels,
+            channel_index=mainchan_ci,
+            n_pitches_shift=n_pitches_shift,
+            workers=workers,
+        )
+        assert sorting.parent_h5_path is not None
+        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+            _erp, pcs = interpolate_by_chunk(
+                mask=None,
+                dataset=h5[clustering_features_cfg.pca_dataset_name],
+                geom=motion.geom,
+                channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+                channels=sorting.channels,
+                shifts=shifts,
+                registered_geom=motion.rgeom,
+                target_channels=schan,
+                params=clustering_features_cfg.interp_params,
+                trim_to_rank=clustering_features_cfg.n_main_channel_pcs,
+                show_progress=False,
+            )
+            assert pcs.shape[2] == 1  # just one channel here
+            pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
+        check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
+    else:
+        pcs = None
+    return pcs
 
 
 def signed_log1p(x, pre_scale=1.0):

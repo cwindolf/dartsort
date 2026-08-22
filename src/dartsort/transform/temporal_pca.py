@@ -98,8 +98,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         channels,
         **spike_data,
     ):
-        weights = spike_data.get("weights", None)
-        time_shifts = spike_data.get("time_shifts", None)
+        weights = spike_data.get("weights")
+        time_shifts = spike_data.get("time_shifts")
         super().fit(
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
