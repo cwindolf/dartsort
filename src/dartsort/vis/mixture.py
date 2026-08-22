@@ -979,6 +979,7 @@ class SplitView(MixtureComponentPlot):
         dist_cmap="plasma",
         manual_group=None,
         keep_original_components=False,
+        fix_responsibilities=None,
     ):
         self.colors = np.array(colors)
         self.bail_color = bail_color
@@ -986,6 +987,7 @@ class SplitView(MixtureComponentPlot):
         self.dist_cmap = plt.get_cmap(dist_cmap)
         self.manual_group = manual_group
         self.keep_original_components = keep_original_components
+        self.fix_responsibilities = fix_responsibilities
 
     def compute(
         self, mix_data: MixtureVisData, unit_id: int, split_res=None, debug_info=None
@@ -1019,6 +1021,7 @@ class SplitView(MixtureComponentPlot):
                 eval_labels=mix_data.eval_labels,
                 debug=True,
                 keep_original_components=self.keep_original_components,
+                fix_responsibilities=self.fix_responsibilities,
             )
         else:
             if split_res is not None:

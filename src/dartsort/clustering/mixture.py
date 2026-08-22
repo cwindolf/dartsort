@@ -828,6 +828,7 @@ class TMMParams:
     kmeans_beta: float
     kmeanspp_tries: int
     whiten_split: bool
+    fix_responsibilities: bool
     scale_dist_args: tuple[float, float, float]
     whiten_dist: bool
 
@@ -864,6 +865,7 @@ class TMMParams:
             demolish_during_selection=refinement_cfg.demolish_during_selection,
             refit_in_demolition=refinement_cfg.refit_in_demolition,
             whiten_split=refinement_cfg.whiten_split,
+            fix_responsibilities=refinement_cfg.fix_responsibilities_in_split,
             scale_dist_args=refinement_cfg.scale_dist_args,
             whiten_dist=refinement_cfg.whiten_dist,
         )
@@ -2393,7 +2395,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         noise_log_prop: Tensor | float = -torch.inf,
         p: TMMParams,
         min_channel_count: int | None = None,
-    ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor]:
+        fix_responsibilities: bool | None = None,
+    ) -> tuple[Self, Tensor, DenseSpikeData, bool, Tensor, Tensor, Tensor]:
         """Fit units with fixed label posterior
 
         Used to construct hypothetical models:
@@ -2475,8 +2478,20 @@ class TruncatedMixtureModel(BaseMixtureModel):
         self.update_lut(lut)
 
         # run some em steps
-        self.fixed_weight_em(data=data, responsibilities=responsibilities)
-        return self, valid, data, any_spikes_discarded, keep_mask, keep_spikes
+        responsibilities = self.dense_em(
+            data=data,
+            responsibilities=responsibilities,
+            fix_responsibilities=fix_responsibilities,
+        )
+        return (
+            self,
+            valid,
+            data,
+            any_spikes_discarded,
+            keep_mask,
+            keep_spikes,
+            responsibilities,
+        )
 
     def em(
         self,
@@ -2614,10 +2629,19 @@ class TruncatedMixtureModel(BaseMixtureModel):
             assert lp is not None
             assert lp.isfinite().all()
 
-    def fixed_weight_em(
-        self, data: DenseSpikeData, responsibilities: Tensor, *, debug: bool = False
-    ):
+    def dense_em(
+        self,
+        data: DenseSpikeData,
+        responsibilities: Tensor,
+        *,
+        fix_responsibilities: bool | None = None,
+        debug: bool = False,
+    ) -> Tensor:
         assert self.lut_params is not None
+        if fix_responsibilities is None:
+            fix_responsibilities = self.p.fix_responsibilities
+        if not fix_responsibilities:
+            responsibilities = responsibilities.clone()
         batches = data.to_batches(self.unit_ids, self.lut)
         elbos = []
         j = -1
@@ -2647,7 +2671,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
             for batch, spixs in zip(batches, batch_sparse_ixs, strict=True):
                 spike_ixs, candidate_ixs, unit_ixs, neighb_ixs, lut_ixs = spixs
                 bresp = responsibilities[batch.batch]
-                if j >= self.p.criterion_em_iters:
+                if not fix_responsibilities or j >= self.p.criterion_em_iters:
                     # compute log liks for convergence testing below
                     batch_scores = self.score_batch(
                         batch=batch,
@@ -2661,6 +2685,11 @@ class TruncatedMixtureModel(BaseMixtureModel):
                         neighb_ixs=neighb_ixs,
                         lut_ixs=lut_ixs,
                     )
+                    if not fix_responsibilities:
+                        # e step. candidate order is fixed, so no topk needed.
+                        bresp = batch_scores.log_liks.softmax(dim=1)
+                        responsibilities[batch.batch] = bresp
+                        batch_scores.responsibilities = bresp
                 else:
                     # too soon to test convergence, no need for log liks
                     batch_scores = Scores(
@@ -2721,6 +2750,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # in fact, I'm going to comment this assertion out, but leaving the
         # comment here.
         # assert (len(elbos) < 2) or (elbos[-1] > elbos[0] - 5e-2)
+
+        return responsibilities
 
     def score(
         self,
@@ -2991,6 +3022,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         eval_labels: Tensor,
         debug: bool = False,
         keep_original_components: bool = False,
+        fix_responsibilities: bool | None = None,
     ) -> tuple[SplitCaseResult, SplitCaseDebugInfo | None]:
         assert self.noise is not None
         assert self.erp is not None
@@ -3054,7 +3086,8 @@ class TruncatedMixtureModel(BaseMixtureModel):
 
         # initialize dense model with fixed resps
         group_lp = self.b.log_proportions[group].logsumexp(dim=0).item()
-        split_model, _, split_data, any_spikes_discarded, _, keep_spikes = (
+        n_kmeans_units = kmeans_responsibilities.shape[1]
+        split_model, _, split_data, _, _, keep_spikes, kmeans_responsibilities = (
             TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                 data=split_data,
                 responsibilities=kmeans_responsibilities,
@@ -3065,10 +3098,9 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 total_log_proportion=group_lp,
                 noise_log_prop=self.b.noise_log_prop,
                 p=self.p,
+                fix_responsibilities=fix_responsibilities,
             )
         )
-        if any_spikes_discarded:
-            kmeans_responsibilities = kmeans_responsibilities[keep_spikes]
         if debug:
             assert kmeans_x is not None
             kmeans_x = kmeans_x[keep_spikes]
@@ -3077,7 +3109,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
         # let's accept it as long as the improvement was good (below).
         if single and split_model.n_units <= 1 and debug:
             logger.dartsortverbose(
-                f"Split {group_str}: only {split_model.n_units} of {kmeans_responsibilities.shape[1]} sub-units."
+                f"Split {group_str}: only {split_model.n_units} of {n_kmeans_units} sub-units."
             )
             return None, SplitCaseDebugInfo(
                 bailed=True,
@@ -5183,7 +5215,7 @@ def _fit_subset_models(
     any_spikes_discarded = False
     for s0 in range(0, n_subsets, max_fit_at_once):
         s1 = min(n_subsets, s0 + max_fit_at_once)
-        s0m, s0valid, _, s0discard, s0mask, _ = (
+        s0m, s0valid, _, s0discard, s0mask, _, _ = (
             TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                 data=train_data,
                 responsibilities=subset_resps[:, s0:s1],
@@ -5705,7 +5737,7 @@ def _evaluate_single_refit_demolition(
     chopped_responsibilities.clamp_(min=1e-8)
 
     # re-fit model to train_scores_adj
-    chopped_model, _s0valid, _, _s0discard, _s0mask, _ = (
+    chopped_model, _s0valid, _, _s0discard, _s0mask, _, _ = (
         TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
             data=group_train_data,
             responsibilities=chopped_responsibilities,

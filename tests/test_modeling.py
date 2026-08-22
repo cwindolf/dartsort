@@ -200,8 +200,8 @@ def test_truncated_mixture(
                     min_channel_count=tmm.p.min_channel_count,
                 )
                 assert kmeans_responsibliities is not None
-                split_model, _, _, any_discarded, _, _ = (
-                    mixture.TruncatedMixtureModel.initialize_from_dense_data_with_fixed_responsibilities(
+                split_model, _, _, any_discarded, _, _, _ = (
+                    mixture.TruncatedMixtureModel.initialize_from_dense_data_and_responsibilities(
                         data=split_data,
                         responsibilities=kmeans_responsibliities,
                         p=tmm.p,

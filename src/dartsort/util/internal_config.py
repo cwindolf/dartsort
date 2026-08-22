@@ -251,7 +251,7 @@ class ClusteringFeaturesConfig:
     motion_aware: bool = True
     use_amplitude: bool = False
     use_signed_amplitude: bool = True
-    log_transform_amplitude: bool = True
+    log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
     x_scale: float = 1.0
@@ -543,6 +543,7 @@ class RefinementConfig:
     refit_in_demolition: bool = False
     em_after_demolish: bool = True
     whiten_split: bool = True
+    fix_responsibilities_in_split: bool = True
     scale_dist_args: tuple[float, float, float] = (0.01, 3.0 / 4.0, 4.0 / 3.0)
     whiten_dist: bool = True
 
