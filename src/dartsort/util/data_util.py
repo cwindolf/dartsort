@@ -25,6 +25,7 @@ from .internal_config import (
     TemplateConfig,
     TemplateMergeConfig,
     WaveformConfig,
+    WaveformKind,
     default_clustering_features_cfg,
     default_waveform_cfg,
 )
@@ -1213,17 +1214,43 @@ def _get_featurization_loading_meta(sorting):
     return geom, channel_index, model_dir
 
 
-def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=None):
+def featurization_pipeline_path(
+    model_dir: Path, waveform_kind: WaveformKind = "collisioncleaned"
+) -> Path | None:
+    pt = model_dir / f"{waveform_kind}_featurization_pipeline.pt"
+    if pt.exists():
+        return pt
+    unprefixed = model_dir / "featurization_pipeline.pt"
+    if waveform_kind == "collisioncleaned" and unprefixed.exists():
+        return unprefixed
+    return None
+
+
+def _ensure_featurization_pipeline_pt(
+    featurization_pipeline_pt, model_dir: Path, waveform_kind: WaveformKind
+) -> Path:
+    if featurization_pipeline_pt is None:
+        featurization_pipeline_pt = featurization_pipeline_path(
+            model_dir, waveform_kind
+        )
+    if featurization_pipeline_pt is None or not featurization_pipeline_pt.exists():
+        raise ValueError(f"No {waveform_kind} pipeline in {model_dir}.")
+    return featurization_pipeline_pt
+
+
+def get_featurization_pipeline(
+    sorting,
+    featurization_pipeline_pt=None,
+    motion=None,
+    waveform_kind: WaveformKind = "collisioncleaned",
+):
     """Look for the pipeline in the usual place."""
     from dartsort.transform import WaveformPipeline
 
     geom, _channel_index, model_dir = _get_featurization_loading_meta(sorting)
-
-    if featurization_pipeline_pt is None:
-        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
-
-    if not featurization_pipeline_pt.exists():
-        raise ValueError(f"No file at {featurization_pipeline_pt=}")
+    featurization_pipeline_pt = _ensure_featurization_pipeline_pt(
+        featurization_pipeline_pt, model_dir, waveform_kind
+    )
 
     pipeline = WaveformPipeline.from_state_dict_pt(
         geom, featurization_pipeline_pt, motion
@@ -1231,13 +1258,19 @@ def get_featurization_pipeline(sorting, featurization_pipeline_pt=None, motion=N
     return pipeline
 
 
-def get_tpca(sorting, name_prefix="collisioncleaned", featurization_pipeline_pt=None):
+def get_tpca(
+    sorting,
+    name_prefix="collisioncleaned",
+    featurization_pipeline_pt=None,
+    waveform_kind: WaveformKind = "collisioncleaned",
+):
     """Look for the TemporalPCAFeaturizer in the usual place."""
     from ..transform import transformers_by_class_name
 
     geom, channel_index, model_dir = _get_featurization_loading_meta(sorting)
-    if featurization_pipeline_pt is None:
-        featurization_pipeline_pt = model_dir / "featurization_pipeline.pt"
+    featurization_pipeline_pt = _ensure_featurization_pipeline_pt(
+        featurization_pipeline_pt, model_dir, waveform_kind
+    )
 
     d = torch.load(featurization_pipeline_pt, weights_only=True)
     kw = d["_extra_state"]["class_names_and_kwargs"]
@@ -2073,7 +2106,7 @@ def subsample_waveforms(
     random_state: int | np.random.Generator = 0,
     n_waveforms_fit=10_000,
     voltages_dataset_name="collisioncleaned_voltages",
-    waveforms_dataset_name="collisioncleaned_waveforms",
+    waveforms_dataset_name: str | Sequence[str] = "collisioncleaned_waveforms",
     fit_max_reweighting=4.0,
     log_voltages=True,
     subsample_by_weighting=False,
@@ -2081,8 +2114,16 @@ def subsample_waveforms(
     replace=True,
     h5=None,
     device: torch.device | str = "cpu",
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Subsample waveform datasets, returning them keyed by dataset name.
+
+    Multiple dataset names may be passed, in which case they are all read at the
+    same subsampled indices, so that they correspond to each other and to the
+    returned fixed properties.
+    """
     random_state = np.random.default_rng(random_state)
+    if isinstance(waveforms_dataset_name, str):
+        waveforms_dataset_name = [waveforms_dataset_name]
 
     need_open = h5 is None
     if need_open and hdf5_filename is not None:
@@ -2097,9 +2138,10 @@ def subsample_waveforms(
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            wfshape = h5[waveforms_dataset_name].shape
-            emptywf = torch.zeros(wfshape)
-            return emptywf, dict(channels=emptyi)
+            empty = {
+                k: torch.zeros(h5[k].shape) for k in waveforms_dataset_name
+            }
+            return empty, dict(channels=emptyi)
         weights = fit_reweighting(
             h5=h5,
             log_voltages=log_voltages,
@@ -2115,9 +2157,10 @@ def subsample_waveforms(
             )
             if not replace:
                 choices.sort()
-                waveforms = batched_h5_read(
-                    h5[waveforms_dataset_name], choices, show_progress=True
-                )
+                waveforms = {
+                    k: batched_h5_read(h5[k], choices, show_progress=True)
+                    for k in waveforms_dataset_name
+                }
                 if weights is not None:
                     weights = weights[choices]
                 fixed_properties = {
@@ -2125,10 +2168,10 @@ def subsample_waveforms(
                 }
             else:
                 uchoices, ichoices = np.unique(choices, return_inverse=True)
-                waveforms = batched_h5_read(
-                    h5[waveforms_dataset_name], uchoices, show_progress=True
-                )
-                waveforms = waveforms[ichoices]
+                waveforms = {
+                    k: batched_h5_read(h5[k], uchoices, show_progress=True)[ichoices]
+                    for k in waveforms_dataset_name
+                }
                 if weights is not None:
                     weights = weights[uchoices[ichoices]]
                 fixed_properties = {
@@ -2136,7 +2179,7 @@ def subsample_waveforms(
                 }
                 fixed_properties = {k: v[ichoices] for k, v in fixed_properties.items()}
         else:
-            waveforms: np.ndarray = h5[waveforms_dataset_name][:]
+            waveforms = {k: h5[k][:] for k in waveforms_dataset_name}
             fixed_properties = {k: h5[k][:] for k in fixed_property_keys}
     finally:
         if need_open:
@@ -2144,14 +2187,15 @@ def subsample_waveforms(
         del h5
 
     device = torch.device(device)
-    waveformsr = torch.as_tensor(waveforms)
+    waveformsr = {k: torch.as_tensor(v) for k, v in waveforms.items()}
+    n = len(next(iter(waveformsr.values())))
     fixed_properties = {
         k: torch.as_tensor(v, device=device) for k, v in fixed_properties.items()
     }
     if subsample_by_weighting and weights is not None:
         fixed_properties["weights"] = torch.as_tensor(weights, device=device)
     elif subsample_by_weighting:
-        fixed_properties["weights"] = torch.ones(waveforms.shape[0], device=device)
+        fixed_properties["weights"] = torch.ones(n, device=device)
 
     return waveformsr, fixed_properties
 

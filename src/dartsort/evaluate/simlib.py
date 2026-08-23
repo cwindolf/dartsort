@@ -312,7 +312,8 @@ def add_features(h5_path, recording, featurization_cfg, computation_cfg):
     with h5py.File(h5_path, "r+", locking=False) as h5:
         geom = cast(h5py.Dataset, h5["geom"])[:]
         channel_index = cast(h5py.Dataset, h5["channel_index"])[:]
-        waveforms, fixed_properties = subsample_waveforms(h5=h5)
+        waveform_dict, fixed_properties = subsample_waveforms(h5=h5)
+        waveforms = waveform_dict["collisioncleaned_waveforms"]
         if not len(waveforms):
             return
         featurization_cfg = replace(featurization_cfg, do_localization=len(geom) > 1)

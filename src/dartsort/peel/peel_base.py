@@ -2,14 +2,14 @@
 
 import gc
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from itertools import repeat
 from pathlib import Path
 from sys import getrefcount
 from threading import Lock, local
-from typing import Any
+from typing import Any, cast, get_args
 from warnings import catch_warnings, filterwarnings
 
 import h5py
@@ -20,16 +20,18 @@ from spikeinterface.core.recording_tools import get_chunk_with_margin
 from sympy import divisors
 from typing_extensions import TypedDict
 
-from ..transform import WaveformPipeline
+from ..transform import WaveformPipeline, check_unique_feature_names_across
 from ..util.data_util import (
     SpikeDataset,
     divide_randomly,
     extract_random_snips,
+    featurization_pipeline_path,
     subsample_waveforms,
 )
 from ..util.internal_config import (
     FitSamplingConfig,
     WaveformConfig,
+    WaveformKind,
     default_peeling_fit_sampling_cfg,
     default_waveform_cfg,
 )
@@ -68,6 +70,7 @@ class BasePeeler(BModule):
         recording: BaseRecording,
         channel_index: np.ndarray | torch.Tensor,
         featurization_pipeline: WaveformPipeline | None = None,
+        featurization_pipelines: Mapping[WaveformKind, WaveformPipeline] | None = None,
         chunk_length_samples: int = 30_000,
         chunk_margin_samples: int = 0,
         fit_sampling_cfg: FitSamplingConfig = default_peeling_fit_sampling_cfg,
@@ -106,7 +109,15 @@ class BasePeeler(BModule):
             channel_index = torch.asarray(channel_index, copy=True).contiguous()
             self.register_buffer("channel_index", channel_index)
             assert recording.get_num_channels() == channel_index.shape[0]
-        self.featurization_pipeline: WaveformPipeline | None = featurization_pipeline
+        if featurization_pipeline is not None:
+            assert featurization_pipelines is None
+            featurization_pipelines = {"collisioncleaned": featurization_pipeline}
+        elif featurization_pipelines is None:
+            featurization_pipelines = {}
+        for kind in featurization_pipelines:
+            if kind not in get_args(WaveformKind):
+                panic(kind)
+        self.featurization_pipelines = torch.nn.ModuleDict(featurization_pipelines)  # ty: ignore[invalid-argument-type]
         self.fixed_property_keys: Sequence[str] = fixed_property_keys
 
         # subclasses can append to this if they want to store more fixed
@@ -121,6 +132,19 @@ class BasePeeler(BModule):
             )
 
         self._rgs: local = local()
+
+    @property
+    def featurization_pipeline(self) -> WaveformPipeline | None:
+        if "collisioncleaned" not in self.featurization_pipelines:
+            return None
+        return cast(WaveformPipeline, self.featurization_pipelines["collisioncleaned"])
+
+    @property
+    def waveform_kinds(self) -> list[WaveformKind]:
+        return cast(list[WaveformKind], list(self.featurization_pipelines))
+
+    def get_pipeline(self, waveform_kind: WaveformKind) -> WaveformPipeline:
+        return cast(WaveformPipeline, self.featurization_pipelines[waveform_kind])
 
     # -- main functions for users to call
     # in practice users will interact with the functions `subtract(...)` in
@@ -472,21 +496,24 @@ class BasePeeler(BModule):
             SpikeDataset(name="times_seconds", shape_per_spike=(), dtype=np.float64),
             SpikeDataset(name="channels", shape_per_spike=(), dtype=np.int64),
         ]
-        if self.featurization_pipeline is not None:
-            datasets.extend(self.featurization_pipeline.spike_datasets())
+        check_unique_feature_names_across(self.featurization_pipelines)  # ty: ignore[invalid-argument-type]
+        for pipeline in self.featurization_pipelines.values():
+            datasets.extend(pipeline.spike_datasets())  # ty: ignore[call-non-callable]
         return datasets
 
     # -- utility methods which users likely won't touch
 
-    def featurize_collisioncleaned_waveforms(
-        self, collisioncleaned_waveforms, **fixed_properties
+    def featurize_waveforms(
+        self,
+        waveforms,
+        waveform_kind: WaveformKind = "collisioncleaned",
+        **fixed_properties,
     ):
-        if not self.featurization_pipeline:
+        pipeline = self.get_pipeline(waveform_kind)
+        if not pipeline:
             return {}
 
-        _waveforms, features = self.featurization_pipeline(
-            collisioncleaned_waveforms, **fixed_properties
-        )
+        _waveforms, features = pipeline(waveforms, **fixed_properties)
         return features
 
     def process_chunk(
@@ -507,7 +534,9 @@ class BasePeeler(BModule):
         chunk, chunk_end_samples, left_margin, right_margin = self.get_chunk(
             chunk_start_samples, chunk_end_samples
         )
-        return_waveforms = not skip_features and bool(self.featurization_pipeline)
+        return_waveforms = not skip_features and any(
+            map(bool, self.featurization_pipelines.values())
+        )
         peel_result = self.peel_chunk(
             chunk,
             chunk_start_samples=chunk_start_samples,
@@ -568,23 +597,25 @@ class BasePeeler(BModule):
                 peel_result["times_samples"].numpy(force=True)
             )
             peel_result["times_seconds"] = torch.asarray(t_s)
+        features = {}
         if peel_result["n_spikes"] > 0 and return_waveforms:
             chunk_start_s = self.recording.sample_index_to_time(chunk_start_samples)
             chunk_end_s = self.recording.sample_index_to_time(chunk_end_samples)
             chunk_center_s = (chunk_start_s + chunk_end_s) / 2
             fixed_properties = {k: peel_result[k] for k in self.fixed_property_keys}
-            features = self.featurize_collisioncleaned_waveforms(
-                peel_result["collisioncleaned_waveforms"],
-                chunk_center_s=chunk_center_s,
-                **fixed_properties,
-            )
-        else:
-            features = {}
+            for kind in self.waveform_kinds:
+                features |= self.featurize_waveforms(
+                    peel_result[f"{kind}_waveforms"],
+                    waveform_kind=kind,
+                    chunk_center_s=chunk_center_s,
+                    **fixed_properties,
+                )
 
         # a user who wants these must featurize with a waveform node
         # then they'll end up in `features`
-        if "collisioncleaned_waveforms" in peel_result:
-            del peel_result["collisioncleaned_waveforms"]
+        for kind in get_args(WaveformKind):
+            if f"{kind}_waveforms" in peel_result:
+                del peel_result[f"{kind}_waveforms"]
 
         chunk_result = peel_result | features
         if to_cpu:
@@ -680,16 +711,18 @@ class BasePeeler(BModule):
     def needs_fit(self):
         if self.peeling_needs_fit():
             return True
-        if self.featurization_pipeline is not None:
-            return self.featurization_pipeline.needs_fit()
-        return False
+        return any(
+            p.needs_fit()  # ty: ignore[call-non-callable]
+            for p in self.featurization_pipelines.values()
+        )
 
     def needs_precompute(self):
         if self.peeling_needs_precompute():
             return True
-        if self.featurization_pipeline is not None:
-            return self.featurization_pipeline.needs_precompute()
-        return False
+        return any(
+            p.needs_precompute()  # ty: ignore[call-non-callable]
+            for p in self.featurization_pipelines.values()
+        )
 
     def fit_models(
         self, save_folder, tmp_dir=None, overwrite=False, computation_cfg=None
@@ -719,31 +752,31 @@ class BasePeeler(BModule):
                 overwrite=overwrite,
                 computation_cfg=computation_cfg,
             )
-        if self.featurization_pipeline is None:
-            return
-        self.featurization_pipeline.precompute()
+        for pipeline in self.featurization_pipelines.values():
+            pipeline.precompute()  # ty: ignore[call-non-callable]
 
     def fit_featurization_pipeline(self, tmp_dir=None, computation_cfg=None):
-        if self.featurization_pipeline is None:
-            return
-        if not self.featurization_pipeline.needs_fit():
+        pipelines = {k: self.get_pipeline(k) for k in self.waveform_kinds}
+        if not any(p.needs_fit() for p in pipelines.values()):
             return
 
         computation_cfg = ensure_computation_config(computation_cfg)
         device = computation_cfg.actual_device()
 
-        # disable self's featurization pipeline, replacing it with a waveform
-        # saving node. then, we'll use those waveforms to fit the original
-        featurization_pipeline = self.featurization_pipeline
-        self.featurization_pipeline = WaveformPipeline.from_class_names_and_kwargs(
-            self.recording.get_channel_locations(),
-            self.channel_index,
-            [
-                ("Voltage", {"name": "peeled_voltages_fit"}),
-                ("Waveform", {"name": "peeled_waveforms_fit"}),
-            ],
-            waveform_cfg=self.waveform_cfg,
-            sampling_frequency=self.recording.sampling_frequency,
+        # disable self's featurization pipelines, replacing each with a waveform
+        # saving node. then, we'll use those waveforms to fit the originals
+        wf_dsets = {k: f"peeled_{k}_waveforms_fit" for k in pipelines}
+        self.featurization_pipelines = torch.nn.ModuleDict(
+            {
+                kind: WaveformPipeline.from_class_names_and_kwargs(
+                    self.recording.get_channel_locations(),
+                    self.channel_index,
+                    self._fit_pipeline_nodes(kind, wf_dsets[kind]),
+                    waveform_cfg=self.waveform_cfg,
+                    sampling_frequency=self.recording.sampling_frequency,
+                )
+                for kind in pipelines
+            }
         )
 
         if tmp_dir is None:
@@ -753,11 +786,11 @@ class BasePeeler(BModule):
             temp_hdf5_filename = Path(temp_dir) / "peeler_fit.h5"
             waveforms = fixed_properties = None
             try:
-                if featurization_pipeline.needs_residual():
+                if any(p.needs_residual() for p in pipelines.values()):
                     n_resid_snips = self.fit_sampling_cfg.n_residual_snips
                 else:
                     n_resid_snips = None
-                more = featurization_pipeline.needs_more_features()
+                more = any(p.needs_more_features() for p in pipelines.values())
                 self.run_subsampled_peeling(
                     temp_hdf5_filename,
                     computation_cfg=computation_cfg,
@@ -770,7 +803,7 @@ class BasePeeler(BModule):
                 # to take up space
                 self.to(device="cpu")
 
-                # fit featurization pipeline and reassign
+                # fit featurization pipelines and reassign
                 # work in a try finally so we can delete the temp file
                 # in case of an issue or a keyboard interrupt
                 waveforms, fixed_properties = subsample_waveforms(
@@ -780,39 +813,52 @@ class BasePeeler(BModule):
                     n_waveforms_fit=self.fit_sampling_cfg.n_waveforms_fit,
                     fit_max_reweighting=self.fit_sampling_cfg.fit_max_reweighting,
                     voltages_dataset_name="peeled_voltages_fit",
-                    waveforms_dataset_name="peeled_waveforms_fit",
+                    waveforms_dataset_name=list(wf_dsets.values()),
                     fixed_property_keys=self.fixed_property_keys,
                     device=device,
                 )
-                if not len(waveforms):
-                    raise ValueError("Found no spikes when trying to fit featurizers.")
 
                 workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
                 _, workers = handle_negative_jobs(workers)
-                featurization_pipeline.register_cpu_workers(workers)
-                featurization_pipeline = featurization_pipeline.to(device)
-                featurization_pipeline.fit(
-                    recording=self.recording,
-                    waveforms=waveforms,
-                    computation_cfg=computation_cfg,
-                    hdf5_filename=temp_hdf5_filename,
-                    waveforms_dataset_name="peeled_waveforms_fit",
-                    **fixed_properties,
-                )
-                featurization_pipeline = featurization_pipeline.to("cpu")
-                self.featurization_pipeline = featurization_pipeline
+                for kind, pipeline in pipelines.items():
+                    kind_waveforms = waveforms[wf_dsets[kind]]
+                    if not len(kind_waveforms):
+                        raise ValueError(
+                            f"Found no spikes when trying to fit {kind} featurizers."
+                        )
+                    pipeline.register_cpu_workers(workers)
+                    pipeline.to(device).fit(
+                        recording=self.recording,
+                        waveforms=kind_waveforms,
+                        computation_cfg=computation_cfg,
+                        hdf5_filename=temp_hdf5_filename,
+                        waveforms_dataset_name=wf_dsets[kind],
+                        **fixed_properties,
+                    )
+                    pipeline.to("cpu")
+                self.featurization_pipelines = torch.nn.ModuleDict(pipelines)  # ty: ignore[invalid-argument-type]
             finally:
                 self.to(device="cpu")
                 if temp_hdf5_filename.exists():
                     temp_hdf5_filename.unlink()
                 del fixed_properties
                 gc.collect()
-                if getrefcount(waveforms) > 2:
-                    logger.warning(f"Fit waveforms had {getrefcount(waveforms)=}")
-                    for obj in gc.get_referrers(waveforms):
-                        logger.warning(f"{obj!r}: {obj!s}")
+                for name in list(waveforms or ()):
+                    wfs = waveforms.pop(name)
+                    if getrefcount(wfs) > 2:
+                        logger.warning(f"Fit waveforms {name} had {getrefcount(wfs)=}")
+                        for obj in gc.get_referrers(wfs):
+                            logger.warning(f"{obj!r}: {obj!s}")
+                    del wfs
                 del waveforms
                 gc.collect()
+
+    def _fit_pipeline_nodes(self, waveform_kind: WaveformKind, waveforms_name: str):
+        waveform_node = ("Waveform", {"name": waveforms_name})
+        if waveform_kind == "collisioncleaned":
+            # voltages are used to reweight the fit subsample for all kinds
+            return [("Voltage", {"name": "peeled_voltages_fit"}), waveform_node]
+        return [waveform_node]
 
     def get_chunk_starts(
         self,
@@ -949,26 +995,28 @@ class BasePeeler(BModule):
         )
 
     def save_models(self, save_folder: str | Path):
-        if self.featurization_pipeline is None:
+        if not self.featurization_pipelines:
             return
 
         save_folder = Path(save_folder)
         save_folder.mkdir(exist_ok=True)
-        torch.save(
-            self.featurization_pipeline.state_dict(),
-            save_folder / "featurization_pipeline.pt",
-        )
+        for kind, pipeline in self.featurization_pipelines.items():
+            torch.save(
+                pipeline.state_dict(),
+                save_folder / f"{kind}_featurization_pipeline.pt",
+            )
 
     def load_models(self, save_folder: str | Path):
         save_folder = Path(save_folder)
         if not save_folder.exists():
             return
 
-        feats_pt = save_folder / "featurization_pipeline.pt"
-        if feats_pt.exists():
-            assert self.featurization_pipeline is not None
+        for kind in self.waveform_kinds:
+            feats_pt = featurization_pipeline_path(save_folder, kind)
+            if feats_pt is None:
+                continue
             state_dict = torch.load(feats_pt, weights_only=True)
-            self.featurization_pipeline.load_state_dict(state_dict)
+            self.get_pipeline(kind).load_state_dict(state_dict)
 
     def check_resuming(
         self,

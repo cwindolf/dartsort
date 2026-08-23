@@ -88,21 +88,24 @@ def run_peeler(
             return None
 
     # run main
-    if peeler.featurization_pipeline is not None:
-        workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
-        _, workers = handle_negative_jobs(workers)
-        peeler.featurization_pipeline.register_cpu_workers(workers)
+    workers = computation_cfg.actual_n_jobs(small=True, cpu=True)
+    _, workers = handle_negative_jobs(workers)
+    for pipeline in peeler.featurization_pipelines.values():
+        pipeline.register_cpu_workers(workers)  # ty: ignore[call-non-callable]
 
+    feature_pipelines = {
+        kind: str(pipeline)
+        for kind, pipeline in peeler.featurization_pipelines.items()
+    }
     if hasattr(peeler, "subtraction_denoising_pipeline"):
         logger.dartsortverbose(
-            f"Run {peel_name} with denoising pipeline %s and feature pipeline %s",
+            f"Run {peel_name} with denoising pipeline %s and feature pipelines %s",
             peeler.subtraction_denoising_pipeline,
-            peeler.featurization_pipeline,
+            feature_pipelines,
         )
     else:
         logger.dartsortverbose(
-            f"Run {peel_name} with feature pipeline %s",
-            peeler.featurization_pipeline,
+            f"Run {peel_name} with feature pipelines %s", feature_pipelines
         )
     with timer(f"peel ({peel_name})"):
         peeler.peel(

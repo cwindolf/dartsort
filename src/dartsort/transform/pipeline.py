@@ -1,7 +1,8 @@
 """A class which manages pipelines of denoisers and featurizers"""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -456,6 +457,47 @@ def check_unique_feature_names(transformers):
                 fnames.append(f.name)
     if not len(fnames) == len(set(fnames)):
         raise ValueError("Featurizer name collision in a WaveformPipeline")
+
+
+def check_unique_feature_names_across(pipelines: "Mapping[str, WaveformPipeline]"):
+    """Pipelines write to a shared h5, so their dataset names must not collide."""
+    seen: dict[str, str] = {}
+    for kind, pipeline in pipelines.items():
+        for ds in pipeline.spike_datasets():
+            if ds.name in seen:
+                raise ValueError(
+                    f"Feature name collision: {ds.name} is written by both the "
+                    f"{seen[ds.name]} and {kind} featurization pipelines."
+                )
+            seen[ds.name] = kind
+
+
+def split_featurization_cfg_for_denoised_localization(
+    featurization_cfg: FeaturizationConfig,
+) -> tuple[FeaturizationConfig, FeaturizationConfig]:
+    collisioncleaned_cfg = replace(
+        featurization_cfg, do_localization=False, additional_com_localization=False
+    )
+    denoised_cfg = replace(
+        featurization_cfg,
+        do_nn_denoise=False,
+        do_tpca_denoise=False,
+        save_input_voltages=False,
+        save_input_waveforms=False,
+        save_input_tpca_projs=False,
+        compute_input_tpca_projs_regardless=False,
+        save_output_waveforms=False,
+        save_output_tpca_projs=False,
+        save_collidedness=False,
+        save_amplitudes=False,
+        save_amplitude_vectors=False,
+        save_all_amplitudes=False,
+        learn_cleaned_tpca_basis=False,
+        use_gmm_classifier=False,
+        fit_disabled_whitener=False,
+        whiten_cfg=None,
+    )
+    return collisioncleaned_cfg, denoised_cfg
 
 
 def featurization_config_to_class_names_and_kwargs(

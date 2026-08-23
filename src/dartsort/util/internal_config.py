@@ -681,6 +681,8 @@ class FeaturizationConfig:
 
 PeakSign = Literal["pos", "neg", "both"]
 
+WaveformKind = Literal["collisioncleaned", "denoised"]
+
 
 @cfg_dataclass
 class SubtractionConfig:
@@ -708,6 +710,7 @@ class SubtractionConfig:
     max_iter: int = 200
     whiten: bool = True
     threshold_before_whitening: float = 10.0
+    denoise_before_localization: bool = False
     whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
 
     # how will waveforms be denoised before subtraction?

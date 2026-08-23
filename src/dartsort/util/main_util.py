@@ -250,7 +250,7 @@ def ds_handle_link_from(cfg: DARTsortInternalConfig, output_dir: Path):
                 "subtraction.h5",
                 "motion.pkl",
                 "motionthreshold.h5",
-                "subtraction_models/featurization_pipeline.pt",
+                "subtraction_models/*featurization_pipeline.pt",
             ]
         )
     if link_refined0:

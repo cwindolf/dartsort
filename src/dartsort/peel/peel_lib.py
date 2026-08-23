@@ -164,16 +164,84 @@ ChunkSubtractionResult = namedtuple(
         "times_samples",
         "channels",
         "collisioncleaned_waveforms",
+        "denoised_waveforms",
         "residual",
         "features",
     ],
 )
 
 
+def extract_output_waveforms(
+    residual: Tensor,
+    times_samples: Tensor,
+    channels: Tensor,
+    subtracted_waveforms: Tensor,
+    channel_index: Tensor,
+    extract_index: Tensor,
+    extract_mask: Tensor | None,
+    denoising_pipeline: "WaveformPipeline",
+    trough_offset_samples: int,
+    spike_length_samples: int,
+    return_denoised_waveforms: bool = False,
+    compute_collidedness: bool = False,
+    batch_size: int = 1024,
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
+    """Deal with logic of going to extract index with/without denoising etc."""
+    n = times_samples.numel()
+    # intermediate index, before going to extract
+    grab_index = channel_index if return_denoised_waveforms else extract_index
+    shape = (n, spike_length_samples, extract_index.shape[1])
+    collisioncleaned_waveforms = residual.new_empty(shape)
+    denoised_waveforms = (
+        residual.new_empty(shape) if return_denoised_waveforms else None
+    )
+    collidedness = residual.new_empty((n,)) if compute_collidedness else None
+
+    def to_extract(waveforms, chans):
+        if extract_mask is None:
+            return waveforms
+        return get_relative_subset(waveforms, chans, extract_mask)
+
+    for i0 in range(0, n, batch_size):
+        bs = slice(i0, min(n, i0 + batch_size))
+        chans = channels[bs]
+        waveforms = grab_spikes(
+            residual,
+            times_samples[bs],
+            chans,
+            grab_index,
+            trough_offset=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            buffer=0,
+            already_padded=True,
+        )
+
+        # collidedness is always extract neighborhood rms, costs an extra extract
+        if collidedness is not None:
+            resid = (
+                to_extract(waveforms, chans) if return_denoised_waveforms else waveforms
+            )
+            collidedness[bs] = resid.square().nanmean(dim=(1, 2)).sqrt_()
+
+        if return_denoised_waveforms:
+            waveforms += subtracted_waveforms[bs]
+            # copy out before denoising, which may overwrite its input
+            collisioncleaned_waveforms[bs] = to_extract(waveforms, chans)
+            denoised, _ = denoising_pipeline(waveforms, channels=chans)
+            assert denoised_waveforms is not None
+            denoised_waveforms[bs] = to_extract(denoised, chans)
+        else:
+            waveforms += to_extract(subtracted_waveforms[bs], chans)
+            collisioncleaned_waveforms[bs] = waveforms
+
+    return collisioncleaned_waveforms, denoised_waveforms, collidedness
+
+
 def subtract_chunk(
     traces: Tensor,
     channel_index: Tensor,
     denoising_pipeline: "WaveformPipeline",
+    *,
     sub_dedup_channel_index: Tensor | None = None,
     subtract_global_dedup: bool = False,
     extract_index: Tensor | None = None,
@@ -201,10 +269,10 @@ def subtract_chunk(
     save_iteration=False,
     save_residnorm_decrease=False,
     compute_collidedness=False,
+    return_denoised_waveforms=False,
 ) -> ChunkSubtractionResult:
     """Core peeling routine for subtraction"""
     # validate arguments to avoid confusing error messages later
-    re_extract = extract_index is not None
     if extract_index is None:
         extract_index = channel_index
     else:
@@ -390,8 +458,9 @@ def subtract_chunk(
     if not spike_times:
         return empty_chunk_subtraction_result(
             spike_length_samples,
-            channel_index,
+            extract_index,
             residual[left_margin : traces.shape[0] - right_margin, :-1],
+            return_denoised_waveforms,
         )
 
     # concatenate all of the thresholds together into single tensors
@@ -410,8 +479,9 @@ def subtract_chunk(
     if not keep.numel():
         return empty_chunk_subtraction_result(
             spike_length_samples,
-            channel_index,
+            extract_index,
             residual[left_margin : traces.shape[0] - right_margin, :-1],
+            return_denoised_waveforms,
         )
 
     keep = keep[torch.argsort(spike_times[keep])]
@@ -421,27 +491,25 @@ def subtract_chunk(
     for k in spike_features:
         spike_features[k] = spike_features[k][keep]
 
-    # if extract_index != subtract_index, re-do the channels for the subtracted wfs
-    if re_extract:
-        subtracted_waveforms = get_relative_subset(
-            subtracted_waveforms, spike_channels, extract_mask
+    # construct collision-cleaned (and optionally denoised) waveforms
+    collisioncleaned_waveforms, denoised_waveforms, collidedness = (
+        extract_output_waveforms(
+            residual,
+            spike_times,
+            spike_channels,
+            subtracted_waveforms,
+            channel_index=channel_index,
+            extract_index=extract_index,
+            extract_mask=extract_mask,
+            denoising_pipeline=denoising_pipeline,
+            trough_offset_samples=trough_offset_samples,
+            spike_length_samples=spike_length_samples,
+            return_denoised_waveforms=return_denoised_waveforms,
+            compute_collidedness=compute_collidedness,
         )
-
-    # construct collision-cleaned waveforms
-    collisioncleaned_waveforms = grab_spikes(
-        residual,
-        spike_times,
-        spike_channels,
-        extract_index,
-        trough_offset=trough_offset_samples,
-        spike_length_samples=spike_length_samples,
-        buffer=0,
-        already_padded=True,
     )
-    if compute_collidedness:
-        coll = collisioncleaned_waveforms.square().nanmean(dim=(1, 2)).sqrt_()
-        spike_features["collidedness"] = coll
-    collisioncleaned_waveforms += subtracted_waveforms
+    if collidedness is not None:
+        spike_features["collidedness"] = collidedness
 
     # offset spike times_samples according to margin
     spike_times -= left_margin
@@ -458,12 +526,15 @@ def subtract_chunk(
         times_samples=spike_times,
         channels=spike_channels,
         collisioncleaned_waveforms=collisioncleaned_waveforms,
+        denoised_waveforms=denoised_waveforms,
         residual=residual,
         features=spike_features,
     )
 
 
-def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual):
+def empty_chunk_subtraction_result(
+    spike_length_samples, channel_index, residual, return_denoised
+):
     empty_waveforms = torch.empty(
         (0, spike_length_samples, channel_index.shape[1]),
         dtype=residual.dtype,
@@ -474,6 +545,7 @@ def empty_chunk_subtraction_result(spike_length_samples, channel_index, residual
         times_samples=empty_times_or_chans,
         channels=empty_times_or_chans,
         collisioncleaned_waveforms=empty_waveforms,
+        denoised_waveforms=empty_waveforms if return_denoised else None,
         residual=residual,
         features={},
     )
@@ -862,7 +934,7 @@ def threshold_to_fit(
 
             # get fit weights
             device = computation_cfg.actual_device()
-            waveforms, fixed_properties = subsample_waveforms(
+            waveform_dict, fixed_properties = subsample_waveforms(
                 temp_hdf5_filename,
                 fit_sampling=sampling_cfg.fit_sampling,
                 random_state=sampling_cfg.seed,
@@ -872,6 +944,7 @@ def threshold_to_fit(
                 waveforms_dataset_name="waveforms",
                 subsample_by_weighting=True,
             )
+            waveforms = waveform_dict["waveforms"]
             if not len(waveforms):
                 raise ValueError(
                     "Found no spikes when thresholding to get model fitting data. "

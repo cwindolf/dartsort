@@ -12,12 +12,14 @@ from test_util import dense_layout
 
 from dartsort.localize.localize_torch import point_source_amplitude_at
 from dartsort.main import subtract
+from dartsort.peel.subtract import SubtractionPeeler
 from dartsort.util import waveform_util
 from dartsort.util.internal_config import (
     ComputationConfig,
     FeaturizationConfig,
     FitSamplingConfig,
     SubtractionConfig,
+    WaveformConfig,
 )
 
 fixedlenkeys = (
@@ -74,7 +76,7 @@ def fakedata():
 
     # combine to make templates
     templates = np.array(
-        [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps)]
+        [t[:, None] * a[None, :] for t, a in zip((t0, t1, t2, t3), amps, strict=True)]
     )
     templates[0] *= 100 / np.abs(templates[0]).max()
     templates[1] *= 50 / np.abs(templates[1]).max()
@@ -88,7 +90,7 @@ def fakedata():
 
     # inject the spikes into a noise background
     rec = 0.1 * rg.normal(size=(T_samples, len(geom))).astype(np.float32)
-    for t, ll in zip(times, labels):
+    for t, ll in zip(times, labels, strict=True):
         rec[t : t + 121] += templates[ll]
     assert np.sum(np.abs(rec) > 80) >= 100
     assert np.sum(np.abs(rec) > 40) >= 50
@@ -385,35 +387,134 @@ def test_resume(fakedata, tmp_path):
         np.testing.assert_array_equal(st_orig.channels, stb.channels[order])
 
 
-@pytest.mark.parametrize("nn_localization", [True])
-def test_small_nonn(tmp_path, nn_localization):
-    # noise recording
-    T_samples = 50_100
-    n_channels = 50
+def little_recording(T_samples=30_200, n_channels=50):
     rg = np.random.default_rng(0)
     noise = rg.normal(size=(T_samples, n_channels)).astype(np.float32)
 
-    # add a spike every so_often samples
     so_often = 501
     template = 50 * np.exp(-(((np.arange(121) - 42) / 10) ** 2))
     for t in range(0, T_samples - 121, so_often):
-        random_channel = rg.integers(n_channels)
-        noise[t : t + 121, random_channel] += template
+        noise[t : t + 121, rg.integers(n_channels)] += template
 
     h = dense_layout()
     geom = np.c_[h["x"], h["y"]][:n_channels]
     rec = sc.NumpyRecording(noise, 30_000)
     rec.set_dummy_probe_from_locations(geom)
+    return rec
 
+
+def smallcfgs(denoise_before_localization=False, nn_localization=True):
     subconf = SubtractionConfig(
         detection_threshold=40.0,
-        peak_sign="both",
         subtraction_denoising_cfg=FeaturizationConfig(
             do_nn_denoise=False, denoise_only=True
         ),
         whiten=False,
+        denoise_before_localization=denoise_before_localization,
     )
     featconf = FeaturizationConfig(do_nn_denoise=False, nn_localization=nn_localization)
+    return subconf, featconf
+
+
+@pytest.mark.parametrize("denoise_before_localization", [False, True])
+def test_pipeline_save_load(tmp_path, denoise_before_localization):
+    rec = little_recording()
+    subconf, featconf = smallcfgs(denoise_before_localization)
+    kinds = ["collisioncleaned"]
+    if denoise_before_localization:
+        kinds.append("denoised")
+
+    def peeler():
+        return SubtractionPeeler.from_config(
+            recording=rec,
+            waveform_cfg=WaveformConfig(),
+            subtraction_cfg=subconf,
+            featurization_cfg=featconf,
+            sampling_cfg=FitSamplingConfig(),
+        )
+
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
+        subtract(
+            recording=rec,
+            output_dir=tempdir,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            overwrite=True,
+            computation_cfg=two_jobs_cfg_cpu,
+        )
+        model_dir = Path(tempdir) / "subtraction_models"
+        pts = {k: model_dir / f"{k}_featurization_pipeline.pt" for k in kinds}
+        assert sorted(f.name for f in model_dir.glob("*featurization_pipeline.pt")) == (
+            sorted(pt.name for pt in pts.values())
+        )
+
+        peeler = peeler()
+        assert peeler.waveform_kinds == kinds
+        assert peeler.needs_fit()
+        peeler.precompute_models(model_dir)
+        peeler.load_models(model_dir)
+        assert not peeler.needs_fit()
+
+        for kind, pt in pts.items():
+            saved = torch.load(pt, weights_only=True)
+            loaded = peeler.get_pipeline(kind).state_dict()
+            assert set(saved) == set(loaded)
+            for k, v in saved.items():
+                if torch.is_tensor(v):
+                    assert torch.equal(v, loaded[k]), f"{kind}/{k}"
+
+        # test old style
+        pts["collisioncleaned"].rename(model_dir / "featurization_pipeline.pt")
+        peeler = peeler()
+        peeler.precompute_models(model_dir)
+        peeler.load_models(model_dir)
+        assert not peeler.needs_fit()
+
+
+@pytest.mark.parametrize("nn_localization", [True, False])
+def test_denoise_before_localization(tmp_path, nn_localization):
+    rec = little_recording()
+    subconf, featconf = smallcfgs(
+        denoise_before_localization=True, nn_localization=nn_localization
+    )
+    assert subconf.subtract_radius_um > featconf.extract_radius
+
+    with tempfile.TemporaryDirectory(
+        dir=tmp_path, ignore_cleanup_errors=True
+    ) as tempdir:
+        st = subtract(
+            recording=rec,
+            output_dir=tempdir,
+            featurization_cfg=featconf,
+            subtraction_cfg=subconf,
+            overwrite=True,
+            computation_cfg=two_jobs_cfg_cpu,
+        )
+        assert st is not None
+
+        model_dir = Path(tempdir) / "subtraction_models"
+        assert (model_dir / "collisioncleaned_featurization_pipeline.pt").exists()
+        assert (model_dir / "denoised_featurization_pipeline.pt").exists()
+
+        with h5py.File(st.parent_h5_path, locking=False) as h5:
+            lens = []
+            for k in h5.keys():  # noqa: SIM118
+                if k not in fixedlenkeys and h5[k].ndim >= 1:  # type: ignore[reportAttributeAccessIssue]
+                    lens.append(h5[k].shape[0])  # type: ignore[reportAttributeAccessIssue]
+            assert np.unique(lens).size == 1
+            ns = lens[0]
+            assert ns > 0
+            assert h5["point_source_localizations"].shape in [(ns, 4), (ns, 3)]  # type: ignore[reportAttributeAccessIssue]
+            assert "collisioncleaned_tpca_features" in h5
+            assert "denoised_ptp_amplitudes" in h5
+
+
+@pytest.mark.parametrize("nn_localization", [True])
+def test_small_nonn(tmp_path, nn_localization):
+    rec = little_recording(T_samples=50_100)
+    subconf, featconf = smallcfgs(nn_localization=nn_localization)
 
     print("No parallel")
     with tempfile.TemporaryDirectory(
