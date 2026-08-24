@@ -424,7 +424,7 @@ def test_pipeline_save_load(tmp_path, denoise_before_localization):
     if denoise_before_localization:
         kinds.append("denoised")
 
-    def peeler():
+    def _peeler():
         return SubtractionPeeler.from_config(
             recording=rec,
             waveform_cfg=WaveformConfig(),
@@ -450,7 +450,7 @@ def test_pipeline_save_load(tmp_path, denoise_before_localization):
             sorted(pt.name for pt in pts.values())
         )
 
-        peeler = peeler()
+        peeler = _peeler()
         assert peeler.waveform_kinds == kinds
         assert peeler.needs_fit()
         peeler.precompute_models(model_dir)
@@ -467,7 +467,7 @@ def test_pipeline_save_load(tmp_path, denoise_before_localization):
 
         # test old style
         pts["collisioncleaned"].rename(model_dir / "featurization_pipeline.pt")
-        peeler = peeler()
+        peeler = _peeler()
         peeler.precompute_models(model_dir)
         peeler.load_models(model_dir)
         assert not peeler.needs_fit()

@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from scipy.interpolate import CubicSpline
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist, pdist, squareform
+from torch import Tensor
 
 from .logging_util import progrange
 
@@ -190,7 +191,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: Literal[True],
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> torch.LongTensor: ...
 
@@ -201,7 +202,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: Literal[False],
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray: ...
 
@@ -212,7 +213,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: bool = False,
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray | torch.Tensor: ...
 
@@ -222,7 +223,7 @@ def make_channel_index(
     radius: float,
     *,
     to_torch: bool = False,
-    p: int | float = 2,
+    p: float = 2,
     pad_val: int | None = None,
 ) -> np.ndarray | torch.Tensor:
     """
@@ -416,7 +417,9 @@ def single_channel_index(n_channels, to_torch=False):
 # fitting models.
 
 
-def get_channels_in_probe(waveforms, max_channels, channel_index):
+def get_channels_in_probe(
+    waveforms: Tensor, max_channels: Tensor, channel_index: Tensor
+):
     n, _t, c = waveforms.shape
     assert max_channels.shape == (n,)
     assert channel_index.ndim == 2 and channel_index.shape[1] == c
@@ -707,7 +710,7 @@ def get_relative_subset(
 
 def grab_main_channels(waveforms, main_channels, channel_index, keepdim=False):
     nc = len(channel_index)
-    _, relative_positions = np.nonzero((channel_index == np.arange(nc)[:, None]))
+    _, relative_positions = np.nonzero(channel_index == np.arange(nc)[:, None])
     assert relative_positions.shape == (nc,)
     inds = relative_positions[main_channels]
     res = np.take_along_axis(waveforms, inds[:, None, None], axis=2)
