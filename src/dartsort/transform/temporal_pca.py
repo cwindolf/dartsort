@@ -6,6 +6,7 @@ import torch
 from sklearn.decomposition import PCA, TruncatedSVD
 
 from ..util.internal_config import WaveformConfig, default_waveform_cfg
+from ..util.py_util import panic
 from ..util.spiketorch import svd_lowrank_helper
 from ..util.waveform_util import (
     channel_subset_by_radius,
@@ -333,8 +334,8 @@ class BaseTemporalPCA(BaseWaveformModule):
         elif isinstance(pca, TruncatedSVD):
             whiten = False
         else:
-            assert False
-        rank = cast(int, getattr(pca, "n_components"))
+            panic(type(pca))
+        rank = cast(int, pca.n_components)
         if trim_rank_to:
             rank = min(rank, trim_rank_to)
         self = cls(
@@ -447,7 +448,7 @@ class TemporalPCADenoiser(BaseWaveformDenoiser, BaseTemporalPCA):
         waveforms = self._temporal_slice(waveforms, time_shifts=time_shifts)
         dev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels.to(device=dev), self.channel_index.to(device=dev)
+            waveforms, channels.to(device=dev), self.b.channel_index.to(device=dev)
         )
         waveforms_in_probe = self._project_in_probe(waveforms_in_probe)
         return set_channels_in_probe(waveforms_in_probe, waveforms, channels_in_probe)

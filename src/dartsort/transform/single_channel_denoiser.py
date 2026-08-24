@@ -8,10 +8,7 @@ from .transform_base import BaseWaveformDenoiser
 try:
     from importlib.resources import files
 except ImportError:
-    try:
-        from importlib_resources import files  # type: ignore  # ty: ignore[x]
-    except ImportError:
-        raise ValueError("Need python>=3.10 or pip install importlib_resources.")
+    from importlib_resources import files  # type: ignore  # ty: ignore[x]
 
 default_pretrained_path = files("dartsort.pretrained")
 default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser.pt")
@@ -19,6 +16,7 @@ default_pretrained_path = default_pretrained_path.joinpath("single_chan_denoiser
 
 class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
     """YASS-style single-channel waveform denoising."""
+
     default_name = "single_chan_denoiser"
 
     def __init__(
@@ -51,7 +49,7 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
     def forward(self, waveforms, *, channels, **unused):
         odev = waveforms.device
         channels_in_probe, waveforms_in_probe = get_channels_in_probe(
-            waveforms, channels, self.channel_index.to(odev)
+            waveforms, channels.to(odev), self.b.channel_index.to(odev)
         )
 
         n_in_probe = len(waveforms_in_probe)
@@ -84,8 +82,8 @@ class SingleChannelWaveformDenoiser(BaseWaveformDenoiser):
 class SingleChannelDenoiser(nn.Module):
     def __init__(
         self,
-        n_filters=[16, 8],
-        filter_sizes=[5, 11],
+        n_filters=(16, 8),
+        filter_sizes=(5, 11),
         spike_size=121,
     ):
         super().__init__()
@@ -119,14 +117,13 @@ class SingleChannelDenoiser(nn.Module):
 class FlexibleSingleChanDenoiser(nn.Module):
     def __init__(
         self,
-        pretrained_path=None,
-        n_filters=[32, 32, 32],
-        filter_sizes=[11, 11, 11],
+        n_filters=(32, 32, 32),
+        filter_sizes=(11, 11, 11),
         spike_size=121,
     ):
         super().__init__()
         nets = []
-        for inf, outf, s in zip([1, *n_filters], n_filters, filter_sizes):
+        for inf, outf, s in zip([1, *n_filters], n_filters, filter_sizes, strict=True):
             nets.append(nn.Sequential(nn.Conv1d(inf, outf, s), nn.ReLU()))
         # self.conv1 = nn.Sequential(nn.Conv1d(1, feat1, size1), nn.ReLU())
         # self.conv2 = nn.Sequential(nn.Conv1d(feat1, feat2, size2), nn.ReLU())
