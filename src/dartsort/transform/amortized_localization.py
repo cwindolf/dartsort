@@ -152,7 +152,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.encoder.to(self.b.padded_geom.device)
 
     def reparameterize(self, mu, var):
-        if var is None:
+        if var is None or not self.training:
             return mu
         std = var.relu().sqrt()
         eps = torch.randn_like(std)
@@ -274,12 +274,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             rescale = mask.sum(1, keepdim=True).clamp(min=1e-6).reciprocal()
         x_masked *= rescale
         recon_x_masked *= rescale
-        mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / self.batch_size
+        n = len(x)
+        mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / n
         kld = 0.0
         if self.variational:
-            muterm = mu.pow(2) / self.prior_variance - 1
-            kld = torch.log(self.prior_variance / var).add(muterm).sum()
-            kld = kld.mul(0.5 / self.batch_size)
+            ratio = (var + mu.pow(2)) / self.prior_variance - 1
+            kld = torch.log(self.prior_variance / var).add(ratio)
+            kld = kld.mul(rescale.square()).sum().mul(0.5 / n)
         return mse, kld
 
     def _fit(self, waveforms, channels, weights=None):
@@ -381,7 +382,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     total_loss += loss.item()
                     total_mse += mse.item()
                     if self.variational:
-                        total_kld += float(kld)
+                        total_kld += float(kld.numpy(force=True))
 
                     n_examples += chans_batch.numel()
                     if n_examples >= self.epoch_size:
