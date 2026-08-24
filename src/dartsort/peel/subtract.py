@@ -15,7 +15,7 @@ from ..transform import (
     Waveform,
     WaveformPipeline,
     WaveformWhitener,
-    split_featurization_cfg_for_denoised_localization,
+    split_featurization_cfg_for_denoised_features,
 )
 from ..util import job_util
 from ..util.data_util import SpikeDataset, subsample_waveforms
@@ -236,18 +236,11 @@ class SubtractionPeeler(BasePeeler):
             sampling_frequency=recording.sampling_frequency,
         )
 
-        localizing = featurization_cfg.do_localization
-        localizing |= featurization_cfg.additional_com_localization
-        localizing &= not (featurization_cfg.skip or featurization_cfg.denoise_only)
-        featurization_cfgs: dict[WaveformKind, FeaturizationConfig] = {}
-        if subtraction_cfg.denoise_before_localization and localizing:
-            cc_cfg, dn_cfg = split_featurization_cfg_for_denoised_localization(
-                featurization_cfg
-            )
-            featurization_cfgs["collisioncleaned"] = cc_cfg
-            featurization_cfgs["denoised"] = dn_cfg
-        else:
-            featurization_cfgs["collisioncleaned"] = featurization_cfg
+        featurization_cfgs = split_featurization_cfg_for_denoised_features(
+            featurization_cfg,
+            localization=subtraction_cfg.denoise_before_localization,
+            amplitudes=subtraction_cfg.denoise_before_amplitudes,
+        )
         featurization_pipelines = {
             kind: WaveformPipeline.from_config(
                 geom=geom,

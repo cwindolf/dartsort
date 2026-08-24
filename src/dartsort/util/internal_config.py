@@ -644,6 +644,7 @@ class FeaturizationConfig:
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
+    singlechan_denoised_amplitudes_and_localizations: bool = False
 
     # -- further info about denoising
     nn_denoiser_class_name: str = "Decollider"
@@ -711,6 +712,7 @@ class SubtractionConfig:
     whiten: bool = True
     threshold_before_whitening: float = 10.0
     denoise_before_localization: bool = False
+    denoise_before_amplitudes: bool = False
     whiten_cfg: WhiteningConfig | None = WhiteningConfig(strategy="prewhiten_postapply")
 
     # how will waveforms be denoised before subtraction?
@@ -1053,6 +1055,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         save_input_waveforms=cfg.save_collisioncleaned_waveforms,
         save_collidedness=save_collidedness,
         tpca_from_templates=cfg.tpca_from_templates,
+        singlechan_denoised_amplitudes_and_localizations=cfg.singlechan_denoised_amplitudes_and_localizations,
+        do_enforce_decrease=cfg.do_enforce_decrease,
     )
     if cfg.template_interp_kind == "tps":
         temp_interp_params = tps_interp_clampna_extrap_params
@@ -1117,6 +1121,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
             subtraction_denoising_cfg=subtraction_denoising_cfg,
             temporal_dedup_radius_samples=cfg.temporal_dedup_radius_samples,
             positive_temporal_dedup_radius_samples=cfg.positive_temporal_dedup_radius_samples,
+            denoise_before_localization=cfg.denoise_before_localization,
+            denoise_before_amplitudes=cfg.denoise_before_amplitudes,
             whiten=cfg.whiten_in_subtraction,
             whiten_cfg=whiten_cfg,
         )

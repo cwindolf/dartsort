@@ -268,6 +268,10 @@ class DeveloperConfig(DARTsortUserConfig):
     use_nn_in_subtraction: bool = True
     whiten_in_subtraction: bool = True
     threshold_before_whitening: float = 10.0
+    denoise_before_localization: bool = False
+    denoise_before_amplitudes: bool = False
+    singlechan_denoised_amplitudes_and_localizations: bool = False
+    do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
     shave_score: float = 10.0
     temporal_dedup_radius_samples: int = 7
     subtract_global_dedup: bool = True
