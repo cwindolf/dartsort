@@ -426,7 +426,7 @@ class InjectSpikesPreprocessor(BasePreprocessor):
         amp_jitter_family: Literal["gamma", "uniform", "normal"] = "normal",
         temporal_jitter: int = 1,
         temporal_jitter_family: Literal["uniform", "by_unit"] = "uniform",
-        extract_radius: float = 100.0,
+        extract_radius: float = 150.0,
         random_seed: np.random.Generator | int = 0,
         features_dtype="float32",
         compute_collision_waveforms=False,

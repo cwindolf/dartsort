@@ -616,12 +616,12 @@ class FeaturizationConfig:
     """
 
     skip: bool = False
-    extract_radius: float = 100.0
+    extract_radius: float = 150.0
 
     # -- denoising configuration
     do_nn_denoise: bool = False
     do_tpca_denoise: bool = True
-    do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
+    do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
     # turn off features below
     denoise_only: bool = False
 

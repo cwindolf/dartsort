@@ -174,7 +174,7 @@ class DARTsortUserConfig:
     ignored. But also all of the secondary channels of the big one,
     which is important."""
 
-    featurization_radius_um: Annotated[float, Field(gt=0)] = 100.0
+    featurization_radius_um: Annotated[float, Field(gt=0)] = 150.0
     """Radius around detection channel or template peak channel used
     to extract spike features for clustering."""
 
@@ -273,7 +273,7 @@ class DeveloperConfig(DARTsortUserConfig):
     singlechan_denoised_amplitudes_and_localizations: bool = False
     save_amplitude_vectors: bool = False
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
-    do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
+    do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
     shave_score: float = 10.0
     temporal_dedup_radius_samples: int = 7
     subtract_global_dedup: bool = True

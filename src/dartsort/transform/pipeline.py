@@ -583,7 +583,7 @@ def featurization_config_to_class_names_and_kwargs(
         _add_tpca_and_nn(featurization_cfg, waveform_cfg, sampling_frequency)
     )
 
-    if fc.do_enforce_decrease is True:
+    if fc.do_enforce_decrease == "yes":
         class_names_and_kwargs.append(("EnforceDecrease", {}))
     if fc.save_output_waveforms:
         class_names_and_kwargs.append(
