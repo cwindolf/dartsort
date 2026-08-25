@@ -37,7 +37,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         whiten=False,
         centered=False,
         fit_radius=None,
-        random_state=0,
+        random_seed=0,
         name=None,
         name_prefix="",
         temporal_slice: slice | None = None,
@@ -70,7 +70,7 @@ class BaseTemporalPCA(BaseWaveformModule):
 
         # fit control
         self.fit_radius = fit_radius
-        self.random_state = random_state
+        self.random_seed = random_seed
         self.n_oversamples = n_oversamples
         self.niter = niter
         self.fit_dtype = fit_dtype
@@ -105,7 +105,7 @@ class BaseTemporalPCA(BaseWaveformModule):
             recording, waveforms, computation_cfg=computation_cfg, channels=channels
         )
         del spike_data
-        rg = np.random.default_rng(self.random_state)
+        rg = np.random.default_rng(self.random_seed)
         if weights is not None and waveforms.shape[0] > self.max_waveforms:
             weights = weights.numpy(force=True) if torch.is_tensor(weights) else weights
             weights = weights.astype(np.float64)
@@ -149,16 +149,18 @@ class BaseTemporalPCA(BaseWaveformModule):
         else:
             M = None
 
-        _, components, _, whitener = svd_lowrank_helper(
-            x=waveforms_fit,
-            rank=self.rank,
-            n_oversamples=self.n_oversamples,
-            fit_dtype=self.fit_dtype,
-            niter=self.niter,
-            M=M,
-            with_loadings=False,
-            device=self.b.channel_index.device,
-        )
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(self.random_seed)
+            _, components, _, whitener = svd_lowrank_helper(
+                x=waveforms_fit,
+                rank=self.rank,
+                n_oversamples=self.n_oversamples,
+                fit_dtype=self.fit_dtype,
+                niter=self.niter,
+                M=M,
+                with_loadings=False,
+                device=self.b.channel_index.device,
+            )
 
         self.b.mean.copy_(mean)
         self.b.components.copy_(components)
@@ -308,7 +310,7 @@ class BaseTemporalPCA(BaseWaveformModule):
         rank = min(trim_rank_to, self.rank) if trim_rank_to else self.rank
         pca = PCA(
             n_components=rank,
-            random_state=self.random_state,
+            random_state=self.random_seed,
             whiten=self.whiten,
         )
         pca.mean_ = self.b.mean.numpy(force=True)

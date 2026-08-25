@@ -21,7 +21,10 @@ class SupervisedDenoiser(BaseMultichannelDenoiser):
 
     def initialize_spike_length_dependent_params(self):
         self.initialize_shapes()
-        self.exy = self.get_mlp(res_type=self.res_type)
+
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(self.random_seed)
+            self.exy = self.get_mlp(res_type=self.res_type)
         self.to(self.device)
 
     def forward_unbatched(self, waveforms, channels, to_orig_channels=True):

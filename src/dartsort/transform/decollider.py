@@ -160,30 +160,33 @@ class Decollider(BaseMultichannelDenoiser):
             logger.dartsortdebug("Already initialized.")
             return
         self.initialize_shapes()
-        if self.exz_estimator in ("n2n", "n3n"):
-            self.eyz: torch.nn.Module = self.get_mlp(
-                res_type=self.eyz_res_type,
-                hidden_dims=self.eyz_net_hidden_dims,
-                message="eyz",
-            )
-        if self.exz_estimator in ("n3n", "2n2", "3n3"):
-            self.emz: torch.nn.Module = self.get_mlp(
-                res_type=self.emz_res_type, output_layer="linear", message="emz"
-            )
-        if self.inference_kind == "amortized":
-            self.inf_net: torch.nn.Module = self.get_mlp(
-                res_type=self.e_exz_y_res_type,
-                hidden_dims=self.inf_net_hidden_dims,
-                message="inf",
-            )
-        if self.separate_cycle_net:
-            self.den_net: torch.nn.Module = self.get_mlp(
-                res_type=self.e_exz_y_res_type,
-                hidden_dims=self.inf_net_hidden_dims,
-                message="den",
-            )
-        else:
-            self.den_net: torch.nn.Module = self.inf_net
+
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(self.random_seed)
+            if self.exz_estimator in ("n2n", "n3n"):
+                self.eyz: torch.nn.Module = self.get_mlp(
+                    res_type=self.eyz_res_type,
+                    hidden_dims=self.eyz_net_hidden_dims,
+                    message="eyz",
+                )
+            if self.exz_estimator in ("n3n", "2n2", "3n3"):
+                self.emz: torch.nn.Module = self.get_mlp(
+                    res_type=self.emz_res_type, output_layer="linear", message="emz"
+                )
+            if self.inference_kind == "amortized":
+                self.inf_net: torch.nn.Module = self.get_mlp(
+                    res_type=self.e_exz_y_res_type,
+                    hidden_dims=self.inf_net_hidden_dims,
+                    message="inf",
+                )
+            if self.separate_cycle_net:
+                self.den_net: torch.nn.Module = self.get_mlp(
+                    res_type=self.e_exz_y_res_type,
+                    hidden_dims=self.inf_net_hidden_dims,
+                    message="den",
+                )
+            else:
+                self.den_net: torch.nn.Module = self.inf_net
         if self.svd_projection_rank:
             from .temporal_pca import BaseTemporalPCA
 
