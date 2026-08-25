@@ -6,7 +6,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..util.data_util import DARTsortSorting
+from ..util.data_util import (
+    DARTsortSorting,
+    featurization_pipeline_path,
+    get_tpca,
+    try_get_model_dir,
+)
 from ..util.drift_util import get_stable_channels
 from ..util.internal_config import (
     ClusteringFeaturesConfig,
@@ -23,7 +28,7 @@ from ..util.logging_util import get_logger
 from ..util.motion import MotionInfo
 from ..util.multiprocessing_util import handle_negative_jobs
 from ..util.py_util import databag
-from ..util.spiketorch import svd_lowrank_helper
+from ..util.spiketorch import ptp, svd_lowrank_helper
 from ..util.waveform_util import make_channel_index, single_channel_index
 from . import cluster_util
 
@@ -102,6 +107,17 @@ class SimpleMatrixFeatures:
 
         features = []
 
+        # motion-aware main channel TPCA features, interpolated to the registered
+        # main channel. shared by the amplitude and the main channel PCs below.
+        main_channel_feats = None
+        if clustering_features_cfg.motion_aware:
+            main_channel_feats = _interpolate_main_channel_features(
+                sorting=sorting,
+                motion=motion,
+                clustering_features_cfg=clustering_features_cfg,
+                computation_cfg=computation_cfg,
+            )
+
         if clustering_features_cfg.use_z:
             assert z is not None
             assert z_reg is not None
@@ -114,7 +130,15 @@ class SimpleMatrixFeatures:
             assert x is not None
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
-        amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+        amp = None
+        if main_channel_feats is not None:
+            amp = _reconstruct_main_channel_amplitudes(
+                sorting=sorting,
+                main_channel_feats=main_channel_feats,
+                clustering_features_cfg=clustering_features_cfg,
+            )
+        if amp is None:
+            amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
         v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
         if (
             clustering_features_cfg.use_amplitude
@@ -139,9 +163,8 @@ class SimpleMatrixFeatures:
         if clustering_features_cfg.n_main_channel_pcs:
             pcs = _compute_main_channel_pcs(
                 sorting=sorting,
-                motion=motion,
+                main_channel_feats=main_channel_feats,
                 clustering_features_cfg=clustering_features_cfg,
-                computation_cfg=computation_cfg,
                 raise_on_na=raise_on_na,
             )
             assert pcs is not None
@@ -281,59 +304,116 @@ class StableWaveformFeatures:
 # -- helpers
 
 
-def _compute_main_channel_pcs(
+def _interpolate_main_channel_features(
     *,
     sorting: DARTsortSorting,
     clustering_features_cfg: ClusteringFeaturesConfig,
     motion: MotionInfo,
     computation_cfg: ComputationConfig,
-    raise_on_na: bool,
-):
-    do_pcs = bool(clustering_features_cfg.n_main_channel_pcs)
-    if not do_pcs:
+) -> Tensor | None:
+    """Full rank main channel TPCA features, interpolated to the registered main chan.
+
+    Returns a (n_spikes, rank) tensor, or None if the features aren't available.
+    """
+    if sorting.parent_h5_path is None or not sorting.has_dataset(
+        clustering_features_cfg.pca_dataset_name
+    ):
+        logger.warning(
+            f"Motion aware clustering features, but no "
+            f"{clustering_features_cfg.pca_dataset_name} to interpolate."
+        )
         return None
 
-    if not clustering_features_cfg.motion_aware:
+    shifts, n_pitches_shift = motion.pitch_shifts(
+        sorting=sorting,
+        motion_depth_mode=clustering_features_cfg.motion_depth_mode,
+    )
+    mainchan_ci = single_channel_index(len(motion.geom))
+    _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+    schan, *_ = get_stable_channels(
+        motion=motion,
+        channels=sorting.channels,
+        channel_index=mainchan_ci,
+        n_pitches_shift=n_pitches_shift,
+        workers=workers,
+    )
+    assert sorting.parent_h5_path is not None
+    with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
+        _erp, feats = interpolate_by_chunk(
+            mask=None,
+            dataset=h5[clustering_features_cfg.pca_dataset_name],
+            geom=motion.geom,
+            channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
+            channels=sorting.channels,
+            shifts=shifts,
+            registered_geom=motion.rgeom,
+            target_channels=schan,
+            params=clustering_features_cfg.interp_params,
+            show_progress=False,
+        )
+    assert feats.shape[2] == 1  # just one channel here
+    return feats[:, :, 0]
+
+
+def _reconstruct_main_channel_amplitudes(
+    *,
+    sorting: DARTsortSorting,
+    main_channel_feats: Tensor,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+) -> np.ndarray | None:
+    """Drift-corrected main channel amplitudes from interpolated TPCA features.
+
+    None if the TPCA basis isn't on disk. It's saved when peeling finishes, so
+    callers running mid-fit fall back to the stored amplitudes.
+    """
+    model_dir = try_get_model_dir(sorting)
+    if model_dir is None or featurization_pipeline_path(model_dir) is None:
+        logger.warning(
+            "No featurization pipeline saved yet, so falling back to "
+            f"{clustering_features_cfg.amplitudes_dataset_name} rather than "
+            "reconstructing drift-corrected amplitudes."
+        )
+        return None
+
+    name_prefix = clustering_features_cfg.pca_dataset_name.removesuffix(
+        "_tpca_features"
+    )
+    tpca = get_tpca(sorting, name_prefix=name_prefix)
+    # force_reconstruct ignores the mean, so amplitudes would be off if centered
+    assert not tpca.centered
+    waveforms = tpca.force_reconstruct(main_channel_feats[:, :, None])
+
+    kind = clustering_features_cfg.amplitude_kind
+    if kind == "peak":
+        amps = waveforms.abs().amax(dim=1)
+    elif kind == "ptp":
+        amps = ptp(waveforms, dim=1)
+    else:
+        raise ValueError(f"Unknown {kind=}.")
+    return amps[:, 0].numpy(force=True)
+
+
+def _compute_main_channel_pcs(
+    *,
+    sorting: DARTsortSorting,
+    clustering_features_cfg: ClusteringFeaturesConfig,
+    main_channel_feats: Tensor | None,
+    raise_on_na: bool,
+):
+    rank = clustering_features_cfg.n_main_channel_pcs
+    if not rank:
+        return None
+
+    if main_channel_feats is None:
         pcs = cluster_util.get_main_channel_pcs(
             sorting,
-            rank=clustering_features_cfg.n_main_channel_pcs,
+            rank=rank,
             dataset_name=clustering_features_cfg.pca_dataset_name,
         )
         check_numbers("No motion pcs", pcs, raise_for_numerics=raise_on_na)
-    elif clustering_features_cfg.motion_aware:
-        shifts, n_pitches_shift = motion.pitch_shifts(
-            sorting=sorting,
-            motion_depth_mode=clustering_features_cfg.motion_depth_mode,
-        )
-        mainchan_ci = single_channel_index(len(motion.geom))
-        _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
-        schan, *_ = get_stable_channels(
-            motion=motion,
-            channels=sorting.channels,
-            channel_index=mainchan_ci,
-            n_pitches_shift=n_pitches_shift,
-            workers=workers,
-        )
-        assert sorting.parent_h5_path is not None
-        with h5py.File(sorting.parent_h5_path, "r", locking=False) as h5:
-            _erp, pcs = interpolate_by_chunk(
-                mask=None,
-                dataset=h5[clustering_features_cfg.pca_dataset_name],
-                geom=motion.geom,
-                channel_index=cast(h5py.Dataset, h5["channel_index"])[:],
-                channels=sorting.channels,
-                shifts=shifts,
-                registered_geom=motion.rgeom,
-                target_channels=schan,
-                params=clustering_features_cfg.interp_params,
-                trim_to_rank=clustering_features_cfg.n_main_channel_pcs,
-                show_progress=False,
-            )
-            assert pcs.shape[2] == 1  # just one channel here
-            pcs = pcs[:, : clustering_features_cfg.n_main_channel_pcs, 0]
-        check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
     else:
-        pcs = None
+        pcs = main_channel_feats[:, :rank].clone()
+        check_numbers("h5 interp pcs", pcs, raise_for_numerics=raise_on_na)
     return pcs
 
 
@@ -524,7 +604,7 @@ def signed_sqrt_transform(x, pre_scale=1.0):
     return xx
 
 
-def check_numbers(name: str, x: np.ndarray, raise_for_numerics=False):
+def check_numbers(name: str, x: np.ndarray | torch.Tensor, raise_for_numerics=False):
     if isinstance(x, torch.Tensor):
         x = x.numpy(force=True)
     if x.ndim > 1:

@@ -271,6 +271,8 @@ class DeveloperConfig(DARTsortUserConfig):
     denoise_before_localization: bool = False
     denoise_before_amplitudes: bool = False
     singlechan_denoised_amplitudes_and_localizations: bool = False
+    save_amplitude_vectors: bool = False
+    localization_model: Literal["pointsource", "dipole"] = "pointsource"
     do_enforce_decrease: bool | Literal["loc_only"] = "loc_only"
     shave_score: float = 10.0
     temporal_dedup_radius_samples: int = 7

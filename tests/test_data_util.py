@@ -6,11 +6,14 @@ import tempfile
 from pathlib import Path
 from typing import cast
 
+import dredge.motion_util as mu
 import h5py
 import numpy as np
 import pytest
 from spikeinterface import NumpyRecording
 
+from dartsort import MotionInfo
+from dartsort.util import data_util, waveform_util
 from dartsort.util.data_util import DARTsortSorting, check_recording
 
 times_samples = np.arange(0, 1000, 10)
@@ -72,3 +75,73 @@ def test_check_recording():
     }
 
     assert warnings == expected
+
+
+def _amp_vec_sorting(tempdir, geom, channel_index, times_seconds, channels, amp_vecs):
+    """Write a peeling-style h5 holding amplitude vectors and load it."""
+    peeling_h5 = Path(tempdir) / "ampvecs.h5"
+    with h5py.File(peeling_h5, "w") as h:
+        h.create_dataset("sampling_frequency", data=1000.0)
+        h.create_dataset("times_samples", data=(1000 * times_seconds).astype(np.int64))
+        h.create_dataset("times_seconds", data=times_seconds)
+        h.create_dataset("channels", data=channels)
+        h.create_dataset("geom", data=geom)
+        h.create_dataset("channel_index", data=channel_index)
+        h.create_dataset("amplitude_vectors", data=amp_vecs)
+    return DARTsortSorting.from_peeling_hdf5(peeling_h5)
+
+
+@pytest.mark.parametrize("drift_speed", [0.0, 1.0])
+def test_interpolate_main_channel_amplitudes(drift_speed):
+    rg = np.random.default_rng(0)
+    geom = np.c_[np.tile([0.0, 20.0], 12), np.repeat(20.0 * np.arange(12), 2)]
+    nc = len(geom)
+    pgeom = np.pad(geom, [(0, 1), (0, 0)], constant_values=np.nan)
+    ci = waveform_util.make_channel_index(geom, 45.0)
+    T_seconds = 100.0
+    n_spikes = 256
+
+    if drift_speed:
+        time_bin_centers = np.arange(T_seconds) + 0.5
+        motion = MotionInfo.from_motion_est(
+            geom=geom,
+            dredge_motion_est=mu.get_motion_estimate(
+                drift_speed * (time_bin_centers - T_seconds / 2),
+                time_bin_centers_s=time_bin_centers,
+            ),
+        )
+    else:
+        motion = MotionInfo.from_motion_est(geom=geom)
+
+    times_seconds = np.sort(rg.uniform(0, T_seconds, size=n_spikes))
+    channels = rg.integers(0, nc, size=n_spikes)
+    neighb_pos = pgeom[ci[channels]].astype(np.float32)
+
+    coefs = rg.normal(size=2).astype(np.float32)
+    offset = np.float32(10.0)
+    amp_vecs = offset + neighb_pos @ coefs
+
+    with tempfile.TemporaryDirectory() as tempdir:
+        sorting = _amp_vec_sorting(
+            tempdir, geom, ci, times_seconds, channels, amp_vecs
+        )
+        data_util.interpolate_main_channel_amplitudes(
+            sorting, motion, show_progress=False
+        )
+        with h5py.File(sorting.parent_h5_path, "r") as h5:
+            amps = cast(h5py.Dataset, h5["motion_corrected_amplitudes"])[:]
+
+    assert amps.shape == (n_spikes,)
+    assert np.isfinite(amps).all()
+
+    shifts, n_pitches_shift = motion.pitch_shifts(sorting=sorting)
+    target_pos = geom[channels].copy()
+    target_pos[:, 1] += n_pitches_shift * motion.pitch - shifts
+    assert np.isclose(amps, offset + target_pos @ coefs, rtol=1e-4).all()
+
+    if not drift_speed:
+        assert (n_pitches_shift == 0).all()
+        main_ix = np.array([np.flatnonzero(ci[c] == c).item() for c in channels])
+        assert np.isclose(
+            amps, amp_vecs[np.arange(n_spikes), main_ix], rtol=1e-4
+        ).all()

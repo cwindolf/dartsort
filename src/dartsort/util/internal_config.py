@@ -254,6 +254,7 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
+    amplitude_kind: Literal["peak", "ptp"] = "peak"
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
     n_multi_channel_pcs: int = 0
@@ -641,7 +642,7 @@ class FeaturizationConfig:
     # these are saved always if do_localization
     localization_amplitude_type: Literal["peak", "ptp"] = "peak"
     localization_decay_power: int = 1
-    localization_model: Literal["pointsource", "dipole"] = "pointsource"
+    localization_model: Literal["pointsource", "dipole", "gaussian"] = "pointsource"
     nn_localization: bool = True
     additional_com_localization: bool = False
     singlechan_denoised_amplitudes_and_localizations: bool = False
@@ -1057,6 +1058,8 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         tpca_from_templates=cfg.tpca_from_templates,
         singlechan_denoised_amplitudes_and_localizations=cfg.singlechan_denoised_amplitudes_and_localizations,
         do_enforce_decrease=cfg.do_enforce_decrease,
+        save_amplitude_vectors=cfg.save_amplitude_vectors,
+        localization_model=cfg.localization_model,
     )
     if cfg.template_interp_kind == "tps":
         temp_interp_params = tps_interp_clampna_extrap_params
@@ -1215,6 +1218,7 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         motion_aware=cfg.motion_aware_clustering,
         interp_params=interp_params,
         feature_rank=cfg.temporal_pca_rank,
+        amplitude_kind=featurization_cfg.localization_amplitude_type,
     )
     sb = 1.0 + cfg.amplitude_scaling_boundary
     refinement_cfg = RefinementConfig(

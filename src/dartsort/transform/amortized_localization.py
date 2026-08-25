@@ -48,7 +48,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         inference_batch_size=2**14,
         norm_kind="layernorm",
         alpha_closed_form=True,
-        prior_variance=None,
+        bandwidth_scale=10.0,
+        prior_variance=1000.0,
         convergence_rtol=0.01,
         convergence_atol=1e-4,
         min_epochs=10,
@@ -63,6 +64,8 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         assert localization_model in ("pointsource", "dipole", "gaussian")
         assert amplitude_kind in ("peak", "ptp")
         assert reference in ("main_channel", "com")
+        if localization_model == "gaussian":
+            assert decay_power == 2
         super().__init__(
             geom=geom,
             channel_index=channel_index,
@@ -72,12 +75,17 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             sampling_frequency=sampling_frequency,
         )
 
+        if amplitude_kind == "atpeak":
+            assert self.trough_offset_samples is not None
         self.amplitude_kind = amplitude_kind
         self.radius = radius
         self.decay_power = decay_power
         self.localization_model = localization_model
         alpha_dim = 1 + 2 * (localization_model == "dipole")
-        self.latent_dim = 3 + (not alpha_closed_form) * alpha_dim
+        # the bandwidth has no closed form, so it is always a latent
+        gaussian = localization_model == "gaussian"
+        self.latent_dim = 3 + gaussian + (not alpha_closed_form) * alpha_dim
+        self.bandwidth_scale = bandwidth_scale
         self.n_epochs = n_epochs
         self.learning_rate = learning_rate
         self.batch_size = batch_size
@@ -200,19 +208,35 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             return alphas, alphas.unsqueeze(1) * pred_amps_alpha1
         return alphas
 
+    def get_bandwidths(self, z):
+        return self.bandwidth_scale * F.softplus(z[:, 3])
+
     def point_source_model(self, z, obs_amps, masks, channels):
         dists = self.local_distances(z, channels, obs_amps=obs_amps)
         if self.alpha_closed_form:
-            if self.localization_model == "gaussian":
-                pred_amps_alpha1 = dists.square().mul(-2).exp()
-            else:
-                pred_amps_alpha1 = dists.clamp(min=1e-6).reciprocal()
+            pred_amps_alpha1 = dists.clamp(min=1e-6).reciprocal()
             alphas, pred_amps = self.get_alphas(
                 obs_amps, pred_amps_alpha1, masks, return_pred=True
             )
         else:
             alphas = F.softplus(z[:, 3])
             pred_amps = alphas.unsqueeze(1) / (dists + 1e-6)
+
+        return alphas, pred_amps
+
+    def gaussian_model(self, z, obs_amps, masks, channels):
+        # decay_power==2, so these are squared distances
+        sq_dists = self.local_distances(z, channels, obs_amps=obs_amps)
+        sigmas = self.get_bandwidths(z)
+        twosigmasq = sigmas.square().mul(2).clamp(min=1e-6).unsqueeze(1)
+        pred_amps_alpha1 = sq_dists.div(twosigmasq).neg().exp()
+        if self.alpha_closed_form:
+            alphas, pred_amps = self.get_alphas(
+                obs_amps, pred_amps_alpha1, masks, return_pred=True
+            )
+        else:
+            alphas = F.softplus(z[:, 4])
+            pred_amps = alphas.unsqueeze(1) * pred_amps_alpha1
 
         return alphas, pred_amps
 
@@ -244,8 +268,10 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         return beta, pred_amps
 
     def decode(self, z, channels, obs_amps, masks):
-        if self.localization_model in ("pointsource", "monopole", "gaussian"):
+        if self.localization_model in ("pointsource", "monopole"):
             alphas, pred_amps = self.point_source_model(z, obs_amps, masks, channels)
+        elif self.localization_model == "gaussian":
+            alphas, pred_amps = self.gaussian_model(z, obs_amps, masks, channels)
         elif self.localization_model == "dipole":
             alphas, pred_amps = self.dipole_model(z, obs_amps, masks, channels)
         else:

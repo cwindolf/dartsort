@@ -22,6 +22,8 @@ from spikeinterface.core.sparsity import estimate_sparsity
 
 from ..detect import detect_and_deduplicate
 from .internal_config import (
+    ComputationConfig,
+    InterpolationParams,
     TemplateConfig,
     TemplateMergeConfig,
     WaveformConfig,
@@ -2036,13 +2038,14 @@ def reconstruct_amplitude_vectors(
     out_dataset="amplitude_vectors",
     kind="ptp",
     show_progress: bool = True,
+    waveform_cfg: WaveformConfig = default_waveform_cfg,
 ):
     from .spiketorch import ptp
 
     pca = get_tpca(sorting=sorting)
     with h5py.File(sorting.parent_h5_path, "r+") as h5:
         ind = h5[tpca_dataset]
-        outd = h5.create_dataset(
+        outd = h5.require_dataset(
             out_dataset, shape=(ind.shape[0], ind.shape[2]), dtype=ind.dtype
         )
         for sli, x in yield_chunks(
@@ -2057,6 +2060,88 @@ def reconstruct_amplitude_vectors(
             else:
                 panic(kind)
             outd[sli] = z
+
+
+def get_tpca_norms(
+    sorting: DARTsortSorting,
+    tpca_dataset="collisioncleaned_tpca_features",
+    out_dataset="collisioncleaned_tpca_rms",
+    show_progress: bool = True,
+):
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[tpca_dataset]
+        outd = h5.create_dataset(out_dataset, shape=(ind.shape[0],), dtype=ind.dtype)
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            x = torch.asarray(x)
+            nna = x[:, 0, :].isfinite().sum(1)
+            ms = x.square_().sum(1).nan_to_num_().sum(1).div_(nna)
+            outd[sli] = ms.sqrt_()
+
+
+def interpolate_main_channel_amplitudes(
+    sorting: DARTsortSorting,
+    motion: "MotionInfo",
+    amplitude_vectors_dataset="amplitude_vectors",
+    out_dataset="motion_corrected_amplitudes",
+    interp_params: InterpolationParams | None = None,
+    motion_depth_mode: Literal["channel", "localization"] = "channel",
+    computation_cfg: ComputationConfig | None = None,
+    show_progress: bool = True,
+):
+    from .drift_util import get_stable_channels
+    from .interpolation_util import StableFeaturesInterpolator, pad_geom
+    from .multiprocessing_util import handle_negative_jobs
+    from .waveform_util import single_channel_index
+
+    computation_cfg = ensure_computation_config(computation_cfg)
+    if interp_params is None:
+        interp_params = default_clustering_features_cfg.interp_params
+    device = computation_cfg.actual_device()
+
+    shifts, n_pitches_shift = motion.pitch_shifts(
+        sorting=sorting, motion_depth_mode=motion_depth_mode
+    )
+    mainchan_ci = single_channel_index(len(motion.geom))
+    _, workers = handle_negative_jobs(computation_cfg.n_jobs_small)
+    target_channels, *_ = get_stable_channels(
+        motion=motion,
+        channels=sorting.channels,
+        channel_index=mainchan_ci,
+        n_pitches_shift=n_pitches_shift,
+        workers=workers,
+    )
+    target_channels = torch.as_tensor(target_channels)
+    assert target_channels.shape == (len(sorting), 1)  # just one channel here
+    channels = torch.as_tensor(sorting.channels)
+
+    with h5py.File(sorting.parent_h5_path, "r+") as h5:
+        ind = h5[amplitude_vectors_dataset]
+        outd = h5.create_dataset(out_dataset, shape=(ind.shape[0],), dtype=ind.dtype)
+        dtype = torch.from_numpy(np.empty((), dtype=ind.dtype)).dtype
+        erp = StableFeaturesInterpolator(
+            source_geom=pad_geom(motion.geom, dtype=dtype, device=device),
+            target_geom=pad_geom(motion.rgeom, dtype=dtype, device=device),
+            channel_index=torch.as_tensor(
+                cast(h5py.Dataset, h5["channel_index"])[:], device=device
+            ),
+            params=interp_params,
+        )
+        shifts = torch.as_tensor(shifts, dtype=dtype)
+        for sli, x in yield_chunks(
+            ind, show_progress=show_progress, desc_prefix=out_dataset
+        ):
+            # kernel interpolation wants a feature dim, so add a singleton one
+            x = torch.asarray(x, device=device, dtype=dtype)[:, None]
+            y = erp.interp(
+                features=x,
+                source_main_channels=channels[sli].to(device),
+                target_channels=target_channels[sli],
+                source_shifts=shifts[sli].to(device),
+                allow_destroy=True,
+            )
+            outd[sli] = y[:, 0, 0].numpy(force=True)
 
 
 # -- residual
@@ -2138,9 +2223,7 @@ def subsample_waveforms(
         n_wf = channels.shape[0]
         if not n_wf:
             emptyi = torch.tensor([], dtype=torch.long)
-            empty = {
-                k: torch.zeros(h5[k].shape) for k in waveforms_dataset_name
-            }
+            empty = {k: torch.zeros(h5[k].shape) for k in waveforms_dataset_name}
             return empty, dict(channels=emptyi)
         weights = fit_reweighting(
             h5=h5,
