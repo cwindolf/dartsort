@@ -49,12 +49,14 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         norm_kind="layernorm",
         alpha_closed_form=True,
         bandwidth_scale=10.0,
-        prior_variance=1000.0,
+        prior_std=32.0,
+        amp_noise_var=0.25,
+        log_amp_input=True,
         convergence_rtol=0.01,
         convergence_atol=1e-4,
+        convergence_patience=10,
         min_epochs=10,
-        scale_loss_by_mean=True,
-        reference="main_channel",
+        reference="com",
         channelwise_dropout_p=0.00,
         decay_power=1,
         epoch_size=50_000,
@@ -93,14 +95,16 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         self.norm_kind = norm_kind
         self.hidden_dims = hidden_dims
         self.alpha_closed_form = alpha_closed_form
-        self.variational = prior_variance is not None
-        self.prior_variance = (
-            torch.tensor(prior_variance) if prior_variance is not None else None
+        self.variational = prior_std is not None
+        self.register_buffer_or_none(
+            "prior_std", None if prior_std is None else torch.tensor(prior_std)
         )
+        self.amp_noise_var = amp_noise_var
+        self.log_amp_input = log_amp_input
         self.convergence_atol = convergence_atol
         self.convergence_rtol = convergence_rtol
+        self.convergence_patience = convergence_patience
         self.min_epochs = min_epochs
-        self.scale_loss_by_mean = scale_loss_by_mean
         self.channelwise_dropout_p = channelwise_dropout_p
         self.reference = reference
         self.epoch_size = epoch_size
@@ -278,8 +282,18 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
             panic(self.localization_model)
         return alphas, pred_amps
 
-    def forward(self, x, mask, obs_amps, channels):
-        x_mask = torch.cat((x, mask.unsqueeze(1)), dim=1)
+    def encoder_features(self, amps, mask):
+        if self.log_amp_input:
+            x = amps.clamp(min=1e-3).log()
+            denom = mask.sum(1, keepdim=True).clamp(min=1.0)
+            x = x - x.mul(mask).sum(1, keepdim=True).div(denom)
+            x = x * mask
+        else:
+            x = amps
+        return torch.stack((x, mask), dim=1)
+
+    def forward(self, amps, mask, obs_amps, channels):
+        x_mask = self.encoder_features(amps, mask)
         assert self.encoder is not None
         mu = self.encoder(x_mask)
         var = None
@@ -291,23 +305,15 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         return pred_amps, mu, var
 
     def loss_function(self, recon_x, x, mask, mu, var):
-        recon_x_masked = recon_x * mask
-        x_masked = x * mask
-        if self.scale_loss_by_mean:
-            # 1/(n_chans_retained*mean amplitude)
-            rescale = x_masked.sum(1, keepdim=True).clamp(min=1e-6).reciprocal()
-        else:
-            rescale = mask.sum(1, keepdim=True).clamp(min=1e-6).reciprocal()
-        x_masked *= rescale
-        recon_x_masked *= rescale
-        n = len(x)
-        mse = F.mse_loss(recon_x_masked, x_masked, reduction="sum") / n
+        resid = (recon_x - x).mul(mask)
+        nll = resid.square().sum(dim=1).div(2 * self.amp_noise_var).mean()
         kld = 0.0
         if self.variational:
-            ratio = (var + mu.pow(2)) / self.prior_variance - 1
-            kld = torch.log(self.prior_variance / var).add(ratio)
-            kld = kld.mul(rescale.square()).sum().mul(0.5 / n)
-        return mse, kld
+            prior_var = self.b.prior_std.square()
+            ratio = (var + mu.pow(2)) / prior_var - 1
+            kld = torch.log(prior_var / var).add(ratio)
+            kld = kld.sum(dim=1).mul(0.5).mean()
+        return nll, kld
 
     def _fit(self, waveforms, channels, weights=None):
         # apply channel reindexing before any fitting...
@@ -374,17 +380,23 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         optimizer = torch.optim.Adam(
             self.parameters(), lr=self.learning_rate, fused=self.fused_opt
         )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=self.n_epochs
+        )
 
         val_dataset = TensorDataset(val_amps, val_channels)
         val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
 
         self.train()
-        mse_history = []
+        best_val = None
+        best_state = None
+        n_no_improve = 0
         with progrange(self.n_epochs, desc="Train localizer", unit="epoch") as pbar:
             for epoch in pbar:
                 total_loss = 0
-                total_mse = 0
+                total_nll = 0
                 total_kld = 0
+                nbatch = 0
                 n_examples = 0
                 for amps_batch, chans_batch in dataloader:
                     # for whatever reason, batch sampler adds an empty dim
@@ -395,21 +407,22 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                     channels_mask = self.b.model_channel_index[chans_batch] < self.nc
                     channels_mask = channels_mask.to(amps_batch)
                     reconstructed_amps, mu, var = self.forward(
-                        amps_batch.unsqueeze(1), channels_mask, amps_batch, chans_batch
+                        amps_batch, channels_mask, amps_batch, chans_batch
                     )
-                    mse, kld = self.loss_function(
+                    nll, kld = self.loss_function(
                         reconstructed_amps, amps_batch, channels_mask, mu, var
                     )
-                    loss = mse
+                    loss = nll
                     if self.variational:
                         loss = loss + kld
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
-                    total_mse += mse.item()
+                    total_nll += nll.item()
                     if self.variational:
-                        total_kld += float(kld.numpy(force=True))
+                        total_kld += kld.item()
 
+                    nbatch += 1
                     n_examples += chans_batch.numel()
                     if n_examples >= self.epoch_size:
                         break
@@ -425,14 +438,13 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                         ci_batch = self.b.model_channel_index[chans_batch]
                         channels_mask = ci_batch < len(self.b.geom)
                         channels_mask = channels_mask.to(amps_batch)
-                        amps_batch_ = amps_batch.unsqueeze(1)
                         reconstructed_amps, mu, var = self.forward(
-                            amps_batch_, channels_mask, amps_batch, chans_batch
+                            amps_batch, channels_mask, amps_batch, chans_batch
                         )
-                        mse, kld = self.loss_function(
+                        nll, kld = self.loss_function(
                             reconstructed_amps, amps_batch, channels_mask, mu, var
                         )
-                        loss = mse
+                        loss = nll
                         if self.variational:
                             loss = loss + kld
                         val_loss += loss.item()
@@ -442,28 +454,42 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
                             break
                     self.train()
 
-                nbatch = max(1.0, np.ceil(n_examples / self.batch_size))
+                scheduler.step()
+                nbatch = max(1, nbatch)
                 loss = total_loss / nbatch
-                mse = total_mse / nbatch
+                nll = total_nll / nbatch
                 val_loss = val_loss / valbatch
-                mse_history.append(val_loss)
                 desc = f"[loss={loss:0.4f},val={val_loss:0.4f}"
                 if self.variational:
                     kld = total_kld / nbatch
-                    desc += f",mse={mse:0.2f},kld={kld:0.2f}"
+                    desc += f",nll={nll:0.2f},kld={kld:0.2f}"
                 desc += "]"
                 pbar.set_description(f"Train localizer {desc}")
 
-                # check convergence
+                if best_val is None:
+                    improved = True
+                else:
+                    adiff = best_val - val_loss
+                    rtol = self.convergence_rtol * abs(best_val)
+                    improved = adiff > max(rtol, self.convergence_atol)
+                n_no_improve = 0 if improved else n_no_improve + 1
+                if best_val is None or val_loss < best_val:
+                    best_val = val_loss
+                    assert self.encoder is not None
+                    best_state = {
+                        k: v.detach().clone()
+                        for k, v in self.encoder.state_dict().items()
+                    }
+
                 if epoch < self.min_epochs:
                     continue
-
-                # positive if cur is smaller than prev
-                adiff = min(mse_history[:-1]) - val_loss
-                rdiff = adiff / min(mse_history[:-1])
-                if rdiff < self.convergence_rtol or adiff < self.convergence_atol:
+                if n_no_improve >= self.convergence_patience:
                     pbar.set_description(f"Localizer converged at epoch={epoch} {desc}")
                     break
+
+        if best_state is not None:
+            assert self.encoder is not None
+            self.encoder.load_state_dict(best_state)
 
     def transform_unbatched(self, waveforms, channels, return_extra=False):
         # handle getting amplitudes, reindexing channels
@@ -486,7 +512,7 @@ class AmortizedLocalization(BaseWaveformFeaturizer):
         # nn inputs
         mask = self.b.model_channel_index[channels] < self.b.geom.shape[0]
         mask = mask.to(waveforms)
-        x_mask = torch.cat((waveforms, mask.unsqueeze(1)), dim=1)
+        x_mask = self.encoder_features(obs_amps, mask)
 
         # encode
         # this is where we need to batch
