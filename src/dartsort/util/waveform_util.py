@@ -697,6 +697,7 @@ def get_channel_subset(
 
 
 def relative_channel_subset_index(channel_index_full, channel_index_new, to_torch=True):
+    """What indices to grab when going from a bigger channel index to a smaller one?"""
     mask = channel_subset_mask(channel_index_full, channel_index_new, to_torch=True)
     rel_sub_channel_index = mask_to_relative(mask)
     return rel_sub_channel_index
@@ -705,6 +706,11 @@ def relative_channel_subset_index(channel_index_full, channel_index_new, to_torc
 def get_relative_subset(
     waveforms, max_channels, rel_sub_channel_index, fill_value=torch.nan
 ):
+    """Reindex from a bigger channel index to a smaller one
+
+    Cooperates with relative_channel_subset_index, which should be used to get
+    rel_sub_channel_index.
+    """
     waveforms = F.pad(waveforms, (0, 1), value=fill_value)
     index = rel_sub_channel_index[max_channels]
     if waveforms.ndim == 3:
