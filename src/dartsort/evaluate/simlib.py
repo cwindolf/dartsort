@@ -304,7 +304,7 @@ def rbf_kernel_sqrt(geom, bandwidth=15.0, dtype="float32"):
 
 # collidedness special cased in sims
 default_sim_featurization_cfg = FeaturizationConfig(
-    do_enforce_decrease=False, additional_com_localization=True, save_collidedness=False
+    do_enforce_decrease="no", additional_com_localization=True, save_collidedness=False
 )
 
 

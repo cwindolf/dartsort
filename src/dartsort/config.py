@@ -274,6 +274,7 @@ class DeveloperConfig(DARTsortUserConfig):
     save_amplitude_vectors: bool = False
     localization_model: Literal["pointsource", "dipole"] = "pointsource"
     do_enforce_decrease: Literal["yes", "no", "loc_only"] = "loc_only"
+    clustering_amplitude_kind: Literal["peak", "ptp", "rms"] = "ptp"
     shave_score: float = 10.0
     temporal_dedup_radius_samples: int = 7
     subtract_global_dedup: bool = True
@@ -325,6 +326,7 @@ class DeveloperConfig(DARTsortUserConfig):
     initial_pc_transform: Literal["log", "sqrt", "none"] = "none"
     initial_pc_scale: float = 2.0
     initial_pc_pre_scale: float = 0.5
+    initial_pc_kind: Literal["single", "multi", "mixed"] = "single"
     motion_aware_clustering: bool = True
     clustering_max_spikes: Annotated[int, Field(gt=0)] = 1024 * 1000
     pre_refinement_merge: bool = True
@@ -333,6 +335,7 @@ class DeveloperConfig(DARTsortUserConfig):
     pre_refinement_merge_threshold: float = 0.1
     use_hellinger: bool = True
     density_bandwidth: Annotated[float, Field(gt=0)] = 5.0
+    density_regional: Annotated[float, Field(gt=0)] = 25.0
     component_overlap: float = 0.95
     hellinger_strong: float = 0.0
     hellinger_weak: float = 0.0

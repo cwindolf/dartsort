@@ -254,7 +254,7 @@ class ClusteringFeaturesConfig:
     log_transform_amplitude: bool = False
     amp_log_c: float = 5.0
     amp_scale: float = 3.0
-    amplitude_kind: Literal["peak", "ptp"] = "peak"
+    amplitude_kind: Literal["peak", "ptp", "rms"] = "peak"
     x_scale: float = 1.0
     n_main_channel_pcs: int = 5
     n_multi_channel_pcs: int = 0
@@ -1176,10 +1176,10 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     clustering_cfg = ClusteringConfig(
         cluster_strategy=cfg.cluster_strategy,
         sigma_local=cfg.density_bandwidth,
-        sigma_regional=5 * cfg.density_bandwidth,
+        sigma_regional=cfg.density_regional,
         n_neighbors_search=cfg.n_neighbors_search or cfg.min_cluster_size,
-        outlier_radius=5 * cfg.density_bandwidth,
-        radius_search=5 * cfg.density_bandwidth,
+        outlier_radius=cfg.density_regional,
+        radius_search=cfg.density_regional,
         min_cluster_size=cfg.min_cluster_size,
         use_hellinger=cfg.use_hellinger,
         component_overlap=cfg.component_overlap,
@@ -1211,14 +1211,17 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
     clustering_features_cfg = ClusteringFeaturesConfig(
         use_amplitude=cfg.initial_amp_feat,
         use_signed_amplitude=cfg.initial_signed_amp_feat,
-        n_main_channel_pcs=cfg.initial_pc_feats,
+        n_main_channel_pcs=cfg.initial_pc_feats
+        * int(cfg.initial_pc_kind in ("single", "mixed")),
+        n_multi_channel_pcs=cfg.initial_pc_feats
+        * int(cfg.initial_pc_kind in ("multi", "mixed")),
         pc_transform=cfg.initial_pc_transform,
         pc_scale=cfg.initial_pc_scale,
         pc_pre_transform_scale=cfg.initial_pc_pre_scale,
         motion_aware=cfg.motion_aware_clustering,
         interp_params=interp_params,
         feature_rank=cfg.temporal_pca_rank,
-        amplitude_kind=featurization_cfg.localization_amplitude_type,
+        amplitude_kind=cfg.clustering_amplitude_kind,
     )
     sb = 1.0 + cfg.amplitude_scaling_boundary
     refinement_cfg = RefinementConfig(
@@ -1445,7 +1448,7 @@ unshifted_raw_template_cfg = TemplateConfig(
 )
 waveforms_only_featurization_cfg = FeaturizationConfig(
     do_tpca_denoise=False,
-    do_enforce_decrease=False,
+    do_enforce_decrease="no",
     save_input_tpca_projs=False,
     save_amplitudes=False,
     do_localization=False,
