@@ -328,6 +328,46 @@ def get_waveform_mlp(
     return net
 
 
+class MaskedSetPooling(nn.Module):
+    def forward(self, inputs):
+        embeddings, mask = inputs
+        mask = mask.unsqueeze(-1)
+        keep = mask > 0
+        denom = mask.sum(1).clamp(min=1.0)
+        mean = embeddings.mul(mask).sum(1).div(denom)
+        amax = embeddings.masked_fill(keep.logical_not(), -torch.inf).amax(1)
+        amax = torch.where(keep.any(1), amax, torch.zeros_like(amax))
+        return torch.cat((mean, amax), dim=1)
+
+
+def get_waveform_deepsets_model(
+    n_channel_features,
+    channel_hidden_dims,
+    readout_hidden_dims,
+    output_dim,
+    embed_dim=128,
+    norm_kind="layernorm",
+    nonlinearity="ReLU",
+):
+    # batchnorm would normalize over the channel axis here
+    assert norm_kind in ("layernorm", "none", None)
+    channel_encoder = get_mlp(
+        n_channel_features,
+        channel_hidden_dims,
+        embed_dim,
+        norm_kind=norm_kind,
+        nonlinearity=nonlinearity,
+    )
+    readout = get_mlp(
+        2 * embed_dim,
+        readout_hidden_dims,
+        output_dim,
+        norm_kind=norm_kind,
+        nonlinearity=nonlinearity,
+    )
+    return nn.Sequential(WaveformOnly(channel_encoder), MaskedSetPooling(), readout)
+
+
 def get_norm(n_features, norm_kind=None):
     if norm_kind == "batchnorm":
         return nn.BatchNorm1d(n_features)
@@ -444,6 +484,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
             ResidualForm,
             WaveformOnlyResidualForm,
             ChannelwiseDropout,
+            MaskedSetPooling,
             Cat,
             Permute,
             WaveformOnly,
