@@ -9,6 +9,7 @@ from scipy.spatial import KDTree
 from spikeinterface.comparison import GroundTruthComparison
 
 from ..clustering import merge
+from ..util.data_util import pos_int_unique_and_counts
 from ..util.logging_util import progbar
 from .analysis import DARTsortAnalysis
 
@@ -437,9 +438,20 @@ class DARTsortGroundTruthComparison:
         c = greedy_res["counts"]
         self._greedy_confusion = c
 
-        u = (c.sum(0, keepdims=True) + c.sum(1, keepdims=True)) - c
+        gt_labels = self.gt_analysis.sorting.labels
+        tested_labels = self.tested_analysis.sorting.labels
+        assert gt_labels is not None
+        assert tested_labels is not None
+        gt_uniq, gt_n, _ = pos_int_unique_and_counts(gt_labels)
+        tested_uniq, tested_n, _ = pos_int_unique_and_counts(tested_labels)
+        gt_counts = np.zeros(c.shape[0], dtype=np.int64)
+        gt_counts[gt_uniq] = gt_n
+        tested_counts = np.zeros(c.shape[1], dtype=np.int64)
+        tested_counts[tested_uniq] = tested_n
+
+        u = gt_counts[:, None] + tested_counts[None, :] - c
         self._greedy_iou = c / np.maximum(u, 1)
-        self._greedy_prec = c / np.maximum(c.sum(0, keepdims=True), 1)
+        self._greedy_prec = c / np.maximum(tested_counts[None, :], 1)
 
         self._tested_to_gt = greedy_res["test2gt_spike"]
         self._unsorted_detection = np.logical_not(greedy_res["gt_unmatched"])
