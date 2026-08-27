@@ -10,6 +10,7 @@ from ..util.data_util import (
     DARTsortSorting,
     featurization_pipeline_path,
     get_tpca,
+    get_tpca_norms,
     try_get_model_dir,
 )
 from ..util.drift_util import get_stable_channels
@@ -107,16 +108,20 @@ class SimpleMatrixFeatures:
 
         features = []
 
-        # motion-aware main channel TPCA features, interpolated to the registered
-        # main channel. shared by the amplitude and the main channel PCs below.
-        main_channel_feats = None
-        if clustering_features_cfg.motion_aware:
+        need_main_channel_feats = bool(clustering_features_cfg.n_main_channel_pcs)
+        need_main_channel_feats |= (
+            clustering_features_cfg.motion_aware
+            and clustering_features_cfg.amplitude_kind in ("peak", "ptp")
+        )
+        if need_main_channel_feats:
             main_channel_feats = _interpolate_main_channel_features(
                 sorting=sorting,
                 motion=motion,
                 clustering_features_cfg=clustering_features_cfg,
                 computation_cfg=computation_cfg,
             )
+        else:
+            main_channel_feats = None
 
         if clustering_features_cfg.use_z:
             assert z is not None
@@ -130,15 +135,24 @@ class SimpleMatrixFeatures:
             assert x is not None
             features.append(x[:, None] * clustering_features_cfg.x_scale)
 
-        amp = None
-        if main_channel_feats is not None:
-            amp = _reconstruct_main_channel_amplitudes(
-                sorting=sorting,
-                main_channel_feats=main_channel_feats,
-                clustering_features_cfg=clustering_features_cfg,
+        if clustering_features_cfg.amplitude_kind in ("peak", "ptp"):
+            if main_channel_feats is not None:
+                amp = _reconstruct_main_channel_amplitudes(
+                    sorting=sorting,
+                    main_channel_feats=main_channel_feats,
+                    clustering_features_cfg=clustering_features_cfg,
+                )
+            else:
+                amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+        elif clustering_features_cfg.amplitude_kind == "rms":
+            amp = get_tpca_norms(
+                sorting,
+                tpca_dataset=clustering_features_cfg.pca_dataset_name,
+                out_dataset=None,
             )
-        if amp is None:
-            amp = getattr(sorting, clustering_features_cfg.amplitudes_dataset_name)
+        else:
+            amp = None
+
         v = getattr(sorting, clustering_features_cfg.voltages_dataset_name, None)
         if (
             clustering_features_cfg.use_amplitude
