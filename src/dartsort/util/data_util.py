@@ -2065,12 +2065,17 @@ def reconstruct_amplitude_vectors(
 def get_tpca_norms(
     sorting: DARTsortSorting,
     tpca_dataset="collisioncleaned_tpca_features",
-    out_dataset="collisioncleaned_tpca_rms",
-    show_progress: bool = True,
+    out_dataset: str | None = "collisioncleaned_tpca_rms",
+    show_progress: bool = False,
 ):
     with h5py.File(sorting.parent_h5_path, "r+") as h5:
         ind = h5[tpca_dataset]
-        outd = h5.create_dataset(out_dataset, shape=(ind.shape[0],), dtype=ind.dtype)
+        if out_dataset is not None:
+            outd = h5.create_dataset(
+                out_dataset, shape=(ind.shape[0],), dtype=ind.dtype
+            )
+        else:
+            outd = np.empty(shape=(ind.shape[0],), dtype=ind.dtype)
         for sli, x in yield_chunks(
             ind, show_progress=show_progress, desc_prefix=out_dataset
         ):
@@ -2078,6 +2083,7 @@ def get_tpca_norms(
             nna = x[:, 0, :].isfinite().sum(1)
             ms = x.square_().sum(1).nan_to_num_().sum(1).div_(nna)
             outd[sli] = ms.sqrt_()
+    return outd
 
 
 def interpolate_main_channel_amplitudes(
