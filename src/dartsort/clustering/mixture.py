@@ -2715,6 +2715,7 @@ class TruncatedMixtureModel(BaseMixtureModel):
                 lut=self.lut,
                 lut_params=self.lut_params,
                 neighb_cov=self.neighb_cov,
+                prior_pseudocount=self.p.prior_pseudocount,
             )
             self.m_step(stats, skip_proportions=True)
             self.update_lut(self.lut)
@@ -6086,7 +6087,7 @@ def _initialize_single(
     # weighting the svd -- needs sqrt!
     if weight is not None:
         if prior_pseudocount:
-            weight *= wsum / (wsum + prior_pseudocount)
+            weight = weight * (wsum / (wsum + prior_pseudocount))
         x *= weight.sqrt()[:, None]
 
     # NB they return V not Vh here, so rank dim comes last
@@ -7420,15 +7421,11 @@ def _finalize_e_stats(
 
     if prior_pseudocount:
         term = means @ neighb_cov.b.full_Linv.T
-        term = term.square_().sum(dim=1).mean()
-        term *= -0.5 * prior_pseudocount
-        stats.elbo += term
-
-    if prior_pseudocount and bases is not None:
-        K, r = bases.shape[:2]
-        term = bases.view(K * r, -1) @ neighb_cov.b.full_Linv.T
-        term = term.square_().sum(dim=1).view(K, r).mean(dim=0).sum()
-        term *= -0.5 * prior_pseudocount
+        term = term.square_().sum()
+        if bases is not None:
+            bterm = bases.reshape(-1, bases.shape[-1]) @ neighb_cov.b.full_Linv.T
+            term = term + bterm.square_().sum()
+        term *= -0.5 * prior_pseudocount / max(stats.count, 1.0)
         stats.elbo += term
 
     # storage
