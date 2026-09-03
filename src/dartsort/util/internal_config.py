@@ -476,6 +476,8 @@ class TemplateMergeConfig:
 
 MixtureStep = Literal["split", "singlesplit", "merge", "demolish"]
 ComponentDistanceMetric = Literal["cosine", "normeuc", "scaled_normeuc"]
+KmeansppSelection = Literal["phi", "marginal"]
+KmeansppStopping = Literal["patience", "dpmeanspp", "patientdpmeanspp"]
 
 
 @cfg_dataclass
@@ -534,6 +536,12 @@ class RefinementConfig:
     kmeans_tries: int = 10
     kmeans_beta: float = 50.0
     kmeanspp_tries: int = 5
+    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_patience: int = 21
+    kmeanspp_greedy_proposals: int = 1
+    kmeanspp_neighb_overlap: float | None = None
+    kmeanspp_selection: KmeansppSelection = "phi"
+    kmeanspp_stopping: KmeansppStopping = "patience"
     full_proposal_every: int = 10
     main_min_iters: int = 20
     search_adj: Literal["top", "explore"] = "top"
@@ -1248,6 +1256,13 @@ def to_internal_config(cfg, n_channels: int) -> DARTsortInternalConfig:
         robust_strategy=cfg.robust_strategy,
         robust_fixed_std_dataset=cfg.robust_fixed_std_dataset,
         robust_fixed_power=cfg.robust_fixed_power,
+        kmeanspp_stop_rms=cfg.kmeanspp_stop_rms,
+        kmeanspp_tries=cfg.kmeanspp_tries,
+        kmeanspp_patience=cfg.kmeanspp_patience,
+        kmeanspp_greedy_proposals=cfg.kmeanspp_greedy_proposals,
+        kmeanspp_neighb_overlap=cfg.kmeanspp_neighb_overlap,
+        kmeanspp_selection=cfg.kmeanspp_selection,
+        kmeanspp_stopping=cfg.kmeanspp_stopping,
         robust_df=cfg.robust_df,
         demolish_during_selection=cfg.demolish_during_selection,
         em_after_demolish=cfg.em_after_demolish,

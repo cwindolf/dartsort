@@ -6,6 +6,8 @@ from pydantic import Field
 from .util.internal_config import (
     InterpKernel,
     InterpMethod,
+    KmeansppSelection,
+    KmeansppStopping,
     MixtureStep,
     PreprocessingStrategy,
     RealignStrategy,
@@ -343,6 +345,13 @@ class DeveloperConfig(DARTsortUserConfig):
     hellinger_weak: float = 0.0
     dpc_mop: bool = True
     n_neighbors_search: int | None = 50
+    kmeanspp_stop_rms: float = 5.0
+    kmeanspp_tries: int = 5
+    kmeanspp_patience: int = 21
+    kmeanspp_greedy_proposals: int = 1
+    kmeanspp_neighb_overlap: float | None = None
+    kmeanspp_selection: KmeansppSelection = "phi"
+    kmeanspp_stopping: KmeansppStopping = "patience"
 
     # filters
     gmm_isolation_threshold: float | None = None
