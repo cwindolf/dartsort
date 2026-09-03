@@ -854,7 +854,7 @@ class SpikeNeighborhoods(BModule):
         ----------
         neighborhood_ids : torch.Tensor
             Size (n_spikes,), the neighborhood id for each spike
-        neighborhoods : list[torch.Tensor]
+        neighborhoods : torch.Tensor
             The channels in each neighborhood
         neighborhood_members : list[torch.Tensor]
             The indices of spikes in each neighborhood
@@ -956,8 +956,9 @@ class SpikeNeighborhoods(BModule):
 
     def partial_order(self):
         """ret[i, j] == 1 iff neighb j subset neighb i"""
-        inds = self.b.indicators.T  # nneighb x nc
-        po = (inds[:, None, :] >= inds[None, :, :]).all(2)
+        # well, j subset i iff i covers all j's channels
+        overlaps = self.b.indicators.T @ self.b.indicators
+        po = overlaps == self.b.channel_counts
         assert po.shape == (self.n_neighborhoods, self.n_neighborhoods)
         return po
 
