@@ -155,7 +155,6 @@ def entropy(Q: Tensor, reduce_mean: bool = True, dim: int = 1) -> Tensor:
     return H.neg_()
 
 
-@torch_compile
 def ecl(
     resps: Tensor, log_liks: Tensor, cl_alpha: float = 1.0, reduce_mean: bool = True
 ) -> Tensor:
