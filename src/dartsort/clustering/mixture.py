@@ -304,16 +304,17 @@ class NeighborhoodCovariance(BModule):
         Parameters
         ----------
         feat_rank : int
-            most observed channels in any neighborhood
+            tpca rank
         max_nc_obs: int
-            most missing channels (inside the cov zero radius)
+            most observed channels in any neighborhood
         max_nc_miss_near: int
-            total n channels
+            most missing channels (inside the cov zero radius)
         n_channels: int
-            not really used, but helpful to keep it here for vis
+            total n channels
         prgeom: Tensor
-            adjacency of neighborhoods
+            padded registered geometry
         neighb_adj: Tensor
+            adjacency of neighborhoods
         nobs: Tensor
             number of observed features (rank*chans) by neighborhood
         obs_ix: Tensor
