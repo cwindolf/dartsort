@@ -96,7 +96,9 @@ class DARTsortUserConfig:
     work_in_tmpdir: bool = False
     """If True, dartsort will store all temporary data in a scratch directory in tmpdir_parent or TMPDIR."""
 
-    copy_recording_to_tmpdir: Literal["yes", "no", "if_preprocessing"] = "if_preprocessing"
+    copy_recording_to_tmpdir: Literal["yes", "no", "if_preprocessing"] = (
+        "if_preprocessing"
+    )
     """Save a copy of the preprocessed recording to a tmpdir?"""
 
     workdir_copier: Literal["shutil", "rsync"] = "shutil"
@@ -205,7 +207,7 @@ class DARTsortUserConfig:
     """Upsampling of templates during matching to allow for temporal aliasing of waveforms."""
 
     # -- final merge step
-    #TODO name this more prominently, clarify flags for dedup ms, decouple dedup and agg
+    # TODO name this more prominently, clarify flags for dedup ms, decouple dedup and agg
     agg_kind: Literal["none", "template_distance", "qda"] = "qda"
     """Final distance or GMM-based merge type."""
 
